@@ -1,13 +1,13 @@
-/** The welcome walkthrough — a slideshow that introduces MindFlock and, more
- * usefully, walks a new user through the non-obvious setup: connecting a coding
- * provider, ticket ingestion, PR review, issue handling, a linked IDE, and
- * mobile access. Opens automatically on first run (see App) and is replayable
+/** The welcome walkthrough — a short slideshow that says what MindFlock is and
+ * where its few everyday surfaces live: New, the grid, the ship step and the
+ * bell, Intake. Opens automatically on first run (see App) and is replayable
  * from Settings → General.
  *
- * Setup slides carry a `screen` key; their "Set up now" button pauses the tour
- * and jumps straight to that surface — a Settings screen, or an Intake tab for the
- * three intake steps (tickets, PRs, issues) — so a user can act on the exact
- * thing they're reading about. Everything else is Back/Next. */
+ * It used to be twelve slides that walked every setup screen in turn, which put
+ * a page of configuration between a new user and their first session. Setup now
+ * waits until it is needed; the one slide that names a setup surface (Intake)
+ * carries a `screen` key, and its "Set up now" button pauses the tour and jumps
+ * there. Everything else is Back/Next. */
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
@@ -31,14 +31,9 @@ const SLIDES: Slide[] = [
     title: "Welcome to MindFlock",
     body: (
       <>
-        MindFlock runs a private flock of AI coding agents, each in its own git
-        worktree, all of them on this machine — there is no MindFlock cloud and no
-        account. Start one yourself with any agent CLI — or let a ticket assigned
-        to you in Jira, Linear, GitHub Issues, Shortcut or Asana start it for you,
-        with the ticket already seeded. Either way you review the diff and merge.
-        This tour
-        covers the basics and then walks you through connecting your accounts. You
-        can skip it any time and replay it later from <b>Settings → General</b>.
+        MindFlock runs coding agents side by side on this machine — there is no
+        account and no cloud. Each session is its own branch and folder with an
+        agent working in it; you review the diff and ship it.
       </>
     ),
   },
@@ -47,147 +42,48 @@ const SLIDES: Slide[] = [
     title: "Sessions & the grid",
     body: (
       <>
-        Start work with <b>New Session</b> in the top bar. Every session gets a
-        pane in the grid. The <b>View</b> buttons at the bottom of the sidebar
-        (Auto / 2 / 4 / 9) decide how many panes show at once — the rest keep
-        running, hidden, until you bring them forward. Drag sessions to reorder.
+        Press <b>New</b> (Ctrl+N) and say what to work on — one task, or one per
+        line. Each session gets a pane in the grid and a row in the sidebar; drag
+        rows to reorder. <b>View</b> at the bottom of the sidebar picks how many
+        panes show at once. The <b>Assistant</b> bar is a personal helper with a
+        todo list.
       </>
     ),
   },
   {
-    icon: "⚙",
-    title: "Your sidebar, your way",
+    icon: "⏩",
+    title: "Shipping",
     body: (
       <>
-        You start with <b>Usage</b>, <b>Ticket Ingestion</b> and{" "}
-        <b>Assistant</b>. Click <b>⚙ Customize</b> at the bottom of the sidebar to
-        switch on <b>PR review</b> and <b>issue handling</b> whenever you want them
-        — and drag any bar to reorder.
+        When an agent stops, its pane's button offers the next step —{" "}
+        <b>Commit…</b>, <b>Push</b>, <b>Make PR</b>. <b>⏩ Fast-track</b> takes
+        those steps for you, as far as you choose, and can ask first. Anything
+        waiting on you — a question or an approval — shows under the{" "}
+        <b>bell</b>.
       </>
     ),
-  },
-  {
-    icon: "💬",
-    title: "Your assistant",
-    body: (
-      <>
-        The <b>Assistant</b> bar is a personal AI helper, <b>powered by whichever
-        coding provider you choose</b>. It answers questions, manages your{" "}
-        <b>Todo</b> list, and follows standing instructions you set under{" "}
-        <b>Agent</b> — handy for planning before you spin up sessions.
-      </>
-    ),
-  },
-  {
-    icon: "🔗",
-    title: "Connect your accounts",
-    body: (
-      <>
-        The powerful features need a one-time hookup to your outside services.
-        <b> Settings → Connections</b> is your at-a-glance dashboard — it shows
-        what's <b>Connected</b>, <b>Action needed</b>, or <b>Not connected</b>,
-        and its <b>Configure</b> links jump to each setup screen. The next few
-        steps cover each one.
-      </>
-    ),
-    screen: "connections",
-  },
-  {
-    icon: "🤖",
-    title: "1. Coding provider",
-    body: (
-      <>
-        Pick the CLI new sessions launch with (Claude, Codex, or any provider you
-        add) and any default launch flags. Then hit the <b>Agent CLI check</b> —
-        it probes the binary <i>and</i> its login state, so you catch a
-        not-installed or not-logged-in provider before your first session, not
-        during it.
-      </>
-    ),
-    screen: "coding",
   },
   {
     icon: "🎫",
-    title: "2. Ticket ingestion",
+    title: "Where work comes from",
     body: (
       <>
-        Add a source — <b>Jira, Linear, GitHub Issues, Shortcut or Asana</b> —
-        and paste its <b>API token</b>. The non-obvious part: set each source's{" "}
-        <b>Repo URL</b> so agents know which repository to clone and branch from.
-        Press <b>Test</b> on a source to confirm the credentials before you rely
-        on it. New tickets then spin up sessions automatically.
+        <b>Intake</b> turns tickets, PRs and issues into sessions (Jira, Linear,
+        GitHub Issues, Shortcut, Asana). <b>Verify</b> joins the top bar once it
+        is checking what you shipped. <b>Customize</b> at the bottom of the
+        sidebar holds extra bars, your saved prompts and the Outbox.
       </>
     ),
     screen: "ticketing",
-  },
-  {
-    icon: "🔀",
-    title: "3. PR review",
-    body: (
-      <>
-        On <b>Intake → Pull requests</b>, add a card per repository —{" "}
-        <b>owner/name</b> (e.g. <code>mindflockai/MindFlock</code>), and optionally its
-        own agent CLI, base branch and grace period. Then paste a{" "}
-        <b>GitHub token</b> under Advanced options. That token is the whole setup: it also
-        lets MindFlock open and merge PRs for you. It falls back to{" "}
-        <code>$GH_TOKEN</code> / <code>$GITHUB_TOKEN</code>, and to{" "}
-        <code>gh auth token</code> if you happen to have the GitHub CLI — which is
-        optional, not required. <b>Pushing</b> is always plain <code>git push</code>{" "}
-        over the remote you already use, so an SSH remote needs nothing extra.
-      </>
-    ),
-    screen: "repo",
-  },
-  {
-    icon: "🐛",
-    title: "4. Issue handling",
-    body: (
-      <>
-        MindFlock can watch repos for <b>newly opened issues</b> and auto-start a
-        session on a fresh branch for each. Two prerequisites that trip people up:
-        it needs <b>git installed</b>, and it runs alongside ticket ingestion, so
-        it needs a <b>connected ticketing source</b>. Its repo list is independent
-        from PR review's.
-      </>
-    ),
-    screen: "issues",
-  },
-  {
-    icon: "🖥️",
-    title: "5. Linked IDE",
-    body: (
-      <>
-        Choose the editor MindFlock opens worktrees in. Detected editors are
-        selectable; missing ones are grayed out. <b>VS Code-family editors</b>{" "}
-        (code, cursor, windsurf) get the best integration — window focus and
-        auto-adopt — but you can point to any editor with a{" "}
-        <b>custom command</b> (e.g. <code>zed</code>).
-      </>
-    ),
-    screen: "ide",
-  },
-  {
-    icon: "📱",
-    title: "6. Mobile & remote (optional)",
-    body: (
-      <>
-        Want to check on sessions from your phone or another machine? Turn on{" "}
-        <b>Tailscale mode</b>, then use the <b>access token</b> to reach this
-        MindFlock securely from any device on your tailnet. Skip this if you only
-        ever work at one desk.
-      </>
-    ),
-    screen: "mobile",
   },
   {
     logo: true,
     title: "You're all set",
     body: (
       <>
-        That's the tour. Watch for <b>💡 hints</b> around the app as you go — turn
-        them off (or replay this walkthrough) any time under{" "}
-        <b>Settings → General</b>. The <b>Doctor</b> screen flags anything that
-        still needs attention. Happy flocking!
+        Watch for <b>💡 hints</b> around the app as you go — replay this tour or
+        turn hints off under <b>Settings → General</b>. <b>Settings → Doctor</b>{" "}
+        flags anything that still needs attention.
       </>
     ),
   },
@@ -202,10 +98,13 @@ export function WelcomeTour() {
   const open = useUi((s) => s.tourOpen);
   // While a setup dialog is open we PAUSE the tour: hide it but stay mounted so
   // the slide index survives. Closing that dialog brings the tour back where it
-  // was. Both dialogs count — .modal carries no z-index, and the tour renders
-  // last in App.tsx, so an unpaused tour would paint on top of whichever dialog
-  // its own "Set up now" button just opened.
-  const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake");
+  // was. All three dialogs count — .modal carries no z-index, and the tour
+  // renders last in App.tsx, so an unpaused tour would paint on top of whichever
+  // dialog its own "Set up now" / "Open Settings" just opened, or of the Setup
+  // checklist a failing doctor probe popped.
+  const settingsOpen = useUi(
+    (s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup"
+  );
   const finishTour = useUi((s) => s.finishTour);
   const openDialogFor = useUi((s) => s.openDialogFor);
   const [i, setI] = useState(0);
@@ -237,8 +136,8 @@ export function WelcomeTour() {
   const slide = SLIDES[i];
 
   // Open the setup surface ON TOP of the (now paused) tour instead of ending it,
-  // so the user lands back on this exact slide when they close it. Three of the
-  // six setup steps live in the Intake dialog now; the key tells us which.
+  // so the user lands back on this exact slide when they close it. A legacy
+  // Settings key that moved to Intake routes there; anything else is Settings.
   const jumpTo = (screen: string) => {
     const tab = LEGACY_SCREEN_TABS[screen];
     openDialogFor(tab ? "intake" : "settings", tab || screen);

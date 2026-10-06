@@ -37,12 +37,11 @@ interface RepositorySettings {
   verify_repos?: string[];
 }
 
-export function VerifyBar() {
-  const openDialogFor = useUi((s) => s.openDialogFor);
-  const openDialog = useUi((s) => s.openDialog);
-  const qc = useQueryClient();
-
-  const { data: repo, refetch } = useQuery({
+/** The repository half of the settings Verify runs on (`verify_enabled`,
+ * `verify_repos`) — one query, shared by this bar and the top bar's Verify
+ * button, which shows on the same "anything to govern" rule as the bar. */
+export function useVerifySettings() {
+  return useQuery({
     queryKey: ["verify-settings"],
     queryFn: async () => {
       const r = await api<{ settings?: { repository?: RepositorySettings } }>(
@@ -53,6 +52,14 @@ export function VerifyBar() {
     refetchInterval: 30_000,
     retry: false,
   });
+}
+
+export function VerifyBar() {
+  const openDialogFor = useUi((s) => s.openDialogFor);
+  const openDialog = useUi((s) => s.openDialog);
+  const qc = useQueryClient();
+
+  const { data: repo, refetch } = useVerifySettings();
 
   // The same query the top-bar badge already keeps warm, so reading it here
   // costs no extra polling — and guarantees the bar and the badge can never
@@ -137,7 +144,7 @@ export function VerifyBar() {
             ? "An agent is working through a checklist right now"
             : broken
               ? broken + (broken === 1 ? " shipped change" : " shipped changes") +
-                " did not do what its checklist expected — open Checklists to see" +
+                " did not do what its checklist expected — open Verify to see" +
                 " which step, and what was observed"
               : !on
                 ? // Deliberately not the word a removed status line used: a blunt
@@ -150,36 +157,39 @@ export function VerifyBar() {
                   : "On, and nothing is outstanding — a checklist appears here when a branch ships"
         }
       />
-      <span className="dc-label">Verify</span>
+      {/* The bar's name IS its door (the pattern every automation bar shares):
+          one control under one name, rather than a label beside a second
+          button that opened the same dialog under another word. */}
+      <button
+        id="verify-plans-btn"
+        type="button"
+        className="dc-label dc-open"
+        title="Open Verify"
+        onClick={() => openDialogFor("verify")}
+      >
+        Verify
+      </button>
       <span className="dc-actions">
-        <button
-          id="verify-plans-btn"
-          className="dc-toggle"
-          title="Checklists for what shipped, tracked repositories and what counts as live (Alt+V)"
-          onClick={() => openDialogFor("verify")}
-        >
-          Checklists
-          {/* NO "how many to check" pill here. It was the same number, from the
-              same rule, as the one on the top bar's Verify button — two badges
-              a few pixels apart saying one thing, which reads as two things
-              until you check. The top bar's is the one that survives: it is on
-              the surface you look at when you are not thinking about verifying,
-              which is the whole reason the count exists.
-              The failure pill below is NOT that number and stays: "3 to check"
-              and "1 of them is broken" are different questions with different
-              urgencies, and nothing else on screen says the second one. */}
-          {broken > 0 ? (
-            <span
-              className="dc-count dc-count-bad"
-              title={
-                broken + (broken === 1 ? " checklist has" : " checklists have") +
-                " a step that failed"
-              }
-            >
-              {"\u2717" + broken}
-            </span>
-          ) : null}
-        </button>
+        {/* NO "how many to check" pill here. It was the same number, from the
+            same rule, as the one on the top bar's Verify button — two badges a
+            few pixels apart saying one thing, which reads as two things until
+            you check. The top bar's is the one that survives: it is on the
+            surface you look at when you are not thinking about verifying,
+            which is the whole reason the count exists.
+            The failure pill below is NOT that number and stays: "3 to check"
+            and "1 of them is broken" are different questions with different
+            urgencies, and nothing else on screen says the second one. */}
+        {broken > 0 ? (
+          <span
+            className="dc-count dc-count-bad"
+            title={
+              broken + (broken === 1 ? " checklist has" : " checklists have") +
+              " a step that failed"
+            }
+          >
+            {"\u2717" + broken}
+          </span>
+        ) : null}
         <label
           className="dc-switch"
           title="Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work"

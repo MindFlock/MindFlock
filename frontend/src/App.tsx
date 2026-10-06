@@ -25,14 +25,13 @@ import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
-import { OutboxDialog } from "./components/outbox/OutboxDialog";
+import { CustomizeDialog } from "./components/customize/CustomizeDialog";
 import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { DeviceDialog } from "./components/dialogs/DeviceDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
-import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
@@ -265,14 +264,14 @@ export default function App() {
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
       <IntakeDialog />
-      <OutboxDialog />
+      {/* Sidebar · Prompts · Outbox — mounts for "customize", "prompts" and "outbox". */}
+      <CustomizeDialog />
       <VerifyDialog />
       <CommitDialog />
       <MakePrDialog />
       <RenameDialog />
       <DeviceDialog />
       <RecentDialog />
-      <PromptsDialog />
       <SetupDialog />
       <TodoDialog />
       <AssistantAgentDialog />

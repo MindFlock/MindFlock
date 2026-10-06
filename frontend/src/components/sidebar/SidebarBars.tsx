@@ -1,15 +1,14 @@
-/** The movable sidebar sections. Each customizable bar (Usage, Ticket
- * Ingestion, PR Review, Assistant) renders inside a <BarSlot> that carries the
- * drag affordance (a grip on the left, since the bars themselves are wall-to-
- * wall buttons/toggles that would otherwise swallow the drag gesture) and the
- * accent insertion cue. Reordering happens in Sidebar, which owns the shared
+/** The movable sidebar sections. Each customizable bar (Usage, Tickets, Pull
+ * requests, Issues, Verify, Assistant) renders inside a <BarSlot> that carries
+ * the drag affordance (a grip on the left, since the bars themselves are
+ * wall-to-wall buttons/toggles that would otherwise swallow the drag gesture)
+ * and the accent insertion cue. Reordering happens in Sidebar, which owns the shared
  * section-drag state so a bar can be dropped above OR below the session list.
  *
  * Section drags are tagged with SECTION_MIME so the session ROW drag (plain
  * text titles) and the section drag never interfere. */
 
 import { type DragEvent, type ReactNode } from "react";
-import type { DialogName } from "../../state/store";
 import { ExtensionBar } from "../../extensions/ExtensionBar";
 import { OverallUsage } from "../usage/OverallUsage";
 import { AutomationBar } from "./AutomationBar";
@@ -24,7 +23,6 @@ export const SECTION_MIME = "application/x-mf-section";
 interface ContentCbs {
   onOpenChat(): void;
   onOpenTodo(): void;
-  openDialogFor(name: DialogName, target?: string | null): void;
 }
 
 /** The inner content for a given bar key (visibility is each bar's own call —
@@ -47,6 +45,9 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
     case "verify":
       return <VerifyBar />;
     case "assistant":
+      // Chat and Todo only. The assistant's standing instructions are a
+      // set-once edit, so they open from "Instructions" in the Assistant
+      // window's own head (and the palette), not from a third bar button.
       return (
         <div
           id="assistant-bar"
@@ -69,14 +70,6 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
               onClick={cbs.onOpenTodo}
             >
               Todo
-            </button>
-            <button
-              id="assistant-agent-btn"
-              className="as-toggle"
-              title="Edit the assistant's standing instructions (its agent file) — shape how it behaves"
-              onClick={() => cbs.openDialogFor("assistant-agent")}
-            >
-              Agent
             </button>
           </span>
         </div>

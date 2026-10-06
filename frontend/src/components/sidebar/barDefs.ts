@@ -1,11 +1,15 @@
 /** Shared registry + ordering for the movable sidebar sections. The
- * customizable bars (Usage, Ticket Ingestion, PR Review, Issue Handling,
- * Assistant) are draggable; the session list is a fixed anchor (the
- * SESSIONS_KEY sentinel) that bars can be dropped above or below but which
- * never itself moves.
+ * customizable bars (Usage, Tickets, Pull requests, Issues, Verify, Assistant)
+ * are draggable; the session list is a fixed anchor (the SESSIONS_KEY
+ * sentinel) that bars can be dropped above or below but which never itself
+ * moves.
  *
- * Both the sidebar renderer and the footer Customize popover read from here so
- * the drag order and the menu order stay in lockstep. */
+ * Both the sidebar renderer and Customize → Sidebar read from here so the drag
+ * order and the checklist order stay in lockstep.
+ *
+ * The three automation bars are named after the Intake tab each one opens
+ * (Tickets, Pull requests, Issues): a bar is that tab's door and quick switch,
+ * not a feature with a name of its own. */
 
 export interface BarDef {
   key: string;
@@ -15,9 +19,9 @@ export interface BarDef {
 /** The draggable, hideable bars — also the fallback order for a fresh user. */
 export const SIDEBAR_BARS: BarDef[] = [
   { key: "usage", label: "Usage" },
-  { key: "ingestion", label: "Ticket Ingestion" },
-  { key: "pr-review", label: "PR Review" },
-  { key: "issue-handling", label: "Issue Handling" },
+  { key: "ingestion", label: "Tickets" },
+  { key: "pr-review", label: "Pull requests" },
+  { key: "issue-handling", label: "Issues" },
   // Last of the automations, and after the three that START work: Verify is the
   // other end of the same pipeline — what came in through ingestion comes back
   // here once it has actually shipped.
@@ -25,13 +29,14 @@ export const SIDEBAR_BARS: BarDef[] = [
   { key: "assistant", label: "Assistant" },
 ];
 
-/** Bars shown out of the box to a brand-new user. Ticket Ingestion is in here
- * because it is the headline feature — connecting a tracker is the first thing a
- * new user does, and hiding its bar meant they had to go find the product before
- * they could use it. The remaining three (PR Review, Issue Handling, Verify)
- * start hidden so a first run isn't overwhelming; they're one click away in the
- * footer Customize menu. Only applied when the user has never touched the
- * Customize menu (no persisted hiddenBars) — order and length carry no meaning,
+/** Bars shown out of the box to a brand-new user. Tickets is in here because
+ * ticket ingestion is the headline feature — connecting a tracker is the first
+ * thing a new user does, and hiding its bar meant they had to go find the
+ * product before they could use it (it still renders nothing until a tracker
+ * is connected). The remaining three (Pull requests, Issues, Verify) start
+ * hidden so a first run isn't overwhelming; they're one click away in
+ * Customize → Sidebar. Only applied when the user has never touched that
+ * checklist (no persisted hiddenBars) — order and length carry no meaning,
  * this is only a membership set (see `defaultHiddenBars`). */
 export const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
 
@@ -42,7 +47,7 @@ export function defaultHiddenBars(): string[] {
 }
 
 /** Sentinel for the session-list block in the section order. Not a bar: it is
- * never draggable and never appears in the Customize menu. */
+ * never draggable and never appears in Customize → Sidebar. */
 export const SESSIONS_KEY = "sessions";
 
 /** Full orderable section list, default order: the bars, then the session
@@ -96,7 +101,7 @@ export function orderedSections(order: string[], extraKeys: string[] = []): stri
 }
 
 /** The bar defs alone, in section order (drops the sessions anchor) — used by
- * the Customize menu so it mirrors the sidebar's live order. `extraDefs` are
+ * Customize → Sidebar so it mirrors the sidebar's live order. `extraDefs` are
  * the extension bars (key + label), resolved by the same rules as above. */
 export function orderedBars(order: string[], extraDefs: BarDef[] = []): BarDef[] {
   const byKey = new Map([...SIDEBAR_BARS, ...extraDefs].map((b) => [b.key, b]));

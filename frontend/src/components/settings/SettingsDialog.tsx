@@ -8,7 +8,7 @@
  * "issues")` opens Intake on the matching tab instead of a blank pane, which
  * matters because the server hands those keys back on Connections cards. */
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
@@ -39,27 +39,38 @@ export interface ScreenProps {
   onOpenSysLogsPane(): void;
 }
 
-const SCREENS: Array<{ key: string; label: string; el: (p: ScreenProps) => React.ReactNode }> = [
+/** The nav, in reading order. `group` names the heading a run of screens sits
+ * under: the everyday three lead ungrouped, then what configures the agents,
+ * the code they work on, this machine, and the troubleshooting tail. Purely a
+ * heading — keys and labels are what deep links and the palette resolve, so
+ * they never move with it. (Kept AFTER `label` so `{ key, label` stays one
+ * contiguous phrase for whoever greps for a screen.) */
+const SCREENS: Array<{
+  key: string;
+  label: string;
+  group?: string;
+  el: (p: ScreenProps) => React.ReactNode;
+}> = [
   { key: "general", label: "General", el: (p) => <General {...p} /> },
   { key: "connections", label: "Connections", el: (p) => <Connections {...p} /> },
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
-  { key: "coding", label: "Agent CLI", el: (p) => <CodingCli {...p} /> },
-  { key: "accounts", label: "Accounts", el: (p) => <Accounts {...p} /> },
-  { key: "localmodel", label: "Local model", el: (p) => <LocalModel {...p} /> },
-  { key: "workspace", label: "Workspace", el: (p) => <Workspace {...p} /> },
-  { key: "ide", label: "IDE", el: (p) => <Ide {...p} /> },
-  { key: "providers", label: "Agent providers", el: (p) => <Providers {...p} /> },
-  { key: "security", label: "Security", el: (p) => <Security {...p} /> },
-  { key: "appearance", label: "Appearance", el: (p) => <Appearance {...p} /> },
-  { key: "mobile", label: "Mobile", el: (p) => <Mobile {...p} /> },
-  { key: "doctor", label: "Doctor", el: (p) => <Doctor {...p} /> },
-  { key: "logs", label: "System logs", el: (p) => <SystemLogs {...p} /> },
-  { key: "advanced", label: "Advanced", el: (p) => <Advanced {...p} /> },
-  { key: "extensions", label: "Extensions", el: (p) => <Extensions {...p} /> },
+  { key: "coding", label: "Agent CLI", group: "Agents", el: (p) => <CodingCli {...p} /> },
+  { key: "providers", label: "Agent providers", group: "Agents", el: (p) => <Providers {...p} /> },
+  { key: "accounts", label: "Accounts", group: "Agents", el: (p) => <Accounts {...p} /> },
+  { key: "localmodel", label: "Local model", group: "Agents", el: (p) => <LocalModel {...p} /> },
+  { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
+  { key: "ide", label: "IDE", group: "Code", el: (p) => <Ide {...p} /> },
+  { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
+  { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
+  { key: "mobile", label: "Mobile", group: "This device", el: (p) => <Mobile {...p} /> },
+  { key: "doctor", label: "Doctor", group: "Troubleshooting", el: (p) => <Doctor {...p} /> },
+  { key: "logs", label: "System logs", group: "Troubleshooting", el: (p) => <SystemLogs {...p} /> },
+  { key: "advanced", label: "Advanced", group: "Troubleshooting", el: (p) => <Advanced {...p} /> },
+  { key: "extensions", label: "Extensions", group: "Troubleshooting", el: (p) => <Extensions {...p} /> },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.
-  { key: "traffic", label: "Site traffic", el: (p) => <Traffic {...p} /> },
+  { key: "traffic", label: "Site traffic", group: "Troubleshooting", el: (p) => <Traffic {...p} /> },
 ];
 
 export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () => void }) {
@@ -134,16 +145,24 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
           </div>
           <div id="settings-body">
             <nav id="settings-nav" aria-label="Settings sections">
-              {screens.map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  className={"set-nav-item" + (screen === s.key ? " active" : "")}
-                  data-screen={s.key}
-                  onClick={() => setScreen(s.key)}
-                >
-                  {s.label}
-                </button>
+              {screens.map((s, i) => (
+                <Fragment key={s.key}>
+                  {/* A heading before each group's first screen — text, not a
+                      control, so it takes no Tab stop and no click. */}
+                  {s.group && s.group !== screens[i - 1]?.group ? (
+                    <div className="set-nav-group" role="presentation">
+                      {s.group}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={"set-nav-item" + (screen === s.key ? " active" : "")}
+                    data-screen={s.key}
+                    onClick={() => setScreen(s.key)}
+                  >
+                    {s.label}
+                  </button>
+                </Fragment>
               ))}
             </nav>
             <div id="settings-screens">

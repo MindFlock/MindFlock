@@ -12,14 +12,32 @@ and the contracts to preserve.
 ## Layout
 
 **Top bar** — on the left: the brand logo, the sidebar toggle (`Ctrl+B` / `⌘B`),
-the theme toggle 🌙 and the notifications 🔔 bell. Then the menu — **New**,
-**Intake** (`Alt+I`; see [Intake](#intake)), **Outbox** (`Alt+O`; see
-[Outbox](#outbox)), **Verify** (`Alt+V`), **Recent** (see [Recently
-closed](#recently-closed)), **Prompts**, **Command**, **Settings**. **Intake** sits
-beside **New** because both are about starting sessions — one from scratch, one
-from what came in. The **MindFlock** wordmark (carrying the *running engine's*
-version, plus a red `-DEV` badge under a dev shell) sits centered, and the empty
-strip beside it is the drag region that moves the desktop shell's window.
+the theme toggle 🌙 and the notifications 🔔 bell, whose one amber badge counts
+everything waiting on you (see [Notifications](#notifications-)). Then the menu,
+which carries only the daily loop — **New**, **Intake** (`Alt+I`; see
+[Intake](#intake)), **Verify** (`Alt+V`) and **Settings** — and ends in a
+monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
+⌘P*) that opens the command palette (below). **Intake** sits beside **New**
+because both are about starting sessions — one from scratch, one from what came
+in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
+red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
+is the drag region that moves the desktop shell's window.
+
+**Verify** (with its due badge) joins the bar once Verify tracks a repository
+or has a checklist. Until then it is a button a newcomer has no use for. The
+browser remembers that it has been shown (`mf_tb_verify` in `localStorage`),
+so it does not blink out and back in while settings load on a reload, and
+`Alt+V` and the palette open Verify whether or not the button is showing.
+
+Four entries left the bar, and nothing they did went with them:
+
+- **Outbox** became a tab of [Customize](#customize) (`Alt+O` still opens it).
+  The part of it that waited on you moved into the bell.
+- **Prompts** is Customize's **Prompts** tab (see
+  [Saved prompts](#saved-prompts)).
+- **Recent** is the **Recently closed (n)** link under the session list (see
+  [Recently closed](#recently-closed)).
+- **Command** is the magnifier icon.
 
 In the desktop shell **on macOS** the bar mirrors. The window keeps the OS
 traffic lights top-left (`titleBarStyle: 'hidden'` — the shell draws no – □ ✕
@@ -56,32 +74,48 @@ another session's agent spawned or adopted (see
 [Agent teams](#agent-teams-mindflock-mcp)) nests under its parent and carries
 a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
-**Usage** readout, the **Assistant** bar (Chat, Todo), the **Ticket Ingestion**
-bar (pipeline on/off switch, state dot, Logs pane), the **PR Review** and
-**Issue Handling** bars, and one auto-rendered bar per generic addon — e.g.
-**Notifications** with its On/Off toggle (disabled with an explanatory tooltip
-on plain-http origins, "Blocked" when the browser denies permission).
-Below: view-mode buttons (Auto/1/2/4/9), the session count, a **⚙ Customize**
-button (sidebar bars — see below) and **⌨ Shortcuts**. (Recently closed, the
-command palette, Intake and settings live in the top bar's menu, not down here.)
+**Usage** readout (hidden while there are no sessions), the **Assistant** bar
+(**Chat** · **Todo**; the assistant's standing instructions open from
+**Instructions** in its chat window's head, or the palette's **Assistant
+instructions…**), the **Tickets** bar (pipeline on/off switch and state dot;
+it appears once a ticket source is connected), the **Pull requests** and
+**Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
+list, a **Recently closed (n)** link shows once anything is closed (see
+[Recently closed](#recently-closed)). Below: **View [Auto ▾]** (one select —
+*Auto — fit every window*, 1, 2, 4 or 9 windows), the session count,
+**Customize** (see [Customize](#customize)) and **Shortcuts**. The command
+palette, Intake, Verify and Settings live in the top bar, not down here, and
+the desktop-notification on/off toggle lives in Settings → Notifications.
 Disk management is not a screen of its own any more: it is the same page as
 [Recently closed](#recently-closed).
 
+A first run keeps the sidebar quiet: there is no welcome hint (the tour and the
+grid's **Get set up** card do that job), and the Doctor warning chip stays down
+while that card is showing, because the card already lists the same checks. One
+dismissible hint remains in the footer: *Extra sidebar bars, your saved prompts
+and the Outbox live under Customize.*
+
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
-shared registry (`sidebar/barDefs.ts`: Usage, Ticket Ingestion, PR Review, Issue
-Handling, Assistant). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
-**Usage**, **Ticket Ingestion** and **Assistant** — so the flagship
-ticket → session flow is reachable out of the box without being overwhelming;
-**PR Review** and **Issue Handling** start hidden. The footer **⚙ Customize**
-popover (`FooterCustomize`) toggles each bar on/off, and bars drag-to-reorder
-(the session list is a fixed anchor bars can sit above or below, but which never
-itself moves). Order and the hidden set persist per browser (`localStorage`).
-Each feature bar's own button deep-links into the matching **Intake** tab
-(Tickets / PRs / Issues), so a bar is a status light plus a switch rather than
-the only door — Intake is in the top bar whether or not its bar is showing.
-Turning a feature's bar on is still how you get an at-a-glance dot for PR review
-and issue handling once you've connected them; the first-run footer hint points
-only at those still-hidden bars.
+shared registry (`sidebar/barDefs.ts`: Usage, Tickets, Pull requests, Issues,
+Verify, Assistant). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
+**Usage**, **Tickets** and **Assistant** — so the flagship ticket → session flow
+is reachable out of the box without being overwhelming; **Pull requests**,
+**Issues** and **Verify** start hidden. **Customize → Sidebar** toggles each bar
+on/off, and bars drag-to-reorder by their ⠿ grip (the session list is a fixed
+anchor bars can sit above or below, but which never itself moves). Order and the
+hidden set persist per browser (`localStorage`).
+
+The three automation bars carry the **names of the Intake tabs they mirror**, so
+one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
+label is its door — a button (`.dc-open`) that opens that Intake tab — so a bar
+is a status light, a switch and a door rather than the only way in; Intake is in
+the top bar whether or not its bar is showing. Each switch's tooltip names the
+Intake switch it mirrors (**Automated ingestion**, **Automated review**,
+**Automated handling**), and a switch that fails says why in a bottom-right
+card rather than a browser `alert()` (which the desktop app does not
+implement). The **Verify** bar's label opens Verify the same way. Turning a
+feature's bar on is still how you get an at-a-glance dot for PR review and
+issue handling once you've connected them.
 
 **Window rows** — every open non-session window (MindFlock logs, System
 logs, the Assistant chat, a verify watch window, an extension pane such as a
@@ -91,17 +125,19 @@ badge, drags to reorder among the sessions (one saved order holds both — a
 never-dragged window still starts below the sessions), is toured by
 `Ctrl+Tab`, and narrows under the sidebar filter by its title. Clicking a row
 selects the window (top of the MRU, so a capped view brings it on screen) and
-its ✕ closes the window — the same ✕ every pane head carries at its top
-right, next to copy-all (a session pane's hides the window; the session keeps
-running). Closing a verify row closes only the watch window; the run keeps
-going and the Verify dialog reopens it. Verify *sessions* stay off the session
-rail (they are not work); their open windows list here like any other window.
+its ✕ closes the window — the same ✕ every non-session pane head carries at its
+top right. A **session** pane's head carries **−** there instead: it hides the
+window and the session keeps running, so ✕ always means end or close (see
+[the pane header](#the-pane-header)). Closing a verify row closes only the
+watch window; the run keeps going and the Verify dialog reopens it. Verify
+*sessions* stay off the session rail (they are not work); their open windows
+list here like any other window.
 The Assistant — the one window here that takes input — also accepts a dropped
 file the way a session terminal does; the read-only tails do not — see "Hand a
 file to the agent" below.
 
 The **Assistant row wears the same activity chip a session row does** —
-`running` / `clarify` / `limit` / `idle` / `offline`, painted from the same five
+`running` / `question` / `limit` / `idle` / `offline`, painted from the same five
 words by the same helper (`lib/stage.ts` `activityChip`, split out of
 `chipState` so a window that has an agent but is not a session shares the
 vocabulary rather than growing a second copy of it). It is fed by
@@ -117,15 +153,21 @@ and reordering two rows would silently shuffle rows that were not on screen.
 Merging keeps the absent ones where they were.
 
 **Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
-**Command** button) opens a fuzzy-filtered palette over everything: jump to
-("Focus:") any session, New session, Commit / Push / Create PR / Open in IDE on
-the focused session, Open Intake (plus **Intake: Tickets** / **Intake: Pull requests**
-/ **Intake: Issues**, so typing "issues" lands on that queue instead of on a
-dialog you then have to navigate), Open Settings / Doctor / Setup checklist,
-Toggle sidebar, and New from Recently closed. Type to filter (subsequence
-match), `↑`/`↓` to select, `Enter` to run, `Esc` to close. Both bindings work
-from anywhere, including while a terminal has keyboard focus — the same VSCode
-trade-off as its quick-open/palette keys.
+magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
+first and the jump rows last: **New session…**, then the dialog openers — Open
+Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
+Issues**, so typing "issues" lands on that queue instead of on a dialog you then
+have to navigate), **Verify — check what shipped**, **Outbox — what's on its way
+out**, **Customize…**, **Prompts…** (*paste a saved prompt*), **Assistant
+instructions…**, **Recently closed…**, Open Settings / Doctor / Setup checklist,
+Toggle sidebar, Keyboard shortcuts — then the focused session's verbs (Commit /
+Push / **Make PR** / **Merge PR** / Open in IDE, Rename…, Queue prompt… *runs
+when idle*, and Split… only where a split can actually start), then one
+**Focus:** row per session, named exactly as its rail row, then extension
+commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
+run, `Esc` to close. Both bindings work from anywhere, including while a
+terminal has keyboard focus — the same VSCode trade-off as its quick-open/palette
+keys.
 
 **Grid** — terminal panes in a draggable grid (grip `⠿` to rearrange; layout is
 persisted). The view mode caps how many panes are visible; the most recently used
@@ -210,7 +252,7 @@ The pane shows a single **guided next-step button**:
 | pre-commit ✗ | **Re-commit** | Restages the hook auto-fixes and retries with the same message |
 | committed | **Push** | `git push --no-verify -u origin HEAD` (hooks already ran) — plain git over your own remote, SSH or HTTPS |
 | pushed | **Make PR** | `gh pr create --base <base> --fill` when `gh` is authenticated; else the GitHub REST API with a token; else opens a prefilled compare URL in your browser |
-| PR open | **Merge** | `gh pr merge --merge` (confirmed); else the REST API with a token; else opens the PR page |
+| PR open | **Merge** | Confirms in the app (*Merge this PR?* — a bottom-right card, since the desktop app has no browser `confirm()`), then `gh pr merge --merge`; else the REST API with a token; else opens the PR page |
 | merged | **Open PR ↗** | Opens the PR page |
 
 Stages are detected best-effort from git state, so a commit made in Cursor also
@@ -219,9 +261,48 @@ advances the badge within a few seconds. Everything up to and including
 `merged` stages do (an authenticated `gh`, or a token from Intake → Pull requests
 → Advanced options), so with neither the chip parks on `pushed` while the buttons
 keep working through the browser. Live agent **activity** overlays the stage chip:
-`running`, `clarify` (the agent is asking you something), `idle`,
-`offline`, `paused` — detected from the CLI's own activity hooks where
-available, with CPU/pane-hash fallback (see [providers.md](providers.md)).
+`running`, `question` (the agent is asking you something — the activity value
+underneath is still `clarify`), `idle`, `offline`, `paused` — detected from the
+CLI's own activity hooks where available, with CPU/pane-hash fallback (see
+[providers.md](providers.md)).
+
+A push whose checks have not passed for this commit stops with a bottom-right
+card — *Checks haven't passed for this commit* — and a **Push anyway** button,
+and **Clean up** on a session whose folder is gone asks the same way. These used
+to be browser `confirm()`s, which the desktop app does not implement, so the
+buttons did nothing there.
+
+### The pane header
+
+Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
+**Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
+workers or messages), the guided next-step button, ⏩
+[Fast-track](#fast-track-), the cost chip, **History** and **−**.
+
+- **One name.** The pane is titled with exactly what its rail row shows — the
+  rename if there is one, else the `(tix) feature/slug` label — and the same
+  name heads its palette **Focus:** row. The raw title and branch stay in the
+  tooltip.
+- **Quiet until it is your move.** The next-step button is outlined, not
+  filled, while the agent is working, asking a question or at its usage limit,
+  and while it offers **Commit…** with nothing uncommitted. It turns accent
+  once the agent is idle with changes to commit.
+- **⏩ alone while Off.** The Fast-track button shows just the glyph while it
+  is Off (its screen-reader name still says *Fast-track: off*) and
+  names the target once one is set.
+- **− hides, ✕ ends.** The session pane's last button is **−** (*Hide window —
+  the session keeps running*); ✕ is kept for ending a session (the rail row's
+  ✕) and closing a non-session window.
+- **Copy all** moved into **History**: the header no longer carries a copy
+  button, and the History overlay's bar copies the whole pane's text.
+- **Narrow panes compact.** Below about 640px the header drops the provider
+  and context parts of the cost chip (the cost stays) and tightens the tabs,
+  so at a 2×2 grid on a laptop every control stays visible without sideways
+  scrolling.
+- **The live step doesn't repeat the target.** While fast-track is working,
+  the step chip shows the run's own note (what it is doing or waiting on) and
+  the target stays on ⏩ beside it; a halted run shows ✗ on ⏩ with the reason
+  in its tooltip.
 
 **Ctrl+C on a running hook gives the button back.** The commit chain holds a lock
 file while the hooks run, which is what keeps the pill on `pre-commit`; the whole
@@ -295,12 +376,25 @@ leaves the ladder still asking for **Merge** until someone presses ↺.
 
 ## Session row actions (expand a sidebar row with ›)
 
-Copy path · **Commit…** · **Push** · **Make PR** · **Merge to staging** ·
+Copy path · **Commit…** · **Push** · **Make PR** · **Merge PR** ·
 **Open PR ↗** · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
 **Split into parallel pieces…** · **Move out of {group}** for a group member ·
 **Message…** · **Copy window** (a second in-place session on the same worktree) ·
 **Open/focus Cursor** (row double-click does the same) · **Hide/Show window**
-(session keeps running) · **Pause/Resume** · **Delete + wipe worktree** (confirmed).
+(session keeps running) · **Pause/Resume** · **Delete + wipe worktree**.
+
+**Merge PR** asks first in the app (*Merge this PR?*, with a **Merge PR**
+button), because a merge cannot be undone from MindFlock. **Delete + wipe
+worktree** confirms inline: the first click turns the item into *Delete
+&lt;name&gt; and its folder?* with **Delete + wipe** and **Keep**, and a failure
+shows in a bottom-right card. Both used to be browser `confirm()` / `alert()`
+calls, which do nothing in the desktop app.
+
+**A status line that waits on you is a door.** When a fast-tracked row's line
+ends **— open the bell** (an escalation or a failure) or **· ready — approve in
+the bell** (an ask-first ship), clicking it — or Tab to it and Enter — opens
+the bell scrolled to that session's row, without selecting, dragging or
+renaming the row.
 
 A copy is filed **directly beneath the one it was copied from**, not at the
 bottom of the rail — the provisioning row lands there too, so it never appears
@@ -505,13 +599,15 @@ server — nothing is pasted into the agent**:
 
 **Ask me before it ships** stops one step short of the first outward step
 (a Commit target stops before committing; Push / PR / Merge stop once
-committed) and waits for your go in the Outbox. It means nothing while
-fast-track is Off.
+committed) and waits for your go in the bell, which shows the commit message
+and PR title before anything is pushed. It means nothing while fast-track is
+Off.
 
 **The ⏩ button** in each pane head, beside the guided **Commit… / Push /
 Make PR** button, is THE per-session control. It names the target —
-**⏩ off**, **⏩ Commit**, **⏩ Push**, **⏩ PR**, **⏩ Merge**, with a small
-circled **?** when it asks first — and a click opens the picker:
+**⏩ Commit**, **⏩ Push**, **⏩ PR**, **⏩ Merge**, with a small circled **?**
+when it asks first, and just **⏩** while it is Off — and a click opens the
+picker:
 Off (`O`), Commit (`C`), Push (`U`), Open a PR (`P`), Merge when green (`M`),
 then **Ask me before it ships** (`A`). The current choice is ticked and
 highlighted; arrows, Enter, Esc (back to the terminal) and the letters work,
@@ -559,7 +655,8 @@ palette: it makes this session the lead of a split run (`POST /api/runs`,
 `split: true`). The lead proposes the pieces, each fenced to its own paths;
 you approve the plan in its Thread tab; the server starts the workers and
 merges them back into one PR, which goes as far as the session's fast-track
-(a PR when it was Off). It is disabled, with the reason, on a server that
+(a PR when it was Off). In the row's › menu it is disabled, with the reason
+(the palette lists it only where a split can start), on a server that
 doesn't take splits, for a CLI that doesn't get the MindFlock tools, an agent
 launched without them ("Restart this agent…"), or one on a prompt or at its
 usage limit. A group member's row › menu also has **Move out of {group}**
@@ -890,12 +987,66 @@ edit" notification rule is off by default, the other two are on.
 
 ## Notifications (🔔)
 
-The header bell keeps a running feed of notable session events — finished,
+**The bell is the one place anything waits on you.** Its panel (*Notifications —
+what needs you, and what happened while you were away*, about 400px wide) has
+two lists: **Needs attention** on top, then the history feed.
+
+**Needs attention** merges two sources into one list, one row per session: the
+per-session attention reasons (an agent waiting on your answer, a broken
+session, failing checks, a branch ready for its PR) and the `waiting` group of
+`GET /api/outbox` — everything the Outbox used to hold under *Waiting on you*.
+It is sorted by urgency: answers first, then approvals and group escalations,
+then broken, failing and ready. The list scrolls and shows six rows before
+**+N more**. What each kind of row offers:
+
+- **An agent's question.** Every session on a dialog gets the same answer
+  strip its rail row has — the prompt's own buttons, **↗** to open the pane —
+  not only an orchestrator's workers.
+- **An ask-first approval.** The exact commit message and PR title, plus where
+  its fast-track stops, *before* anything leaves the machine: **Diff** /
+  **Commit** (or **Open the PR**), via `POST /api/instances/{title}/ship-now`. A
+  commit-step approval can **edit** the message inline first; an approval held
+  before its *push* has already committed, so it offers no edit. With no
+  message previewed the row reads "written from the diff when it commits".
+- **A stuck group line** (stalled twice, hooks failed twice, a conflict, a
+  create that failed after its retries) carries its reason and the server's
+  actions for it: **Retry**, **Retry fresh**, **Open ↗**, **Skip**.
+- **A group budget pause** offers **Raise to $N** (an inline amount;
+  `POST /api/runs/{id}/resume {budget_usd}`, raise and resume in one call) and
+  **Stop** (`/cancel`).
+- **A group's plan or release** keeps its one-click quick action (**Approve
+  the plan** / **Start N workers**, which approves into separate worktrees, the
+  same default the Thread card preselects; the release's own button, such as
+  open the PR) next to **Open the Thread ↗**, which opens the lead's Thread
+  with the full card. A failed check offers **Run the check again**, a group
+  whose lead is gone offers **Cancel the group**, and changes no piece owns
+  (a `stray` item) offer **Open ↗**.
+
+**One badge.** `#notif-badge` counts that merged list, so nothing needs you
+that the badge does not count. The top bar has no second count, and the
+desktop-notification on/off toggle lives only in Settings → Notifications.
+
+**Opening it from elsewhere.** Anything can open the panel by dispatching a
+`mf-open-bell` DOM event (`document.dispatchEvent(new CustomEvent("mf-open-bell",
+{detail: {title}}))`); with a `title` it scrolls that session's row into view
+and flashes it. The rail's clickable **— open the bell** lines, a group
+`run.needs_you` toast without a lead, and the Outbox tab's *n waiting on you —
+in the bell* line all use it.
+
+**History** keeps a running feed of notable session events — finished,
 needs-input, stage changes, cost-over-budget, auto-sent queued prompts — fed by
 the events bus, **including the backlog replayed on connect** so it answers
-"what happened while I was away." An unread badge counts events since you last
-opened it (keyed on timestamp so it survives server restarts); clicking an entry
-focuses that session.
+"what happened while I was away." Events since you last opened it are marked
+unread (keyed on timestamp so it survives server restarts); while nothing
+needs attention, unread history shows as a small neutral dot on the bell, never
+a number. Clicking an entry focuses that session. The rows read as sentences: a stage change says
+*committed*, *pushed*, *opened a PR*, *merged*, *pre-commit failed* or *running
+pre-commit hooks* rather than the raw stage key, and an auto-sent prompt says
+*sent the next queued prompt (n left)*. A group's rows are labelled with the
+group's name; clicking one opens the lead's Thread when the group has a lead,
+scrolls to its Needs attention row when it is waiting on you, and otherwise
+opens that group in Customize → Outbox. *No notifications yet.* shows only when
+both lists are empty.
 
 **Agent messages stay out of the feed; worker reports don't.** A
 `session.message` ([Agent teams](#agent-teams-mindflock-mcp)) becomes a row
@@ -1088,7 +1239,8 @@ Authentication section. If the token leaks, regenerate it from Settings →
 - **Attention** — sessions waiting on input badge the tab **title** (`● (n)`)
   *and* the **favicon** (a red dot), so a backgrounded tab is noticeable. The
   🔔 bell keeps the durable list, prioritized: waiting on your answer, then
-  broken (pre-commit / worktree setup), then checks failing, then ready to move.
+  approvals and group escalations, then broken (pre-commit / worktree setup),
+  then checks failing, then ready to move.
 - **Wedged-session watchdog** — the lowest-noise entry on that list: a session
   idle for more than **20 minutes** while still holding **uncommitted** changes
   reads *idle 25m with unfinished work — possibly stuck*, i.e. an agent that
@@ -1131,7 +1283,7 @@ built-in alias.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Alt+O` | Outbox — what's shipping, and what's waiting on you |
+| `Alt+O` | Outbox — what's on its way out (opens Customize → Outbox; anything waiting on you is in the bell) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -1159,14 +1311,18 @@ branch — the old `Ctrl+Alt` single-stroke family collided with AltGr on
 Windows international layouts. Like VSCode (whose
 `terminal.integrated.allowChords` defaults to true), the `Ctrl+K` prefix is
 claimed even while a terminal is focused; readline's kill-line is the accepted
-cost (`Ctrl+U` still kills the line, `Esc` cancels a pending chord). Merge to
-staging is deliberately unbound — palette/menu only, behind a confirm.
+cost (`Ctrl+U` still kills the line, `Esc` cancels a pending chord). **Merge
+PR** is deliberately unbound — palette/menu only, behind an in-app confirm.
+`Alt+O` keeps its binding id `outbox`, so a rebind saved before the Outbox moved
+into Customize still applies.
 
 ## New-session dialog
 
-The dialog has two tabs — **Session** and **Ticket**. Session is the landing
-tab on every open (including after a refused create), because it is the hot
-path: name → Enter. Ticket is described further down.
+Once a ticket tracker is connected (`caps.ticketing`), the dialog has two
+tabs — **Session** and **Ticket**. Before that there is no tab strip at all:
+filing a ticket needs a tracker, so a newcomer sees only the Session content.
+Session is the landing tab on every open (including after a refused create),
+because it is the hot path: name → Enter. Ticket is described further down.
 
 The card has one fixed top edge and grows downward from it, rather than being
 centred like every other modal — a centred card shifts its top by half of any
@@ -1177,12 +1333,14 @@ each pane keeps its own natural height, and a card stops growing at the bottom
 of the window and scrolls inside instead.
 
 The Session tab is two pages: a one-sentence **Describe** page it opens on
-(below), and the form itself. On the form, newcomers see just **Name**, **Prompt**, and
-**Create** — the defaults do the right thing (blank repo → the configured
-`[repository].url` is provisioned; program prefilled). Program, repo folder, the *create new repo* / *work in place* checkboxes, the folder
-browser, and a **Launch flags** field live under a collapsed **Advanced options**
-fold (its open/closed state is remembered). **Ctrl/Cmd+Enter** submits the dialog
-from anywhere in it (the handler is dialog-level, not tied to the prompt field).
+(below), and the form itself. On the form the defaults do the right thing
+(blank repo → the configured `[repository].url` is provisioned; program
+prefilled). Program, repo folder, the *create new repo* / *work in place*
+checkboxes and the folder browser sit in the **Git & workspace** fold, which
+starts **open** on purpose — hidden, people launched with the wrong strategy
+rather than discover it. **Launch flags** (placeholder *e.g. --verbose*) and the
+**Prompt** are closed folds. **Ctrl/Cmd+Enter** submits the dialog from anywhere
+in it (the handler is dialog-level, not tied to the prompt field).
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -1200,10 +1358,11 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs a CLI with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Split a big line into parallel pieces first** sits under the fast-track on the
-Describe page. **Not yet:** while `caps.team_runs.split` is false it is
-disabled with "(splitting into parallel pieces is coming next)" — everything
-below describes it once the server takes splits. It applies to exactly one task line. Ticked, the primary button
+**Split a big line into parallel pieces first** sits under the fast-track in the
+Describe page's **Options** fold. On a server that doesn't take splits
+(`caps.team_runs.split` false) it is not shown at all, rather than shown
+disabled — everything below describes it once the server takes splits. It
+applies to exactly one task line. Ticked, the primary button
 reads **Start the lead** and starts a split run (`POST /api/runs`, `split:
 true`) instead of a session: MindFlock creates the lead in a new worktree of
 the folder shown on **Starts in**, the lead proposes the pieces with separate
@@ -1293,7 +1452,8 @@ its outcome rather than for the app's own vocabulary:
 - **Set it up myself instead** — straight to page 2. Nothing is read and no model
   runs. It cannot be dropped: every opening lands here, so it is the only route
   to the form for someone with no coding CLI installed.
-- **Review details first ↵** — what Enter in the box does. Sends the sentence to
+- **Review details first ↵** — what Enter in the box does (hidden for a list
+  or a split, which have no single form to fill in). Sends the sentence to
   [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
   the filesystem, asks one headless model turn, and fills in page 2 for you to
   change before anything is created. Enter here has always meant "read this",
@@ -1302,7 +1462,9 @@ its outcome rather than for the app's own vocabulary:
   folder the suggestion pre-fill left behind. The button is **`type="button"`**
   for the same reason.
 - **Create session** — start now from what you typed, without reading the
-  details. The one thing it does *not* skip is a folder that does not exist.
+  details. The one thing it does *not* skip is a folder that does not exist;
+  its refusal says to *press Create session again* or *use Set it up myself
+  instead*.
 
 While a turn is in flight the button shows a ring and reads **Reading…**, then
 **Still reading…** after 8 s: a cold CLI start plus a real turn runs to ~25 s and
@@ -1312,12 +1474,17 @@ read-only rather than disabled so the caret and the selection survive the wait.
 
 **One thing per line, or ticket IDs.** The box is a textarea (three lines,
 growing to eight). One plain line is everything above, unchanged — the only
-addition is **Fast-track to** (Off / Commit / Push / Open a PR / Merge when
-green, starting **Off** unless you pick) and **Ask me before it
-ships**; anything but Off is armed on the new session as soon as its worktree
-exists. The "Set it up myself" form shows the same row. Shift+Enter
-starts another line, and once the box holds **two or more things, or any ticket
-ID**, it becomes a list:
+addition is a folded **Options** row (`#new-options`) whose summary says what it
+holds, e.g. **Options · Fast-track: Off** or **Options · Fast-track: Open a PR,
+asks first**. Inside it: **Fast-track to** (Off / Commit / Push / Open a PR /
+Merge when green, starting **Off** unless you pick), **Ask me before it ships**
+and the split box. The fold opens by itself when the fast-track differs from
+the dialog's default or split is on, and otherwise remembers whether you left
+it open (`mf_new_options_open`). Anything but Off is armed on the new session
+as soon as its worktree exists. The "Set it up myself" form shows the same
+fast-track row. Shift+Enter starts another line, and once the box holds **two
+or more things, or any ticket ID**, it becomes a list (lists and splits show
+their choices unfolded):
 
 - Rows under the box, read by the server (`POST /api/runs/preview`, 300 ms
   after you stop typing): a `TICKET`/`TASK` chip, the ID, the title, where it
@@ -1335,7 +1502,8 @@ ID**, it becomes a list:
 - A sentence under the choices says what will happen, e.g. *"6 sessions, 3 at a
   time. Each one is committed with a message written from its diff, pushed and
   opened as its own PR once its agent stops and your hooks pass. Nothing
-  merges; you'll see each PR in the Outbox."*
+  merges; each PR shows on its row."* With ask-first on it adds *"Before the
+  first commit it stops and asks you first, in the bell."*
 - **Start N sessions** posts `POST /api/runs`; the dialog closes once the server
   has taken it, and a refusal ("one-for-all needs a single repository") lands
   beside the choices. MindFlock owns those sessions from then on: queueing,
@@ -1375,44 +1543,79 @@ project usually wants both, and the tick's own copy says so. A folder is the one
 thing a plan proposes that outlives the session: a worktree goes when the session
 does, but nobody comes back for the directory.
 
-## New-session dialog: prompt presets
+## Saved prompts
 
-The dialog carries an optional **Prompt** textarea (sent to the agent at
-launch) with a **Preset…** select beside it. Built-ins ship for the common
-loops — *Fix failing tests*, *Address PR review comments*, *Write tests for
-recent changes*, *Refactor for clarity — no behavior change* — and **Save…**
-stores the current prompt under a name of your own (✕ deletes a saved one).
-Picking a preset fills the textarea; edit freely before creating. Saved
-presets live in this browser's `localStorage` under `mindflock.prompt_presets`
-(`[{name, prompt}]`).
+Saved prompts are text you reuse. They have two homes, one per job:
+
+- **Customize → Prompts** manages them and pastes one — it is the one place
+  that puts text into sessions that are already running. The **Paste into**
+  picker at the top chooses where: the selected session (the default), any
+  other running session by the name its rail row shows, or **All running
+  sessions (n)** once two or more are running ("running" = status `running`
+  or started, but not paused; verify sessions are left out). Click a prompt
+  to paste it there (`POST /api/instances/{title}/send` with `submit: false`
+  and `dialog_safe: true`, once per session for *All*) — *nothing is sent
+  until you press Enter in that session*, in each for *All*, and a session
+  sitting on a permission or limit prompt is skipped rather than typed into
+  (the toast says how many it reached; any that failed get an error card). Add and delete live here too, and ⋮ previews a long one. Open
+  it from the palette's **Prompts…** (*paste a saved prompt*) or the sidebar
+  footer's **Customize**.
+- **New → page 2's Prompt fold** picks one as a new session's opening prompt.
+  The **Saved prompt…** select sits beside the optional **Prompt** textarea
+  (sent to the agent at launch). Built-ins ship for the common loops — *Fix
+  failing tests*, *Address PR review comments*, *Write tests for recent
+  changes*, *Refactor for clarity — no behavior change*. **Save…** opens an
+  inline row under the select — a name box with **Save** and **Cancel** (Enter
+  saves; Esc cancels without closing the dialog) — rather than a browser
+  `prompt()`, which the desktop app does not implement. ✕ deletes a saved one,
+  and **Manage…** opens Customize → Prompts. Picking one fills the textarea;
+  edit freely before creating.
+
+Both read the same list: this browser's `localStorage` under
+`mindflock.prompt_presets` (`[{name, prompt}]`).
 
 ## First-run onboarding
 
-Two coordinated pieces help a new user find their way, backed by UI store state
-(`state/store.ts`: `tourDone`, `hintsEnabled`, `dismissedHints`, persisted in
-`localStorage`).
+One welcome at a time. A first load shows the tour over the grid's first-run
+card, and nothing else competes with them. Three pieces, backed by UI store
+state (`state/store.ts`: `tourDone`, `hintsEnabled`, `dismissedHints`,
+persisted in `localStorage`):
 
-- **Welcome tour** (`onboarding/WelcomeTour.tsx`) — a replayable slideshow that
-  covers the basics (sessions, the grid, the customizable sidebar, the
-  assistant) and then walks through the one-time account hookups (coding
-  provider, ticket ingestion, PR review, issue handling, linked IDE, mobile).
-  Setup slides carry a **Set up now →** button that jumps straight to the
-  matching surface: three of the six — ticket ingestion, PR review, issue
-  handling — open the **Intake** dialog on their tab, the other three a Settings
-  screen (`LEGACY_SCREEN_TABS` decides which from the slide's `screen` key). The
-  tour pauses behind either dialog rather than ending, so closing it lands you
-  back on the same slide. It **opens automatically on first run** — when
-  `tourDone` is `false` *and* `hintsEnabled` is `true` — and is replayable any
-  time from **Settings → General** (`openTour`). Finishing or skipping sets
+- **Welcome tour** (`onboarding/WelcomeTour.tsx`) — a replayable five-slide
+  tour: **Welcome to MindFlock** (agents side by side on this machine, no
+  account and no cloud; each session is its own branch and folder), **Sessions
+  & the grid** (New, one task or one per line; a pane and a row per session;
+  View picks how many panes show; the Assistant), **Shipping** (the pane's
+  next-step button, ⏩ Fast-track, and the bell for anything waiting on you),
+  **Where work comes from** (Intake, plus Verify joining the top bar once it is
+  checking what you shipped, and Customize for extra bars, saved prompts and
+  the Outbox) and **You're all set** (hints, Replay tour, Doctor). The fourth
+  slide carries **Set up now →**, which opens **Intake** on its Tickets tab
+  (`LEGACY_SCREEN_TABS` decides that from the slide's `screen` key). The tour
+  pauses behind Settings, Intake or Setup rather than ending, so closing one
+  lands you back on the same slide. It **opens automatically on first run** —
+  when `tourDone` is `false` *and* `hintsEnabled` is `true` — and is replayable
+  any time from **Settings → General** (`openTour`). Finishing or skipping sets
   `tourDone`.
+- **Get set up** — with no sessions the grid shows a card headed *Get set up*,
+  *Three steps to a running agent.*: ① the dependency checklist with
+  **Re-check**, ② **Test agent CLI**, with **Test GitHub** and the Shortcut
+  token test folded under *Optional: test GitHub or a Shortcut token*, and ③
+  **+ New session**. A line under ② says where tokens live: *Ticket and GitHub
+  tokens are set up in Intake · agent logins in Settings → Accounts*, each half
+  a link. The **Setup** modal shows the same checklist, so on a machine not yet
+  onboarded it only opens by itself when a check fails *and* sessions already
+  exist (the card is gone then); with zero sessions the card is the one
+  welcome.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,
   Settings → General) hides all of them at once; turning hints **back on
   re-arms** every previously dismissed hint (clears `dismissedHints`).
 
-Both are reset/replayed from the **Onboarding** block at the bottom of
-**Settings → General**.
+The tour and hints are reset/replayed from the **Getting started** block at the
+top of **Settings → General**. There is no sidebar welcome hint any more; the
+one first-run hint left in the sidebar points at Customize.
 
 ## Make-PR dialog
 
@@ -1430,7 +1633,14 @@ One page for closed sessions **and** what they left on disk. "Workspaces on
 disk" used to be a second, near-identical list of the same directories seen from
 the other end, so the two were folded together: *can I have this work back* and
 *can I have this disk back* are the same question about the same directory.
-Opened from **Recent** in the top bar; rows come from `GET /api/recent`.
+Opened from the **Recently closed (n)** link under the session list, which
+shows only while there is something to list (it shares the `recently-closed`
+query Verify uses, and refreshes when a session is deleted) or from the
+palette's **Recently closed…**; `Ctrl+Shift+T` / `Ctrl+Z` reopen the last one
+without it. Rows come from `GET /api/recent`. Forget, Delete, **Remove unused worktrees** and its
+follow-up confirm in a bar under the header, and failures show in a
+bottom-right card — never a browser `confirm()` or `alert()`, which the desktop
+app does not implement.
 
 Each row carries both identities — the saved name / branch / session title, then
 badges for what the directory is (`worktree`, `workspace`, `pr`, `in-place`,
@@ -1562,6 +1772,10 @@ tab" clause, because that toggle lives right there); a section stalled because t
 engine is down names the engine instead and points at the tab that owns it, since
 turning PR review on while the engine is stopped would still start nothing.
 
+A row carries the **will auto-start** chip only while its section is **auto-start
+on**. When the section is off or not set up the chip would be a promise the
+pipeline won't keep, and the sentence under the heading already says why.
+
 Each heading also carries an **Open Tickets ›** / **Pull requests ›** /
 **Issues ›** button through to the tab that owns the setup, and a section with
 nothing in it says *"Nothing
@@ -1574,9 +1788,16 @@ use, with the same per-launch agent, depth and effort pickers and a **Start now*
 button, so waiting for the sweep is the default rather than the only option — and
 when auto-start is off, starting from here is the entire point of the tab.
 
-**One anatomy, three tabs** (`components/intake/kit.tsx`): a master switch → a
-list of collapsible **source cards** with **+ Add** → a **work list grouped by
-source**, each row carrying why auto-pickup did or didn't take it. Each of the
+**One anatomy, three tabs** (`components/intake/kit.tsx`): an intro line → a
+master switch → a **work list grouped by source**, each row carrying why
+auto-pickup did or didn't take it → the list of collapsible **source cards**
+with **+ Add** → **Advanced options**. That is the **work-first** order, used
+once at least one source or repository is configured: you come here for the
+work, and the cards are what you set up once. With nothing configured the
+cards lead, since there is no work to show yet and adding a source is the next
+step. A ticket source's collapsed card reads *Jira — payments · claude
+(default)* — the provider once, the label, the CLI — without repeating the
+provider's key or name. Each of the
 three is a titled section, and the switch is a banded row; the switch used to be
 followed by a status sentence ("● Active — polling 1 source…", "‖ Paused — 1
 source kept…") and no longer is — with the toggle beside it and the sources it
@@ -1590,7 +1811,7 @@ credential.
 
 - **Tickets** — the master **Automated ingestion** switch (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
-  the sidebar's Ticket Ingestion bar, so the two never disagree), one card per
+  the sidebar's **Tickets** bar, so the two never disagree), one card per
   connected source (provider, optional label, Repo URL, its own **Agent CLI**,
   its **Thinking effort**, ingest-state picker, **Move to state on start**,
   credentials, **Test connection**, **Remove**), then
@@ -1612,7 +1833,7 @@ credential.
   ceiling and is disabled outright for a CLI with no effort control. It applies
   to every ticket from the queue — ingested automatically or started by hand —
   and an individual ticket can still override it on its row, where the empty
-  choice now reads **Configured (…)** naming the queue's rung. Unset means
+  choice reads **Default (…)** naming the queue's rung. Unset means
   whatever the CLI does on its own; there is deliberately no flock-wide default,
   because how hard to think is a property of the work rather than of the
   installation. Unset **Agent CLI** falls back to `[mindflock].agent`, then the app
@@ -1629,13 +1850,18 @@ credential.
   live and never fails a launch — a tracker that refuses it (most often a Jira
   status with no transition into it from where the issue sits) logs a warning
   and the session keeps running.
-- **Pull requests** — **Automated review** (absent = on once repos exist), the
-  repository cards, then **Open pull requests** with **Begin review**. This tab
-  also owns the shared GitHub token, under **Advanced options**.
-- **Issues** — **Automated handling** (opt-in: absent = off), its own repository
-  cards (`github.issue_repos`, independent of review's), then **Open issues**
-  with **Start work**. It links to the Pull requests tab for the credential,
-  which authenticates the same account.
+- **Pull requests** — **Automated review** (absent = on once repos exist),
+  **Open pull requests** with **Begin review**, then the repository cards. This
+  tab also owns the shared GitHub token, under **Advanced options**.
+- **Issues** — **Automated handling** (opt-in: absent = off), **Open issues**
+  with **Start work**, then its own repository cards (`github.issue_repos`,
+  independent of review's). It links to the Pull requests tab for the
+  credential, which authenticates the same account.
+
+The ticket source's **Fast-track tickets to** and a repository's **Fast-track
+them to** offer **Off** plus the same ladder minus Merge — *How far each ticket
+goes after its agent finishes. Merge is per-ticket only — a source default runs
+with nobody watching.* A source that stored the old `agent` depth shows Off.
 
 **Per-repo cards, with inherited defaults** — the two GitHub tabs no longer show
 a flat `owner/name` chip list. Each watched repository is its own
@@ -1820,8 +2046,8 @@ is not this button's decision.
 
 **Every row can be started on a different coding CLI, for that one launch** — a
 small picker beside **Begin work** / **Begin review** / **Start work**, whose
-empty choice names what the row's source or repo card would use ("Configured
-(codex)"), so it is never a mystery. You notice mid-review that this one wants a
+empty choice names what the row's source or repo card would use ("Default
+(codex)", or "Default (app default)"), so it is never a mystery. You notice mid-review that this one wants a
 different model; re-configuring the whole queue to run one item is the wrong
 shape of action, so the override is not persisted. All three start routes
 (`POST /api/tickets/start`, `/api/github/prs/review`, `/api/github/issues/start`)
@@ -1831,9 +2057,19 @@ unknown name is a **400** rather than a silent fall back to the default
 is worse than a rejected request).
 
 Beside it sit the other two per-launch pickers, on the same line and with the
-same "just this item" lifetime: **how far** to carry it (the autopilot depth —
-an individual item may choose *Merge*, which a source default may not) and **how
-hard to think** about it. The effort ladder is neutral — Low, Medium, High, Extra
+same "just this item" lifetime: **how far** to carry it and **how hard to
+think** about it. **How far** is the same Fast-track ladder as everywhere else
+— **Off** / **Commit** / **Push** / **Open a PR** / **Merge when green** — led by
+**Default (X)**, naming what the source would do; an explicit **Off** is
+offered only when that default isn't already Off, and an individual item may
+choose *Merge*, which a source default may not. There is no *Agent only* rung:
+a stored `agent` depth reads as Off, which is what it always did.
+
+**The pickers fold behind Options.** A row shows a muted one-liner of what
+**Start** will use — e.g. *claude · Off · default effort* — and a quiet
+**Options** toggle (`.ik-item-opts`, `aria-expanded`); the three selects appear
+when it is open, or as soon as any of them holds a choice, so a pick is never
+hidden. The effort ladder is neutral — Low, Medium, High, Extra
 high, Max, Ultra — and the server translates the rung into whichever CLI the row
 launches, so the picker labels what will actually happen: a rung above that CLI's
 ceiling reads "Max (→ Extra high)", the top rung is named the way the CLI names
@@ -1916,40 +2152,68 @@ Two consequences worth knowing:
   configured yet will have its `Could not list …` error ready the moment you
   first open that tab.
 
+## Customize
+
+**Extras you opt into.** The sidebar footer's **Customize** button (title
+*Sidebar bars, saved prompts and the Outbox*) opens one dialog,
+`#customize-dialog` (`components/customize/CustomizeDialog.tsx`), headed
+*Customize — Extras you can switch on*, with three tabs:
+
+- **Sidebar** — *Show in the sidebar*: one checkbox per bar, built-in and
+  extension, in sidebar order (the same `mf_hiddenbars` set the bars always
+  used). Each built-in bar says when it has something to show — *What your
+  sessions cost* (Usage); *Appears once a ticket source is connected* with an
+  **Intake → Tickets** link (Tickets); *Appears once a repository is added*
+  with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
+  Issues); *Appears once Verify tracks a repository or has a checklist* with
+  **Open Verify** (Verify); *Chat and a todo list with your personal
+  assistant* (Assistant); *From an extension* for an extension's bar. A last
+  line says how to reorder: drag a bar's ⠿ grip in the sidebar.
+- **Prompts** — your [saved prompts](#saved-prompts): pick a target (the
+  selected session, another running one, or all running sessions), click one
+  to paste it there (nothing is sent), add, delete, preview.
+- **Outbox** — the read-only log of outbound work (below).
+
+Every older way in lands on the right tab: `Alt+O`, a group's **Open in the
+Outbox**, a run row in the bell or a toast, the palette's **Outbox — what's on
+its way out**, **Customize…** and **Prompts…**, and New's **Manage…** link.
+`Esc` closes the dialog unless something inside it (a prompt preview) handled
+the key first; a click on the backdrop closes it too.
+
+Customize holds what is optional. Set-and-forget configuration stays in
+[Settings](#settings-), and anything that needs you is in the bell.
+
 ## Outbox
 
-**What's shipping, and what's waiting on you.** The middle of the pipeline:
-Intake (in) → Outbox (out) → Verify (checked). Top-bar entry **Outbox**
-(`Alt+O`, or the palette), dialog `#outbox-dialog`, built from the same kit as
-Intake. Its badge counts only what is **waiting on you**, and is hidden at 0.
+**What's on its way out, and what shipped today.** The middle of the pipeline,
+Intake (in) → Outbox (out) → Verify (checked), as a read-only log: the
+**Outbox** tab of [Customize](#customize) (`Alt+O`, or the palette), panel
+`#outbox-panel`, built from the same kit as Intake. It holds nothing you have to
+act on — approvals and escalations live in the bell's **Needs attention** list
+(see [Notifications](#notifications-)). While anything is waiting, one line
+says so — *n waiting on you — in the bell* — with an **Open the bell** button.
 
-- **Tabs** filter one `GET /api/outbox?group=all`: **All**, one tab per group of
-  sessions started together, and **On their own** once any group exists. Each
-  badge counts the rows that tab shows. Rows are de-duplicated on
-  `(repo, branch)`, so a `foo` / `foo-copy` pair is one row.
-- **Waiting on you** — only two kinds: a prompt an agent is stuck on (the same
-  answer strip as the rail), or a ship you asked to see first. That row shows
-  the exact commit message (editable inline) and PR title, plus where its
-  fast-track stops, *before* anything leaves the machine: **Diff** / **Commit** (or **Open
-  the PR**). A group escalation (stalled twice, hooks failed twice, a conflict,
-  a create that failed after its retries) carries its reason and the server's
-  actions for it — **Retry** / **Retry fresh** / **Open ↗** / **Skip**. A group
-  that spent its budget is paused and shows **Raise to $N** (an inline amount;
-  `POST /api/runs/{id}/resume {budget_usd}`, raise and resume in one call) and
-  **Stop** (`/cancel`). An approval held before its *push* has already
-  committed, so only a commit-step approval offers **edit** on the message;
-  with no message previewed it reads "written from the diff when it commits".
+- **Group chips** filter one `GET /api/outbox?group=all`: **All**, one chip per
+  group of sessions started together, and **On their own** once any group
+  exists — shown only when there are two or more to choose between. Each count
+  is the rows that chip shows, not counting what waits in the bell. Rows are
+  de-duplicated on `(repo, branch)`, so a `foo` / `foo-copy` pair is one row.
 - **Shipping now** — MindFlock is committing / pushing / opening the PR. Read-only.
 - **Shipped today** — PR number and checks, the commit subject, **Review ↗**, and
-  **Verify →** when the branch has a checklist waiting.
+  **Verify →** when the branch has a checklist waiting. Closed sessions stay
+  in it for the day, which is why the log exists at all.
 - **Queued** — group lines waiting for a slot: **Start now** / **Remove**.
-- **Summaries** — a finished group's card with **Copy as Markdown**.
+- **Summary** — a finished group's card with **Copy as Markdown**.
+
+With nothing outbound it says *Nothing is on its way out. Sessions show up here
+once ⏩ Fast-track carries them, or when you start several together from New.*
 
 **On the rail.** Sessions started together sit under a group header — the same
 header family as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold
 badge is how many need you; a click folds the group, and **⋯** on hover has
-Pause / Resume, Add lines…, the queued lines (Start now / Remove), the Outbox
-on that group, and Cancel… (an inline confirm; sessions and branches are kept).
+Pause / Resume, Add lines…, the queued lines (Start now / Remove), **Open in
+the Outbox** (Customize → Outbox on that group), and Cancel… (an inline
+confirm; sessions and branches are kept).
 A header appears only for a group of two or more, and **On their own** only
 under at least one header. Queued lines are dim, with a hollow dot and no
 number. Headers and queued lines are never rail keys: Alt+N numbering skips
@@ -1958,13 +2222,20 @@ them, and a folded group's rows leave the numbering like a folded device's.
 Every session with fast-track on leads its status line with the target, so a
 narrow rail cuts the detail and never the target: `→ PR · working 12m`, `⇡ opening PR`,
 `✓ PR #318 · checks ✓`, `? needs your answer`, `→ commit, asks first · idle`,
-`! hooks failed twice — open the Outbox`. A group member (or any session with
-fast-track on) on a prompt gets the answer strip under its row, like a family worker.
+`! hooks failed twice — open the bell`,
+`→ commit, asks first · ready — approve in the bell`. A group member (or any
+session with fast-track on) on a prompt gets the answer strip under its row,
+like a family worker. A line that ends **open the bell** or **approve in the
+bell** is clickable and opens the bell on that session's row.
 
-**Notifications.** The bell lists a group's escalations, its finish, and each
-line that shipped; a row opens the Outbox on its group. Rows obey the
-`run_needs_you` / `run_finished` switches in Settings → Notifications, and a
-prompt is never announced twice (the session's own "needs your input" row
+**Notifications.** The bell's history lists a group's escalations, its finish,
+and each line that shipped, under the group's name. Clicking one opens the
+lead's Thread when the group has a lead; otherwise an escalation scrolls to its
+**Needs attention** row, and a finish or shipped row opens the group in
+Customize → Outbox. A `run.needs_you` toast opens the lead's Thread, else the
+bell, and a `run.finished` toast opens the group in Customize → Outbox. Rows
+obey the `run_needs_you` / `run_finished` switches in Settings → Notifications,
+and a prompt is never announced twice (the session's own "needs your input" row
 covers it). At most one group toast per 30 seconds.
 
 ## Verify
@@ -1974,8 +2245,11 @@ is the back of it. The pipeline's last honest checkpoint is "the PR merged", and
 merged is not verified — nobody has opened the thing and looked at it. So work
 that reaches the branch you actually ship from comes back here as a **checklist**,
 an agent works the steps it can from a shell, and whatever needs a pair of eyes
-is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`), dialog
-`#verify-dialog` / panel `#verify-panel`, from
+is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`, or the
+palette's **Verify — check what shipped**) — the button joins the bar, with its
+due badge, once Verify tracks a repository or has a checklist, and `Alt+V` and
+the palette open it before then. Dialog `#verify-dialog` / panel
+`#verify-panel`, from
 `frontend/src/components/dialogs/{VerifyDialog.tsx,verify.ts}`; the sidebar bar
 is `frontend/src/components/sidebar/VerifyBar.tsx` and the store is
 `backend/web/core/test_plans.py`.
@@ -2095,15 +2369,17 @@ That is a team-wide, committed decision, it is OR'd with the tracked-repo list,
 and neither half can switch the other off.
 
 **The panel is Intake's anatomy, in Intake's order**: an intro line, the master
-switch, **Sources**, the work list, then a fold for what you touch once — the
-same shape as Intake → Pull requests / Issues, using the same classes, because
-it is the fourth surface of that kind. The master switch
+switch, the **Checklists** work list, **Sources**, then a fold for what you
+touch once — the same work-first shape as Intake → Pull requests / Issues, using
+the same classes, because it is the fourth surface of that kind. Before any
+repository or checklist exists, **Sources** leads instead, since adding one is
+the only thing to do. The master switch
 (`repository.verify_enabled`) pauses the **automatic** half only: no checklist
 written on a push, and nothing new moved into the list. Repositories, checklists
 and every recorded answer are kept, and writing one by hand, running one and
 answering a step all keep working — exactly as a forced PR review still runs with
 automated review switched off. **Sources** is the repository list; **Write a
-checklist by hand** is the fold under the work list, for asking for exactly one
+checklist by hand** is the fold at the bottom, for asking for exactly one
 checklist by name with nothing configured.
 
 **It offers only what has no checklist yet.** A live session whose repo and
@@ -2241,8 +2517,8 @@ these used to be silent:
   failed** got the same treatment with one deliberate difference: a fix
   session's whole job is to change its tree, so its leftover is reclaimed only
   when it is provably pristine — and when it is not, the press is **refused in
-  words naming the directory** ("reopen it from Recent to finish or discard that
-  work") rather than dying minutes later with a raw git line in the
+  words naming the directory** ("reopen it from Recently closed to finish or discard
+  that work") rather than dying minutes later with a raw git line in the
   notifications bell.
 - **Two presses at once.** Run and a per-step Re-check start the same request, so
   two of them for one plan raced through a single session title: one create won,
@@ -2364,6 +2640,32 @@ is running it**.
 
 ## Settings (⚙)
 
+**Set-and-forget configuration and diagnostics**, from the top bar's
+**Settings**. The left nav is grouped under non-clickable headings
+(`.set-nav-group`) so it scans: **General**, **Connections** and
+**Notifications** first, then **Agents** (Agent CLI, Agent providers, Accounts,
+Local model), **Code** (Workspace, IDE), **This device** (Security, Appearance,
+Mobile) and **Troubleshooting** (Doctor, System logs, Advanced, Extensions,
+Site traffic). Only the grouping is new: every screen key and label is unchanged, so
+deep links, the legacy Intake hand-off and the Connections cards' **Configure**
+buttons land where they always did.
+
+A few screens got quieter:
+
+- **General** opens with **Getting started** (hints, **Replay tour**), and the
+  two MindFlock MCP rows sit in a closed *Agent orchestration (MindFlock MCP)*
+  fold.
+- **Advanced → Platform (Windows / WSL only)** shows only on Windows/WSL, or
+  where a WSL distro or Windows Terminal command is already set.
+- **Extensions** folds *Create an extension* closed.
+- **Security**'s turn-off and **Regenerate**, and **Accounts**' **Remove
+  anyway**, confirm in an inline row with **Cancel**. They used to be browser
+  `confirm()`s, which do nothing in the desktop app.
+- Saving any screen toasts **Saved**, and the IDE toggle toasts *IDE
+  auto-adopt on* / *off*.
+- **Notifications** holds the only desktop-notification on/off toggle; the
+  bell no longer carries a copy.
+
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
 - **Per-session budget (USD, 0 = off)** — cost guardrail: when a session's
   estimated cost crosses this figure the server emits a one-shot
@@ -2434,8 +2736,8 @@ is running it**.
   the app. Takes effect the next time the ingestion pipeline starts; it is the
   same switch as `[mindflock].enabled` in `config.toml` and overrides that file
   (see [configuration.md](configuration.md)).
-- **General → Give agents the MindFlock MCP** (`general.agent_mcp`, **default
-  on**) — launches each Claude Code and Codex session with the MindFlock MCP
+- **General → Agent orchestration (MindFlock MCP) → Give agents the MindFlock
+  MCP** (`general.agent_mcp`, **default on**; in a closed fold) — launches each Claude Code and Codex session with the MindFlock MCP
   attached (see [Agent teams](#agent-teams-mindflock-mcp)). Applies on each
   session's next launch; a running agent keeps what it started with. When the
   server runs with `MINDFLOCK_AGENT_MCP=0` the row says the switch is
@@ -2521,8 +2823,9 @@ is running it**.
 
   Under `prefers-reduced-motion` both surfaces show a settled flock rather than a
   moving one.
-- **General → Onboarding** — the master **getting-started hints** switch and a
-  **Replay tour** button (see [First-run onboarding](#first-run-onboarding)).
+- **General → Getting started** (top of the screen) — the master
+  **getting-started hints** switch and a **Replay tour** button (see
+  [First-run onboarding](#first-run-onboarding)).
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads
@@ -2573,7 +2876,11 @@ is running it**.
   (sessions namespaced `<device>::<title>`); pair/unpair via
   `/api/devices/{device}/connect|disconnect`.
 - **Session templates** — save a New-session dialog configuration under a name
-  and refill it later (templates addon, `/api/templates`).
+  and refill it later (templates addon, `/api/templates`). A template only
+  ever *starts* a session — CLI, repo, workspace and an opening prompt; New
+  page 2's **Templates** strip lists them and its **Manage…** opens the
+  manager. To paste text into a session that is already running, use
+  [Customize → Prompts](#saved-prompts).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
 - **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.
@@ -2598,7 +2905,7 @@ is running it**.
   with `localStorage` (`cs_surface` / `cs_accent`) as a pre-paint cache.
 
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
-last-used tab, and prompt presets are persisted in `localStorage` (`cs_*` /
+last-used tab, and saved prompts are persisted in `localStorage` (`cs_*` /
 `mindflock.*` keys).
 
 ## Token / cost usage
@@ -2735,7 +3042,7 @@ poll tick, when its row actually appears in the list.
 `GET /api/addons` describes each addon's frontend mounts (`FrontendDescriptor`:
 where to render, which JS module, which WebSocket, poll interval).
 `core/slots.js` auto-renders a sidebar bar for any addon **not** marked
-`builtin_ui` and, for descriptors carrying a `module` URL, dynamically imports
+`builtin_ui` (shown or hidden, like every bar, from Customize → Sidebar) and, for descriptors carrying a `module` URL, dynamically imports
 that ES module (served from `static/addons/`) and calls
 `window.mindflockAddons[<id>].init(ctx)` — handing it the descriptor plus the
 client event bus (`window.mindflock.events`, fed by `WS /api/events`), the

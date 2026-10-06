@@ -1,5 +1,7 @@
-/** MindFlock ticket-ingestion bar (port of the automation toggle, section 17).
- * Hidden entirely without a connected ticketing source. The switch reflects the
+/** The sidebar's Tickets bar — Intake → Tickets' door and quick switch (port of
+ * the automation toggle, section 17). Hidden entirely without a connected
+ * ticketing source. Its label opens Intake → Tickets; its switch is the same
+ * "Automated ingestion" switch that tab shows. The switch reflects the
  * DESIRED state of the TICKET half of the pipeline (persisted server-side,
  * restored on reboot; the PR-review bar gates the other half of the same
  * process). The dot reflects reality — gold while starting or idle-waiting
@@ -9,6 +11,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
@@ -69,7 +72,9 @@ export function AutomationBar() {
     try {
       await api<MfStatus>(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
     } catch (err) {
-      alert(`MindFlock ${start ? "start" : "stop"} failed: ` + errMsg(err));
+      // A card, not alert(): the desktop app has no native dialogs, so an
+      // alert() failure there said nothing at all.
+      errorPop("Automated ingestion failed", errMsg(err));
     } finally {
       setBusy(false);
       setOptimistic(null);
@@ -81,7 +86,7 @@ export function AutomationBar() {
   return (
     <div
       id="mindflock-bar"
-      title="Run/stop ticket ingestion (polls your ticketing provider + PRs and auto-creates sessions). Stays in this state across restarts."
+      title="Tickets — automated ingestion turns your assigned tickets into sessions. Stays in this state across restarts."
     >
       <span
         id="mindflock-dot"
@@ -111,17 +116,18 @@ export function AutomationBar() {
                   : undefined
         }
       />
-      <span className="dc-label">Ticket Ingestion</span>
+      {/* The label IS the door: one name, one button, Intake → Tickets. */}
+      <button
+        id="mindflock-tickets-btn"
+        type="button"
+        className="dc-label dc-open"
+        title="Open Intake → Tickets"
+        onClick={() => openDialogFor("intake", "tickets")}
+      >
+        Tickets
+      </button>
       <span className="dc-actions">
-        <button
-          id="mindflock-tickets-btn"
-          className="dc-toggle"
-          title="Ticketing sources and assigned tickets (Intake → Tickets)"
-          onClick={() => openDialogFor("intake", "tickets")}
-        >
-          Tickets
-        </button>
-        <label className="dc-switch" title="Flip to run/stop ticket ingestion">
+        <label className="dc-switch" title="Automated ingestion — the same switch as Intake → Tickets">
           <input
             type="checkbox"
             id="mindflock-toggle"

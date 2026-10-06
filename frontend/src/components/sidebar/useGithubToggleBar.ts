@@ -4,12 +4,13 @@
  * github.<settingKey> flag with the same optimistic/refetch dance — they
  * differ only in which setting/repo-list key they read, the default polarity
  * (PR review defaults on once repos exist; issue handling is opt-in), which
- * status flag means "actively working", and their labels. Each bar keeps its
+ * status flag means "actively working", and the switch name. Each bar keeps its
  * own markup; only this behavior is shared. */
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
@@ -46,7 +47,8 @@ export function useGithubToggleBar(opts: {
   /** absent flag => on (PR review) vs off (issue handling, opt-in). */
   defaultOn: boolean;
   activeFlag: "pr_active" | "issues_active";
-  /** Prefix for the toggle-failure alert ("PR review" / "Issue handling"). */
+  /** The Intake switch this bar mirrors, named exactly as that tab shows it
+   * ("Automated review" / "Automated handling") — the failure card's title. */
   toggleLabel: string;
 }): GithubToggleBar {
   const { settingKey, reposKey, defaultOn, activeFlag, toggleLabel } = opts;
@@ -100,7 +102,8 @@ export function useGithubToggleBar(opts: {
     try {
       await api("/api/settings", { json: { github: { [settingKey]: enable } } });
     } catch (err) {
-      alert(`${toggleLabel} ${enable ? "on" : "off"} failed: ` + errMsg(err));
+      // A card, not alert(): the desktop app has no native dialogs.
+      errorPop(`${toggleLabel} failed`, errMsg(err));
     } finally {
       setBusy(false);
       setOptimistic(null);

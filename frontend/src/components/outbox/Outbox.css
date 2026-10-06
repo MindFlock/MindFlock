@@ -1,37 +1,18 @@
-/* The Outbox: Intake's shell, a third time.
+/* The Outbox tab of Customize: Intake's kit, a third time.
  *
- * The frame mirrors #intake-panel / #verify-panel and everything inside it is
- * the shared kit — `.ws-head`, `.ik-subtitle`, `.ik-tab`, `.ik-groups`,
- * `.tk-bucket`, `.pr-open-item`, `.pr-open-chip`, `.btn-primary`, `.test-btn`.
- * Imported after VerifyDialog.css so the few rules that reach into those
- * shared classes win the equal-specificity ties. What has no counterpart
- * there lives under `ob-`. */
+ * The frame is Customize's (CustomizeDialog.css); everything inside is the
+ * shared kit — `.ik-subtitle`, `.ik-groups`, `.pr-open-item`, `.pr-open-chip`,
+ * `.btn-primary`, `.test-btn`. Imported after VerifyDialog.css so the few rules
+ * that reach into those shared classes win the equal-specificity ties. What has
+ * no counterpart there lives under `ob-`. The waiting rows (WaitingRow.tsx)
+ * render in the bell, but their `ob-` rules stay here with the kit they extend. */
 
 #outbox-panel {
-  width: 820px;
-  max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(86vh, 800px);
-  padding: 18px 22px 20px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-#outbox-panel .ws-head {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-
-#outbox-panel .ws-head h2 {
-  margin: 0;
-  font-size: 14.5px;
 }
 
 #outbox-panel .ob-fetch {
@@ -39,12 +20,57 @@
   color: var(--muted);
 }
 
+/* "<n> waiting on you — in the bell": one quiet line, never a list. */
+.ob-to-bell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--gold-fill) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gold-fill) 8%, transparent);
+  font-size: 12px;
+}
+
+.ob-to-bell span {
+  flex: 1;
+}
+
+/* Group chips — shown only once there are at least two (All + a group). */
 #outbox-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   flex: none;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+}
+
+#outbox-tabs .ob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+#outbox-tabs .ob-chip:hover {
+  color: var(--text);
+}
+
+#outbox-tabs .ob-chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+#outbox-tabs .ob-chip-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 #outbox-body {

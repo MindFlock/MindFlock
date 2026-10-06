@@ -78,7 +78,7 @@ export const LANE_KEY: Record<Lane, string> = {
 
 /** The toggle every fast-track control carries beside the rungs. */
 export const ASK_FIRST_LABEL = "Ask me before it ships";
-export const ASK_FIRST_DESC = "Stop one step short and show it in the Outbox first";
+export const ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
 
 /** A target from anything the server or a setting might hand us. The autopilot
  * ladder's own words map across: `agent` (stop when the agent stops) and

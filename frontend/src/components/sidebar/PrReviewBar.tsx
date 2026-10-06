@@ -1,12 +1,13 @@
-/** Automated-PR-review bar: sits under the ticket-ingestion bar. The switch
- * is the github.enabled setting — the settings addon emits
- * addon.settings.github_toggled on a real change and the ingestion addon
- * reconciles the pipeline process (start / stop / bounce), so flipping it
- * here takes effect on its own, independent of the ticket toggle. The dot is
- * gold while starting or idle-waiting for a reviewable PR, green while one is
- * actually being handled. Hidden until PR review is set up (a repository
- * added in Intake → Pull requests) since review can't run with an empty repo
- * list. */
+/** The sidebar's Pull requests bar — Intake → Pull requests' door and quick
+ * switch: its label opens that tab, its switch is the tab's "Automated review"
+ * switch. Sits under the Tickets bar. The switch is the github.enabled setting
+ * — the settings addon emits addon.settings.github_toggled on a real change
+ * and the ingestion addon reconciles the pipeline process (start / stop /
+ * bounce), so flipping it here takes effect on its own, independent of the
+ * ticket toggle. The dot is gold while starting or idle-waiting for a
+ * reviewable PR, green while one is actually being handled. Hidden until PR
+ * review is set up (a repository added in Intake → Pull requests) since review
+ * can't run with an empty repo list. */
 
 import { useUi } from "../../state/store";
 import { useGithubToggleBar } from "./useGithubToggleBar";
@@ -19,7 +20,7 @@ export function PrReviewBar() {
     reposKey: "repos",
     defaultOn: true,
     activeFlag: "pr_active",
-    toggleLabel: "PR review",
+    toggleLabel: "Automated review",
   });
   if (!visible) return null;
 
@@ -27,9 +28,9 @@ export function PrReviewBar() {
     <div
       id="pr-review-bar"
       title={
-        `Automated PR review — watches your open pull requests on ${repos.length} ` +
-        `${repos.length === 1 ? "repository" : "repositories"} and spins up review ` +
-        "sessions. Runs on its own — ticket ingestion can stay off."
+        `Pull requests — automated review watches your open PRs on ${repos.length} ` +
+        `${repos.length === 1 ? "repository" : "repositories"} and starts a review ` +
+        "session for each."
       }
     >
       <span
@@ -47,19 +48,19 @@ export function PrReviewBar() {
               : undefined
         }
       />
-      <span className="dc-label">PR Review</span>
+      <button
+        id="pr-review-prs-btn"
+        type="button"
+        className="dc-label dc-open"
+        title="Open Intake → Pull requests"
+        onClick={() => openDialogFor("intake", "prs")}
+      >
+        Pull requests
+      </button>
       <span className="dc-actions">
-        <button
-          id="pr-review-prs-btn"
-          className="dc-toggle"
-          title="Repositories, open PRs and review options (Intake → Pull requests)"
-          onClick={() => openDialogFor("intake", "prs")}
-        >
-          PRs
-        </button>
         <label
           className="dc-switch"
-          title="Flip to turn automated PR review on/off — your repositories are kept either way"
+          title="Automated review — the same switch as Intake → Pull requests (your repositories are kept either way)"
         >
           <input
             type="checkbox"

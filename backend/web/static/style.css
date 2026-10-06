@@ -794,7 +794,7 @@ body #grid {
    stretched #mf-winctl across the whole top (left:0 / left:260px) as a drag
    region at max z-index, so it sat ON TOP of the top-bar buttons and swallowed
    their clicks. Force it back to a right-anchored, content-width cluster (the
-   new shell already does this) so New / Recent / Command / Settings are
+   new shell already does this) so New / Intake / Settings and the rest are
    clickable even before Electron is fully restarted. */
 body #mf-winctl {
   left: auto !important;
@@ -904,8 +904,8 @@ body #mf-winctl {
   justify-content: flex-start;
 }
 
-/* The menu carries seven items now (New, Intake, Verify, Recent, Prompts,
-   Command, Settings), so the type and the spacing are deliberately tighter than
+/* The menu carries New, Intake, Verify (once it has something to check),
+   Settings and the palette's icon. The type and the spacing stay tighter than
    the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
    which must all move together or the row goes ragged.
    The bar must stay ONE line at the narrowest window anyone actually uses: it is
@@ -1050,7 +1050,7 @@ body #mf-winctl {
   display: block;
 }
 
-/* Matches the neutral .tb-item look (same as the Recent button) — which is why
+/* Matches the neutral .tb-item look (same as Intake and Settings) — which is why
    it follows .tb-item down to the smaller type and tighter padding above rather
    than staying 13px/8px and reading as a different kind of button. */
 #topbar #new-btn.tb-new {
@@ -1221,59 +1221,35 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   color: var(--text);
 }
 
-/* Footer "Customize" popover — pick which bars show in the sidebar. */
-#foot-customize {
-  position: relative;
-}
-
-#foot-customize .foot-link.open {
-  color: var(--text);
-}
-
-#foot-customize-menu {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
-  z-index: 60;
-}
-
-#foot-customize-menu .fc-title {
-  padding: 2px 8px 4px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-#foot-customize-menu .fc-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 8px;
-  border-radius: 5px;
+/* "Recently closed (n)" — under the session list, only while there is
+   something to reopen. Pinned to the bottom of the session block (the list
+   above it takes the slack), so it holds still as rows come and go. */
+#sidebar .recent-link {
+  flex: none;
+  align-self: flex-start;
+  margin: 2px 0 8px 20px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
   cursor: pointer;
-  font-size: 12px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+#sidebar .recent-link:hover,
+#sidebar .recent-link:focus-visible {
   color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-#foot-customize-menu .fc-item:hover {
-  background: var(--panel-2);
-}
-
-#foot-customize-menu .fc-item input {
-  margin: 0;
-  accent-color: var(--accent);
+#sidebar .recent-link:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 }
 
@@ -1316,15 +1292,14 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   gap: 6px;
 }
 
-/* Getting-started block at the foot of General — set off from the settings
-   above it by a divider so it reads as its own group. */
+/* Getting-started block at the head of General — set off from the settings
+   below it by a divider so it reads as its own group. */
 .onboarding-block {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 8px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
 }
 
 .onboarding-block .set-section-title {
@@ -1485,6 +1460,29 @@ p.set-hint {
 
 .notif-rule .ca-switch {
   flex: none;
+}
+
+
+/* A group heading in the nav ("Agents", "Code", "This device",
+   "Troubleshooting"): the screens are seventeen buttons long, and a run of
+   equal-weight words is a list you have to read top to bottom to find one.
+   Text, not a control — no hover, no pointer, no Tab stop — in the same small
+   uppercase as a screen's section titles, so it reads as a label for what
+   follows rather than as one more place to click. */
+.set-nav-group {
+  margin: 12px 0 2px;
+  /* Left inset matches the items' text; none on the right, where the longest
+     heading ("Troubleshooting") would otherwise overrun the 132px column. */
+  padding: 0 0 0 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.8;
+  user-select: none;
+  cursor: default;
 }
 }
 
@@ -2287,6 +2285,43 @@ p.set-hint {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* InlineConfirm (useSettings.tsx): the "are you sure?" a guarded Settings
+   action draws under itself, because the desktop app has no native confirm.
+   A tinted box in the warning colour so it reads as a question the app is
+   asking, not as one more hint; the go-ahead is the red verb, Cancel stays the
+   plain button (and holds focus). */
+.set-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.set-confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.set-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.set-confirm .set-confirm-yes {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+
+.set-confirm .set-confirm-yes:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
 }
 
 /* 050 */
@@ -2371,8 +2406,8 @@ p.set-hint {
   display: none;
 }
 
-/* Draggable wrapper around each customizable sidebar section (Usage, Ticket
-   Ingestion, PR Review, Assistant). The slot is a passthrough — the child bar
+/* Draggable wrapper around each customizable sidebar section (Usage, Tickets,
+   Pull requests, Issues, Verify, Assistant). The slot is a passthrough — the child bar
    keeps its own border/padding — but it owns the drag grip and the insertion
    cue. A slot whose bar renders nothing collapses so it leaves no gap and
    can't be a drop target. */
@@ -2526,6 +2561,49 @@ p.set-hint {
 #git-issue-bar .dc-label,
 #verify-bar .dc-label {
   font-weight: 600;
+}
+
+/* A bar's label is its door: one button, named after the dialog tab it opens
+   (Tickets → Intake → Tickets, Verify → Verify). Reset to read as the label it
+   replaced, so the bar still says one word, not "Tickets [Tickets]". */
+#mindflock-bar .dc-open,
+#pr-review-bar .dc-open,
+#git-issue-bar .dc-open,
+#verify-bar .dc-open {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#mindflock-bar .dc-open:hover,
+#pr-review-bar .dc-open:hover,
+#git-issue-bar .dc-open:hover,
+#verify-bar .dc-open:hover,
+#mindflock-bar .dc-open:focus-visible,
+#pr-review-bar .dc-open:focus-visible,
+#git-issue-bar .dc-open:focus-visible,
+#verify-bar .dc-open:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+#mindflock-bar .dc-open:focus-visible,
+#pr-review-bar .dc-open:focus-visible,
+#git-issue-bar .dc-open:focus-visible,
+#verify-bar .dc-open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 #mindflock-bar .dc-actions,
@@ -2958,26 +3036,41 @@ p.set-hint {
   color: var(--red, #e55);
 }
 
-/* Prompts library dialog (a modal like #recent-panel). */
+/* Prompts library — the Prompts tab of Customize. The frame (border, width,
+   height) is the dialog's; the panel fills the tab and only the list scrolls. */
 #prompts-panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  width: 560px;
-  max-width: 92vw;
-  max-height: 82vh;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.ws-head #prompts-target {
+/* "Paste into [target ▾]" — the focused session, any other running one, or
+   all of them. */
+.prompts-target-wrap {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 12px;
 }
 
-.ws-head #prompts-target.prompts-notarget {
+#prompts-target {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+#prompts-target.prompts-notarget {
   color: var(--red, #e55);
 }
 
@@ -3572,6 +3665,24 @@ p.set-hint {
   border-radius: 3px;
 }
 
+/* A lane line that is waiting on you ("! hooks failed twice", "approve?")
+   opens its row in the bell. */
+.inst .lineage.opens-bell {
+  cursor: pointer;
+}
+
+.inst .lineage.opens-bell:hover .sl-lead,
+.inst .lineage.opens-bell:focus-visible .sl-lead {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .lineage.opens-bell:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
 .inst .lineage .needs {
   color: var(--gold);
   font-weight: 600;
@@ -3681,6 +3792,37 @@ p.set-hint {
   background: rgba(222, 97, 62, 0.14);
 }
 
+/* "Delete + wipe worktree", armed: the question and its two answers in place
+   of the item (the desktop app has no confirm()). */
+.inst-actions .wipe-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(222, 97, 62, 0.1);
+  font-size: 12px;
+}
+
+.inst-actions .wipe-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-actions .wipe-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.inst-actions .wipe-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+
+.inst-actions .wipe-acts button.danger {
+  border-color: var(--red);
+}
+
 .inst-actions .menu-sep {
   height: 1px;
   background: var(--border);
@@ -3764,34 +3906,32 @@ p.set-hint {
 #view-modes {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 #view-modes .vm-label {
   font-size: 11px;
   color: var(--muted);
-  margin-right: 2px;
 }
 
-#view-modes .vm {
+/* One quiet picker, not a row of five toggles: the view is set once and left. */
+#view-modes select {
   flex: 1;
+  min-width: 0;
   cursor: pointer;
+  font: inherit;
   font-size: 11px;
-  padding: 4px 0;
+  padding: 3px 6px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
 }
 
-#view-modes .vm:hover {
+#view-modes select:hover,
+#view-modes select:focus-visible {
   border-color: var(--accent);
-}
-
-#view-modes .vm.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  outline: none;
 }
 
 
@@ -4554,12 +4694,14 @@ p.set-hint {
   display: none;
 }
 
+/* Wide enough for a waiting row's buttons and its commit-message preview;
+   NotificationsBell.tsx clamps `left` with the same 400px (+ 8px margin). */
 .notif-pop {
   position: fixed;
   z-index: 3000;
-  width: 320px;
+  width: 400px;
   max-width: calc(100vw - 16px);
-  max-height: 60vh;
+  max-height: min(82vh, 760px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -4589,38 +4731,20 @@ p.set-hint {
 }
 
 /* title left, buttons right */
-.notif-head .notif-toggle {
+.notif-settings {
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
   border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
 }
 
-.notif-head .notif-toggle svg {
-  display: block;
-}
-
-.notif-head .notif-toggle:hover:not(:disabled) {
+.notif-settings:hover {
   color: var(--text);
-  border-color: var(--accent);
-}
-
-.notif-head .notif-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.notif-head .notif-toggle:disabled {
-  opacity: .5;
-  cursor: not-allowed;
+  border-color: var(--border);
 }
 
 .notif-clear {
@@ -4639,6 +4763,8 @@ p.set-hint {
 }
 
 .notif-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -4709,20 +4835,31 @@ p.set-hint {
   color: var(--gold-fill);
 }
 
-/* Pinned live section at the top of the bell popover, above the history. */
+/* Pinned live section at the top of the bell popover, above the history. It
+   scrolls on its own so a long list never pushes the history off the panel. */
 .notif-attn {
+  flex: 0 1 auto;
+  max-height: 55vh;
+  overflow-y: auto;
   padding: 5px 6px 6px;
   margin: 0;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 215, 0, 0.05);
 }
 
+/* Stays put while the list scrolls under it (top: -5px cancels the section's
+   padding); painted with the section's own tint so it reads as one surface. */
 .notif-attn-head {
+  position: sticky;
+  top: -5px;
+  z-index: 1;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--muted);
-  margin: 0 0 3px 3px;
+  margin: -5px -6px 3px;
+  padding: 5px 9px 3px;
+  background: linear-gradient(rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.05)), var(--panel);
 }
 
 .attn-item {
@@ -4798,9 +4935,95 @@ p.set-hint {
   font-size: 11px;
 }
 
-.attn-more {
+.notif-attn .attn-more {
+  display: block;
   font-size: 11px;
-  margin: 2px 0 0 6px;
+  margin: 4px 0 0 6px;
+  color: var(--muted);
+}
+
+.notif-attn .attn-more:hover {
+  color: var(--text);
+}
+
+/* A row asked for by name (`mf-open-bell` with a title, a history row): one
+   accent pulse, so the eye lands on it after the scroll. */
+.attn-item.flash,
+.attn-wait.flash > .ob-item {
+  animation: notif-flash 1.4s ease-out;
+}
+
+@keyframes notif-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* --- The Outbox's waiting rows, hosted in the bell ------------------------- */
+/* WaitingRow is the Intake kit's two-column card; at the bell's 400px it
+   stacks — the session and its chips, then the buttons, then the preview. */
+.attn-wait {
+  padding: 2px 0;
+}
+
+.attn-wait + .attn-wait,
+.attn-item + .attn-wait,
+.attn-wait + .attn-item {
+  margin-top: 4px;
+}
+
+.notif-attn .ob-item {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.notif-attn .ob-item .pr-open-ref {
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.notif-attn .ob-item .ik-item-start {
+  grid-column: 1;
+  grid-row: 3;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  max-width: none;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.notif-attn .ob-item .ik-item-start .ob-acts {
+  justify-content: flex-start;
+}
+
+.notif-attn .ob-item .ik-item-start .pr-review-btn,
+.notif-attn .ob-item .ik-item-start .ob-ship {
+  min-width: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.notif-attn .ob-item .ik-item-drawer {
+  grid-row: 4;
+}
+
+.notif-attn .ob-item .ob-card {
+  margin-top: 6px;
+  padding: 7px 9px;
+}
+
+.notif-attn .ob-item .ob-kv {
+  grid-template-columns: 62px minmax(0, 1fr);
+  font-size: 11.5px;
 }
 }
 
@@ -5617,7 +5840,7 @@ p.set-hint {
      off past the edge. The scrollbar itself is hidden so the header keeps its
      one-line height — content cut mid-glyph at the edge is the affordance —
      and .head-tail stays pinned to the right so the window controls (history,
-     copy-all, ✕) never leave view. */
+     hide −) never leave view. */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -5723,33 +5946,17 @@ p.set-hint {
   display: none;
 }
 
-/* The header scrolls sideways now, so NOTHING is display:none'd away as a
-   pane narrows — everything stays clickable, just possibly a scroll away.
-   (The old progressive-disclosure rules hid the token chip and the live-step
-   text at 560/360px, which made them unreachable in tiled layouts.) Narrow
-   panes only tighten spacing: */
+/* Narrow panes: see the @container rules after the head's base rules
+   (they must come later in the file to beat them at equal specificity). */
 .pane {
   container-type: inline-size;
 }
 
-@container (max-width: 560px) {
-  .pane-head .actions .stepnow-text {
-    max-width: 12ch;
-  }
-}
-
-@container (max-width: 360px) {
-  .pane-head {
-    gap: 4px;
-  }
-
-  .pane-head .tabs {
-    margin-left: 4px;
-  }
-
-  .pane-head .tabs button {
-    padding: 3px 6px;
-  }
+/* The head is its own container too, so the queries that fit its controls
+   measure the strip they actually live in. On the head rather than moving it
+   off .pane: the pane's other queries (Map, Thread) stay as they are. */
+.pane-head {
+  container-type: inline-size;
 }
 
 .pane-body {
@@ -5997,6 +6204,24 @@ p.set-hint {
   filter: brightness(1.12);
 }
 
+/* Quiet: the next step exists but is not the thing to press right now (the
+   agent is busy, or there is nothing uncommitted for "Commit…" to take). Same
+   button, same place, outlined instead of filled, so a grid of panes is not a
+   wall of accent buttons. Hint and blocked steps never get this class. */
+.pane-head .actions .nextstep.nextstep-quiet {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  /* The border is inside the filled button's box, so quieting it never
+     nudges the controls beside it. */
+  padding: 3px 10px;
+}
+
+.pane-head .actions .nextstep.nextstep-quiet:hover {
+  border-color: var(--accent);
+  filter: none;
+}
+
 /* Live step indicator — what is happening RIGHT NOW.
    Replaces the old `.nextstep-status` pill, which filled the primary button's
    slot with DISABLED GREY TEXT whenever there was no actionable next step. That
@@ -6026,11 +6251,6 @@ p.set-hint {
      predictable. The server's wait sentences run long ("waiting for CI to pass
      before merging"), and the full text is in the tooltip. */
   max-width: 15ch;
-}
-
-.pane-head .actions .stepnow-target {
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
 }
 
 .pane-head .actions .stepnow-dot {
@@ -6177,32 +6397,6 @@ p.set-hint {
   filter: none;
 }
 
-/* The next-step button is the LAST header control to drop: the token/cost
-   counter (and diff-stats line) hide first at 560px, so the primary action
-   stays reachable in tight tiled layouts. Only at 420px, when even the button
-   no longer fits, does it hide too. Fast-track is secondary, so it goes one step
-   earlier — the primary action must never be the thing that gets squeezed out. */
-/* Fast-track is secondary, so it drops one step before the primary button —
-   EXCEPT while it carries state (a target is set, a run is working or halted).
-   Hiding it then would hide the only place that says where the session is going
-   and the way to turn it off. */
-@container (max-width: 500px) {
-  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
-    display: none !important;
-  }
-  /* ↺ carries no state at all — it is a one-shot action, so there is nothing to
-     lose by hiding it, and the window is still resettable from a wider layout. */
-  .pane-head .actions .nextstep.nextstep-reset {
-    display: none !important;
-  }
-}
-
-@container (max-width: 420px) {
-  .pane-head .actions .nextstep {
-    display: none !important;
-  }
-}
-
 .pane-head .act {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -6222,7 +6416,7 @@ p.set-hint {
   cursor: default;
 }
 
-/* The right-edge control cluster (history, copy-all, ✕). Sticky against the
+/* The right-edge control cluster (history, hide −; a special window's ✕). Sticky against the
    header's own horizontal scroll so these stay visible while the rest of the
    header slides beneath; the opaque background is what masks that content.
    margin-left:auto pins it right in heads with no .tok (special panes); when
@@ -6248,8 +6442,9 @@ p.set-hint {
   margin-left: 0;
 }
 
-/* The window ✕: hide (sessions) / close (special windows). Same glyph and
-   hover treatment as the sidebar rows' .kill so it reads as the same verb. */
+/* The window control: − hides a session's pane (the session keeps running),
+   ✕ closes a special window. ✕ means end/close everywhere, so hiding wears
+   its own glyph; the hover treatment is shared. */
 .pane-head .act.pane-close {
   display: inline-flex;
   align-items: center;
@@ -6264,7 +6459,7 @@ p.set-hint {
   background: rgba(222, 97, 62, 0.12);
 }
 
-/* Icon-only copy-history button: center the SVG, muted like the other glyphs. */
+/* Icon-only history button: center the SVG, muted like the other glyphs. */
 .pane-head .act.copyhist {
   display: inline-flex;
   align-items: center;
@@ -6290,6 +6485,158 @@ p.set-hint {
   background: rgba(var(--accent-rgb), 0.45);
 }
 
+
+/* --- Narrow pane heads ------------------------------------------------------
+   Measured on .pane-head (its own container). The header still scrolls
+   sideways as a last resort; these make that rare. Target: a 2×2 grid at
+   1440×900 (heads near 570px) shows every control, and a 2×2 at 1100px
+   (heads near 400px) still shows the title, the tabs and ⏩.
+
+   Below 640px what gives way first is what is least about THIS window: the
+   provider name and the context fill leave the cost chip (both are in its
+   breakdown, one click away), the diff-stat line goes (the rail row carries
+   it), and the tabs and gaps pack tighter so the title keeps some room. */
+@container (max-width: 640px) {
+  .pane-head {
+    gap: 5px;
+  }
+
+  .pane-head .ctxline {
+    display: none !important;
+  }
+
+  .pane-head .tok .uh-prov,
+  .pane-head .tok .uh-ctx,
+  .pane-head .tok .caret {
+    display: none;
+  }
+
+  .pane-head .tabs {
+    margin-left: 4px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 5px;
+  }
+
+  .pane-head .actions {
+    margin-left: 4px;
+    gap: 4px;
+  }
+
+  .pane-head .head-tail {
+    gap: 4px;
+    padding-left: 4px;
+  }
+}
+
+@container (max-width: 560px) {
+  .pane-head .actions .stepnow-text {
+    max-width: 12ch;
+  }
+}
+
+/* A title squeezed to a few characters shows the name, not its "(tix) "
+   kind tag (the rail row and the tooltip still carry the whole label). */
+@container (max-width: 440px) {
+  .pane-head .title .title-kind {
+    display: none;
+  }
+}
+
+/* A 2×2 at 1100px puts heads near 400px: title, five tabs, the guided button,
+   ⏩ and the sticky tail (history, −) only fit side by side once every gap and
+   pad packs tight. Without this the tail sat on top of the guided button and
+   ⏩ (the head scrolls under the sticky tail), so nothing here hides a
+   control — it only takes back the air between them. */
+@container (max-width: 440px) {
+  .pane-head {
+    gap: 3px;
+    padding-left: 6px;
+  }
+
+  .pane-head .title {
+    min-width: 2.25rem;
+  }
+
+  .pane-head .tabs {
+    margin-left: 2px;
+    gap: 1px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 3px;
+  }
+
+  .pane-head .actions {
+    margin-left: 2px;
+    gap: 3px;
+  }
+
+  .pane-head .actions .nextstep {
+    padding: 4px 6px;
+  }
+
+  .pane-head .actions .nextstep.nextstep-quiet {
+    padding: 3px 5px;
+  }
+
+  .pane-head .actions .nextstep.nextstep-fast {
+    padding: 3px 4px;
+  }
+
+  .pane-head .actions .stepnow-text {
+    max-width: 5ch;
+  }
+
+  .pane-head .head-tail {
+    gap: 2px;
+    padding-left: 3px;
+    padding-right: 6px;
+  }
+
+  .pane-head .act.copyhist {
+    padding: 4px 3px;
+  }
+
+  .pane-head .act.pane-close {
+    padding: 4px 4px;
+  }
+}
+
+/* ↺ carries no state at all — it is a one-shot action, so there is nothing to
+   lose by hiding it, and the window is still resettable from a wider layout.
+   ⏩ stays: Off it is one glyph wide, so it holds on down to a sliver of a
+   pane; set, running or halted it never goes, because it is the only place
+   that says where the session is going and the way to turn it off. */
+@container (max-width: 500px) {
+  .pane-head .actions .nextstep.nextstep-reset {
+    display: none !important;
+  }
+}
+
+@container (max-width: 300px) {
+  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
+    display: none !important;
+  }
+}
+
+/* A 2×2 grid on a laptop puts heads around 400px. The cost chip gives way
+   first — the sidebar's Usage bar still totals it — so Commit… / Push / Make
+   PR stay on screen: the next step is the head's reason to exist. */
+@container (max-width: 420px) {
+  .pane-head .tok.usage-trigger {
+    display: none;
+  }
+}
+
+/* The guided button goes last of all, and only from a pane too narrow for it
+   beside the tabs and ⏩; the rail row's › menu still has every step. */
+@container (max-width: 340px) {
+  .pane-head .actions .nextstep:not(.nextstep-fast) {
+    display: none !important;
+  }
+}
 
 /* A verify run's watch window. Read-only by construction (SpecialPane's
    VerifyBody passes interactive=false, which sets xterm's disableStdin), and
@@ -10060,6 +10407,25 @@ button.ct-chip:hover {
   white-space: nowrap;
 }
 
+/* "Copy all": the whole history to the clipboard. A quiet bordered button,
+   the find arrows' look, so the bar keeps one control style. */
+.hist-bar .hist-copy {
+  flex: none;
+  padding: 0 8px;
+  line-height: 18px;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hist-bar .hist-copy:hover {
+  border-color: var(--accent);
+}
+
 /* The page itself: native scrolling and selection are the whole feature.
    overscroll-behavior keeps a fast wheel from spilling into the grid. */
 .hist-scroll {
@@ -12621,6 +12987,47 @@ button.ct-chip:hover {
   margin-top: 12px;
 }
 
+/* One session's Options fold (RunOptions): the summary names the rung, so a
+   closed fold still says what a start will do. Same disclosure idiom as the
+   page-2 folds (.nf-advanced), quieter: no rule above it, no inset panel. */
+.rt-fold>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+}
+
+.rt-fold>summary::-webkit-details-marker {
+  display: none;
+}
+
+.rt-fold>summary::before {
+  content: "▸";
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.rt-fold[open]>summary::before {
+  transform: rotate(90deg);
+}
+
+.rt-fold>summary:hover {
+  color: var(--text);
+}
+
+.rt-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 10px;
+}
+
 .rt-row {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
@@ -12782,6 +13189,61 @@ button.ct-chip:hover {
   font: inherit;
   font-size: 12px;
   padding: 2px 10px;
+}
+
+/* Page 2's Prompt fold: "Manage…" is a link to Customize → Prompts, not a
+   fourth pill. The id outranks contextPresets.css's `.preset-row button`. */
+.preset-row #preset-manage {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--accent);
+  text-decoration: underline;
+  align-self: center;
+}
+
+.preset-row #preset-manage:hover {
+  border: none;
+  filter: brightness(1.15);
+}
+
+/* "Save…" opens this inline name row under the select (Electron has no
+   window.prompt): name, Save, Cancel. */
+.preset-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.preset-name-row input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.preset-name-row button {
+  flex: none;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.preset-name-row button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.preset-name-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.preset-name-row .muted {
+  font-size: 11.5px;
 }
 }
 
@@ -14194,6 +14656,28 @@ body.conn-lost #cs-errors {
   margin: 6px 0 0;
 }
 
+/* Step ②'s optional tests (GitHub, Shortcut token), folded under the one test
+   a first session needs. A quiet disclosure, not another button row. */
+.setup-optional {
+  margin: 2px 0 4px;
+}
+
+.setup-optional>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  width: fit-content;
+}
+
+.setup-optional>summary:hover {
+  color: var(--text);
+}
+
+.setup-optional[open]>summary {
+  margin-bottom: 8px;
+}
+
 button.linklike {
   background: none;
   border: none;
@@ -14455,22 +14939,21 @@ button.linklike {
   font-size: 12px;
 }
 
-/* Sidebar-footer hint button that surfaces the shortcut. */
-#palette-btn {
-  cursor: pointer;
-  font-size: 10px;
-  padding: 0 6px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
+/* The top bar's palette door: a monochrome magnifier at the end of the menu,
+   sized and coloured like #theme-btn (currentColor, so it follows the region's
+   --text on a bar of any hue). `#topbar` in front to outrank `.tb-item`. */
+#topbar #palette-btn {
+  padding: 0 5px;
   color: var(--muted);
-  height: 30px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-#palette-btn:hover {
-  border-color: var(--accent);
+#topbar #palette-btn:hover {
   color: var(--text);
+}
+
+/* Kills the inline-SVG baseline gap (same as #theme-btn svg). */
+#palette-btn svg {
+  display: block;
 }
 }
 
@@ -14559,24 +15042,6 @@ button.linklike {
 .preset-row #preset-del:hover {
   border-color: var(--red);
   background: rgba(222, 97, 62, 0.12);
-}
-
-/* Inline "name this preset" editor (replaces the native prompt()). */
-.preset-row .preset-name-edit {
-  display: flex;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  align-items: stretch;
-}
-
-.preset-row .preset-name-edit.hidden {
-  display: none;
-}
-
-.preset-row .preset-name-edit input {
-  flex: 1;
-  min-width: 0;
 }
 }
 
@@ -15327,6 +15792,41 @@ button.linklike {
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+}
+
+/* The folded state of those pickers: one muted line saying what Start will
+   use, and a quiet "Options" toggle at its end. Right-aligned like the button
+   under it, so the list's right edge stays one straight line. Muted rather than
+   `.linklike`'s accent + underline — a rarely-used override must not be the
+   loudest thing on every row. */
+.ik-item-start .ik-item-optline {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ik-item-start .ik-item-uses {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ik-item-start .ik-item-opts {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ik-item-start .ik-item-opts:hover,
+.ik-item-start .ik-item-opts:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 /* Same quiet treatment as the CLI picker, and the same two-classes-deep
@@ -17195,40 +17695,21 @@ button.linklike {
 
 @layer components{
 
-/* The Outbox: Intake's shell, a third time.
+/* The Outbox tab of Customize: Intake's kit, a third time.
  *
- * The frame mirrors #intake-panel / #verify-panel and everything inside it is
- * the shared kit — `.ws-head`, `.ik-subtitle`, `.ik-tab`, `.ik-groups`,
- * `.tk-bucket`, `.pr-open-item`, `.pr-open-chip`, `.btn-primary`, `.test-btn`.
- * Imported after VerifyDialog.css so the few rules that reach into those
- * shared classes win the equal-specificity ties. What has no counterpart
- * there lives under `ob-`. */
+ * The frame is Customize's (CustomizeDialog.css); everything inside is the
+ * shared kit — `.ik-subtitle`, `.ik-groups`, `.pr-open-item`, `.pr-open-chip`,
+ * `.btn-primary`, `.test-btn`. Imported after VerifyDialog.css so the few rules
+ * that reach into those shared classes win the equal-specificity ties. What has
+ * no counterpart there lives under `ob-`. The waiting rows (WaitingRow.tsx)
+ * render in the bell, but their `ob-` rules stay here with the kit they extend. */
 
 #outbox-panel {
-  width: 820px;
-  max-width: 94vw;
-  min-height: min(420px, 84vh);
-  max-height: min(86vh, 800px);
-  padding: 18px 22px 20px;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-#outbox-panel .ws-head {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-
-#outbox-panel .ws-head h2 {
-  margin: 0;
-  font-size: 14.5px;
 }
 
 #outbox-panel .ob-fetch {
@@ -17236,12 +17717,57 @@ button.linklike {
   color: var(--muted);
 }
 
+/* "<n> waiting on you — in the bell": one quiet line, never a list. */
+.ob-to-bell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--gold-fill) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gold-fill) 8%, transparent);
+  font-size: 12px;
+}
+
+.ob-to-bell span {
+  flex: 1;
+}
+
+/* Group chips — shown only once there are at least two (All + a group). */
 #outbox-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   flex: none;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+}
+
+#outbox-tabs .ob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+#outbox-tabs .ob-chip:hover {
+  color: var(--text);
+}
+
+#outbox-tabs .ob-chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+#outbox-tabs .ob-chip-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 #outbox-body {
@@ -17449,6 +17975,133 @@ span.pr-open-ref.ob-ref {
 
 /* 257 — the
    same kit a third time; after VerifyDialog.css for the same reason */
+
+@layer components{
+
+/* Customize: Sidebar · Prompts · Outbox in one dialog.
+ *
+ * The frame mirrors #intake-panel (a third of the same family, after Verify and
+ * the old Outbox): the shared `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one
+ * fixed height for all three tabs so switching never makes the dialog jump, and
+ * only the tab's own list scrolls. Imported right after Outbox.css, so it can
+ * shape the panels that live inside it. */
+
+#customize-panel {
+  width: 760px;
+  max-width: 94vw;
+  height: min(620px, 86vh);
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+#customize-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+#customize-panel .ws-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+#customize-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+#customize-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A tab's own first line (the Outbox's subtitle, the Prompts target). */
+#customize-body .cz-tab-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-height: 18px;
+}
+
+/* --- Sidebar tab ----------------------------------------------------------- */
+#customize-sidebar {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cz-heading {
+  margin: 4px 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.cz-bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cz-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 7px;
+}
+
+.cz-bar:hover {
+  background: var(--panel-2);
+}
+
+.cz-bar-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cz-bar-check input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Lines up under the label, past the checkbox. */
+.cz-bar-note {
+  margin-left: 21px;
+  font-size: 11.5px;
+}
+
+#customize-sidebar .cz-bar-link {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.cz-foot {
+  margin: 12px 0 0 8px;
+  font-size: 11.5px;
+}
+}
+
+/* 258 —
+   the frame the Outbox and Prompts panels sit in; after Outbox.css */
 
 @layer components{
 /* Settings → Mobile: white QR card + URL rows.
@@ -19041,8 +19694,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
    app-wide palette through the unshadowed --app-* copies. A declaration on the
    element itself always beats the region's inherited one, so this needs no
    specificity or layer juggling. */
-.notif-pop,
-#foot-customize-menu {
+.notif-pop {
   --panel: var(--app-panel);
   --panel-2: var(--app-panel-2);
   --border: var(--app-border);

@@ -28,29 +28,40 @@ describe("tourDecision (welcome tour auto-open)", () => {
 });
 
 describe("shouldAutoShowSetup (first-run checklist auto-open)", () => {
+  // `sessions: 1` throughout unless the case is about sessions: the modal
+  // exists for a first-run user with something on screen to cover.
   it("opens for a first-run user with something failing", () => {
-    expect(shouldAutoShowSetup({ failing: true, onboarded: false })).toBe(true);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: false, sessions: 1 })).toBe(true);
   });
 
   it("never ambushes a veteran with a first-run checklist", () => {
-    expect(shouldAutoShowSetup({ failing: true, onboarded: true })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: true, sessions: 1 })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: true, sessions: 0 })).toBe(false);
   });
 
   it("stays shut while the onboarded flag is unknown", () => {
-    expect(shouldAutoShowSetup({ failing: true, onboarded: undefined })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: undefined, sessions: 1 })).toBe(false);
   });
 
   it("keeps opening for the same first-run user until the tools are there", () => {
     // No per-browser "already saw it" flag can suppress this: a missing tmux is
     // still missing on the next load, and the checklist is the only thing that
     // says so before the user tries to create a session.
-    expect(shouldAutoShowSetup({ failing: true, onboarded: false })).toBe(true);
-    expect(shouldAutoShowSetup({ failing: true, onboarded: false })).toBe(true);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: false, sessions: 1 })).toBe(true);
+    expect(shouldAutoShowSetup({ failing: true, onboarded: false, sessions: 1 })).toBe(true);
   });
 
   it("stays shut when doctor is happy, whoever is asking", () => {
-    expect(shouldAutoShowSetup({ failing: false, onboarded: false })).toBe(false);
-    expect(shouldAutoShowSetup({ failing: false, onboarded: undefined })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: false, onboarded: false, sessions: 1 })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: false, onboarded: undefined, sessions: 1 })).toBe(false);
+    expect(shouldAutoShowSetup({ failing: false, onboarded: false, sessions: 0 })).toBe(false);
+  });
+
+  it("leaves an empty grid to its own card", () => {
+    // With no session at all the grid's "Get set up" card already shows this
+    // exact checklist; a modal on top of it said the same three steps twice,
+    // under the welcome tour.
+    expect(shouldAutoShowSetup({ failing: true, onboarded: false, sessions: 0 })).toBe(false);
   });
 });
 

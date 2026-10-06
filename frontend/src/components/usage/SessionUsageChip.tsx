@@ -8,7 +8,7 @@ import type { Instance } from "../../api/types";
 import { provLabel } from "../../lib/format";
 import { useUsage } from "../../state/queries";
 import { UsagePopNote, UsagePopTable, UsagePopover } from "./UsagePopover";
-import { USAGE_NOTE, asUsageWindows, isPlanMode, usageHeadline, usageRows } from "./usageModel";
+import { USAGE_NOTE, asUsageWindows, isPlanMode, usageHeadParts, usageRows } from "./usageModel";
 
 export interface SessionUsageChipProps {
   inst: Instance;
@@ -23,6 +23,11 @@ export function SessionUsageChip({ inst }: SessionUsageChipProps) {
   const usage = asUsageWindows(usageData);
 
   const pl = provLabel(inst.provider);
+  // usageHeadline's text, in parts: a narrow pane head (Pane.css @container)
+  // hides the provider and the context fill and keeps the cost. Each
+  // separator rides with the optional part beside it, so the cost never
+  // dangles a " · ".
+  const head = usageHeadParts(inst);
   return (
     <>
       <span
@@ -34,7 +39,11 @@ export function SessionUsageChip({ inst }: SessionUsageChipProps) {
           setOpen((o) => !o);
         }}
       >
-        <span className="usage-head">{usageHeadline(inst)}</span>
+        <span className="usage-head">
+          {head.prov && <span className="uh-prov">{head.prov} · </span>}
+          <span className="uh-cost">{head.cost}</span>
+          {head.ctx && <span className="uh-ctx"> · {head.ctx}</span>}
+        </span>
         <span className="caret">▾</span>
       </span>
       {open && chipRef.current && (

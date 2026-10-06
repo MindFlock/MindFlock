@@ -1,23 +1,39 @@
-/** Notification center bell (port of section 7): unread history badge vs the
- * amber needs-attention count, the popover with the pinned attention section
- * + history feed, and the desktop-notification toggle (shared addon API). */
+/** Notification center bell (port of section 7): the ONE place anything
+ * waits on you, plus what happened while you were away.
+ *
+ * "Needs attention" merges the sidebar's attention items (an agent asking, a
+ * broken session, failing checks, ready for a PR) with the Outbox's waiting
+ * rows (an ask-first approval with its commit-message preview, a stuck group
+ * line, a spent budget, a lead's plan or PR) — `needsAttention`, one row per
+ * session — and the amber badge counts exactly that list. Below it, the
+ * history feed. The desktop-notification switch lives in Settings →
+ * Notifications (the ⚙ here goes there).
+ *
+ * Other surfaces open it with a DOM event, `mf-open-bell` (detail.title
+ * optional: scroll that session's row into view and flash it) — the rail's
+ * "— open the bell" lines, the Outbox tab and run toasts. A waiting row that
+ * navigates closes it with `mf-close-bell`. */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useInstances, type EventEnvelope } from "../state/queries";
 import { displayName, useUi } from "../state/store";
 import { relTime } from "../lib/format";
 import { selectSession } from "../lib/sessionActions";
 import { attentionItems } from "./sidebar/ordering";
-import { slotNumber } from "../lib/windowName";
+import { slotNumber, windowName } from "../lib/windowName";
 import { childrenByParent, inFamily, messageNotif, workerOf, type MessageEventData } from "../lib/agentMessages";
 import { openThread } from "../lib/flockActions";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
-import { ruleOn, runLookups, useNotifyConfig } from "../state/runs";
+import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
+import { needsAttention } from "./outbox/outbox";
+import { WaitingRow } from "./outbox/WaitingRow";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
+/** Rows of "Needs attention" shown before "+N more". */
+const NEEDS_SHOWN = 6;
 
 /** Monochrome bell (fill=currentColor), never the 🔔 emoji. The emoji paints
  * its own colour from the OS emoji font — Apple Color Emoji renders a bright
@@ -45,7 +61,19 @@ interface Notif {
   lead?: string;
   /** Same fact, same key — a replay under a new seq adds no second row. */
   dedupe?: string;
+  /** The notify rule that gated it ("run_needs_you" rows point at a needs row). */
+  rule?: string;
 }
+
+/** A stage change, said as what happened. */
+const STAGE_WORDS: Record<string, string> = {
+  committed: "committed",
+  pushed: "pushed",
+  pr: "opened a PR",
+  merged: "merged",
+  interrupt: "pre-commit failed",
+  precommit: "running pre-commit hooks",
+};
 
 /** A bell row as notifFromEvent produces it. `rule` names the notify rule that
  * gates it (the bell is the third, otherwise ungated channel). */
@@ -97,11 +125,11 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       return { text: secs ? "finished — idle " + held : "finished", cls: "n-done" };
     }
     case "session.stage_changed":
-      return { text: "stage → " + (env.new || ""), cls: "n-info" };
+      return { text: STAGE_WORDS[String(env.new || "")] || String(env.new || ""), cls: "n-info" };
     case "session.budget_exceeded":
       return { text: "cost over budget ($" + (Number(d.cost) || 0).toFixed(2) + ")", cls: "n-warn" };
     case "session.prompt_sent":
-      return { text: "auto-sent a queued prompt (" + (Number(d.remaining) || 0) + " left)", cls: "n-info" };
+      return { text: "sent the next queued prompt (" + (Number(d.remaining) || 0) + " left)", cls: "n-info" };
     case "session.setup_finished":
       return env.new === "ok"
         ? { text: "worktree setup finished", cls: "n-done" }
@@ -136,27 +164,16 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
   }
 }
 
-interface NotifApi {
-  state?: () => string;
-  enable?: () => Promise<void> | void;
-  disable?: () => void;
-  unavailableReason?: string;
-}
-
-function notifApi(): NotifApi | null {
-  const w = window as unknown as { mindflockAddons?: { notify?: NotifApi } };
-  return w.mindflockAddons?.notify || null;
-}
-
-function notifState(): string {
-  const api = notifApi();
-  return api && typeof api.state === "function" ? api.state() : "unsupported";
-}
-
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
+  // The Outbox's waiting rows are half of "Needs attention" — the same query
+  // (and the same polling) the top bar's Outbox badge used to keep warm.
+  const { data: outbox } = useOutbox();
+  const { data: runs } = useRuns();
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
   const [seenTs, setSeenTs] = useState(() => {
     try {
       return parseFloat(localStorage.getItem(NOTIF_SEEN_KEY) || "0") || 0;
@@ -164,9 +181,12 @@ export function NotificationsBell() {
       return 0;
     }
   });
-  const [toggleState, setToggleState] = useState(notifState());
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+  /** When the panel last opened (performance.now()): the click that opened it
+   * from elsewhere — a rail line, a toast — is still bubbling, and must not
+   * read as a click outside it. */
+  const openedAt = useRef(0);
 
   // Feed from the event bus; the replayed backlog IS the away-history,
   // deduped by seq. "Unread" keys on ts (seq resets on server restart).
@@ -193,22 +213,21 @@ export function NotificationsBell() {
     });
   }, []);
 
-  // Keep the toggle in sync when Settings flips it while the panel is open.
-  useEffect(() => {
-    const on = () => setToggleState(notifState());
-    document.addEventListener("mf-notify-state", on);
-    return () => document.removeEventListener("mf-notify-state", on);
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      if (e.timeStamp <= openedAt.current) return;
+      // The path as it was when the click was dispatched, not `contains` on the
+      // target: React commits between the root's listener and this one, so a
+      // control the click itself replaced ("+N more", a preview's "edit") is
+      // already detached here and would read as a click outside the panel.
+      const path = e.composedPath();
+      if ((popRef.current && path.includes(popRef.current)) || (btnRef.current && path.includes(btnRef.current)))
+        return;
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
     };
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKey);
@@ -218,19 +237,24 @@ export function NotificationsBell() {
     };
   }, [open]);
 
-  const attn = attentionItems(instances);
+  const families = useMemo(() => childrenByParent(instances), [instances]);
+  const byTitle = useMemo(() => new Map(instances.map((i) => [i.title, i])), [instances]);
+  // ONE list: the sessions' own attention items and the Outbox's waiting rows,
+  // one row per session (outbox.ts `needsAttention` says how they merge).
+  const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
-  // answer" item names whose worker it is and carries the same answer strip
-  // as its rail row — answerable from any screen, two clicks.
-  const families = childrenByParent(instances);
+  // answer" item names whose worker it is, and its strip can redirect the
+  // question to the lead's Thread — answerable from any screen, two clicks.
   const familyOf = (title: string) => {
-    const inst = instances.find((x) => x.title === title);
+    const inst = byTitle.get(title);
     if (!inst || inst.device) return null;
     const parent = inst.parent && families.get(inst.parent)?.includes(inst) ? inst.parent : "";
     return inFamily(inst, !!parent, families.get(title)?.length ?? 0) ? { parent } : null;
   };
   const unread = notifs.filter((n) => n.ts > seenTs).length;
-  const aliases = useUi((s) => s.aliases);
+  // Rows are named by windowName, which reads the renames from the store: keep
+  // a subscription so a rename repaints the open panel.
+  useUi((s) => s.aliases);
 
   const openPanel = () => {
     const newest = notifs.reduce((m, n) => Math.max(m, n.ts), seenTs);
@@ -240,12 +264,58 @@ export function NotificationsBell() {
     } catch {
       /* storage unavailable */
     }
-    setToggleState(notifState());
+    openedAt.current = performance.now();
     setOpen(true);
   };
+  // The DOM-event listeners below are registered once; they reach the
+  // current render's state through these refs.
+  const openRef = useRef(openPanel);
+  openRef.current = openPanel;
+  const attnRef = useRef(attn);
+  attnRef.current = attn;
+
+  // `mf-open-bell` (detail.title optional) opens the panel from anywhere;
+  // `mf-close-bell` closes it after a waiting row navigated away.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const title = String((e as CustomEvent<{ title?: string } | null>).detail?.title || "");
+      openRef.current();
+      if (!title) return;
+      // A session's title, or "run:<id>" for a group's own rows (a group can
+      // hold several with no session — its budget, unresolved ticket lines —
+      // so match on the run id, not on one row's key).
+      const runId = title.startsWith("run:") ? title.slice(4) : "";
+      const rows = attnRef.current;
+      const ofRun = (r: (typeof rows)[number]) => !r.title && !!runId && r.waiting?.run?.id === runId;
+      let at = rows.findIndex((r) => r.title === title || r.key === title);
+      if (at < 0) at = rows.findIndex(ofRun);
+      if (at >= NEEDS_SHOWN) setShowAll(true);
+      setFlash(at >= 0 ? attnRef.current[at].key : title);
+    };
+    const onClose = () => setOpen(false);
+    document.addEventListener("mf-open-bell", onOpen);
+    document.addEventListener("mf-close-bell", onClose);
+    return () => {
+      document.removeEventListener("mf-open-bell", onOpen);
+      document.removeEventListener("mf-close-bell", onClose);
+    };
+  }, []);
+
+  // Scroll a requested row into view and flash it, once it has rendered.
+  useEffect(() => {
+    if (!open || !flash) return;
+    const row = popRef.current?.querySelector<HTMLElement>('[data-needs="' + CSS.escape(flash) + '"]');
+    row?.scrollIntoView({ block: "nearest" });
+    const t = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(t);
+  }, [open, flash]);
+
+  useEffect(() => {
+    if (!open) setShowAll(false);
+  }, [open]);
 
   const jump = (title: string) => {
-    if (instances.some((x) => x.title === title)) {
+    if (byTitle.has(title)) {
       selectSession(title);
       setOpen(false);
     }
@@ -253,10 +323,11 @@ export function NotificationsBell() {
 
   const rect = btnRef.current?.getBoundingClientRect();
   const popStyle = rect
-    ? { top: rect.bottom + 6 + "px", left: Math.max(8, Math.min(rect.left, window.innerWidth - 328)) + "px" }
+    ? { top: rect.bottom + 6 + "px", left: Math.max(8, Math.min(rect.left, window.innerWidth - 408)) + "px" }
     : undefined;
 
-  const shownAttn = attn.slice(0, 8);
+  const shownAttn = showAll ? attn : attn.slice(0, NEEDS_SHOWN);
+  const runName = (id: string) => runs?.find((r) => r.id === id)?.name || "";
 
   return (
     <>
@@ -267,7 +338,7 @@ export function NotificationsBell() {
           "tb-item" + (attn.length > 0 ? " has-attn" : "") + (attn.length === 0 && unread > 0 ? " has-unread" : "")
         }
         type="button"
-        title="Notifications — what happened while you were away"
+        title="Notifications — what needs you, and what happened while you were away"
         aria-label="Notifications"
         onClick={(e) => {
           e.stopPropagation();
@@ -283,14 +354,13 @@ export function NotificationsBell() {
       </button>
       {open &&
         createPortal(
-          <div className="notif-pop" ref={popRef} style={popStyle}>
+          <div className="notif-pop" id="notif-pop" ref={popRef} style={popStyle}>
             <div className="notif-head">
               <span>Notifications</span>
-              <NotifToggle state={toggleState} onChange={() => setToggleState(notifState())} />
               <button
                 className="notif-settings"
                 type="button"
-                title="Notification settings"
+                title="Notification settings — desktop notifications and which events notify"
                 onClick={() => {
                   setOpen(false);
                   useUi.getState().openDialogFor("settings", "notifications");
@@ -306,37 +376,68 @@ export function NotificationsBell() {
               <div className="notif-attn">
                 <div className="notif-attn-head">Needs attention</div>
                 {shownAttn.map((it) => {
-                  // Only a prompt (p0) is answerable; the strip then stands in
-                  // for the snippet with the dialog's own question.
-                  const fam = it.p === 0 ? familyOf(it.title) : null;
+                  const flashing = flash !== null && (flash === it.title || flash === it.key);
+                  if (it.waiting) {
+                    // An approval or an escalation: the Outbox's own row, with
+                    // its preview and buttons — the click lives on those.
+                    const w = it.waiting;
+                    const runId = w.run?.id || "";
+                    return (
+                      <div
+                        key={"w:" + it.key}
+                        className={"attn-wait" + (flashing ? " flash" : "")}
+                        data-needs={it.key}
+                        data-attn={it.title || undefined}
+                        data-run={runId || undefined}
+                      >
+                        <WaitingRow
+                          w={w}
+                          row={it.title ? byTitle.get(it.title) : undefined}
+                          shown={windowName}
+                          group={runId ? w.run?.name || runName(runId) : ""}
+                          runInfo={runId ? runs?.find((r) => r.id === runId) : undefined}
+                        />
+                      </div>
+                    );
+                  }
+                  const a = it.attn!;
+                  // A prompt (p0) is answerable: every one carries the answer
+                  // strip, which stands in for the snippet with the dialog's own
+                  // question. Only a family's can redirect to a Thread.
+                  const fam = a.p === 0 ? familyOf(it.title) : null;
                   return (
                     <div
-                      key={it.title + it.reason}
-                      className={"attn-item p" + it.p}
+                      key={it.key + a.reason}
+                      className={"attn-item p" + a.p + (flashing ? " flash" : "")}
                       data-attn={it.title}
+                      data-needs={it.key}
                       onClick={() => jump(it.title)}
                     >
                       <span className="attn-dot" />
-                      <span className="attn-title">{aliases[it.title] || it.title}</span>
-                      <span className="attn-reason">{it.reason}</span>
+                      <span className="attn-title">{windowName(it.title)}</span>
+                      <span className="attn-reason">{a.reason}</span>
                       {fam?.parent && (
                         <span className="attn-lineage">{workerOf(fam.parent, displayName)}</span>
                       )}
-                      {fam ? (
+                      {a.p === 0 ? (
                         <AnswerStrip
                           title={it.title}
                           activity="clarify"
                           variant="bell"
                           onOpen={() => jump(it.title)}
-                          onRedirect={() => {
-                            setOpen(false);
-                            openThread(fam.parent || it.title, it.title);
-                          }}
+                          onRedirect={
+                            fam
+                              ? () => {
+                                  setOpen(false);
+                                  openThread(fam.parent || it.title, it.title);
+                                }
+                              : undefined
+                          }
                         />
                       ) : (
-                        !!it.snippet && (
+                        !!a.snippet && (
                           <div className="attn-snippet">
-                            “{typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet)}”
+                            “{typeof a.snippet === "string" ? a.snippet : JSON.stringify(a.snippet)}”
                           </div>
                         )
                       )}
@@ -344,7 +445,9 @@ export function NotificationsBell() {
                   );
                 })}
                 {attn.length > shownAttn.length && (
-                  <div className="attn-more muted">+{attn.length - shownAttn.length} more</div>
+                  <button type="button" className="attn-more linklike" onClick={() => setShowAll(true)}>
+                    +{attn.length - shownAttn.length} more
+                  </button>
                 )}
               </div>
             )}
@@ -356,14 +459,26 @@ export function NotificationsBell() {
                     className={"notif-item " + n.cls + (n.ts > seenTs ? " unread" : "")}
                     data-session={n.session}
                     onClick={() => {
-                      // A group's row opens the Outbox on that group — where
-                      // its escalation, or its summary, is.
                       if (n.lead) {
                         // The plan to approve / the one PR to open live on
                         // the lead's Thread tab — the click goes there.
                         setOpen(false);
                         openThread(n.lead);
+                      } else if (n.run && n.rule === "run_needs_you") {
+                        // What it asks for is a row above, if it still waits:
+                        // point at it rather than leaving the bell.
+                        const row = attn.find((r) => r.waiting?.run?.id === n.run && (!n.session || r.title === n.session))
+                          || attn.find((r) => r.waiting?.run?.id === n.run);
+                        if (row) {
+                          if (attn.indexOf(row) >= NEEDS_SHOWN) setShowAll(true);
+                          setFlash(row.key);
+                        } else {
+                          setOpen(false);
+                          useUi.getState().openDialogFor("outbox", n.run);
+                        }
                       } else if (n.run) {
+                        // A group's row opens the Outbox on that group — where
+                        // its summary, or what it shipped, is.
                         setOpen(false);
                         useUi.getState().openDialogFor("outbox", n.run);
                       } else jump(n.session);
@@ -371,57 +486,21 @@ export function NotificationsBell() {
                   >
                     <span className="notif-sess">
                       {n.run && !n.session
-                        ? "Outbox"
+                        ? runLookups.name(n.run) || "Group"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
-                          (aliases[n.session] || n.session || "—")}
+                          (n.session ? windowName(n.session) : "—")}
                     </span>
                     <span className="notif-text">{n.text}</span>
                     <span className="notif-time">{relTime(n.ts)}</span>
                   </div>
                 ))}
               </div>
-            ) : (
+            ) : attn.length === 0 ? (
               <div className="notif-empty muted">No notifications yet.</div>
-            )}
+            ) : null}
           </div>,
           document.body
         )}
     </>
-  );
-}
-
-function NotifToggle({ state, onChange }: { state: string; onChange(): void }) {
-  const api = notifApi();
-  // Text-only label + a monochrome BellGlyph — no 🔔/🔕 emoji, which render as a
-  // bright yellow bell in macOS's Apple Color Emoji font (differs per platform).
-  const label =
-    state === "on" ? "On" : state === "blocked" ? "Blocked" : state === "unsupported" ? "Unavailable" : "Off";
-  const showBell = state === "on" || state === "off";
-  const title =
-    state === "blocked"
-      ? "Notifications are blocked by the browser — allow them in this site's settings, then click again"
-      : state === "unsupported"
-        ? api?.unavailableReason || "Desktop notifications aren't available here"
-        : state === "on"
-          ? "Desktop notifications on — click to turn off"
-          : "Turn on desktop notifications (clarify prompts, PR merges, budget overruns)";
-  return (
-    <button
-      className={"notif-toggle" + (state === "on" ? " active" : "")}
-      type="button"
-      data-state={state}
-      disabled={state === "unsupported"}
-      title={title}
-      onClick={async (e) => {
-        e.stopPropagation();
-        if (!api || state === "unsupported") return;
-        if (state === "on") api.disable?.();
-        else await api.enable?.();
-        onChange();
-      }}
-    >
-      {showBell && <BellGlyph size={12} />}
-      {label}
-    </button>
   );
 }

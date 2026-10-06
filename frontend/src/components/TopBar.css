@@ -14,7 +14,7 @@ body #grid {
    stretched #mf-winctl across the whole top (left:0 / left:260px) as a drag
    region at max z-index, so it sat ON TOP of the top-bar buttons and swallowed
    their clicks. Force it back to a right-anchored, content-width cluster (the
-   new shell already does this) so New / Recent / Command / Settings are
+   new shell already does this) so New / Intake / Settings and the rest are
    clickable even before Electron is fully restarted. */
 body #mf-winctl {
   left: auto !important;
@@ -124,8 +124,8 @@ body #mf-winctl {
   justify-content: flex-start;
 }
 
-/* The menu carries seven items now (New, Intake, Verify, Recent, Prompts,
-   Command, Settings), so the type and the spacing are deliberately tighter than
+/* The menu carries New, Intake, Verify (once it has something to check),
+   Settings and the palette's icon. The type and the spacing stay tighter than
    the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
    which must all move together or the row goes ragged.
    The bar must stay ONE line at the narrowest window anyone actually uses: it is
@@ -270,7 +270,7 @@ body #mf-winctl {
   display: block;
 }
 
-/* Matches the neutral .tb-item look (same as the Recent button) — which is why
+/* Matches the neutral .tb-item look (same as Intake and Settings) — which is why
    it follows .tb-item down to the smaller type and tighter padding above rather
    than staying 13px/8px and reading as a different kind of button. */
 #topbar #new-btn.tb-new {

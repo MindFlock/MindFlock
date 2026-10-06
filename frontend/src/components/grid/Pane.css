@@ -89,7 +89,7 @@
      off past the edge. The scrollbar itself is hidden so the header keeps its
      one-line height — content cut mid-glyph at the edge is the affordance —
      and .head-tail stays pinned to the right so the window controls (history,
-     copy-all, ✕) never leave view. */
+     hide −) never leave view. */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -195,33 +195,17 @@
   display: none;
 }
 
-/* The header scrolls sideways now, so NOTHING is display:none'd away as a
-   pane narrows — everything stays clickable, just possibly a scroll away.
-   (The old progressive-disclosure rules hid the token chip and the live-step
-   text at 560/360px, which made them unreachable in tiled layouts.) Narrow
-   panes only tighten spacing: */
+/* Narrow panes: see the @container rules after the head's base rules
+   (they must come later in the file to beat them at equal specificity). */
 .pane {
   container-type: inline-size;
 }
 
-@container (max-width: 560px) {
-  .pane-head .actions .stepnow-text {
-    max-width: 12ch;
-  }
-}
-
-@container (max-width: 360px) {
-  .pane-head {
-    gap: 4px;
-  }
-
-  .pane-head .tabs {
-    margin-left: 4px;
-  }
-
-  .pane-head .tabs button {
-    padding: 3px 6px;
-  }
+/* The head is its own container too, so the queries that fit its controls
+   measure the strip they actually live in. On the head rather than moving it
+   off .pane: the pane's other queries (Map, Thread) stay as they are. */
+.pane-head {
+  container-type: inline-size;
 }
 
 .pane-body {
@@ -469,6 +453,24 @@
   filter: brightness(1.12);
 }
 
+/* Quiet: the next step exists but is not the thing to press right now (the
+   agent is busy, or there is nothing uncommitted for "Commit…" to take). Same
+   button, same place, outlined instead of filled, so a grid of panes is not a
+   wall of accent buttons. Hint and blocked steps never get this class. */
+.pane-head .actions .nextstep.nextstep-quiet {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  /* The border is inside the filled button's box, so quieting it never
+     nudges the controls beside it. */
+  padding: 3px 10px;
+}
+
+.pane-head .actions .nextstep.nextstep-quiet:hover {
+  border-color: var(--accent);
+  filter: none;
+}
+
 /* Live step indicator — what is happening RIGHT NOW.
    Replaces the old `.nextstep-status` pill, which filled the primary button's
    slot with DISABLED GREY TEXT whenever there was no actionable next step. That
@@ -498,11 +500,6 @@
      predictable. The server's wait sentences run long ("waiting for CI to pass
      before merging"), and the full text is in the tooltip. */
   max-width: 15ch;
-}
-
-.pane-head .actions .stepnow-target {
-  opacity: 0.75;
-  font-variant-numeric: tabular-nums;
 }
 
 .pane-head .actions .stepnow-dot {
@@ -649,32 +646,6 @@
   filter: none;
 }
 
-/* The next-step button is the LAST header control to drop: the token/cost
-   counter (and diff-stats line) hide first at 560px, so the primary action
-   stays reachable in tight tiled layouts. Only at 420px, when even the button
-   no longer fits, does it hide too. Fast-track is secondary, so it goes one step
-   earlier — the primary action must never be the thing that gets squeezed out. */
-/* Fast-track is secondary, so it drops one step before the primary button —
-   EXCEPT while it carries state (a target is set, a run is working or halted).
-   Hiding it then would hide the only place that says where the session is going
-   and the way to turn it off. */
-@container (max-width: 500px) {
-  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
-    display: none !important;
-  }
-  /* ↺ carries no state at all — it is a one-shot action, so there is nothing to
-     lose by hiding it, and the window is still resettable from a wider layout. */
-  .pane-head .actions .nextstep.nextstep-reset {
-    display: none !important;
-  }
-}
-
-@container (max-width: 420px) {
-  .pane-head .actions .nextstep {
-    display: none !important;
-  }
-}
-
 .pane-head .act {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -694,7 +665,7 @@
   cursor: default;
 }
 
-/* The right-edge control cluster (history, copy-all, ✕). Sticky against the
+/* The right-edge control cluster (history, hide −; a special window's ✕). Sticky against the
    header's own horizontal scroll so these stay visible while the rest of the
    header slides beneath; the opaque background is what masks that content.
    margin-left:auto pins it right in heads with no .tok (special panes); when
@@ -720,8 +691,9 @@
   margin-left: 0;
 }
 
-/* The window ✕: hide (sessions) / close (special windows). Same glyph and
-   hover treatment as the sidebar rows' .kill so it reads as the same verb. */
+/* The window control: − hides a session's pane (the session keeps running),
+   ✕ closes a special window. ✕ means end/close everywhere, so hiding wears
+   its own glyph; the hover treatment is shared. */
 .pane-head .act.pane-close {
   display: inline-flex;
   align-items: center;
@@ -736,7 +708,7 @@
   background: rgba(222, 97, 62, 0.12);
 }
 
-/* Icon-only copy-history button: center the SVG, muted like the other glyphs. */
+/* Icon-only history button: center the SVG, muted like the other glyphs. */
 .pane-head .act.copyhist {
   display: inline-flex;
   align-items: center;
@@ -762,6 +734,158 @@
   background: rgba(var(--accent-rgb), 0.45);
 }
 
+
+/* --- Narrow pane heads ------------------------------------------------------
+   Measured on .pane-head (its own container). The header still scrolls
+   sideways as a last resort; these make that rare. Target: a 2×2 grid at
+   1440×900 (heads near 570px) shows every control, and a 2×2 at 1100px
+   (heads near 400px) still shows the title, the tabs and ⏩.
+
+   Below 640px what gives way first is what is least about THIS window: the
+   provider name and the context fill leave the cost chip (both are in its
+   breakdown, one click away), the diff-stat line goes (the rail row carries
+   it), and the tabs and gaps pack tighter so the title keeps some room. */
+@container (max-width: 640px) {
+  .pane-head {
+    gap: 5px;
+  }
+
+  .pane-head .ctxline {
+    display: none !important;
+  }
+
+  .pane-head .tok .uh-prov,
+  .pane-head .tok .uh-ctx,
+  .pane-head .tok .caret {
+    display: none;
+  }
+
+  .pane-head .tabs {
+    margin-left: 4px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 5px;
+  }
+
+  .pane-head .actions {
+    margin-left: 4px;
+    gap: 4px;
+  }
+
+  .pane-head .head-tail {
+    gap: 4px;
+    padding-left: 4px;
+  }
+}
+
+@container (max-width: 560px) {
+  .pane-head .actions .stepnow-text {
+    max-width: 12ch;
+  }
+}
+
+/* A title squeezed to a few characters shows the name, not its "(tix) "
+   kind tag (the rail row and the tooltip still carry the whole label). */
+@container (max-width: 440px) {
+  .pane-head .title .title-kind {
+    display: none;
+  }
+}
+
+/* A 2×2 at 1100px puts heads near 400px: title, five tabs, the guided button,
+   ⏩ and the sticky tail (history, −) only fit side by side once every gap and
+   pad packs tight. Without this the tail sat on top of the guided button and
+   ⏩ (the head scrolls under the sticky tail), so nothing here hides a
+   control — it only takes back the air between them. */
+@container (max-width: 440px) {
+  .pane-head {
+    gap: 3px;
+    padding-left: 6px;
+  }
+
+  .pane-head .title {
+    min-width: 2.25rem;
+  }
+
+  .pane-head .tabs {
+    margin-left: 2px;
+    gap: 1px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 3px;
+  }
+
+  .pane-head .actions {
+    margin-left: 2px;
+    gap: 3px;
+  }
+
+  .pane-head .actions .nextstep {
+    padding: 4px 6px;
+  }
+
+  .pane-head .actions .nextstep.nextstep-quiet {
+    padding: 3px 5px;
+  }
+
+  .pane-head .actions .nextstep.nextstep-fast {
+    padding: 3px 4px;
+  }
+
+  .pane-head .actions .stepnow-text {
+    max-width: 5ch;
+  }
+
+  .pane-head .head-tail {
+    gap: 2px;
+    padding-left: 3px;
+    padding-right: 6px;
+  }
+
+  .pane-head .act.copyhist {
+    padding: 4px 3px;
+  }
+
+  .pane-head .act.pane-close {
+    padding: 4px 4px;
+  }
+}
+
+/* ↺ carries no state at all — it is a one-shot action, so there is nothing to
+   lose by hiding it, and the window is still resettable from a wider layout.
+   ⏩ stays: Off it is one glyph wide, so it holds on down to a sliver of a
+   pane; set, running or halted it never goes, because it is the only place
+   that says where the session is going and the way to turn it off. */
+@container (max-width: 500px) {
+  .pane-head .actions .nextstep.nextstep-reset {
+    display: none !important;
+  }
+}
+
+@container (max-width: 300px) {
+  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
+    display: none !important;
+  }
+}
+
+/* A 2×2 grid on a laptop puts heads around 400px. The cost chip gives way
+   first — the sidebar's Usage bar still totals it — so Commit… / Push / Make
+   PR stay on screen: the next step is the head's reason to exist. */
+@container (max-width: 420px) {
+  .pane-head .tok.usage-trigger {
+    display: none;
+  }
+}
+
+/* The guided button goes last of all, and only from a pane too narrow for it
+   beside the tabs and ⏩; the rail row's › menu still has every step. */
+@container (max-width: 340px) {
+  .pane-head .actions .nextstep:not(.nextstep-fast) {
+    display: none !important;
+  }
+}
 
 /* A verify run's watch window. Read-only by construction (SpecialPane's
    VerifyBody passes interactive=false, which sets xterm's disableStdin), and

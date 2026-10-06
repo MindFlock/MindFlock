@@ -19,6 +19,7 @@ import { instApi } from "../../api/client";
 import { queryClient, refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
+import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
 import { sessionLabel } from "../../lib/sessionLabel";
@@ -141,6 +142,9 @@ export const SidebarRow = memo(function SidebarRow({
   leadRun = null,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  // "Delete + wipe worktree" asks in place (the desktop app has no confirm()):
+  // the first click arms it, the second does it. Closing the menu disarms.
+  const [wipeArmed, setWipeArmed] = useState(false);
   const strip = useRef<AnswerStripHandle | null>(null);
   const [editing, setEditing] = useState(false);
   // Escape must abandon the edit; unmounting the focused input can still run
@@ -231,6 +235,19 @@ export const SidebarRow = memo(function SidebarRow({
   // A session MindFlock is carrying (a group member, or one with a lane) is
   // one you have handed off: its prompt gets the strip like a family's does.
   const shipLane = !!inst.run || !!ship;
+  // A line that is waiting on YOU (a stuck group line, an ask-first approval)
+  // is a door to where you act on it: the bell's "Needs attention" row. Only
+  // where the bell HAS that row: a halted fast-track ("! fast-track stopped")
+  // is also "escalated", but the bell holds nothing for it — its reason and
+  // retry are on the pane's red ⏩ — so that line stays plain text.
+  const runTaskState = String(runTask?.state || "");
+  const shipOpensBell =
+    !!ship &&
+    (ship.state === "approve" ||
+      (ship.state === "escalated" && (runTaskState === "needs_you" || runTaskState === "failed")));
+  const openBell = () => {
+    document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title } }));
+  };
   // The answer strip: a family member stuck on a dialog gets that dialog's own
   // buttons under its row (the orchestrator's spawn_session permission
   // prompts land here too — from its very first one, via its playbook). Keys
@@ -283,6 +300,9 @@ export const SidebarRow = memo(function SidebarRow({
     }
   };
   useEffect(() => clearRenameTimer, []);
+  useEffect(() => {
+    if (!expanded) setWipeArmed(false);
+  }, [expanded]);
 
   /** Click on the row that's ALREADY selected → edit the name in place. The
    * second click of a double-click also lands here, so the edit is held for
@@ -419,8 +439,32 @@ export const SidebarRow = memo(function SidebarRow({
           )}
           {!editing && ship && (
             <span
-              className={"lineage ship-line " + ship.cls}
-              title={[ship.title, wline ? wline.title : lineage ? lineage.title : ""].filter(Boolean).join("\n")}
+              className={"lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : "")}
+              title={[
+                ship.title,
+                wline ? wline.title : lineage ? lineage.title : "",
+                shipOpensBell ? "Click to open it in the bell" : "",
+              ]
+                .filter(Boolean)
+                .join("\n")}
+              {...(shipOpensBell
+                ? {
+                    role: "button",
+                    tabIndex: 0,
+                    // Like the lead line: the click is the line's, never the
+                    // row's select / rename, and a double-click never opens
+                    // the IDE. mousedown stays put so it can't start a drag.
+                    onMouseDown: (e: MouseEvent) => e.stopPropagation(),
+                    onClick: (e: MouseEvent) => act(openBell, e),
+                    onDoubleClick: (e: MouseEvent) => e.stopPropagation(),
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openBell();
+                    },
+                  }
+                : {})}
             >
               <span className="sl-lead">{ship.lead}</span>
               {ship.rest && (
@@ -625,7 +669,7 @@ export const SidebarRow = memo(function SidebarRow({
                         onClick={() => act(() => mergeSession(title))}
                         title={prSupport ? undefined : PR_FALLBACK_HINT}
                       >
-                        Merge to staging{prSupport ? "" : " ↗"}
+                        Merge PR{prSupport ? "" : " ↗"}
                       </button>
                     )}
                     {inst.pr_url && (
@@ -702,30 +746,47 @@ export const SidebarRow = memo(function SidebarRow({
                 <button onClick={() => (paused ? resumeSession(title) : pauseSession(title))}>
                   {paused ? "Resume session" : "Pause session"}
                 </button>
-                {caps.git && (
-                  <button
-                    className="danger"
-                    onClick={() =>
-                      act(async () => {
-                        if (
-                          !confirm(
-                            `Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`
-                          )
-                        )
-                          return;
-                        try {
-                          await instApi(title, "/cleanup", { method: "POST" });
-                        } catch (err) {
-                          alert("Cleanup failed: " + errMsg(err));
-                        }
-                        useUi.getState().setHidden(title, false);
-                        await refreshInstances();
-                      })
-                    }
-                  >
-                    Delete + wipe worktree
-                  </button>
-                )}
+                {caps.git &&
+                  (wipeArmed ? (
+                    <div
+                      className="wipe-confirm"
+                      role="group"
+                      title={`Permanently removes the worktree directory and closes its ${ideName} window. This cannot be undone.`}
+                    >
+                      <span className="wipe-q">
+                        Delete <b>{shown}</b> and its folder?
+                      </span>
+                      <span className="wipe-acts">
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() =>
+                            act(async () => {
+                              setWipeArmed(false);
+                              try {
+                                await instApi(title, "/cleanup", { method: "POST" });
+                              } catch (err) {
+                                errorPop("Delete failed", errMsg(err));
+                              }
+                              useUi.getState().setHidden(title, false);
+                              await refreshInstances();
+                            })
+                          }
+                        >
+                          Delete + wipe
+                        </button>
+                        {/* Focus lands on the harmless answer: a second
+                            Enter on the item never wipes. */}
+                        <button type="button" autoFocus onClick={() => setWipeArmed(false)}>
+                          Keep
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <button className="danger" onClick={() => setWipeArmed(true)}>
+                      Delete + wipe worktree
+                    </button>
+                  ))}
               </>
             )}
           </div>

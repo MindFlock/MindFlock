@@ -12,7 +12,9 @@
  * Opened from the pane header's history button or by drag-selecting past the
  * top edge of a live terminal (see attachDragHistoryGesture in
  * lib/terminals). Esc or the × closes it. Copy mirrors the terminals' house
- * rule: release the drag and the selection is already on the clipboard.
+ * rule: release the drag and the selection is already on the clipboard; the
+ * bar's "Copy all" puts the whole history there (it used to be a second icon
+ * in the pane header, beside the one that opens this view).
  *
  * Ctrl+F on a terminal opens it straight into find mode (and Ctrl+F inside it
  * focuses the find box): the search runs over the WHOLE history, not just
@@ -682,6 +684,32 @@ export function HistoryOverlay({
   // trigger this (its mousedown landed on the terminal, so no press start is
   // recorded here).
   const pressAt = useRef<{ x: number; y: number; hadSelection: boolean } | null>(null);
+  // The whole history to the clipboard: what is already loaded, or a fresh
+  // fetch when nothing has arrived yet.
+  const copyAll = () => {
+    const got: Promise<string> =
+      text !== null
+        ? Promise.resolve(text)
+        : fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`).then((r) => {
+            if (!r.ok)
+              return r.text().then((t) => {
+                throw new Error(t || "HTTP " + r.status);
+              });
+            return r.text();
+          });
+    got
+      .then((all) => {
+        if (!all.trim()) {
+          toast("No history to copy");
+          return;
+        }
+        copyText(all).then((ok) =>
+          toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed")
+        );
+      })
+      .catch((err) => toast("History copy failed: " + (err as Error).message));
+  };
+
   const onRootMouseDown = (e: React.MouseEvent) => {
     // The header (find box, its buttons) is chrome, not page: a click there
     // must neither deselect nor count as "return to live".
@@ -798,6 +826,14 @@ export function HistoryOverlay({
             </button>
           </div>
         ) : null}
+        <button
+          type="button"
+          className="hist-copy"
+          title="Copy this pane's whole history to the clipboard"
+          onClick={copyAll}
+        >
+          Copy all
+        </button>
         <span className="hist-hint">
           {findOpen
             ? "Enter older · Shift+Enter newer · Esc returns to live"

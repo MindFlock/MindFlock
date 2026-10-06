@@ -13,7 +13,6 @@ import {
   openFastTrackMenu,
   splitBlockReason,
   splitSession,
-  teamRunCaps,
 } from "../../lib/laneActions";
 import { fastTrackStep } from "../../lib/stage";
 import { errMsg } from "../../lib/format";
@@ -32,6 +31,7 @@ import {
   selectSession,
 } from "../../lib/sessionActions";
 import { orderedInstances } from "../sidebar/ordering";
+import { sessionLabel } from "../../lib/sessionLabel";
 
 interface PaletteAction {
   label: string;
@@ -86,22 +86,58 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const prHint = hasPrSupport(caps) ? "" : " · opens GitHub";
     const ideName = config?.ide_name || "Cursor";
     const acts: PaletteAction[] = [];
+    // Order: New, then the places you open, then what acts on the focused
+    // session, then Focus rows, then extensions — commands before sessions, so
+    // an empty query reads as a menu rather than as the session list again.
     acts.push({ label: "New session…", hint: "Ctrl+N", run: () => ui.openDialogFor("new-session") });
-    // The same dialog: its box takes one thing per line, or ticket IDs, and
-    // turns into the list the moment it holds two.
+
+    // --- Dialog openers ----------------------------------------------------
+    // Each Intake tab gets its own entry: the queue you want is the thing you
+    // have in mind, and typing "issues" should land on it directly rather than
+    // on a dialog you then have to navigate.
+    acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
+    acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
+    acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
+    acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
     acts.push({
-      label: "Start several sessions…",
-      hint: "one per line",
-      run: () => ui.openNewWith(""),
+      label: "Intake: Auto-start",
+      hint: "what starts on its own",
+      run: () => ui.openDialogFor("intake", "autostart"),
     });
+    // The other end of the same arc, so it sits with the Intake entries rather
+    // than down among the settings screens.
+    acts.push({
+      label: "Verify — check what shipped",
+      hint: "Alt+V",
+      run: () => ui.openDialogFor("verify"),
+    });
+    // Customize and its tabs: the extras you opt into.
+    acts.push({ label: "Customize…", hint: "sidebar bars, prompts, Outbox", run: () => ui.openDialogFor("customize") });
+    acts.push({ label: "Prompts…", hint: "paste a saved prompt", run: () => ui.openDialogFor("prompts") });
+    acts.push({
+      label: "Outbox — what's on its way out",
+      hint: "Alt+O",
+      run: () => ui.openDialogFor("outbox"),
+    });
+    acts.push({ label: "Recently closed…", hint: "reopen or clean up closed sessions", run: () => ui.openDialogFor("recent") });
+    acts.push({ label: "Assistant instructions…", run: () => ui.openDialogFor("assistant-agent") });
+    if (caps.git)
+      acts.push({
+        label: "Zones…",
+        hint: "keep-out paths per repo, and derived outputs",
+        run: () => ui.openDialogFor("red-zones"),
+      });
+    acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
+    acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+    acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
+    acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
+    acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
+
+    // --- The focused session's verbs ---------------------------------------
     const { rows } = orderedInstances(instances(), ui.order);
-    for (const inst of rows) {
-      const name = ui.aliases[inst.title] || inst.title;
-      acts.push({ label: "Focus: " + name, hint: "session", run: () => selectSession(inst.title) });
-    }
     const t = ui.focused;
     if (t) {
-      acts.push({ label: `Rename… — ${t}`, hint: "display", run: () => ui.openDialogFor("rename", t) });
+      acts.push({ label: `Rename… — ${t}`, run: () => ui.openDialogFor("rename", t) });
       // Both used to ask for the text with window.prompt, which the desktop
       // app never implements — the entries did nothing there. They now open
       // the place the text is typed: the Thread composer (as you, Ctrl+Enter
@@ -111,12 +147,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         hint: "Ctrl+K S",
         run: () => ui.threadOpen(t, { composeTo: t }),
       });
-      acts.push({ label: `Queue prompt… — ${t}`, hint: "auto-run", run: () => focusQueueInput(t) });
+      acts.push({ label: `Queue prompt… — ${t}`, hint: "runs when idle", run: () => focusQueueInput(t) });
       // Fast-track: ONE entry, which opens the pane's ⏩ picker (the same
       // control as the button and Ctrl+K F, never a second copy of its
       // choices). Split is its own action, acting at once through the
       // server — nothing is pasted into the agent. Split is for local rows
-      // only (another device's group and split routes aren't forwarded).
+      // only (another device's group and split routes aren't forwarded), and
+      // is listed only when it can run: an entry that only explains why not
+      // is noise in a launcher.
       const inst = rows.find((r) => r.title === t);
       if (inst && !inst.pending && fastTrackStep(inst)) {
         acts.push({
@@ -125,16 +163,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
           run: () => openFastTrackMenu(t),
         });
       }
-      if (inst && !inst.device && !inst.pending && !t.includes("::")) {
-        const why = splitBlockReason(caps, inst);
+      if (inst && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) {
         acts.push({
           label: `Split into parallel pieces… — ${t}`,
-          hint: why ? (teamRunCaps(caps).split ? "unavailable" : "needs a newer server") : "starts a split",
+          hint: "starts a split",
           run: () => {
-            if (why) {
-              toast(why, { duration: 5000 });
-              return;
-            }
             const name = ui.aliases[t] || t;
             splitSession(inst, name)
               .then((said) => toast(said, { duration: 5000 }))
@@ -146,7 +179,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       if (caps.git) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
-        acts.push({ label: `Create PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
+        acts.push({ label: `Make PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
       }
       acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
       acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
@@ -164,48 +197,19 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       // sidebar menu only, and mergeSession() itself confirms.
       if (caps.git)
         acts.push({
-          label: `Merge PR to staging — ${t}`,
+          label: `Merge PR — ${t}`,
           hint: prHint ? prHint.replace(" · ", "") : undefined,
           run: () => mergeSession(t),
         });
     }
-    acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
-    // Each Intake tab gets its own entry: the queue you want is the thing you
-    // have in mind, and typing "issues" should land on it directly rather than
-    // on a dialog you then have to navigate.
-    acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
-    acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
-    acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
-    acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
-    acts.push({
-      label: "Intake: Auto-start",
-      hint: "what starts on its own",
-      run: () => ui.openDialogFor("intake", "autostart"),
-    });
-    // The middle of the arc: what is on its way out, and what is waiting on you.
-    acts.push({
-      label: "Outbox — what's shipping, and what's waiting on you",
-      hint: "Alt+O",
-      run: () => ui.openDialogFor("outbox"),
-    });
-    // The other half of the same arc, so it sits with the Intake entries rather
-    // than down among the settings screens.
-    acts.push({
-      label: "Verify — what's waiting on you",
-      hint: "Alt+V",
-      run: () => ui.openDialogFor("verify"),
-    });
-    if (caps.git)
-      acts.push({
-        label: "Zones…",
-        hint: "keep-out paths per repo, and derived outputs",
-        run: () => ui.openDialogFor("red-zones"),
-      });
-    acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
-    acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
-    acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
-    acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
-    acts.push({ label: "New from Recently closed…", run: () => ui.openDialogFor("recent") });
+
+    // --- Focus rows: every session under the name its rail row shows -------
+    for (const inst of rows) {
+      // `display_title` is a proxied row's own name (its title carries the device).
+      const own = (inst as unknown as { display_title?: string }).display_title || inst.title;
+      const name = ui.aliases[inst.title] || sessionLabel(own, inst.branch || "").text;
+      acts.push({ label: "Focus: " + name, run: () => selectSession(inst.title) });
+    }
     // Extensions (Addon API v3): every command of every ENABLED extension,
     // under the manifest's palette title ("Database: Explorer" style). Listing
     // needs no extension code — a declarative command opens its surface from

@@ -42,8 +42,7 @@
    app-wide palette through the unshadowed --app-* copies. A declaration on the
    element itself always beats the region's inherited one, so this needs no
    specificity or layer juggling. */
-.notif-pop,
-#foot-customize-menu {
+.notif-pop {
   --panel: var(--app-panel);
   --panel-2: var(--app-panel-2);
   --border: var(--app-border);

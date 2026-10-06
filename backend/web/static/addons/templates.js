@@ -6,6 +6,8 @@
 // self-built modal to save, run, and delete templates. A template bundles the
 // New-session inputs (program, repo, provisioning, seed prompt); "Run" posts
 // them to the existing POST /api/instances, so session creation keeps one path.
+// A template only ever STARTS a session: pasting text into sessions that are
+// already running (one, or all of them) is Customize → Prompts' job alone.
 // No edits to app.js/index.html/style.css — styling reuses the app's CSS vars
 // and the shared `.modal` overlay.
 
@@ -60,10 +62,6 @@ function injectStyles() {
   .mft-run-row { display: flex; gap: 6px; margin-top: 8px; }
   .mft-run-row input { flex: 1 1 auto; }
   .mft-runerr { color: var(--red); font-size: 12px; margin-top: 5px; min-height: 0; }
-  .mft-send-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
-  .mft-send-label { font-size: 12px; color: var(--muted); }
-  .mft-send-sel { flex: 1 1 120px; min-width: 120px; background: var(--panel); color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px; padding: 5px 7px; font: inherit; }
   .mft-form { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
   .mft-form summary { cursor: pointer; font-size: 13px; font-weight: 600; }
   .mft-form label { display: block; font-size: 12px; color: var(--muted); margin-top: 8px; }
@@ -271,110 +269,10 @@ window.mindflockAddons.templates = {
       runErr.setAttribute("role", "status");
       runErr.setAttribute("aria-live", "polite");
 
-      // Optional: send this recipe's prompt to an already-running session
-      // (reuses the /send endpoint). Only meaningful when the template carries
-      // a prompt; revealed alongside the run row.
-      const sendRow = document.createElement("div");
-      sendRow.className = "mft-send-row";
-      sendRow.style.display = "none";
-      const sendLabel = document.createElement("span");
-      sendLabel.className = "mft-send-label";
-      sendLabel.textContent = "or send prompt to:";
-      const sendSel = document.createElement("select");
-      sendSel.className = "mft-send-sel";
-      const sendBtn = document.createElement("button");
-      sendBtn.className = "mft-btn";
-      sendBtn.textContent = "Send";
-      sendRow.append(sendLabel, sendSel, sendBtn);
-      let sendPopulated = false;
-      let sendTargets = []; // titles of running sessions (for broadcast)
-      async function populateSend() {
-        if (sendPopulated) return;
-        sendPopulated = true;
-        try {
-          const data = await getJSON("/api/instances");
-          const running = (Array.isArray(data) ? data : []).filter(
-            (s) => s && s.title && (s.status === "running" || s.started)
-          );
-          sendSel.innerHTML = "";
-          sendTargets = running.map((s) => s.title);
-          if (!running.length) {
-            const o = document.createElement("option");
-            o.value = "";
-            o.textContent = "no running sessions";
-            sendSel.appendChild(o);
-            sendSel.disabled = sendBtn.disabled = true;
-          } else {
-            // Broadcast option first, only when it's meaningful (≥2 sessions).
-            if (running.length >= 2) {
-              const all = document.createElement("option");
-              all.value = "*";
-              all.textContent = "All running sessions (" + running.length + ")";
-              sendSel.appendChild(all);
-            }
-            for (const s of running) {
-              const o = document.createElement("option");
-              o.value = s.title;
-              o.textContent = s.alias || s.title;
-              sendSel.appendChild(o);
-            }
-            sendSel.disabled = sendBtn.disabled = false;
-          }
-        } catch (e) {
-          sendSel.innerHTML = "";
-          sendTargets = [];
-          const o = document.createElement("option");
-          o.textContent = "couldn't load sessions";
-          sendSel.appendChild(o);
-          sendSel.disabled = sendBtn.disabled = true;
-        }
-      }
-      async function sendPromptTo(title) {
-        const r = await fetch("/api/instances/" + encodeURIComponent(title) + "/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: t.prompt }),
-        });
-        return r.ok;
-      }
-      sendBtn.addEventListener("click", async () => {
-        const target = sendSel.value;
-        runErr.textContent = "";
-        if (!target) {
-          runErr.textContent = "No running session to send to.";
-          return;
-        }
-        sendBtn.disabled = true;
-        try {
-          if (target === "*") {
-            let ok = 0;
-            for (const title of sendTargets) {
-              if (await sendPromptTo(title)) ok++;
-            }
-            hide();
-            toast('Sent "' + t.name + '" prompt to ' + ok + " session" + (ok === 1 ? "" : "s"));
-          } else if (await sendPromptTo(target)) {
-            hide();
-            toast('Sent "' + t.name + '" prompt to ' + target);
-          } else {
-            runErr.textContent = "could not send (the session may be busy)";
-          }
-        } catch (e) {
-          runErr.textContent = "could not reach the server";
-        } finally {
-          sendBtn.disabled = false;
-        }
-      });
-
       runBtn.addEventListener("click", () => {
         const showing = runRow.style.display !== "none";
         const disp = showing ? "none" : "flex";
         runRow.style.display = disp;
-        // Reveal the send-to-session control only if this recipe has a prompt.
-        if (t.prompt) {
-          sendRow.style.display = disp;
-          if (!showing) populateSend();
-        }
         if (!showing) {
           titleInput.focus();
           titleInput.select();
@@ -421,7 +319,7 @@ window.mindflockAddons.templates = {
         }
       });
 
-      card.append(top, runRow, sendRow, runErr);
+      card.append(top, runRow, runErr);
       return card;
     }
 
@@ -659,7 +557,9 @@ window.mindflockAddons.templates = {
 
       const intro = document.createElement("p");
       intro.className = "mft-intro muted";
-      intro.textContent = "Save a session setup once, launch it in one click. Templates are per-user and never touch running sessions.";
+      intro.textContent =
+        "A template is a saved New-session setup — CLI, repo, workspace and an opening prompt. " +
+        "To paste text into a session that's already running, use Customize → Prompts.";
 
       filterWrap = document.createElement("div");
       filterWrap.className = "mft-filter";

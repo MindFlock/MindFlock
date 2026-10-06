@@ -127,7 +127,7 @@ window.mindflockAddons = window.mindflockAddons || {};
 window.mindflockAddons.notify = {
   init(ctx) {
     // This module has no visible surface of its own anymore — the on/off toggle
-    // lives in the bell dropdown (app.js) and Settings → Notifications. Here we
+    // lives in Settings → Notifications (app.js). Here we
     // just subscribe to the event bus and expose enable/disable/state so those
     // UIs drive the same flow, staying in sync via the "mf-notify-state" event.
 

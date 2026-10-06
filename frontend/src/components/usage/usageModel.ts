@@ -108,14 +108,23 @@ export const ZERO_AGG: UsageAgg = { cost: 0, in: 0, out: 0, cache_read: 0, cache
 
 // --- Per-session helpers ---------------------------------------------------- //
 
+/** The headline's three parts, separately, so a narrow pane head can drop
+ * the provider and the context fill and keep the cost. `prov` and `ctx` are
+ * "" when there is nothing to say; `cost` is always set. */
+export function usageHeadParts(info: Instance): { prov: string; cost: string; ctx: string } {
+  const win = info.tokens_ctx_window || 0;
+  return {
+    prov: provLabel(info.provider),
+    cost: "~" + fmtUsd(info.tokens_cost || 0),
+    ctx: win ? fmtTokens(info.tokens_ctx || 0) + "/" + fmtTokens(win) : "",
+  };
+}
+
 /** Collapsed headline for one session: "Codex · ~$0.62 · 128k/200k". The
  * provider prefix tells you at a glance exactly who is serving this window. */
 export function usageHeadline(info: Instance): string {
-  const cost = "~" + fmtUsd(info.tokens_cost || 0);
-  const win = info.tokens_ctx_window || 0;
-  const body = win ? cost + " · " + fmtTokens(info.tokens_ctx || 0) + "/" + fmtTokens(win) : cost;
-  const p = provLabel(info.provider);
-  return p ? p + " · " + body : body;
+  const { prov, cost, ctx } = usageHeadParts(info);
+  return [prov, cost, ctx].filter(Boolean).join(" · ");
 }
 
 /** [label, value] rows for the expanded dropdown of one session. `plan` is

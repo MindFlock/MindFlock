@@ -34,15 +34,14 @@
   gap: 6px;
 }
 
-/* Getting-started block at the foot of General — set off from the settings
-   above it by a divider so it reads as its own group. */
+/* Getting-started block at the head of General — set off from the settings
+   below it by a divider so it reads as its own group. */
 .onboarding-block {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 8px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
 }
 
 .onboarding-block .set-section-title {
@@ -205,3 +204,25 @@ p.set-hint {
   flex: none;
 }
 
+
+/* A group heading in the nav ("Agents", "Code", "This device",
+   "Troubleshooting"): the screens are seventeen buttons long, and a run of
+   equal-weight words is a list you have to read top to bottom to find one.
+   Text, not a control — no hover, no pointer, no Tab stop — in the same small
+   uppercase as a screen's section titles, so it reads as a label for what
+   follows rather than as one more place to click. */
+.set-nav-group {
+  margin: 12px 0 2px;
+  /* Left inset matches the items' text; none on the right, where the longest
+     heading ("Troubleshooting") would otherwise overrun the 132px column. */
+  padding: 0 0 0 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.8;
+  user-select: none;
+  cursor: default;
+}

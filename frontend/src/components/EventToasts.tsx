@@ -412,7 +412,20 @@ export function EventToasts() {
           if (!n || !ruleOn(n.rule)) return;
           notifyOnce("*run", "run", n.text, {
             // A plan / the one PR: their click is on the lead's Thread tab.
-            onClick: () => (n.lead ? openThread(n.lead) : useUi.getState().openDialogFor("outbox", n.run || null)),
+            // Anything else that needs you waits in the bell; a finished
+            // group's summary is on its Outbox view.
+            onClick: () => {
+              if (n.lead) openThread(n.lead);
+              else if (env.event === "run.needs_you")
+                // A line's session, or the group's own row ("run:<id>") when
+                // the escalation names no session.
+                document.dispatchEvent(
+                  new CustomEvent("mf-open-bell", {
+                    detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") },
+                  })
+                );
+              else useUi.getState().openDialogFor("outbox", n.run || null);
+            },
             duration: 8000,
           });
         })

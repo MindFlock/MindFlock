@@ -31,7 +31,7 @@ export function BulkBar() {
     let opts: RequestInit;
     let verb: string;
     if (kind === "end") {
-      if (!confirm(`End ${titles.length} session(s)? Their worktrees are kept (reopen from Recent…).`))
+      if (!confirm(`End ${titles.length} session(s)? Their worktrees are kept (reopen from Recently closed).`))
         return;
       suffix = "/close";
       opts = { method: "POST" };

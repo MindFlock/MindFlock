@@ -1,13 +1,15 @@
 /** The sidebar (ports app.js section 9's renderSidebar + the partial
- * 040-sidebar.html): doctor-warn chip, overall usage, automation + PR-review +
- * assistant bars (each hideable via the footer Customize menu), the addon-bars
- * mount, filter, bulk bar, device-grouped session list, and the footer
- * (view modes + count + customize + shortcuts). */
+ * 040-sidebar.html): doctor-warn chip, the movable bars (Usage, Tickets, Pull
+ * requests, Issues, Verify, Assistant — each hideable in Customize → Sidebar),
+ * the addon-bars mount, filter, bulk bar, device-grouped session list with its
+ * "Recently closed (n)" link, and the footer (view picker + count + Customize
+ * + Shortcuts). */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshInstances, useDevices, useInstances } from "../../state/queries";
+import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
 import { useUi, windowKey, type ViewMode } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { viewCap } from "../grid/layout";
@@ -47,13 +49,43 @@ interface Props {
   onOpenTodo(): void;
 }
 
-const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
+/** The footer's view picker. One <select> rather than five buttons: it is a
+ * set-once preference, and a row of five toggles read as the sidebar's loudest
+ * control. */
+const VIEW_MODES: Array<{ value: ViewMode; label: string }> = [
+  { value: "auto", label: "Auto — fit every window" },
+  { value: "1" as ViewMode, label: "1 window" },
+  { value: "2", label: "2 windows" },
+  { value: "4", label: "4 windows" },
+  { value: "9", label: "9 windows" },
+];
 
 export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   const { data: instances = [] } = useInstances();
   const { data: devices } = useDevices();
   const ui = useUi();
   const doctorWarn = useDoctorWarn();
+  const { data: config } = useConfig();
+  const qc = useQueryClient();
+  // "Recently closed (n)" under the list: the same key and endpoint the Verify
+  // dialog reads, so a reopen/forget that invalidates one refreshes both.
+  const { data: closed } = useQuery({
+    queryKey: ["recently-closed"],
+    queryFn: () => api<unknown[]>("/api/recently-closed"),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const closedCount = Array.isArray(closed) ? closed.length : 0;
+  // Closing a session is what adds an entry — don't make the link wait a
+  // minute to appear. No bus (SSR, a test) just means the poll does it.
+  useEffect(() => {
+    const ev = window.mindflock?.events;
+    if (!ev) return;
+    return ev.subscribe("session.deleted", () => {
+      void qc.invalidateQueries({ queryKey: ["recently-closed"] });
+    });
+  }, [qc]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropCue, setDropCue] = useState<{ title: string; cue: "above" | "below" } | null>(null);
   // Section (bar) drag — independent of the row drag above; a bar can land
@@ -395,11 +427,16 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
 
   const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
+  // The grid's first-run card ("Get set up") shows exactly when there is no
+  // session at all and the user has not onboarded — TerminalGrid's own test.
+  const firstRunCard = instances.length === 0 && config?.onboarded === false;
 
   return (
     <aside id="sidebar">
       <SidebarResizer />
-      {doctorWarn.failing && !doctorWarn.dismissed && (
+      {/* Not while the grid's first-run card is up: that card IS the setup
+          checklist, and a second "setup issues" warning beside it is noise. */}
+      {doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && (
         <div id="doctor-warn">
           <span className="dw-text">⚠ setup issues —</span>
           <button
@@ -421,13 +458,6 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           </button>
         </div>
       )}
-      <Hint
-        id="welcome"
-        action={{ label: "Open Settings", onClick: () => ui.openDialogFor("settings") }}
-      >
-        <b>Welcome to MindFlock.</b> Connect your coding CLI and tools in Settings,
-        then start a session to get going.
-      </Hint>
       {orderedSections(ui.barOrder, extKeys).map((key) => {
         if (key === SESSIONS_KEY) {
           return (
@@ -517,6 +547,19 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                   <li className="filter-empty muted">No sessions match “{ui.filter}”</li>
                 )}
               </ul>
+              {/* A button, never an <li>: everything inside #instance-list is
+                  a rail row, and the rail's SSR tests split on '<li class="'. */}
+              {closedCount > 0 && (
+                <button
+                  type="button"
+                  id="recent-btn"
+                  className="foot-link recent-link"
+                  title="Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)"
+                  onClick={() => ui.openDialogFor("recent")}
+                >
+                  Recently closed ({closedCount})
+                </button>
+              )}
             </div>
           );
         }
@@ -536,35 +579,32 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             onLeave={secLeave}
             onDropSection={moveSection}
           >
-            {barContent(key, {
-              onOpenChat,
-              onOpenTodo,
-              openDialogFor: ui.openDialogFor,
-            })}
+            {barContent(key, { onOpenChat, onOpenTodo })}
           </BarSlot>
         );
       })}
       <footer id="sidebar-footer">
         <div
           id="view-modes"
-          title="Grid view — Auto grows with sessions; 2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
+          title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
         >
-          <span className="vm-label">View</span>
-          {VIEW_MODES.map((v) => (
-            <button
-              key={v}
-              type="button"
-              className={"vm" + (ui.viewMode === v ? " active" : "")}
-              data-view={v}
-              onClick={() => ui.setViewMode(v)}
-            >
-              {v === "auto" ? "Auto" : v}
-            </button>
-          ))}
+          <label className="vm-label" htmlFor="view-mode-select">
+            View
+          </label>
+          <select
+            id="view-mode-select"
+            value={ui.viewMode}
+            onChange={(e) => ui.setViewMode(e.target.value as ViewMode)}
+          >
+            {VIEW_MODES.map((v) => (
+              <option key={v.value} value={v.value}>
+                {v.label}
+              </option>
+            ))}
+          </select>
         </div>
         <Hint id="customize" className="hint-footer">
-          Showing just the essentials. Add <b>PR review</b>, <b>issue handling</b> and
-          more anytime from <b>⚙ Customize</b> below.
+          Extra sidebar bars, your saved prompts and the Outbox live under <b>Customize</b>.
         </Hint>
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
@@ -576,7 +616,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             title="Keyboard shortcuts (?)"
             onClick={() => ui.openDialogFor("shortcuts")}
           >
-            ⌨ Shortcuts
+            Shortcuts
           </button>
         </div>
       </footer>

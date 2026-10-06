@@ -80,6 +80,10 @@ describe("the vocabulary", () => {
     expect(words).not.toMatch(/\bShip\b/);
   });
 
+  it("ask-first sends you to the bell, where approvals wait", () => {
+    expect(L.ASK_FIRST_DESC).toBe("Stop one step short and wait for your OK in the bell");
+  });
+
   it("THE default is the Settings one, Off when unset", () => {
     expect(L.laneDefault("")).toBe("leave");
     expect(L.laneDefault(undefined)).toBe("leave");

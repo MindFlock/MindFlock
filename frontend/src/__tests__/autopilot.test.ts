@@ -311,13 +311,27 @@ describe("liveStep (the pane header's live step)", () => {
       autopilot: run({ note: "prompt queue still has work" }),
     });
     expect(s?.label).toBe("prompt queue still has work");
-    expect(s?.target).toBe("→ PR");
+    expect(s?.tone).toBe("work");
+    // Where it is going is the ⏩ button's to say ("⏩ PR"); the step never
+    // repeats it.
+    expect(s).not.toHaveProperty("target");
+    expect(JSON.stringify(s)).not.toContain("→ PR");
   });
 
-  it("reports a halted chain as blocked", () => {
-    const s = step({ stage: "agent", autopilot: run({ state: "halted", reason: "checks failed" }) });
-    expect(s?.tone).toBe("blocked");
-    expect(s?.title).toContain("checks failed");
+  it("falls through for a running chain with no note — the ⏩ already says it", () => {
+    expect(step({ stage: "agent", autopilot: run({ note: "" }) })).toBeNull();
+    // …to whatever the session itself is doing.
+    expect(step({ stage: "precommit", autopilot: run({ note: "" }) })?.label).toBe("pre-commit");
+  });
+
+  it("falls through for a halted chain — the ⏩ shows ✗ and the reason", () => {
+    const halted = run({ state: "halted", reason: "checks failed" });
+    expect(step({ stage: "agent", autopilot: halted })).toBeNull();
+    // The ⏩ is where the halt is said.
+    const ft = fastTrackStep({ title: "t", status: "running", stage: "agent", autopilot: halted });
+    expect(ft?.halted).toBe(true);
+    expect(ft?.label).toContain("✗");
+    expect(ft?.title).toContain("checks failed");
   });
 
   it("offers an open PR as a link", () => {

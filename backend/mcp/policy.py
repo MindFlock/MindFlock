@@ -276,7 +276,8 @@ class Policy:
         if lane.get("ask_first"):
             raise ToolError(
                 "%s refused: your user set %r to ask them before it ships — "
-                "only they can approve it (MindFlock's Outbox)" % (action, title)
+                "only they can approve it (the approval waits in MindFlock's bell)"
+                % (action, title)
             )
         order = ("leave", "commit", "push", "pr", "merge")
         want = {"agent": "leave", "off": "leave"}.get(depth, depth)

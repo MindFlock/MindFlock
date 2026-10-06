@@ -23,7 +23,7 @@ own record instead.
 "ASK ME BEFORE IT SHIPS" holds the run one rung short of its first outward
 step: a commit lane stops when the agent is done (the "agent" rung), a push /
 PR / merge lane stops once it has committed. The autopilot then finishes at the
-held rung and the session waits on you in the Outbox; :func:`ship_now` (the
+held rung and the session waits on you in the bell; :func:`ship_now` (the
 approval) re-arms it at the real target without re-earning the idle dwell.
 The held rung is ``depth`` on the record; the target is ``lane`` there.
 
@@ -243,7 +243,7 @@ def shared_checkout(title: str) -> str:
     """Another live session working in the SAME folder as ``title`` (an
     in-place session on a checkout others share), or ``""``. A lane there
     would commit every sharer's work under one session's name — and the
-    Outbox, keyed by (repo, branch), shows one approval for all of them."""
+    bell, keyed by (repo, branch), shows one approval for all of them."""
     srv = _server()
     inst = srv.ENGINE.instances.get(title)
     if inst is None or not getattr(inst, "InPlace", False):
@@ -389,7 +389,7 @@ def ship_now(
     """Ship what is there NOW: arm ``lane`` (default: the session's own lane)
     with no "ask first", WITHOUT the idle dwell. A session with no lane of its
     own is refused — never shipped at the Settings fast-track default, which is
-    nobody's choice for THIS session (a copy window, a held group member). ``message`` (the Outbox approval card's edited commit message) is
+    nobody's choice for THIS session (a copy window, a held group member). ``message`` (the bell's approval card's edited commit message) is
     committed as written.
 
     The dwell exists to tell "the agent finished" from "the agent paused"; a

@@ -1,6 +1,7 @@
 """Ship lanes, UI part 2 (SPEC §7.C.2-3, §8): structural checks on the shipped
 bundle for the rail's run group headers, queued lines and lane-first status
-lines, the Outbox (top-bar entry, Alt+O, dialog) and the bell's run rows.
+lines, the Outbox (Customize's third tab, Alt+O), the bell's waiting rows and
+its run rows.
 
 The wording and the grouping arithmetic are unit-tested in
 frontend/src/__tests__/{lanes,runs,outbox}.test.ts (runs.test.ts also
@@ -129,59 +130,62 @@ def test_every_lane_row_leads_with_its_lane():
     for phrase in (
         '"? needs your answer"',
         '"⇡ " + (',
-        '" — open the Outbox"',
+        '" — open the bell"',
         '" · working "',
         '", asks first"',
     ):
         assert phrase in body, phrase
     assert '"opening PR"' in body
+    assert "Outbox" not in body, "what waits on you is the bell's"
 
 
 # --- The Outbox ------------------------------------------------------------------
 
 
-def test_the_outbox_sits_between_intake_and_verify_with_a_waiting_badge():
+def test_the_top_bar_carries_only_the_daily_loop():
+    """The Outbox, Prompts and Recent buttons are gone (Customize, the session
+    list); the palette is the last item, after Settings."""
     js = _js()
     top = squash(_fn(js, "TopBar"))
-    i, o, v = (
+    for gone in ('"outbox-btn"', '"prompts-btn"', '"recent-btn"'):
+        assert gone not in top, gone
+    i, s_, p = (
         top.index('id: "intake-btn"'),
-        top.index('id: "outbox-btn"'),
-        top.index('id: "verify-btn"'),
+        top.index('id: "settings-btn"'),
+        top.index('id: "palette-btn"'),
     )
-    assert i < o < v
-    # Hidden at zero — a "0" reads as "nothing to do" while it is still loading.
-    assert (
-        'waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tb-count", children: waiting })'
-        in top
-        or ("waiting > 0 &&" in top and '"tb-count"' in top)
-    )
-    assert "const waiting = waitingCount(outbox);" in top
+    assert i < s_ < p
+    assert 'title: "Command palette — Ctrl+P / ⌘P"' in top
+    assert "waitingCount" not in top and "useOutbox" not in top
 
 
 def test_alt_o_opens_the_outbox_and_is_on_the_shortcuts_sheet():
     flat = squash(_js())
     assert 'key: "o", alt: true, id: "outbox",' in flat
     assert (
-        'help: [ "Navigation", "Alt+O", "Outbox — what\'s shipping, and what\'s waiting on you" ]'
+        'help: [ "Navigation", "Alt+O", "Outbox — what\'s on its way out (in Customize)" ]'
         in flat
     )
     assert 'run: () => useUi.getState().openDialogFor("outbox")' in flat
     # A modal: Delete / Ctrl+W must not end the session behind it.
-    assert '"outbox-dialog"' in flat
+    assert '"customize-dialog"' in flat
+    assert '"outbox-dialog"' not in flat
 
 
-def test_the_outbox_reads_one_response_and_renders_the_four_sections():
+def test_the_outbox_reads_one_response_and_renders_its_sections():
     js = _js()
     assert '"/api/outbox?group=all"' in js
-    body = squash(_fn(js, "OutboxDialog"))
+    body = squash(_fn(js, "OutboxPanel"))
     for heading in (
-        '"Waiting on you"',
         '"Shipping now"',
         '"Shipped today"',
         '"Queued"',
     ):
         assert heading in body, heading
-    assert '"answer or approve — nothing else needs you"' in body
+    # What waits on you is the bell's: one line that points there.
+    assert '"Waiting on you"' not in body
+    assert "waiting on you — in the bell" in body
+    assert '"mf-open-bell"' in js
     assert '"MindFlock is doing these — no action"' in body
     assert "outboxTabs(data, rowOf, runName)" in body
     assert "viewFor(data, tab, rowOf)" in body
@@ -242,7 +246,9 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
     """Electron has no window.prompt / confirm; ship lanes act, never paste."""
     js = _js()
     for name in (
-        "OutboxDialog",
+        "OutboxPanel",
+        "CustomizeDialog",
+        "SidebarBarsPicker",
         "WaitingRow",
         "ApproveButtons",
         "ApprovePreview",
@@ -277,7 +283,10 @@ def test_new_source_files_have_no_native_dialog_calls():
     """Source-level twin of the above, comments stripped (they explain why)."""
     for rel in (
         "components/outbox/OutboxDialog.tsx",
+        "components/outbox/WaitingRow.tsx",
         "components/outbox/outbox.ts",
+        "components/customize/CustomizeDialog.tsx",
+        "components/customize/SidebarBarsPicker.tsx",
         "components/sidebar/RunGroupHeader.tsx",
         "lib/runs.ts",
         "state/runs.ts",

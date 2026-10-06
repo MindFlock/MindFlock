@@ -182,7 +182,7 @@ export async function killSession(title: string) {
   try {
     await instApi(title, "/close", { method: "POST" });
   } catch (err) {
-    alert("Close failed: " + errMsg(err));
+    errorPop("Close failed", errMsg(err));
     return;
   }
   const ui = useUi.getState();
@@ -190,7 +190,7 @@ export async function killSession(title: string) {
   if (ui.focused === title) ui.setFocused(null);
   releaseTerms(title);
   closeUndo.push(title);
-  toast("Session ended — reopen from Recent… (or Ctrl+Z / Ctrl+Shift+T)");
+  toast("Session ended — reopen it from Recently closed, under the session list (or Ctrl+Z / Ctrl+Shift+T)");
   await refreshInstances();
 }
 
@@ -260,17 +260,19 @@ export async function undoLastClose() {
   }
 }
 
-/** L7: remove a session whose workspace directory vanished. */
-export async function cleanupMissing(title: string) {
+/** L7: remove a session whose workspace directory vanished. Asks first on an
+ * inline card (the desktop app has no confirm(): it silently meant "no", so
+ * Clean up did nothing there); the card's button re-enters `confirmed`. */
+export async function cleanupMissing(title: string, confirmed = false) {
   if (!title) return;
-  if (
-    !confirm(
-      "Clean up '" +
-        title +
-        "'?\nIts workspace directory no longer exists — this removes the dead session."
-    )
-  )
+  if (!confirmed) {
+    errorPop(
+      "Clean up “" + displayName(title) + "”?",
+      "Its workspace folder no longer exists — this removes the dead session.",
+      [{ label: "Clean up", primary: true, run: () => void cleanupMissing(title, true) }]
+    );
     return;
+  }
   const ui = useUi.getState();
   ui.setHidden(title, false);
   if (ui.focused === title) ui.setFocused(null);
@@ -390,7 +392,7 @@ export async function copySession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    alert("Copy failed: " + errMsg(err));
+    errorPop("Copy failed", errMsg(err));
   }
 }
 
@@ -482,13 +484,26 @@ export async function pushSession(title: string, force = false, overrideRedZones
       // Falls through to freshStage below: that re-read is what repaints the
       // header off the cleared "pushing" marker.
     } else if ((err as Error).message === "checks haven't passed for this commit") {
-      // O3 soft gate: checks haven't passed — offer an explicit override.
-      if (
-        confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")
-      )
-        // A red-zone override already given still applies to the re-push.
-        return overrideRedZones ? pushSession(title, true, true) : pushSession(title, true);
+      // O3 soft gate: checks haven't passed — offer an explicit override on
+      // an inline card (confirm() is a silent "no" in the desktop app). A
+      // red-zone override already given still applies to the re-push.
+      // The card names its session: errorPop drops a card whose title+detail
+      // is already on screen, so a nameless one meant a second blocked push
+      // reused the first card — and its Push anyway pushed the OTHER session.
       clearStep(title);
+      errorPop(
+        "Push blocked — checks haven't passed",
+        displayName(title) + "'s commit has no passing check run (see the ✗ checks chip on its row). Override for this push only?",
+        [
+          {
+            label: "Push anyway",
+            primary: true,
+            title: "Push " + displayName(title) + " past the check gate",
+            run: () =>
+              void (overrideRedZones ? pushSession(title, true, true) : pushSession(title, true)),
+          },
+        ]
+      );
       return;
     } else {
       clearStep(title);
@@ -545,7 +560,7 @@ export async function ideSession(title: string, quiet = false) {
     await instApi(title, "/ide", { method: "POST" });
   } catch (err) {
     if (quiet) toast(ideName() + ": " + errMsg(err), { duration: 7000 });
-    else alert(ideName() + ": " + errMsg(err));
+    else errorPop(ideName() + " failed", errMsg(err));
   }
 }
 
@@ -595,10 +610,20 @@ export async function submitMakePr(title: string, base: string, overrideRedZones
 
 /** Merge the branch's PR. Same shape as make-pr: `ok: false` + `pr_url` means
  * "merge it yourself on GitHub", which is a link, not a failure. */
-export async function mergeSession(title: string, overrideRedZones = false) {
+export async function mergeSession(title: string, overrideRedZones = false, confirmed = false) {
   if (!title || !requireGit()) return;
-  // The override re-entry skips the question: its click on the card IS the answer.
-  if (!overrideRedZones && !confirm("Merge this branch's PR into staging?")) return;
+  // Asked on an inline card (confirm() is a silent "no" in the desktop app,
+  // so Merge did nothing there); its button re-enters `confirmed`. The
+  // red-zone override re-entry skips the question: its click on the card IS
+  // the answer.
+  if (!overrideRedZones && !confirmed) {
+    errorPop(
+      "Merge this PR?",
+      displayName(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.",
+      [{ label: "Merge PR", primary: true, run: () => void mergeSession(title, false, true) }]
+    );
+    return;
+  }
   markStep(title, "merge");
   try {
     const r = await instApi<MergePrResult>(

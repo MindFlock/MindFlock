@@ -24,11 +24,7 @@ import {
   laneChoice,
   type Lane,
 } from "./laneActions";
-import {
-  DEPTH_SHORT,
-  autopilotChipTitle,
-  mergeBlockerLabel,
-} from "./autopilot";
+import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
@@ -220,11 +216,13 @@ export interface ChipState {
  */
 export function activityChip(act: string): ChipState {
   if (act === "working") return { label: "running", cls: "s-running", title: "Agent is working" };
+  // The word is "question", not the activity value "clarify" (which stays
+  // the value everywhere it is stored or compared, and the class).
   if (act === "clarify")
     return {
-      label: "clarify",
+      label: "question",
       cls: "s-clarify",
-      title: "Agent paused to ask you a question — needs your answer",
+      title: "The agent asked you a question — answer it in its pane or from the bell",
     };
   if (act === "limit")
     return {
@@ -348,8 +346,8 @@ export interface NextStep {
  * whenever `nextStep()` returned null — so the single busiest moment in the
  * workflow (pre-commit hooks running) rendered as dead greyed-out text reading
  * "pre-commit". This replaces it with a small indicator that reads as active,
- * names the step, and — when a chain is armed — says what it is waiting on and
- * where it is heading.
+ * names the step, and — when a chain is armed — says what it is waiting on
+ * (where it is heading is the ⏩ button's to say).
  */
 
 export type StepTone = "work" | "blocked" | "ok" | "quiet";
@@ -358,8 +356,6 @@ export interface LiveStep {
   label: string;
   tone: StepTone;
   title: string;
-  /** Short "→ PR" target suffix while a chain is armed. */
-  target?: string;
   /** Click opens the PR (only set when there is one to open). */
   href?: string;
 }
@@ -459,17 +455,14 @@ export function liveStep(inst: Partial<Instance>): LiveStep | null {
       title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + ".",
     };
 
-  // An armed chain: say what it is waiting on and where it is going.
+  // An armed chain: say what it is waiting on, in the server's words. Where
+  // it is going is the ⏩ button's job (it names the target, filled while a
+  // run works), so the step never repeats it; with no note there is nothing
+  // the ⏩ doesn't already say and the step falls through. A halt falls
+  // through too: the ⏩ turns red with ✗ and carries the reason.
   const run = inst.autopilot;
-  if (run && run.depth && run.state === "running")
-    return {
-      label: run.note || "fast-tracking",
-      tone: "work",
-      title: autopilotChipTitle(run),
-      target: DEPTH_SHORT[run.depth] || "",
-    };
-  if (run && run.depth && run.state === "halted")
-    return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
+  if (run && run.depth && run.state === "running" && run.note)
+    return { label: run.note, tone: "work", title: autopilotChipTitle(run) };
 
   if (stage === "pr") {
     const ms = inst.merge_state;

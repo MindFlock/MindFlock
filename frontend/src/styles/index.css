@@ -67,6 +67,8 @@
    panel reuses wholesale and, in a few places, extends */
 @import "../components/outbox/Outbox.css" layer(components); /* 257 — the
    same kit a third time; after VerifyDialog.css for the same reason */
+@import "../components/customize/CustomizeDialog.css" layer(components); /* 258 —
+   the frame the Outbox and Prompts panels sit in; after Outbox.css */
 @import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
 @import "../components/settings/screens/notifications.css" layer(components); /* 260 */
 @import "../components/capsGate.css" layer(components); /* 270 */

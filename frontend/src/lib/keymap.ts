@@ -138,8 +138,13 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
   "intake",
-  // The Outbox: Commit / Retry / Skip buttons on rows about OTHER sessions — a
-  // stray Delete or Ctrl+W must never end the focused one behind it.
+  // Customize, on any of its tabs: the Outbox's Start now / Remove rows are
+  // about OTHER sessions, and the Prompts tab has text fields where Ctrl+W is
+  // muscle memory — neither may end the focused session behind the dialog.
+  // (The waiting rows' Retry / Skip / Commit moved to the bell: see
+  // "notif-pop" in MODAL_DOM_IDS.)
+  "customize",
+  "prompts",
   "outbox",
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
   // nothing about it suggests the session behind is still taking keystrokes.
@@ -159,7 +164,7 @@ const MODAL_DOM_IDS = [
   "rename-dialog",
   "device-dialog",
   "intake-dialog",
-  "outbox-dialog",
+  "customize-dialog",
   "verify-dialog",
   "red-zones-dialog",
   // The take-a-break screen owns the whole window and holds the keyboard on
@@ -169,6 +174,11 @@ const MODAL_DOM_IDS = [
   // The ⏩ fast-track picker holds the keyboard for its arrows and letters; a
   // Delete or Ctrl+W pressed at it must not end the session it hangs from.
   "fast-track-menu",
+  // The bell holds the waiting rows (Retry / Skip / Commit / Raise budget /
+  // Start the workers) about OTHER sessions; a stray Delete or Ctrl+W on one
+  // of its buttons must never end the focused session behind it. The popover
+  // only exists while the bell is open.
+  "notif-pop",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -433,13 +443,14 @@ export const KEYMAP: KeymapEntry[] = [
     run: () => useUi.getState().openDialogFor("intake"),
   },
   {
-    // The Outbox sits between Intake and Verify on the top bar, and its key
-    // between theirs: Alt+O, guarded the same way (Option+O types ø on macOS).
-    // Not a Ctrl+K chord — Ctrl+K O already opens the IDE.
+    // The Outbox is a tab of Customize now; its key stays Alt+O (and its id
+    // stays "outbox", so a saved rebind in mf_keymap still finds it), guarded
+    // like Alt+I (Option+O types ø on macOS). Not a Ctrl+K chord — Ctrl+K O
+    // already opens the IDE.
     key: "o",
     alt: true,
     id: "outbox",
-    help: ["Navigation", "Alt+O", "Outbox — what's shipping, and what's waiting on you"],
+    help: ["Navigation", "Alt+O", "Outbox — what's on its way out (in Customize)"],
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("outbox"),
   },

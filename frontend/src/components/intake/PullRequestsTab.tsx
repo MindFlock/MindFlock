@@ -131,6 +131,152 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
       ];
 
+  const sourceList = (
+    <RepoSourceList
+      key="sources"
+      surface="pr"
+      label="Repositories"
+      repos={repos}
+      overrides={overrides}
+      onSave={(list, next, msg) =>
+        saveGithub({ repos: list, repo_settings: next }, msg)
+      }
+      defaults={{
+        agent: String(gh.agent || agentChoices.fallback || ""),
+        baseBranch: String(gh.base_branch || ""),
+        minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
+        skipAuthors: String(skipAuthors),
+        // Verify's field. Blank here for the same reason Issues passes a blank
+        // base branch: the bag is one shape for all three surfaces, and a
+        // surface that never renders a field has nothing to seed it with.
+        liveBranch: "",
+      }}
+      listId="gh-repos-list"
+      addId="gh-repo-add-btn"
+      addLabel="+ Add repository"
+      emptyText="No repositories yet — add one below to start reviewing your PRs."
+      hint={
+        <>
+          Each card is one repository, with its own agent CLI and filters. Blank fields
+          inherit the tab defaults under <strong>Advanced options</strong>. Adding a
+          repository turns review on; remove them all to turn it off.
+        </>
+      }
+    />
+  );
+
+  const workList = (
+    <WorkListPanel
+      key="work"
+      label="Open pull requests"
+      onRefresh={loadOpenPrs}
+      note={prsNote}
+      rowId="gh-open-prs-row"
+      refreshId="gh-prs-refresh"
+      noteId="gh-prs-note"
+      listId="gh-prs-list"
+      toolbarExtra={prs && prs.length ? filter.control : undefined}
+      hint={
+        <>
+          Every non-draft open PR on your watched repositories, grouped by repository,
+          with why auto review has or hasn't
+          picked it up. <strong>Begin review</strong> starts a review session for that PR
+          right now, bypassing the author / age / base-branch / already-reviewed filters.
+        </>
+      }
+    >
+      {prsError ? (
+        <div className="repo-empty">{prsError}</div>
+      ) : prs === null ? null : !prsRepos.length ? (
+        <div className="repo-empty">Add a repository to see its open PRs.</div>
+      ) : !prs.length ? (
+        <div className="repo-empty">No open pull requests on the watched repositories.</div>
+      ) : !groupOrder.length ? (
+        <div className="repo-empty">No open pull request matches “{filter.query}”.</div>
+      ) : (
+        groupOrder.map((repo) => {
+          const rows = byRepo.get(repo) || [];
+          const body = !rows.length ? (
+            <div className="repo-empty">No open pull requests in this repository.</div>
+          ) : (
+                rows.map((p) => (
+                  <WorkItemRow
+                    key={(p.repo || "") + p.number}
+                    reference={"#" + p.number}
+                    url={p.url}
+                    title={p.title}
+                    tooltip={
+                      (p.repo || "") +
+                      "#" +
+                      p.number +
+                      " — " +
+                      (p.title || "") +
+                      "\nby " +
+                      (p.author || "?") +
+                      " · " +
+                      (p.head_ref || "?") +
+                      " → " +
+                      (p.base_ref || "?")
+                    }
+                    meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
+                    hasSession={p.has_session}
+                    eligible={p.eligible}
+                    eligibleLabel="queued for auto review"
+                    reasons={p.reasons}
+                    actionLabel="Begin review"
+                    failPrefix="Begin review failed"
+                    workspace={p.workspace}
+                    onReopen={async () => {
+                      const title = await reopenIntakeItem({
+                        kind: "prs",
+                        repo: p.repo,
+                        number: p.number,
+                      });
+                      setTimeout(relistPrs, 5000);
+                      return title;
+                    }}
+                    agents={agentChoices.names}
+                    configuredAgent={
+                      overrides[repo]?.agent ||
+                      String(gh.agent || agentChoices.fallback || "")
+                    }
+                    configuredDepth={overrides[repo]?.depth || ""}
+                    onStart={async ({ agent, depth, effort }) => {
+                      const r = await api<{ title?: string }>("/api/github/prs/review", {
+                        json: {
+                          repo: p.repo,
+                          number: p.number,
+                          ...(agent ? { agent } : {}),
+                          ...(depth ? { depth } : {}),
+                          ...(effort ? { effort } : {}),
+                        },
+                      });
+                      // The server already has a provisioning row for it: pull it now
+                      // instead of leaving the sidebar blank through the PR clone.
+                      refreshInstances();
+                      setTimeout(relistPrs, 5000);
+                      return "Review session " + (r?.title || "");
+                    }}
+                  />
+                ))
+          );
+          return (
+            <WorkGroup
+              key={repo}
+              heading
+              name={repo}
+              count={rows.length}
+              open={groups.isOpen(repo)}
+              onToggle={() => groups.toggle(repo)}
+            >
+              {body}
+            </WorkGroup>
+          );
+        })
+      )}
+    </WorkListPanel>
+  );
+
   return (
     <>
       <div className="caps-gate" data-caps-gate="git">
@@ -174,145 +320,14 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         note={n ? undefined : "Add a repository below and this starts reviewing your PRs on it"}
       />
 
-      <RepoSourceList
-        surface="pr"
-        label="Repositories"
-        repos={repos}
-        overrides={overrides}
-        onSave={(list, next, msg) =>
-          saveGithub({ repos: list, repo_settings: next }, msg)
-        }
-        defaults={{
-          agent: String(gh.agent || agentChoices.fallback || ""),
-          baseBranch: String(gh.base_branch || ""),
-          minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
-          skipAuthors: String(skipAuthors),
-          // Verify's field. Blank here for the same reason Issues passes a blank
-          // base branch: the bag is one shape for all three surfaces, and a
-          // surface that never renders a field has nothing to seed it with.
-          liveBranch: "",
-        }}
-        listId="gh-repos-list"
-        addId="gh-repo-add-btn"
-        addLabel="+ Add repository"
-        emptyText="No repositories yet — add one below to start reviewing your PRs."
-        hint={
-          <>
-            Each card is one repository, with its own agent CLI and filters. Blank fields
-            inherit the tab defaults under <strong>Advanced options</strong>. Adding a
-            repository turns review on; remove them all to turn it off.
-          </>
-        }
-      />
-
-      <WorkListPanel
-        label="Open pull requests"
-        onRefresh={loadOpenPrs}
-        note={prsNote}
-        rowId="gh-open-prs-row"
-        refreshId="gh-prs-refresh"
-        noteId="gh-prs-note"
-        listId="gh-prs-list"
-        toolbarExtra={prs && prs.length ? filter.control : undefined}
-        hint={
-          <>
-            Every non-draft open PR on the repositories above
-, grouped by repository, with why auto review has or hasn't
-            picked it up. <strong>Begin review</strong> starts a review session for that PR
-            right now, bypassing the author / age / base-branch / already-reviewed filters.
-          </>
-        }
-      >
-        {prsError ? (
-          <div className="repo-empty">{prsError}</div>
-        ) : prs === null ? null : !prsRepos.length ? (
-          <div className="repo-empty">Add a repository above to see its open PRs.</div>
-        ) : !prs.length ? (
-          <div className="repo-empty">No open pull requests on the watched repositories.</div>
-        ) : !groupOrder.length ? (
-          <div className="repo-empty">No open pull request matches “{filter.query}”.</div>
-        ) : (
-          groupOrder.map((repo) => {
-            const rows = byRepo.get(repo) || [];
-            const body = !rows.length ? (
-              <div className="repo-empty">No open pull requests in this repository.</div>
-            ) : (
-                  rows.map((p) => (
-                    <WorkItemRow
-                      key={(p.repo || "") + p.number}
-                      reference={"#" + p.number}
-                      url={p.url}
-                      title={p.title}
-                      tooltip={
-                        (p.repo || "") +
-                        "#" +
-                        p.number +
-                        " — " +
-                        (p.title || "") +
-                        "\nby " +
-                        (p.author || "?") +
-                        " · " +
-                        (p.head_ref || "?") +
-                        " → " +
-                        (p.base_ref || "?")
-                      }
-                      meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
-                      hasSession={p.has_session}
-                      eligible={p.eligible}
-                      eligibleLabel="queued for auto review"
-                      reasons={p.reasons}
-                      actionLabel="Begin review"
-                      failPrefix="Begin review failed"
-                      workspace={p.workspace}
-                      onReopen={async () => {
-                        const title = await reopenIntakeItem({
-                          kind: "prs",
-                          repo: p.repo,
-                          number: p.number,
-                        });
-                        setTimeout(relistPrs, 5000);
-                        return title;
-                      }}
-                      agents={agentChoices.names}
-                      configuredAgent={
-                        overrides[repo]?.agent ||
-                        String(gh.agent || agentChoices.fallback || "")
-                      }
-                      configuredDepth={overrides[repo]?.depth || ""}
-                      onStart={async ({ agent, depth, effort }) => {
-                        const r = await api<{ title?: string }>("/api/github/prs/review", {
-                          json: {
-                            repo: p.repo,
-                            number: p.number,
-                            ...(agent ? { agent } : {}),
-                            ...(depth ? { depth } : {}),
-                            ...(effort ? { effort } : {}),
-                          },
-                        });
-                        // The server already has a provisioning row for it: pull it now
-                        // instead of leaving the sidebar blank through the PR clone.
-                        refreshInstances();
-                        setTimeout(relistPrs, 5000);
-                        return "Review session " + (r?.title || "");
-                      }}
-                    />
-                  ))
-            );
-            return (
-              <WorkGroup
-                key={repo}
-                heading
-                name={repo}
-                count={rows.length}
-                open={groups.isOpen(repo)}
-                onToggle={() => groups.toggle(repo)}
-              >
-                {body}
-              </WorkGroup>
-            );
-          })
-        )}
-      </WorkListPanel>
+      {/* WORK FIRST once a repository is watched: the PRs are the reason you
+          came, the cards are setup you revisit. With none, the empty card list
+          and its + Add come first — there is no work to show yet. */}
+      {/* A KEYED pair, not two fragments: the order flips the moment the
+          first repository is saved, and position-matched children would
+          remount both — collapsing the card you are still configuring and
+          dropping its focus mid-edit. Keys let React move them instead. */}
+      {n ? [workList, sourceList] : [sourceList, workList]}
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>

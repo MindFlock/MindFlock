@@ -62,12 +62,14 @@
   display: none;
 }
 
+/* Wide enough for a waiting row's buttons and its commit-message preview;
+   NotificationsBell.tsx clamps `left` with the same 400px (+ 8px margin). */
 .notif-pop {
   position: fixed;
   z-index: 3000;
-  width: 320px;
+  width: 400px;
   max-width: calc(100vw - 16px);
-  max-height: 60vh;
+  max-height: min(82vh, 760px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -97,38 +99,20 @@
 }
 
 /* title left, buttons right */
-.notif-head .notif-toggle {
+.notif-settings {
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
   border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
 }
 
-.notif-head .notif-toggle svg {
-  display: block;
-}
-
-.notif-head .notif-toggle:hover:not(:disabled) {
+.notif-settings:hover {
   color: var(--text);
-  border-color: var(--accent);
-}
-
-.notif-head .notif-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.notif-head .notif-toggle:disabled {
-  opacity: .5;
-  cursor: not-allowed;
+  border-color: var(--border);
 }
 
 .notif-clear {
@@ -147,6 +131,8 @@
 }
 
 .notif-list {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -217,20 +203,31 @@
   color: var(--gold-fill);
 }
 
-/* Pinned live section at the top of the bell popover, above the history. */
+/* Pinned live section at the top of the bell popover, above the history. It
+   scrolls on its own so a long list never pushes the history off the panel. */
 .notif-attn {
+  flex: 0 1 auto;
+  max-height: 55vh;
+  overflow-y: auto;
   padding: 5px 6px 6px;
   margin: 0;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 215, 0, 0.05);
 }
 
+/* Stays put while the list scrolls under it (top: -5px cancels the section's
+   padding); painted with the section's own tint so it reads as one surface. */
 .notif-attn-head {
+  position: sticky;
+  top: -5px;
+  z-index: 1;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--muted);
-  margin: 0 0 3px 3px;
+  margin: -5px -6px 3px;
+  padding: 5px 9px 3px;
+  background: linear-gradient(rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.05)), var(--panel);
 }
 
 .attn-item {
@@ -306,8 +303,94 @@
   font-size: 11px;
 }
 
-.attn-more {
+.notif-attn .attn-more {
+  display: block;
   font-size: 11px;
-  margin: 2px 0 0 6px;
+  margin: 4px 0 0 6px;
+  color: var(--muted);
+}
+
+.notif-attn .attn-more:hover {
+  color: var(--text);
+}
+
+/* A row asked for by name (`mf-open-bell` with a title, a history row): one
+   accent pulse, so the eye lands on it after the scroll. */
+.attn-item.flash,
+.attn-wait.flash > .ob-item {
+  animation: notif-flash 1.4s ease-out;
+}
+
+@keyframes notif-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* --- The Outbox's waiting rows, hosted in the bell ------------------------- */
+/* WaitingRow is the Intake kit's two-column card; at the bell's 400px it
+   stacks — the session and its chips, then the buttons, then the preview. */
+.attn-wait {
+  padding: 2px 0;
+}
+
+.attn-wait + .attn-wait,
+.attn-item + .attn-wait,
+.attn-wait + .attn-item {
+  margin-top: 4px;
+}
+
+.notif-attn .ob-item {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.notif-attn .ob-item .pr-open-ref {
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.notif-attn .ob-item .ik-item-start {
+  grid-column: 1;
+  grid-row: 3;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  max-width: none;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.notif-attn .ob-item .ik-item-start .ob-acts {
+  justify-content: flex-start;
+}
+
+.notif-attn .ob-item .ik-item-start .pr-review-btn,
+.notif-attn .ob-item .ik-item-start .ob-ship {
+  min-width: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.notif-attn .ob-item .ik-item-drawer {
+  grid-row: 4;
+}
+
+.notif-attn .ob-item .ob-card {
+  margin-top: 6px;
+  padding: 7px 9px;
+}
+
+.notif-attn .ob-item .ob-kv {
+  grid-template-columns: 62px minmax(0, 1fr);
+  font-size: 11.5px;
 }
 

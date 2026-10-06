@@ -7,6 +7,7 @@ import {
   approvalKey,
   dedupe,
   messageHead,
+  needsAttention,
   outboxTabs,
   shippedChip,
   shipVerb,
@@ -76,12 +77,13 @@ describe("Outbox tabs: badges count what the tab shows", () => {
     expect(own.queued).toEqual([]);
   });
 
-  it("builds All · one tab per group · On their own, each counting its own rows", () => {
+  it("builds All · one chip per group · On their own, each counting its own rows", () => {
     const tabs = outboxTabs(DATA, rowOf);
+    // What waits on you is the bell's: no chip counts it.
     expect(tabs.map((t) => [t.key, t.label, t.count])).toEqual([
-      ["all", "All", 7],
-      ["r1", "Q4 payments", 5],
-      ["own", "On their own", 2],
+      ["all", "All", 5],
+      ["r1", "Q4 payments", 4],
+      ["own", "On their own", 1],
     ]);
     for (const t of tabs) expect(t.count).toBe(viewCount(viewFor(DATA, t.key, rowOf)));
   });
@@ -92,7 +94,19 @@ describe("Outbox tabs: badges count what the tab shows", () => {
     expect(outboxTabs(null, rowOf).map((t) => [t.key, t.count])).toEqual([["all", 0]]);
   });
 
-  it("puts what's waiting on YOU on the top-bar badge — 0 hides it", () => {
+  it("leaves what waits on you out of every count, but keeps it in the view", () => {
+    const all = viewFor(DATA, "all", rowOf);
+    expect(all.waiting).toHaveLength(2);
+    expect(viewCount(all)).toBe(5);
+    // A group whose only rows wait on you gets no chip.
+    const waitOnly: OutboxResponse = {
+      ...DATA,
+      groups: { waiting: [DATA.groups.waiting[0]], shipping: [], shipped: [], queued: [] },
+    };
+    expect(outboxTabs(waitOnly, rowOf).map((t) => [t.key, t.count])).toEqual([["all", 0]]);
+  });
+
+  it("counts what's waiting on YOU, across every group — 0 is none", () => {
     expect(waitingCount(DATA)).toBe(2);
     expect(waitingCount(null)).toBe(0);
     expect(waitingCount(undefined)).toBe(0);
@@ -156,5 +170,72 @@ describe("the approval card's message (review findings 23, 24)", () => {
     expect(messageHead("feat: x\n\nwhy it matters")).toBe("feat: x …");
     expect(messageHead("feat: x")).toBe("feat: x");
     expect(messageHead(null)).toBe("");
+  });
+});
+
+describe("the bell's one list: needsAttention", () => {
+  const approve = DATA.groups.waiting[1];
+  const prompt = DATA.groups.waiting[0];
+
+  it("drops the Outbox's prompt item: the session's own answer row is that question", () => {
+    const rows = needsAttention([{ p: 0, title: "jira-PAY-419", reason: "needs your answer" }], [prompt]);
+    expect(rows.map((r) => [r.key, r.rank, !!r.attn, !!r.waiting])).toEqual([["jira-PAY-419", 0, true, false]]);
+  });
+
+  it("is one row per session: an approval outranks the session's other attention reasons", () => {
+    const rows = needsAttention([{ p: 2, title: "web-dark-mode", reason: "checks failing" }], [approve]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].waiting?.kind).toBe("approve");
+    expect(rows[0].rank).toBe(1);
+  });
+
+  it("keeps an answer row over an Outbox item for the same session", () => {
+    const rows = needsAttention(
+      [{ p: 0, title: "web-dark-mode", reason: "needs your answer" }],
+      [{ ...approve, kind: "ship_halted" }]
+    );
+    expect(rows.map((r) => [r.key, r.rank, !!r.attn])).toEqual([["web-dark-mode", 0, true]]);
+  });
+
+  it("dedupes one branch's two windows to one row", () => {
+    const rows = needsAttention([], [approve, { ...approve, title: "web-dark-mode-copy" }]);
+    expect(rows.map((r) => r.title)).toEqual(["web-dark-mode"]);
+  });
+
+  it("keys a group-level item with no session as run:<id>", () => {
+    const budget = { title: "", kind: "budget", run: { id: "r9", name: "Q4" }, actions: ["raise_budget", "stop"] };
+    expect(needsAttention([], [budget]).map((r) => [r.key, r.title, r.rank])).toEqual([["run:r9", "", 1]]);
+  });
+
+  it("keeps every session-less item of one group: two unresolved ticket lines and its budget pause", () => {
+    const r9 = { id: "r9", name: "Q4 batch" };
+    const waiting = [
+      { key: "run::r9::t1", title: "", kind: "failed", reason: "ticket PAY-1 not found", run: { ...r9, task: "t1" }, actions: ["retry", "skip"] },
+      { key: "run::r9::t2", title: "", kind: "failed", reason: "ticket PAY-2 not found", run: { ...r9, task: "t2" }, actions: ["retry", "skip"] },
+      { key: "run::r9", title: "", kind: "budget", run: r9, actions: ["raise_budget", "stop"] },
+    ];
+    const rows = needsAttention([], waiting);
+    expect(rows.map((r) => r.key)).toEqual(["run::r9::t1", "run::r9::t2", "run::r9"]);
+    expect(rows.map((r) => r.waiting?.kind)).toEqual(["failed", "failed", "budget"]);
+    expect(rows.every((r) => r.waiting?.run?.id === "r9")).toBe(true);
+  });
+
+  it("orders answer → approvals/escalations → broken → checks failing → ready", () => {
+    const rows = needsAttention(
+      [
+        { p: 0, title: "asking", reason: "needs your answer" },
+        { p: 1, title: "broken", reason: "worktree setup failed" },
+        { p: 2, title: "red", reason: "checks failing" },
+        { p: 3, title: "ready", reason: "pushed — ready for PR" },
+      ],
+      [{ title: "stuck", kind: "stuck", run: { id: "r1", task: "t1" }, actions: ["retry", "skip"] }, approve]
+    );
+    expect(rows.map((r) => r.key)).toEqual(["asking", "stuck", "web-dark-mode", "broken", "red", "ready"]);
+    expect(rows.map((r) => r.rank)).toEqual([0, 1, 1, 2, 3, 4]);
+  });
+
+  it("is empty with nothing on either side, and tolerates no Outbox at all", () => {
+    expect(needsAttention([], undefined)).toEqual([]);
+    expect(needsAttention([{ p: 3, title: "a", reason: "pushed — ready for PR" }], undefined)).toHaveLength(1);
   });
 });

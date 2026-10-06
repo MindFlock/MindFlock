@@ -97,8 +97,11 @@ export type DialogName =
   | "new-session"
   | "settings"
   | "intake"
-  // What's shipping, and what's waiting on you (ship lanes) — the out-side of
-  // Intake; dialogTarget may name a run id ("own" = sessions on their own).
+  // Customize (CustomizeDialog): "customize" opens its Sidebar tab, and
+  // "prompts" / "outbox" below open it on those tabs.
+  | "customize"
+  // Customize → Outbox: what's on its way out and what shipped today (ship
+  // lanes); dialogTarget may name a run id ("own" = sessions on their own).
   | "outbox"
   | "verify"
   | "commit"
@@ -107,6 +110,7 @@ export type DialogName =
   | "device"
   // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
+  // Customize → Prompts: the saved-prompt library.
   | "prompts"
   | "setup"
   | "todo"
@@ -333,7 +337,7 @@ export const useUi = create<UiState>((set, get) => ({
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
   collapsedRuns: new Set(load<string[]>("mf_runcollapse", [])),
-  // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
+  // Fresh users start with the essentials (Usage + Tickets + Assistant)
   // so a first run isn't overwhelming; the rest are one click away in Customize.
   // Once the user touches Customize the saved set wins, empty included.
   hiddenBars: new Set(

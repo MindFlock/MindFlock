@@ -144,21 +144,20 @@
   font-size: 12px;
 }
 
-/* Sidebar-footer hint button that surfaces the shortcut. */
-#palette-btn {
-  cursor: pointer;
-  font-size: 10px;
-  padding: 0 6px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
+/* The top bar's palette door: a monochrome magnifier at the end of the menu,
+   sized and coloured like #theme-btn (currentColor, so it follows the region's
+   --text on a bar of any hue). `#topbar` in front to outrank `.tb-item`. */
+#topbar #palette-btn {
+  padding: 0 5px;
   color: var(--muted);
-  height: 30px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-#palette-btn:hover {
-  border-color: var(--accent);
+#topbar #palette-btn:hover {
   color: var(--text);
+}
+
+/* Kills the inline-SVG baseline gap (same as #theme-btn svg). */
+#palette-btn svg {
+  display: block;
 }
 

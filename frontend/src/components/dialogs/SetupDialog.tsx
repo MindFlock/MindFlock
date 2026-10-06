@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { create } from "zustand";
 import { api } from "../../api/client";
-import { useConfig } from "../../state/queries";
+import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 
@@ -71,12 +71,20 @@ let setupAutoShown = false; // auto-open the setup dialog at most once per load
  * mf_ever_created) had no writer left in this app, and the only thing a working
  * one could have bought is a user with a missing tmux never being shown the
  * checklist again. It should keep opening every load until either the tools are
- * installed or a session exists. */
+ * installed or a session exists.
+ *
+ * And never over an empty grid. With no session at all the grid's first-run
+ * card already shows this very checklist, so popping the modal on top of it put
+ * the same three steps on screen twice, right under the welcome tour. The
+ * caller also spends the once-per-load latch on that case (see
+ * useDoctorAutoShow), so creating the first session does not pop the modal
+ * over it while the cached config still says "not onboarded". */
 export function shouldAutoShowSetup(opts: {
   failing: boolean;
   onboarded: boolean | undefined;
+  sessions: number;
 }): boolean {
-  return opts.failing && opts.onboarded === false;
+  return opts.failing && opts.onboarded === false && opts.sessions > 0;
 }
 
 /** Headless doctor probe: on load + every 5 minutes (never on the 4s poll).
@@ -91,6 +99,9 @@ export function shouldAutoShowSetup(opts: {
  * staleTime) and makes the decision reactive, which is what the race needs. */
 export function useDoctorAutoShow() {
   const { data: config } = useConfig();
+  const { data: instances } = useInstances();
+  // -1 while the first snapshot is in flight: unknown, so neither rule fires.
+  const sessions = instances ? instances.length : -1;
   const failing = useDoctorWarnStore((s) => s.failing);
 
   useEffect(() => {
@@ -116,11 +127,18 @@ export function useDoctorAutoShow() {
   // the onboarded flag did.
   useEffect(() => {
     if (setupAutoShown) return;
-    const show = shouldAutoShowSetup({ failing, onboarded: config?.onboarded });
+    // The grid's own card is showing the checklist this load: that IS the
+    // auto-show. Latch, so the session it leads to does not get the modal
+    // dropped on it a poll later (config is cached, and still says false).
+    if (failing && config?.onboarded === false && sessions === 0) {
+      setupAutoShown = true;
+      return;
+    }
+    const show = shouldAutoShowSetup({ failing, onboarded: config?.onboarded, sessions });
     if (!show) return;
     setupAutoShown = true;
     useUi.getState().openDialogFor("setup");
-  }, [failing, config?.onboarded]);
+  }, [failing, config?.onboarded, sessions]);
 }
 
 /** The doctor check list (setup panel + Settings → Doctor). */
@@ -310,45 +328,74 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           <span className="setup-num">②</span> Accounts
         </h3>
         <div className="setup-acct-row">
-          <button type="button" className="setup-test-github" onClick={(e) => { e.stopPropagation(); testGithub(); }}>
-            Test GitHub
-          </button>
-          <TestResult state={gh} />
-        </div>
-        <div className="setup-acct-row setup-shortcut-row">
-          <button type="button" className="setup-test-shortcut" onClick={(e) => { e.stopPropagation(); testShortcut(); }}>
-            Test Shortcut
-          </button>
-          <input
-            type="password"
-            className="setup-shortcut-token"
-            placeholder="Shortcut API token (optional)"
-            autoComplete="off"
-            title="Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token."
-            value={scToken}
-            onChange={(e) => setScToken(e.target.value)}
-            onClick={(e) => e.stopPropagation()}
-          />
-          <TestResult state={sc} />
-        </div>
-        <div className="setup-acct-row">
           <button type="button" className="setup-test-agent" onClick={(e) => { e.stopPropagation(); testAgent(); }}>
             Test agent CLI
           </button>
           <TestResult state={agent} />
         </div>
+        {/* The agent CLI is the one account a first session needs. GitHub and
+            Shortcut matter only once you push or pull tickets, so their tests
+            sit folded rather than reading like two more required steps. */}
+        <details className="setup-optional" onClick={(e) => e.stopPropagation()}>
+          <summary>Optional: test GitHub or a Shortcut token</summary>
+          <div className="setup-acct-row">
+            <button
+              type="button"
+              className="setup-test-github"
+              // What the welcome tour's old PR-review slide used to say: the
+              // token is what onboarding asks for, never a gh login.
+              title={
+                "Checks that a GitHub token resolves (Intake → Pull requests, $GH_TOKEN / $GITHUB_TOKEN, " +
+                "or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI " +
+                "is optional, and pushing is plain git push over your own remote."
+              }
+              onClick={(e) => { e.stopPropagation(); testGithub(); }}
+            >
+              Test GitHub
+            </button>
+            <TestResult state={gh} />
+          </div>
+          <div className="setup-acct-row setup-shortcut-row">
+            <button type="button" className="setup-test-shortcut" onClick={(e) => { e.stopPropagation(); testShortcut(); }}>
+              Test Shortcut
+            </button>
+            <input
+              type="password"
+              className="setup-shortcut-token"
+              placeholder="Shortcut API token (optional)"
+              autoComplete="off"
+              title="Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token."
+              value={scToken}
+              onChange={(e) => setScToken(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+            />
+            <TestResult state={sc} />
+          </div>
+        </details>
         <p className="muted setup-hint">
-          Tokens live in{" "}
+          Ticket and GitHub tokens are set up in{" "}
+          <button
+            type="button"
+            className="setup-open-intake linklike"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeSetup();
+              useUi.getState().openDialogFor("intake", "tickets");
+            }}
+          >
+            Intake
+          </button>
+          {" · agent logins in "}
           <button
             type="button"
             className="setup-open-settings linklike"
             onClick={(e) => {
               e.stopPropagation();
               closeSetup();
-              useUi.getState().openDialogFor("settings");
+              useUi.getState().openDialogFor("settings", "accounts");
             }}
           >
-            Open Settings
+            Settings → Accounts
           </button>
         </p>
       </div>

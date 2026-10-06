@@ -37,6 +37,25 @@
   white-space: nowrap;
 }
 
+/* "Copy all": the whole history to the clipboard. A quiet bordered button,
+   the find arrows' look, so the bar keeps one control style. */
+.hist-bar .hist-copy {
+  flex: none;
+  padding: 0 8px;
+  line-height: 18px;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hist-bar .hist-copy:hover {
+  border-color: var(--accent);
+}
+
 /* The page itself: native scrolling and selection are the whole feature.
    overscroll-behavior keeps a fast wheel from spilling into the grid. */
 .hist-scroll {

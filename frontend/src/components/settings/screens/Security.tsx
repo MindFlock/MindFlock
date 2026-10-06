@@ -5,7 +5,7 @@ import { useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
-import { useSettings } from "../useSettings";
+import { InlineConfirm, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
 const AUTH_TOKEN_MASK = "••••••••••••••••";
@@ -23,21 +23,40 @@ export function Security(_: ScreenProps) {
   const [tokenText, setTokenText] = useState(AUTH_TOKEN_MASK);
   const authMode = String(s.get("general", "auth_mode") ?? "auto") || "auto";
   const remote = String(s.get("general", "remote_control") ?? "");
+  // The two guarded actions ask inline (see InlineConfirm for why not a native
+  // confirm). Nothing is saved or sent until the go-ahead: picking "off" leaves
+  // the select on the stored mode, so Cancel has nothing to undo.
+  const [confirmOff, setConfirmOff] = useState(false);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  const [rotating, setRotating] = useState(false);
 
   const setAuthMode = (value: string) => {
     // Warn before turning the gate fully off.
-    if (value === "off") {
-      const ok = confirm(
-        "Turn the access-token gate OFF?\n\nAnyone who can reach this server's URL " +
-          "(e.g. on your tailnet/LAN) will be able to drive your agents and commit code " +
-          "with no sign-in. Only do this on a network you fully trust."
-      );
-      if (!ok) {
-        s.saveField("general", "auth_mode", "auto");
-        return;
-      }
+    if (value === "off" && authMode !== "off") {
+      setConfirmOff(true);
+      return;
     }
+    setConfirmOff(false);
     s.saveField("general", "auth_mode", value);
+  };
+
+  const rotate = async () => {
+    // Compromise recovery: this browser's cookie is re-issued in the
+    // same response, so only OTHER devices get signed out.
+    setRotating(true);
+    try {
+      const r = await api<{ token?: string }>("/api/settings/auth-token/rotate", {
+        method: "POST",
+      });
+      authTokenCache = r?.token || null;
+      if (shown) setTokenText(authTokenCache || "(none set)");
+      toast("Access token regenerated — other devices must sign in again");
+    } catch (e) {
+      toast("Couldn't regenerate the token: " + (e as Error).message);
+    } finally {
+      setRotating(false);
+      setConfirmRotate(false);
+    }
   };
 
   return (
@@ -64,6 +83,23 @@ export function Security(_: ScreenProps) {
           commit code). "Off" removes that gate entirely.
         </span>
       </label>
+      {confirmOff && (
+        <InlineConfirm
+          id="auth-mode-confirm"
+          title="Turn the access-token gate off?"
+          body={
+            "Anyone who can reach this server's URL (e.g. on your tailnet/LAN) will be able " +
+            "to drive your agents and commit code with no sign-in. Only do this on a network " +
+            "you fully trust."
+          }
+          confirmLabel="Turn it off"
+          onConfirm={() => {
+            setConfirmOff(false);
+            s.saveField("general", "auth_mode", "off");
+          }}
+          onCancel={() => setConfirmOff(false)}
+        />
+      )}
       <div
         className="set-row"
         title="The token another MindFlock device enters to control this one, and the browser sign-in token."
@@ -114,30 +150,27 @@ export function Security(_: ScreenProps) {
             type="button"
             className="test-btn"
             id="auth-token-rotate"
-            onClick={async () => {
-              // Compromise recovery: this browser's cookie is re-issued in the
-              // same response, so only OTHER devices get signed out.
-              const ok = confirm(
-                "Regenerate the access token?\n\nEvery other signed-in browser, phone QR code, " +
-                  "and paired MindFlock device stops working until it re-authenticates with the " +
-                  "new token. This browser stays signed in."
-              );
-              if (!ok) return;
-              try {
-                const r = await api<{ token?: string }>("/api/settings/auth-token/rotate", {
-                  method: "POST",
-                });
-                authTokenCache = r?.token || null;
-                if (shown) setTokenText(authTokenCache || "(none set)");
-                toast("Access token regenerated — other devices must sign in again");
-              } catch (e) {
-                toast("Couldn't regenerate the token: " + (e as Error).message);
-              }
-            }}
+            disabled={confirmRotate}
+            onClick={() => setConfirmRotate(true)}
           >
             Regenerate
           </button>
         </div>
+        {confirmRotate && (
+          <InlineConfirm
+            id="auth-token-rotate-confirm"
+            title="Regenerate the access token?"
+            body={
+              "Every other signed-in browser, phone QR code, and paired MindFlock device " +
+              "stops working until it re-authenticates with the new token. This browser " +
+              "stays signed in."
+            }
+            confirmLabel={rotating ? "Regenerating…" : "Regenerate"}
+            busy={rotating}
+            onConfirm={() => void rotate()}
+            onCancel={() => setConfirmRotate(false)}
+          />
+        )}
         <span className="set-hint">
           Enter this on another MindFlock device (its sidebar's "Connect…" button next to this
           device's name) to let it control this one, or at the browser sign-in page when the

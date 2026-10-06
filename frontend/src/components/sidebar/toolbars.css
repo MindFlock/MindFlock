@@ -77,8 +77,8 @@
   display: none;
 }
 
-/* Draggable wrapper around each customizable sidebar section (Usage, Ticket
-   Ingestion, PR Review, Assistant). The slot is a passthrough — the child bar
+/* Draggable wrapper around each customizable sidebar section (Usage, Tickets,
+   Pull requests, Issues, Verify, Assistant). The slot is a passthrough — the child bar
    keeps its own border/padding — but it owns the drag grip and the insertion
    cue. A slot whose bar renders nothing collapses so it leaves no gap and
    can't be a drop target. */
@@ -232,6 +232,49 @@
 #git-issue-bar .dc-label,
 #verify-bar .dc-label {
   font-weight: 600;
+}
+
+/* A bar's label is its door: one button, named after the dialog tab it opens
+   (Tickets → Intake → Tickets, Verify → Verify). Reset to read as the label it
+   replaced, so the bar still says one word, not "Tickets [Tickets]". */
+#mindflock-bar .dc-open,
+#pr-review-bar .dc-open,
+#git-issue-bar .dc-open,
+#verify-bar .dc-open {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#mindflock-bar .dc-open:hover,
+#pr-review-bar .dc-open:hover,
+#git-issue-bar .dc-open:hover,
+#verify-bar .dc-open:hover,
+#mindflock-bar .dc-open:focus-visible,
+#pr-review-bar .dc-open:focus-visible,
+#git-issue-bar .dc-open:focus-visible,
+#verify-bar .dc-open:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+#mindflock-bar .dc-open:focus-visible,
+#pr-review-bar .dc-open:focus-visible,
+#git-issue-bar .dc-open:focus-visible,
+#verify-bar .dc-open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 #mindflock-bar .dc-actions,

@@ -121,11 +121,13 @@ describe("a newer chord whose letter an older rebinding took", () => {
   });
 });
 
-describe("Alt+O opens the Outbox", () => {
+describe("Alt+O opens the Outbox (a tab of Customize)", () => {
   it("is bound, on the sheet, and taken by nothing else", () => {
+    // The id stays "outbox": a saved rebind in mf_keymap is keyed by it.
     const o = byId("outbox");
     expect(o).toMatchObject({ key: "o", alt: true });
     expect(o.help?.[1]).toBe("Alt+O");
+    expect(o.help?.[2]).toBe("Outbox — what's on its way out (in Customize)");
     const combo = defaultCombosFor("outbox")[0];
     const clash = KEYMAP.filter((e) => e !== o && e.key.toLowerCase() === "o" && sameCombo(combo, { key: e.key, mod: e.mod, shift: e.shift, alt: e.alt }));
     expect(clash).toEqual([]);
@@ -141,15 +143,54 @@ describe("Alt+O opens the Outbox", () => {
 describe("modalOpen", () => {
   afterEach(() => useUi.getState().closeDialog());
 
-  it("counts the Outbox: its Commit / Retry / Skip rows are about OTHER sessions", () => {
-    useUi.getState().openDialogFor("outbox");
-    expect(modalOpen()).toBe(true);
+  it("counts Customize on every tab: its rows and inputs are about OTHER sessions", () => {
+    for (const name of ["customize", "prompts", "outbox"] as const) {
+      useUi.getState().openDialogFor(name);
+      expect(modalOpen()).toBe(true);
+      useUi.getState().closeDialog();
+    }
   });
 
   it("counts the Red zones dialog: Delete on a zone's × or Ctrl+W in its input must not close the session behind", () => {
     // The store slot answers before any DOM lookup, so this runs without a DOM.
     useUi.getState().openDialogFor("red-zones");
     expect(modalOpen()).toBe(true);
+  });
+});
+
+describe("Delete / Ctrl+W never end the focused session from inside the bell", () => {
+  // The Outbox's waiting rows (Retry / Skip / Commit) live in the bell's
+  // popover now; its buttons are about OTHER sessions.
+  const g = globalThis as Record<string, unknown>;
+  const hadDoc = "document" in g;
+  const prevDoc = g.document;
+  afterEach(() => {
+    useUi.setState({ focused: null } as never);
+    if (hadDoc) g.document = prevDoc;
+    else delete g.document;
+  });
+  const withBell = (open: boolean) => {
+    const pop = { classList: { contains: () => false } };
+    g.document = {
+      activeElement: { tagName: "BUTTON", className: "attn-act", closest: () => null },
+      getElementById: (id: string) => (open && id === "notif-pop" ? pop : null),
+    };
+  };
+
+  it("the open bell counts as a modal", () => {
+    withBell(true);
+    expect(modalOpen()).toBe(true);
+    withBell(false);
+    expect(modalOpen()).toBe(false);
+  });
+
+  it("Delete and Ctrl+W stand down while the bell is open, and work again once it closes", () => {
+    useUi.setState({ focused: "sess-A" } as never);
+    withBell(true);
+    expect(aliasFor("close").when!()).toBe(false);
+    expect(byId("close").when!()).toBe(false);
+    withBell(false);
+    expect(aliasFor("close").when!()).toBe(true);
   });
 });
 

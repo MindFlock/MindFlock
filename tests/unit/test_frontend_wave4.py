@@ -49,7 +49,7 @@ def test_app_js_palette_wiring():
         '"Open Doctor"',
         '"Open Setup checklist"',
         '"Toggle sidebar"',
-        '"New from Recently closed…"',
+        '"Recently closed…"',
     ):
         assert label in js, label
     # Focused-session actions reuse the existing handlers.

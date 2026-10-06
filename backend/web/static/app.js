@@ -25580,15 +25580,15 @@ var SIDEBAR_BARS = [
 	},
 	{
 		key: "ingestion",
-		label: "Ticket Ingestion"
+		label: "Tickets"
 	},
 	{
 		key: "pr-review",
-		label: "PR Review"
+		label: "Pull requests"
 	},
 	{
 		key: "issue-handling",
-		label: "Issue Handling"
+		label: "Issues"
 	},
 	{
 		key: "verify",
@@ -26530,7 +26530,7 @@ async function killSession(title) {
 	try {
 		await instApi(title, "/close", { method: "POST" });
 	} catch (err) {
-		alert("Close failed: " + errMsg(err));
+		errorPop("Close failed", errMsg(err));
 		return;
 	}
 	const ui = useUi.getState();
@@ -26538,7 +26538,7 @@ async function killSession(title) {
 	if (ui.focused === title) ui.setFocused(null);
 	releaseTerms(title);
 	closeUndo.push(title);
-	toast("Session ended — reopen from Recent… (or Ctrl+Z / Ctrl+Shift+T)");
+	toast("Session ended — reopen it from Recently closed, under the session list (or Ctrl+Z / Ctrl+Shift+T)");
 	await refreshInstances();
 }
 var closedWhen = (x) => {
@@ -26588,9 +26588,16 @@ async function undoLastClose() {
 		undoBusy = false;
 	}
 }
-async function cleanupMissing(title) {
+async function cleanupMissing(title, confirmed = false) {
 	if (!title) return;
-	if (!confirm("Clean up '" + title + "'?\nIts workspace directory no longer exists — this removes the dead session.")) return;
+	if (!confirmed) {
+		errorPop("Clean up “" + displayName(title) + "”?", "Its workspace folder no longer exists — this removes the dead session.", [{
+			label: "Clean up",
+			primary: true,
+			run: () => void cleanupMissing(title, true)
+		}]);
+		return;
+	}
 	const ui = useUi.getState();
 	ui.setHidden(title, false);
 	if (ui.focused === title) ui.setFocused(null);
@@ -26659,7 +26666,7 @@ async function copySession(title) {
 		}
 	} catch (err) {
 		failPendingSession(guess);
-		alert("Copy failed: " + errMsg(err));
+		errorPop("Copy failed", errMsg(err));
 	}
 }
 function commitSession(title) {
@@ -26704,8 +26711,13 @@ async function pushSession(title, force = false, overrideRedZones = false) {
 			clearStep(title);
 			offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
 		} else if (err.message === "checks haven't passed for this commit") {
-			if (confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")) return overrideRedZones ? pushSession(title, true, true) : pushSession(title, true);
 			clearStep(title);
+			errorPop("Push blocked — checks haven't passed", displayName(title) + "'s commit has no passing check run (see the ✗ checks chip on its row). Override for this push only?", [{
+				label: "Push anyway",
+				primary: true,
+				title: "Push " + displayName(title) + " past the check gate",
+				run: () => void (overrideRedZones ? pushSession(title, true, true) : pushSession(title, true))
+			}]);
 			return;
 		} else {
 			clearStep(title);
@@ -26733,7 +26745,7 @@ async function ideSession(title, quiet = false) {
 		await instApi(title, "/ide", { method: "POST" });
 	} catch (err) {
 		if (quiet) toast(ideName() + ": " + errMsg(err), { duration: 7e3 });
-		else alert(ideName() + ": " + errMsg(err));
+		else errorPop(ideName() + " failed", errMsg(err));
 	}
 }
 function makePrSession(title) {
@@ -26764,9 +26776,16 @@ async function submitMakePr(title, base, overrideRedZones = false) {
 	}
 	await freshStage(title);
 }
-async function mergeSession(title, overrideRedZones = false) {
+async function mergeSession(title, overrideRedZones = false, confirmed = false) {
 	if (!title || !requireGit()) return;
-	if (!overrideRedZones && !confirm("Merge this branch's PR into staging?")) return;
+	if (!overrideRedZones && !confirmed) {
+		errorPop("Merge this PR?", displayName(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.", [{
+			label: "Merge PR",
+			primary: true,
+			run: () => void mergeSession(title, false, true)
+		}]);
+		return;
+	}
 	markStep(title, "merge");
 	try {
 		const r = await instApi(title, "/merge-pr", overrideRedZones ? { json: { override_red_zones: true } } : { method: "POST" });
@@ -27049,7 +27068,7 @@ function workerOf(parent, nameOf) {
 	return parent ? "· worker of " + nameOf(parent) : "";
 }
 var LANE_HEAD = {
-	leave: "agent only",
+	leave: "fast-track off",
 	commit: "→ commit",
 	push: "→ push",
 	pr: "→ PR",
@@ -27153,7 +27172,7 @@ function shipLine(row, opts = {}) {
 	const stage = String(row.stage || "");
 	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
 	const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
-	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
+	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
 	const base = {
 		restCls: "",
 		title: (means ? "Fast-track: " + means + "." : "") + copy
@@ -27166,11 +27185,11 @@ function shipLine(row, opts = {}) {
 		state,
 		title: (why ? why + "\n" : "") + base.title
 	});
-	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
+	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
 	const tstate = String(task?.state || "");
 	const reason = String(task?.reason || "");
-	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
-	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
 	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
 	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
@@ -27197,7 +27216,7 @@ function shipLine(row, opts = {}) {
 		const note = String(ap?.note || "");
 		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
 	}
-	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
+	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
 	let rest;
 	let state = "idle";
 	if (act === "working") {
@@ -27592,7 +27611,7 @@ var LANE_KEY = {
 	merge: "M"
 };
 var ASK_FIRST_LABEL = "Ask me before it ships";
-var ASK_FIRST_DESC = "Stop one step short and show it in the Outbox first";
+var ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
 function normalizeLane(v) {
 	const s = String(v || "").trim().toLowerCase();
 	if (s === "agent" || s === "off" || s === "none") return "leave";
@@ -27784,8 +27803,7 @@ function openFastTrackMenu(title) {
 }
 //#endregion
 //#region src/lib/autopilot.ts
-var DEPTHS = [
-	"agent",
+var SESSION_DEPTHS = [
 	"commit",
 	"push",
 	"pr",
@@ -27804,13 +27822,6 @@ var DEPTH_LABELS = {
 	push: "Push",
 	pr: "Open a PR",
 	merge: "Merge when green"
-};
-var DEPTH_SHORT = {
-	agent: "→ agent",
-	commit: "→ commit",
-	push: "→ push",
-	pr: "→ PR",
-	merge: "→ merge"
 };
 function depthLabel(depth) {
 	return DEPTH_LABELS[depth] || depth || "Off";
@@ -27950,9 +27961,9 @@ function activityChip(act) {
 		title: "Agent is working"
 	};
 	if (act === "clarify") return {
-		label: "clarify",
+		label: "question",
 		cls: "s-clarify",
-		title: "Agent paused to ask you a question — needs your answer"
+		title: "The agent asked you a question — answer it in its pane or from the bell"
 	};
 	if (act === "limit") return {
 		label: "limit",
@@ -28138,15 +28149,9 @@ function liveStep(inst) {
 		title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + "."
 	};
 	const run = inst.autopilot;
-	if (run && run.depth && run.state === "running") return {
-		label: run.note || "fast-tracking",
+	if (run && run.depth && run.state === "running" && run.note) return {
+		label: run.note,
 		tone: "work",
-		title: autopilotChipTitle(run),
-		target: DEPTH_SHORT[run.depth] || ""
-	};
-	if (run && run.depth && run.state === "halted") return {
-		label: "fast-track ✗",
-		tone: "blocked",
 		title: autopilotChipTitle(run)
 	};
 	if (stage === "pr") {
@@ -28921,6 +28926,8 @@ var MODAL_DIALOG_NAMES = [
 	"rename",
 	"device",
 	"intake",
+	"customize",
+	"prompts",
 	"outbox",
 	"verify",
 	"extension",
@@ -28933,11 +28940,12 @@ var MODAL_DOM_IDS = [
 	"rename-dialog",
 	"device-dialog",
 	"intake-dialog",
-	"outbox-dialog",
+	"customize-dialog",
 	"verify-dialog",
 	"red-zones-dialog",
 	"break-screen",
-	"fast-track-menu"
+	"fast-track-menu",
+	"notif-pop"
 ];
 function modalOpen() {
 	const open = useUi.getState().openDialog;
@@ -29175,7 +29183,7 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+O",
-			"Outbox — what's shipping, and what's waiting on you"
+			"Outbox — what's on its way out (in Customize)"
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useUi.getState().openDialogFor("outbox")
@@ -30138,707 +30146,82 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
-//#region src/lib/splitRun.ts
-function firstLine(text, max = 120) {
-	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
-	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
-}
-function testsLabel(tests) {
-	if (typeof tests === "number") return tests > 0 ? tests + (tests === 1 ? " test" : " tests") : "";
-	const s = String(tests || "");
-	const m = s.match(/(\d+)\s+(?:tests?\s+)?passed/i) || s.match(/(\d+)\s+tests?\b/i);
-	if (!m) return "";
-	const n = Number(m[1]);
-	return n + (n === 1 ? " test" : " tests");
-}
-function memberTasks(run) {
-	return (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
-}
-function pieceLabel(t, run) {
-	const pieces = run.plan?.pieces || [];
-	const ix = (run.tasks || []).filter((x) => x.kind === "piece").indexOf(t);
-	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
-	if (p) return {
-		name: p.title,
-		what: firstLine(p.prompt, 90)
-	};
-	const what = firstLine(t.text, 90);
-	return {
-		name: t.title || what || t.id,
-		what: t.title && what !== t.title ? what : ""
-	};
-}
-function pathsText(paths) {
-	return (paths || []).filter(Boolean).join(", ");
-}
-function isSameFolder(run) {
-	return run?.mode === "same_folder";
-}
-function pieceStatus(t, leadName, mode) {
-	const tests = testsLabel(t.tests);
-	const files = (t.conflict?.files || []).join(", ");
-	if (mode === "same_folder") {
-		if (t.state === "integrated") return {
-			word: "committed ✓",
-			cls: "ok",
-			detail: tests
-		};
-		if (t.state === "integrating") return {
-			word: "committing…",
-			cls: "work",
-			detail: ""
-		};
-	}
-	switch (t.state) {
-		case "integrated": return {
-			word: "merged back ✓",
-			cls: "ok",
-			detail: tests
-		};
-		case "integrating":
-			if (t.reason === "conflict" || t.conflict) return {
-				word: "conflict",
-				cls: "needs",
-				detail: leadName + " is resolving" + (files ? " " + files : " it")
-			};
-			return {
-				word: "merging…",
-				cls: "work",
-				detail: ""
-			};
-		case "needs_you": return {
-			word: t.reason === "conflict" ? "conflict — needs you" : "needs you",
-			cls: "needs",
-			detail: t.detail || ""
-		};
-		case "failed": return {
-			word: "failed",
-			cls: "bad",
-			detail: t.detail || ""
-		};
-		case "shipping": return {
-			word: "committing",
-			cls: "work",
-			detail: ""
-		};
-		case "working": return {
-			word: "working",
-			cls: "work",
-			detail: ""
-		};
-		case "starting": return {
-			word: "starting",
-			cls: "idle",
-			detail: ""
-		};
-		case "queued": return {
-			word: "queued",
-			cls: "idle",
-			detail: ""
-		};
-		case "skipped":
-		case "cancelled": return {
-			word: "left out",
-			cls: "idle",
-			detail: t.detail || ""
-		};
-		case "shipped": return {
-			word: "done",
-			cls: "ok",
-			detail: tests
-		};
-		default: return {
-			word: t.state || "—",
-			cls: "idle",
-			detail: ""
-		};
-	}
-}
-function plural$5(n, one, many = one + "s") {
-	return n + " " + (n === 1 ? one : many);
-}
-function leadSubline(run, leadName) {
-	const split = !!run.split;
-	const tasks = memberTasks(run);
-	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
-	const branch = run.lead?.branch || run.release?.branch || "";
-	if (run.state === "planning") return [{ text: "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
-	if (run.state === "plan_ready") return [
-		{ text: leadName + " proposed " },
-		{
-			text: plural$5(n, "piece") + " with separate paths",
-			b: true
+//#region src/components/sidebar/VerifyBar.tsx
+function useVerifySettings() {
+	return useQuery({
+		queryKey: ["verify-settings"],
+		queryFn: async () => {
+			return (await api("/api/settings"))?.settings?.repository || {};
 		},
-		{ text: " — approve them and MindFlock starts the workers." }
-	];
-	const parts = split ? [{ text: "Split into " }, {
-		text: plural$5(n, "piece") + " with separate paths",
-		b: true
-	}] : [{
-		text: plural$5(n, "line") + ", one PR",
-		b: true
-	}];
-	const merged = tasks.filter((t) => t.state === "integrated").length;
-	const live = tasks.filter((t) => ![
-		"cancelled",
-		"skipped",
-		"failed"
-	].includes(t.state)).length;
-	if (isSameFolder(run)) {
-		parts.push({ text: " in " + leadName + "'s folder · " });
-		if (merged) {
-			parts.push({
-				text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
-				cls: "ok"
-			});
-			parts.push({ text: " on " });
-			parts.push({
-				text: branch || "the lead's branch",
-				b: true
-			});
-		} else {
-			parts.push({ text: "each piece is committed on " });
-			parts.push({
-				text: branch || "the lead's branch",
-				b: true
-			});
-			parts.push({ text: " as it finishes" });
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function VerifyBar() {
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const openDialog = useUi((s) => s.openDialog);
+	const qc = useQueryClient();
+	const { data: repo, refetch } = useVerifySettings();
+	const { data: plansData } = useTestPlans();
+	(0, import_react.useEffect)(() => {
+		if (openDialog === null) refetch();
+	}, [openDialog, refetch]);
+	const repos = Array.isArray(repo?.verify_repos) ? repo.verify_repos : [];
+	const plans = plansData?.plans || [];
+	const on = repo?.verify_enabled !== false;
+	const due = dueCount(plans);
+	const running = plans.some((p) => p.state === "running");
+	const broken = plans.filter((p) => verdictOf(p) === "fail").length;
+	if (!repo || repos.length === 0 && plans.length === 0) return null;
+	const toggle = async (enable) => {
+		try {
+			await api("/api/settings", { json: { repository: { verify_enabled: enable } } });
+			toast(enable ? "Automatic checking on" : "Automatic checking paused");
+		} catch (err) {
+			toast("Verify " + (enable ? "on" : "off") + " failed: " + errMsg(err));
+		} finally {
+			refetch();
+			qc.invalidateQueries({ queryKey: ["test-plans"] });
 		}
-	} else if (merged) {
-		parts.push({ text: " · " });
-		parts.push({
-			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
-			cls: "ok"
-		});
-		if (branch) {
-			parts.push({ text: " into " });
-			parts.push({
-				text: branch,
-				b: true
-			});
-		}
-	} else if (live) {
-		parts.push({ text: " · merging back into " });
-		parts.push({
-			text: branch || "the lead's branch",
-			b: true
-		});
-		parts.push({ text: " as each finishes" });
-	}
-	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
-	if (conflicts) parts.push({
-		text: " · " + plural$5(conflicts, "conflict") + " with " + leadName,
-		cls: "needs"
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "verify-bar",
+		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				id: "verify-dot",
+				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
+				role: "img",
+				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
+				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "verify-plans-btn",
+				type: "button",
+				className: "dc-label dc-open",
+				title: "Open Verify",
+				onClick: () => openDialogFor("verify"),
+				children: "Verify"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "dc-actions",
+				children: [broken > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dc-count dc-count-bad",
+					title: broken + (broken === 1 ? " checklist has" : " checklists have") + " a step that failed",
+					children: "✗" + broken
+				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "dc-switch",
+					title: "Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "verify-toggle",
+						checked: on,
+						onChange: (e) => void toggle(e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
+				})]
+			})
+		]
 	});
-	const c = run.check;
-	if (c && c.state === "ok") {
-		const tests = testsLabel(c.tests ?? null);
-		parts.push({ text: " · " });
-		parts.push({
-			text: tests ? tests + " pass" : "the check passed",
-			cls: "ok"
-		});
-		parts.push({ text: " after the last merge" });
-	} else if (c && c.state === "running") parts.push({ text: " · running the check on the merged branch" });
-	else if (c && c.state === "failed") parts.push({
-		text: " · the check failed on the merged branch",
-		cls: "bad"
-	});
-	return parts;
-}
-function modeChoices(run, leadName) {
-	const lead = run.lead || { title: "" };
-	const branch = lead.branch || "";
-	return [{
-		mode: "worktrees",
-		label: "In separate worktrees (merge back) — default",
-		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
-		blocked: ""
-	}, {
-		mode: "same_folder",
-		label: "In this folder (no merge)",
-		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
-		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
-	}];
-}
-function startedText(n, mode, leadName) {
-	const w = startWorkersLabel(n).replace(/^Start/, "Starting");
-	return mode === "same_folder" ? w + " in " + leadName + "'s folder — each fenced to its paths" : w + " — each fenced to its paths";
-}
-function planRows(pieces) {
-	return (pieces || []).map((p) => ({
-		title: String(p.title || ""),
-		prompt: String(p.prompt || ""),
-		paths: (p.paths || []).map(String),
-		pathsText: pathsText(p.paths)
-	}));
-}
-function startWorkersLabel(n) {
-	return "Start " + plural$5(n, "worker");
-}
-function parsePaths(text) {
-	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-}
-function editPlan(pieces, i, next) {
-	return pieces.map((p, j) => j === i ? {
-		title: next.title.trim(),
-		prompt: next.prompt.trim(),
-		paths: parsePaths(next.paths)
-	} : {
-		...p,
-		paths: [...p.paths]
-	});
-}
-function planProblems(body) {
-	const b = body || {};
-	const out = (b.problems || []).map((p) => (p.piece ? p.piece + ": " : "") + String(p.error || "")).filter(Boolean);
-	if (!out.length && b.error) out.push(String(b.error));
-	return out;
-}
-function releaseCard(run) {
-	const r = run.release || { state: "none" };
-	const base = r.base || "the base branch";
-	const branch = r.branch || run.lead?.branch || "";
-	const files = Number(r.files) || 0;
-	const stat = files ? plural$5(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
-	const fixes = Number(r.conflict_fixes) || 0;
-	const split = !!run.split;
-	return {
-		title: r.title || run.name,
-		into: base + " ← " + (branch || "its branch"),
-		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
-		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
-	};
-}
-function checkLine(run) {
-	const c = run.check;
-	const cmd = c?.command ? "`" + c.command + "`" : "the check";
-	switch (c?.state) {
-		case "none": return "no check configured — add a check_command to .mindflock.toml to run one";
-		case "ok": return cmd + " passed" + (c.tests ? " (" + c.tests + " tests)" : "");
-		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
-		case "running": return cmd + " is running on the merged branch…";
-		case "fixing": return cmd + " failed — the lead is fixing it";
-		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
-		default: return "";
-	}
-}
-function releaseChoices(lane, localOrigin) {
-	if (localOrigin) return [{
-		merge: false,
-		label: "Push to the local folder",
-		primary: true,
-		title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
-	}];
-	if (lane === "push") return [{
-		merge: false,
-		label: "Push the branch",
-		primary: true,
-		title: "Push the group's branch — no PR is opened"
-	}];
-	const pr = {
-		merge: false,
-		label: lane === "merge" ? "Open the PR only" : "Open the PR",
-		primary: lane !== "merge",
-		title: "Open the group's one PR — it is not merged"
-	};
-	const merge = {
-		merge: true,
-		label: lane === "merge" ? "Open the PR, merge when checks pass" : "Open it, merge when checks pass",
-		primary: lane === "merge",
-		title: "Open the group's one PR and merge it once its checks pass"
-	};
-	return lane === "merge" ? [merge, pr] : [pr, merge];
-}
-function laneNote(lane) {
-	const t = String(lane?.target || "");
-	if (!t) return "";
-	return "fast-track: " + (t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
-}
-function releaseOutcome(run) {
-	const r = run.release;
-	const lane = run.policy?.lane || "";
-	const local = r?.local_origin || "";
-	if (run.state === "releasing" || r?.state === "releasing") return {
-		text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
-		cls: "work",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "done" && r.pr_url) {
-		const m = r.pr_url.match(/\/pull\/(\d+)/);
-		return {
-			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
-			cls: "ok",
-			url: r.pr_url,
-			link: "Open the PR ↗"
-		};
-	}
-	if ((r?.state === "handoff" || r?.state === "done") && local) return {
-		text: "Pushed " + (r.branch || run.lead?.branch || "the branch") + " to " + local + " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" + (r.title ? " (copy its title and body below)" : ""),
-		cls: "idle",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "handoff") return {
-		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
-		cls: "idle",
-		url: r.compare_url || "",
-		link: r.compare_url ? "Open the compare page ↗" : ""
-	};
-	if (r?.state === "failed") return {
-		text: "The release stopped: " + (r.detail || "see the lead's pane"),
-		cls: "bad",
-		url: "",
-		link: ""
-	};
-	if (r?.state === "done") return {
-		text: lane === "push" ? "✓ pushed" : "✓ released",
-		cls: "ok",
-		url: "",
-		link: ""
-	};
-	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
-		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
-		cls: "ok",
-		url: "",
-		link: ""
-	};
-	return null;
-}
-function railExtraChips(check, rz, o) {
-	if (!o.integrated && !o.leadAsks) return {
-		check,
-		rz
-	};
-	const loud = (c) => !!c && /(interrupt|breach|warn)/.test(c.cls);
-	return {
-		check: loud(check) ? check : null,
-		rz: loud(rz) ? rz : null
-	};
-}
-function leadChip(run) {
-	if (!run) return null;
-	if (run.state === "release_ready") {
-		const lane = run.policy?.lane || "pr";
-		return {
-			label: lane === "push" ? "→ push?" : lane === "merge" ? "→ merge?" : "→ PR?",
-			title: "Everything merged back and checked — open its Thread to release the one PR"
-		};
-	}
-	if (run.state === "plan_ready") return {
-		label: "plan?",
-		title: "The lead proposed the pieces — open its Thread to approve them"
-	};
-	return null;
-}
-function leadLine(run) {
-	if (!run) return null;
-	const tasks = memberTasks(run);
-	const merged = tasks.filter((t) => t.state === "integrated").length;
-	const live = tasks.filter((t) => ![
-		"cancelled",
-		"skipped",
-		"failed"
-	].includes(t.state)).length;
-	switch (run.state) {
-		case "planning": return {
-			text: "proposing the pieces…",
-			cls: ""
-		};
-		case "plan_ready": return {
-			text: "plan ready — approve it",
-			cls: "needs"
-		};
-		case "checking": return run.check?.state === "failed" ? {
-			text: "the check failed",
-			cls: "bad"
-		} : {
-			text: "running the check",
-			cls: ""
-		};
-		case "releasing": return {
-			text: "opening the PR",
-			cls: ""
-		};
-		case "cancelled": return {
-			text: "cancelled",
-			cls: ""
-		};
-	}
-	if (run.release?.state === "done" && run.release.pr_url) {
-		const m = run.release.pr_url.match(/\/pull\/(\d+)/);
-		return {
-			text: "✓ " + (m ? "PR #" + m[1] : "PR"),
-			cls: "ok",
-			url: run.release.pr_url
-		};
-	}
-	if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done")) return {
-		text: "⇡ pushed to a local folder — no PR",
-		cls: ""
-	};
-	if (run.release?.state === "handoff") return {
-		text: "⇡ pushed — open the PR",
-		cls: "",
-		url: run.release.compare_url || void 0
-	};
-	if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict))) return {
-		text: "resolving a conflict",
-		cls: "needs"
-	};
-	if (!live) return null;
-	return {
-		text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
-		cls: merged === live ? "ok" : ""
-	};
-}
-//#endregion
-//#region src/components/outbox/outbox.ts
-function dedupe(list) {
-	const seen = /* @__PURE__ */ new Set();
-	const out = [];
-	for (const it of list || []) {
-		const k = it.key || it.title || "";
-		if (k && seen.has(k)) continue;
-		if (k) seen.add(k);
-		out.push(it);
-	}
-	return out;
-}
-function runOf(item, rowOf) {
-	if (item.run?.id) return item.run.id;
-	if (item.title) return rowOf(item.title)?.run?.id || "";
-	return "";
-}
-function viewFor(data, tab, rowOf) {
-	const g = data?.groups;
-	const keep = (it) => {
-		if (tab === "all") return true;
-		const r = runOf(it, rowOf);
-		return tab === "own" ? !r : r === tab;
-	};
-	return {
-		waiting: dedupe(g?.waiting).filter(keep),
-		shipping: dedupe(g?.shipping).filter(keep),
-		shipped: dedupe(g?.shipped).filter(keep),
-		queued: (g?.queued || []).filter((q) => tab === "all" || tab !== "own" && q.run?.id === tab),
-		summaries: (data?.summaries || []).filter((s) => tab === "all" || s.run === tab)
-	};
-}
-function viewCount(v) {
-	return v.waiting.length + v.shipping.length + v.shipped.length + v.queued.length;
-}
-function waitingCount(data) {
-	if (!data) return 0;
-	if (data.groups?.waiting) return dedupe(data.groups.waiting).length;
-	return Number(data.counts?.waiting) || 0;
-}
-function outboxTabs(data, rowOf, names = () => "") {
-	const tabs = [{
-		key: "all",
-		label: "All",
-		count: viewCount(viewFor(data, "all", rowOf))
-	}];
-	const g = data?.groups;
-	const order = [];
-	const label = /* @__PURE__ */ new Map();
-	const note = (id, name) => {
-		if (!id) return;
-		if (!label.has(id)) order.push(id);
-		if (name || !label.get(id)) label.set(id, name || label.get(id) || "");
-	};
-	const all = [
-		...g?.waiting || [],
-		...g?.shipping || [],
-		...g?.shipped || []
-	];
-	for (const it of all) note(runOf(it, rowOf), it.run?.name || (it.title ? rowOf(it.title)?.run?.name : "") || "");
-	for (const q of g?.queued || []) note(q.run?.id || "", q.run?.name);
-	for (const id of order) {
-		const count = viewCount(viewFor(data, id, rowOf));
-		if (count) tabs.push({
-			key: id,
-			label: label.get(id) || names(id) || "Group",
-			count
-		});
-	}
-	const own = viewCount(viewFor(data, "own", rowOf));
-	if (own && order.length) tabs.push({
-		key: "own",
-		label: "On their own",
-		count: own
-	});
-	return tabs;
-}
-function shipVerb(step) {
-	switch (String(step || "")) {
-		case "push": return "Push";
-		case "pr":
-		case "make_pr": return "Open the PR";
-		case "merge": return "Merge";
-		default: return "Commit";
-	}
-}
-var LADDER = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var STEP_WORD = {
-	commit: "commit",
-	push: "push",
-	pr: "PR",
-	merge: "merge"
-};
-function thenText(step, laneTarget) {
-	const s = String(step || "commit") === "make_pr" ? "pr" : String(step || "commit");
-	const lane = String(laneTarget || s);
-	const from = LADDER.indexOf(s);
-	const to = LADDER.indexOf(lane);
-	if (from < 0 || to <= from) return s === "commit" ? "stays local — its fast-track ends at commit" : "its fast-track ends at " + (STEP_WORD[s] || s);
-	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
-}
-function waitingChip(w) {
-	if (w.kind === "prompt") return {
-		text: w.reason || "its agent is asking",
-		cls: "warn"
-	};
-	if (w.kind === "plan") return {
-		text: w.reason || "the lead proposed the pieces — approve them",
-		cls: "warn"
-	};
-	if (w.kind === "release") return {
-		text: w.reason || "one PR is ready to open",
-		cls: ""
-	};
-	if (w.kind === "check_failed") return {
-		text: w.reason || "the check failed on the merged branch",
-		cls: "bad"
-	};
-	if (w.kind === "stray") return {
-		text: w.reason || "changes no piece owns in the lead's folder",
-		cls: "warn"
-	};
-	if (w.kind === "approve") return {
-		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
-		cls: ""
-	};
-	return {
-		text: w.reason || "needs you",
-		cls: "bad"
-	};
-}
-function approvalKey(w) {
-	return w.title + "@" + String(w.armed_at || w.since || "");
-}
-function messageHead(msg) {
-	const s = String(msg || "");
-	const i = s.indexOf("\n");
-	return i < 0 ? s : s.slice(0, i).trimEnd() + " …";
-}
-function statText(p) {
-	if (!p) return "";
-	const bits = [];
-	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
-	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
-	return bits.join(" ");
-}
-function shippedChip(s) {
-	const m = String(s.pr_url || "").match(/\/pull\/(\d+)/);
-	const pr = m ? "PR #" + m[1] : s.pr_url ? "PR" : "";
-	const state = String(s.pr_state || "").toLowerCase();
-	const checks = s.checks === "pass" || s.checks === "ok" ? "checks ✓" : s.checks === "fail" || s.checks === "failed" ? "checks ✗" : s.checks === "pending" ? "checks…" : "";
-	const parts = [pr + (state === "merged" ? " merged" : state === "closed" ? " closed" : ""), checks].filter(Boolean);
-	const bad = checks === "checks ✗" || state === "closed";
-	const noPr = s.lane === "commit" ? "committed" : s.lane === "push" ? "pushed" : "shipped";
-	return {
-		text: parts.join(" · ") || noPr,
-		cls: bad ? "bad" : "ok"
-	};
-}
-var LEAD_KINDS = /* @__PURE__ */ new Set([
-	"plan",
-	"release",
-	"check_failed",
-	"conflict",
-	"stray"
-]);
-function waitingActions(w, can) {
-	const a = new Set(w.actions || []);
-	const out = [];
-	const open = (title) => {
-		if (can.row && (a.has("open") || LEAD_KINDS.has(w.kind))) out.push({
-			key: "open",
-			label: LEAD_KINDS.has(w.kind) ? "Open the Thread ↗" : "Open ↗",
-			primary: false,
-			title
-		});
-	};
-	if (w.kind === "plan") {
-		const n = w.preview?.pieces?.length || 0;
-		if (a.has("approve") && can.run) out.push({
-			key: "approve",
-			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
-			primary: true,
-			title: "MindFlock starts one worker per piece, each fenced to its paths"
-		});
-		open("Read the plan in the lead's Thread tab — edit a piece there");
-		return out;
-	}
-	if (w.kind === "release") {
-		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin)) out.push({
-			key: c.merge ? "release_merge" : "release",
-			label: c.label,
-			primary: c.primary,
-			title: c.title
-		});
-		open("The lead's Thread has the PR's title, body and the merged diff");
-		return out;
-	}
-	if (w.kind === "lead_gone") {
-		if (a.has("cancel_group") && can.run) out.push({
-			key: "cancel_group",
-			label: "Cancel the group",
-			primary: true,
-			title: "Stop the group — its sessions and branches are kept"
-		});
-		return out;
-	}
-	if (w.kind === "check_failed") {
-		if (a.has("retry_check") && can.run) out.push({
-			key: "retry_check",
-			label: "Run the check again",
-			primary: true
-		});
-		open();
-		return out;
-	}
-	if (a.has("retry") && can.run && can.task) out.push({
-		key: "retry",
-		label: "Retry",
-		primary: true
-	});
-	if (a.has("retry_fresh") && can.run && can.task) out.push({
-		key: "retry_fresh",
-		label: "Retry fresh",
-		primary: false,
-		title: "Start it again on a new branch; the old one is kept"
-	});
-	if (can.row) out.push({
-		key: "open",
-		label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗",
-		primary: false
-	});
-	if (a.has("skip") && can.run && can.task) out.push({
-		key: "skip",
-		label: "Skip",
-		primary: false,
-		title: "Take it out of the group — its session and branch stay"
-	});
-	return out;
 }
 //#endregion
 //#region src/lib/playbooks.ts
@@ -31402,9 +30785,1064 @@ function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, r
 	});
 }
 //#endregion
+//#region src/lib/splitRun.ts
+function firstLine(text, max = 120) {
+	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function testsLabel(tests) {
+	if (typeof tests === "number") return tests > 0 ? tests + (tests === 1 ? " test" : " tests") : "";
+	const s = String(tests || "");
+	const m = s.match(/(\d+)\s+(?:tests?\s+)?passed/i) || s.match(/(\d+)\s+tests?\b/i);
+	if (!m) return "";
+	const n = Number(m[1]);
+	return n + (n === 1 ? " test" : " tests");
+}
+function memberTasks(run) {
+	return (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
+}
+function pieceLabel(t, run) {
+	const pieces = run.plan?.pieces || [];
+	const ix = (run.tasks || []).filter((x) => x.kind === "piece").indexOf(t);
+	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
+	if (p) return {
+		name: p.title,
+		what: firstLine(p.prompt, 90)
+	};
+	const what = firstLine(t.text, 90);
+	return {
+		name: t.title || what || t.id,
+		what: t.title && what !== t.title ? what : ""
+	};
+}
+function pathsText(paths) {
+	return (paths || []).filter(Boolean).join(", ");
+}
+function isSameFolder(run) {
+	return run?.mode === "same_folder";
+}
+function pieceStatus(t, leadName, mode) {
+	const tests = testsLabel(t.tests);
+	const files = (t.conflict?.files || []).join(", ");
+	if (mode === "same_folder") {
+		if (t.state === "integrated") return {
+			word: "committed ✓",
+			cls: "ok",
+			detail: tests
+		};
+		if (t.state === "integrating") return {
+			word: "committing…",
+			cls: "work",
+			detail: ""
+		};
+	}
+	switch (t.state) {
+		case "integrated": return {
+			word: "merged back ✓",
+			cls: "ok",
+			detail: tests
+		};
+		case "integrating":
+			if (t.reason === "conflict" || t.conflict) return {
+				word: "conflict",
+				cls: "needs",
+				detail: leadName + " is resolving" + (files ? " " + files : " it")
+			};
+			return {
+				word: "merging…",
+				cls: "work",
+				detail: ""
+			};
+		case "needs_you": return {
+			word: t.reason === "conflict" ? "conflict — needs you" : "needs you",
+			cls: "needs",
+			detail: t.detail || ""
+		};
+		case "failed": return {
+			word: "failed",
+			cls: "bad",
+			detail: t.detail || ""
+		};
+		case "shipping": return {
+			word: "committing",
+			cls: "work",
+			detail: ""
+		};
+		case "working": return {
+			word: "working",
+			cls: "work",
+			detail: ""
+		};
+		case "starting": return {
+			word: "starting",
+			cls: "idle",
+			detail: ""
+		};
+		case "queued": return {
+			word: "queued",
+			cls: "idle",
+			detail: ""
+		};
+		case "skipped":
+		case "cancelled": return {
+			word: "left out",
+			cls: "idle",
+			detail: t.detail || ""
+		};
+		case "shipped": return {
+			word: "done",
+			cls: "ok",
+			detail: tests
+		};
+		default: return {
+			word: t.state || "—",
+			cls: "idle",
+			detail: ""
+		};
+	}
+}
+function plural$5(n, one, many = one + "s") {
+	return n + " " + (n === 1 ? one : many);
+}
+function leadSubline(run, leadName) {
+	const split = !!run.split;
+	const tasks = memberTasks(run);
+	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
+	const branch = run.lead?.branch || run.release?.branch || "";
+	if (run.state === "planning") return [{ text: "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
+	if (run.state === "plan_ready") return [
+		{ text: leadName + " proposed " },
+		{
+			text: plural$5(n, "piece") + " with separate paths",
+			b: true
+		},
+		{ text: " — approve them and MindFlock starts the workers." }
+	];
+	const parts = split ? [{ text: "Split into " }, {
+		text: plural$5(n, "piece") + " with separate paths",
+		b: true
+	}] : [{
+		text: plural$5(n, "line") + ", one PR",
+		b: true
+	}];
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	if (isSameFolder(run)) {
+		parts.push({ text: " in " + leadName + "'s folder · " });
+		if (merged) {
+			parts.push({
+				text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
+				cls: "ok"
+			});
+			parts.push({ text: " on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+		} else {
+			parts.push({ text: "each piece is committed on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+			parts.push({ text: " as it finishes" });
+		}
+	} else if (merged) {
+		parts.push({ text: " · " });
+		parts.push({
+			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
+			cls: "ok"
+		});
+		if (branch) {
+			parts.push({ text: " into " });
+			parts.push({
+				text: branch,
+				b: true
+			});
+		}
+	} else if (live) {
+		parts.push({ text: " · merging back into " });
+		parts.push({
+			text: branch || "the lead's branch",
+			b: true
+		});
+		parts.push({ text: " as each finishes" });
+	}
+	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
+	if (conflicts) parts.push({
+		text: " · " + plural$5(conflicts, "conflict") + " with " + leadName,
+		cls: "needs"
+	});
+	const c = run.check;
+	if (c && c.state === "ok") {
+		const tests = testsLabel(c.tests ?? null);
+		parts.push({ text: " · " });
+		parts.push({
+			text: tests ? tests + " pass" : "the check passed",
+			cls: "ok"
+		});
+		parts.push({ text: " after the last merge" });
+	} else if (c && c.state === "running") parts.push({ text: " · running the check on the merged branch" });
+	else if (c && c.state === "failed") parts.push({
+		text: " · the check failed on the merged branch",
+		cls: "bad"
+	});
+	return parts;
+}
+function modeChoices(run, leadName) {
+	const lead = run.lead || { title: "" };
+	const branch = lead.branch || "";
+	return [{
+		mode: "worktrees",
+		label: "In separate worktrees (merge back) — default",
+		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
+		blocked: ""
+	}, {
+		mode: "same_folder",
+		label: "In this folder (no merge)",
+		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
+		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
+	}];
+}
+function startedText(n, mode, leadName) {
+	const w = startWorkersLabel(n).replace(/^Start/, "Starting");
+	return mode === "same_folder" ? w + " in " + leadName + "'s folder — each fenced to its paths" : w + " — each fenced to its paths";
+}
+function planRows(pieces) {
+	return (pieces || []).map((p) => ({
+		title: String(p.title || ""),
+		prompt: String(p.prompt || ""),
+		paths: (p.paths || []).map(String),
+		pathsText: pathsText(p.paths)
+	}));
+}
+function startWorkersLabel(n) {
+	return "Start " + plural$5(n, "worker");
+}
+function parsePaths(text) {
+	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+function editPlan(pieces, i, next) {
+	return pieces.map((p, j) => j === i ? {
+		title: next.title.trim(),
+		prompt: next.prompt.trim(),
+		paths: parsePaths(next.paths)
+	} : {
+		...p,
+		paths: [...p.paths]
+	});
+}
+function planProblems(body) {
+	const b = body || {};
+	const out = (b.problems || []).map((p) => (p.piece ? p.piece + ": " : "") + String(p.error || "")).filter(Boolean);
+	if (!out.length && b.error) out.push(String(b.error));
+	return out;
+}
+function releaseCard(run) {
+	const r = run.release || { state: "none" };
+	const base = r.base || "the base branch";
+	const branch = r.branch || run.lead?.branch || "";
+	const files = Number(r.files) || 0;
+	const stat = files ? plural$5(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const fixes = Number(r.conflict_fixes) || 0;
+	const split = !!run.split;
+	return {
+		title: r.title || run.name,
+		into: base + " ← " + (branch || "its branch"),
+		stat,
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
+	};
+}
+function checkLine(run) {
+	const c = run.check;
+	const cmd = c?.command ? "`" + c.command + "`" : "the check";
+	switch (c?.state) {
+		case "none": return "no check configured — add a check_command to .mindflock.toml to run one";
+		case "ok": return cmd + " passed" + (c.tests ? " (" + c.tests + " tests)" : "");
+		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
+		case "running": return cmd + " is running on the merged branch…";
+		case "fixing": return cmd + " failed — the lead is fixing it";
+		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
+		default: return "";
+	}
+}
+function releaseChoices(lane, localOrigin) {
+	if (localOrigin) return [{
+		merge: false,
+		label: "Push to the local folder",
+		primary: true,
+		title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
+	}];
+	if (lane === "push") return [{
+		merge: false,
+		label: "Push the branch",
+		primary: true,
+		title: "Push the group's branch — no PR is opened"
+	}];
+	const pr = {
+		merge: false,
+		label: lane === "merge" ? "Open the PR only" : "Open the PR",
+		primary: lane !== "merge",
+		title: "Open the group's one PR — it is not merged"
+	};
+	const merge = {
+		merge: true,
+		label: lane === "merge" ? "Open the PR, merge when checks pass" : "Open it, merge when checks pass",
+		primary: lane === "merge",
+		title: "Open the group's one PR and merge it once its checks pass"
+	};
+	return lane === "merge" ? [merge, pr] : [pr, merge];
+}
+function laneNote(lane) {
+	const t = String(lane?.target || "");
+	if (!t) return "";
+	return "fast-track: " + (t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
+}
+function releaseOutcome(run) {
+	const r = run.release;
+	const lane = run.policy?.lane || "";
+	const local = r?.local_origin || "";
+	if (run.state === "releasing" || r?.state === "releasing") return {
+		text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
+		cls: "work",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done" && r.pr_url) {
+		const m = r.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
+			cls: "ok",
+			url: r.pr_url,
+			link: "Open the PR ↗"
+		};
+	}
+	if ((r?.state === "handoff" || r?.state === "done") && local) return {
+		text: "Pushed " + (r.branch || run.lead?.branch || "the branch") + " to " + local + " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" + (r.title ? " (copy its title and body below)" : ""),
+		cls: "idle",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "handoff") return {
+		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
+		cls: "idle",
+		url: r.compare_url || "",
+		link: r.compare_url ? "Open the compare page ↗" : ""
+	};
+	if (r?.state === "failed") return {
+		text: "The release stopped: " + (r.detail || "see the lead's pane"),
+		cls: "bad",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done") return {
+		text: lane === "push" ? "✓ pushed" : "✓ released",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
+		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	return null;
+}
+function railExtraChips(check, rz, o) {
+	if (!o.integrated && !o.leadAsks) return {
+		check,
+		rz
+	};
+	const loud = (c) => !!c && /(interrupt|breach|warn)/.test(c.cls);
+	return {
+		check: loud(check) ? check : null,
+		rz: loud(rz) ? rz : null
+	};
+}
+function leadChip(run) {
+	if (!run) return null;
+	if (run.state === "release_ready") {
+		const lane = run.policy?.lane || "pr";
+		return {
+			label: lane === "push" ? "→ push?" : lane === "merge" ? "→ merge?" : "→ PR?",
+			title: "Everything merged back and checked — open its Thread to release the one PR"
+		};
+	}
+	if (run.state === "plan_ready") return {
+		label: "plan?",
+		title: "The lead proposed the pieces — open its Thread to approve them"
+	};
+	return null;
+}
+function leadLine(run) {
+	if (!run) return null;
+	const tasks = memberTasks(run);
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	switch (run.state) {
+		case "planning": return {
+			text: "proposing the pieces…",
+			cls: ""
+		};
+		case "plan_ready": return {
+			text: "plan ready — approve it",
+			cls: "needs"
+		};
+		case "checking": return run.check?.state === "failed" ? {
+			text: "the check failed",
+			cls: "bad"
+		} : {
+			text: "running the check",
+			cls: ""
+		};
+		case "releasing": return {
+			text: "opening the PR",
+			cls: ""
+		};
+		case "cancelled": return {
+			text: "cancelled",
+			cls: ""
+		};
+	}
+	if (run.release?.state === "done" && run.release.pr_url) {
+		const m = run.release.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR"),
+			cls: "ok",
+			url: run.release.pr_url
+		};
+	}
+	if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done")) return {
+		text: "⇡ pushed to a local folder — no PR",
+		cls: ""
+	};
+	if (run.release?.state === "handoff") return {
+		text: "⇡ pushed — open the PR",
+		cls: "",
+		url: run.release.compare_url || void 0
+	};
+	if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict))) return {
+		text: "resolving a conflict",
+		cls: "needs"
+	};
+	if (!live) return null;
+	return {
+		text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
+		cls: merged === live ? "ok" : ""
+	};
+}
+//#endregion
+//#region src/components/outbox/outbox.ts
+function dedupe(list) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const it of list || []) {
+		const k = it.key || it.title || "";
+		if (k && seen.has(k)) continue;
+		if (k) seen.add(k);
+		out.push(it);
+	}
+	return out;
+}
+function runOf(item, rowOf) {
+	if (item.run?.id) return item.run.id;
+	if (item.title) return rowOf(item.title)?.run?.id || "";
+	return "";
+}
+function viewFor(data, tab, rowOf) {
+	const g = data?.groups;
+	const keep = (it) => {
+		if (tab === "all") return true;
+		const r = runOf(it, rowOf);
+		return tab === "own" ? !r : r === tab;
+	};
+	return {
+		waiting: dedupe(g?.waiting).filter(keep),
+		shipping: dedupe(g?.shipping).filter(keep),
+		shipped: dedupe(g?.shipped).filter(keep),
+		queued: (g?.queued || []).filter((q) => tab === "all" || tab !== "own" && q.run?.id === tab),
+		summaries: (data?.summaries || []).filter((s) => tab === "all" || s.run === tab)
+	};
+}
+function viewCount(v) {
+	return v.shipping.length + v.shipped.length + v.queued.length;
+}
+function outboxTabs(data, rowOf, names = () => "") {
+	const tabs = [{
+		key: "all",
+		label: "All",
+		count: viewCount(viewFor(data, "all", rowOf))
+	}];
+	const g = data?.groups;
+	const order = [];
+	const label = /* @__PURE__ */ new Map();
+	const note = (id, name) => {
+		if (!id) return;
+		if (!label.has(id)) order.push(id);
+		if (name || !label.get(id)) label.set(id, name || label.get(id) || "");
+	};
+	const all = [...g?.shipping || [], ...g?.shipped || []];
+	for (const it of all) note(runOf(it, rowOf), it.run?.name || (it.title ? rowOf(it.title)?.run?.name : "") || "");
+	for (const q of g?.queued || []) note(q.run?.id || "", q.run?.name);
+	for (const id of order) {
+		const count = viewCount(viewFor(data, id, rowOf));
+		if (count) tabs.push({
+			key: id,
+			label: label.get(id) || names(id) || "Group",
+			count
+		});
+	}
+	const own = viewCount(viewFor(data, "own", rowOf));
+	if (own && order.length) tabs.push({
+		key: "own",
+		label: "On their own",
+		count: own
+	});
+	return tabs;
+}
+function shipVerb(step) {
+	switch (String(step || "")) {
+		case "push": return "Push";
+		case "pr":
+		case "make_pr": return "Open the PR";
+		case "merge": return "Merge";
+		default: return "Commit";
+	}
+}
+var LADDER = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var STEP_WORD = {
+	commit: "commit",
+	push: "push",
+	pr: "PR",
+	merge: "merge"
+};
+function thenText(step, laneTarget) {
+	const s = String(step || "commit") === "make_pr" ? "pr" : String(step || "commit");
+	const lane = String(laneTarget || s);
+	const from = LADDER.indexOf(s);
+	const to = LADDER.indexOf(lane);
+	if (from < 0 || to <= from) return s === "commit" ? "stays local — its fast-track ends at commit" : "its fast-track ends at " + (STEP_WORD[s] || s);
+	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
+}
+function waitingChip(w) {
+	if (w.kind === "prompt") return {
+		text: w.reason || "its agent is asking",
+		cls: "warn"
+	};
+	if (w.kind === "plan") return {
+		text: w.reason || "the lead proposed the pieces — approve them",
+		cls: "warn"
+	};
+	if (w.kind === "release") return {
+		text: w.reason || "one PR is ready to open",
+		cls: ""
+	};
+	if (w.kind === "check_failed") return {
+		text: w.reason || "the check failed on the merged branch",
+		cls: "bad"
+	};
+	if (w.kind === "stray") return {
+		text: w.reason || "changes no piece owns in the lead's folder",
+		cls: "warn"
+	};
+	if (w.kind === "approve") return {
+		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
+		cls: ""
+	};
+	return {
+		text: w.reason || "needs you",
+		cls: "bad"
+	};
+}
+function approvalKey(w) {
+	return w.title + "@" + String(w.armed_at || w.since || "");
+}
+function messageHead(msg) {
+	const s = String(msg || "");
+	const i = s.indexOf("\n");
+	return i < 0 ? s : s.slice(0, i).trimEnd() + " …";
+}
+function statText(p) {
+	if (!p) return "";
+	const bits = [];
+	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
+	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
+	return bits.join(" ");
+}
+function shippedChip(s) {
+	const m = String(s.pr_url || "").match(/\/pull\/(\d+)/);
+	const pr = m ? "PR #" + m[1] : s.pr_url ? "PR" : "";
+	const state = String(s.pr_state || "").toLowerCase();
+	const checks = s.checks === "pass" || s.checks === "ok" ? "checks ✓" : s.checks === "fail" || s.checks === "failed" ? "checks ✗" : s.checks === "pending" ? "checks…" : "";
+	const parts = [pr + (state === "merged" ? " merged" : state === "closed" ? " closed" : ""), checks].filter(Boolean);
+	const bad = checks === "checks ✗" || state === "closed";
+	const noPr = s.lane === "commit" ? "committed" : s.lane === "push" ? "pushed" : "shipped";
+	return {
+		text: parts.join(" · ") || noPr,
+		cls: bad ? "bad" : "ok"
+	};
+}
+var LEAD_KINDS = /* @__PURE__ */ new Set([
+	"plan",
+	"release",
+	"check_failed",
+	"conflict",
+	"stray"
+]);
+function waitingActions(w, can) {
+	const a = new Set(w.actions || []);
+	const out = [];
+	const open = (title) => {
+		if (can.row && (a.has("open") || LEAD_KINDS.has(w.kind))) out.push({
+			key: "open",
+			label: LEAD_KINDS.has(w.kind) ? "Open the Thread ↗" : "Open ↗",
+			primary: false,
+			title
+		});
+	};
+	if (w.kind === "plan") {
+		const n = w.preview?.pieces?.length || 0;
+		if (a.has("approve") && can.run) out.push({
+			key: "approve",
+			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
+			primary: true,
+			title: "MindFlock starts one worker per piece, each fenced to its paths"
+		});
+		open("Read the plan in the lead's Thread tab — edit a piece there");
+		return out;
+	}
+	if (w.kind === "release") {
+		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin)) out.push({
+			key: c.merge ? "release_merge" : "release",
+			label: c.label,
+			primary: c.primary,
+			title: c.title
+		});
+		open("The lead's Thread has the PR's title, body and the merged diff");
+		return out;
+	}
+	if (w.kind === "lead_gone") {
+		if (a.has("cancel_group") && can.run) out.push({
+			key: "cancel_group",
+			label: "Cancel the group",
+			primary: true,
+			title: "Stop the group — its sessions and branches are kept"
+		});
+		return out;
+	}
+	if (w.kind === "check_failed") {
+		if (a.has("retry_check") && can.run) out.push({
+			key: "retry_check",
+			label: "Run the check again",
+			primary: true
+		});
+		open();
+		return out;
+	}
+	if (a.has("retry") && can.run && can.task) out.push({
+		key: "retry",
+		label: "Retry",
+		primary: true
+	});
+	if (a.has("retry_fresh") && can.run && can.task) out.push({
+		key: "retry_fresh",
+		label: "Retry fresh",
+		primary: false,
+		title: "Start it again on a new branch; the old one is kept"
+	});
+	if (can.row) out.push({
+		key: "open",
+		label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗",
+		primary: false
+	});
+	if (a.has("skip") && can.run && can.task) out.push({
+		key: "skip",
+		label: "Skip",
+		primary: false,
+		title: "Take it out of the group — its session and branch stay"
+	});
+	return out;
+}
+function needsAttention(attn, waiting) {
+	const rows = /* @__PURE__ */ new Map();
+	for (const a of attn) if (!rows.has(a.title)) rows.set(a.title, {
+		key: a.title,
+		title: a.title,
+		rank: a.p === 0 ? 0 : a.p + 1,
+		attn: a
+	});
+	for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
+		if (w.title) {
+			const had = rows.get(w.title);
+			if (had && (had.rank === 0 || had.waiting)) continue;
+			rows.set(w.title, {
+				key: w.title,
+				title: w.title,
+				rank: 1,
+				waiting: w
+			});
+			continue;
+		}
+		const key = w.key || "run:" + (w.run?.id || "") + (w.run?.task ? ":" + w.run.task : "");
+		if (rows.has(key)) continue;
+		rows.set(key, {
+			key,
+			title: "",
+			rank: 1,
+			waiting: w
+		});
+	}
+	return [...rows.values()].sort((a, b) => a.rank - b.rank);
+}
+//#endregion
+//#region src/components/outbox/WaitingRow.tsx
+function openSession(title, tab) {
+	selectSession(title);
+	if (tab) useUi.getState().setLastTab(title, tab);
+	useUi.getState().closeDialog();
+	document.dispatchEvent(new CustomEvent("mf-close-bell"));
+}
+function RowMain({ title, text, shown, row }) {
+	const about = text || row?.last_prompt || "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-main",
+		children: [row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "pr-open-ref ob-ref",
+			title: "Open " + title,
+			onClick: () => openSession(title),
+			children: shown(title)
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pr-open-ref ob-ref",
+			children: shown(title)
+		}), about && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pr-open-title",
+			children: about
+		})]
+	});
+}
+function doWaitAction(key, w, runId, taskId) {
+	switch (key) {
+		case "retry": return runAction("Retry", taskPath(runId, taskId, "retry"), { fresh: false }, "Retrying " + w.title);
+		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
+		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
+		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
+		case "release": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the group");
+		case "release_merge": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
+		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
+		case "cancel_group": return cancelRun(runId, w.run?.name || "");
+		default: return Promise.resolve(false);
+	}
+}
+function WaitingRow({ w, row, shown, group, runInfo }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const chip = waitingChip(w);
+	const runId = w.run?.id || row?.run?.id || "";
+	const taskId = w.run?.task || row?.run?.task || "";
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const escalation = w.kind !== "prompt" && w.kind !== "approve";
+	if (w.kind === "budget") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetRow, {
+		w,
+		runInfo
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind),
+		"data-outbox-row": w.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: w.title,
+				text: w.text,
+				shown,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip" + (chip.cls ? " " + chip.cls : ""),
+						children: escalation ? escalationText(chip.text) : chip.text
+					}),
+					w.kind === "approve" && statText(w.preview) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: statText(w.preview) }),
+					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: w.kind === "approve" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApproveButtons, {
+					w,
+					busy,
+					setBusy,
+					hasRow: !!row
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-acts",
+					children: waitingActions(w, {
+						row: !!row,
+						run: !!runId,
+						task: !!taskId
+					}).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: a.primary ? "btn-primary pr-review-btn" : "test-btn",
+						disabled: busy && a.key !== "open",
+						title: a.title,
+						onClick: () => {
+							if (a.key === "open") {
+								const lead = w.kind === "conflict" ? row?.parent || w.title : w.title;
+								openSession(LEAD_KINDS.has(w.kind) ? lead : w.title, LEAD_KINDS.has(w.kind) ? "thread" : void 0);
+								return;
+							}
+							run(() => doWaitAction(a.key, w, runId, taskId));
+						},
+						children: a.label
+					}, a.key))
+				})
+			}),
+			w.kind === "prompt" && row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+					title: w.title,
+					activity: effectiveActivity(row),
+					variant: "thread",
+					onOpen: () => openSession(w.title)
+				})
+			}),
+			w.kind === "approve" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApprovePreview, {
+					w,
+					row
+				})
+			}),
+			w.kind === "plan" && (w.preview?.pieces?.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-card ob-plan",
+					children: w.preview.pieces.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ob-plan-piece",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.title }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ob-only",
+							children: ["only here: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: (p.paths || []).join(", ") || "—" })]
+						})]
+					}, i))
+				})
+			}),
+			w.kind === "release" && w.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-card",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ob-kv",
+						children: [
+							w.preview.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-k",
+								children: "PR title"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-pr-title",
+								children: w.preview.pr_title
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-k",
+								children: "Into"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "ob-mono",
+								children: [(w.preview.base || "base") + " ← " + (w.preview.branch || w.title), statText(w.preview) ? " · " + statText(w.preview) : ""]
+							})
+						]
+					})
+				})
+			})
+		]
+	});
+}
+function BudgetRow({ w, runInfo }) {
+	const runId = w.run?.id || "";
+	const name = w.run?.name || runInfo?.name || "The group";
+	const budget = Number(runInfo?.budget_usd) || 0;
+	const spent = Number(runInfo?.cost_usd) || 0;
+	const [usd, setUsd] = (0, import_react.useState)(() => String(suggestedBudget(budget, spent)));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const amount = Number(usd);
+	const valid = Number.isFinite(amount) && amount > spent;
+	const go = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-escalation ob-budget",
+		"data-outbox-row": "budget:" + runId,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-ref ob-ref",
+					children: name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "pr-open-title",
+					children: [w.reason || "the group's budget is used up", budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-chip bad",
+					children: "paused — budget"
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [(w.actions || []).includes("raise_budget") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ob-usd",
+					children: ["$", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "number",
+						min: 0,
+						step: "any",
+						"aria-label": "New budget in dollars",
+						value: usd,
+						disabled: busy,
+						onChange: (e) => setUsd(e.target.value),
+						onKeyDown: (e) => {
+							if (e.key === "Enter" && valid) go(() => raiseBudget(runId, amount, name));
+						}
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn",
+					disabled: busy || !valid,
+					title: valid ? "Raise the budget and resume the group" : "More than it has spent ($" + spent.toFixed(2) + ")",
+					onClick: () => go(() => raiseBudget(runId, amount, name)),
+					children: ["Raise to $", valid ? amount : "…"]
+				})] }), (w.actions || []).includes("stop") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					title: "Cancel the group — nothing new starts or ships; sessions and branches stay",
+					onClick: () => go(() => cancelRun(runId, name)),
+					children: "Stop"
+				})]
+			})
+		]
+	});
+}
+var editedMessage = /* @__PURE__ */ new Map();
+function ApproveButtons({ w, busy, setBusy, hasRow }) {
+	const verb = shipVerb(w.step);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [hasRow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		title: "Open its Diff tab",
+		onClick: () => openSession(w.title, "diff"),
+		children: "Diff"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "btn-primary pr-review-btn ob-ship",
+		disabled: busy,
+		title: verb + " now, with the message and title shown below",
+		onClick: async () => {
+			setBusy(true);
+			const msg = editedMessage.get(approvalKey(w));
+			try {
+				await instApi(w.title, "/ship-now", { json: msg ? { commit_message: msg } : {} });
+				toast(verb + ": " + w.title);
+				editedMessage.delete(approvalKey(w));
+			} catch (err) {
+				errorPop(verb + " failed — " + w.title, errMsg(err));
+			} finally {
+				setBusy(false);
+				refreshRuns();
+				refreshInstances();
+			}
+		},
+		children: verb
+	})] });
+}
+function ApprovePreview({ w, row }) {
+	const p = w.preview || null;
+	const [editing, setEditing] = (0, import_react.useState)(false);
+	const editKey = approvalKey(w);
+	const [msg, setMsg] = (0, import_react.useState)(() => editedMessage.get(editKey) ?? p?.commit_message ?? "");
+	const lane = w.lane || (row ? laneOf(row)?.target : "") || "";
+	const canEdit = (w.actions || []).includes("edit_message") && (w.step || "commit") === "commit";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ob-card",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ob-kv",
+			children: [
+				(p?.commit_message || msg || canEdit) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Message" }), editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "ob-msg-edit",
+					value: msg,
+					autoFocus: true,
+					rows: Math.min(8, Math.max(2, msg.split("\n").length)),
+					spellCheck: false,
+					"aria-label": "Commit message",
+					title: "Enter for a new line; Ctrl+Enter (or click away) to keep it; Escape to undo",
+					onChange: (e) => setMsg(e.target.value),
+					onBlur: () => {
+						setEditing(false);
+						if (msg.trim() && msg !== p?.commit_message) editedMessage.set(editKey, msg.trim());
+						else editedMessage.delete(editKey);
+					},
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) e.target.blur();
+						if (e.key === "Escape") {
+							e.stopPropagation();
+							setMsg(p?.commit_message || "");
+							editedMessage.delete(editKey);
+							setEditing(false);
+						}
+					}
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ob-mono",
+					children: [messageHead(msg) || /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "written from the diff when it commits"
+					}), canEdit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike ob-edit",
+						onClick: () => setEditing(true),
+						children: "edit"
+					})]
+				})] }),
+				p?.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "PR title" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ob-pr-title",
+					children: p.pr_title
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Then" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: thenText(w.step, lane) })
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
+var NEEDS_SHOWN = 6;
 function BellGlyph({ size = 15 }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		viewBox: "0 0 24 24",
@@ -31415,6 +31853,14 @@ function BellGlyph({ size = 15 }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 2.2a1.3 1.3 0 0 1 1.3 1.3v.6a6 6 0 0 1 4.7 5.9v3.3l1.5 2.6a1 1 0 0 1-.9 1.5H5.4a1 1 0 0 1-.9-1.5L6 13.3V10a6 6 0 0 1 4.7-5.9v-.6A1.3 1.3 0 0 1 12 2.2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9.6 19.2h4.8a2.4 2.4 0 0 1-4.8 0z" })]
 	});
 }
+var STAGE_WORDS = {
+	committed: "committed",
+	pushed: "pushed",
+	pr: "opened a PR",
+	merged: "merged",
+	interrupt: "pre-commit failed",
+	precommit: "running pre-commit hooks"
+};
 function notifFromEvent(env) {
 	const d = env.data || {};
 	switch (env.event) {
@@ -31448,7 +31894,7 @@ function notifFromEvent(env) {
 			};
 		}
 		case "session.stage_changed": return {
-			text: "stage → " + (env.new || ""),
+			text: STAGE_WORDS[String(env.new || "")] || String(env.new || ""),
 			cls: "n-info"
 		};
 		case "session.budget_exceeded": return {
@@ -31456,7 +31902,7 @@ function notifFromEvent(env) {
 			cls: "n-warn"
 		};
 		case "session.prompt_sent": return {
-			text: "auto-sent a queued prompt (" + (Number(d.remaining) || 0) + " left)",
+			text: "sent the next queued prompt (" + (Number(d.remaining) || 0) + " left)",
 			cls: "n-info"
 		};
 		case "session.setup_finished": return env.new === "ok" ? {
@@ -31489,17 +31935,14 @@ function notifFromEvent(env) {
 		default: return null;
 	}
 }
-function notifApi$1() {
-	return window.mindflockAddons?.notify || null;
-}
-function notifState$1() {
-	const api = notifApi$1();
-	return api && typeof api.state === "function" ? api.state() : "unsupported";
-}
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
+	const { data: outbox } = useOutbox();
+	const { data: runs } = useRuns();
 	const [notifs, setNotifs] = (0, import_react.useState)([]);
 	const [open, setOpen] = (0, import_react.useState)(false);
+	const [showAll, setShowAll] = (0, import_react.useState)(false);
+	const [flash, setFlash] = (0, import_react.useState)(null);
 	const [seenTs, setSeenTs] = (0, import_react.useState)(() => {
 		try {
 			return parseFloat(localStorage.getItem(NOTIF_SEEN_KEY) || "0") || 0;
@@ -31507,9 +31950,9 @@ function NotificationsBell() {
 			return 0;
 		}
 	});
-	const [toggleState, setToggleState] = (0, import_react.useState)(notifState$1());
 	const btnRef = (0, import_react.useRef)(null);
 	const popRef = (0, import_react.useRef)(null);
+	const openedAt = (0, import_react.useRef)(0);
 	useNotifyConfig();
 	(0, import_react.useEffect)(() => {
 		const bus = window.mindflock?.events;
@@ -31533,19 +31976,15 @@ function NotificationsBell() {
 		});
 	}, []);
 	(0, import_react.useEffect)(() => {
-		const on = () => setToggleState(notifState$1());
-		document.addEventListener("mf-notify-state", on);
-		return () => document.removeEventListener("mf-notify-state", on);
-	}, []);
-	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const onClick = (e) => {
-			const t = e.target;
-			if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+			if (e.timeStamp <= openedAt.current) return;
+			const path = e.composedPath();
+			if (popRef.current && path.includes(popRef.current) || btnRef.current && path.includes(btnRef.current)) return;
 			setOpen(false);
 		};
 		const onKey = (e) => {
-			if (e.key === "Escape") setOpen(false);
+			if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
 		};
 		document.addEventListener("click", onClick);
 		document.addEventListener("keydown", onKey);
@@ -31554,27 +31993,62 @@ function NotificationsBell() {
 			document.removeEventListener("keydown", onKey);
 		};
 	}, [open]);
-	const attn = attentionItems(instances);
-	const families = childrenByParent(instances);
+	const families = (0, import_react.useMemo)(() => childrenByParent(instances), [instances]);
+	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
+	const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
 	const familyOf = (title) => {
-		const inst = instances.find((x) => x.title === title);
+		const inst = byTitle.get(title);
 		if (!inst || inst.device) return null;
 		const parent = inst.parent && families.get(inst.parent)?.includes(inst) ? inst.parent : "";
 		return inFamily(inst, !!parent, families.get(title)?.length ?? 0) ? { parent } : null;
 	};
 	const unread = notifs.filter((n) => n.ts > seenTs).length;
-	const aliases = useUi((s) => s.aliases);
+	useUi((s) => s.aliases);
 	const openPanel = () => {
 		const newest = notifs.reduce((m, n) => Math.max(m, n.ts), seenTs);
 		setSeenTs(newest);
 		try {
 			localStorage.setItem(NOTIF_SEEN_KEY, String(newest));
 		} catch {}
-		setToggleState(notifState$1());
+		openedAt.current = performance.now();
 		setOpen(true);
 	};
+	const openRef = (0, import_react.useRef)(openPanel);
+	openRef.current = openPanel;
+	const attnRef = (0, import_react.useRef)(attn);
+	attnRef.current = attn;
+	(0, import_react.useEffect)(() => {
+		const onOpen = (e) => {
+			const title = String(e.detail?.title || "");
+			openRef.current();
+			if (!title) return;
+			const runId = title.startsWith("run:") ? title.slice(4) : "";
+			const rows = attnRef.current;
+			const ofRun = (r) => !r.title && !!runId && r.waiting?.run?.id === runId;
+			let at = rows.findIndex((r) => r.title === title || r.key === title);
+			if (at < 0) at = rows.findIndex(ofRun);
+			if (at >= NEEDS_SHOWN) setShowAll(true);
+			setFlash(at >= 0 ? attnRef.current[at].key : title);
+		};
+		const onClose = () => setOpen(false);
+		document.addEventListener("mf-open-bell", onOpen);
+		document.addEventListener("mf-close-bell", onClose);
+		return () => {
+			document.removeEventListener("mf-open-bell", onOpen);
+			document.removeEventListener("mf-close-bell", onClose);
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!open || !flash) return;
+		(popRef.current?.querySelector("[data-needs=\"" + CSS.escape(flash) + "\"]"))?.scrollIntoView({ block: "nearest" });
+		const t = setTimeout(() => setFlash(null), 1600);
+		return () => clearTimeout(t);
+	}, [open, flash]);
+	(0, import_react.useEffect)(() => {
+		if (!open) setShowAll(false);
+	}, [open]);
 	const jump = (title) => {
-		if (instances.some((x) => x.title === title)) {
+		if (byTitle.has(title)) {
 			selectSession(title);
 			setOpen(false);
 		}
@@ -31582,15 +32056,16 @@ function NotificationsBell() {
 	const rect = btnRef.current?.getBoundingClientRect();
 	const popStyle = rect ? {
 		top: rect.bottom + 6 + "px",
-		left: Math.max(8, Math.min(rect.left, window.innerWidth - 328)) + "px"
+		left: Math.max(8, Math.min(rect.left, window.innerWidth - 408)) + "px"
 	} : void 0;
-	const shownAttn = attn.slice(0, 8);
+	const shownAttn = showAll ? attn : attn.slice(0, NEEDS_SHOWN);
+	const runName = (id) => runs?.find((r) => r.id === id)?.name || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		id: "notif-btn",
 		ref: btnRef,
 		className: "tb-item" + (attn.length > 0 ? " has-attn" : "") + (attn.length === 0 && unread > 0 ? " has-unread" : ""),
 		type: "button",
-		title: "Notifications — what happened while you were away",
+		title: "Notifications — what needs you, and what happened while you were away",
 		"aria-label": "Notifications",
 		onClick: (e) => {
 			e.stopPropagation();
@@ -31603,6 +32078,7 @@ function NotificationsBell() {
 		})]
 	}), open && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "notif-pop",
+		id: "notif-pop",
 		ref: popRef,
 		style: popStyle,
 		children: [
@@ -31610,14 +32086,10 @@ function NotificationsBell() {
 				className: "notif-head",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Notifications" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NotifToggle, {
-						state: toggleState,
-						onChange: () => setToggleState(notifState$1())
-					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						className: "notif-settings",
 						type: "button",
-						title: "Notification settings",
+						title: "Notification settings — desktop notifications and which events notify",
 						onClick: () => {
 							setOpen(false);
 							useUi.getState().openDialogFor("settings", "notifications");
@@ -31640,47 +32112,69 @@ function NotificationsBell() {
 						children: "Needs attention"
 					}),
 					shownAttn.map((it) => {
-						const fam = it.p === 0 ? familyOf(it.title) : null;
+						const flashing = flash !== null && (flash === it.title || flash === it.key);
+						if (it.waiting) {
+							const w = it.waiting;
+							const runId = w.run?.id || "";
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "attn-wait" + (flashing ? " flash" : ""),
+								"data-needs": it.key,
+								"data-attn": it.title || void 0,
+								"data-run": runId || void 0,
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow, {
+									w,
+									row: it.title ? byTitle.get(it.title) : void 0,
+									shown: windowName,
+									group: runId ? w.run?.name || runName(runId) : "",
+									runInfo: runId ? runs?.find((r) => r.id === runId) : void 0
+								})
+							}, "w:" + it.key);
+						}
+						const a = it.attn;
+						const fam = a.p === 0 ? familyOf(it.title) : null;
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "attn-item p" + it.p,
+							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
 							"data-attn": it.title,
+							"data-needs": it.key,
 							onClick: () => jump(it.title),
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "attn-title",
-									children: aliases[it.title] || it.title
+									children: windowName(it.title)
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "attn-reason",
-									children: it.reason
+									children: a.reason
 								}),
 								fam?.parent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "attn-lineage",
 									children: workerOf(fam.parent, displayName)
 								}),
-								fam ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+								a.p === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
 									title: it.title,
 									activity: "clarify",
 									variant: "bell",
 									onOpen: () => jump(it.title),
-									onRedirect: () => {
+									onRedirect: fam ? () => {
 										setOpen(false);
 										openThread(fam.parent || it.title, it.title);
-									}
-								}) : !!it.snippet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									} : void 0
+								}) : !!a.snippet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "attn-snippet",
 									children: [
 										"“",
-										typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet),
+										typeof a.snippet === "string" ? a.snippet : JSON.stringify(a.snippet),
 										"”"
 									]
 								})
 							]
-						}, it.title + it.reason);
+						}, it.key + a.reason);
 					}),
-					attn.length > shownAttn.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "attn-more muted",
+					attn.length > shownAttn.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "attn-more linklike",
+						onClick: () => setShowAll(true),
 						children: [
 							"+",
 							attn.length - shownAttn.length,
@@ -31698,6 +32192,15 @@ function NotificationsBell() {
 						if (n.lead) {
 							setOpen(false);
 							openThread(n.lead);
+						} else if (n.run && n.rule === "run_needs_you") {
+							const row = attn.find((r) => r.waiting?.run?.id === n.run && (!n.session || r.title === n.session)) || attn.find((r) => r.waiting?.run?.id === n.run);
+							if (row) {
+								if (attn.indexOf(row) >= NEEDS_SHOWN) setShowAll(true);
+								setFlash(row.key);
+							} else {
+								setOpen(false);
+								useUi.getState().openDialogFor("outbox", n.run);
+							}
 						} else if (n.run) {
 							setOpen(false);
 							useUi.getState().openDialogFor("outbox", n.run);
@@ -31706,7 +32209,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.run && !n.session ? "Outbox" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (aliases[n.session] || n.session || "—")
+							children: n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -31718,33 +32221,12 @@ function NotificationsBell() {
 						})
 					]
 				}, n.seq || n.ts + ":" + i))
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			}) : attn.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "notif-empty muted",
 				children: "No notifications yet."
-			})
+			}) : null
 		]
 	}), document.body)] });
-}
-function NotifToggle({ state, onChange }) {
-	const api = notifApi$1();
-	const label = state === "on" ? "On" : state === "blocked" ? "Blocked" : state === "unsupported" ? "Unavailable" : "Off";
-	const showBell = state === "on" || state === "off";
-	const title = state === "blocked" ? "Notifications are blocked by the browser — allow them in this site's settings, then click again" : state === "unsupported" ? api?.unavailableReason || "Desktop notifications aren't available here" : state === "on" ? "Desktop notifications on — click to turn off" : "Turn on desktop notifications (clarify prompts, PR merges, budget overruns)";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		className: "notif-toggle" + (state === "on" ? " active" : ""),
-		type: "button",
-		"data-state": state,
-		disabled: state === "unsupported",
-		title,
-		onClick: async (e) => {
-			e.stopPropagation();
-			if (!api || state === "unsupported") return;
-			if (state === "on") api.disable?.();
-			else await api.enable?.();
-			onChange();
-		},
-		children: [showBell && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BellGlyph, { size: 12 }), label]
-	});
 }
 //#endregion
 //#region src/components/EventToasts.tsx
@@ -31989,7 +32471,11 @@ function EventToasts() {
 			const n = runNote(env.event, env.data, runLookups);
 			if (!n || !ruleOn(n.rule)) return;
 			notifyOnce("*run", "run", n.text, {
-				onClick: () => n.lead ? openThread(n.lead) : useUi.getState().openDialogFor("outbox", n.run || null),
+				onClick: () => {
+					if (n.lead) openThread(n.lead);
+					else if (env.event === "run.needs_you") document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") } }));
+					else useUi.getState().openDialogFor("outbox", n.run || null);
+				},
 				duration: 8e3
 			});
 		}));
@@ -32042,14 +32528,26 @@ function applyTheme(light) {
 	document.documentElement.classList.toggle("light", light);
 }
 var engineVersion = "";
+var VERIFY_SEEN_KEY = "mf_tb_verify";
+function verifySeen() {
+	try {
+		return localStorage.getItem(VERIFY_SEEN_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
 function TopBar() {
 	const ui = useUi();
 	const [light, setLight] = (0, import_react.useState)(() => document.documentElement.classList.contains("light"));
 	const [version, setVersion] = (0, import_react.useState)(engineVersion);
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
-	const { data: outbox } = useOutbox();
-	const waiting = waitingCount(outbox);
+	const { data: verifySettings } = useVerifySettings();
+	const verifyRepos = verifySettings?.verify_repos;
+	const verifyLive = Array.isArray(verifyRepos) && verifyRepos.length > 0 || (testPlans?.plans || []).length > 0;
+	const verifyKnown = !!verifySettings && !!testPlans;
+	const [verifyRemembered] = (0, import_react.useState)(verifySeen);
+	const showVerify = verifyLive || !verifyKnown && verifyRemembered;
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -32064,6 +32562,12 @@ function TopBar() {
 			off();
 		};
 	}, [mac]);
+	(0, import_react.useEffect)(() => {
+		if (!verifyLive && !verifyKnown) return;
+		try {
+			localStorage.setItem(VERIFY_SEEN_KEY, verifyLive ? "1" : "0");
+		} catch {}
+	}, [verifyKnown, verifyLive]);
 	(0, import_react.useEffect)(() => {
 		if (engineVersion) return;
 		let live = true;
@@ -32179,18 +32683,7 @@ function TopBar() {
 							onClick: () => ui.openDialogFor("intake"),
 							children: "Intake"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							id: "outbox-btn",
-							className: "tb-item",
-							type: "button",
-							title: "Outbox — what's shipping, and what's waiting on you (Alt+O)",
-							onClick: () => ui.openDialogFor("outbox"),
-							children: ["Outbox", waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "tb-count",
-								children: waiting
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						showVerify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
@@ -32202,21 +32695,13 @@ function TopBar() {
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							id: "recent-btn",
+							id: "settings-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Recently closed — reopen closed work, or clear out what it left on disk",
-							onClick: () => ui.openDialogFor("recent"),
-							children: "Recent"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							id: "prompts-btn",
-							className: "tb-item",
-							type: "button",
-							title: "Prompt library — click a ready-made prompt to paste it into the selected session",
-							"aria-label": "Open prompt library",
-							onClick: () => ui.openDialogFor("prompts"),
-							children: "Prompts"
+							title: "Settings",
+							"aria-label": "Open settings",
+							onClick: () => ui.openDialogFor("settings"),
+							children: "Settings"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "palette-btn",
@@ -32225,16 +32710,21 @@ function TopBar() {
 							title: "Command palette — Ctrl+P / ⌘P",
 							"aria-label": "Open command palette",
 							onClick: () => ui.openDialogFor("palette"),
-							children: "Command"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							id: "settings-btn",
-							className: "tb-item",
-							type: "button",
-							title: "Settings",
-							"aria-label": "Open settings",
-							onClick: () => ui.openDialogFor("settings"),
-							children: "Settings"
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+								viewBox: "0 0 24 24",
+								width: "15",
+								height: "15",
+								"aria-hidden": "true",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2.2",
+								strokeLinecap: "round",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+									cx: "10.5",
+									cy: "10.5",
+									r: "6"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M15 15l5 5" })]
+							})
 						})
 					]
 				})]
@@ -32795,6 +33285,7 @@ var FLAT = {
 var NO_KIDS = [];
 var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [expanded, setExpanded] = (0, import_react.useState)(false);
+	const [wipeArmed, setWipeArmed] = (0, import_react.useState)(false);
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
@@ -32859,6 +33350,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		task: runTask
 	});
 	const shipLane = !!inst.run || !!ship;
+	const runTaskState = String(runTask?.state || "");
+	const shipOpensBell = !!ship && (ship.state === "approve" || ship.state === "escalated" && (runTaskState === "needs_you" || runTaskState === "failed"));
+	const openBell = () => {
+		document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title } }));
+	};
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
 	const subline = !editing && (ship || wline || roll || lline || lineage);
 	const [, tick] = (0, import_react.useReducer)((n) => n + 1, 0);
@@ -32888,6 +33384,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		}
 	};
 	(0, import_react.useEffect)(() => clearRenameTimer, []);
+	(0, import_react.useEffect)(() => {
+		if (!expanded) setWipeArmed(false);
+	}, [expanded]);
 	const armRename = () => {
 		clearRenameTimer();
 		renameTimer.current = window.setTimeout(() => {
@@ -33001,8 +33500,25 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							children: shown
 						}),
 						!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "lineage ship-line " + ship.cls,
-							title: [ship.title, wline ? wline.title : lineage ? lineage.title : ""].filter(Boolean).join("\n"),
+							className: "lineage ship-line " + ship.cls + (shipOpensBell ? " opens-bell" : ""),
+							title: [
+								ship.title,
+								wline ? wline.title : lineage ? lineage.title : "",
+								shipOpensBell ? "Click to open it in the bell" : ""
+							].filter(Boolean).join("\n"),
+							...shipOpensBell ? {
+								role: "button",
+								tabIndex: 0,
+								onMouseDown: (e) => e.stopPropagation(),
+								onClick: (e) => act(openBell, e),
+								onDoubleClick: (e) => e.stopPropagation(),
+								onKeyDown: (e) => {
+									if (e.key !== "Enter" && e.key !== " ") return;
+									e.preventDefault();
+									e.stopPropagation();
+									openBell();
+								}
+							} : {},
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sl-lead",
 								children: ship.lead
@@ -33186,7 +33702,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								inst.stage === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => act(() => mergeSession(title)),
 									title: prSupport ? void 0 : PR_FALLBACK_HINT,
-									children: ["Merge to staging", prSupport ? "" : " ↗"]
+									children: ["Merge PR", prSupport ? "" : " ↗"]
 								}),
 								inst.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									onClick: () => window.open(inst.pr_url, "_blank"),
@@ -33259,20 +33775,45 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								onClick: () => paused ? resumeSession(title) : pauseSession(title),
 								children: paused ? "Resume session" : "Pause session"
 							}),
-							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							caps.git && (wipeArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "wipe-confirm",
+								role: "group",
+								title: `Permanently removes the worktree directory and closes its ${ideName} window. This cannot be undone.`,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "wipe-q",
+									children: [
+										"Delete ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: shown }),
+										" and its folder?"
+									]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "wipe-acts",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "danger",
+										onClick: () => act(async () => {
+											setWipeArmed(false);
+											try {
+												await instApi(title, "/cleanup", { method: "POST" });
+											} catch (err) {
+												errorPop("Delete failed", errMsg(err));
+											}
+											useUi.getState().setHidden(title, false);
+											await refreshInstances();
+										}),
+										children: "Delete + wipe"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										autoFocus: true,
+										onClick: () => setWipeArmed(false),
+										children: "Keep"
+									})]
+								})]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "danger",
-								onClick: () => act(async () => {
-									if (!confirm(`Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`)) return;
-									try {
-										await instApi(title, "/cleanup", { method: "POST" });
-									} catch (err) {
-										alert("Cleanup failed: " + errMsg(err));
-									}
-									useUi.getState().setHidden(title, false);
-									await refreshInstances();
-								}),
+								onClick: () => setWipeArmed(true),
 								children: "Delete + wipe worktree"
-							})
+							}))
 						] })
 					]
 				})
@@ -33487,7 +34028,7 @@ function BulkBar() {
 		let opts;
 		let verb;
 		if (kind === "end") {
-			if (!confirm(`End ${titles.length} session(s)? Their worktrees are kept (reopen from Recent…).`)) return;
+			if (!confirm(`End ${titles.length} session(s)? Their worktrees are kept (reopen from Recently closed).`)) return;
 			suffix = "/close";
 			opts = { method: "POST" };
 			verb = "Ended";
@@ -33702,12 +34243,13 @@ var ZERO_AGG = {
 	cache_read: 0,
 	cache_write: 0
 };
-function usageHeadline(info) {
-	const cost = "~" + fmtUsd(info.tokens_cost || 0);
+function usageHeadParts(info) {
 	const win = info.tokens_ctx_window || 0;
-	const body = win ? cost + " · " + fmtTokens(info.tokens_ctx || 0) + "/" + fmtTokens(win) : cost;
-	const p = provLabel(info.provider);
-	return p ? p + " · " + body : body;
+	return {
+		prov: provLabel(info.provider),
+		cost: "~" + fmtUsd(info.tokens_cost || 0),
+		ctx: win ? fmtTokens(info.tokens_ctx || 0) + "/" + fmtTokens(win) : ""
+	};
 }
 function usageRows(info, plan = false) {
 	const rows = [[plan ? "≈ API-equiv. cost" : "Est. cost", "~" + fmtUsd(info.tokens_cost || 0)]];
@@ -34039,7 +34581,7 @@ function AutomationBar() {
 		try {
 			await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
 		} catch (err) {
-			alert(`MindFlock ${start ? "start" : "stop"} failed: ` + errMsg(err));
+			errorPop("Automated ingestion failed", errMsg(err));
 		} finally {
 			setBusy(false);
 			setOptimistic(null);
@@ -34049,28 +34591,26 @@ function AutomationBar() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "mindflock-bar",
-		title: "Run/stop ticket ingestion (polls your ticketing provider + PRs and auto-creates sessions). Stays in this state across restarts.",
+		title: "Tickets — automated ingestion turns your assigned tickets into sessions. Stays in this state across restarts.",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "mindflock-dot",
 				className: "dc-dot " + (netIssue ? "dc-error" : active ? "on" : !desired ? "off" : "idle"),
 				title: active ? "A ticket is being brought in right now (auto ingestion or a forced start)" : netIssue ? online ? "Connection issues in the ingestion log — see Settings → System logs" : "No network connection" : starting ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)" : desired ? "Waiting for an assigned ticket — turns green while one is being brought in" : void 0
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dc-label",
-				children: "Ticket Ingestion"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "mindflock-tickets-btn",
+				type: "button",
+				className: "dc-label dc-open",
+				title: "Open Intake → Tickets",
+				onClick: () => openDialogFor("intake", "tickets"),
+				children: "Tickets"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "mindflock-tickets-btn",
-					className: "dc-toggle",
-					title: "Ticketing sources and assigned tickets (Intake → Tickets)",
-					onClick: () => openDialogFor("intake", "tickets"),
-					children: "Tickets"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
-					title: "Flip to run/stop ticket ingestion",
+					title: "Automated ingestion — the same switch as Intake → Tickets",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "mindflock-toggle",
@@ -34078,7 +34618,7 @@ function AutomationBar() {
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
+				})
 			})
 		]
 	});
@@ -34125,7 +34665,7 @@ function useGithubToggleBar(opts) {
 		try {
 			await api("/api/settings", { json: { github: { [settingKey]: enable } } });
 		} catch (err) {
-			alert(`${toggleLabel} ${enable ? "on" : "off"} failed: ` + errMsg(err));
+			errorPop(`${toggleLabel} failed`, errMsg(err));
 		} finally {
 			setBusy(false);
 			setOptimistic(null);
@@ -34153,33 +34693,31 @@ function GitIssueBar() {
 		reposKey: "issue_repos",
 		defaultOn: false,
 		activeFlag: "issues_active",
-		toggleLabel: "Issue handling"
+		toggleLabel: "Automated handling"
 	});
 	if (!visible) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "git-issue-bar",
-		title: `Automated issue handling — watches newly opened issues on ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}, grabs each issue and its comments, and starts work on a fresh branch. Runs on its own — ticket ingestion and PR review can stay off.`,
+		title: `Issues — automated handling watches ${repos.length} ${repos.length === 1 ? "repository" : "repositories"} and starts work on each newly opened issue on a fresh branch.`,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "git-issue-dot",
 				className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
 				title: active ? "An issue is being brought in right now (automated or a forced start)" : on ? starting ? "Switched on — the pipeline is starting" : "Waiting for a newly opened issue — turns green while one is being handled" : void 0
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dc-label",
-				children: "Issue Handling"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "git-issue-repos-btn",
+				type: "button",
+				className: "dc-label dc-open",
+				title: "Open Intake → Issues",
+				onClick: () => openDialogFor("intake", "issues"),
+				children: "Issues"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "git-issue-repos-btn",
-					className: "dc-toggle",
-					title: "Repositories, open issues and options (Intake → Issues)",
-					onClick: () => openDialogFor("intake", "issues"),
-					children: "Issues"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
-					title: "Flip to turn automated issue handling on/off — your repositories are kept either way",
+					title: "Automated handling — the same switch as Intake → Issues (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "git-issue-toggle",
@@ -34187,7 +34725,7 @@ function GitIssueBar() {
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
+				})
 			})
 		]
 	});
@@ -34201,33 +34739,31 @@ function PrReviewBar() {
 		reposKey: "repos",
 		defaultOn: true,
 		activeFlag: "pr_active",
-		toggleLabel: "PR review"
+		toggleLabel: "Automated review"
 	});
 	if (!visible) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "pr-review-bar",
-		title: `Automated PR review — watches your open pull requests on ${repos.length} ${repos.length === 1 ? "repository" : "repositories"} and spins up review sessions. Runs on its own — ticket ingestion can stay off.`,
+		title: `Pull requests — automated review watches your open PRs on ${repos.length} ${repos.length === 1 ? "repository" : "repositories"} and starts a review session for each.`,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "pr-review-dot",
 				className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
 				title: active ? "A pull request is being brought in for review right now (automated or a forced start)" : on ? starting ? "Switched on — the review pipeline is starting" : "Waiting for an open PR with actionable review comments — turns green while one is being handled" : void 0
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dc-label",
-				children: "PR Review"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "pr-review-prs-btn",
+				type: "button",
+				className: "dc-label dc-open",
+				title: "Open Intake → Pull requests",
+				onClick: () => openDialogFor("intake", "prs"),
+				children: "Pull requests"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dc-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "pr-review-prs-btn",
-					className: "dc-toggle",
-					title: "Repositories, open PRs and review options (Intake → Pull requests)",
-					onClick: () => openDialogFor("intake", "prs"),
-					children: "PRs"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "dc-switch",
-					title: "Flip to turn automated PR review on/off — your repositories are kept either way",
+					title: "Automated review — the same switch as Intake → Pull requests (your repositories are kept either way)",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						id: "pr-review-toggle",
@@ -34235,84 +34771,7 @@ function PrReviewBar() {
 						disabled: busy,
 						onChange: (e) => toggle(e.target.checked)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/sidebar/VerifyBar.tsx
-function VerifyBar() {
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const openDialog = useUi((s) => s.openDialog);
-	const qc = useQueryClient();
-	const { data: repo, refetch } = useQuery({
-		queryKey: ["verify-settings"],
-		queryFn: async () => {
-			return (await api("/api/settings"))?.settings?.repository || {};
-		},
-		refetchInterval: 3e4,
-		retry: false
-	});
-	const { data: plansData } = useTestPlans();
-	(0, import_react.useEffect)(() => {
-		if (openDialog === null) refetch();
-	}, [openDialog, refetch]);
-	const repos = Array.isArray(repo?.verify_repos) ? repo.verify_repos : [];
-	const plans = plansData?.plans || [];
-	const on = repo?.verify_enabled !== false;
-	const due = dueCount(plans);
-	const running = plans.some((p) => p.state === "running");
-	const broken = plans.filter((p) => verdictOf(p) === "fail").length;
-	if (!repo || repos.length === 0 && plans.length === 0) return null;
-	const toggle = async (enable) => {
-		try {
-			await api("/api/settings", { json: { repository: { verify_enabled: enable } } });
-			toast(enable ? "Automatic checking on" : "Automatic checking paused");
-		} catch (err) {
-			toast("Verify " + (enable ? "on" : "off") + " failed: " + errMsg(err));
-		} finally {
-			refetch();
-			qc.invalidateQueries({ queryKey: ["test-plans"] });
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "verify-bar",
-		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				id: "verify-dot",
-				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
-				role: "img",
-				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
-				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Checklists to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dc-label",
-				children: "Verify"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "dc-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					id: "verify-plans-btn",
-					className: "dc-toggle",
-					title: "Checklists for what shipped, tracked repositories and what counts as live (Alt+V)",
-					onClick: () => openDialogFor("verify"),
-					children: ["Checklists", broken > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "dc-count dc-count-bad",
-						title: broken + (broken === 1 ? " checklist has" : " checklists have") + " a step that failed",
-						children: "✗" + broken
-					}) : null]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "dc-switch",
-					title: "Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						id: "verify-toggle",
-						checked: on,
-						onChange: (e) => void toggle(e.target.checked)
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
+				})
 			})
 		]
 	});
@@ -34336,29 +34795,19 @@ function barContent(key, cbs) {
 				children: "Assistant"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "as-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-chat-btn",
-						className: "as-toggle",
-						title: "Open a chat window with your personal assistant",
-						onClick: cbs.onOpenChat,
-						children: "Chat"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-todo-btn",
-						className: "as-toggle",
-						title: "Show the todo list (drag to reorder)",
-						onClick: cbs.onOpenTodo,
-						children: "Todo"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						id: "assistant-agent-btn",
-						className: "as-toggle",
-						title: "Edit the assistant's standing instructions (its agent file) — shape how it behaves",
-						onClick: () => cbs.openDialogFor("assistant-agent"),
-						children: "Agent"
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					id: "assistant-chat-btn",
+					className: "as-toggle",
+					title: "Open a chat window with your personal assistant",
+					onClick: cbs.onOpenChat,
+					children: "Chat"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					id: "assistant-todo-btn",
+					className: "as-toggle",
+					title: "Show the todo list (drag to reorder)",
+					onClick: cbs.onOpenTodo,
+					children: "Todo"
+				})]
 			})]
 		});
 		default: return null;
@@ -34407,54 +34856,17 @@ function BarSlot({ barKey, dragging, cue, onStart, onEnd, onOver, onLeave, onDro
 //#endregion
 //#region src/components/sidebar/FooterCustomize.tsx
 function FooterCustomize() {
-	const hiddenBars = useUi((s) => s.hiddenBars);
-	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
-	const barOrder = useUi((s) => s.barOrder);
-	const extBars = useExtensionBarDefs();
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const ref = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onDown = (e) => {
-			if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-		};
-		const onKey = (e) => {
-			if (e.key === "Escape") setOpen(false);
-		};
-		document.addEventListener("mousedown", onDown);
-		document.addEventListener("keydown", onKey);
-		return () => {
-			document.removeEventListener("mousedown", onDown);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [open]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "foot-customize",
-		ref,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			id: "foot-customize-btn",
 			type: "button",
-			className: "foot-link" + (open ? " open" : ""),
-			title: "Choose which bars show in the sidebar",
-			"aria-haspopup": "true",
-			"aria-expanded": open,
-			onClick: () => setOpen(!open),
-			children: "⚙ Customize"
-		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "foot-customize-menu",
-			role: "menu",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "fc-title",
-				children: "Show in sidebar"
-			}), orderedBars(barOrder, extBars).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "fc-item",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					checked: !hiddenBars.has(b.key),
-					onChange: () => toggleBarHidden(b.key)
-				}), b.label]
-			}, b.key))]
-		})]
+			className: "foot-link",
+			title: "Sidebar bars, saved prompts and the Outbox",
+			onClick: () => openDialogFor("customize"),
+			children: "Customize"
+		})
 	});
 }
 //#endregion
@@ -34785,10 +35197,12 @@ function useDoctorWarn() {
 }
 var setupAutoShown = false;
 function shouldAutoShowSetup(opts) {
-	return opts.failing && opts.onboarded === false;
+	return opts.failing && opts.onboarded === false && opts.sessions > 0;
 }
 function useDoctorAutoShow() {
 	const { data: config } = useConfig();
+	const { data: instances } = useInstances();
+	const sessions = instances ? instances.length : -1;
 	const failing = useDoctorWarnStore((s) => s.failing);
 	(0, import_react.useEffect)(() => {
 		const check = async () => {
@@ -34806,13 +35220,22 @@ function useDoctorAutoShow() {
 	}, []);
 	(0, import_react.useEffect)(() => {
 		if (setupAutoShown) return;
+		if (failing && config?.onboarded === false && sessions === 0) {
+			setupAutoShown = true;
+			return;
+		}
 		if (!shouldAutoShowSetup({
 			failing,
-			onboarded: config?.onboarded
+			onboarded: config?.onboarded,
+			sessions
 		})) return;
 		setupAutoShown = true;
 		useUi.getState().openDialogFor("setup");
-	}, [failing, config?.onboarded]);
+	}, [
+		failing,
+		config?.onboarded,
+		sessions
+	]);
 }
 function DoctorList({ reprobeKey }) {
 	const [doctor, setDoctor] = (0, import_react.useState)(lastDoctor);
@@ -35010,43 +35433,6 @@ function SetupChecklist(_props) {
 					className: "setup-acct-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "setup-test-github",
-						onClick: (e) => {
-							e.stopPropagation();
-							testGithub();
-						},
-						children: "Test GitHub"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: gh })]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-acct-row setup-shortcut-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "setup-test-shortcut",
-							onClick: (e) => {
-								e.stopPropagation();
-								testShortcut();
-							},
-							children: "Test Shortcut"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "password",
-							className: "setup-shortcut-token",
-							placeholder: "Shortcut API token (optional)",
-							autoComplete: "off",
-							title: "Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token.",
-							value: scToken,
-							onChange: (e) => setScToken(e.target.value),
-							onClick: (e) => e.stopPropagation()
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: sc })
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-acct-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
 						className: "setup-test-agent",
 						onClick: (e) => {
 							e.stopPropagation();
@@ -35055,20 +35441,76 @@ function SetupChecklist(_props) {
 						children: "Test agent CLI"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: agent })]
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "setup-optional",
+					onClick: (e) => e.stopPropagation(),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional: test GitHub or a Shortcut token" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "setup-acct-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "setup-test-github",
+								title: "Checks that a GitHub token resolves (Intake → Pull requests, $GH_TOKEN / $GITHUB_TOKEN, or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
+								onClick: (e) => {
+									e.stopPropagation();
+									testGithub();
+								},
+								children: "Test GitHub"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: gh })]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "setup-acct-row setup-shortcut-row",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "setup-test-shortcut",
+									onClick: (e) => {
+										e.stopPropagation();
+										testShortcut();
+									},
+									children: "Test Shortcut"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "password",
+									className: "setup-shortcut-token",
+									placeholder: "Shortcut API token (optional)",
+									autoComplete: "off",
+									title: "Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token.",
+									value: scToken,
+									onChange: (e) => setScToken(e.target.value),
+									onClick: (e) => e.stopPropagation()
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: sc })
+							]
+						})
+					]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "muted setup-hint",
 					children: [
-						"Tokens live in",
+						"Ticket and GitHub tokens are set up in",
 						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "setup-open-intake linklike",
+							onClick: (e) => {
+								e.stopPropagation();
+								closeSetup();
+								useUi.getState().openDialogFor("intake", "tickets");
+							},
+							children: "Intake"
+						}),
+						" · agent logins in ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "setup-open-settings linklike",
 							onClick: (e) => {
 								e.stopPropagation();
 								closeSetup();
-								useUi.getState().openDialogFor("settings");
+								useUi.getState().openDialogFor("settings", "accounts");
 							},
-							children: "Open Settings"
+							children: "Settings → Accounts"
 						})
 					]
 				})
@@ -35178,17 +35620,49 @@ function Hint({ id, children, action, className }) {
 //#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var VIEW_MODES = [
-	"auto",
-	"1",
-	"2",
-	"4",
-	"9"
+	{
+		value: "auto",
+		label: "Auto — fit every window"
+	},
+	{
+		value: "1",
+		label: "1 window"
+	},
+	{
+		value: "2",
+		label: "2 windows"
+	},
+	{
+		value: "4",
+		label: "4 windows"
+	},
+	{
+		value: "9",
+		label: "9 windows"
+	}
 ];
 function Sidebar({ onOpenChat, onOpenTodo }) {
 	const { data: instances = [] } = useInstances();
 	const { data: devices } = useDevices();
 	const ui = useUi();
 	const doctorWarn = useDoctorWarn();
+	const { data: config } = useConfig();
+	const qc = useQueryClient();
+	const { data: closed } = useQuery({
+		queryKey: ["recently-closed"],
+		queryFn: () => api("/api/recently-closed"),
+		staleTime: 3e4,
+		refetchInterval: 6e4,
+		retry: false
+	});
+	const closedCount = Array.isArray(closed) ? closed.length : 0;
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		return ev.subscribe("session.deleted", () => {
+			qc.invalidateQueries({ queryKey: ["recently-closed"] });
+		});
+	}, [qc]);
 	const [dragging, setDragging] = (0, import_react.useState)(null);
 	const [dropCue, setDropCue] = (0, import_react.useState)(null);
 	const [secDrag, setSecDrag] = (0, import_react.useState)(null);
@@ -35409,11 +35883,12 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
 	const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
 	const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
+	const firstRunCard = instances.length === 0 && config?.onboarded === false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		id: "sidebar",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarResizer, {}),
-			doctorWarn.failing && !doctorWarn.dismissed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "doctor-warn",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -35436,14 +35911,6 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						children: "✕"
 					})
 				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Hint, {
-				id: "welcome",
-				action: {
-					label: "Open Settings",
-					onClick: () => ui.openDialogFor("settings")
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Welcome to MindFlock." }), " Connect your coding CLI and tools in Settings, then start a session to get going."]
 			}),
 			orderedSections(ui.barOrder, extKeys).map((key) => {
 				if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -35514,6 +35981,18 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 									"”"
 								]
 							})]
+						}),
+						closedCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							id: "recent-btn",
+							className: "foot-link recent-link",
+							title: "Reopen closed sessions or clear what they left on disk (Ctrl+Shift+T reopens the last one)",
+							onClick: () => ui.openDialogFor("recent"),
+							children: [
+								"Recently closed (",
+								closedCount,
+								")"
+							]
 						})
 					]
 				}, SESSIONS_KEY);
@@ -35532,8 +36011,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 					onDropSection: moveSection,
 					children: barContent(key, {
 						onOpenChat,
-						onOpenTodo,
-						openDialogFor: ui.openDialogFor
+						onOpenTodo
 					})
 				}, key);
 			}),
@@ -35542,29 +36020,28 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "view-modes",
-						title: "Grid view — Auto grows with sessions; 2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						title: "Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
 							className: "vm-label",
+							htmlFor: "view-mode-select",
 							children: "View"
-						}), VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "vm" + (ui.viewMode === v ? " active" : ""),
-							"data-view": v,
-							onClick: () => ui.setViewMode(v),
-							children: v === "auto" ? "Auto" : v
-						}, v))]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+							id: "view-mode-select",
+							value: ui.viewMode,
+							onChange: (e) => ui.setViewMode(e.target.value),
+							children: VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: v.value,
+								children: v.label
+							}, v.value))
+						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Hint, {
 						id: "customize",
 						className: "hint-footer",
 						children: [
-							"Showing just the essentials. Add ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "PR review" }),
-							", ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "issue handling" }),
-							" and more anytime from ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
-							" below."
+							"Extra sidebar bars, your saved prompts and the Outbox live under ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
+							"."
 						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -35581,7 +36058,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 								className: "foot-link",
 								title: "Keyboard shortcuts (?)",
 								onClick: () => ui.openDialogFor("shortcuts"),
-								children: "⌨ Shortcuts"
+								children: "Shortcuts"
 							})
 						]
 					})
@@ -36523,6 +37000,20 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		}, 0);
 	};
 	const pressAt = (0, import_react.useRef)(null);
+	const copyAll = () => {
+		(text !== null ? Promise.resolve(text) : fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`).then((r) => {
+			if (!r.ok) return r.text().then((t) => {
+				throw new Error(t || "HTTP " + r.status);
+			});
+			return r.text();
+		})).then((all) => {
+			if (!all.trim()) {
+				toast("No history to copy");
+				return;
+			}
+			copyText(all).then((ok) => toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed"));
+		}).catch((err) => toast("History copy failed: " + err.message));
+	};
 	const onRootMouseDown = (e) => {
 		if (e.button !== 0 || e.target.closest?.(".hist-bar")) {
 			pressAt.current = null;
@@ -36623,6 +37114,13 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 						})
 					]
 				}) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "hist-copy",
+					title: "Copy this pane's whole history to the clipboard",
+					onClick: copyAll,
+					children: "Copy all"
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "hist-hint",
 					children: findOpen ? "Enter older · Shift+Enter newer · Esc returns to live" : "drag to select · release to copy · Ctrl+F find · Ctrl+↑/↓ top/bottom · click or Esc returns to live"
@@ -38830,9 +39328,10 @@ function ThreadTab({ title, active }) {
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "thread-sub",
 						children: [
-							"No workers yet. Split a task across workers from the fork button, or write to ",
+							"No workers yet — use Split into parallel pieces… in the session's › menu. Or write to",
+							" ",
 							myName,
-							" below — it is typed into its prompt as you."
+							" below; it is typed into its prompt as you."
 						]
 					})] })
 				}),
@@ -53837,6 +54336,7 @@ function SessionUsageChip({ inst }) {
 	const { data: usageData } = useUsage();
 	const usage = asUsageWindows(usageData);
 	const pl = provLabel(inst.provider);
+	const head = usageHeadParts(inst);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		ref: chipRef,
 		className: "tok usage-trigger",
@@ -53845,9 +54345,22 @@ function SessionUsageChip({ inst }) {
 			ev.stopPropagation();
 			setOpen((o) => !o);
 		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "usage-head",
-			children: usageHeadline(inst)
+			children: [
+				head.prov && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "uh-prov",
+					children: [head.prov, " · "]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "uh-cost",
+					children: head.cost
+				}),
+				head.ctx && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "uh-ctx",
+					children: [" · ", head.ctx]
+				})
+			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "caret",
 			children: "▾"
@@ -54233,6 +54746,7 @@ function paneTab(t, git) {
 	if (GIT_TABS.has(t) && !git) return "agent";
 	return t;
 }
+var HIDE_TITLE = "Hide window — the session keeps running (show it again from its row)";
 function queueRelTime(ms) {
 	const m = Math.ceil(ms / 6e4);
 	if (m < 60) return m + "m";
@@ -54291,7 +54805,14 @@ function Pane({ inst, drag, dragging }) {
 	}, [title]);
 	const bodyRef = (0, import_react.useRef)(null);
 	const fitTimer = (0, import_react.useRef)(void 0);
-	const displayName = alias || title;
+	const label = sessionLabel(inst.display_title || title, inst.branch || "");
+	const displayName = alias || label.text;
+	const nameTip = (displayName !== title ? title + "  ·  " : "") + (inst.branch || title);
+	const kindTag = !alias && label.kind ? "(" + label.kind + ") " : "";
+	const titleText = kindTag && displayName.startsWith(kindTag) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "title-kind",
+		children: kindTag
+	}), displayName.slice(kindTag.length)] }) : displayName;
 	const adopt = (0, import_react.useCallback)((kind) => (el) => {
 		if (!el || missing || loading) return;
 		const handle = getTerm(title, kind);
@@ -54505,7 +55026,8 @@ function Pane({ inst, drag, dragging }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "title",
-					children: displayName
+					title: nameTip,
+					children: titleText
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip s-missing",
@@ -54522,12 +55044,12 @@ function Pane({ inst, drag, dragging }) {
 						className: "act pane-close",
 						type: "button",
 						"aria-label": "Hide window",
-						title: "Hide this window (show it again from its sidebar row)",
+						title: HIDE_TITLE,
 						onClick: (e) => {
 							e.stopPropagation();
 							useUi.getState().setHidden(title, true);
 						},
-						children: "✕"
+						children: "−"
 					})
 				})
 			]
@@ -54570,7 +55092,8 @@ function Pane({ inst, drag, dragging }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "title",
-					children: displayName
+					title: nameTip,
+					children: titleText
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "branch",
@@ -54586,12 +55109,12 @@ function Pane({ inst, drag, dragging }) {
 						className: "act pane-close",
 						type: "button",
 						"aria-label": "Hide window",
-						title: "Hide this window — provisioning keeps going (show it again from its sidebar row)",
+						title: HIDE_TITLE,
 						onClick: (e) => {
 							e.stopPropagation();
 							useUi.getState().setHidden(title, true);
 						},
-						children: "✕"
+						children: "−"
 					})
 				})
 			]
@@ -54622,6 +55145,8 @@ function Pane({ inst, drag, dragging }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
+	const act = effectiveActivity(inst);
+	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit" || ns.label === "Commit…" && (ds?.uncommitted?.files || 0) + (ds?.uncommitted?.additions || 0) + (ds?.uncommitted?.deletions || 0) === 0);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane" + (focused ? " focused" : "") + (dragging ? " dragging" : ""),
@@ -54640,8 +55165,8 @@ function Pane({ inst, drag, dragging }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "title",
-						title: (alias ? title + "  ·  " : "") + (inst.branch || title),
-						children: displayName
+						title: nameTip,
+						children: titleText
 					}),
 					hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -54716,7 +55241,7 @@ function Pane({ inst, drag, dragging }) {
 						className: "actions",
 						children: [
 							ns ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : ""),
+								className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : "") + (quiet ? " nextstep-quiet" : ""),
 								type: "button",
 								disabled: !!ns.disabled,
 								title: ns.title || "Do the next step",
@@ -54739,7 +55264,7 @@ function Pane({ inst, drag, dragging }) {
 									ev.stopPropagation();
 									useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
 								},
-								children: [ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								children: [ft.lane === "leave" && !ft.halted ? "⏩" : ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "ft-ask",
 									"aria-hidden": "true",
 									children: "?"
@@ -54752,20 +55277,13 @@ function Pane({ inst, drag, dragging }) {
 									ev.stopPropagation();
 									window.open(step.href, "_blank");
 								} : void 0,
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "stepnow-dot",
-										"aria-hidden": "true"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "stepnow-text",
-										children: step.label
-									}),
-									step.target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "stepnow-target",
-										children: step.target
-									})
-								]
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "stepnow-dot",
+									"aria-hidden": "true"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "stepnow-text",
+									children: step.label
+								})]
 							}),
 							rs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "nextstep nextstep-reset",
@@ -54798,86 +55316,44 @@ function Pane({ inst, drag, dragging }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "head-tail",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act copyhist",
-								type: "button",
-								title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
-								onClick: (e) => {
-									e.stopPropagation();
-									setHistPane({
-										kind: tab === "shell" ? "shell" : "agent",
-										dragSel: null
-									});
-								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									width: "12",
-									height: "12",
-									viewBox: "0 0 24 24",
-									fill: "none",
-									stroke: "currentColor",
-									strokeWidth: "2",
-									strokeLinecap: "round",
-									strokeLinejoin: "round",
-									"aria-hidden": "true",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
-									]
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act copyhist",
-								type: "button",
-								title: "Copy this pane's whole history to the clipboard",
-								onClick: (e) => {
-									e.stopPropagation();
-									const which = tab === "shell" ? "shell" : "agent";
-									fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
-										if (!r.ok) return r.text().then((t) => {
-											throw new Error(t || "HTTP " + r.status);
-										});
-										return r.text();
-									}).then((text) => {
-										if (!text.trim()) {
-											toast("No history to copy");
-											return;
-										}
-										copyText(text).then((ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed"));
-									}).catch((err) => toast("History copy failed: " + err.message));
-								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-									width: "12",
-									height: "12",
-									viewBox: "0 0 24 24",
-									fill: "none",
-									stroke: "currentColor",
-									strokeWidth: "2",
-									strokeLinecap: "round",
-									strokeLinejoin: "round",
-									"aria-hidden": "true",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-										x: "8",
-										y: "2",
-										width: "8",
-										height: "4",
-										rx: "1"
-									})]
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "act pane-close",
-								type: "button",
-								"aria-label": "Hide window",
-								title: "Hide this window — the session keeps running (show it again from its sidebar row)",
-								onClick: (e) => {
-									e.stopPropagation();
-									useUi.getState().setHidden(title, true);
-								},
-								children: "✕"
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act copyhist",
+							type: "button",
+							title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+							onClick: (e) => {
+								e.stopPropagation();
+								setHistPane({
+									kind: tab === "shell" ? "shell" : "agent",
+									dragSel: null
+								});
+							},
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+								width: "12",
+								height: "12",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								strokeLinecap: "round",
+								strokeLinejoin: "round",
+								"aria-hidden": "true",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+								]
 							})
-						]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act pane-close",
+							type: "button",
+							"aria-label": "Hide window",
+							title: HIDE_TITLE,
+							onClick: (e) => {
+								e.stopPropagation();
+								useUi.getState().setHidden(title, true);
+							},
+							children: "−"
+						})]
 					})
 				]
 			}),
@@ -55497,6 +55973,17 @@ function ChatBody({ headDrag }) {
 				className: "state",
 				children: state
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "assistant-agent-btn",
+				className: "act",
+				type: "button",
+				title: "Edit the assistant's standing instructions",
+				onClick: (e) => {
+					e.stopPropagation();
+					useUi.getState().openDialogFor("assistant-agent");
+				},
+				children: "Instructions"
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc: { kind: "chat" } })
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -55762,7 +56249,7 @@ function TerminalGrid({ specialPanes }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "setup-card",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Welcome to MindFlock" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Get set up" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted",
 							children: "Three steps to a running agent."
@@ -55778,7 +56265,7 @@ function TerminalGrid({ specialPanes }) {
 				"data-mode": "plain",
 				className: noneAtAll ? "clickable" : "",
 				onClick: noneAtAll ? () => useUi.getState().openDialogFor("new-session") : void 0,
-				children: noneAtAll ? "No sessions yet — click here to create one. (Ctrl+N)" : "All sessions hidden. Use a session's ⋯ menu to show one."
+				children: noneAtAll ? "No sessions yet — click here to create one. (Ctrl+N)" : "All sessions hidden. Click a session's row in the sidebar to show it."
 			}))
 		]
 	});
@@ -55836,24 +56323,88 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("new-session")
 		});
 		acts.push({
-			label: "Start several sessions…",
-			hint: "one per line",
-			run: () => ui.openNewWith("")
+			label: "Open Intake",
+			hint: "Alt+I",
+			run: () => ui.openDialogFor("intake")
+		});
+		acts.push({
+			label: "Intake: Tickets",
+			run: () => ui.openDialogFor("intake", "tickets")
+		});
+		acts.push({
+			label: "Intake: Pull requests",
+			run: () => ui.openDialogFor("intake", "prs")
+		});
+		acts.push({
+			label: "Intake: Issues",
+			run: () => ui.openDialogFor("intake", "issues")
+		});
+		acts.push({
+			label: "Intake: Auto-start",
+			hint: "what starts on its own",
+			run: () => ui.openDialogFor("intake", "autostart")
+		});
+		acts.push({
+			label: "Verify — check what shipped",
+			hint: "Alt+V",
+			run: () => ui.openDialogFor("verify")
+		});
+		acts.push({
+			label: "Customize…",
+			hint: "sidebar bars, prompts, Outbox",
+			run: () => ui.openDialogFor("customize")
+		});
+		acts.push({
+			label: "Prompts…",
+			hint: "paste a saved prompt",
+			run: () => ui.openDialogFor("prompts")
+		});
+		acts.push({
+			label: "Outbox — what's on its way out",
+			hint: "Alt+O",
+			run: () => ui.openDialogFor("outbox")
+		});
+		acts.push({
+			label: "Recently closed…",
+			hint: "reopen or clean up closed sessions",
+			run: () => ui.openDialogFor("recent")
+		});
+		acts.push({
+			label: "Assistant instructions…",
+			run: () => ui.openDialogFor("assistant-agent")
+		});
+		if (caps.git) acts.push({
+			label: "Zones…",
+			hint: "keep-out paths per repo, and derived outputs",
+			run: () => ui.openDialogFor("red-zones")
+		});
+		acts.push({
+			label: "Open Settings",
+			run: () => ui.openDialogFor("settings")
+		});
+		acts.push({
+			label: "Open Doctor",
+			run: () => host.openDoctor()
+		});
+		acts.push({
+			label: "Open Setup checklist",
+			run: () => ui.openDialogFor("setup")
+		});
+		acts.push({
+			label: "Toggle sidebar",
+			hint: "Ctrl+B",
+			run: () => ui.toggleSidebar()
+		});
+		acts.push({
+			label: "Keyboard shortcuts",
+			hint: "?",
+			run: () => host.toggleShortcuts()
 		});
 		const { rows } = orderedInstances(instances$1(), ui.order);
-		for (const inst of rows) {
-			const name = ui.aliases[inst.title] || inst.title;
-			acts.push({
-				label: "Focus: " + name,
-				hint: "session",
-				run: () => selectSession(inst.title)
-			});
-		}
 		const t = ui.focused;
 		if (t) {
 			acts.push({
 				label: `Rename… — ${t}`,
-				hint: "display",
 				run: () => ui.openDialogFor("rename", t)
 			});
 			acts.push({
@@ -55863,7 +56414,7 @@ function CommandPalette({ host }) {
 			});
 			acts.push({
 				label: `Queue prompt… — ${t}`,
-				hint: "auto-run",
+				hint: "runs when idle",
 				run: () => focusQueueInput(t)
 			});
 			const inst = rows.find((r) => r.title === t);
@@ -55872,21 +56423,14 @@ function CommandPalette({ host }) {
 				hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
 				run: () => openFastTrackMenu(t)
 			});
-			if (inst && !inst.device && !inst.pending && !t.includes("::")) {
-				const why = splitBlockReason(caps, inst);
-				acts.push({
-					label: `Split into parallel pieces… — ${t}`,
-					hint: why ? teamRunCaps(caps).split ? "unavailable" : "needs a newer server" : "starts a split",
-					run: () => {
-						if (why) {
-							toast(why, { duration: 5e3 });
-							return;
-						}
-						const name = ui.aliases[t] || t;
-						splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
-					}
-				});
-			}
+			if (inst && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) acts.push({
+				label: `Split into parallel pieces… — ${t}`,
+				hint: "starts a split",
+				run: () => {
+					const name = ui.aliases[t] || t;
+					splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
+				}
+			});
 			acts.push({
 				label: `Thread — ${t}`,
 				hint: "Ctrl+K T",
@@ -55904,7 +56448,7 @@ function CommandPalette({ host }) {
 					run: () => pushSession(t)
 				});
 				acts.push({
-					label: `Create PR — ${t}`,
+					label: `Make PR — ${t}`,
 					hint: "Ctrl+K R" + prHint,
 					run: () => makePrSession(t)
 				});
@@ -55933,74 +56477,19 @@ function CommandPalette({ host }) {
 				}
 			});
 			if (caps.git) acts.push({
-				label: `Merge PR to staging — ${t}`,
+				label: `Merge PR — ${t}`,
 				hint: prHint ? prHint.replace(" · ", "") : void 0,
 				run: () => mergeSession(t)
 			});
 		}
-		acts.push({
-			label: "Keyboard shortcuts",
-			hint: "?",
-			run: () => host.toggleShortcuts()
-		});
-		acts.push({
-			label: "Open Intake",
-			hint: "Alt+I",
-			run: () => ui.openDialogFor("intake")
-		});
-		acts.push({
-			label: "Intake: Tickets",
-			run: () => ui.openDialogFor("intake", "tickets")
-		});
-		acts.push({
-			label: "Intake: Pull requests",
-			run: () => ui.openDialogFor("intake", "prs")
-		});
-		acts.push({
-			label: "Intake: Issues",
-			run: () => ui.openDialogFor("intake", "issues")
-		});
-		acts.push({
-			label: "Intake: Auto-start",
-			hint: "what starts on its own",
-			run: () => ui.openDialogFor("intake", "autostart")
-		});
-		acts.push({
-			label: "Outbox — what's shipping, and what's waiting on you",
-			hint: "Alt+O",
-			run: () => ui.openDialogFor("outbox")
-		});
-		acts.push({
-			label: "Verify — what's waiting on you",
-			hint: "Alt+V",
-			run: () => ui.openDialogFor("verify")
-		});
-		if (caps.git) acts.push({
-			label: "Zones…",
-			hint: "keep-out paths per repo, and derived outputs",
-			run: () => ui.openDialogFor("red-zones")
-		});
-		acts.push({
-			label: "Open Settings",
-			run: () => ui.openDialogFor("settings")
-		});
-		acts.push({
-			label: "Open Doctor",
-			run: () => host.openDoctor()
-		});
-		acts.push({
-			label: "Open Setup checklist",
-			run: () => ui.openDialogFor("setup")
-		});
-		acts.push({
-			label: "Toggle sidebar",
-			hint: "Ctrl+B",
-			run: () => ui.toggleSidebar()
-		});
-		acts.push({
-			label: "New from Recently closed…",
-			run: () => ui.openDialogFor("recent")
-		});
+		for (const inst of rows) {
+			const own = inst.display_title || inst.title;
+			const name = ui.aliases[inst.title] || sessionLabel(own, inst.branch || "").text;
+			acts.push({
+				label: "Focus: " + name,
+				run: () => selectSession(inst.title)
+			});
+		}
 		for (const ext of extensions || []) {
 			if (!ext.enabled) continue;
 			for (const cmd of ext.extension.commands) acts.push({
@@ -56854,6 +57343,7 @@ function NewTicketPane() {
 //#endregion
 //#region src/components/dialogs/SplitCheck.tsx
 function SplitCheck({ id, split, onSplit, gate, shapeReason, text }) {
+	if (!gate.ok && gate.reason === SERVER_NO_SPLIT) return null;
 	const why = gate.ok ? shapeReason : gate.reason;
 	const ok = !why;
 	const on = split && ok;
@@ -57108,7 +57598,7 @@ function startLabel(n, split) {
 	return "Create session";
 }
 function summarySentence(o) {
-	const asks = !(o.split || o.n >= 2 && o.grouping === "together") && o.lane !== "leave" && o.askFirst ? " Before the first commit it stops and asks you in the Outbox." : "";
+	const asks = !(o.split || o.n >= 2 && o.grouping === "together") && o.lane !== "leave" && o.askFirst ? " Before the first commit it stops and asks you first, in the bell." : "";
 	if (o.split) return {
 		lead: "One lead session in a new worktree. Its agent proposes pieces with separate paths; you approve the split in its Thread tab, then MindFlock starts the workers, fences each to its paths and merges them back.",
 		tail: (o.lane === "pr" ? "Then it opens one PR — after you say go." : o.lane === "merge" ? "Then it opens one PR and merges it once checks pass — after you say go." : o.lane === "push" ? "Then the merged branch is pushed — after you say go." : "The merged branch waits for you; nothing is pushed.") + asks
@@ -57133,8 +57623,8 @@ function summarySentence(o) {
 			leave: [" Each one stops when its agent does — nothing is committed.", "You'll see each in the rail."],
 			commit: [" Each one is committed with a message written from its diff once its agent stops and your hooks pass.", "Nothing is pushed."],
 			push: [" Each one is committed with a message written from its diff and pushed once its agent stops and your hooks pass.", "No PRs are opened."],
-			pr: [" Each one is committed with a message written from its diff, pushed and opened as its own PR once its agent stops and your hooks pass.", "Nothing merges; you'll see each PR in the Outbox."],
-			merge: [" Each one is committed with a message written from its diff, pushed, opened as its own PR and merged once its checks pass.", "You'll see each PR in the Outbox."]
+			pr: [" Each one is committed with a message written from its diff, pushed and opened as its own PR once its agent stops and your hooks pass.", "Nothing merges; each PR shows on its row."],
+			merge: [" Each one is committed with a message written from its diff, pushed, opened as its own PR and merged once its checks pass.", "Each PR shows on its row."]
 		}[o.lane];
 		return {
 			lead: count + l,
@@ -57337,6 +57827,7 @@ function useRunDraft(o) {
 		warnings: fresh?.data?.warnings || [],
 		lane,
 		setLane: setLaneChoice,
+		defaultLane: defaultLaneFor(batch, o.fasttrackDefault),
 		askFirst: oneForAll ? false : askFirst,
 		setAskFirst,
 		grouping,
@@ -57396,8 +57887,30 @@ function RunItems({ rows, onRemove }) {
 		}, r.key))
 	});
 }
+var OPTIONS_OPEN_KEY = "mf_new_options_open";
+function readOptionsOpen() {
+	try {
+		return localStorage.getItem(OPTIONS_OPEN_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+function rememberOptionsOpen(on) {
+	try {
+		localStorage.setItem(OPTIONS_OPEN_KEY, on ? "1" : "0");
+	} catch {}
+}
+function optionsSummary(lane, askFirst) {
+	return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
+}
 function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 	const many = n >= 2 && !split;
+	const single = n < 2 && !split;
+	const offDefault = draft.lane !== draft.defaultLane;
+	const [foldOpen, setFoldOpen] = (0, import_react.useState)(readOptionsOpen);
+	(0, import_react.useEffect)(() => {
+		if (single && offDefault) setFoldOpen(true);
+	}, [single, offDefault]);
 	const oneForAll = split || n >= 2 && draft.grouping === "together";
 	const sum = summarySentence({
 		n,
@@ -57407,144 +57920,170 @@ function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 		grouping: draft.grouping,
 		split
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "rt-opts",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rt-row rt-row-top",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "rt-label",
-					children: many ? "Fast-track each to" : "Fast-track to"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "rt-ctl",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
-						id: "new-lane",
-						label: many ? "Fast-track each to" : "Fast-track to",
-						value: draft.lane,
-						onChange: draft.setLane,
-						askFirst: draft.askFirst,
-						onAskFirst: draft.setAskFirst,
-						disabledReason: oneForAll ? { leave: "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" } : void 0,
-						askReason: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : void 0
-					})
-				})]
-			}),
-			many && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rt-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rt-label",
-						children: "PRs"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rt-ctl",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-							id: "new-grouping",
-							label: "PRs",
-							value: draft.grouping,
-							options: [{
-								v: "each",
-								label: "One per line"
-							}, {
-								v: "together",
-								label: "One for all",
-								disabled: !draft.togetherOk,
-								title: draft.togetherOk ? "Merge them into one branch first, then open one PR" : SERVER_NO_TOGETHER
-							}],
-							onChange: draft.setGrouping
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "rt-hint",
-							children: draft.togetherOk ? "one-for-all merges them into one branch first" : SERVER_NO_TOGETHER
-						})]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rt-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rt-label",
-						children: "At a time"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rt-ctl",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "rt-step",
-							role: "group",
-							"aria-label": "At a time",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									"aria-label": "Fewer at a time",
-									disabled: draft.concurrency <= CONCURRENCY_MIN,
-									onClick: () => draft.setConcurrency(draft.concurrency - 1),
-									children: "−"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									id: "new-concurrency",
-									"aria-live": "polite",
-									children: draft.concurrency
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									"aria-label": "More at a time",
-									disabled: draft.concurrency >= CONCURRENCY_MAX,
-									onClick: () => draft.setConcurrency(draft.concurrency + 1),
-									children: "+"
-								})
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "rt-hint",
-							children: "the rest wait in the group, not in your grid"
-						})]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "rt-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rt-label",
-						children: "Group as"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "rt-ctl",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "new-group-name",
-							className: "rt-name",
-							type: "text",
-							value: draft.name,
-							maxLength: 60,
-							spellCheck: false,
-							autoComplete: "off",
-							onChange: (e) => draft.setName(e.target.value)
-						}), repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "rt-hint",
-							children: "tasks start in"
-						}), repoPicker] })]
-					})]
+	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "rt-row rt-row-top",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "rt-label",
+				children: many ? "Fast-track each to" : "Fast-track to"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "rt-ctl",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
+					id: "new-lane",
+					label: many ? "Fast-track each to" : "Fast-track to",
+					value: draft.lane,
+					onChange: draft.setLane,
+					askFirst: draft.askFirst,
+					onAskFirst: draft.setAskFirst,
+					disabledReason: oneForAll ? { leave: "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" } : void 0,
+					askReason: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : void 0
 				})
-			] }),
-			split && repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			})]
+		}),
+		many && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "rt-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "rt-label",
-					children: "Starts in"
+					children: "PRs"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "rt-ctl",
-					children: [repoPicker, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+						id: "new-grouping",
+						label: "PRs",
+						value: draft.grouping,
+						options: [{
+							v: "each",
+							label: "One per line"
+						}, {
+							v: "together",
+							label: "One for all",
+							disabled: !draft.togetherOk,
+							title: draft.togetherOk ? "Merge them into one branch first, then open one PR" : SERVER_NO_TOGETHER
+						}],
+						onChange: draft.setGrouping
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "rt-hint",
-						children: "the lead gets a new worktree there"
+						children: draft.togetherOk ? "one-for-all merges them into one branch first" : SERVER_NO_TOGETHER
 					})]
 				})]
 			}),
-			splitBox,
-			sum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "rt-sum",
-				"aria-live": "polite",
-				children: [
-					sum.lead,
-					" ",
-					sum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: sum.tail
-					})
-				]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-label",
+					children: "At a time"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-ctl",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-step",
+						role: "group",
+						"aria-label": "At a time",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								"aria-label": "Fewer at a time",
+								disabled: draft.concurrency <= CONCURRENCY_MIN,
+								onClick: () => draft.setConcurrency(draft.concurrency - 1),
+								children: "−"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								id: "new-concurrency",
+								"aria-live": "polite",
+								children: draft.concurrency
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								"aria-label": "More at a time",
+								disabled: draft.concurrency >= CONCURRENCY_MAX,
+								onClick: () => draft.setConcurrency(draft.concurrency + 1),
+								children: "+"
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-hint",
+						children: "the rest wait in the group, not in your grid"
+					})]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-label",
+					children: "Group as"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-ctl",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "new-group-name",
+						className: "rt-name",
+						type: "text",
+						value: draft.name,
+						maxLength: 60,
+						spellCheck: false,
+						autoComplete: "off",
+						onChange: (e) => draft.setName(e.target.value)
+					}), repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-hint",
+						children: "tasks start in"
+					}), repoPicker] })]
+				})]
 			})
-		]
+		] }),
+		split && repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "rt-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "rt-label",
+				children: "Starts in"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-ctl",
+				children: [repoPicker, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-hint",
+					children: "the lead gets a new worktree there"
+				})]
+			})]
+		}),
+		splitBox,
+		sum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "rt-sum",
+			"aria-live": "polite",
+			children: [
+				sum.lead,
+				" ",
+				sum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: sum.tail
+				})
+			]
+		})
+	] });
+	if (many) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-opts",
+		children: body
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-opts",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			id: "new-options",
+			className: "rt-fold",
+			open: split || foldOpen,
+			onToggle: (e) => {
+				if (!split) setFoldOpen(e.currentTarget.open);
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+				title: split ? "Stays open while Split is ticked" : void 0,
+				onClick: (e) => {
+					if (split) {
+						e.preventDefault();
+						return;
+					}
+					rememberOptionsOpen(!foldOpen);
+				},
+				children: optionsSummary(draft.lane, draft.askFirst)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "rt-fold-body",
+				children: body
+			})]
+		})
 	});
 }
 //#endregion
@@ -57704,7 +58243,7 @@ function provisionBlockReason(where) {
 }
 function immediateStartBlockReason(where) {
 	if (where.folderExists || where.confirmed) return "";
-	return "One thing first: " + where.folderLabel + " does not exist yet. Tick the box, then press Start session again.";
+	return "One thing first: " + where.folderLabel + " does not exist yet. Tick the box, then press Create session again.";
 }
 function worktreeClampReason(where) {
 	if (where.inPlace || where.provisionOn) return "";
@@ -57820,6 +58359,7 @@ function NewSessionDialog() {
 	const [searchSel, setSearchSel] = (0, import_react.useState)(0);
 	const [presetValue, setPresetValue] = (0, import_react.useState)("");
 	const [savedPresets, setSavedPresets] = (0, import_react.useState)([]);
+	const [presetName, setPresetName] = (0, import_react.useState)(null);
 	const [profileId, setProfileId] = (0, import_react.useState)("");
 	const [profileModel, setProfileModel] = (0, import_react.useState)("");
 	const [profileModels, setProfileModels] = (0, import_react.useState)({});
@@ -57884,6 +58424,7 @@ function NewSessionDialog() {
 		setProfileModel("");
 		setProfileModels({});
 		setSavedPresets(loadUserPresets());
+		setPresetName(null);
 		let live = true;
 		(async () => {
 			try {
@@ -58031,6 +58572,8 @@ function NewSessionDialog() {
 		program
 	]);
 	const togetherOk = teamRunCaps(config?.caps).together;
+	const ticketingOk = !!config?.caps?.ticketing;
+	const shownTab = ticketingOk ? tab : "session";
 	const draft = useRunDraft({
 		open,
 		text: describe,
@@ -58230,7 +58773,7 @@ function NewSessionDialog() {
 		} catch (err) {
 			if (planRun.current.seq !== seq) return;
 			if (err?.name === "AbortError") return;
-			setPlanError(errMsg(err) + " — fill in the form below instead.");
+			setPlanError(errMsg(err) + " — use Set it up myself instead.");
 		} finally {
 			window.clearTimeout(slow);
 			if (planRun.current.seq === seq) {
@@ -58402,21 +58945,18 @@ function NewSessionDialog() {
 	};
 	const savePreset = () => {
 		const text = prompt.trim();
-		if (!text) {
-			toast("Type a prompt first, then save it as a preset");
-			return;
-		}
-		const name = window.prompt("Preset name:", "");
-		if (!name || !name.trim()) return;
-		const list = loadUserPresets().filter((p) => p.name !== name.trim());
+		const name = (presetName || "").trim();
+		if (!text || !name) return;
+		const list = loadUserPresets().filter((p) => p.name !== name);
 		list.push({
-			name: name.trim(),
+			name,
 			prompt: text
 		});
 		saveUserPresets(list);
 		setSavedPresets(list);
-		setPresetValue("u:" + name.trim());
-		toast(`Saved preset “${name.trim()}”`);
+		setPresetValue("u:" + name);
+		setPresetName(null);
+		toast(`Saved prompt “${name}”`);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "new-dialog",
@@ -58431,17 +58971,18 @@ function NewSessionDialog() {
 				if (browserOpen) folderDo({ t: "browse-cancel" });
 				else closeDialog();
 			} else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-				if (tab !== "session") return;
+				if (shownTab !== "session") return;
 				e.preventDefault();
 				submit();
 			}
 		},
-		children: tab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "new-ticket-form",
 			className: "ta-drop",
 			ref: dropZoneRef,
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
-				tab,
+				tab: shownTab,
+				tabs: ticketingOk,
 				onTab: setTab,
 				onClose: closeDialog
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewTicketPane, {})]
@@ -58455,7 +58996,8 @@ function NewSessionDialog() {
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
-					tab,
+					tab: shownTab,
+					tabs: ticketingOk,
 					onTab: setTab,
 					onClose: closeDialog
 				}),
@@ -58503,6 +59045,23 @@ function NewSessionDialog() {
 									children: "Cancel"
 								})]
 							}),
+							!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "nf-describe-help",
+								children: [
+									"Your coding CLI reads this and works out which folder to use, what to call the session, and what to tell the agent first.",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you pick one of the buttons below." })
+								]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "nf-describe-eg",
+								children: [
+									"Also understood:",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "start a new project called invoice-parser" }),
+									" · ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
+								]
+							})] }),
 							draft.listMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunItems, {
 								rows: draft.rows,
 								onRemove: (row) => {
@@ -58584,23 +59143,6 @@ function NewSessionDialog() {
 									}
 								})]
 							}),
-							!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "nf-describe-help",
-								children: [
-									"Your coding CLI reads this and works out which folder to use, what to call the session, and what to tell the agent first.",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you pick one of the buttons below." })
-								]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "nf-describe-eg",
-								children: [
-									"Also understood:",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "start a new project called invoice-parser" }),
-									" · ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
-								]
-							})] }),
 							planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "nf-describe-note",
 								"aria-live": "polite",
@@ -58620,7 +59162,10 @@ function NewSessionDialog() {
 							className: "new-templates",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nt-head",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Templates" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									title: "Saved New-session setups",
+									children: "Templates"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									id: "new-templates-manage",
 									className: "linklike",
@@ -59131,72 +59676,128 @@ function NewSessionDialog() {
 								children: "— sent to the agent at launch"
 							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-advanced-body",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "preset-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-											id: "new-preset",
-											title: "Prompt presets — pick one to fill the prompt below (editable after)",
-											value: presetValue,
-											onChange: (e) => {
-												setPresetValue(e.target.value);
-												const p = findPreset(e.target.value);
-												if (p) setPrompt(p.prompt);
-											},
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-													value: "",
-													children: "Preset…"
-												}),
-												BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-													label: "Built-in",
-													children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "b:" + p.name,
-														title: p.prompt,
-														children: p.name
-													}, "b:" + p.name))
-												}),
-												savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-													label: "Saved",
-													children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "u:" + p.name,
-														title: p.prompt,
-														children: p.name
-													}, "u:" + p.name))
-												})
-											]
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "preset-save",
-											title: "Save current prompt as preset…",
-											onClick: savePreset,
-											children: "Save…"
-										}),
-										presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "preset-del",
-											title: "Delete the selected saved preset",
-											onClick: () => {
-												const p = findPreset(presetValue);
-												if (!p) return;
-												const list = loadUserPresets().filter((q) => q.name !== p.name);
-												saveUserPresets(list);
-												setSavedPresets(list);
-												setPresetValue("");
-											},
-											children: "✕"
-										})
-									]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-									id: "new-prompt",
-									rows: 2,
-									autoComplete: "off",
-									spellCheck: false,
-									placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
-									value: prompt,
-									onChange: (e) => setPrompt(e.target.value)
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "preset-row",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+												id: "new-preset",
+												title: "Saved prompts — pick one to fill the prompt below (editable after)",
+												value: presetValue,
+												onChange: (e) => {
+													setPresetValue(e.target.value);
+													const p = findPreset(e.target.value);
+													if (p) setPrompt(p.prompt);
+												},
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "",
+														children: "Saved prompt…"
+													}),
+													BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Built-in",
+														children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: "b:" + p.name,
+															title: p.prompt,
+															children: p.name
+														}, "b:" + p.name))
+													}),
+													savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Saved",
+														children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: "u:" + p.name,
+															title: p.prompt,
+															children: p.name
+														}, "u:" + p.name))
+													})
+												]
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-save",
+												title: "Save the prompt below so you can pick it again",
+												"aria-expanded": presetName !== null,
+												onClick: () => setPresetName((cur) => cur === null ? "" : null),
+												children: "Save…"
+											}),
+											presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-del",
+												title: "Delete this saved prompt",
+												onClick: () => {
+													const p = findPreset(presetValue);
+													if (!p) return;
+													const list = loadUserPresets().filter((q) => q.name !== p.name);
+													saveUserPresets(list);
+													setSavedPresets(list);
+													setPresetValue("");
+												},
+												children: "✕"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-manage",
+												className: "linklike",
+												title: "Your saved prompts, in Customize → Prompts",
+												onClick: () => useUi.getState().openDialogFor("prompts"),
+												children: "Manage…"
+											})
+										]
+									}),
+									presetName !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "preset-name-row",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+												id: "preset-name",
+												type: "text",
+												autoFocus: true,
+												autoComplete: "off",
+												spellCheck: false,
+												placeholder: "Name this prompt",
+												"aria-label": "Name for the saved prompt",
+												value: presetName,
+												onChange: (e) => setPresetName(e.target.value),
+												onKeyDown: (e) => {
+													e.stopPropagation();
+													if (e.key === "Enter") {
+														e.preventDefault();
+														savePreset();
+													} else if (e.key === "Escape") {
+														e.preventDefault();
+														setPresetName(null);
+													}
+												}
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-name-save",
+												disabled: !presetName.trim() || !prompt.trim(),
+												title: prompt.trim() ? "Save it" : "Type a prompt below first",
+												onClick: savePreset,
+												children: "Save"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-name-cancel",
+												onClick: () => setPresetName(null),
+												children: "Cancel"
+											}),
+											!prompt.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: "Type a prompt below first."
+											})
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+										id: "new-prompt",
+										rows: 2,
+										autoComplete: "off",
+										spellCheck: false,
+										placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
+										value: prompt,
+										onChange: (e) => setPrompt(e.target.value)
+									})
+								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 									className: "check" + (planOk ? "" : " disabled"),
 									id: "new-plan-first-row",
 									title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
@@ -59247,7 +59848,7 @@ function NewSessionDialog() {
 									type: "text",
 									id: "new-launch-args",
 									autoComplete: "off",
-									placeholder: "--dangerously-skip-permissions",
+									placeholder: "e.g. --verbose",
 									value: launchArgs,
 									onChange: (e) => setLaunchArgs(e.target.value)
 								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
@@ -59274,19 +59875,13 @@ function NewSessionDialog() {
 							onClick: () => setPage(2),
 							children: "Set it up myself instead"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "new-describe-go",
 							disabled: describing,
 							"aria-busy": describing || void 0,
-							title: runMode ? "Review is for one session. A list (or a split) starts from the rows and choices above." : "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
-							onClick: () => {
-								if (runMode) {
-									setPlanError(splitOn ? "A split's lead is set up by MindFlock — untick Split to review one session's details." : "Review details is for one session — check the rows above and start them from here.");
-									return;
-								}
-								runDescribe("fill");
-							},
+							title: "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
+							onClick: () => void runDescribe("fill"),
 							children: describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "btn-spin",
@@ -59297,7 +59892,7 @@ function NewSessionDialog() {
 							] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								"Review details first",
 								" ",
-								!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "nf-key",
 									"aria-hidden": "true",
 									children: "↵"
@@ -59309,7 +59904,7 @@ function NewSessionDialog() {
 							id: "new-describe-start",
 							disabled: describing || draft.starting,
 							"aria-busy": draft.starting || void 0,
-							title: runMode ? "Start them now. MindFlock queues the rest, ships each one as chosen above, and shows what needs you in the Outbox." : "Create the session right now from what you typed, without showing you the details first.",
+							title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
 							onClick: runMode ? () => void startRun() : startNow,
 							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1, splitOn)
 						})
@@ -59328,12 +59923,12 @@ function NewSessionDialog() {
 		})
 	});
 }
-function NewHead({ tab, onTab, onClose }) {
+function NewHead({ tab, tabs, onTab, onClose }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ws-head nf-head",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+			tabs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
 				className: "nf-tabs",
 				"aria-label": "New",
 				children: NEW_TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -59542,7 +60137,7 @@ function useSettingsModel(open) {
 			try {
 				putSettingsDoc((await api("/api/settings", { json: { [group]: { [field]: value } } }))?.settings || {});
 				refreshConfig();
-				toast("Saved " + field.replace(/_/g, " "));
+				toast("Saved");
 			} catch (err) {
 				toast("Save failed: " + (err.message || field));
 				reload();
@@ -59610,6 +60205,38 @@ function SettingField(props) {
 		onKeyDown: (e) => {
 			if (e.key === "Enter") e.target.blur();
 		}
+	});
+}
+function InlineConfirm(props) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-confirm",
+		role: "alertdialog",
+		"aria-label": props.title,
+		id: props.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-confirm-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
+				" ",
+				props.body
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-confirm-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn set-confirm-yes",
+				disabled: props.busy,
+				onClick: props.onConfirm,
+				children: props.confirmLabel
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				autoFocus: true,
+				disabled: props.busy,
+				onClick: props.onCancel,
+				children: "Cancel"
+			})]
+		})]
 	});
 }
 //#endregion
@@ -59783,6 +60410,10 @@ function workspaceNote(ws) {
 		return when ? "session ended " + when : "session you ended";
 	}
 	return "workspace left on this machine";
+}
+function ladderLabel(depth) {
+	const d = !depth || depth === "agent" ? "off" : depth;
+	return DEPTH_LABELS[d] || d;
 }
 function ageText(iso) {
 	const t = Date.parse(iso || "");
@@ -59972,6 +60603,17 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 	const effortProvider = agent || configuredAgent || "";
 	const effortCap = effortCaps ? effortCaps[effortProvider] : void 0;
 	const effortUsable = supportsEffort(effortCap);
+	const [optsOpen, setOptsOpen] = (0, import_react.useState)(false);
+	const picked = !!(agent || depth || effortUsable && effort);
+	const showPicks = optsOpen || picked;
+	const defaultDepth = ladderLabel(configuredDepth);
+	const defaultIsOff = defaultDepth === DEPTH_LABELS.off;
+	const effortDefault = configuredEffort ? effortOptionLabel(configuredEffort, effortCap) : "";
+	const uses = [
+		agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
+		"Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth),
+		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : "default effort"
+	].filter(Boolean).join(" · ");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-item" + (pick?.checked ? " picked" : ""),
 		title: tooltip,
@@ -60054,7 +60696,21 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 						},
 						children: reopening === "busy" ? "Reopening…" : reopening === "done" ? "Reopened" : "Reopen window"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					!picked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ik-item-optline",
+						children: [!showPicks && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-item-uses",
+							children: uses
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike ik-item-opts",
+							"aria-expanded": showPicks,
+							title: showPicks ? "Hide the per-start options" : "Pick a different CLI, Fast-track or effort for just this start",
+							onClick: () => setOptsOpen(!optsOpen),
+							children: showPicks ? "Hide options" : "Options"
+						})]
+					}),
+					showPicks && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "ik-item-picks",
 						children: [
 							agents && agents.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
@@ -60062,12 +60718,12 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 								value: agent,
 								"data-picked": agent || void 0,
 								disabled: state !== "idle",
-								title: "Coding CLI to run this one on — just this start, not the whole queue" + (configuredAgent ? " (configured: " + configuredAgent + ")" : ""),
+								title: "Coding CLI to run this one on — just this start, not the whole queue" + (configuredAgent ? " (default: " + configuredAgent + ")" : ""),
 								"aria-label": "Coding CLI for " + reference,
 								onChange: (e) => setAgent(e.target.value),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 									value: "",
-									children: "Configured (" + (configuredAgent || "app default") + ")"
+									children: "Default (" + (configuredAgent || "app default") + ")"
 								}), agents.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 									value: n,
 									children: n
@@ -60078,16 +60734,23 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 								value: depth,
 								"data-picked": depth || void 0,
 								disabled: state !== "idle",
-								title: "Fast-track this one to — just this start, not the whole queue" + (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : ""),
+								title: "Fast-track this one to — just this start, not the whole queue (default: " + defaultDepth + ")",
 								"aria-label": "Fast-track " + reference + " to",
 								onChange: (e) => setDepth(e.target.value),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: "",
-									children: "Configured (" + DEPTH_LABELS[configuredDepth || "off"] + ")"
-								}), DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: d,
-									children: DEPTH_LABELS[d]
-								}, d))]
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "",
+										children: "Default (" + defaultDepth + ")"
+									}),
+									!defaultIsOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "off",
+										children: DEPTH_LABELS.off
+									}),
+									SESSION_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: d,
+										children: DEPTH_LABELS[d]
+									}, d))
+								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 								className: "ik-item-effort",
@@ -60099,7 +60762,7 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 								onChange: (e) => setEffort(e.target.value),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 									value: "",
-									children: !effortUsable ? "No effort (" + (effortProvider || "this CLI") + ")" : configuredEffort ? "Configured (" + effortOptionLabel(configuredEffort, effortCap) + ")" : "Default effort"
+									children: !effortUsable ? "No effort (" + (effortProvider || "this CLI") + ")" : effortDefault ? "Default (" + effortDefault + ")" : "Default effort"
 								}), effortUsable && EFFORTS.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 									value: e,
 									children: effortOptionLabel(e, effortCap)
@@ -60544,6 +61207,13 @@ function TicketsTab(_) {
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IngestionToggle, { sourceCount: (sources || []).length }),
+		sources.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
+			agents: agents.names,
+			sourceAgents: Object.fromEntries(sources.map((s) => [s.id, s.agent || agents.fallback || ""])),
+			defaultAgent: agents.fallback,
+			sourceDepths: Object.fromEntries(sources.map((s) => [s.id, s.depth || ""])),
+			sourceEfforts: Object.fromEntries(sources.map((s) => [s.id, s.effort || ""]))
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
 			children: [
@@ -60580,13 +61250,6 @@ function TicketsTab(_) {
 					})
 				})
 			]
-		}),
-		sources.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
-			agents: agents.names,
-			sourceAgents: Object.fromEntries(sources.map((s) => [s.id, s.agent || agents.fallback || ""])),
-			defaultAgent: agents.fallback,
-			sourceDepths: Object.fromEntries(sources.map((s) => [s.id, s.depth || ""])),
-			sourceEfforts: Object.fromEntries(sources.map((s) => [s.id, s.effort || ""]))
 		})
 	] });
 }
@@ -61064,7 +61727,8 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 	const [states, setStates] = (0, import_react.useState)([]);
 	const provName = meta?.label || source.provider;
 	const detail = (source.label || source.member_id || source.repo_url || "").trim();
-	const summary = (detail ? provName + " — " + detail : provName) + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
+	const namesProvider = [provName, source.provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length)));
+	const summary = (!detail ? provName : namesProvider ? detail : provName + " — " + detail) + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
 	const repoMissing = !(source.repo_url || "").trim();
 	const testPayload = () => {
 		const payload = {
@@ -61240,23 +61904,19 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 						className: "tk-depth",
 						"data-tk-field": "depth",
-						value: source.depth || "",
+						value: source.depth === "agent" ? "" : source.depth || "",
 						onChange: (e) => onChange({ depth: e.target.value }),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: "",
-							children: "Off — stop after the agent works"
-						}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							children: DEPTH_LABELS.off
+						}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: d,
 							children: DEPTH_LABELS[d]
 						}, d))]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: [
-							"How far every ticket from this source carries itself once the agent finishes: commit, push, open a PR. Merging is ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "not" }),
-							" offered here — a source default applies to every future ticket with nobody watching, and a merge cannot be undone. You can still pick Merge on one ticket's row."
-						]
+						children: "How far each ticket goes after its agent finishes. Merge is per-ticket only — a source default runs with nobody watching."
 					})
 				]
 			}),
@@ -61489,7 +62149,7 @@ function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, li
 				}) : cards.map((card) => {
 					const o = ov[card.repo];
 					const agent = o?.agent || "";
-					const depth = o?.depth || "";
+					const depth = o?.depth === "agent" ? "" : o?.depth || "";
 					const live = o?.live_branch || defaults.liveBranch;
 					const summary = surface === "verify" ? (card.repo || "New repository") + (live ? " · live: " + live : "") : (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SourceCard, {
@@ -61735,15 +62395,15 @@ function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, li
 											onChange: (e) => patch(card.repo, "depth", e.target.value),
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: "",
-												children: "Off — stop after the agent works"
-											}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												children: DEPTH_LABELS.off
+											}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: d,
 												children: DEPTH_LABELS[d]
 											}, d))]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "set-hint",
-											children: "How far each item from this repo carries itself once the agent finishes: commit, push, open a PR. Merge is not offered for a whole repo — pick it on an individual row instead."
+											children: "How far each item goes after its agent finishes. Merge is per-item only — a repo default runs with nobody watching."
 										})
 									]
 								}),
@@ -61895,6 +62555,115 @@ function PullRequestsTab({ gotoTab }) {
 		byRepo.get(key).push(p);
 	}
 	const groupOrder = filter.active ? [...byRepo.keys()] : [...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)), ...[...byRepo.keys()].filter((r) => !repos.includes(r))];
+	const sourceList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
+		surface: "pr",
+		label: "Repositories",
+		repos,
+		overrides,
+		onSave: (list, next, msg) => saveGithub({
+			repos: list,
+			repo_settings: next
+		}, msg),
+		defaults: {
+			agent: String(gh.agent || agentChoices.fallback || ""),
+			baseBranch: String(gh.base_branch || ""),
+			minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
+			skipAuthors: String(skipAuthors),
+			liveBranch: ""
+		},
+		listId: "gh-repos-list",
+		addId: "gh-repo-add-btn",
+		addLabel: "+ Add repository",
+		emptyText: "No repositories yet — add one below to start reviewing your PRs.",
+		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
+			". Adding a repository turns review on; remove them all to turn it off."
+		] })
+	}, "sources");
+	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+		label: "Open pull requests",
+		onRefresh: loadOpenPrs,
+		note: prsNote,
+		rowId: "gh-open-prs-row",
+		refreshId: "gh-prs-refresh",
+		noteId: "gh-prs-note",
+		listId: "gh-prs-list",
+		toolbarExtra: prs && prs.length ? filter.control : void 0,
+		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Every non-draft open PR on your watched repositories, grouped by repository, with why auto review has or hasn't picked it up. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Begin review" }),
+			" starts a review session for that PR right now, bypassing the author / age / base-branch / already-reviewed filters."
+		] }),
+		children: prsError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: prsError
+		}) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: "Add a repository to see its open PRs."
+		}) : !prs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: "No open pull requests on the watched repositories."
+		}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "repo-empty",
+			children: [
+				"No open pull request matches “",
+				filter.query,
+				"”."
+			]
+		}) : groupOrder.map((repo) => {
+			const rows = byRepo.get(repo) || [];
+			const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "repo-empty",
+				children: "No open pull requests in this repository."
+			}) : rows.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+				reference: "#" + p.number,
+				url: p.url,
+				title: p.title,
+				tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
+				meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
+				hasSession: p.has_session,
+				eligible: p.eligible,
+				eligibleLabel: "queued for auto review",
+				reasons: p.reasons,
+				actionLabel: "Begin review",
+				failPrefix: "Begin review failed",
+				workspace: p.workspace,
+				onReopen: async () => {
+					const title = await reopenIntakeItem({
+						kind: "prs",
+						repo: p.repo,
+						number: p.number
+					});
+					setTimeout(relistPrs, 5e3);
+					return title;
+				},
+				agents: agentChoices.names,
+				configuredAgent: overrides[repo]?.agent || String(gh.agent || agentChoices.fallback || ""),
+				configuredDepth: overrides[repo]?.depth || "",
+				onStart: async ({ agent, depth, effort }) => {
+					const r = await api("/api/github/prs/review", { json: {
+						repo: p.repo,
+						number: p.number,
+						...agent ? { agent } : {},
+						...depth ? { depth } : {},
+						...effort ? { effort } : {}
+					} });
+					refreshInstances();
+					setTimeout(relistPrs, 5e3);
+					return "Review session " + (r?.title || "");
+				}
+			}, (p.repo || "") + p.number));
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+				heading: true,
+				name: repo,
+				count: rows.length,
+				open: groups.isOpen(repo),
+				onToggle: () => groups.toggle(repo),
+				children: body
+			}, repo);
+		})
+	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
@@ -61943,115 +62712,7 @@ function PullRequestsTab({ gotoTab }) {
 			onChange: (next) => saveGithub({ enabled: next }, next ? "Automated review on" : "Automated review paused"),
 			note: n ? void 0 : "Add a repository below and this starts reviewing your PRs on it"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
-			surface: "pr",
-			label: "Repositories",
-			repos,
-			overrides,
-			onSave: (list, next, msg) => saveGithub({
-				repos: list,
-				repo_settings: next
-			}, msg),
-			defaults: {
-				agent: String(gh.agent || agentChoices.fallback || ""),
-				baseBranch: String(gh.base_branch || ""),
-				minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
-				skipAuthors: String(skipAuthors),
-				liveBranch: ""
-			},
-			listId: "gh-repos-list",
-			addId: "gh-repo-add-btn",
-			addLabel: "+ Add repository",
-			emptyText: "No repositories yet — add one below to start reviewing your PRs.",
-			hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				"Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
-				". Adding a repository turns review on; remove them all to turn it off."
-			] })
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
-			label: "Open pull requests",
-			onRefresh: loadOpenPrs,
-			note: prsNote,
-			rowId: "gh-open-prs-row",
-			refreshId: "gh-prs-refresh",
-			noteId: "gh-prs-note",
-			listId: "gh-prs-list",
-			toolbarExtra: prs && prs.length ? filter.control : void 0,
-			hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				"Every non-draft open PR on the repositories above , grouped by repository, with why auto review has or hasn't picked it up. ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Begin review" }),
-				" starts a review session for that PR right now, bypassing the author / age / base-branch / already-reviewed filters."
-			] }),
-			children: prsError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: prsError
-			}) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: "Add a repository above to see its open PRs."
-			}) : !prs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: "No open pull requests on the watched repositories."
-			}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "repo-empty",
-				children: [
-					"No open pull request matches “",
-					filter.query,
-					"”."
-				]
-			}) : groupOrder.map((repo) => {
-				const rows = byRepo.get(repo) || [];
-				const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "repo-empty",
-					children: "No open pull requests in this repository."
-				}) : rows.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
-					reference: "#" + p.number,
-					url: p.url,
-					title: p.title,
-					tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
-					meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
-					hasSession: p.has_session,
-					eligible: p.eligible,
-					eligibleLabel: "queued for auto review",
-					reasons: p.reasons,
-					actionLabel: "Begin review",
-					failPrefix: "Begin review failed",
-					workspace: p.workspace,
-					onReopen: async () => {
-						const title = await reopenIntakeItem({
-							kind: "prs",
-							repo: p.repo,
-							number: p.number
-						});
-						setTimeout(relistPrs, 5e3);
-						return title;
-					},
-					agents: agentChoices.names,
-					configuredAgent: overrides[repo]?.agent || String(gh.agent || agentChoices.fallback || ""),
-					configuredDepth: overrides[repo]?.depth || "",
-					onStart: async ({ agent, depth, effort }) => {
-						const r = await api("/api/github/prs/review", { json: {
-							repo: p.repo,
-							number: p.number,
-							...agent ? { agent } : {},
-							...depth ? { depth } : {},
-							...effort ? { effort } : {}
-						} });
-						refreshInstances();
-						setTimeout(relistPrs, 5e3);
-						return "Review session " + (r?.title || "");
-					}
-				}, (p.repo || "") + p.number));
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-					heading: true,
-					name: repo,
-					count: rows.length,
-					open: groups.isOpen(repo),
-					onToggle: () => groups.toggle(repo),
-					children: body
-				}, repo);
-			})
-		}),
+		n ? [workList, sourceList] : [sourceList, workList],
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -62251,6 +62912,115 @@ function IssuesTab({ gotoTab }) {
 		byRepo.get(key).push(i);
 	}
 	const groupOrder = filter.active ? [...byRepo.keys()] : [...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)), ...[...byRepo.keys()].filter((r) => !repos.includes(r))];
+	const sourceList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
+		surface: "issue",
+		label: "Repositories",
+		repos,
+		overrides,
+		onSave: (list, next, msg) => saveGithub({
+			issue_repos: list,
+			issue_repo_settings: next
+		}, msg),
+		defaults: {
+			agent: String(gh.issue_agent || agentChoices.fallback || ""),
+			baseBranch: "",
+			minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
+			skipAuthors: String(skipAuthors),
+			liveBranch: ""
+		},
+		listId: "gh-issue-repos-list",
+		addId: "gh-issue-repo-add-btn",
+		addLabel: "+ Add repository",
+		emptyText: "No repositories yet — add one below to start handling new issues.",
+		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
+			". This list is separate from PR review's — a repo can be on either, or both."
+		] })
+	}, "sources");
+	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+		label: "Open issues",
+		onRefresh: loadOpenIssues,
+		note: issuesNote,
+		rowId: "gh-open-issues-row",
+		refreshId: "gh-issues-refresh",
+		noteId: "gh-issues-note",
+		listId: "gh-issues-list",
+		toolbarExtra: issues && issues.length ? filter.control : void 0,
+		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Every open issue on your watched repositories, grouped by repository, with why auto handling has or hasn't picked it up. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start work" }),
+			" spins up a session for that issue right now, bypassing the age / already-handled filters."
+		] }),
+		children: issuesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: issuesError
+		}) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: "Add a repository to see its open issues."
+		}) : !issues.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: "No open issues on the watched repositories."
+		}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "repo-empty",
+			children: [
+				"No open issue matches “",
+				filter.query,
+				"”."
+			]
+		}) : groupOrder.map((repo) => {
+			const rows = byRepo.get(repo) || [];
+			const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "repo-empty",
+				children: "No open issues in this repository."
+			}) : rows.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+				reference: "#" + i.number,
+				url: i.url,
+				title: i.title,
+				tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
+				meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
+				hasSession: i.has_session,
+				eligible: i.eligible,
+				eligibleLabel: "queued for auto handling",
+				reasons: i.reasons,
+				actionLabel: "Start work",
+				failPrefix: "Start work failed",
+				workspace: i.workspace,
+				onReopen: async () => {
+					const title = await reopenIntakeItem({
+						kind: "issues",
+						repo: i.repo,
+						number: i.number
+					});
+					setTimeout(relistIssues, 5e3);
+					return title;
+				},
+				agents: agentChoices.names,
+				configuredAgent: overrides[repo]?.agent || String(gh.issue_agent || agentChoices.fallback || ""),
+				configuredDepth: overrides[repo]?.depth || "",
+				onStart: async ({ agent, depth, effort }) => {
+					const r = await api("/api/github/issues/start", { json: {
+						repo: i.repo,
+						number: i.number,
+						...agent ? { agent } : {},
+						...depth ? { depth } : {},
+						...effort ? { effort } : {}
+					} });
+					refreshInstances();
+					setTimeout(relistIssues, 5e3);
+					return "Issue session " + (r?.title || "");
+				}
+			}, (i.repo || "") + i.number));
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+				heading: true,
+				name: repo,
+				count: rows.length,
+				open: groups.isOpen(repo),
+				onToggle: () => groups.toggle(repo),
+				children: body
+			}, repo);
+		})
+	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
@@ -62298,115 +63068,7 @@ function IssuesTab({ gotoTab }) {
 			onChange: (next) => saveGithub({ issues_enabled: next }, next ? "Automated issue handling on" : "Automated issue handling off"),
 			note: n ? void 0 : "Add a repository below and this starts handling its new issues"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
-			surface: "issue",
-			label: "Repositories",
-			repos,
-			overrides,
-			onSave: (list, next, msg) => saveGithub({
-				issue_repos: list,
-				issue_repo_settings: next
-			}, msg),
-			defaults: {
-				agent: String(gh.issue_agent || agentChoices.fallback || ""),
-				baseBranch: "",
-				minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
-				skipAuthors: String(skipAuthors),
-				liveBranch: ""
-			},
-			listId: "gh-issue-repos-list",
-			addId: "gh-issue-repo-add-btn",
-			addLabel: "+ Add repository",
-			emptyText: "No repositories yet — add one below to start handling new issues.",
-			hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				"Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
-				". This list is separate from PR review's — a repo can be on either, or both."
-			] })
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
-			label: "Open issues",
-			onRefresh: loadOpenIssues,
-			note: issuesNote,
-			rowId: "gh-open-issues-row",
-			refreshId: "gh-issues-refresh",
-			noteId: "gh-issues-note",
-			listId: "gh-issues-list",
-			toolbarExtra: issues && issues.length ? filter.control : void 0,
-			hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				"Every open issue on the repositories above, grouped by repository, with why auto handling has or hasn't picked it up. ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start work" }),
-				" spins up a session for that issue right now, bypassing the age / already-handled filters."
-			] }),
-			children: issuesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: issuesError
-			}) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: "Add a repository above to see its open issues."
-			}) : !issues.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: "No open issues on the watched repositories."
-			}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "repo-empty",
-				children: [
-					"No open issue matches “",
-					filter.query,
-					"”."
-				]
-			}) : groupOrder.map((repo) => {
-				const rows = byRepo.get(repo) || [];
-				const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "repo-empty",
-					children: "No open issues in this repository."
-				}) : rows.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
-					reference: "#" + i.number,
-					url: i.url,
-					title: i.title,
-					tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
-					meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
-					hasSession: i.has_session,
-					eligible: i.eligible,
-					eligibleLabel: "queued for auto handling",
-					reasons: i.reasons,
-					actionLabel: "Start work",
-					failPrefix: "Start work failed",
-					workspace: i.workspace,
-					onReopen: async () => {
-						const title = await reopenIntakeItem({
-							kind: "issues",
-							repo: i.repo,
-							number: i.number
-						});
-						setTimeout(relistIssues, 5e3);
-						return title;
-					},
-					agents: agentChoices.names,
-					configuredAgent: overrides[repo]?.agent || String(gh.issue_agent || agentChoices.fallback || ""),
-					configuredDepth: overrides[repo]?.depth || "",
-					onStart: async ({ agent, depth, effort }) => {
-						const r = await api("/api/github/issues/start", { json: {
-							repo: i.repo,
-							number: i.number,
-							...agent ? { agent } : {},
-							...depth ? { depth } : {},
-							...effort ? { effort } : {}
-						} });
-						refreshInstances();
-						setTimeout(relistIssues, 5e3);
-						return "Issue session " + (r?.title || "");
-					}
-				}, (i.repo || "") + i.number));
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-					heading: true,
-					name: repo,
-					count: rows.length,
-					open: groups.isOpen(repo),
-					onToggle: () => groups.toggle(repo),
-					children: body
-				}, repo);
-			})
-		}),
+		n ? [workList, sourceList] : [sourceList, workList],
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -62709,8 +63371,8 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 							ageText(item.created_at),
 							item.assignee
 						].filter(Boolean).join(" · "),
-						eligible: true,
-						eligibleLabel: "will auto-start",
+						eligible: s.state === "on",
+						eligibleLabel: s.state === "on" ? "will auto-start" : "",
 						actionLabel: "Start now",
 						failPrefix: "Start failed",
 						agents,
@@ -62841,6 +63503,7 @@ function QueueTab({ gotoTab }) {
 		items: sec.items.filter((i) => queuedMatches(i, filter.tokens))
 	})).filter((sec) => sec.items.length) : sections;
 	const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
+	const autoTotal = sections.filter((sec) => sec.state === "on").reduce((n, sec) => n + sec.items.length, 0);
 	const refreshAll = () => {
 		ticketsQ.refresh();
 		prsQ.refresh();
@@ -62898,7 +63561,7 @@ function QueueTab({ gotoTab }) {
 					total ? filter.control : null,
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "pr-open-note",
-						children: total === 0 ? "Nothing waiting to start" : filter.active ? shownTotal + " of " + total + " shown" : total + (total === 1 ? " item will auto-start" : " items will auto-start")
+						children: total === 0 ? "Nothing waiting to start" : filter.active ? shownTotal + " of " + total + " shown" : autoTotal === total ? total + (total === 1 ? " item will auto-start" : " items will auto-start") : total + " waiting · " + autoTotal + " will auto-start"
 					})
 				]
 			}),
@@ -62934,7 +63597,7 @@ var LEGACY_SCREEN_TABS = {
 	repo: "prs",
 	issues: "issues"
 };
-var TABS = [
+var TABS$1 = [
 	{
 		key: "tickets",
 		label: "Tickets",
@@ -62995,7 +63658,7 @@ function IntakeDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const wanted = target && (LEGACY_SCREEN_TABS[target] || target);
-		setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
+		setTab(wanted && TABS$1.some((t) => t.key === wanted) ? wanted : "tickets");
 	}, [open, target]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -63046,7 +63709,7 @@ function IntakeDialog() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
 						id: "intake-tabs",
 						"aria-label": "Intake tabs",
-						children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						children: TABS$1.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							type: "button",
 							className: "ik-tab" + (tab === t.key ? " active" : ""),
 							"data-intake-tab": t.key,
@@ -63057,7 +63720,7 @@ function IntakeDialog() {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						id: "intake-body",
-						children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+						children: TABS$1.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 							className: "ik-panel" + (tab === t.key ? " active" : ""),
 							"data-intake-tab": t.key,
 							id: t.legacyId,
@@ -63082,6 +63745,7 @@ function IntakeDialog() {
 //#region src/components/settings/screens/General.tsx
 function General(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GettingStarted, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "General"
@@ -63108,7 +63772,7 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
-			title: "Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the header's '% left' — leave 0 to show only the reset countdown.",
+			title: "Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown.",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
@@ -63122,17 +63786,22 @@ function General(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Subscription plans only — the '% left' estimate in the top bar is measured against this. Not billed dollars."
+					children: "Subscription plans only — the '% left' estimate in the sidebar's Usage bar is measured against this. Not billed dollars."
 				})
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GettingStarted, {})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "pr-advanced agent-mcp-fold",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Agent orchestration (MindFlock MCP)" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-advanced-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {})
+			})]
+		})
 	] });
 }
 function ResumeOnUsageResetRow() {
@@ -63284,7 +63953,7 @@ function GettingStarted() {
 						children: "Welcome walkthrough"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "A guided tour of sessions, the sidebar, and connecting your accounts."
+						children: "A short tour: sessions and the grid, shipping, and where work comes from (Intake, Verify, Customize)."
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -63850,10 +64519,6 @@ function Notifications(_) {
 				className: "muted",
 				children: "No notification rules configured."
 			}) : rules.map((rule) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleRow, { rule }, rule.id))
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Also reachable from the bell in the sidebar header."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ntfy, {})
 	] });
@@ -64550,6 +65215,7 @@ function Accounts(_) {
 	const [error, setError] = (0, import_react.useState)("");
 	const [probes, setProbes] = (0, import_react.useState)({});
 	const [testing, setTesting] = (0, import_react.useState)("");
+	const [pendingForce, setPendingForce] = (0, import_react.useState)(null);
 	(0, import_react.useEffect)(() => {
 		setProfiles(data?.profiles || []);
 		setDefaultId(data?.default_profile || "");
@@ -64557,6 +65223,7 @@ function Accounts(_) {
 	}, [data]);
 	const save = async (next, nextDefault, force) => {
 		setError("");
+		setPendingForce(null);
 		try {
 			const body = { profiles: next };
 			if (nextDefault !== void 0) body.default_profile = nextDefault;
@@ -64573,11 +65240,11 @@ function Accounts(_) {
 		} catch (err) {
 			const msg = err.message || "";
 			if (/still in use by/.test(msg)) {
-				if (window.confirm(msg.replace(/, or resend with force.*$/, "") + ".\n\nRemove anyway? Those sessions will run on the CLI's own login until you give them a new account.")) {
-					await save(next, nextDefault, true);
-					return;
-				}
-				setError("");
+				setPendingForce({
+					next,
+					nextDefault,
+					msg: msg.replace(/, or resend with force.*$/, "")
+				});
 				return;
 			}
 			setError(msg);
@@ -64933,6 +65600,21 @@ function Accounts(_) {
 				children: "Add account"
 			})
 		}),
+		pendingForce && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			id: "acct-force-confirm",
+			title: pendingForce.msg + ".",
+			body: "Remove it anyway? Those sessions will run on the CLI's own login until you give them a new account.",
+			confirmLabel: "Remove anyway",
+			onConfirm: () => {
+				const p = pendingForce;
+				setPendingForce(null);
+				save(p.next, p.nextDefault, true);
+			},
+			onCancel: () => {
+				setPendingForce(null);
+				setProfiles(data?.profiles || []);
+			}
+		}),
 		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "error",
 			children: error
@@ -65170,8 +65852,8 @@ function Workspace({ gotoScreen }) {
 				"Where MindFlock puts the working checkouts your ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "coding sessions" }),
 				" run in. Which repo a session clones comes from its ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Ticketing source" }),
-				" (each source names its own repo) or the repo you pick when starting a manual session — so there's nothing to set here per repo."
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ticket source (Intake → Tickets)" }),
+				", which names its own repo, or the repo you pick when starting a manual session — so there's nothing to set here per repo."
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -65469,7 +66151,7 @@ function Ide(_) {
 						try {
 							const r = await api("/api/cursor/autoadopt", { json: { enabled: want } });
 							setAutoAdopt(!!r?.enabled);
-							toast(r?.enabled ? "Cursor auto-adopt on" : "Cursor auto-adopt off");
+							toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
 						} catch {
 							setAutoAdopt(!want);
 							toast("Auto-adopt toggle failed");
@@ -65781,14 +66463,29 @@ function Security(_) {
 	const [tokenText, setTokenText] = (0, import_react.useState)(AUTH_TOKEN_MASK);
 	const authMode = String(s.get("general", "auth_mode") ?? "auto") || "auto";
 	const remote = String(s.get("general", "remote_control") ?? "");
+	const [confirmOff, setConfirmOff] = (0, import_react.useState)(false);
+	const [confirmRotate, setConfirmRotate] = (0, import_react.useState)(false);
+	const [rotating, setRotating] = (0, import_react.useState)(false);
 	const setAuthMode = (value) => {
-		if (value === "off") {
-			if (!confirm("Turn the access-token gate OFF?\n\nAnyone who can reach this server's URL (e.g. on your tailnet/LAN) will be able to drive your agents and commit code with no sign-in. Only do this on a network you fully trust.")) {
-				s.saveField("general", "auth_mode", "auto");
-				return;
-			}
+		if (value === "off" && authMode !== "off") {
+			setConfirmOff(true);
+			return;
 		}
+		setConfirmOff(false);
 		s.saveField("general", "auth_mode", value);
+	};
+	const rotate = async () => {
+		setRotating(true);
+		try {
+			authTokenCache = (await api("/api/settings/auth-token/rotate", { method: "POST" }))?.token || null;
+			if (shown) setTokenText(authTokenCache || "(none set)");
+			toast("Access token regenerated — other devices must sign in again");
+		} catch (e) {
+			toast("Couldn't regenerate the token: " + e.message);
+		} finally {
+			setRotating(false);
+			setConfirmRotate(false);
+		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -65830,6 +66527,17 @@ function Security(_) {
 					children: "The token guards a server reachable over your tailnet/LAN (it can drive agents and commit code). \"Off\" removes that gate entirely."
 				})
 			]
+		}),
+		confirmOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			id: "auth-mode-confirm",
+			title: "Turn the access-token gate off?",
+			body: "Anyone who can reach this server's URL (e.g. on your tailnet/LAN) will be able to drive your agents and commit code with no sign-in. Only do this on a network you fully trust.",
+			confirmLabel: "Turn it off",
+			onConfirm: () => {
+				setConfirmOff(false);
+				s.saveField("general", "auth_mode", "off");
+			},
+			onCancel: () => setConfirmOff(false)
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
@@ -65886,19 +66594,20 @@ function Security(_) {
 							type: "button",
 							className: "test-btn",
 							id: "auth-token-rotate",
-							onClick: async () => {
-								if (!confirm("Regenerate the access token?\n\nEvery other signed-in browser, phone QR code, and paired MindFlock device stops working until it re-authenticates with the new token. This browser stays signed in.")) return;
-								try {
-									authTokenCache = (await api("/api/settings/auth-token/rotate", { method: "POST" }))?.token || null;
-									if (shown) setTokenText(authTokenCache || "(none set)");
-									toast("Access token regenerated — other devices must sign in again");
-								} catch (e) {
-									toast("Couldn't regenerate the token: " + e.message);
-								}
-							},
+							disabled: confirmRotate,
+							onClick: () => setConfirmRotate(true),
 							children: "Regenerate"
 						})
 					]
+				}),
+				confirmRotate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "auth-token-rotate-confirm",
+					title: "Regenerate the access token?",
+					body: "Every other signed-in browser, phone QR code, and paired MindFlock device stops working until it re-authenticates with the new token. This browser stays signed in.",
+					confirmLabel: rotating ? "Regenerating…" : "Regenerate",
+					busy: rotating,
+					onConfirm: () => void rotate(),
+					onCancel: () => setConfirmRotate(false)
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
@@ -66124,11 +66833,17 @@ function SystemLogs({ onOpenSysLogsPane }) {
 }
 //#endregion
 //#region src/components/settings/screens/Advanced.tsx
+function onWindows() {
+	if (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent || "")) return true;
+	if (typeof window === "undefined") return false;
+	return window.mfshell?.platform === "win32";
+}
 function Advanced(_) {
 	const s = useSettings();
 	const mode = String(s.get("engine", "mode") ?? "");
 	const engineSessions = s.get("engine", "enabled") !== false;
 	const { restarting, timedOut, restart } = useServerRestart();
+	const showPlatform = onWindows() || !!String(s.get("platform", "wsl_distro") ?? "").trim() || !!String(s.get("platform", "wt_command") ?? "").trim();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -66180,42 +66895,44 @@ function Advanced(_) {
 			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EngineUpdate, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-			className: "set-section-title",
-			children: ["Platform ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "(Windows / WSL only)"
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "WSL distro"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "platform",
-					field: "wsl_distro",
-					placeholder: "(your default distro)"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		showPlatform && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+				className: "set-section-title",
+				children: ["Platform ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Name used for `wsl.exe -d <distro>`. Leave empty to use your default distro — the one the Windows installer put MindFlock in (`wsl -l -v` lists them)."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Windows Terminal command"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-				group: "platform",
-				field: "wt_command",
-				placeholder: "wt.exe"
-			})]
-		}),
+					children: "(Windows / WSL only)"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "WSL distro"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "platform",
+						field: "wsl_distro",
+						placeholder: "(your default distro)"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Name used for `wsl.exe -d <distro>`. Leave empty to use your default distro — the one the Windows installer put MindFlock in (`wsl -l -v` lists them)."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Windows Terminal command"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "platform",
+					field: "wt_command",
+					placeholder: "wt.exe"
+				})]
+			})
+		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Server"
@@ -66578,34 +67295,36 @@ function Extensions(_) {
 				}, ext.id);
 			})
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Create an extension"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"Make a folder ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "~/.mindflock/extensions/<id>/" }),
-				" containing an",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension.py" }),
-				" that exposes ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "build(ctx)" }),
-				" and returns an Addon whose",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension()" }),
-				" declares the bar, commands and surfaces. Put the ES module and its ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "style.css" }),
-				" in an optional ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "frontend/" }),
-				" folder next to it (served at ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/extensions/<id>/" }),
-				"). Extensions are discovered once at startup: restart MindFlock to load a new one. The manifest and API reference is in",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/extensions.md" }),
-				"."
-			]
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "pr-advanced ext-create-fold",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Create an extension" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-advanced-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"Make a folder ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "~/.mindflock/extensions/<id>/" }),
+						" containing an",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension.py" }),
+						" that exposes ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "build(ctx)" }),
+						" and returns an Addon whose",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension()" }),
+						" declares the bar, commands and surfaces. Put the ES module and its ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "style.css" }),
+						" in an optional ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "frontend/" }),
+						" folder next to it (served at ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/extensions/<id>/" }),
+						"). Extensions are discovered once at startup: restart MindFlock to load a new one. The manifest and API reference is in",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/extensions.md" }),
+						"."
+					]
+				})
+			})]
 		})
 	] });
 }
@@ -67553,71 +68272,85 @@ var SCREENS = [
 	{
 		key: "coding",
 		label: "Agent CLI",
+		group: "Agents",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodingCli, { ...p })
+	},
+	{
+		key: "providers",
+		label: "Agent providers",
+		group: "Agents",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Providers, { ...p })
 	},
 	{
 		key: "accounts",
 		label: "Accounts",
+		group: "Agents",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Accounts, { ...p })
 	},
 	{
 		key: "localmodel",
 		label: "Local model",
+		group: "Agents",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LocalModel, { ...p })
 	},
 	{
 		key: "workspace",
 		label: "Workspace",
+		group: "Code",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Workspace, { ...p })
 	},
 	{
 		key: "ide",
 		label: "IDE",
+		group: "Code",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ide, { ...p })
-	},
-	{
-		key: "providers",
-		label: "Agent providers",
-		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Providers, { ...p })
 	},
 	{
 		key: "security",
 		label: "Security",
+		group: "This device",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Security, { ...p })
 	},
 	{
 		key: "appearance",
 		label: "Appearance",
+		group: "This device",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Appearance, { ...p })
 	},
 	{
 		key: "mobile",
 		label: "Mobile",
+		group: "This device",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mobile, { ...p })
 	},
 	{
 		key: "doctor",
 		label: "Doctor",
+		group: "Troubleshooting",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Doctor, { ...p })
 	},
 	{
 		key: "logs",
 		label: "System logs",
+		group: "Troubleshooting",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SystemLogs, { ...p })
 	},
 	{
 		key: "advanced",
 		label: "Advanced",
+		group: "Troubleshooting",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Advanced, { ...p })
 	},
 	{
 		key: "extensions",
 		label: "Extensions",
+		group: "Troubleshooting",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Extensions, { ...p })
 	},
 	{
 		key: "traffic",
 		label: "Site traffic",
+		group: "Troubleshooting",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Traffic, { ...p })
 	}
 ];
@@ -67691,13 +68424,17 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
 						id: "settings-nav",
 						"aria-label": "Settings sections",
-						children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						children: screens.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [s.group && s.group !== screens[i - 1]?.group ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "set-nav-group",
+							role: "presentation",
+							children: s.group
+						}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "set-nav-item" + (screen === s.key ? " active" : ""),
 							"data-screen": s.key,
 							onClick: () => setScreen(s.key),
 							children: s.label
-						}, s.key))
+						})] }, s.key))
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						id: "settings-screens",
 						children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
@@ -67713,42 +68450,420 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	});
 }
 //#endregion
-//#region src/components/outbox/OutboxDialog.tsx
-function openSession(title, tab) {
-	selectSession(title);
-	if (tab) useUi.getState().setLastTab(title, tab);
-	useUi.getState().closeDialog();
+//#region src/components/customize/SidebarBarsPicker.tsx
+var NOTES = {
+	usage: { text: "What your sessions cost" },
+	ingestion: {
+		text: "Appears once a ticket source is connected",
+		link: {
+			label: "Intake → Tickets",
+			dialog: "intake",
+			target: "tickets"
+		}
+	},
+	"pr-review": {
+		text: "Appears once a repository is added",
+		link: {
+			label: "Intake → Pull requests",
+			dialog: "intake",
+			target: "prs"
+		}
+	},
+	"issue-handling": {
+		text: "Appears once a repository is added",
+		link: {
+			label: "Intake → Issues",
+			dialog: "intake",
+			target: "issues"
+		}
+	},
+	verify: {
+		text: "Appears once Verify tracks a repository or has a checklist",
+		link: {
+			label: "Open Verify",
+			dialog: "verify"
+		}
+	},
+	assistant: { text: "Chat and a todo list with your personal assistant" }
+};
+var EXTENSION_NOTE = { text: "From an extension" };
+function SidebarBarsPicker() {
+	const hiddenBars = useUi((s) => s.hiddenBars);
+	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
+	const barOrder = useUi((s) => s.barOrder);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const extBars = useExtensionBarDefs();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "customize-sidebar",
+		className: "cz-bars",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "cz-heading",
+				children: "Show in the sidebar"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-bar-list",
+				children: orderedBars(barOrder, extBars).map((b) => {
+					const note = NOTES[b.key] || EXTENSION_NOTE;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "cz-bar",
+						"data-bar": b.key,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "cz-bar-check",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: !hiddenBars.has(b.key),
+								onChange: () => toggleBarHidden(b.key)
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cz-bar-name",
+								children: b.label
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cz-bar-note muted",
+							children: [note.text, note.link && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike cz-bar-link",
+								onClick: () => openDialogFor(note.link.dialog, note.link.target ?? null),
+								children: note.link.label
+							})] })]
+						})]
+					}, b.key);
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cz-foot muted",
+				children: "Drag a bar's ⠿ grip in the sidebar to reorder it."
+			})
+		]
+	});
 }
-function OutboxDialog() {
-	const open = useUi((s) => s.openDialog === "outbox");
-	const target = useUi((s) => s.dialogTarget);
+//#endregion
+//#region src/lib/promptTargets.ts
+var ALL_RUNNING = "*";
+function isRunningTarget(row) {
+	if (!row || !row.title) return false;
+	if (isVerifySession(String(row.title))) return false;
+	if (row.status === "paused") return false;
+	return row.status === "running" || !!row.started;
+}
+function runningTitles(rows, railOrder = []) {
+	const titles = (rows || []).filter(isRunningTarget).map((r) => String(r.title));
+	const pos = (t) => {
+		const i = railOrder.indexOf(t);
+		return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+	};
+	return titles.map((t, i) => ({
+		t,
+		i
+	})).sort((a, b) => pos(a.t) - pos(b.t) || a.i - b.i).map((x) => x.t);
+}
+function promptTargets(focused, running, nameOf) {
+	const out = [];
+	if (focused) out.push({
+		value: focused,
+		label: nameOf(focused)
+	});
+	for (const t of running) if (t !== focused) out.push({
+		value: t,
+		label: nameOf(t)
+	});
+	if (running.length >= 2) out.push({
+		value: ALL_RUNNING,
+		label: `All running sessions (${running.length})`
+	});
+	return out;
+}
+function resolveTarget(picked, focused, options) {
+	if (picked && options.some((o) => o.value === picked)) return picked;
+	return focused || "";
+}
+async function pasteIntoAll(titles, send) {
+	const settled = await Promise.allSettled(titles.map((t) => send(t)));
+	const out = {
+		ok: [],
+		failed: []
+	};
+	settled.forEach((r, i) => {
+		if (r.status === "fulfilled") out.ok.push(titles[i]);
+		else out.failed.push({
+			title: titles[i],
+			error: String(r.reason?.message || r.reason || "failed")
+		});
+	});
+	return out;
+}
+function pastedAllToast(n) {
+	return n === 1 ? "Pasted into 1 session — press Enter there to send" : `Pasted into ${n} sessions — press Enter in each to send`;
+}
+//#endregion
+//#region src/components/dialogs/PromptsDialog.tsx
+function PromptsPanel() {
 	const closeDialog = useUi((s) => s.closeDialog);
+	const focused = useUi((s) => s.focused);
+	const railOrder = useUi((s) => s.railOrder);
 	const aliases = useUi((s) => s.aliases);
+	const { data: instances } = useInstances();
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const [saved, setSaved] = (0, import_react.useState)([]);
+	const [name, setName] = (0, import_react.useState)("");
+	const [text, setText] = (0, import_react.useState)("");
+	const [pop, setPop] = (0, import_react.useState)(null);
+	const listRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		setSaved(loadUserPresets());
+		setPop(null);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const closePop = () => setPop(null);
+		const list = listRef.current;
+		list?.addEventListener("scroll", closePop);
+		window.addEventListener("resize", closePop);
+		return () => {
+			list?.removeEventListener("scroll", closePop);
+			window.removeEventListener("resize", closePop);
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!pop) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			setPop(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [pop]);
+	const running = (0, import_react.useMemo)(() => runningTitles(instances, railOrder), [instances, railOrder]);
+	const options = (0, import_react.useMemo)(() => promptTargets(focused, running, (t) => aliases[t] || windowName(t)), [
+		focused,
+		running,
+		aliases
+	]);
+	const target = resolveTarget(picked, focused, options);
+	const busy = (0, import_react.useRef)(false);
+	const closeIfStillOpen = () => {
+		if (useUi.getState().openDialog === "prompts") closeDialog();
+	};
+	const pastePrompt = async (prompt) => {
+		if (!target) {
+			toast("Choose a session to paste into first, then click a prompt");
+			return;
+		}
+		if (busy.current) return;
+		busy.current = true;
+		const send = (t) => instApi(t, "/send", { json: {
+			text: prompt,
+			submit: false,
+			dialog_safe: true
+		} });
+		try {
+			if (target === ALL_RUNNING) {
+				const titles = running.slice();
+				const { ok, failed } = await pasteIntoAll(titles, send);
+				if (failed.length) errorPop(`Couldn't paste into ${failed.length} of ${titles.length} sessions`, failed.map((f) => windowName(f.title) + ": " + f.error).join(" · "));
+				if (!ok.length) return;
+				toast(pastedAllToast(ok.length));
+				setPop(null);
+				closeIfStillOpen();
+				return;
+			}
+			try {
+				await send(target);
+				toast("Pasted into " + windowName(target));
+				setPop(null);
+				closeIfStillOpen();
+			} catch (err) {
+				toast("Paste failed: " + (err.message || ""));
+			}
+		} finally {
+			busy.current = false;
+		}
+	};
+	const addPrompt = () => {
+		const n = name.trim();
+		const t = text.trim();
+		if (!n) {
+			toast("Give the prompt a name");
+			return;
+		}
+		if (!t) {
+			toast("Enter the prompt text");
+			return;
+		}
+		const list = loadUserPresets().filter((p) => p.name !== n);
+		list.push({
+			name: n,
+			prompt: t
+		});
+		saveUserPresets(list);
+		setSaved(list);
+		setName("");
+		setText("");
+		toast(`Added prompt “${n}”`);
+	};
+	const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "prompts-group-label",
+		children: label
+	}), items.map((p) => {
+		const key = kind + ":" + p.name;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "prompt-card",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prompt-card-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-main",
+						title: target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session",
+						onClick: () => pastePrompt(p.prompt),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "prompt-card-name",
+							children: p.name
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-expand" + (pop?.key === key ? " open" : ""),
+						title: "Show the full prompt",
+						"aria-expanded": pop?.key === key,
+						onClick: (e) => {
+							e.stopPropagation();
+							const anchor = e.currentTarget.getBoundingClientRect();
+							setPop((cur) => cur?.key === key ? null : {
+								anchor,
+								text: p.prompt,
+								key
+							});
+						},
+						children: "⋮"
+					}),
+					deletable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-del",
+						title: "Delete this saved prompt",
+						onClick: (e) => {
+							e.stopPropagation();
+							setPop(null);
+							const list = loadUserPresets().filter((q) => q.name !== p.name);
+							saveUserPresets(list);
+							setSaved(list);
+						},
+						children: "✕"
+					})
+				]
+			})
+		}, key);
+	})] }, label) : null;
+	const popStyle = pop ? (() => {
+		const w = Math.min(380, window.innerWidth - 24);
+		const left = Math.max(12, Math.min(pop.anchor.right - w, window.innerWidth - w - 12));
+		return {
+			width: w + "px",
+			left: left + "px",
+			top: pop.anchor.bottom + 6 + "px"
+		};
+	})() : void 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "prompts-panel",
+		onClick: () => {
+			if (pop) setPop(null);
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "cz-tab-head",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "prompts-target-wrap",
+					onClick: (e) => e.stopPropagation(),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "Paste into"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "prompts-target",
+						className: !target ? "prompts-notarget" : "",
+						value: target,
+						disabled: !options.length,
+						onChange: (e) => setPicked(e.target.value || null),
+						children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "no session selected"
+						}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: o.value,
+							children: o.label
+						}, o.value))]
+					})]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "prompts-hint",
+				children: "Choose where it goes, then click a prompt to paste it there — nothing is sent until you press Enter in that session (in each, for all running sessions). Saved prompts also show in New → Saved prompt."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "prompts-list",
+				ref: listRef,
+				children: [section("Built-in", BUILTIN_PRESETS, false, "b"), section("Saved", saved, true, "u")]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prompts-add",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						id: "prompts-add-name",
+						autoComplete: "off",
+						spellCheck: false,
+						placeholder: "New prompt name…",
+						value: name,
+						onChange: (e) => setName(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						id: "prompts-add-text",
+						rows: 3,
+						placeholder: "Prompt text…",
+						value: text,
+						onChange: (e) => setText(e.target.value),
+						onKeyDown: (e) => {
+							if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+								e.preventDefault();
+								addPrompt();
+							}
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "prompts-add-btn",
+						onClick: addPrompt,
+						children: "Add prompt"
+					})
+				]
+			}),
+			pop && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prompt-pop",
+				style: popStyle,
+				onClick: (e) => e.stopPropagation(),
+				children: pop.text
+			}), document.body)
+		]
+	});
+}
+//#endregion
+//#region src/components/outbox/OutboxDialog.tsx
+function openBell() {
+	useUi.getState().closeDialog();
+	document.dispatchEvent(new CustomEvent("mf-open-bell"));
+}
+function OutboxPanel({ target }) {
+	useUi((s) => s.aliases);
 	const [tab, setTab] = (0, import_react.useState)("all");
 	const { data, error, isFetching } = useOutbox();
 	const { data: instances = [] } = useInstances();
 	const { data: runs } = useRuns();
 	const folds = useToggleSet("mf_outbox_folded", true);
 	(0, import_react.useEffect)(() => {
-		if (!open) return;
 		setTab(target || "all");
 		refreshRuns();
-	}, [open, target]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
+	}, [target]);
 	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
 	const rowOf = (t) => byTitle.get(t);
 	const runName = (id) => runs?.find((r) => r.id === id)?.name || "";
-	if (!open) return null;
 	const tabs = outboxTabs(data, rowOf, runName);
 	if (tab !== "all" && !tabs.some((t) => t.key === tab)) tabs.push({
 		key: tab,
@@ -67762,7 +68877,7 @@ function OutboxDialog() {
 		const id = it.run?.id || (it.title ? rowOf(it.title)?.run?.id : "") || "";
 		return id ? it.run?.name || rowOf(it.title || "")?.run?.name || runName(id) : "";
 	};
-	const shown = (t) => aliases[t] || t;
+	const shown = windowName;
 	const section = (key, name, count, detail, body) => count > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
 		name,
 		count,
@@ -67775,425 +68890,84 @@ function OutboxDialog() {
 			children: body
 		})
 	}, key) : null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "outbox-dialog",
-		className: "modal",
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "outbox-title",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "outbox-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "outbox-title",
-							children: "Outbox"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ik-subtitle",
-							children: "What's shipping, and what's waiting on you"
-						}),
-						isFetching && data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ob-fetch",
-							children: "refreshing…"
-						}) : null,
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "outbox-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-					id: "outbox-tabs",
-					"aria-label": "Outbox groups",
-					children: tabs.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "ik-tab" + (tab === t.key ? " active" : ""),
-						"data-outbox-tab": t.key,
-						"aria-current": tab === t.key ? "page" : void 0,
-						onClick: () => setTab(t.key),
-						children: [t.label, t.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ik-tab-count",
-							children: t.count
-						})]
-					}, t.key))
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "outbox-body",
-					children: data === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "repo-empty",
-						children: "This MindFlock server has no Outbox yet — update it, then sessions you start together (and any session with a lane) show up here."
-					}) : error && !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "repo-empty",
-						children: ["Could not load the Outbox: ", errMsg(error)]
-					}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "repo-empty",
-						children: "Loading…"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ik-groups ob-groups",
-						children: [
-							total === 0 && !view.summaries.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "repo-empty",
-								children: "Nothing is shipping and nothing is waiting on you. Give a session a lane — or start several together from New — and it shows up here on its way out."
-							}),
-							tab !== "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run)),
-							section("waiting", "Waiting on you", view.waiting.length, "answer or approve — nothing else needs you", view.waiting.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow, {
-								w,
-								row: w.title ? rowOf(w.title) : void 0,
-								shown,
-								group: groupLabel(w),
-								runInfo: w.run?.id ? runs?.find((r) => r.id === w.run.id) : void 0
-							}, "w:" + (w.key || w.title) + ":" + w.kind))),
-							section("shipping", "Shipping now", view.shipping.length, "MindFlock is doing these — no action", view.shipping.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippingRow, {
-								s,
-								row: rowOf(s.title),
-								shown,
-								group: groupLabel(s)
-							}, "s:" + (s.key || s.title)))),
-							section("shipped", "Shipped today", view.shipped.length, "", view.shipped.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippedRow, {
-								s,
-								row: rowOf(s.title),
-								shown,
-								group: groupLabel(s)
-							}, "d:" + (s.key || s.title)))),
-							section("queued", "Queued", view.queued.length, "they start as slots free", view.queued.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueuedItem, {
-								q,
-								group: tab === "all" ? q.run.name || runName(q.run.id) : ""
-							}, "q:" + q.run.id + ":" + q.run.task))),
-							tab === "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run))
-						]
-					})
-				})
-			]
-		})
-	});
-}
-function RowMain({ title, text, shown, row }) {
-	const about = text || row?.last_prompt || "";
+	const waiting = view.waiting.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-main",
-		children: [row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "pr-open-ref ob-ref",
-			title: "Open " + title,
-			onClick: () => openSession(title),
-			children: shown(title)
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pr-open-ref ob-ref",
-			children: shown(title)
-		}), about && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "pr-open-title",
-			children: about
-		})]
-	});
-}
-function doWaitAction(key, w, runId, taskId) {
-	switch (key) {
-		case "retry": return runAction("Retry", taskPath(runId, taskId, "retry"), { fresh: false }, "Retrying " + w.title);
-		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
-		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
-		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-		case "release": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the group");
-		case "release_merge": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
-		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
-		case "cancel_group": return cancelRun(runId, w.run?.name || "");
-		default: return Promise.resolve(false);
-	}
-}
-function WaitingRow({ w, row, shown, group, runInfo }) {
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const chip = waitingChip(w);
-	const runId = w.run?.id || row?.run?.id || "";
-	const taskId = w.run?.task || row?.run?.task || "";
-	const run = async (fn) => {
-		setBusy(true);
-		try {
-			await fn();
-		} finally {
-			setBusy(false);
-		}
-	};
-	const escalation = w.kind !== "prompt" && w.kind !== "approve";
-	if (w.kind === "budget") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetRow, {
-		w,
-		runInfo
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind),
-		"data-outbox-row": w.title,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: w.title,
-				text: w.text,
-				shown,
-				row
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-meta",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pr-open-chip" + (chip.cls ? " " + chip.cls : ""),
-						children: escalation ? escalationText(chip.text) : chip.text
-					}),
-					w.kind === "approve" && statText(w.preview) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: statText(w.preview) }),
-					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-start",
-				children: w.kind === "approve" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApproveButtons, {
-					w,
-					busy,
-					setBusy,
-					hasRow: !!row
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "ob-acts",
-					children: waitingActions(w, {
-						row: !!row,
-						run: !!runId,
-						task: !!taskId
-					}).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: a.primary ? "btn-primary pr-review-btn" : "test-btn",
-						disabled: busy && a.key !== "open",
-						title: a.title,
-						onClick: () => {
-							if (a.key === "open") {
-								const lead = w.kind === "conflict" ? row?.parent || w.title : w.title;
-								openSession(LEAD_KINDS.has(w.kind) ? lead : w.title, LEAD_KINDS.has(w.kind) ? "thread" : void 0);
-								return;
-							}
-							run(() => doWaitAction(a.key, w, runId, taskId));
-						},
-						children: a.label
-					}, a.key))
-				})
-			}),
-			w.kind === "prompt" && row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-drawer",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
-					title: w.title,
-					activity: effectiveActivity(row),
-					variant: "thread",
-					onOpen: () => openSession(w.title)
-				})
-			}),
-			w.kind === "approve" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-drawer",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApprovePreview, {
-					w,
-					row
-				})
-			}),
-			w.kind === "plan" && (w.preview?.pieces?.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-drawer",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "ob-card ob-plan",
-					children: w.preview.pieces.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ob-plan-piece",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.title }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "ob-only",
-							children: ["only here: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: (p.paths || []).join(", ") || "—" })]
-						})]
-					}, i))
-				})
-			}),
-			w.kind === "release" && w.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-drawer",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "ob-card",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ob-kv",
-						children: [
-							w.preview.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ob-k",
-								children: "PR title"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ob-pr-title",
-								children: w.preview.pr_title
-							})] }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ob-k",
-								children: "Into"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "ob-mono",
-								children: [(w.preview.base || "base") + " ← " + (w.preview.branch || w.title), statText(w.preview) ? " · " + statText(w.preview) : ""]
-							})
-						]
-					})
-				})
-			})
-		]
-	});
-}
-function BudgetRow({ w, runInfo }) {
-	const runId = w.run?.id || "";
-	const name = w.run?.name || runInfo?.name || "The group";
-	const budget = Number(runInfo?.budget_usd) || 0;
-	const spent = Number(runInfo?.cost_usd) || 0;
-	const [usd, setUsd] = (0, import_react.useState)(() => String(suggestedBudget(budget, spent)));
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const amount = Number(usd);
-	const valid = Number.isFinite(amount) && amount > spent;
-	const go = async (fn) => {
-		setBusy(true);
-		try {
-			await fn();
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item ob-item ob-escalation ob-budget",
-		"data-outbox-row": "budget:" + runId,
+		id: "outbox-panel",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-main",
+				className: "cz-tab-head",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-ref ob-ref",
-					children: name
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "pr-open-title",
-					children: [w.reason || "the group's budget is used up", budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""]
-				})]
+					className: "ik-subtitle",
+					children: "What's on its way out, and what shipped today"
+				}), isFetching && data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ob-fetch",
+					children: "refreshing…"
+				}) : null]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pr-open-meta",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-chip bad",
-					children: "paused — budget"
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-item-start",
-				children: [(w.actions || []).includes("raise_budget") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "ob-usd",
-					children: ["$", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "number",
-						min: 0,
-						step: "any",
-						"aria-label": "New budget in dollars",
-						value: usd,
-						disabled: busy,
-						onChange: (e) => setUsd(e.target.value),
-						onKeyDown: (e) => {
-							if (e.key === "Enter" && valid) go(() => raiseBudget(runId, amount, name));
-						}
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "btn-primary pr-review-btn",
-					disabled: busy || !valid,
-					title: valid ? "Raise the budget and resume the group" : "More than it has spent ($" + spent.toFixed(2) + ")",
-					onClick: () => go(() => raiseBudget(runId, amount, name)),
-					children: ["Raise to $", valid ? amount : "…"]
-				})] }), (w.actions || []).includes("stop") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ob-to-bell",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [waiting, " waiting on you — in the bell"] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
-					disabled: busy,
-					title: "Cancel the group — nothing new starts or ships; sessions and branches stay",
-					onClick: () => go(() => cancelRun(runId, name)),
-					children: "Stop"
+					onClick: openBell,
+					children: "Open the bell"
 				})]
+			}),
+			tabs.length >= 2 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+				id: "outbox-tabs",
+				"aria-label": "Outbox groups",
+				children: tabs.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "ob-chip" + (tab === t.key ? " active" : ""),
+					"data-outbox-tab": t.key,
+					"aria-pressed": tab === t.key,
+					onClick: () => setTab(t.key),
+					children: [t.label, t.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ob-chip-count",
+						children: t.count
+					})]
+				}, t.key))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				id: "outbox-body",
+				children: data === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "repo-empty",
+					children: "This MindFlock server has no Outbox yet — update it, then sessions you start together (and any session with ⏩ Fast-track on) show up here."
+				}) : error && !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "repo-empty",
+					children: ["Could not load the Outbox: ", errMsg(error)]
+				}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "repo-empty",
+					children: "Loading…"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-groups ob-groups",
+					children: [
+						total === 0 && !view.summaries.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "repo-empty",
+							children: "Nothing is on its way out. Sessions show up here once ⏩ Fast-track carries them, or when you start several together from New."
+						}),
+						tab !== "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run)),
+						section("shipping", "Shipping now", view.shipping.length, "MindFlock is doing these — no action", view.shipping.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippingRow, {
+							s,
+							row: rowOf(s.title),
+							shown,
+							group: groupLabel(s)
+						}, "s:" + (s.key || s.title)))),
+						section("shipped", "Shipped today", view.shipped.length, "", view.shipped.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippedRow, {
+							s,
+							row: rowOf(s.title),
+							shown,
+							group: groupLabel(s)
+						}, "d:" + (s.key || s.title)))),
+						section("queued", "Queued", view.queued.length, "they start as slots free", view.queued.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueuedItem, {
+							q,
+							group: tab === "all" ? q.run.name || runName(q.run.id) : ""
+						}, "q:" + q.run.id + ":" + q.run.task))),
+						tab === "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run))
+					]
+				})
 			})
 		]
-	});
-}
-var editedMessage = /* @__PURE__ */ new Map();
-function ApproveButtons({ w, busy, setBusy, hasRow }) {
-	const verb = shipVerb(w.step);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [hasRow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-		type: "button",
-		className: "test-btn",
-		title: "Open its Diff tab",
-		onClick: () => openSession(w.title, "diff"),
-		children: "Diff"
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-		type: "button",
-		className: "btn-primary pr-review-btn ob-ship",
-		disabled: busy,
-		title: verb + " now, with the message and title shown below",
-		onClick: async () => {
-			setBusy(true);
-			const msg = editedMessage.get(approvalKey(w));
-			try {
-				await instApi(w.title, "/ship-now", { json: msg ? { commit_message: msg } : {} });
-				toast(verb + ": " + w.title);
-				editedMessage.delete(approvalKey(w));
-			} catch (err) {
-				errorPop(verb + " failed — " + w.title, errMsg(err));
-			} finally {
-				setBusy(false);
-				refreshRuns();
-				refreshInstances();
-			}
-		},
-		children: verb
-	})] });
-}
-function ApprovePreview({ w, row }) {
-	const p = w.preview || null;
-	const [editing, setEditing] = (0, import_react.useState)(false);
-	const editKey = approvalKey(w);
-	const [msg, setMsg] = (0, import_react.useState)(() => editedMessage.get(editKey) ?? p?.commit_message ?? "");
-	const lane = w.lane || (row ? laneOf(row)?.target : "") || "";
-	const canEdit = (w.actions || []).includes("edit_message") && (w.step || "commit") === "commit";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "ob-card",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ob-kv",
-			children: [
-				(p?.commit_message || msg || canEdit) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Message" }), editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-					className: "ob-msg-edit",
-					value: msg,
-					autoFocus: true,
-					rows: Math.min(8, Math.max(2, msg.split("\n").length)),
-					spellCheck: false,
-					"aria-label": "Commit message",
-					title: "Enter for a new line; Ctrl+Enter (or click away) to keep it; Escape to undo",
-					onChange: (e) => setMsg(e.target.value),
-					onBlur: () => {
-						setEditing(false);
-						if (msg.trim() && msg !== p?.commit_message) editedMessage.set(editKey, msg.trim());
-						else editedMessage.delete(editKey);
-					},
-					onKeyDown: (e) => {
-						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) e.target.blur();
-						if (e.key === "Escape") {
-							e.stopPropagation();
-							setMsg(p?.commit_message || "");
-							editedMessage.delete(editKey);
-							setEditing(false);
-						}
-					}
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "ob-mono",
-					children: [messageHead(msg) || /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "written from the diff when it commits"
-					}), canEdit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike ob-edit",
-						onClick: () => setEditing(true),
-						children: "edit"
-					})]
-				})] }),
-				p?.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "PR title" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ob-pr-title",
-					children: p.pr_title
-				})] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Then" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: thenText(w.step, lane) })
-			]
-		})
 	});
 }
 function ShippingRow({ s, row, shown, group }) {
@@ -68354,6 +69128,105 @@ function SummaryCard({ s }) {
 			className: "ob-summary-md",
 			children: s.text_md
 		})]
+	});
+}
+//#endregion
+//#region src/components/customize/CustomizeDialog.tsx
+var TABS = [
+	{
+		key: "sidebar",
+		label: "Sidebar",
+		dialog: "customize"
+	},
+	{
+		key: "prompts",
+		label: "Prompts",
+		dialog: "prompts"
+	},
+	{
+		key: "outbox",
+		label: "Outbox",
+		dialog: "outbox"
+	}
+];
+function customizeTab(name) {
+	if (name === "customize") return "sidebar";
+	if (name === "prompts" || name === "outbox") return name;
+	return null;
+}
+function CustomizeDialog() {
+	const tab = useUi((s) => customizeTab(s.openDialog));
+	const target = useUi((s) => s.dialogTarget);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const open = tab !== null;
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			closeDialog();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open, closeDialog]);
+	if (!tab) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "customize-dialog",
+		className: "modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "customize-title",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "customize-panel",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "customize-title",
+							children: "Customize"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-subtitle",
+							children: "Extras you can switch on"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "customize-close",
+							onClick: closeDialog,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+					id: "customize-tabs",
+					"aria-label": "Customize",
+					children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ik-tab" + (tab === t.key ? " active" : ""),
+						"data-customize-tab": t.key,
+						"aria-current": tab === t.key ? "page" : void 0,
+						onClick: () => {
+							if (tab !== t.key) openDialogFor(t.dialog);
+						},
+						children: t.label
+					}, t.key))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					id: "customize-body",
+					"data-tab": tab,
+					children: [
+						tab === "sidebar" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {}),
+						tab === "prompts" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, {}),
+						tab === "outbox" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutboxPanel, { target })
+					]
+				})
+			]
+		})
 	});
 }
 //#endregion
@@ -69092,7 +69965,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 	if (running) menu.push({
 		key: "cancel",
 		label: "Cancel run",
-		title: "Stops the session and puts this plan back. Nothing it found is lost — the session is closed, not deleted, and Recent… reopens it.",
+		title: "Stops the session and puts this plan back. Nothing it found is lost — the session is closed, not deleted, and Recently closed (under the session list) reopens it.",
 		className: "test-btn vf-cancel",
 		onSelect: () => void cancelRun()
 	});
@@ -70019,6 +70892,84 @@ function VerifyDialog() {
 		fetching: plansQ.isFetching,
 		loaded: !!plansQ.data
 	});
+	const workFirst = (repoCfg.verify_repos || []).length > 0 || plans.length > 0;
+	const sources = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, {
+		liveBranch,
+		deployDelay
+	}, "sources");
+	const checklists = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+		label: "Checklists",
+		onRefresh: () => void plansQ.refetch(),
+		note,
+		rowId: "vf-plans-row",
+		refreshId: "vf-plans-refresh",
+		noteId: "vf-plans-note",
+		listId: "vf-plans-list",
+		toolbarExtra: plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectAllCheck, {
+			state: sel.allState,
+			onChange: sel.setAllVisible,
+			label: "Select every checklist shown"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DialogFilter, {
+			id: "vf-plans-filter",
+			value: query,
+			onChange: setQuery,
+			placeholder: "Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )",
+			onEscape: closeDialog
+		})] }) : void 0,
+		hint: plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Steps marked ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "you" }),
+			" are the job — an agent settles the rest."
+		] }) : void 0,
+		children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "repo-empty",
+			children: error
+		}) : !plansQ.data ? null : !plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyEmpty, { liveBranch }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			picked.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(BulkRowBar, {
+				count: picked.length,
+				hiddenCount: sel.hiddenCount,
+				noun: "checklist",
+				onClear: sel.clear,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					disabled: !runnable.length || bulk !== "",
+					title: runnable.length ? "Start a verify session for each — minutes of a real agent apiece" : "None of the selected checklists is one an agent can run",
+					onClick: () => void fanOut(runnable, "Started", (plan) => api(planPath(plan.id) + "/run", {
+						method: "POST",
+						json: {}
+					})),
+					children: bulk === "Started" ? "Starting…" : "Run " + runnable.length + (runnable.length === picked.length ? "" : " of " + picked.length)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "danger",
+					disabled: bulk !== "",
+					title: "Delete the selected checklists and every answer recorded against them",
+					onClick: () => setConfirmBulk(true),
+					children: bulk === "Deleted" ? "Deleting…" : "Delete selected"
+				})]
+			}) : null,
+			confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+				title: "Delete " + picked.length + (picked.length === 1 ? " checklist?" : " checklists?"),
+				body: "Their steps and every answer recorded against them go too. This cannot be undone.\n" + previewList(picked.map(planName)),
+				confirmLabel: "Delete " + picked.length,
+				busy: bulk !== "",
+				onCancel: () => setConfirmBulk(false),
+				onConfirm: () => void fanOut(picked, "Deleted", (plan) => api(planPath(plan.id), { method: "DELETE" }))
+			}) : null,
+			shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanList, {
+				plans: shown,
+				liveBranch,
+				selection: sel
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "muted vf-nomatch",
+				children: [
+					"No checklist matches “",
+					query,
+					"”."
+				]
+			})
+		] })
+	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -70070,83 +71021,7 @@ function VerifyDialog() {
 							children: "MindFlock writes a checklist for every session branch pushed in the repositories below, and brings it here to be checked once that work reaches the branch you ship from. An agent settles the steps a shell can settle; the rest are yours."
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, {}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, {
-							liveBranch,
-							deployDelay
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
-							label: "Checklists",
-							onRefresh: () => void plansQ.refetch(),
-							note,
-							rowId: "vf-plans-row",
-							refreshId: "vf-plans-refresh",
-							noteId: "vf-plans-note",
-							listId: "vf-plans-list",
-							toolbarExtra: plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectAllCheck, {
-								state: sel.allState,
-								onChange: sel.setAllVisible,
-								label: "Select every checklist shown"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DialogFilter, {
-								id: "vf-plans-filter",
-								value: query,
-								onChange: setQuery,
-								placeholder: "Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )",
-								onEscape: closeDialog
-							})] }) : void 0,
-							hint: plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								"Steps marked ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "you" }),
-								" are the job — an agent settles the rest."
-							] }) : void 0,
-							children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "repo-empty",
-								children: error
-							}) : !plansQ.data ? null : !plans.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyEmpty, { liveBranch }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								picked.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(BulkRowBar, {
-									count: picked.length,
-									hiddenCount: sel.hiddenCount,
-									noun: "checklist",
-									onClear: sel.clear,
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										disabled: !runnable.length || bulk !== "",
-										title: runnable.length ? "Start a verify session for each — minutes of a real agent apiece" : "None of the selected checklists is one an agent can run",
-										onClick: () => void fanOut(runnable, "Started", (plan) => api(planPath(plan.id) + "/run", {
-											method: "POST",
-											json: {}
-										})),
-										children: bulk === "Started" ? "Starting…" : "Run " + runnable.length + (runnable.length === picked.length ? "" : " of " + picked.length)
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: "danger",
-										disabled: bulk !== "",
-										title: "Delete the selected checklists and every answer recorded against them",
-										onClick: () => setConfirmBulk(true),
-										children: bulk === "Deleted" ? "Deleting…" : "Delete selected"
-									})]
-								}) : null,
-								confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
-									title: "Delete " + picked.length + (picked.length === 1 ? " checklist?" : " checklists?"),
-									body: "Their steps and every answer recorded against them go too. This cannot be undone.\n" + previewList(picked.map(planName)),
-									confirmLabel: "Delete " + picked.length,
-									busy: bulk !== "",
-									onCancel: () => setConfirmBulk(false),
-									onConfirm: () => void fanOut(picked, "Deleted", (plan) => api(planPath(plan.id), { method: "DELETE" }))
-								}) : null,
-								shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanList, {
-									plans: shown,
-									liveBranch,
-									selection: sel
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									className: "muted vf-nomatch",
-									children: [
-										"No checklist matches “",
-										query,
-										"”."
-									]
-								})
-							] })
-						}),
+						workFirst ? [checklists, sources] : [sources, checklists],
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyByHand, {
 							candidates: targets,
 							closed: closedNames,
@@ -70912,7 +71787,19 @@ function dirtyMessage(r) {
 	const dirty = r.candidates.filter((c) => c.dirty);
 	const clean = r.candidates.length - dirty.length;
 	if (!clean) return `All ${dirty.length} unused ${plural(dirty.length, "worktree")} ${plural(dirty.length, "has", "have")} uncommitted changes. Delete ${plural(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
-	return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nOK — delete all ${r.candidates.length}.\nCancel — delete only the ${clean} that ${plural(clean, "is", "are")} clean.`;
+	return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ${plural(clean, "is", "are")} clean.`;
+}
+function dirtyChoices(r) {
+	const dirty = r.candidates.filter((c) => c.dirty).length;
+	const clean = r.candidates.length - dirty;
+	if (!clean) return {
+		all: "Delete anyway",
+		clean: null
+	};
+	return {
+		all: `Delete all ${r.candidates.length}`,
+		clean: `Only the ${clean} clean`
+	};
 }
 function prunedMessage(r) {
 	const n = r.removed_count || 0;
@@ -70959,6 +71846,12 @@ function RecentDialog() {
 	const [error, setError] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [query, setQuery] = (0, import_react.useState)("");
+	const [ask, setAskState] = (0, import_react.useState)(null);
+	const askSeq = (0, import_react.useRef)(0);
+	const setAsk = (0, import_react.useCallback)((a) => setAskState(a && {
+		...a,
+		seq: ++askSeq.current
+	}), []);
 	const sort = useSortPref("mf_sort_recent", SORTS);
 	const seq = (0, import_react.useRef)(0);
 	const load = (0, import_react.useCallback)(async (keepError = false) => {
@@ -71000,8 +71893,11 @@ function RecentDialog() {
 		if (open) load();
 	}, [open, load]);
 	(0, import_react.useEffect)(() => {
-		if (!open) setQuery("");
-	}, [open]);
+		if (!open) {
+			setQuery("");
+			setAsk(null);
+		}
+	}, [open, setAsk]);
 	const all = data?.rows || [];
 	const aliasOf = (0, import_react.useCallback)((e) => e.title && aliases[e.title] || "", [aliases]);
 	const sorted = (0, import_react.useMemo)(() => sortRows(all, (e) => rowSortValue(e, sort.pref.key, aliasOf(e)), sort.pref.dir), [
@@ -71044,24 +71940,37 @@ function RecentDialog() {
 		const targets = picked.filter(deletable);
 		const skipped = picked.length - targets.length;
 		if (!targets.length) {
-			alert("None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list.");
+			setAsk({
+				text: "None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list.",
+				okLabel: "OK"
+			});
 			return;
 		}
 		const sized = targets.filter((e) => e.size_bytes != null);
 		const sum = sumBytes(sized);
 		const msg = `Permanently delete ${targets.length} director${targets.length === 1 ? "y" : "ies"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < targets.length ? "+" : ""})` : "") + "?\n\n" + previewList(targets.map(label)) + "\n" + (skipped ? `\n${skipped} selected row${skipped === 1 ? " has" : "s have"} no directory this app may delete (an in-place session runs in your own repo, and one may be gone already or still in use by a running session) — ${skipped === 1 ? "it" : "they"} will be left alone.\n` : "") + (targets.every((e) => e.worktree) ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n" : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") + "\nThis cannot be undone.";
-		if (!confirm(msg)) return;
-		await runBulk(targets, "Deleted", removeOne);
+		setAsk({
+			text: msg,
+			okLabel: `Delete ${targets.length}`,
+			danger: true,
+			run: () => runBulk(targets, "Deleted", removeOne)
+		});
 	};
 	const forgetSelected = async () => {
 		const targets = picked.filter((e) => e.source === "closed");
 		if (!targets.length) {
-			alert("None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk.");
+			setAsk({
+				text: "None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk.",
+				okLabel: "OK"
+			});
 			return;
 		}
 		const msg = `Forget ${targets.length} closed session${targets.length === 1 ? "" : "s"}?\n\n` + previewList(targets.map(label)) + "\n\nThe directories stay on disk (they come back as on-disk rows); the sessions leave this list, so Reopen is no longer offered.";
-		if (!confirm(msg)) return;
-		await runBulk(targets, "Forgot", (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: false } }));
+		setAsk({
+			text: msg,
+			okLabel: `Forget ${targets.length}`,
+			run: () => runBulk(targets, "Forgot", (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: false } }))
+		});
 	};
 	const pruneUnused = async () => {
 		setError("");
@@ -71076,15 +71985,33 @@ function RecentDialog() {
 		}
 		setBusy(false);
 		if (!pre.candidates?.length) {
-			alert(nothingMessage(pre));
+			setAsk({
+				text: nothingMessage(pre),
+				okLabel: "OK"
+			});
 			return;
 		}
-		if (!confirm(pruneMessage(pre))) return;
-		let includeDirty = false;
-		if (pre.dirty_count) {
-			includeDirty = confirm(dirtyMessage(pre));
-			if (!includeDirty && pre.dirty_count === pre.candidates.length) return;
-		}
+		setAsk({
+			text: pruneMessage(pre),
+			okLabel: `Delete ${pre.candidates.length}`,
+			danger: true,
+			run: () => {
+				if (!pre.dirty_count) return sweep(false);
+				const choice = dirtyChoices(pre);
+				setAsk({
+					text: dirtyMessage(pre),
+					okLabel: choice.all,
+					danger: true,
+					run: () => sweep(true),
+					alt: choice.clean ? {
+						label: choice.clean,
+						run: () => sweep(false)
+					} : void 0
+				});
+			}
+		});
+	};
+	const sweep = async (includeDirty) => {
 		setBusy(true);
 		let done;
 		try {
@@ -71152,6 +72079,56 @@ function RecentDialog() {
 						})
 					]
 				}),
+				ask && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					id: "recent-ask",
+					className: "dlg-bulk",
+					role: "alertdialog",
+					"aria-label": "Confirm",
+					style: { alignItems: "flex-start" },
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "recent-ask-text",
+						style: {
+							whiteSpace: "pre-wrap",
+							flex: 1,
+							minWidth: 0,
+							maxHeight: "32vh",
+							overflowY: "auto",
+							fontSize: 12
+						},
+						children: ask.text
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "bulk-acts",
+						children: [
+							ask.run && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: ask.danger ? "danger" : void 0,
+								disabled: busy,
+								onClick: () => {
+									const run = ask.run;
+									setAsk(null);
+									run();
+								},
+								children: ask.okLabel
+							}),
+							ask.alt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								disabled: busy,
+								onClick: () => {
+									const run = ask.alt.run;
+									setAsk(null);
+									run();
+								},
+								children: ask.alt.label
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								autoFocus: true,
+								onClick: () => setAsk(null),
+								children: ask.run ? "Cancel" : ask.okLabel
+							})
+						]
+					})]
+				}, ask.seq),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "dlg-filter-row",
 					children: [
@@ -71297,7 +72274,7 @@ function RecentDialog() {
 													await refreshInstances();
 													if (inst?.title) selectSession(inst.title);
 												} catch (err) {
-													alert("Reopen failed: " + err.message);
+													errorPop("Reopen failed", err.message);
 													load();
 												}
 											},
@@ -71307,18 +72284,22 @@ function RecentDialog() {
 											className: "recent-wipe danger",
 											disabled: busy,
 											title: e.worktree ? "Permanently delete this worktree directory (its branch and commits stay in the repository it came from)" : "Permanently delete this directory",
-											onClick: async () => {
-												if (!confirm(`Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") + "?\nThis cannot be undone.")) return;
-												try {
-													await removeOne(e);
-												} catch (err) {
-													alert("Delete failed: " + err.message);
-													return;
+											onClick: () => setAsk({
+												text: `Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") + "?\nThis cannot be undone.",
+												okLabel: "Delete",
+												danger: true,
+												run: async () => {
+													try {
+														await removeOne(e);
+													} catch (err) {
+														errorPop("Delete failed", err.message);
+														return;
+													}
+													load();
+													refreshInstances();
+													refreshRecentlyClosed();
 												}
-												load();
-												refreshInstances();
-												refreshRecentlyClosed();
-											},
+											}),
 											children: "Delete"
 										}),
 										e.source === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -71329,7 +72310,7 @@ function RecentDialog() {
 												try {
 													await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: false } });
 												} catch (err) {
-													alert("Forget failed: " + err.message);
+													errorPop("Forget failed", err.message);
 													return;
 												}
 												load();
@@ -71350,225 +72331,6 @@ function RecentDialog() {
 				})
 			]
 		})
-	});
-}
-//#endregion
-//#region src/components/dialogs/PromptsDialog.tsx
-function PromptsDialog() {
-	const open = useUi((s) => s.openDialog === "prompts");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const focused = useUi((s) => s.focused);
-	const [saved, setSaved] = (0, import_react.useState)([]);
-	const [name, setName] = (0, import_react.useState)("");
-	const [text, setText] = (0, import_react.useState)("");
-	const [pop, setPop] = (0, import_react.useState)(null);
-	const listRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (open) {
-			setSaved(loadUserPresets());
-			setPop(null);
-		}
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const closePop = () => setPop(null);
-		const list = listRef.current;
-		list?.addEventListener("scroll", closePop);
-		window.addEventListener("resize", closePop);
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				setPop((p) => {
-					if (p) return null;
-					closeDialog();
-					return null;
-				});
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => {
-			list?.removeEventListener("scroll", closePop);
-			window.removeEventListener("resize", closePop);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [open, closeDialog]);
-	if (!open) return null;
-	const pastePrompt = async (prompt) => {
-		if (!focused) {
-			toast("Select a session first, then click a prompt");
-			return;
-		}
-		try {
-			await instApi(focused, "/send", { json: {
-				text: prompt,
-				submit: false
-			} });
-			toast("Pasted into " + focused);
-			setPop(null);
-			closeDialog();
-		} catch (err) {
-			toast("Paste failed: " + (err.message || ""));
-		}
-	};
-	const addPrompt = () => {
-		const n = name.trim();
-		const t = text.trim();
-		if (!n) {
-			toast("Give the prompt a name");
-			return;
-		}
-		if (!t) {
-			toast("Enter the prompt text");
-			return;
-		}
-		const list = loadUserPresets().filter((p) => p.name !== n);
-		list.push({
-			name: n,
-			prompt: t
-		});
-		saveUserPresets(list);
-		setSaved(list);
-		setName("");
-		setText("");
-		toast(`Added prompt “${n}”`);
-	};
-	const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "prompts-group-label",
-		children: label
-	}), items.map((p) => {
-		const key = kind + ":" + p.name;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "prompt-card",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prompt-card-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-main",
-						title: "Paste into the selected session",
-						onClick: () => pastePrompt(p.prompt),
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "prompt-card-name",
-							children: p.name
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-expand" + (pop?.key === key ? " open" : ""),
-						title: "Show the full prompt",
-						"aria-expanded": pop?.key === key,
-						onClick: (e) => {
-							e.stopPropagation();
-							setPop((cur) => cur?.key === key ? null : {
-								anchor: e.currentTarget.getBoundingClientRect(),
-								text: p.prompt,
-								key
-							});
-						},
-						children: "⋮"
-					}),
-					deletable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-del",
-						title: "Delete this saved prompt",
-						onClick: (e) => {
-							e.stopPropagation();
-							setPop(null);
-							const list = loadUserPresets().filter((q) => q.name !== p.name);
-							saveUserPresets(list);
-							setSaved(list);
-						},
-						children: "✕"
-					})
-				]
-			})
-		}, key);
-	})] }, label) : null;
-	const popStyle = pop ? (() => {
-		const w = Math.min(380, window.innerWidth - 24);
-		const left = Math.max(12, Math.min(pop.anchor.right - w, window.innerWidth - w - 12));
-		return {
-			width: w + "px",
-			left: left + "px",
-			top: pop.anchor.bottom + 6 + "px"
-		};
-	})() : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "prompts-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (pop) setPop(null);
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "prompts-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Prompts" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							id: "prompts-target",
-							className: "muted" + (!focused ? " prompts-notarget" : ""),
-							children: focused ? "→ " + focused : "no session selected"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prompts-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "prompts-hint",
-					children: "Click a prompt to paste it into the selected session. Saved prompts also appear in the New-session preset picker."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: "prompts-list",
-					ref: listRef,
-					children: [section("Built-in", BUILTIN_PRESETS, false, "b"), section("Saved", saved, true, "u")]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "prompts-add",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "text",
-							id: "prompts-add-name",
-							autoComplete: "off",
-							spellCheck: false,
-							placeholder: "New prompt name…",
-							value: name,
-							onChange: (e) => setName(e.target.value)
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-							id: "prompts-add-text",
-							rows: 3,
-							placeholder: "Prompt text…",
-							value: text,
-							onChange: (e) => setText(e.target.value),
-							onKeyDown: (e) => {
-								if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-									e.preventDefault();
-									addPrompt();
-								}
-							}
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prompts-add-btn",
-							onClick: addPrompt,
-							children: "Add prompt"
-						})
-					]
-				})
-			]
-		}), pop && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "prompt-pop",
-			style: popStyle,
-			onClick: (e) => e.stopPropagation(),
-			children: pop.text
-		}), document.body)]
 	});
 }
 //#endregion
@@ -71857,7 +72619,7 @@ function AssistantAgentDialog() {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ws-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Assistant agent file" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Assistant instructions" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "assistant-agent-close",
 						onClick: closeDialog,
@@ -72365,193 +73127,65 @@ var SLIDES = [
 	{
 		logo: true,
 		title: "Welcome to MindFlock",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"MindFlock runs a private flock of AI coding agents, each in its own git worktree, all of them on this machine — there is no MindFlock cloud and no account. Start one yourself with any agent CLI — or let a ticket assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana start it for you, with the ticket already seeded. Either way you review the diff and merge. This tour covers the basics and then walks you through connecting your accounts. You can skip it any time and replay it later from ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → General" }),
-			"."
-		] })
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "MindFlock runs coding agents side by side on this machine — there is no account and no cloud. Each session is its own branch and folder with an agent working in it; you review the diff and ship it." })
 	},
 	{
 		icon: "▦",
 		title: "Sessions & the grid",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Start work with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "New Session" }),
-			" in the top bar. Every session gets a pane in the grid. The ",
+			"Press ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "New" }),
+			" (Ctrl+N) and say what to work on — one task, or one per line. Each session gets a pane in the grid and a row in the sidebar; drag rows to reorder. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "View" }),
-			" buttons at the bottom of the sidebar (Auto / 2 / 4 / 9) decide how many panes show at once — the rest keep running, hidden, until you bring them forward. Drag sessions to reorder."
-		] })
-	},
-	{
-		icon: "⚙",
-		title: "Your sidebar, your way",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"You start with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Usage" }),
-			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ticket Ingestion" }),
-			" and",
-			" ",
+			" at the bottom of the sidebar picks how many panes show at once. The ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Assistant" }),
-			". Click ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
-			" at the bottom of the sidebar to switch on ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "PR review" }),
-			" and ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "issue handling" }),
-			" whenever you want them — and drag any bar to reorder."
+			" bar is a personal helper with a todo list."
 		] })
 	},
 	{
-		icon: "💬",
-		title: "Your assistant",
+		icon: "⏩",
+		title: "Shipping",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"The ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Assistant" }),
-			" bar is a personal AI helper, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "powered by whichever coding provider you choose" }),
-			". It answers questions, manages your",
+			"When an agent stops, its pane's button offers the next step —",
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Todo" }),
-			" list, and follows standing instructions you set under",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
-			" — handy for planning before you spin up sessions."
-		] })
-	},
-	{
-		icon: "🔗",
-		title: "Connect your accounts",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"The powerful features need a one-time hookup to your outside services.",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: " Settings → Connections" }),
-			" is your at-a-glance dashboard — it shows what's ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Connected" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Commit…" }),
 			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Action needed" }),
-			", or ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Not connected" }),
-			", and its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Configure" }),
-			" links jump to each setup screen. The next few steps cover each one."
-		] }),
-		screen: "connections"
-	},
-	{
-		icon: "🤖",
-		title: "1. Coding provider",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Pick the CLI new sessions launch with (Claude, Codex, or any provider you add) and any default launch flags. Then hit the ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent CLI check" }),
-			" — it probes the binary ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "and" }),
-			" its login state, so you catch a not-installed or not-logged-in provider before your first session, not during it."
-		] }),
-		screen: "coding"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Push" }),
+			", ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Make PR" }),
+			". ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }),
+			" takes those steps for you, as far as you choose, and can ask first. Anything waiting on you — a question or an approval — shows under the",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bell" }),
+			"."
+		] })
 	},
 	{
 		icon: "🎫",
-		title: "2. Ticket ingestion",
+		title: "Where work comes from",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Add a source — ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Jira, Linear, GitHub Issues, Shortcut or Asana" }),
-			" — and paste its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "API token" }),
-			". The non-obvious part: set each source's",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Repo URL" }),
-			" so agents know which repository to clone and branch from. Press ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Test" }),
-			" on a source to confirm the credentials before you rely on it. New tickets then spin up sessions automatically."
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Intake" }),
+			" turns tickets, PRs and issues into sessions (Jira, Linear, GitHub Issues, Shortcut, Asana). ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
+			" joins the top bar once it is checking what you shipped. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
+			" at the bottom of the sidebar holds extra bars, your saved prompts and the Outbox."
 		] }),
 		screen: "ticketing"
-	},
-	{
-		icon: "🔀",
-		title: "3. PR review",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"On ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Intake → Pull requests" }),
-			", add a card per repository —",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "owner/name" }),
-			" (e.g. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflockai/MindFlock" }),
-			"), and optionally its own agent CLI, base branch and grace period. Then paste a",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "GitHub token" }),
-			" under Advanced options. That token is the whole setup: it also lets MindFlock open and merge PRs for you. It falls back to",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "$GH_TOKEN" }),
-			" / ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "$GITHUB_TOKEN" }),
-			", and to",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "gh auth token" }),
-			" if you happen to have the GitHub CLI — which is optional, not required. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Pushing" }),
-			" is always plain ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "git push" }),
-			" ",
-			"over the remote you already use, so an SSH remote needs nothing extra."
-		] }),
-		screen: "repo"
-	},
-	{
-		icon: "🐛",
-		title: "4. Issue handling",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"MindFlock can watch repos for ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "newly opened issues" }),
-			" and auto-start a session on a fresh branch for each. Two prerequisites that trip people up: it needs ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "git installed" }),
-			", and it runs alongside ticket ingestion, so it needs a ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "connected ticketing source" }),
-			". Its repo list is independent from PR review's."
-		] }),
-		screen: "issues"
-	},
-	{
-		icon: "🖥️",
-		title: "5. Linked IDE",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Choose the editor MindFlock opens worktrees in. Detected editors are selectable; missing ones are grayed out. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "VS Code-family editors" }),
-			" ",
-			"(code, cursor, windsurf) get the best integration — window focus and auto-adopt — but you can point to any editor with a",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "custom command" }),
-			" (e.g. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "zed" }),
-			")."
-		] }),
-		screen: "ide"
-	},
-	{
-		icon: "📱",
-		title: "6. Mobile & remote (optional)",
-		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Want to check on sessions from your phone or another machine? Turn on",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tailscale mode" }),
-			", then use the ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "access token" }),
-			" to reach this MindFlock securely from any device on your tailnet. Skip this if you only ever work at one desk."
-		] }),
-		screen: "mobile"
 	},
 	{
 		logo: true,
 		title: "You're all set",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"That's the tour. Watch for ",
+			"Watch for ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "💡 hints" }),
-			" around the app as you go — turn them off (or replay this walkthrough) any time under",
-			" ",
+			" around the app as you go — replay this tour or turn hints off under ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → General" }),
-			". The ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Doctor" }),
-			" screen flags anything that still needs attention. Happy flocking!"
+			". ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → Doctor" }),
+			" ",
+			"flags anything that still needs attention."
 		] })
 	}
 ];
@@ -72564,7 +73198,7 @@ function Logo() {
 }
 function WelcomeTour() {
 	const open = useUi((s) => s.tourOpen);
-	const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake");
+	const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
 	const finishTour = useUi((s) => s.finishTour);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const [i, setI] = (0, import_react.useState)(0);
@@ -73078,14 +73712,13 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutboxDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),

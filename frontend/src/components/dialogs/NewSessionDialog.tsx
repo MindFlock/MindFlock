@@ -421,7 +421,7 @@ export function immediateStartBlockReason(where: {
   return (
     "One thing first: " +
     where.folderLabel +
-    " does not exist yet. Tick the box, then press Start session again."
+    " does not exist yet. Tick the box, then press Create session again."
   );
 }
 
@@ -860,6 +860,9 @@ export function NewSessionDialog() {
   const [searchSel, setSearchSel] = useState(0);
   const [presetValue, setPresetValue] = useState("");
   const [savedPresets, setSavedPresets] = useState<Preset[]>([]);
+  // "Save…" opens an inline name row under the select (null = closed). It is
+  // a row, not a dialog box, because Electron has no window.prompt at all.
+  const [presetName, setPresetName] = useState<string | null>(null);
   // Auth profile pin: "" = inherit the app-wide default account; "default" =
   // explicitly the CLI's own login; anything else = a configured profile id.
   const [profileId, setProfileId] = useState("");
@@ -1006,6 +1009,7 @@ export function NewSessionDialog() {
     // rotated OpenRouter key must not keep offering the old key's catalog.
     setProfileModels({});
     setSavedPresets(loadUserPresets());
+    setPresetName(null);
     let live = true;
     // The folder suggestions get a request of their own rather than a place in
     // the barrier below, because the endpoint walks the filesystem: hundreds of
@@ -1265,6 +1269,13 @@ export function NewSessionDialog() {
     [config?.caps, canonAgent, program]
   );
   const togetherOk = teamRunCaps(config?.caps).together;
+  /** The Ticket tab files a ticket in a connected tracker, so with no tracker
+   * there is nothing behind it: the strip is not drawn at all, and a dialog
+   * somehow left on Ticket (the tracker disconnected mid-open) shows Session.
+   * A two-tab strip whose second tab can only fail is noise on the one dialog
+   * every new user opens first. */
+  const ticketingOk = !!config?.caps?.ticketing;
+  const shownTab: NewTab = ticketingOk ? tab : "session";
 
   /** The box read as a list (list mode), and every choice about how the
    * things in it ship. One plain line leaves all of it on its defaults and the
@@ -1633,7 +1644,7 @@ export function NewSessionDialog() {
       // open dialog — which is exactly what #new-error and MakePrDialog's .error
       // line already are. The remedy never changes and is already on screen, so
       // the sentence names it.
-      setPlanError(errMsg(err) + " — fill in the form below instead.");
+      setPlanError(errMsg(err) + " — use Set it up myself instead.");
     } finally {
       window.clearTimeout(slow);
       // Guarded like every other landing: a later run owns the button now, and
@@ -1954,20 +1965,21 @@ export function NewSessionDialog() {
     );
   };
 
+  /** Save the prompt under the name typed in the inline row. Same store as
+   * Customize → Prompts' list (lib/presets), so a prompt saved here shows there
+   * and the other way round. Refused (with the row left open) rather than
+   * saving an empty prompt or a nameless one. */
   const savePreset = () => {
     const text = prompt.trim();
-    if (!text) {
-      toast("Type a prompt first, then save it as a preset");
-      return;
-    }
-    const name = window.prompt("Preset name:", "");
-    if (!name || !name.trim()) return;
-    const list = loadUserPresets().filter((p) => p.name !== name.trim());
-    list.push({ name: name.trim(), prompt: text });
+    const name = (presetName || "").trim();
+    if (!text || !name) return;
+    const list = loadUserPresets().filter((p) => p.name !== name);
+    list.push({ name, prompt: text });
     saveUserPresets(list);
     setSavedPresets(list);
-    setPresetValue("u:" + name.trim());
-    toast(`Saved preset “${name.trim()}”`);
+    setPresetValue("u:" + name);
+    setPresetName(null);
+    toast(`Saved prompt “${name}”`);
   };
 
   return (
@@ -1990,19 +2002,19 @@ export function NewSessionDialog() {
           // Only the session tab. The Ticket pane owns its own Ctrl+Enter and
           // stops it here, and a fallthrough would submit an empty session form
           // out from under a tab that is not showing one.
-          if (tab !== "session") return;
+          if (shownTab !== "session") return;
           e.preventDefault();
           submit();
         }
       }}
     >
-      {tab === "ticket" ? (
+      {shownTab === "ticket" ? (
         /* A sibling of the form, not a branch inside it: nesting a second form
            is invalid HTML, and hanging the ticket pane off #new-form's submit
            would mean its Enter key and its validation belong to a form whose
            fields are not on screen. The two panes share only the head. */
         <div id="new-ticket-form" className="ta-drop" ref={dropZoneRef}>
-          <NewHead tab={tab} onTab={setTab} onClose={closeDialog} />
+          <NewHead tab={shownTab} tabs={ticketingOk} onTab={setTab} onClose={closeDialog} />
           <NewTicketPane />
         </div>
       ) : (
@@ -2020,7 +2032,7 @@ export function NewSessionDialog() {
           submit();
         }}
       >
-        <NewHead tab={tab} onTab={setTab} onClose={closeDialog} />
+        <NewHead tab={shownTab} tabs={ticketingOk} onTab={setTab} onClose={closeDialog} />
 
         <div className="nf-body">
           {page === 1 ? (
@@ -2098,6 +2110,26 @@ export function NewSessionDialog() {
                   away skips. This says what the sentence is for, and that
                   reading it costs nothing, which is the fact that makes the
                   button row below safe to experiment with. */}
+              {!runMode && (
+              <>
+              <p className="nf-describe-help">
+                Your coding CLI reads this and works out which folder to use, what
+                to call the session, and what to tell the agent first.{" "}
+                <b>Nothing is created until you pick one of the buttons below.</b>
+              </p>
+              {/* Two examples rather than none: the placeholder can only show
+                  one shape and the box accepts three — an existing project, a
+                  brand-new one, and a request for somewhere separate to work. A
+                  user who cannot tell which of those is allowed types the safest
+                  thing they can think of and never finds the other two. */}
+              <p className="nf-describe-eg">
+                Also understood:{" "}
+                <code>start a new project called invoice-parser</code>
+                {" · "}
+                <code>add metrics to billing, in a worktree</code>
+              </p>
+              </>
+              )}
               {draft.listMode && (
                 <RunItems
                   rows={draft.rows}
@@ -2185,26 +2217,6 @@ export function NewSessionDialog() {
                   />
                 </div>
               )}
-              {!runMode && (
-              <>
-              <p className="nf-describe-help">
-                Your coding CLI reads this and works out which folder to use, what
-                to call the session, and what to tell the agent first.{" "}
-                <b>Nothing is created until you pick one of the buttons below.</b>
-              </p>
-              {/* Two examples rather than none: the placeholder can only show
-                  one shape and the box accepts three — an existing project, a
-                  brand-new one, and a request for somewhere separate to work. A
-                  user who cannot tell which of those is allowed types the safest
-                  thing they can think of and never finds the other two. */}
-              <p className="nf-describe-eg">
-                Also understood:{" "}
-                <code>start a new project called invoice-parser</code>
-                {" · "}
-                <code>add metrics to billing, in a worktree</code>
-              </p>
-              </>
-              )}
               {planNoteShown && (
                 <p className="nf-describe-note" aria-live="polite">
                   {planNoteShown}
@@ -2223,7 +2235,7 @@ export function NewSessionDialog() {
           {templates.length > 0 && (
               <div id="new-templates" className="new-templates">
                 <div className="nt-head">
-                  <span>Templates</span>
+                  <span title="Saved New-session setups">Templates</span>
                   <button
                     type="button"
                     id="new-templates-manage"
@@ -2891,7 +2903,7 @@ export function NewSessionDialog() {
                   <span className="preset-row">
                     <select
                       id="new-preset"
-                      title="Prompt presets — pick one to fill the prompt below (editable after)"
+                      title="Saved prompts — pick one to fill the prompt below (editable after)"
                       value={presetValue}
                       onChange={(e) => {
                         setPresetValue(e.target.value);
@@ -2899,7 +2911,7 @@ export function NewSessionDialog() {
                         if (p) setPrompt(p.prompt);
                       }}
                     >
-                      <option value="">Preset…</option>
+                      <option value="">Saved prompt…</option>
                       {BUILTIN_PRESETS.length > 0 && (
                         <optgroup label="Built-in">
                           {BUILTIN_PRESETS.map((p) => (
@@ -2919,14 +2931,20 @@ export function NewSessionDialog() {
                         </optgroup>
                       )}
                     </select>
-                    <button type="button" id="preset-save" title="Save current prompt as preset…" onClick={savePreset}>
+                    <button
+                      type="button"
+                      id="preset-save"
+                      title="Save the prompt below so you can pick it again"
+                      aria-expanded={presetName !== null}
+                      onClick={() => setPresetName((cur) => (cur === null ? "" : null))}
+                    >
                       Save…
                     </button>
                     {presetValue.startsWith("u:") && (
                       <button
                         type="button"
                         id="preset-del"
-                        title="Delete the selected saved preset"
+                        title="Delete this saved prompt"
                         onClick={() => {
                           const p = findPreset(presetValue);
                           if (!p) return;
@@ -2939,7 +2957,59 @@ export function NewSessionDialog() {
                         ✕
                       </button>
                     )}
+                    {/* Customize → Prompts: rename, preview and paste live
+                        there; this picker only picks and saves. */}
+                    <button
+                      type="button"
+                      id="preset-manage"
+                      className="linklike"
+                      title="Your saved prompts, in Customize → Prompts"
+                      onClick={() => useUi.getState().openDialogFor("prompts")}
+                    >
+                      Manage…
+                    </button>
                   </span>
+                  {presetName !== null && (
+                    <span className="preset-name-row">
+                      <input
+                        id="preset-name"
+                        type="text"
+                        autoFocus
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Name this prompt"
+                        aria-label="Name for the saved prompt"
+                        value={presetName}
+                        onChange={(e) => setPresetName(e.target.value)}
+                        onKeyDown={(e) => {
+                          // Kept to this row: Enter must not submit the form
+                          // (that creates the session) and Escape must not
+                          // reach the dialog's handler (that closes it).
+                          e.stopPropagation();
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            savePreset();
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setPresetName(null);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        id="preset-name-save"
+                        disabled={!presetName.trim() || !prompt.trim()}
+                        title={prompt.trim() ? "Save it" : "Type a prompt below first"}
+                        onClick={savePreset}
+                      >
+                        Save
+                      </button>
+                      <button type="button" id="preset-name-cancel" onClick={() => setPresetName(null)}>
+                        Cancel
+                      </button>
+                      {!prompt.trim() && <span className="muted">Type a prompt below first.</span>}
+                    </span>
+                  )}
                   <textarea
                     id="new-prompt"
                     rows={2}
@@ -3013,7 +3083,7 @@ export function NewSessionDialog() {
                     type="text"
                     id="new-launch-args"
                     autoComplete="off"
-                    placeholder="--dangerously-skip-permissions"
+                    placeholder="e.g. --verbose"
                     value={launchArgs}
                     onChange={(e) => setLaunchArgs(e.target.value)}
                   />
@@ -3051,6 +3121,11 @@ export function NewSessionDialog() {
               >
                 Set it up myself instead
               </button>
+              {/* Review is for ONE session: a list (or a split) starts from the
+                  rows and choices above, so in run mode the button is not drawn
+                  at all rather than drawn and then refusing. One fewer button
+                  on the busiest version of this page. */}
+              {!runMode && (
               <button
                 // type="button" is load-bearing, not tidiness: the default is
                 // "submit", so without it this button creates a session out of
@@ -3063,24 +3138,8 @@ export function NewSessionDialog() {
                 // describeBlockReason instead and get the sentence.
                 disabled={describing}
                 aria-busy={describing || undefined}
-                title={
-                  runMode
-                    ? "Review is for one session. A list (or a split) starts from the rows and choices above."
-                    : "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created."
-                }
-                onClick={() => {
-                  if (runMode) {
-                    // Said, not silently ignored — and not disabled, which
-                    // would leave a grey button that won't say why.
-                    setPlanError(
-                      splitOn
-                        ? "A split's lead is set up by MindFlock — untick Split to review one session's details."
-                        : "Review details is for one session — check the rows above and start them from here."
-                    );
-                    return;
-                  }
-                  void runDescribe("fill");
-                }}
+                title="Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created."
+                onClick={() => void runDescribe("fill")}
               >
                 {describing ? (
                   <>
@@ -3096,16 +3155,14 @@ export function NewSessionDialog() {
                     Review details first{" "}
                     {/* What Enter does, shown rather than described. The
                         sentence that used to say it in words sat in the header
-                        and explained the wrong page. In a list Enter is a new
-                        line, so the hint goes. */}
-                    {!runMode && (
-                      <span className="nf-key" aria-hidden="true">
-                        ↵
-                      </span>
-                    )}
+                        and explained the wrong page. */}
+                    <span className="nf-key" aria-hidden="true">
+                      ↵
+                    </span>
                   </>
                 )}
               </button>
+              )}
               {/* The "don't make me read anything" path. Accent, because it is
                   the one this page exists for, and a BUTTON rather than the
                   Enter key on purpose: Enter in the box means "read this", it
@@ -3121,7 +3178,7 @@ export function NewSessionDialog() {
                 aria-busy={draft.starting || undefined}
                 title={
                   runMode
-                    ? "Start them now. MindFlock queues the rest, ships each one as chosen above, and shows what needs you in the Outbox."
+                    ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
                     : "Create the session right now from what you typed, without showing you the details first."
                 }
                 onClick={runMode ? () => void startRun() : startNow}
@@ -3153,7 +3210,8 @@ export function NewSessionDialog() {
   );
 }
 
-/** The New dialog's head: title, the two tabs, and Close.
+/** The New dialog's head: title, the two tabs (only once a tracker is
+ * connected — see ticketingOk), and Close.
 
  * Shared by both panes rather than written twice, because the strip is the one
  * thing that has to look identical from either side of it — a tab row that
@@ -3164,16 +3222,20 @@ export function NewSessionDialog() {
  * tabs name the thing being made. */
 function NewHead({
   tab,
+  tabs,
   onTab,
   onClose,
 }: {
   tab: NewTab;
+  /** Draw the Session/Ticket strip at all. */
+  tabs: boolean;
   onTab(t: NewTab): void;
   onClose(): void;
 }) {
   return (
     <div className="ws-head nf-head">
       <h2>New</h2>
+      {tabs && (
       <nav className="nf-tabs" aria-label="New">
         {NEW_TABS.map((t) => (
           <button
@@ -3188,6 +3250,7 @@ function NewHead({
           </button>
         ))}
       </nav>
+      )}
       <button type="button" id="new-close" title="Close (Esc)" onClick={onClose}>
         Close
       </button>

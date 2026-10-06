@@ -1,67 +1,23 @@
-/** Footer "Customize" popover: choose which bars show in the sidebar. Sits
- * between the session count and the shortcuts link. Availability gating still
- * applies on top — a checked bar can stay absent (e.g. Ticket Ingestion
- * without a connected ticketing source). Persisted via useUi.hiddenBars. */
+/** Footer "Customize": the door to the Customize dialog (Sidebar · Prompts ·
+ * Outbox). Sits between the session count and the shortcuts link. It used to
+ * be a popover holding only the bar checklist; that list is now the dialog's
+ * Sidebar tab (customize/SidebarBarsPicker.tsx), so this is a plain button. */
 
-import { useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
-import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
-import { orderedBars } from "./barDefs";
 
 export function FooterCustomize() {
-  const hiddenBars = useUi((s) => s.hiddenBars);
-  const toggleBarHidden = useUi((s) => s.toggleBarHidden);
-  const barOrder = useUi((s) => s.barOrder);
-  // Extension bars appear here too — same defs the sidebar renders, so the
-  // menu order mirrors the live order, extensions included.
-  const extBars = useExtensionBarDefs();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
+  const openDialogFor = useUi((s) => s.openDialogFor);
   return (
-    <div id="foot-customize" ref={ref}>
+    <div id="foot-customize">
       <button
         id="foot-customize-btn"
         type="button"
-        className={"foot-link" + (open ? " open" : "")}
-        title="Choose which bars show in the sidebar"
-        aria-haspopup="true"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        className="foot-link"
+        title="Sidebar bars, saved prompts and the Outbox"
+        onClick={() => openDialogFor("customize")}
       >
-        ⚙ Customize
+        Customize
       </button>
-      {open && (
-        <div id="foot-customize-menu" role="menu">
-          <div className="fc-title">Show in sidebar</div>
-          {orderedBars(barOrder, extBars).map((b) => (
-            <label key={b.key} className="fc-item">
-              <input
-                type="checkbox"
-                checked={!hiddenBars.has(b.key)}
-                onChange={() => toggleBarHidden(b.key)}
-              />
-              {b.label}
-            </label>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

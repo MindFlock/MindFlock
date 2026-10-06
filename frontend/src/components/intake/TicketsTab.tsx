@@ -291,6 +291,32 @@ export function TicketsTab(_: TabProps) {
         committed.
       </p>
       <IngestionToggle sourceCount={(sources || []).length} />
+      {/* WORK FIRST. Once a source exists the tab opens on what it yielded —
+          the tickets are the reason you came, the source cards are setup you
+          revisit. With none yet, the card to add one is all there is. */}
+      {sources.length > 0 && (
+        <AssignedTickets
+          agents={agents.names}
+          // Per source, what "Default" resolves to on a Begin-work picker —
+          // the source's own Agent CLI, else the app default.
+          sourceAgents={Object.fromEntries(
+            sources.map((s) => [s.id, s.agent || agents.fallback || ""])
+          )}
+          defaultAgent={agents.fallback}
+          // Same idea for the depth picker: what "Default" means on this
+          // source's rows is the source's own automation depth.
+          sourceDepths={Object.fromEntries(
+            sources.map((s) => [s.id, s.depth || ""])
+          )}
+          // ...and for the effort picker, so a row's empty choice names the
+          // queue's own rung instead of the CLI's default. Before the source had
+          // an effort there was nothing to name, which is why that picker's blank
+          // option used to read "Default effort" unconditionally.
+          sourceEfforts={Object.fromEntries(
+            sources.map((s) => [s.id, s.effort || ""])
+          )}
+        />
+      )}
       <div className="set-row">
         <span className="set-label">Sources</span>
         <div id="ticketing-sources" className="ik-cards">
@@ -320,29 +346,6 @@ export function TicketsTab(_: TabProps) {
           </button>
         </div>
       </div>
-      {sources.length > 0 && (
-        <AssignedTickets
-          agents={agents.names}
-          // Per source, what "Configured" resolves to on a Begin-work picker —
-          // the source's own Agent CLI, else the app default.
-          sourceAgents={Object.fromEntries(
-            sources.map((s) => [s.id, s.agent || agents.fallback || ""])
-          )}
-          defaultAgent={agents.fallback}
-          // Same idea for the depth picker: what "Configured" means on this
-          // source's rows is the source's own automation depth.
-          sourceDepths={Object.fromEntries(
-            sources.map((s) => [s.id, s.depth || ""])
-          )}
-          // ...and for the effort picker, so a row's empty choice names the
-          // queue's own rung instead of the CLI's default. Before the source had
-          // an effort there was nothing to name, which is why that picker's blank
-          // option used to read "Default effort" unconditionally.
-          sourceEfforts={Object.fromEntries(
-            sources.map((s) => [s.id, s.effort || ""])
-          )}
-        />
-      )}
     </>
   );
 }
@@ -1128,7 +1131,16 @@ function TicketSourceCard({
 
   const provName = meta?.label || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
-  const base = detail ? provName + " — " + detail : provName;
+  // Said once. A label that already names its provider ("Jira — payments") is
+  // the whole title; prefixing it again read "jira — Jira — payments".
+  // A whole word only: "Linearity board" does not name Linear.
+  const namesProvider = [provName, source.provider].some(
+    (n) =>
+      !!n &&
+      detail.toLowerCase().startsWith(n.toLowerCase()) &&
+      !/[a-z0-9]/i.test(detail.charAt(n.length))
+  );
+  const base = !detail ? provName : namesProvider ? detail : provName + " — " + detail;
   // Always show which CLI this queue runs, not just when it is overridden.
   // Saved sources render collapsed, so an agent shown only when explicitly set
   // made the common case — "it's on the app default" — indistinguishable from
@@ -1304,21 +1316,22 @@ function TicketSourceCard({
         <select
           className="tk-depth"
           data-tk-field="depth"
-          value={source.depth || ""}
+          value={source.depth === "agent" ? "" : source.depth || ""}
           onChange={(e) => onChange({ depth: e.target.value })}
         >
-          <option value="">Off — stop after the agent works</option>
-          {SOURCE_DEPTHS.map((d) => (
+          {/* One ladder, the same words as every other Fast-track control.
+              A stored "agent" (stop once the agent stops) IS Off, so it reads
+              as Off rather than as a sixth rung. */}
+          <option value="">{DEPTH_LABELS.off}</option>
+          {SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => (
             <option key={d} value={d}>
               {DEPTH_LABELS[d]}
             </option>
           ))}
         </select>
         <span className="set-hint">
-          How far every ticket from this source carries itself once the agent finishes:
-          commit, push, open a PR. Merging is <strong>not</strong> offered here — a
-          source default applies to every future ticket with nobody watching, and a
-          merge cannot be undone. You can still pick Merge on one ticket's row.
+          How far each ticket goes after its agent finishes. Merge is per-ticket only —
+          a source default runs with nobody watching.
         </span>
       </label>
       <div className="tk-fields">

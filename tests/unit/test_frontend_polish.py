@@ -67,11 +67,12 @@ def test_notify_js_toggle_contract():
     assert "unsupported" in js
 
 
-def test_bell_dropdown_has_notify_toggle():
-    """The on/off toggle lives in the bell dropdown head (not the left panel),
-    driving the shared notify addon API and syncing via mf-notify-state."""
+def test_notify_toggle_lives_only_in_settings():
+    """The on/off toggle lives ONLY in Settings → Notifications: the bell is the
+    list of what needs you, not a second home for the same knob. Settings still
+    drives the shared notify addon API and syncs via mf-notify-state."""
     js = client.get("/app.js").text
-    assert '"notif-toggle"' in js  # rendered in the .notif-head row
+    assert '"notif-toggle"' not in js  # the bell's duplicate toggle is gone
     assert "mindflockAddons" in js  # _notifApi() drives the addon
     assert "mf-notify-state" in js  # stays in sync with Settings
 

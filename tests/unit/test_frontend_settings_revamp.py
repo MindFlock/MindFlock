@@ -335,6 +335,42 @@ def test_settings_screen_order_moves_appearance_mobile_to_end():
     assert keys.index("appearance") > keys.index("general") + 1
 
 
+def _screen_groups(js: str) -> dict[str, str]:
+    """Screen key -> nav group ("" for the ungrouped head of the list)."""
+    block = squash(js).split("SCREENS = [", 1)[1].split("];", 1)[0]
+    return {
+        k: g
+        for k, g in re.findall(
+            r'key: "([^"]+)", label: "[^"]+",(?: group: "([^"]+)",)?', block
+        )
+    }
+
+
+def test_settings_nav_is_grouped_under_headings():
+    """Seventeen equal-weight buttons became a scannable nav: the everyday three
+    lead, then Agents / Code / This device / Troubleshooting. Only a heading is
+    added — keys and labels (what deep links and the palette resolve) stay."""
+    js = client.get("/app.js").text
+    groups = _screen_groups(js)
+    assert [k for k in ("general", "connections", "notifications") if groups[k]] == []
+    expect = {
+        "Agents": ("coding", "providers", "accounts", "localmodel"),
+        "Code": ("workspace", "ide"),
+        "This device": ("security", "appearance", "mobile"),
+        "Troubleshooting": ("doctor", "logs", "advanced", "extensions", "traffic"),
+    }
+    for group, keys in expect.items():
+        for k in keys:
+            assert groups[k] == group, (k, groups[k])
+    # The group follows the label, so the label pin above stays contiguous.
+    assert in_bundle('{ key: "coding", label: "Agent CLI", group: "Agents"', js)
+    # A non-clickable heading before each group's first screen.
+    assert '"set-nav-group"' in js
+    assert "s.group !== screens[i - 1]?.group" in js
+    css = client.get("/style.css").text
+    assert ".set-nav-group {" in css
+
+
 def test_coding_cli_reads_status_and_persists_default_correction():
     """Settings → Agent CLI reads /api/providers/status (carries `installed`),
     lists only installed CLIs as default candidates, and persists a fallback

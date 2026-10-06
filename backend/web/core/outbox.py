@@ -23,6 +23,11 @@ Groups, in order:
 * ``shipped`` — today's commits, pushes and PRs, with checks and the Verify
   checklist when there is one.
 * ``queued`` — a run's tasks waiting for a free slot.
+
+The payload keeps all four groups; the web UI splits them. ``waiting`` renders
+in the bell's *Needs attention* list, merged with the per-session attention
+rows, so there is one place anything waits on you. The other groups render in
+Customize → Outbox, a read-only log of what is on its way out.
 """
 
 from __future__ import annotations

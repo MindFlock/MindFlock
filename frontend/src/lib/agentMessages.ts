@@ -419,9 +419,11 @@ export interface ShipTask {
   sameFolder?: boolean;
 }
 
-/** How the lane names itself at the head of the line. */
+/** How the lane names itself at the head of the line. "leave" is Fast-track's
+ * Off rung (a group member's line still shows it; its group carries it) —
+ * said as the ladder says it, never "agent only". */
 export const LANE_HEAD: Record<string, string> = {
-  leave: "agent only",
+  leave: "fast-track off",
   commit: "→ commit",
   push: "→ push",
   pr: "→ PR",
@@ -497,7 +499,7 @@ function stageRank(stage: string): number {
   return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
 }
 
-/** A run escalation, said in a few words (the Outbox has the full sentence). */
+/** A run escalation, said in a few words (the bell has the full sentence). */
 export function escalationText(reason: string): string {
   const r = String(reason || "").trim();
   switch (r) {
@@ -536,11 +538,11 @@ export interface ShipLine {
  * for a session MindFlock isn't carrying anywhere — that row keeps today's
  * line. Most urgent first:
  *  - `? needs your answer` (gold): its agent is on a prompt;
- *  - `! hooks failed twice — open the Outbox` (red): a run escalation, or a
+ *  - `! hooks failed twice — open the bell` (red): a run escalation, or a
  *    fast-track that stopped;
  *  - `✓ PR #318 · checks ✓` (green): the lane is reached;
  *  - `⇡ opening PR` (accent): MindFlock is carrying it now;
- *  - `→ commit, asks first · ready — see the Outbox`: waiting on your OK;
+ *  - `→ commit, asks first · ready — approve in the bell`: waiting on your OK;
  *  - `→ PR · working 12m` / `· idle` / `· usage limit`: the agent's turn. */
 export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?: ShipTask | null } = {}): ShipLine | null {
   const lane = laneOf(row);
@@ -554,7 +556,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   const stage = String(row.stage || "");
   const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
   const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
-  const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
+  const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
   const base = { restCls: "", title: (means ? "Fast-track: " + means + "." : "") + copy };
   const line = (lead: string, rest: string, cls: string, state: ShipLine["state"], why = ""): ShipLine => ({
     ...base,
@@ -565,13 +567,13 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
     title: (why ? why + "\n" : "") + base.title,
   });
 
-  if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
+  if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
   const tstate = String(task?.state || "");
   const reason = String(task?.reason || "");
   if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve")
-    return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+    return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
   if (tstate === "failed")
-    return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+    return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
   if (ap && ap.state === "halted")
     return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 
@@ -638,7 +640,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
     return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
   }
   if ((tstate === "needs_you" && reason === "approve") || (!tstate && awaitingApproval(row)))
-    return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
+    return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
 
   let rest: string;
   let state: ShipLine["state"] = "idle";

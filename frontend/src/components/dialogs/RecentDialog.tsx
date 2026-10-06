@@ -11,7 +11,12 @@
  *
  * Per row: reopen / delete / forget. In the header: remove every UNUSED
  * worktree in one sweep — see recentRows.ts for the words it asks with, and
- * core/workspaces.py for why it can only ever take a worktree git generated. */
+ * core/workspaces.py for why it can only ever take a worktree git generated.
+ *
+ * Every question is asked in ONE inline bar under the header, never with
+ * confirm()/alert(): the desktop app implements neither, so there a native
+ * confirm() returned false and every destructive button here silently did
+ * nothing. Failures of a single row raise an error card (errorPop). */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Instance } from "../../api/types";
@@ -19,6 +24,7 @@ import { api } from "../../api/client";
 import { refreshInstances, refreshRecentlyClosed } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
+import { errorPop } from "../../lib/errorPop";
 import { humanSize } from "../../lib/format";
 import { matchesTokens, searchTokens } from "../../lib/rowSearch";
 import { previewList } from "../../lib/rowSelection";
@@ -29,6 +35,7 @@ import { BulkRowBar, RowCheck, SelectAllCheck, useRowSelection } from "./rowSele
 import { SortPicker, useSortPref, type SortOption } from "./SortPicker";
 import {
   dirNote,
+  dirtyChoices,
   dirtyMessage,
   entryLabel,
   nothingMessage,
@@ -63,6 +70,17 @@ const SORTS: SortOption[] = [
   },
 ];
 
+/** The inline confirm bar's question. No `run` = a notice, answered with
+ * `okLabel` alone. `alt` is a third answer (the dirty-worktree follow-up's
+ * "only the clean ones"). */
+interface Ask {
+  text: string;
+  okLabel: string;
+  danger?: boolean;
+  run?: () => void | Promise<void>;
+  alt?: { label: string; run: () => void | Promise<void> };
+}
+
 /** A row whose directory this app may delete. An in-place session ran in the
  * user's OWN repo — that folder is never ours to remove (the server refuses it
  * too); a row whose directory is already gone has nothing to delete; and a
@@ -83,6 +101,16 @@ export function RecentDialog() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  // Each question gets a fresh `seq`, which keys the bar: a follow-up (the
+  // dirty-worktree one) REMOUNTS it, so focus lands on its harmless answer
+  // again instead of staying on the button just pressed — which, by position,
+  // is now "Delete all N" and would take the dirty ones on a second Enter.
+  const [ask, setAskState] = useState<(Ask & { seq: number }) | null>(null);
+  const askSeq = useRef(0);
+  const setAsk = useCallback(
+    (a: Ask | null) => setAskState(a && { ...a, seq: ++askSeq.current }),
+    []
+  );
   const sort = useSortPref("mf_sort_recent", SORTS);
   const seq = useRef(0);
 
@@ -134,10 +162,14 @@ export function RecentDialog() {
     if (open) load();
   }, [open, load]);
 
-  // Reopening the dialog must not silently hide rows behind last time's query.
+  // Reopening the dialog must not silently hide rows behind last time's query
+  // — nor greet you with last time's unanswered question.
   useEffect(() => {
-    if (!open) setQuery("");
-  }, [open]);
+    if (!open) {
+      setQuery("");
+      setAsk(null);
+    }
+  }, [open, setAsk]);
 
   const all = data?.rows || [];
   const aliasOf = useCallback(
@@ -227,9 +259,10 @@ export function RecentDialog() {
     const targets = picked.filter(deletable);
     const skipped = picked.length - targets.length;
     if (!targets.length) {
-      alert(
-        "None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list."
-      );
+      setAsk({
+        text: "None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list.",
+        okLabel: "OK",
+      });
       return;
     }
     const sized = targets.filter((e) => e.size_bytes != null);
@@ -249,16 +282,21 @@ export function RecentDialog() {
         ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n"
         : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") +
       "\nThis cannot be undone.";
-    if (!confirm(msg)) return;
-    await runBulk(targets, "Deleted", removeOne);
+    setAsk({
+      text: msg,
+      okLabel: `Delete ${targets.length}`,
+      danger: true,
+      run: () => runBulk(targets, "Deleted", removeOne),
+    });
   };
 
   const forgetSelected = async () => {
     const targets = picked.filter((e) => e.source === "closed");
     if (!targets.length) {
-      alert(
-        "None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk."
-      );
+      setAsk({
+        text: "None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk.",
+        okLabel: "OK",
+      });
       return;
     }
     // Non-destructive on disk, but it drops the only Reopen handle these rows
@@ -267,12 +305,16 @@ export function RecentDialog() {
       `Forget ${targets.length} closed session${targets.length === 1 ? "" : "s"}?\n\n` +
       previewList(targets.map(label)) +
       "\n\nThe directories stay on disk (they come back as on-disk rows); the sessions leave this list, so Reopen is no longer offered.";
-    if (!confirm(msg)) return;
-    await runBulk(targets, "Forgot", (e) =>
-      api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
-        json: { wipe: false },
-      })
-    );
+    setAsk({
+      text: msg,
+      okLabel: `Forget ${targets.length}`,
+      run: () =>
+        runBulk(targets, "Forgot", (e) =>
+          api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
+            json: { wipe: false },
+          })
+        ),
+    });
   };
 
   /** Remove every worktree nothing has used for a week. Two round trips on
@@ -294,17 +336,30 @@ export function RecentDialog() {
     }
     setBusy(false);
     if (!pre.candidates?.length) {
-      alert(nothingMessage(pre));
+      setAsk({ text: nothingMessage(pre), okLabel: "OK" });
       return;
     }
-    if (!confirm(pruneMessage(pre))) return;
-    let includeDirty = false;
-    if (pre.dirty_count) {
-      includeDirty = confirm(dirtyMessage(pre));
-      // Every candidate holds uncommitted work and the user said no: there is
-      // nothing left to delete, so don't fire a sweep that removes nothing.
-      if (!includeDirty && pre.dirty_count === pre.candidates.length) return;
-    }
+    // Question one: the list. Question two, only when some of it holds
+    // uncommitted work: all of it, or just the clean ones (or neither).
+    setAsk({
+      text: pruneMessage(pre),
+      okLabel: `Delete ${pre.candidates.length}`,
+      danger: true,
+      run: () => {
+        if (!pre.dirty_count) return sweep(false);
+        const choice = dirtyChoices(pre);
+        setAsk({
+          text: dirtyMessage(pre),
+          okLabel: choice.all,
+          danger: true,
+          run: () => sweep(true),
+          alt: choice.clean ? { label: choice.clean, run: () => sweep(false) } : undefined,
+        });
+      },
+    });
+  };
+
+  const sweep = async (includeDirty: boolean) => {
     setBusy(true);
     let done: PruneResult;
     try {
@@ -370,6 +425,67 @@ export function RecentDialog() {
             Close
           </button>
         </div>
+        {ask && (
+          // The bulk bar's look (.dlg-bulk / .bulk-acts), so the dialog keeps
+          // one kind of strip; the inline styles only let a long question wrap
+          // and scroll instead of stretching the panel.
+          <div
+            id="recent-ask"
+            key={ask.seq}
+            className="dlg-bulk"
+            role="alertdialog"
+            aria-label="Confirm"
+            style={{ alignItems: "flex-start" }}
+          >
+            <span
+              className="recent-ask-text"
+              style={{
+                whiteSpace: "pre-wrap",
+                flex: 1,
+                minWidth: 0,
+                maxHeight: "32vh",
+                overflowY: "auto",
+                fontSize: 12,
+              }}
+            >
+              {ask.text}
+            </span>
+            <div className="bulk-acts">
+              {ask.run && (
+                <button
+                  type="button"
+                  className={ask.danger ? "danger" : undefined}
+                  disabled={busy}
+                  onClick={() => {
+                    const run = ask.run!;
+                    // Cleared first, so a run that asks a follow-up wins.
+                    setAsk(null);
+                    void run();
+                  }}
+                >
+                  {ask.okLabel}
+                </button>
+              )}
+              {ask.alt && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const run = ask.alt!.run;
+                    setAsk(null);
+                    void run();
+                  }}
+                >
+                  {ask.alt.label}
+                </button>
+              )}
+              {/* Focus lands on the harmless answer: Enter never deletes. */}
+              <button type="button" autoFocus onClick={() => setAsk(null)}>
+                {ask.run ? "Cancel" : ask.okLabel}
+              </button>
+            </div>
+          </div>
+        )}
         <div className="dlg-filter-row">
           <SelectAllCheck
             state={sel.allState}
@@ -535,7 +651,7 @@ export function RecentDialog() {
                             await refreshInstances();
                             if (inst?.title) selectSession(inst.title);
                           } catch (err) {
-                            alert("Reopen failed: " + (err as Error).message);
+                            errorPop("Reopen failed", (err as Error).message);
                             load();
                           }
                         }}
@@ -552,25 +668,27 @@ export function RecentDialog() {
                             ? "Permanently delete this worktree directory (its branch and commits stay in the repository it came from)"
                             : "Permanently delete this directory"
                         }
-                        onClick={async () => {
-                          if (
-                            !confirm(
+                        onClick={() =>
+                          setAsk({
+                            text:
                               `Permanently delete '${label(e)}'` +
-                                (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") +
-                                "?\nThis cannot be undone."
-                            )
-                          )
-                            return;
-                          try {
-                            await removeOne(e);
-                          } catch (err) {
-                            alert("Delete failed: " + (err as Error).message);
-                            return;
-                          }
-                          load();
-                          refreshInstances();
-                          refreshRecentlyClosed();
-                        }}
+                              (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") +
+                              "?\nThis cannot be undone.",
+                            okLabel: "Delete",
+                            danger: true,
+                            run: async () => {
+                              try {
+                                await removeOne(e);
+                              } catch (err) {
+                                errorPop("Delete failed", (err as Error).message);
+                                return;
+                              }
+                              load();
+                              refreshInstances();
+                              refreshRecentlyClosed();
+                            },
+                          })
+                        }
                       >
                         Delete
                       </button>
@@ -587,7 +705,7 @@ export function RecentDialog() {
                               { json: { wipe: false } }
                             );
                           } catch (err) {
-                            alert("Forget failed: " + (err as Error).message);
+                            errorPop("Forget failed", (err as Error).message);
                             return;
                           }
                           load();

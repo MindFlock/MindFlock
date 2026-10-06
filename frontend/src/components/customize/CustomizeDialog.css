@@ -1,0 +1,120 @@
+/* Customize: Sidebar · Prompts · Outbox in one dialog.
+ *
+ * The frame mirrors #intake-panel (a third of the same family, after Verify and
+ * the old Outbox): the shared `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one
+ * fixed height for all three tabs so switching never makes the dialog jump, and
+ * only the tab's own list scrolls. Imported right after Outbox.css, so it can
+ * shape the panels that live inside it. */
+
+#customize-panel {
+  width: 760px;
+  max-width: 94vw;
+  height: min(620px, 86vh);
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+#customize-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+#customize-panel .ws-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+#customize-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+#customize-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A tab's own first line (the Outbox's subtitle, the Prompts target). */
+#customize-body .cz-tab-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-height: 18px;
+}
+
+/* --- Sidebar tab ----------------------------------------------------------- */
+#customize-sidebar {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cz-heading {
+  margin: 4px 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.cz-bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cz-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 7px;
+}
+
+.cz-bar:hover {
+  background: var(--panel-2);
+}
+
+.cz-bar-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cz-bar-check input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Lines up under the label, past the checkbox. */
+.cz-bar-note {
+  margin-left: 21px;
+  font-size: 11.5px;
+}
+
+#customize-sidebar .cz-bar-link {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.cz-foot {
+  margin: 12px 0 0 8px;
+  font-size: 11.5px;
+}

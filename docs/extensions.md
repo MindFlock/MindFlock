@@ -760,7 +760,7 @@ The bar is 100% host-rendered (`ExtensionBar.tsx`: `.ext-bar#ext-bar-<id>`,
 a label, and one `.ext-btn` per manifest button with its `title` as tooltip),
 so no extension code runs until a button is clicked. Its sidebar key is
 `"ext:" + id`; it drags and hides exactly like the built-in bars because it
-lives in the same `BarSlot` machinery and the footer Customize menu, and it is
+lives in the same `BarSlot` machinery and the Customize dialog's Sidebar tab, and it is
 visible by default. Ordering (`orderedSections`, `barDefs.ts`): a saved order
 is honored for the keys it knows; a missing *built-in* key is appended at the
 tail, as before; a missing *extension* key is inserted immediately **above
@@ -1135,7 +1135,7 @@ export default extension;
 ```
 
 Restart MindFlock. A **Hello** bar appears just above the session list (drag
-or hide it from footer Customize); **Open** runs `hello.open` — the host
+or hide it from Customize → Sidebar); **Open** runs `hello.open` — the host
 opens the dialog from the manifest, imports `index.js`, awaits `activate`,
 then runs the `main` renderer into the body — and the palette lists "Hello:
 Open" and "Hello: Toast". Settings → Extensions shows the row with its

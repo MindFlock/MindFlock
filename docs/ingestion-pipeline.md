@@ -292,7 +292,7 @@ python -m backend.ticket_ingestion   # from the repo root; reads ./config.toml
 
 No CLI arguments — everything comes from `config.toml`
 ([configuration.md](configuration.md)). Or toggle it from the web UI's
-**Ticket Ingestion** sidebar bar, which runs it as a managed subprocess and
+**Tickets** sidebar bar, which runs it as a managed subprocess and
 tails `logs/ticket-ingestion.log`.
 
 **Repo root.** The web server (the ingestion addon and the PR-review flow)

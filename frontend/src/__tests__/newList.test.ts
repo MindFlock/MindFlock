@@ -21,6 +21,7 @@ import {
   summarySentence,
   type PreviewResponse,
 } from "../lib/runStart";
+import { optionsSummary } from "../components/dialogs/NewList";
 
 describe("one plain line is today's single session", () => {
   const one = localItems("fix the login bug in acme-api");
@@ -216,8 +217,20 @@ describe("the sentence", () => {
       lead:
         "6 sessions, 3 at a time. Each one is committed with a message written from its diff, " +
         "pushed and opened as its own PR once its agent stops and your hooks pass.",
-      tail: "Nothing merges; you'll see each PR in the Outbox.",
+      tail: "Nothing merges; each PR shows on its row.",
     });
+  });
+
+  it("points at the row a PR shows on, never at the Outbox", () => {
+    // The Outbox is a log under Customize now, not where anybody looks for a
+    // session's PR: the row's next-step chip already carries the link.
+    expect(summarySentence({ ...base, lane: "merge" })!.tail).toBe("Each PR shows on its row.");
+    for (const lane of ["leave", "commit", "push", "pr", "merge"] as const)
+      for (const grouping of ["each", "together"] as const)
+        for (const askFirst of [false, true])
+          expect(
+            JSON.stringify(summarySentence({ ...base, lane, grouping, askFirst }))
+          ).not.toMatch(/Outbox/);
   });
 
   it("all at once when the pace covers the list; one shared branch for one-for-all", () => {
@@ -229,7 +242,7 @@ describe("the sentence", () => {
 
   it("ask first is said; a split names its lead and the Thread tab", () => {
     expect(summarySentence({ ...base, lane: "commit", askFirst: true })!.tail).toMatch(
-      /asks you in the Outbox/
+      /stops and asks you first, in the bell\./
     );
     const sp = summarySentence({ ...base, n: 1, lane: "pr", split: true })!;
     expect(sp.lead).toMatch(/^One lead session/);
@@ -261,5 +274,15 @@ describe("Intake → Start together", () => {
         { slug: "", id: 77 },
       ])
     ).toBe("PAY-412 sc-21 https://app.shortcut.com/x/story/9 77");
+  });
+});
+
+describe("the single-session Options fold", () => {
+  it("names the rung it is hiding, and says when it will ask first", () => {
+    // A closed fold must still say what a start does: New's first page is
+    // one box, and the summary is the only trace of the choice under it.
+    expect(optionsSummary("leave", false)).toBe("Options · Fast-track: Off");
+    expect(optionsSummary("pr", false)).toBe("Options · Fast-track: Open a PR");
+    expect(optionsSummary("commit", true)).toBe("Options · Fast-track: Commit, asks first");
   });
 });
