@@ -61,20 +61,23 @@ export function DeviceDialog() {
       >
         <h2>Connect to device</h2>
         <label>
-          Access token for <span id="device-dialog-name" className="muted">{device}</span>
+          <span>
+            Access token for <span id="device-dialog-name">{device}</span>
+          </span>
           <input
             type="password"
             id="device-token-input"
             ref={inputRef}
             autoComplete="off"
             spellCheck={false}
-            placeholder="Token from that device's startup banner"
+            placeholder="Paste the access token"
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
         </label>
         <p className="muted device-dialog-hint">
-          The other device must have “Allow remote control” turned on in its Security settings.
+          Find it on that device under Settings → Security (or run <code>mindflock token</code>{" "}
+          there). That device also needs “Allow remote control” turned on.
         </p>
         <div className="modal-actions">
           <span id="device-dialog-err" className="dialog-err">

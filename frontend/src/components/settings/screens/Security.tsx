@@ -64,7 +64,7 @@ export function Security(_: ScreenProps) {
       <h3 className="set-section-title">Access token</h3>
       <label
         className="set-row"
-        title="Whether opening MindFlock in a browser requires the access token from the startup banner."
+        title="Whether opening MindFlock in a browser requires this device's access token (shown below, or `mindflock token`)."
       >
         <span className="set-label">Require access token</span>
         <select

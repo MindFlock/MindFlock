@@ -733,6 +733,130 @@ function spawnEngineShell(scriptText) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Signing in to our OWN server. With the access-token gate on (Tailscale mode
+// turns it on), the local server answers the window with its sign-in page like
+// any other client -- and the token it asks for lives in Settings, behind that
+// very page. Restarting can't help. So when the window lands on the sign-in
+// page we read the token in the engine's environment (the same trust boundary
+// that launched the server) and reload with `?token=`, which the server turns
+// into its long-lived cookie and strips from the URL. Deliberately NOT a
+// server-side "trust 127.0.0.1" rule: `tailscale serve`, SSH tunnels and other
+// reverse proxies all arrive from loopback too.
+// Must match <title> in backend/web/core/auth.py:login_page_html
+// (tests/unit/test_desktop_auto_sign_in.py pins the pair).
+const SIGN_IN_TITLE = 'MindFlock — sign in'
+const TOKEN_READ_TIMEOUT_MS = 20000
+// A token that already failed to sign us in is not retried for this long, so a
+// mismatch (env-pinned token, a second server on the port) leaves the manual
+// sign-in form usable instead of reload-looping.
+const SIGN_IN_RETRY_MS = 60000
+let signInInFlight = false
+let signInLast = { token: '', at: 0 }
+
+// Bash that prints the local access token. `mindflock token` resolves it
+// exactly as the server does (MINDFLOCK_AUTH_TOKEN, MINDFLOCK_SETTINGS_FILE);
+// an engine older than that command falls back to the settings file. Mirrors
+// the launcher's lookup: dev checkout when MINDFLOCK_REPO is set, else the
+// installed CLI on the login PATH or ~/.local/bin.
+function tokenScript() {
+  const cli = WSL_REPO
+    ? 'cd ' + shq(WSL_REPO) + ' && .venv/bin/python -m backend.cli token 2>/dev/null'
+    : 'MF="$(command -v mindflock || true)";'
+      + ' [ -z "$MF" ] && [ -x "$HOME/.local/bin/mindflock" ] && MF="$HOME/.local/bin/mindflock";'
+      + ' [ -n "$MF" ] && "$MF" token 2>/dev/null'
+  return '( ' + cli + ' ) || grep -o \'"auth_token": *"[^"]*"\' "$HOME/.mindflock/settings.json"'
+    + ' 2>/dev/null | sed \'s/.*"\\([^"]*\\)"$/\\1/\''
+}
+
+// The last non-blank line of `out` (a login shell's profile may print above
+// it), or '' when it isn't a plausible token.
+function lastTokenLine(out) {
+  const lines = String(out || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const tok = lines.length ? lines[lines.length - 1] : ''
+  return /^\S+$/.test(tok) ? tok : ''
+}
+
+// Resolve the local server's access token ('' when it can't be read). On
+// Windows the script runs inside WSL over the hidden wscript transport, which
+// has no stdout -- so the script writes into a file under userData (path
+// translated with wslpath) that we read and delete straight away.
+function readEngineToken() {
+  return new Promise((resolve) => {
+    let settled = false
+    let child = null
+    let outPath = ''
+    const finish = (tok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (outPath) { try { fs.unlinkSync(outPath) } catch (e) {} }
+      resolve(tok || '')
+    }
+    const timer = setTimeout(() => {
+      try { if (child) child.kill() } catch (e) {}
+      finish('')
+    }, TOKEN_READ_TIMEOUT_MS)
+    try {
+      if (process.platform === 'win32') {
+        outPath = path.join(app.getPath('userData'), 'engine-token.out')
+        try { fs.unlinkSync(outPath) } catch (e) {}
+        const script = 'OUT="$(wslpath -u ' + shq(outPath) + ')"; { ' + tokenScript() + '; } > "$OUT"'
+        const b64 = Buffer.from(script, 'utf8').toString('base64')
+        const cmd = 'echo ' + b64 + ' | base64 -d | bash'
+        const vbs = 'On Error Resume Next\r\n'
+          + 'rc = CreateObject("WScript.Shell").Run("wsl.exe ' + WSL_D
+          + '-e bash --login -c " & Chr(34) & "' + cmd + '" & Chr(34), 0, True)\r\n'
+          + 'WScript.Quit rc\r\n'
+        const vbsPath = path.join(app.getPath('userData'), 'read-token.vbs')
+        fs.writeFileSync(vbsPath, vbs, 'utf8')
+        child = spawn('wscript.exe', ['//nologo', vbsPath], { windowsHide: true, stdio: 'ignore' })
+        child.on('error', () => finish(''))
+        child.on('exit', () => {
+          let out = ''
+          try { out = fs.readFileSync(outPath, 'utf8') } catch (e) {}
+          finish(lastTokenLine(out))
+        })
+      } else {
+        let out = ''
+        child = spawn('/bin/bash', ['--login', '-c', tokenScript()], { stdio: ['ignore', 'pipe', 'ignore'] })
+        child.stdout.on('data', (d) => { out += d })
+        child.on('error', () => finish(''))
+        child.on('exit', () => finish(lastTokenLine(out)))
+      }
+    } catch (e) {
+      finish('')
+    }
+  })
+}
+
+// Called on every load of the app origin: if the server answered with its
+// sign-in page, sign the window in with the local token.
+async function autoSignIn() {
+  if (signInInFlight || !win || win.isDestroyed()) return
+  if (win.webContents.getTitle() !== SIGN_IN_TITLE) return
+  signInInFlight = true
+  try {
+    const tok = await readEngineToken()
+    if (!tok) {
+      console.log('[mindflock] sign-in page shown; could not read the local access token')
+      return
+    }
+    if (tok === signInLast.token && Date.now() - signInLast.at < SIGN_IN_RETRY_MS) {
+      console.log('[mindflock] local access token was refused; leaving the sign-in page to the user')
+      return
+    }
+    signInLast = { token: tok, at: Date.now() }
+    if (!win || win.isDestroyed()) return
+    const target = new URL(APP_URL)
+    target.searchParams.set('token', tok)
+    console.log('[mindflock] sign-in page shown; signing in with the local access token')
+    win.loadURL(target.toString()).catch(() => {})
+  } finally {
+    signInInFlight = false
+  }
+}
+
 // Finish an engine update: stop the old server, then let the normal launcher
 // bring a FRESH `mindflock serve` up (resolving the shim -> the upgraded venv;
 // a bare re-exec can miss a relocated venv) and reconnect the window. Resetting
@@ -1398,8 +1522,11 @@ function createWindow() {
       // Re-push a verdict reached before this page's listener existed (a
       // reload, or the check winning the race against the renderer).
       pushEngineNotice()
+      // The server's own sign-in page (access-token gate on) -> sign in.
+      autoSignIn().catch(() => {})
     }
-    console.log('[mindflock] loaded:', win.webContents.getURL())
+    // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
+    console.log('[mindflock] loaded:', win.webContents.getURL().split('?')[0])
   })
   win.webContents.on('before-input-event', (_e, input) => {
     if (input.type !== 'keyDown') return
