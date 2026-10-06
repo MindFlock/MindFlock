@@ -46,6 +46,18 @@ _REFRESH_COMMAND_TIMEOUT = 2 * 60 * 60  # the refresh command (e.g. a test run)
 # grow an unbounded buffer in memory.
 _MAX_RETAINED_STDERR = 64 * 1024
 
+# A refresh is background work that can always wait. When the machine is
+# already memory-starved (parallel agent sessions each running their own test
+# suite), starting another full test run pushes it into swap — on WSL a
+# disk-backed swap that stalls every terminal and session start. So a cycle is
+# skipped while the kernel's memory pressure (PSI ``some avg60``: % of the last
+# minute at least one task stalled waiting on memory) is at or above this, and
+# retried after a short backoff instead of a full interval. Linux-only signal;
+# without /proc/pressure the refresher runs as before.
+_PSI_MEMORY_PATH = Path("/proc/pressure/memory")
+_PRESSURE_SKIP_THRESHOLD = 10.0
+_PRESSURE_RETRY_SECONDS = 300
+
 
 def _looks_like_sqlite(path: Path) -> bool:
     try:
@@ -101,6 +113,26 @@ def _checkpoint_and_verify(path: Path) -> bool:
         return False
 
 
+def _memory_pressure() -> float | None:
+    """PSI memory ``some avg60`` as a percentage, or None when unavailable
+    (non-Linux, a kernel without PSI, an unparseable file)."""
+    try:
+        text = _PSI_MEMORY_PATH.read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if not line.startswith("some "):
+            continue
+        for field in line.split()[1:]:
+            key, _, value = field.partition("=")
+            if key == "avg60":
+                try:
+                    return float(value)
+                except ValueError:
+                    return None
+    return None
+
+
 class CacheRefresher:
     def __init__(self, config: PipelineConfig, cache: CacheSeed) -> None:
         self.config = config
@@ -123,6 +155,21 @@ class CacheRefresher:
             self.cache.seed_path,
         )
         while True:
+            pressure = _memory_pressure()
+            if pressure is not None and pressure >= _PRESSURE_SKIP_THRESHOLD:
+                retry = min(
+                    self.cache.refresh_interval_seconds, _PRESSURE_RETRY_SECONDS
+                )
+                _logger.info(
+                    "refresher[%s]: skipping this cycle, memory pressure is "
+                    "%.1f%% (>= %.1f%%); retrying in %ds",
+                    self.cache.name,
+                    pressure,
+                    _PRESSURE_SKIP_THRESHOLD,
+                    retry,
+                )
+                await asyncio.sleep(retry)
+                continue
             try:
                 await self._refresh_once()
             except Exception as e:
