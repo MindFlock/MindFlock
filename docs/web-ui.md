@@ -242,7 +242,7 @@ Push / Make PR / Merge. Someone who just opened a PR and wants to carry on writi
 code on that same branch has no control on the window that isn't about advancing a
 cycle they consider done. ↺, beside the guided button, says so.
 
-It is a **one-shot action, not a toggle** like ⏩ next to it: "back to idle" is
+It is a **one-shot action, not a mode** like ⏩ next to it: "back to idle" is
 something you do to a window, not a mode the window is in, and a control lingering
 in an ON state would assert otherwise. It appears only where the ladder has
 somewhere to be put back *from* (a clean branch at `committed` / `pushed` / `pr`,
@@ -296,9 +296,9 @@ leaves the ladder still asking for **Merge** until someone presses ↺.
 ## Session row actions (expand a sidebar row with ›)
 
 Copy path · **Commit…** · **Push** · **Make PR** · **Merge to staging** ·
-**Open PR ↗** · the [Ship & split](#ship--split-the-fork-icon-menu) items
-(**When it's done: …** unfolding the lanes in place, Split into parallel
-pieces…, Ship it now, Move out of the group for a member, Message…) · **Copy window** (a second in-place session on the same worktree) ·
+**Open PR ↗** · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
+**Split into parallel pieces…** · **Move out of {group}** for a group member ·
+**Message…** · **Copy window** (a second in-place session on the same worktree) ·
 **Open/focus Cursor** (row double-click does the same) · **Hide/Show window**
 (session keeps running) · **Pause/Resume** · **Delete + wipe worktree** (confirmed).
 
@@ -488,49 +488,82 @@ to register it.
 Settings → General has the on/off switch and the scope (see
 [Settings](#settings-)). Both apply from each session's next launch.
 
-### Ship & split (the fork-icon menu)
+### Fast-track (⏩)
 
-Every local session's pane has a **fork-icon button**, the first control at
-the right of its header. It opens **Ship & split → name**, and every item in
-it **acts right away through the server — nothing is pasted into the agent**:
+**Fast-track** is the one name for "how far MindFlock carries this session
+once its agent is done". Every control that sets it shows the same five
+choices and the same toggle, and every one **acts right away through the
+server — nothing is pasted into the agent**:
 
-- **When it's done**: **Leave it** (`L`, MindFlock commits nothing), **Commit**
-  (`C`, a message written from the diff once the agent stops and hooks pass),
-  **Open a PR** (`P`, commit, push, open the PR), **Merge when checks pass**
-  (`M`). This is the session's *lane* — `POST /api/instances/{title}/lane`,
-  which arms the autopilot — and the current one is ticked and highlighted
-  when the menu opens. **Ask me before it ships** (`A`) is a toggle on the
-  same call: the session stops one step before its first outward step and
-  shows it in the Outbox first. It is off (with the reason) on Leave it.
-- **Split into parallel pieces…** (`S`): makes this session the lead of a
-  split run (`POST /api/runs`, `split: true`). The lead proposes the pieces,
-  each fenced to its own paths; you approve the plan in its Thread tab; the
-  server starts the workers and merges them back. **Not yet:** while the
-  server's `caps.team_runs.split` is false (until splits land) the item is
-  shown disabled with "Splitting into parallel pieces is coming next" (the
-  palette's entry says "coming next" too). Once on, it is disabled, with the
-  reason, for a CLI that doesn't get the MindFlock tools, an agent launched
-  without them ("Restart this agent…"), or one on a prompt or at its usage
-  limit.
-- **{Group} · N**, for a session in a group (a run started from the New
-  dialog's list or from Intake): **Ship it now** (`N`, take what's there
-  through the lane without waiting for the agent's idle dwell — refused
-  while the agent is mid-turn) and **Move out of {group}** (`O`, the group
-  stops driving it; the session and its lane stay). A session on its own
-  gets **Ship it now** under a plain separator.
-- **Message…** (`Ctrl+K S`): opens the Thread composer, so the words go in as
-  yours rather than through the agents' mailbox.
+| Choice | What MindFlock does once the agent stops and your hooks pass |
+|---|---|
+| **Off** | Nothing — you take it from there |
+| **Commit** | Commits with a message written from the diff |
+| **Push** | …and pushes the branch |
+| **Open a PR** | …and opens the PR |
+| **Merge when green** | …and merges it once its checks pass |
 
-Keys: arrows, Enter, Esc (back to the terminal) and each item's letter; a
-screen reader follows the highlighted item. `Ctrl+K F` opens the menu on the
-focused session and `Ctrl+K L` opens it on its lane. The same items are in
-the row's › menu (**When it's done: Open a PR ›** unfolds the lanes in place)
-and in the command palette ("Ship: open a PR when done — name", "Ship: commit
-when done — name", "Split into parallel pieces… — name", "Ship & split… —
-name"). Sessions on another device get none of them. If you had already
-rebound another `Ctrl+K` chord to `S`, `F`, `L` or `T`, your binding wins and
-the shortcuts sheet (`?`) marks the newer chord **(taken)** — click it to give
-it a free key.
+**Ask me before it ships** stops one step short of the first outward step
+(a Commit target stops before committing; Push / PR / Merge stop once
+committed) and waits for your go in the Outbox. It means nothing while
+fast-track is Off.
+
+**The ⏩ button** in each pane head, beside the guided **Commit… / Push /
+Make PR** button, is THE per-session control. It names the target —
+**⏩ off**, **⏩ Commit**, **⏩ Push**, **⏩ PR**, **⏩ Merge**, with a small
+circled **?** when it asks first — and a click opens the picker:
+Off (`O`), Commit (`C`), Push (`U`), Open a PR (`P`), Merge when green (`M`),
+then **Ask me before it ships** (`A`). The current choice is ticked and
+highlighted; arrows, Enter, Esc (back to the terminal) and the letters work,
+and a screen reader follows the highlighted item. The button is a control,
+not a status chip: it is **filled while a run is working** toward the target,
+turns red with **✗** (and the reason in its tooltip) when a run halts, and
+is never hidden while a run is armed — even while the workspace is still
+provisioning. To do *one* step yourself, use the guided button beside it;
+fast-track never takes that slot over.
+
+A window that shares its branch with another (a copy window), a group's
+lead (its group ships it once) and a one-for-all member (its work merges
+into the group's one PR) show the picker greyed, with the reason.
+
+**Other ways in**, all to the same picker or the same choices:
+
+- `Ctrl+K F`, the row's › menu (**Fast-track…**, with the current choice)
+  and the palette (**Fast-track… — name**) open the ⏩ picker on that pane.
+- The **New** dialog: **Fast-track to** (one line, and on the "Set it up
+  myself" form) or **Fast-track each to** (a list — Intake's **Start
+  together…** opens New this way). It starts on the Settings default below.
+  Fast-track commits for *this* session, so it gets its own worktree:
+  choosing **Work directly in this folder** turns fast-track Off (the radio
+  says so).
+- The **Commit** dialog: **Then fast-track to** Off / Push / Open a PR /
+  Merge when green, plus ask-first — the commit happens now, the rest
+  follows.
+- **Settings → Workspace → Fast-track goes as far as** is the one default
+  every new session starts on (Off is an answer). A ticket source keeps its
+  own **Fast-track tickets to** in Intake, which never offers Merge.
+
+Under the hood a fast-track target is what the API calls a **lane**:
+`POST /api/instances/{title}/lane` (`{lane: "leave"|"commit"|"push"|"pr"|
+"merge", ask_first}`; `leave` is Off), the row's `lane` field and the MCP's
+`lane` parameters. See [web-api.md](web-api.md) and
+[team-runs.md](team-runs.md).
+
+**Split into parallel pieces…** is its own action in the row's › menu and the
+palette: it makes this session the lead of a split run (`POST /api/runs`,
+`split: true`). The lead proposes the pieces, each fenced to its own paths;
+you approve the plan in its Thread tab; the server starts the workers and
+merges them back into one PR, which goes as far as the session's fast-track
+(a PR when it was Off). It is disabled, with the reason, on a server that
+doesn't take splits, for a CLI that doesn't get the MindFlock tools, an agent
+launched without them ("Restart this agent…"), or one on a prompt or at its
+usage limit. A group member's row › menu also has **Move out of {group}**
+(the group stops driving it; the session and its fast-track stay), and
+**Message…** (`Ctrl+K S`) opens the Thread composer so the words go in as
+yours. Sessions on another device get no Split or Move out. If you had
+already rebound another `Ctrl+K` chord to `S`, `F` or `T`, your binding wins
+and the shortcuts sheet (`?`) marks the newer chord **(taken)** — click it to
+give it a free key.
 
 The Thread tab's worker buttons and the rail's **wrap up** chip still paste a
 prompt for you to send (the server renders it and types it without pressing
@@ -1107,8 +1140,7 @@ built-in alias.
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+K M` | Code map — open the focused session's Map tab |
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
-| `Ctrl+K F` | Ship & split — the focused pane's fork-icon menu |
-| `Ctrl+K L` | When it's done — the same menu, on the focused session's lane |
+| `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
 | `Ctrl+W` / `Delete` | End the focused session (`Delete` only when not typing; never fires for a selected non-session window — those close from their ✕) |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
@@ -1163,7 +1195,7 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs a CLI with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Split a big line into parallel pieces first** sits under the lane on the
+**Split a big line into parallel pieces first** sits under the fast-track on the
 Describe page. **Not yet:** while `caps.team_runs.split` is false it is
 disabled with "(splitting into parallel pieces is coming next)" — everything
 below describes it once the server takes splits. It applies to exactly one task line. Ticked, the primary button
@@ -1275,9 +1307,10 @@ read-only rather than disabled so the caret and the selection survive the wait.
 
 **One thing per line, or ticket IDs.** The box is a textarea (three lines,
 growing to eight). One plain line is everything above, unchanged — the only
-addition is **When it's done** (Leave it / Commit / Open a PR / Merge when
-green, starting on Leave it) and **Ask me before it ships**; a lane other than
-Leave it is armed on the new session as soon as its worktree exists. Shift+Enter
+addition is **Fast-track to** (Off / Commit / Push / Open a PR / Merge when
+green, starting on Settings → Workspace's default) and **Ask me before it
+ships**; anything but Off is armed on the new session as soon as its worktree
+exists. The "Set it up myself" form shows the same row. Shift+Enter
 starts another line, and once the box holds **two or more things, or any ticket
 ID**, it becomes a list:
 
@@ -1287,7 +1320,7 @@ ID**, it becomes a list:
   which takes it out of the box. A ticket that can't be found stays a red row
   with the reason — never quietly a task — and Start refuses until it is
   removed. Plain Enter adds a line in a list.
-- **When each is done** starts on the fast-track default (Settings →
+- **Fast-track each to** starts on the same default (Settings →
   Workspace), **PRs** One per line / One for all ("one-for-all merges them
   into one branch first"; until `caps.team_runs.together` is true One for all
   is disabled with "one PR for the whole group is coming next" and every group
@@ -1891,8 +1924,8 @@ Intake. Its badge counts only what is **waiting on you**, and is hidden at 0.
   `(repo, branch)`, so a `foo` / `foo-copy` pair is one row.
 - **Waiting on you** — only two kinds: a prompt an agent is stuck on (the same
   answer strip as the rail), or a ship you asked to see first. That row shows
-  the exact commit message (editable inline) and PR title, plus where the lane
-  stops, *before* anything leaves the machine: **Diff** / **Commit** (or **Open
+  the exact commit message (editable inline) and PR title, plus where its
+  fast-track stops, *before* anything leaves the machine: **Diff** / **Commit** (or **Open
   the PR**). A group escalation (stalled twice, hooks failed twice, a conflict,
   a create that failed after its retries) carries its reason and the server's
   actions for it — **Retry** / **Retry fresh** / **Open ↗** / **Skip**. A group
@@ -1917,11 +1950,11 @@ under at least one header. Queued lines are dim, with a hollow dot and no
 number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded group's rows leave the numbering like a folded device's.
 
-Every session with a lane leads its status line with it, so a narrow rail cuts
-the detail and never the lane: `→ PR · working 12m`, `⇡ opening PR`,
+Every session with fast-track on leads its status line with the target, so a
+narrow rail cuts the detail and never the target: `→ PR · working 12m`, `⇡ opening PR`,
 `✓ PR #318 · checks ✓`, `? needs your answer`, `→ commit, asks first · idle`,
-`! hooks failed twice — open the Outbox`. A group member (or any session with a
-lane) on a prompt gets the answer strip under its row, like a family worker.
+`! hooks failed twice — open the Outbox`. A group member (or any session with
+fast-track on) on a prompt gets the answer strip under its row, like a family worker.
 
 **Notifications.** The bell lists a group's escalations, its finish, and each
 line that shipped; a row opens the Outbox on its group. Rows obey the

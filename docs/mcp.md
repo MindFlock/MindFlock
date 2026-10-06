@@ -837,7 +837,7 @@ doesn't count.
 
 → `{title, autopilot: {depth, state, step, reason, note, url, …}, hint}`, or
 `{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own autopilot
-(`POST /api/instances/{title}/fast-track`, the ⏩ button; `DELETE` for
+(`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
 `off`). The autopilot waits until the agent's turn has ended and stayed idle
 for 30 s with nothing queued, then ships it up to `depth` through the same
 buttons, retries (then skips) a pre-commit hook Settings allow-lists, runs
