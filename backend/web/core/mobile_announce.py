@@ -13,7 +13,9 @@ change the answer:
 * the ntfy channel is switched on (:data:`REASON_NTFY` — before that there was
   nowhere to push it),
 * Settings → Mobile turns on tailscale mode (:data:`REASON_MOBILE` — before
-  that the URL was not going to work).
+  that the URL was not going to work),
+* Settings → Mobile turns on the shared link (:data:`REASON_SHARED` — the URL
+  itself just changed, to the one that outlives this machine).
 
 The same URL then rides along on *every* push: :func:`click_for` hands the
 notify addon a cached, session-deep-linked copy for each session alert, so any
@@ -43,11 +45,13 @@ from backend.web.core import mobile_access, ntfy
 REASON_STARTUP = "startup"
 REASON_NTFY = "ntfy"
 REASON_MOBILE = "mobile"
+REASON_SHARED = "shared"
 
 _LINES = {
     REASON_STARTUP: "MindFlock just started.",
     REASON_NTFY: "Phone push is on.",
     REASON_MOBILE: "Tailscale mode is on.",
+    REASON_SHARED: "One phone link now reaches all your devices.",
 }
 
 #: Don't say the same thing twice inside this window. Turning on ntfy and
@@ -101,6 +105,16 @@ def remember_url(url: Optional[str]) -> None:
         _CACHED_AT = time.monotonic()
 
 
+def refresh_url() -> None:
+    """Re-probe the phone URL now (blocking): the shared link was switched on
+    or off, so the cached URL every notification taps through to is wrong."""
+    try:
+        url, _live = mobile_access.tailnet_url()
+    except Exception:  # noqa: BLE001
+        return
+    remember_url(url)
+
+
 def _refresh_cache_soon() -> None:
     """Probe for the phone URL on a thread of our own, at most one at a time.
 
@@ -151,6 +165,14 @@ def click_for(session: str = "") -> str:
         return ""
     if not session:
         return url
+    if url == mobile_access._shared_link.advertised_url():
+        # The shared link may be answered by ANOTHER device, which lists this
+        # one's sessions as `<device>::<title>` — so name it that way; the
+        # mobile page strips the prefix again when it lands back here.
+        from backend.web.core import remote as _remote
+
+        if not _remote.is_remote_title(session):
+            session = _remote.join_title(_remote.self_identity()["key"], session)
     sep = "&" if "?" in url else "?"
     return "%s%ss=%s" % (url, sep, urllib.parse.quote(session, safe=""))
 

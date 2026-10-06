@@ -1415,7 +1415,7 @@ devices paired both ways don't echo each other's sessions back as
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, device, host, remote_control, auth, shared_link}`. `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
 | POST | `/api/devices/{device}/disconnect` | Drop the pairing |
@@ -1438,7 +1438,7 @@ devices paired both ways don't echo each other's sessions back as
 | GET | `/api/addons` | Addon manifests `{addons: [{id, label, managed, frontend}]}` |
 | GET | `/api/doctor` | Dependency preflight: git/tmux/agent-CLI/uv checks with per-platform fixes, plus `gh` reported as **optional** (status `info`, detail "not found (optional — only PR create/merge and PR review need it; pushing uses plain git)" — never `fail`, so it can't trip the required-dependency exit); cached ~30 s, `?refresh=1` re-probes. Also carries `version` (the running engine's version) and `state_notice` |
 | POST | `/api/doctor/ack-state-notice` | Dismiss the downgrade notice; clears it and the cached payload |
-| GET | `/api/mobile` | Mobile URLs + QR payload (Settings → Mobile) |
+| GET | `/api/mobile` | Mobile URLs + QR payload (Settings → Mobile): `{urls, qr_target, qr_svg, token, local_only, serve_mode, note, shared}`. `shared` is the shared phone link (`general.shared_link`): `{enabled: false}`, or `{enabled, name, service, url, advertised, approved, tagged, error, devices}`. Once `advertised`, the shared URL leads `urls` (this device's own URLs follow, labelled **This device**) and is what `qr_target` encodes, with one `token=` per device: this one's plus every paired device's. Saving `general.shared_link` through `POST /api/settings` validates the name (one DNS label, `svc:` prefix optional; 400 otherwise), applies it immediately and returns `shared_link` (the same object) beside `settings` |
 | GET | `/m` | The mobile UI page |
 
 ## Session events (WebSocket)
@@ -1869,6 +1869,14 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   URL). A browser navigation without a token gets a tiny inline login page; an
   API call gets `401`; a websocket is closed with code **4401** (the SPA/mobile
   head reload to the login page on 401/4401).
+- **Several devices, one origin.** The shared phone link is one hostname
+  answered by any of your devices, each with its own token. So every sign-in
+  sets `mf_auth_<12 hex of sha256(token)>` beside the plain `mf_auth`, and the
+  gate accepts the request when any `mf_auth*` cookie (up to 16) is this
+  server's token. `?token=` may repeat (the shared QR carries one per paired
+  device). The request passes if one of them is this server's, and the
+  redirect then stores all of them, each held to `[A-Za-z0-9_-]{8,256}`. A
+  server never accepts a token that isn't its own.
 
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests and DNS-rebinding hosts. These checks
@@ -1882,7 +1890,11 @@ run **before everything else**, public paths included: a cross-site
   agent terminals. Non-browser clients (curl, the CLI, other MindFlock
   servers) send no `Origin` and are unaffected.
 - **Host check (local mode).** With `CS_WEB_MODE=local` only loopback `Host`
-  headers are answered — a public domain rebound to 127.0.0.1 gets 403.
+  headers are answered — a public domain rebound to 127.0.0.1 gets 403. The
+  one exception is the shared phone link's service hostname
+  (`<name>.<tailnet>.ts.net`), once this server advertises it. `tailscale
+  serve` keeps the original `Host` on the request it forwards to 127.0.0.1,
+  and only the tailnet resolves that name.
 
 | Method | Path | Behavior |
 |---|---|---|

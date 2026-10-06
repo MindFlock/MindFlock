@@ -720,6 +720,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   (empty entries dropped); a **bare string** left by an older build is coerced to
   the current `default_provider` key on load (dropped if no default provider is
   set).
+- **Shared phone link** (`general.shared_link`; Settings → Mobile → **One
+  link for all devices**): a Tailscale Service name (`mindflock` →
+  `https://mindflock.<tailnet>.ts.net/m`), `""` for off. Every device with the
+  same name advertises the same service, and Tailscale routes the phone to
+  whichever is up. It needs tagged devices, the service defined in the
+  Tailscale admin console, and host approval (an `autoApprovers.services`
+  rule does it automatically). On Linux, `tailscale serve` also needs
+  `sudo tailscale set --operator=$USER` once. Applied on save and at every
+  boot. See [web-ui.md](web-ui.md) (Settings → Mobile).
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

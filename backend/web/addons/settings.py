@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from backend import doctor, providers
 from backend.config import settings as settings_store
 from backend.providers import config as provider_config
-from backend.web.core import mobile_announce, restart
+from backend.web.core import mobile_announce, restart, shared_link
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -579,18 +579,9 @@ class SettingsAddon(Addon):
                     {"error": "could not persist the new token: %s" % err},
                     status_code=500,
                 )
-            resp = JSONResponse(
-                {"token": token, "auth_enabled": web_auth.auth_enabled()}
+            return web_auth.set_auth_cookies(
+                JSONResponse({"token": token, "auth_enabled": web_auth.auth_enabled()})
             )
-            resp.set_cookie(
-                key=web_auth.COOKIE_NAME,
-                value=token,
-                httponly=True,
-                samesite="lax",
-                path="/",
-                max_age=60 * 60 * 24 * 365,
-            )
-            return resp
 
         @router.post("/settings")
         def post_settings(payload: dict, request: Request) -> JSONResponse:
@@ -638,6 +629,23 @@ class SettingsAddon(Addon):
             gen_in = payload.get("general")
             watch_serve = isinstance(gen_in, dict) and "serve_mode" in gen_in
             serve_before = _serve_mode() if watch_serve else None
+            # Settings → Mobile's shared phone link (general.shared_link): the
+            # name must be a valid Tailscale Service name, and a change takes
+            # effect right here — `tailscale serve` needs no restart.
+            watch_shared = isinstance(gen_in, dict) and "shared_link" in gen_in
+            if watch_shared:
+                raw = gen_in.get("shared_link")
+                name = shared_link.normalize(raw)
+                if str(raw or "").strip() and not name:
+                    return JSONResponse(
+                        {
+                            "error": "a shared link name is one DNS label — "
+                            "lowercase letters, digits and dashes"
+                        },
+                        status_code=400,
+                    )
+                payload = {**payload, "general": {**gen_in, "shared_link": name}}
+            shared_before = shared_link.configured_name() if watch_shared else None
             try:
                 _apply_post(payload)
             except Exception as err:  # noqa: BLE001
@@ -650,6 +658,21 @@ class SettingsAddon(Addon):
                         pass
 
             view = {"settings": _masked_view()}
+            # A changed name, or the same one saved again while it isn't up
+            # (the retry after fixing what the last attempt reported).
+            if watch_shared and (
+                shared_link.configured_name() != shared_before
+                or (shared_before and shared_link.advertised_url() is None)
+            ):
+                from backend.web.core import mobile_access
+
+                state = shared_link.apply(mobile_access._server()._server_port())
+                view["shared_link"] = state
+                # Notification taps point at the phone URL — it just changed.
+                mobile_announce.refresh_url()
+                if state.get("advertised"):
+                    # A new phone URL exists — the moment to push it.
+                    mobile_announce.announce_soon(mobile_announce.REASON_SHARED)
             if (
                 watch_serve
                 and serve_before != "tailscale"

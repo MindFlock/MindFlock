@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check scripts, rename and team runs; no other session may run in the peer
   folder; export brings the work into your own repo as a `peer/…` branch.
   Linux + bubblewrap, `claude` or `codex`. See `docs/peer-link.md`.
+- **One phone link for all your devices.** Settings → Mobile → **One link
+  for all devices** gives the phone a URL that names no machine
+  (`https://mindflock.<tailnet>.ts.net/m`). It opens on whichever of your
+  machines is running MindFlock, so the link keeps working when one of them is
+  off. Each device that turns it on advertises the same Tailscale Service. One
+  QR scan signs the phone in on every paired device, because the QR carries
+  their tokens and the browser keeps one cookie per token. It needs a one-time
+  Tailscale setup (tagged devices, the service defined, an auto-approve rule),
+  and the screen walks through it.
 
 ## [0.6.1] - 2026-10-06
 

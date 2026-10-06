@@ -12,6 +12,11 @@ Owns everything behind "how do I reach MindFlock from my phone?":
   URL a phone on the tailnet can actually reach, with the access token baked
   into the QR (``?token=…``) when the auth gate is on.
 
+When the shared phone link is up (:mod:`backend.web.core.shared_link`), all
+three advertise IT instead of this device's own URL — one URL for the whole
+fleet — and the QR carries every paired device's token, not just this one's,
+so the scan signs the phone in on whichever device Tailscale routes it to.
+
 Split out of ``backend.web.server`` (which re-imports these names — tests and
 the routes reference them through the server namespace).
 """
@@ -26,6 +31,7 @@ import sys
 from typing import Optional, Tuple
 
 from backend.web.core import auth as _auth
+from backend.web.core import shared_link as _shared_link
 
 
 def _server():
@@ -122,6 +128,12 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
     (``mindflock serve local``), so the tailnet address only starts answering
     after a restart in tailscale mode.
     """
+    shared = _shared_link.advertised_url()
+    if shared:
+        # One URL for every device, answered by whichever is up — the one to
+        # hand out. Live as soon as this device advertises it (`tailscale
+        # serve` fronts 127.0.0.1, so local mode doesn't matter).
+        return shared, True
     srv = _server()
     port = srv._server_port()
     name, ip = srv._tailscale_info()
@@ -133,6 +145,40 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
     if not host:
         return None, False
     return "http://%s:%d/m" % (host, port), not srv._local_only_mode()
+
+
+def _signin_tokens(shared: bool) -> list:
+    """The tokens a phone QR carries: this server's own (when the auth gate is
+    on), plus — for the shared link — every paired device's, so whichever
+    device answers the scan finds its own among them. ``[]`` with the gate off.
+    """
+    try:
+        if not _auth.auth_enabled():
+            return []
+        own = _auth.get_token()
+    except Exception:  # noqa: BLE001
+        return []
+    tokens = [own] if own else []
+    if shared:
+        try:
+            from backend.web.core import remote as _remote
+
+            for tok in _remote.paired_tokens().values():
+                if tok not in tokens:
+                    tokens.append(tok)
+        except Exception:  # noqa: BLE001 — the own token still works here
+            pass
+    return tokens
+
+
+def _with_tokens(url: str, tokens: list) -> str:
+    """``url`` with one ``token=`` per entry of ``tokens`` appended."""
+    if not tokens:
+        return url
+    from urllib.parse import quote
+
+    sep = "&" if "?" in url else "?"
+    return url + sep + "&".join("token=%s" % quote(t, safe="") for t in tokens)
 
 
 def _qr_lines(data: str):
@@ -196,6 +242,14 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         "  ┌─ MindFlock mobile view ──────────────────────────────────",
         "  │  Local:      http://127.0.0.1:%d/m" % port,
     ]
+    shared = _shared_link.advertised_url()
+    if shared:
+        # The fleet-wide link: the same URL whichever device is up, so it's
+        # the only one worth a QR. Works in local mode too (tailscale serve
+        # fronts 127.0.0.1).
+        lines.append("  │  Shared:     %s   (any of your devices)" % shared)
+        lines.append("  └────────────────────────────────────────────────────────")
+        return "\n".join(lines + _banner_signin(srv, shared, for_log, shared=True))
     if srv._local_only_mode():
         # Bound to 127.0.0.1: no tailnet URL (or QR) can reach this server —
         # printing them would just be wrong. Point at tailscale mode instead.
@@ -225,15 +279,19 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         lines.append("  │  Tailscale:  not detected — run `tailscale up`, then reach")
         lines.append("  │             this host's 100.x.y.z IP at :%d/m" % port)
     lines.append("  └────────────────────────────────────────────────────────")
+    return "\n".join(lines + _banner_signin(srv, qr_url, for_log, shared=False))
 
-    # Auth: show the token and bake it into the QR (?token=…) so a phone lands
-    # signed in from one scan. Only when the gate is actually on.
-    token = ""
-    try:
-        if _auth.auth_enabled():
-            token = _auth.get_token()
-    except Exception:  # noqa: BLE001
-        token = ""
+
+def _banner_signin(srv, qr_url, for_log: bool, *, shared: bool) -> list:
+    """The banner's sign-in tail: the access token and the QR for ``qr_url``.
+
+    Auth: show the token and bake it into the QR (?token=…) so a phone lands
+    signed in from one scan. Only when the gate is actually on. For the shared
+    link the QR carries every paired device's token too (:func:`_signin_tokens`).
+    """
+    lines: list = []
+    tokens = _signin_tokens(shared)
+    token = tokens[0] if tokens else ""
     if token:
         lines.append("")
         if for_log:
@@ -248,8 +306,7 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         if for_log:
             qr_target = None  # the QR encodes ?token=… — never log it
         else:
-            sep = "&" if "?" in qr_url else "?"
-            qr_target = "%s%stoken=%s" % (qr_url, sep, token)
+            qr_target = _with_tokens(qr_url, tokens)
 
     if qr_target:
         qr = srv._qr_lines(qr_target)
@@ -263,7 +320,7 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         else:
             lines.append("  (pip install segno  for a scannable QR code here)")
     lines.append("")
-    return "\n".join(lines)
+    return lines
 
 
 def qr_svg(data: str):
@@ -333,6 +390,16 @@ def _mobile_info() -> dict:
     note = None
     qr_url = None
     serve_mode = _serve_mode_setting()
+    shared = _shared_link.status()
+    shared_url = _shared_link.advertised_url()
+    if shared.get("enabled"):
+        shared["devices"] = _shared_link_devices(shared["name"])
+    if shared_url:
+        # The fleet-wide link leads, and is what the QR encodes: it keeps
+        # working when this device is off. This device's own URLs stay listed
+        # below it (labelled as such) for when you want this machine exactly.
+        urls.append({"label": "Shared link", "url": shared_url})
+        qr_url = shared_url
     if srv._local_only_mode():
         if serve_mode == "tailscale":
             # The user already flipped the toggle; only the restart is missing.
@@ -341,31 +408,31 @@ def _mobile_info() -> dict:
             note = "Local mode — turn on tailscale mode for phone access."
     else:
         name, ip = srv._tailscale_info()
+        own = "This device" if shared_url else "Tailscale"
         if name and srv._tailscale_serves_port(port):
-            qr_url = "https://%s/m" % name
-            urls.append({"label": "Tailscale", "url": qr_url})
+            dev_url = "https://%s/m" % name
+            urls.append({"label": own, "url": dev_url})
+            qr_url = qr_url or dev_url
         elif name or ip:
             if name:
-                qr_url = "http://%s:%d/m" % (name, port)
-                urls.append({"label": "Tailscale", "url": qr_url})
+                dev_url = "http://%s:%d/m" % (name, port)
+                urls.append({"label": own, "url": dev_url})
+                qr_url = qr_url or dev_url
             if ip:
                 ip_url = "http://%s:%d/m" % (ip, port)
-                urls.append({"label": "Tailscale IP", "url": ip_url})
+                urls.append({"label": own + " (IP)", "url": ip_url})
                 qr_url = qr_url or ip_url
         else:
             note = "Tailscale not detected — run `tailscale up` for phone access."
+    if shared_url:
+        note = None  # the shared link works whatever this server is bound to
 
-    token = ""
-    try:
-        if _auth.auth_enabled():
-            token = _auth.get_token()
-    except Exception:  # noqa: BLE001
-        token = ""
+    tokens = _signin_tokens(bool(shared_url))
+    token = tokens[0] if tokens else ""
 
     qr_target = qr_url  # only tailnet URLs are reachable from a phone
-    if qr_target and token:
-        sep = "&" if "?" in qr_target else "?"
-        qr_target = "%s%stoken=%s" % (qr_target, sep, token)
+    if qr_target and tokens:
+        qr_target = _with_tokens(qr_target, tokens)
 
     return {
         "urls": urls,
@@ -375,4 +442,21 @@ def _mobile_info() -> dict:
         "local_only": srv._local_only_mode(),
         "serve_mode": serve_mode,
         "note": note,
+        "shared": shared,
     }
+
+
+def _shared_link_devices(name: str) -> list:
+    """The other devices that say they answer the same shared link (from the
+    remote-control discovery hello) — the failover set, as far as this device
+    can see it. ``[{device, host, reachable}]``."""
+    try:
+        from backend.web.core import remote as _remote
+
+        return [
+            {"device": d["device"], "host": d["host"], "reachable": d["reachable"]}
+            for d in _remote.devices_json().get("devices", [])
+            if d.get("shared_link") == name
+        ]
+    except Exception:  # noqa: BLE001
+        return []

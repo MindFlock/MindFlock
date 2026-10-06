@@ -1007,6 +1007,12 @@ class GeneralSettings:
     Settings → Mobile toggle stick across restarts: the desktop app's
     auto-start runs a bare ``mindflock serve``, which falls back to this.
 
+    ``shared_link``: the Tailscale Service name this device answers the shared
+    phone link on (``"mindflock"`` → ``https://mindflock.<tailnet>.ts.net/m``),
+    ``""`` (the default) for none. Every device with the same name advertises
+    the same service, so the phone keeps one URL and Tailscale routes it to
+    whichever of them is up (:mod:`backend.web.core.shared_link`).
+
     ``ingestion_autostart``: the last state the ticket-ingestion toggle was
     set to (written by ``/api/mindflock/start|stop``). ``True`` makes the
     web server start the pipeline on boot, so a reboot restores the toggle
@@ -1050,6 +1056,7 @@ class GeneralSettings:
     last_repo_path: str = ""
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
+    shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
     ingestion_autostart: Optional[bool] = None
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
@@ -1076,6 +1083,8 @@ class GeneralSettings:
             d["remote_control"] = self.remote_control
         if self.serve_mode:
             d["serve_mode"] = self.serve_mode
+        if self.shared_link:
+            d["shared_link"] = self.shared_link
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
         if self.resume_on_usage_reset is not None:
@@ -1101,6 +1110,7 @@ class GeneralSettings:
             last_repo_path=str(d.get("last_repo_path", "") or ""),
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
+            shared_link=str(d.get("shared_link", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
