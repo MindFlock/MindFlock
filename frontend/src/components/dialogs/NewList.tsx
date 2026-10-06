@@ -1,6 +1,9 @@
-/** The New dialog's list mode (SPEC §7.C.1): the describe box read as "one
- * thing per line, or ticket IDs", shown back as a list of rows, plus the
- * choices that decide how far each one is fast-tracked and how they ship.
+/** The New dialog's runs (SPEC §7.C.1). A BATCH — New opened by Intake's
+ * "Start together…" — reads the box as "one thing per line, or ticket IDs",
+ * shown back as a list of rows; every other opening's box is ONE prompt,
+ * started as one session or, with "Auto-split into up to N" ticked, as an
+ * optional split. Plus the choices that decide how far each one is
+ * fast-tracked and how they ship.
  *
  * `useRunDraft` owns the state and the server's reading of the box
  * (`POST /api/runs/preview`, debounced, stamped with the text it answers so an
@@ -24,13 +27,11 @@ import {
   clampConcurrency,
   defaultLaneFor,
   fallbackName,
-  isListMode,
   itemRows,
   localItems,
   oneForAllLane,
   requestItems,
   runBody,
-  splitApplies,
   summarySentence,
   type Grouping,
   type ItemRow,
@@ -54,9 +55,8 @@ export function prettySource(key: string): string {
 export interface RunDraft {
   /** The box, read locally. */
   items: ReturnType<typeof localItems>;
+  /** A batch with something in it: the box is a list of rows. */
   listMode: boolean;
-  /** Exactly one plain task line — the only shape a split applies to. */
-  oneTask: boolean;
   rows: ItemRow[];
   /** How many sessions a start would make, as the rows show it. */
   count: number;
@@ -87,6 +87,8 @@ export interface RunDraft {
    * (returned) when a row can't start, else POST /api/runs. */
   start(o: {
     split: boolean;
+    /** N of "Auto-split into up to N" (a split only). */
+    maxPieces?: number;
   }): Promise<
     { ok: true; body: Record<string, unknown>; run: unknown } | { ok: false; error: string }
   >;
@@ -103,15 +105,18 @@ export function useRunDraft(o: {
   /** The dialog is creating ONE session whatever the box holds (the "Set it
    * up myself" form): it starts Off. */
   single?: boolean;
-  /** The split box is ticked (and the agent can take one). */
+  /** New was opened as a batch (Intake's "Start together…"): the box is a
+   * list, one session per line or ticket. Typing never makes one. */
+  batch: boolean;
+  /** The auto-split box is ticked (and the agent can take one): the whole
+   * box is the one task its lead may split. */
   split: boolean;
   /** caps.team_runs.together — false: every group is one PR per line. */
   togetherOk?: boolean;
 }): RunDraft {
   const { open, text, repoPath, program } = o;
   const items = useMemo(() => localItems(text), [text]);
-  const listMode = isListMode(items);
-  const oneTask = splitApplies(items);
+  const listMode = o.batch && items.length > 0;
   const asked = text.trim();
 
   // The server's reading, stamped with the exact text (and folder) it read.
@@ -196,15 +201,38 @@ export function useRunDraft(o: {
   // "Off unless I pick": one session starts Off; a batch (a list, tickets,
   // a split) starts on Settings → Workspace's default. An explicit pick wins.
   const oneForAll =
-    (o.split && oneTask) || (grouping === "together" && (rows.length || items.length) >= 2);
-  const batch = !o.single && (listMode || (o.split && oneTask));
+    o.split || (listMode && grouping === "together" && (rows.length || items.length) >= 2);
+  const batch = !o.single && (listMode || o.split);
   const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
   const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 
-  const start: RunDraft["start"] = async ({ split }) => {
+  const start: RunDraft["start"] = async ({ split, maxPieces }) => {
     if (starting) return { ok: false, error: "" };
     setStarting(true);
     try {
+      if (split) {
+        // The whole box is the one task: never read as a list, never
+        // previewed. The server names the group from it.
+        if (!asked) return { ok: false, error: "Nothing to start — describe the task first." };
+        const body = runBody({
+          name: "",
+          items: [{ kind: "task", text: asked }],
+          lane,
+          askFirst,
+          grouping: "together",
+          concurrency,
+          program,
+          repoPath,
+          split: true,
+          maxPieces,
+        });
+        try {
+          const r = await api<{ run?: unknown }>("/api/runs", { json: body });
+          return { ok: true, body, run: r?.run ?? null };
+        } catch (err) {
+          return { ok: false, error: errMsg(err) };
+        }
+      }
       let data = fresh?.data ?? null;
       if (!data) {
         try {
@@ -237,7 +265,7 @@ export function useRunDraft(o: {
         concurrency,
         program,
         repoPath,
-        split,
+        split: false,
       });
       try {
         const r = await api<{ run?: unknown }>("/api/runs", { json: body });
@@ -253,7 +281,6 @@ export function useRunDraft(o: {
   return {
     items,
     listMode,
-    oneTask,
     rows,
     count: rows.length || items.length,
     previewError: listMode && fresh?.error ? fresh.error : "",
@@ -353,7 +380,7 @@ export function optionsSummary(lane: Lane, askFirst: boolean): string {
  * more), the split box (passed in — it is shared with the single flow), and
  * the sentence that says what all of it means.
  *
- * For ONE session (and a split, which is one line) all of that sits in a fold
+ * For ONE session (and a split, which is one task) all of that sits in a fold
  * whose summary names the rung, closed by default: a first-time user's New is
  * one box and three buttons, and the choices are a click away with their value
  * already on screen. It opens by itself when the rung is not the default one
@@ -364,6 +391,7 @@ export function RunOptions({
   draft,
   n,
   split,
+  maxPieces,
   splitBox,
   repoPicker,
 }: {
@@ -371,6 +399,8 @@ export function RunOptions({
   /** How many sessions this would start (1 for the single flow). */
   n: number;
   split: boolean;
+  /** N of "Auto-split into up to N" — what the sentence promises. */
+  maxPieces?: number;
   splitBox: React.ReactNode;
   /** The folder the typed tasks (or a split's lead) start in — only when one
    * needs a folder. A list carries it on the Group as row; a split gets a
@@ -394,6 +424,7 @@ export function RunOptions({
     askFirst: draft.askFirst,
     grouping: draft.grouping,
     split,
+    maxPieces,
   });
   const body = (
     <>
@@ -505,7 +536,7 @@ export function RunOptions({
           <span className="rt-label">Starts in</span>
           <div className="rt-ctl">
             {repoPicker}
-            <span className="rt-hint">the lead gets a new worktree there</span>
+            <span className="rt-hint">it gets a new worktree there</span>
           </div>
         </div>
       )}
@@ -531,7 +562,7 @@ export function RunOptions({
         }}
       >
         <summary
-          title={split ? "Stays open while Split is ticked" : undefined}
+          title={split ? "Stays open while Auto-split is ticked" : undefined}
           onClick={(e) => {
             // A split's rows live in here; closing it would hide what a
             // start is about to do.

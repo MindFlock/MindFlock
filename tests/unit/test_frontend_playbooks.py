@@ -450,7 +450,9 @@ def test_new_and_commit_dialogs_draw_one_fast_track_choice(js):
     # THE default is Settings', for every shape: the preview's own is unread.
     # "Off unless I pick": a single session starts Off, a batch on Settings'
     # default (Off when unset). The preview's own default is never read.
-    assert "const batch = !o.single && (listMode || o.split && oneTask);" in new
+    assert "const batch = !o.single && (listMode || o.split);" in new
+    # Typing never makes a list: only a New opened as a batch reads one.
+    assert "const listMode = o.batch && items.length > 0;" in new
     assert "defaultLaneFor(batch, o.fasttrackDefault)" in new
     assert "lane_default" not in new
     fn = _function(js, "defaultLaneFor")
@@ -539,7 +541,7 @@ def test_pane_draws_the_thread_tab_and_falls_back_to_agent(js):
     assert 'if (!BODY_TABS.has(t)) return "agent";' in fn
 
 
-# --- New dialog: split is a split RUN -------------------------------------------
+# --- New dialog: auto-split is an OPTIONAL split RUN ----------------------------
 
 
 def test_new_dialog_split_check(js):
@@ -548,19 +550,30 @@ def test_new_dialog_split_check(js):
     assert 'id: "new-split"' in dlg and 'id: "new-split-prompt"' not in dlg
     reset = dlg[dlg.find("if (failedReopen.current) {") :]
     reset = reset[: reset.find('folderDo({ t: "reopen" });')]
-    assert "setSplit(false);" in reset
-    # Gated by the agent AND by the box holding exactly one task line.
+    assert "setSplit(false);" in reset and "setMaxPieces(SPLIT_DEFAULT);" in reset
+    # Only Intake's prefill opens New as a batch; typed lines are one prompt.
+    assert "setBatch(!!prefill);" in reset
+    # Gated by the agent, never by the box's line breaks; a batch has no box.
     assert in_bundle("splitGate(config?.caps, canonAgent(program))", dlg)
-    assert "const splitOn = page === 1 && split && mcpOk.ok && draft.oneTask;" in dlg
-    assert "shapeReason: splitShapeReason(draft.items)" in dlg
-    # A split starts through the run, and its button names the lead.
-    assert "draft.start({ split: splitOn })" in dlg
-    assert in_bundle('if (split) return "Start the lead";', _function(js, "startLabel"))
+    assert (
+        'const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";'
+        in dlg
+    )
+    assert "splitShapeReason" not in js
+    # A split starts through the run with its N, and its button stays
+    # "Create session" — it may well not split.
+    assert (
+        "split: splitOn," in dlg
+        and "maxPieces: clampSplit(maxPieces, splitLimit)" in dlg
+    )
+    assert "Start the lead" not in js
 
 
 def test_split_check_copy_and_pill(js):
     box = _region(js, "src/components/dialogs/SplitCheck.tsx")
-    assert '"Split a big line into parallel pieces first"' in box
+    assert '"Auto-split into up to"' in box
+    assert '"sessions if it\'s worth it"' in box
+    assert "Split a big line" not in js
     assert "Split across workers" not in box
     assert "suggestionPill(sug)" in box
     # What the tick does is said once, by the summary sentence.

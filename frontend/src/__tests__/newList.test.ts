@@ -1,21 +1,19 @@
-/** The New dialog's list mode, pure half (lib/runStart): reading the box,
- * when it becomes a list, the rows, ✕, the POST /api/runs body (SPEC §5),
- * the button and the sentence — and that one plain line is still exactly
- * today's single session. */
+/** The New dialog's runs, pure half (lib/runStart): reading a batch's box,
+ * the rows, ✕, the POST /api/runs body (SPEC §5), the auto-split's N, the
+ * button and the sentence — and that a typed box is still exactly today's
+ * single session. */
 import { describe, expect, it } from "vitest";
 import {
   clampConcurrency,
+  clampSplit,
   defaultLaneFor,
   fallbackName,
-  isListMode,
   isTicketToken,
   itemRows,
   localItems,
   removeItem,
   requestItems,
   runBody,
-  splitApplies,
-  splitShapeReason,
   startLabel,
   startTogetherText,
   summarySentence,
@@ -26,10 +24,9 @@ import { optionsSummary } from "../components/dialogs/NewList";
 describe("one plain line is today's single session", () => {
   const one = localItems("fix the login bug in acme-api");
 
-  it("is not a list, keeps 'Create session', and starts Off whatever Settings says", () => {
+  it("keeps 'Create session', and starts Off whatever Settings says", () => {
     expect(one).toEqual([{ kind: "task", text: "fix the login bug in acme-api" }]);
-    expect(isListMode(one)).toBe(false);
-    expect(startLabel(1, false)).toBe("Create session");
+    expect(startLabel(1)).toBe("Create session");
     // "Off unless I pick": a single session never reads the setting.
     for (const setting of ["merge", "pr", "commit", "off", "", undefined])
       expect(defaultLaneFor(false, setting), String(setting)).toBe("leave");
@@ -48,12 +45,54 @@ describe("one plain line is today's single session", () => {
     ).toBeNull();
   });
 
-  it("can be split; a list or a ticket can't", () => {
-    expect(splitApplies(one)).toBe(true);
-    expect(splitShapeReason(one)).toBe("");
-    expect(splitApplies(localItems("a\nb"))).toBe(false);
-    expect(splitShapeReason(localItems("a\nb"))).toMatch(/list of 2/);
-    expect(splitShapeReason(localItems("PAY-412"))).toMatch(/ticket/);
+});
+
+describe("auto-split into up to N", () => {
+  it("N is at least 2 and never above the server's cap", () => {
+    expect(clampSplit(3)).toBe(3);
+    expect(clampSplit(1)).toBe(2);
+    expect(clampSplit(12)).toBe(8);
+    expect(clampSplit(6, 4)).toBe(4);
+    expect(clampSplit(NaN, 8)).toBe(3);
+  });
+
+  it("is an optional split of the whole box, capped at N", () => {
+    const body = runBody({
+      name: "",
+      items: [{ kind: "task", text: "line one\nline two" }],
+      lane: "leave",
+      askFirst: true,
+      grouping: "together",
+      concurrency: 3,
+      program: "claude",
+      repoPath: "/r",
+      split: true,
+      maxPieces: 4,
+    });
+    expect(body).toMatchObject({
+      items: [{ kind: "task", text: "line one\nline two" }],
+      split: true,
+      split_optional: true,
+      max_pieces: 4,
+      // Off can't be a split's lane: Commit keeps it on this machine.
+      policy: { lane: "commit", ask_first: false, grouping: "together", release: "ask" },
+    });
+  });
+
+  it("a batch never carries the split's fields", () => {
+    const body = runBody({
+      name: "PAY tickets",
+      items: [{ kind: "ticket", source: "jira", id: "PAY-1" }],
+      lane: "pr",
+      askFirst: false,
+      grouping: "each",
+      concurrency: 3,
+      program: "",
+      repoPath: "",
+      split: false,
+    });
+    expect(body).not.toHaveProperty("split_optional");
+    expect(body).not.toHaveProperty("max_pieces");
   });
 });
 
@@ -76,13 +115,6 @@ describe("reading the box", () => {
       // A ticket mentioned inside a sentence is part of that task.
       { kind: "task", text: "Backfill PAY-9 ledger" },
     ]);
-  });
-
-  it("list mode: two things, or any ticket at all", () => {
-    expect(isListMode(localItems("a\nb"))).toBe(true);
-    expect(isListMode(localItems("PAY-412"))).toBe(true);
-    expect(isListMode(localItems("one thing"))).toBe(false);
-    expect(isListMode(localItems(""))).toBe(false);
   });
 });
 
@@ -195,9 +227,9 @@ describe("POST /api/runs body (SPEC §5)", () => {
     expect(defaultLaneFor(true, "junk")).toBe("leave");
   });
 
-  it("the button says how many, or that a split starts its lead", () => {
-    expect(startLabel(6, false)).toBe("Start 6 sessions");
-    expect(startLabel(1, true)).toBe("Start the lead");
+  it("the button says how many; an auto-split may stay one session", () => {
+    expect(startLabel(6)).toBe("Start 6 sessions");
+    expect(startLabel(1)).toBe("Create session");
   });
 
   it("a name when the server suggested none", () => {
@@ -240,12 +272,14 @@ describe("the sentence", () => {
     expect(s.lead).toMatch(/opens one PR/);
   });
 
-  it("ask first is said; a split names its lead and the Thread tab", () => {
+  it("ask first is said; an auto-split says it may not split, its N and the Thread tab", () => {
     expect(summarySentence({ ...base, lane: "commit", askFirst: true })!.tail).toMatch(
       /stops and asks you first, in the bell\./
     );
-    const sp = summarySentence({ ...base, n: 1, lane: "pr", split: true })!;
-    expect(sp.lead).toMatch(/^One lead session/);
+    const sp = summarySentence({ ...base, n: 1, lane: "pr", split: true, maxPieces: 4 })!;
+    expect(sp.lead).toMatch(/^One session/);
+    expect(sp.lead).toMatch(/it does the task itself/);
+    expect(sp.lead).toMatch(/up to 4 pieces/);
     expect(sp.lead).toMatch(/Thread tab/);
   });
 

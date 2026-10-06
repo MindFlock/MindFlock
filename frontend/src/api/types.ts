@@ -563,7 +563,8 @@ export interface Caps {
    * for the whole group, `split` = one line into parallel pieces. Both false
    * until the server's phase 3; absent on an older server (= false). Read
    * through laneActions.teamRunCaps, never directly. */
-  team_runs?: { split: boolean; together: boolean };
+  /** max_pieces: the most pieces a split may have (MINDFLOCK_MAX_CHILDREN). */
+  team_runs?: { split: boolean; together: boolean; max_pieces?: number };
 }
 
 export interface Config {
@@ -1175,6 +1176,11 @@ export interface RunDTO extends RunSummary {
   waiting_for_usage?: boolean;
   /** Phase 3: one-for-all and split groups. */
   split?: boolean;
+  /** An auto-split: its lead may decide not to split (the group then
+   * dissolves into its one session). */
+  optional?: boolean;
+  /** The most pieces its lead may propose (0 = the server's limit). */
+  max_pieces?: number;
   /** A split's one line (what the lead was asked to split). */
   goal?: string;
   lead?: RunLead | null;

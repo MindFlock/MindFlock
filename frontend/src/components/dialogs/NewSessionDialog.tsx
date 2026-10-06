@@ -51,7 +51,14 @@ import {
   teamRunCaps,
   type Lane,
 } from "../../lib/laneActions";
-import { BROWSE_VALUE, removeItem, runRepoOptions, splitShapeReason, startLabel } from "../../lib/runStart";
+import {
+  BROWSE_VALUE,
+  SPLIT_DEFAULT,
+  clampSplit,
+  removeItem,
+  runRepoOptions,
+  startLabel,
+} from "../../lib/runStart";
 
 /** The two things New makes. Session is the landing tab and stays that way:
  * it is the hot path (name → Enter), and a tab strip that makes the common
@@ -757,10 +764,16 @@ export function NewSessionDialog() {
   // means to touch (with intent) and wait — the Map tab turns that list into
   // ghost tiles and blast arms you can red-zone before a single edit.
   const [planFirst, setPlanFirst] = useState(false);
-  // "Split a big line into parallel pieces first" (page 1 only): the start
-  // becomes a split run — MindFlock creates the lead, the lead proposes the
-  // pieces, the server starts and merges them. See SplitCheck.
+  // "Auto-split into up to N sessions if it's worth it" (page 1 only): the
+  // start becomes an optional split run — MindFlock creates one session whose
+  // agent decides; a split's pieces are proposed, approved, started and
+  // merged back by the server. See SplitCheck.
   const [split, setSplit] = useState(false);
+  const [maxPieces, setMaxPieces] = useState(SPLIT_DEFAULT);
+  // Opened as a BATCH (Intake's "Start together…"): the box is a list, one
+  // session per line or ticket. Typing never makes one — every other box is
+  // one prompt.
+  const [batch, setBatch] = useState(false);
   /** The list mode's "tasks start in" browser is open (page 1). */
   const [runBrowse, setRunBrowse] = useState(false);
   const [error, setError] = useState("");
@@ -951,8 +964,10 @@ export function NewSessionDialog() {
     // worse than a leaked field: it is a sentence about a folder the form is no
     // longer showing.
     // Intake's "Start together…" hands its ticked tickets over as the box's
-    // text, once; every other opening starts empty.
-    setDescribe(useUi.getState().takeNewPrefill());
+    // text, once, and that opening is a batch; every other starts empty.
+    const prefill = useUi.getState().takeNewPrefill();
+    setDescribe(prefill);
+    setBatch(!!prefill);
     setDescribing(false);
     setDescribeSlow(false);
     setPlanNote("");
@@ -988,6 +1003,7 @@ export function NewSessionDialog() {
     setInitRepo(false);
     setPlanFirst(false);
     setSplit(false);
+    setMaxPieces(SPLIT_DEFAULT);
     // Matches the initial state, and has to be set here too: this reset runs
     // on EVERY open, so a useState default alone left the fold shut from the
     // second open onward.
@@ -1269,6 +1285,7 @@ export function NewSessionDialog() {
     [config?.caps, canonAgent, program]
   );
   const togetherOk = teamRunCaps(config?.caps).together;
+  const splitLimit = teamRunCaps(config?.caps).maxPieces;
   /** The Ticket tab files a ticket in a connected tracker, so with no tracker
    * there is nothing behind it: the strip is not drawn at all, and a dialog
    * somehow left on Ticket (the tracker disconnected mid-open) shows Session.
@@ -1277,9 +1294,9 @@ export function NewSessionDialog() {
   const ticketingOk = !!config?.caps?.ticketing;
   const shownTab: NewTab = ticketingOk ? tab : "session";
 
-  /** The box read as a list (list mode), and every choice about how the
-   * things in it ship. One plain line leaves all of it on its defaults and the
-   * single-session flow below runs exactly as it always has. */
+  /** A batch's box read as a list, and every choice about how the things in
+   * it ship. Any other box is one prompt: unticked, the single-session flow
+   * below runs exactly as it always has. */
   const draft = useRunDraft({
     open,
     text: describe,
@@ -1290,13 +1307,15 @@ export function NewSessionDialog() {
     fasttrackDefault: config?.fasttrack_default,
     // The "Set it up myself" form makes ONE session: it starts Off.
     single: page !== 1,
-    split: page === 1 && split && mcpOk.ok,
+    batch: page === 1 && batch,
+    split: page === 1 && !batch && split && mcpOk.ok,
     togetherOk,
   });
-  /** A split run: one task line, the box ticked, an agent with the tools. */
-  const splitOn = page === 1 && split && mcpOk.ok && draft.oneTask;
-  /** Page 1 starts a RUN (POST /api/runs) rather than one session: a list,
-   * any ticket, or a split. */
+  /** An auto-split run: the box ticked, something to do, an agent with the
+   * tools. The whole box is the task, however many lines it holds. */
+  const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";
+  /** Page 1 starts a RUN (POST /api/runs) rather than one session: a batch
+   * (Intake's tickets) or an auto-split. */
   const runMode = page === 1 && (draft.listMode || splitOn);
   const toggleSplit = (on: boolean) => setSplit(on);
   useEffect(() => {
@@ -1322,7 +1341,7 @@ export function NewSessionDialog() {
    * repository") has to land beside the choices it is about. */
   const startRun = async () => {
     setPlanError("");
-    const r = await draft.start({ split: splitOn });
+    const r = await draft.start({ split: splitOn, maxPieces: clampSplit(maxPieces, splitLimit) });
     if (!r.ok) {
       if (r.error) setPlanError(r.error);
       return;
@@ -1332,9 +1351,10 @@ export function NewSessionDialog() {
     closeDialog();
     refreshInstances();
     if (splitOn)
-      toast(`Starting the lead${name ? " for “" + name + "”" : ""} — its plan shows in its Thread tab`, {
-        duration: 6000,
-      });
+      toast(
+        `Starting it${name ? " — “" + name + "”" : ""}. Its agent decides whether to split; a plan shows in its Thread tab`,
+        { duration: 6000 }
+      );
     else if (n >= 2) {
       const c = Math.min(n, draft.concurrency);
       toast(
@@ -2046,13 +2066,16 @@ export function NewSessionDialog() {
                 submitted, and looking like a form would say otherwise. */}
             <div id="new-describe" className="new-templates nf-describe">
               <div className="nt-head">
-                <span>What do you want to work on? One thing per line, or ticket IDs</span>
+                <span>
+                  {batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"}
+                </span>
               </div>
               <div className="nf-describe-row">
-                {/* A textarea, so a list can be typed or pasted: three lines
-                    tall, growing to eight. Enter keeps its old meaning for one
-                    plain line ("read this"); Shift+Enter starts another line,
-                    and once the box holds a list Enter does too. */}
+                {/* A textarea, so a longer task can be typed or pasted: three
+                    lines tall, growing to eight. However many lines, it is ONE
+                    prompt (only Intake's "Start together…" opens New as a list).
+                    Enter keeps its old meaning ("read this"); Shift+Enter starts
+                    another line, and in a batch or an auto-split Enter does too. */}
                 <textarea
                   id="new-describe-text"
                   ref={describeRef}
@@ -2066,7 +2089,7 @@ export function NewSessionDialog() {
                   // Enter was pressed and the sentence would stop being
                   // selectable while the user waits to see what it produced.
                   readOnly={describing}
-                  placeholder={"e.g. fix the login bug in acme-api\n— or one per line: PAY-412 PAY-415, a task, another task"}
+                  placeholder="e.g. fix the login bug in acme-api"
                   onChange={(e) => {
                     setDescribe(e.target.value);
                     // Typing is what clears the refusal: whatever it objected to
@@ -2184,15 +2207,21 @@ export function NewSessionDialog() {
                     </span>
                   ) : null
                 }
+                maxPieces={clampSplit(maxPieces, splitLimit)}
                 splitBox={
-                  <SplitCheck
-                    id="new-split"
-                    split={split}
-                    onSplit={toggleSplit}
-                    gate={mcpOk}
-                    shapeReason={splitShapeReason(draft.items)}
-                    text={describe}
-                  />
+                  // A batch is already one session per line: nothing to split.
+                  batch ? null : (
+                    <SplitCheck
+                      id="new-split"
+                      split={split}
+                      onSplit={toggleSplit}
+                      gate={mcpOk}
+                      maxPieces={clampSplit(maxPieces, splitLimit)}
+                      onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
+                      limit={splitLimit}
+                      text={describe}
+                    />
+                  )
                 }
               />
               {runMode && runBrowse && (
@@ -3177,7 +3206,9 @@ export function NewSessionDialog() {
                 disabled={describing || draft.starting}
                 aria-busy={draft.starting || undefined}
                 title={
-                  runMode
+                  splitOn
+                    ? "Create it now. Its agent reads the code and decides whether to split; a split waits for your approval in its Thread tab."
+                    : runMode
                     ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
                     : "Create the session right now from what you typed, without showing you the details first."
                 }
@@ -3185,7 +3216,7 @@ export function NewSessionDialog() {
               >
                 {draft.starting
                   ? "Starting…"
-                  : startLabel(draft.listMode ? draft.count : 1, splitOn)}
+                  : startLabel(draft.listMode ? draft.count : 1)}
               </button>
             </>
           ) : (

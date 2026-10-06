@@ -180,8 +180,17 @@ describe("what the row › menu and the palette offer besides the picker", () =>
   it("Split is off on an older server that doesn't say it takes splits", () => {
     const notYet = caps({ enabled: true, providers: ["claude"] }, false);
     expect(L.splitBlockReason(notYet, inst({}))).toMatch(/can't split/);
-    expect(L.teamRunCaps({ git: true } as Partial<Caps>)).toEqual({ split: false, together: false });
-    expect(L.teamRunCaps(caps(undefined))).toEqual({ split: true, together: true });
+    expect(L.teamRunCaps({ git: true } as Partial<Caps>)).toEqual({
+      split: false,
+      together: false,
+      maxPieces: 8,
+    });
+    expect(L.teamRunCaps(caps(undefined))).toEqual({ split: true, together: true, maxPieces: 8 });
+    // The server's own cap, when it says one.
+    expect(
+      L.teamRunCaps({ team_runs: { split: true, together: true, max_pieces: 5 } } as Partial<Caps>)
+        .maxPieces
+    ).toBe(5);
   });
 });
 

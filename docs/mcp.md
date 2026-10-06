@@ -931,11 +931,19 @@ strip or the bell).
 
 `{run_id, pieces: [{title, prompt, paths: [glob]}], why?}` → `{ok, problems,
 note}`. **The lead of a split only** (checked by identity, here and by the
-server). The lead does not spawn workers: it proposes 2–8 pieces, each a
-self-contained prompt plus the path globs it may change. The server checks
+server). The lead does not spawn workers: it proposes 2–8 pieces (fewer when
+the user capped the split at N), each a self-contained prompt plus the path
+globs it may change. An **auto-split**'s lead (New's "Auto-split into up to N
+sessions if it's worth it"; the run's `optional`, and its brief says so) may
+instead pass `pieces: []` with `why`: no split. The group dissolves and the
+answer is `{ok: true, split: false, note}` telling it to do the whole task
+itself in its own session; the note names the fast-track lane MindFlock armed
+for when its turn ends, if any. The tool's schema allows `pieces: []` for
+every lead (`minItems: 0`) — the server is the gate: on any other split
+`pieces: []` is refused like a one-piece plan. The server checks
 them against the lead worktree's `git ls-files` and red zones — no two pieces
-may share a file, a piece may not sit wholly in a red zone, at most
-`MINDFLOCK_MAX_CHILDREN`, no two globs that can match one new path — and
+may share a file, a piece may not sit wholly in a red zone, at most the
+run's cap (else `MINDFLOCK_MAX_CHILDREN`), no two globs that can match one new path — and
 answers `{ok: false, problems: [{piece, error}]}` to fix, or `{ok: true}`. The user then approves the plan in one
 click (the lead's Thread tab, or the bell) and picks where the pieces run —
 the lead cannot approve (there is no MCP tool for it). **In separate

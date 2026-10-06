@@ -533,6 +533,239 @@ class TestTheSplitEndToEnd:
             assert err.value.status == status and words in err.value.message
 
 
+class TestAutoSplit:
+    """The New dialog's "Auto-split into up to N sessions if it's worth it":
+    an OPTIONAL split, capped at N, whose lead may decline (``pieces=[]``)."""
+
+    def test_the_lead_is_named_for_the_work_and_told_it_may_decline(self, env):
+        run = _split(env, split_optional=True, max_pieces=3)
+        assert run["optional"] is True and run["max_pieces"] == 3
+        lead = run["lead"]["title"]
+        assert lead == "clean-up-auth-tokens"
+        (payload,) = env.created
+        assert "pieces=[]" in payload["prompt"] and "2-3 pieces" in payload["prompt"]
+
+    def test_the_users_cap_is_enforced_and_never_above_the_server_limit(self, env):
+        run = _split(env, split_optional=True, max_pieces=3)
+        lead = run["lead"]["title"]
+        four = [
+            {"title": t, "prompt": "do " + t, "paths": ["%s/**" % t]}
+            for t in ("a", "b", "c", "d")
+        ]
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": four, "from": lead})
+        assert err.value.status == 422 and "at most 3 pieces" in err.value.message
+        assert drv._split_max(dict(run, max_pieces=50)) == 8
+        with pytest.raises(drv.RunError) as err:
+            _split(env, split_optional=True, max_pieces=1)
+        assert "at least 2" in err.value.message
+
+    def test_declining_dissolves_the_group_and_fast_tracks_the_lead(
+        self, env, monkeypatch
+    ):
+        armed: list = []
+        monkeypatch.setattr(
+            drv._lanes,
+            "arm_session",
+            lambda title, lane, **kw: armed.append((title, lane, kw)),
+        )
+        run = _split(env, split_optional=True, max_pieces=3)
+        lead = run["lead"]["title"]
+        out = drv.propose_plan(
+            run["id"], {"pieces": [], "why": "one small file", "from": lead}
+        )
+        assert out == {"plan": None, "problems": [], "dissolved": True, "lane": "pr"}
+        assert tr.load(run["id"]) is None and tr.owner_of_title(lead) is None
+        # The group's release would have asked before the PR: so does the lane.
+        assert armed == [(lead, "pr", {"ask_first": True, "source": "session"})]
+        (ev,) = [
+            e for e in _events(env, "run.changed") if e["data"]["run"] == run["id"]
+        ][-1:]
+        assert ev["data"]["state"] == "dissolved" and ev["data"]["lead"] == lead
+
+    def test_a_required_split_cannot_be_declined(self, env):
+        run = _split(env)
+        lead = run["lead"]["title"]
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": [], "from": lead})
+        assert err.value.status == 422 and "at least 2 pieces" in err.value.message
+        assert tr.load(run["id"])["state"] == "planning"
+
+    def test_a_required_split_honours_the_users_cap_too(self, env):
+        run = _split(env, max_pieces=3)
+        assert run["optional"] is False and run["max_pieces"] == 3
+        assert run["lead"]["title"] == "clean-up-auth-tokens-lead"
+        four = [
+            {"title": t, "prompt": "do " + t, "paths": ["%s/**" % t]}
+            for t in ("a", "b", "c", "d")
+        ]
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": four, "from": run["lead"]["title"]})
+        assert err.value.status == 422 and "at most 3 pieces" in err.value.message
+
+    def test_max_pieces_is_validated_clamped_and_ignored_without_a_split(self, env):
+        with pytest.raises(drv.RunError) as err:
+            _split(env, split_optional=True, max_pieces="abc")
+        assert "max_pieces must be a number" in err.value.message
+        assert tr.list_runs() == [] and env.created == []
+        # Blank is "no cap of my own": the server's limit.
+        run = _split(env, split_optional=True, max_pieces="")
+        assert run["max_pieces"] == 0 and drv._split_max(run) == drv._max_pieces()
+        run = _split(env, split_optional=True, max_pieces=50)
+        assert run["max_pieces"] == drv._max_pieces() == 8
+        # Without a split neither field means anything: not even validated.
+        run = _split(env, split=False, split_optional=True, max_pieces="abc")
+        assert run["split"] is False
+        assert run["optional"] is False and run["max_pieces"] == 0
+
+    def test_the_lead_titles_avoid_collisions_with_their_own_shape(self, env):
+        env.instances["clean-up-auth-tokens"] = SimpleNamespace(Title="taken")
+        run = _split(env, split_optional=True)
+        assert run["lead"]["title"] == "clean-up-auth-tokens-2"
+        env.instances["clean-up-auth-tokens-lead"] = SimpleNamespace(Title="taken")
+        run = _split(env)
+        assert run["lead"]["title"] == "clean-up-auth-tokens-lead-2"
+
+    def test_an_adopted_lead_gets_the_optional_brief_with_the_users_cap(self, env):
+        from backend.web.core import prompt_queue as pq
+
+        lead_path = str(env.tmp / "wt" / "mine")
+        _git(env.repo, "worktree", "add", "-q", "-b", "me/mine", lead_path, "main")
+        env.instances["mine"] = _WtInst("mine", lead_path, "me/mine", env.repo)
+        run = _split(env, repo_path="", lead="mine", split_optional=True, max_pieces=3)
+        assert run["lead"]["adopted"] is True and run["optional"] is True
+        (item,) = pq.snapshot()["mine"]["items"]
+        assert "pieces=[]" in item["text"] and "2-3 pieces" in item["text"]
+
+    def _armed(self, monkeypatch, raises=False):
+        armed: list = []
+
+        def _arm(title, lane, **kw):
+            if raises:
+                raise RuntimeError("no autopilot")
+            armed.append((title, lane, kw))
+
+        monkeypatch.setattr(drv._lanes, "arm_session", _arm)
+        return armed
+
+    def _dissolved(self, env, rid):
+        return [
+            e["data"]
+            for e in _events(env, "run.changed")
+            if e["data"]["run"] == rid and e["data"].get("state") == "dissolved"
+        ]
+
+    def test_a_proposed_plan_can_still_be_withdrawn(self, env, monkeypatch):
+        armed = self._armed(monkeypatch)
+        run = _split(env, split_optional=True)
+        lead = run["lead"]["title"]
+        drv.propose_plan(run["id"], {"pieces": PLAN, "why": "two", "from": lead})
+        assert tr.load(run["id"])["state"] == "plan_ready"
+        out = drv.propose_plan(run["id"], {"pieces": [], "why": "small", "from": lead})
+        assert out["dissolved"] is True and out["plan"] is None
+        assert tr.load(run["id"]) is None and len(armed) == 1
+        (ev,) = self._dissolved(env, run["id"])
+        assert ev == {
+            "run": run["id"],
+            "state": "dissolved",
+            "counts": {},
+            "lead": lead,
+            "by": lead,
+            "why": "small",
+        }
+        # Gone: a second decline finds no group at all.
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": [], "from": lead})
+        assert err.value.status == 404 and "no such group" in err.value.message
+
+    def test_only_the_lead_may_decline(self, env, monkeypatch):
+        armed = self._armed(monkeypatch)
+        run = _split(env, split_optional=True)
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": [], "from": "someone-else"})
+        assert err.value.status == 409 and "only the group's lead" in err.value.message
+        assert tr.load(run["id"])["state"] == "planning"
+        assert armed == [] and self._dissolved(env, run["id"]) == []
+
+    def test_an_approved_plan_cannot_be_declined(self, env, monkeypatch):
+        self._armed(monkeypatch)
+        run = _split(env, split_optional=True)
+        lead = run["lead"]["title"]
+        drv.propose_plan(run["id"], {"pieces": PLAN, "from": lead})
+        drv.approve_plan(run["id"])
+        with pytest.raises(drv.RunError) as err:
+            drv.propose_plan(run["id"], {"pieces": [], "from": lead})
+        assert err.value.status == 409 and "already approved" in err.value.message
+        assert tr.load(run["id"])["state"] == "running"
+
+    def test_no_pieces_list_at_all_is_a_bad_plan_not_a_decline(self, env):
+        run = _split(env, split_optional=True)
+        lead = run["lead"]["title"]
+        for payload in ({"from": lead}, {"pieces": None, "from": lead}):
+            with pytest.raises(drv.RunError) as err:
+                drv.propose_plan(run["id"], payload)
+            assert err.value.status == 422
+        assert tr.load(run["id"])["state"] == "planning"
+        assert self._dissolved(env, run["id"]) == []
+
+    def test_the_user_may_decline_and_why_is_capped(self, env, monkeypatch):
+        self._armed(monkeypatch)
+        run = _split(env, split_optional=True)
+        drv.propose_plan(run["id"], {"pieces": [], "why": "x" * 800})
+        (ev,) = self._dissolved(env, run["id"])
+        assert ev["by"] == "user" and ev["why"] == "x" * 500
+
+    @pytest.mark.parametrize(
+        "lane,release,ask_first",
+        [
+            ("pr", "ask", True),
+            ("commit", "ask", False),
+            ("pr", "auto", False),
+            ("merge", "auto", False),
+        ],
+    )
+    def test_the_lane_asks_first_only_where_the_release_would_have(
+        self, env, monkeypatch, lane, release, ask_first
+    ):
+        armed = self._armed(monkeypatch)
+        run = _split(
+            env, split_optional=True, policy={"lane": lane, "release": release}
+        )
+        lead = run["lead"]["title"]
+        out = drv.propose_plan(run["id"], {"pieces": [], "from": lead})
+        assert out["lane"] == lane
+        assert armed == [(lead, lane, {"ask_first": ask_first, "source": "session"})]
+
+    def test_a_leave_lane_arms_nothing(self, env, monkeypatch):
+        armed = self._armed(monkeypatch)
+        run = _split(env, split_optional=True)
+        with tr.edit(run["id"]) as r:
+            r["policy"]["lane"] = "leave"
+        out = drv.propose_plan(run["id"], {"pieces": [], "from": run["lead"]["title"]})
+        assert out == {"plan": None, "problems": [], "dissolved": True, "lane": ""}
+        assert armed == []
+
+    def test_an_adopted_lead_keeps_its_own_lane(self, env, monkeypatch):
+        armed = self._armed(monkeypatch)
+        lead_path = str(env.tmp / "wt" / "mine")
+        _git(env.repo, "worktree", "add", "-q", "-b", "me/mine", lead_path, "main")
+        env.instances["mine"] = _WtInst("mine", lead_path, "me/mine", env.repo)
+        run = _split(env, repo_path="", lead="mine", split_optional=True)
+        out = drv.propose_plan(run["id"], {"pieces": [], "from": "mine"})
+        assert out["dissolved"] is True and out["lane"] == ""
+        assert armed == [] and tr.load(run["id"]) is None
+
+    def test_a_lane_that_fails_to_arm_still_dissolves(self, env, monkeypatch):
+        self._armed(monkeypatch, raises=True)
+        run = _split(env, split_optional=True)
+        lead = run["lead"]["title"]
+        out = drv.propose_plan(run["id"], {"pieces": [], "from": lead})
+        assert out == {"plan": None, "problems": [], "dissolved": True, "lane": ""}
+        assert tr.load(run["id"]) is None
+        (ev,) = self._dissolved(env, run["id"])
+        assert ev["lead"] == lead
+
+
 class TestOneForAll:
     def test_a_batch_starts_its_lines_as_workers_of_the_lead(self, env):
         payload = {

@@ -10,6 +10,7 @@ import { shipLine } from "../lib/agentMessages";
 import { needsRunDetail, runNote, splitRail, TOGETHER_DETAIL_S } from "../lib/runs";
 import { waitingActions, waitingChip } from "../components/outbox/outbox";
 import { BROWSE_VALUE, runRepoOptions } from "../lib/runStart";
+import { dissolvedText } from "../state/runs";
 import dialogSrc from "../components/dialogs/NewSessionDialog.tsx?raw";
 import leadPanelSrc from "../components/grid/RunLeadPanel.tsx?raw";
 import splitRunSrc from "../lib/splitRun.ts?raw";
@@ -244,6 +245,17 @@ describe("the rail", () => {
     const all = run({ tasks: [piece("a", "integrated"), piece("b", "integrated"), piece("c", "integrated")] });
     expect(S.leadLine(all)).toEqual({ text: "3 of 3 merged back", cls: "ok" });
     expect(S.leadLine(run({ state: "planning", tasks: [] }))!.text).toBe("proposing the pieces…");
+    // An auto-split may not split at all: it is still deciding.
+    expect(S.leadLine(run({ state: "planning", optional: true, tasks: [] }))!.text).toBe(
+      "deciding whether to split…"
+    );
+    expect(
+      text(S.leadSubline(run({ state: "planning", optional: true, plan: null, tasks: [] }), "lead"))
+    ).toMatch(/decide whether to split.*just does the task/);
+    expect(dissolvedText("fix-login", "one file")).toBe(
+      "fix-login didn't split it — it's doing the task itself: one file"
+    );
+    expect(dissolvedText("fix-login", "")).toBe("fix-login didn't split it — it's doing the task itself");
     expect(S.leadLine(run({ state: "plan_ready", tasks: [] }))).toEqual({ text: "plan ready — approve it", cls: "needs" });
     expect(S.leadLine(run({ state: "done", release: { state: "done", pr_url: "https://x/pull/9" } }))!.text).toBe("✓ PR #9");
   });

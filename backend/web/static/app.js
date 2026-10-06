@@ -27562,6 +27562,16 @@ function bridgeRunEvents() {
 		"run.finished",
 		"session.autopilot_changed"
 	]) ev.subscribe(name, bump);
+	ev.subscribe("run.changed", (env) => {
+		if (env.data?.state !== "dissolved") return;
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		const lead = String(env.data?.lead || "");
+		if (lead) toast(dissolvedText(lead, String(env.data?.why || "")), { duration: 7e3 });
+	});
+}
+function dissolvedText(lead, why) {
+	const reason = why.trim().replace(/\s+/g, " ");
+	return `${lead} didn't split it — it's doing the task itself` + (reason ? `: ${reason.length > 120 ? reason.slice(0, 119) + "…" : reason}` : "");
 }
 //#endregion
 //#region src/lib/runsApi.ts
@@ -27655,9 +27665,11 @@ function laneChoice(inst) {
 }
 function teamRunCaps(caps) {
 	const t = caps?.team_runs;
+	const max = Number(t?.max_pieces);
 	return {
 		split: t?.split === true,
-		together: t?.together === true
+		together: t?.together === true,
+		maxPieces: Number.isFinite(max) && max >= 2 ? Math.floor(max) : 8
 	};
 }
 var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
@@ -30843,7 +30855,7 @@ function leadSubline(run, leadName) {
 	const tasks = memberTasks(run);
 	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
 	const branch = run.lead?.branch || run.release?.branch || "";
-	if (run.state === "planning") return [{ text: "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
+	if (run.state === "planning") return [{ text: run.optional ? "Waiting for " + leadName + " to decide whether to split — it reads the code first; a plan shows here, or it just does the task." : "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
 	if (run.state === "plan_ready") return [
 		{ text: leadName + " proposed " },
 		{
@@ -31125,7 +31137,7 @@ function leadLine(run) {
 	].includes(t.state)).length;
 	switch (run.state) {
 		case "planning": return {
-			text: "proposing the pieces…",
+			text: run.optional ? "deciding whether to split…" : "proposing the pieces…",
 			cls: ""
 		};
 		case "plan_ready": return {
@@ -57515,89 +57527,6 @@ function NewTicketPane() {
 	});
 }
 //#endregion
-//#region src/components/dialogs/SplitCheck.tsx
-function SplitCheck({ id, split, onSplit, gate, shapeReason, text }) {
-	if (!gate.ok && gate.reason === SERVER_NO_SPLIT) return null;
-	const why = gate.ok ? shapeReason : gate.reason;
-	const ok = !why;
-	const on = split && ok;
-	const sug = ok ? splitSuggestion(text) : null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "nf-split" + (ok ? "" : " disabled"),
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "check" + (ok ? "" : " disabled"),
-			title: ok ? "MindFlock starts a lead session that proposes the pieces, each with its own paths. You approve the split; MindFlock starts the workers and merges them back." : why,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id,
-					checked: on,
-					disabled: !ok,
-					onChange: (e) => onSplit(e.target.checked)
-				}),
-				"Split a big line into parallel pieces first",
-				sug && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "nf-split-pill",
-					title: "Your sentence lists separate pieces. Nothing is ticked for you.",
-					children: suggestionPill(sug)
-				}),
-				why && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "muted",
-					children: [
-						" (",
-						why,
-						")"
-					]
-				})
-			]
-		})
-	});
-}
-//#endregion
-//#region src/components/dialogs/FastTrackChoice.tsx
-function Seg({ value, options, onChange, label, id }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "rt-seg",
-		role: "group",
-		"aria-label": label,
-		id,
-		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: o.v === value ? "on" : void 0,
-			"aria-pressed": o.v === value,
-			title: o.title,
-			disabled: o.disabled || void 0,
-			onClick: () => onChange(o.v),
-			children: o.label
-		}, o.v))
-	});
-}
-function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
-	const askWhy = askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-		id,
-		label,
-		value,
-		options: lanes.map((l) => ({
-			v: l,
-			label: laneLabel?.[l] || LANE_LABEL[l],
-			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
-			disabled: !!disabledReason?.[l]
-		})),
-		onChange
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "check rt-ask" + (askWhy ? " disabled" : ""),
-		title: askWhy || ASK_FIRST_DESC,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-			type: "checkbox",
-			id: id + "-ask",
-			checked: !askWhy && askFirst,
-			disabled: !!askWhy,
-			onChange: (e) => onAskFirst(e.target.checked)
-		}), ASK_FIRST_LABEL]
-	})] });
-}
-//#endregion
 //#region src/lib/runStart.ts
 var TICKET_TOKEN = /^(?:[A-Za-z][A-Za-z0-9]{0,15}-\d+|#\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+)$/;
 function isTicketToken(tok) {
@@ -57625,17 +57554,6 @@ function localItems(text) {
 		});
 	}
 	return out;
-}
-function isListMode(items) {
-	return items.length >= 2 || items.some((i) => i.kind === "ticket");
-}
-function splitApplies(items) {
-	return items.length === 1 && items[0].kind === "task";
-}
-function splitShapeReason(items) {
-	if (!items.length) return "";
-	if (items.length > 1) return "one line only — this is a list of " + items.length;
-	return items[0].kind === "ticket" ? "a ticket starts as itself" : "";
 }
 function itemRows(local, preview, repoLabel, sourceLabel = (k) => k) {
 	if (preview) return preview.items.map((it, i) => {
@@ -57725,6 +57643,14 @@ function startTogetherText(tickets) {
 		return slug || id;
 	}).join(" ");
 }
+var SPLIT_MIN = 2;
+var SPLIT_DEFAULT = 3;
+var SPLIT_LIMIT_DEFAULT = 8;
+function clampSplit(n, limit = SPLIT_LIMIT_DEFAULT) {
+	const top = Math.max(SPLIT_MIN, Number.isFinite(limit) ? Math.floor(limit) : SPLIT_LIMIT_DEFAULT);
+	if (!Number.isFinite(n)) return Math.min(SPLIT_DEFAULT, top);
+	return Math.min(top, Math.max(SPLIT_MIN, Math.round(n)));
+}
 var CONCURRENCY_MIN = 1;
 var CONCURRENCY_MAX = 8;
 var CONCURRENCY_DEFAULT = 3;
@@ -57748,6 +57674,10 @@ function oneForAllLane(lane) {
 function runBody(o) {
 	const together = o.split || o.grouping === "together";
 	const lane = together ? oneForAllLane(o.lane) : o.lane;
+	const split = o.split ? {
+		split_optional: true,
+		max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT)
+	} : {};
 	return {
 		name: o.name.trim(),
 		items: o.items,
@@ -57760,22 +57690,22 @@ function runBody(o) {
 		concurrency: clampConcurrency(o.concurrency),
 		program: o.program.trim(),
 		repo_path: o.repoPath.trim(),
-		split: o.split
+		split: o.split,
+		...split
 	};
 }
 function defaultLaneFor(batch, setting) {
 	return batch ? laneDefault(setting) : "leave";
 }
-function startLabel(n, split) {
-	if (split) return "Start the lead";
+function startLabel(n) {
 	if (n >= 2) return `Start ${n} sessions`;
 	return "Create session";
 }
 function summarySentence(o) {
 	const asks = !(o.split || o.n >= 2 && o.grouping === "together") && o.lane !== "leave" && o.askFirst ? " Before the first commit it stops and asks you first, in the bell." : "";
 	if (o.split) return {
-		lead: "One lead session in a new worktree. Its agent proposes pieces with separate paths; you approve the split in its Thread tab, then MindFlock starts the workers, fences each to its paths and merges them back.",
-		tail: (o.lane === "pr" ? "Then it opens one PR — after you say go." : o.lane === "merge" ? "Then it opens one PR and merges it once checks pass — after you say go." : o.lane === "push" ? "Then the merged branch is pushed — after you say go." : "The merged branch waits for you; nothing is pushed.") + asks
+		lead: `One session in a new worktree. Its agent reads the code and decides: not worth splitting, it does the task itself; worth it, it proposes up to ${clampSplit(o.maxPieces ?? SPLIT_DEFAULT)} pieces with separate paths — you approve the split in its Thread tab, then MindFlock starts the workers, fences each to its paths and merges them back.`,
+		tail: (o.lane === "pr" ? "Either way it then opens one PR — after you say go." : o.lane === "merge" ? "Either way it then opens one PR and merges it once checks pass — after you say go." : o.lane === "push" ? "Either way the branch is then pushed — after you say go." : "Either way it is committed on its branch and waits for you; nothing is pushed.") + asks
 	};
 	if (o.n >= 2) {
 		const c = clampConcurrency(o.concurrency);
@@ -57835,6 +57765,121 @@ function runRepoOptions(repoPath, suggestions, leaf = (p) => p.replace(/\/+$/, "
 	return out;
 }
 //#endregion
+//#region src/components/dialogs/SplitCheck.tsx
+function SplitCheck({ id, split, onSplit, gate, maxPieces, onMaxPieces, limit, text }) {
+	if (!gate.ok && gate.reason === SERVER_NO_SPLIT) return null;
+	const why = gate.ok ? "" : gate.reason;
+	const ok = !why;
+	const on = split && ok;
+	const sug = ok ? splitSuggestion(text) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nf-split" + (ok ? "" : " disabled"),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "check" + (ok ? "" : " disabled"),
+				htmlFor: id,
+				title: ok ? "Its agent reads the code first and decides. Not worth it: it just does the task. Worth it: it proposes the pieces, each with its own paths — you approve, MindFlock starts the workers and merges them back." : why,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id,
+					checked: on,
+					disabled: !ok,
+					onChange: (e) => onSplit(e.target.checked)
+				}), "Auto-split into up to"]
+			}),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "rt-step nf-split-n",
+				role: "group",
+				"aria-label": "Most sessions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						"aria-label": "Fewer sessions",
+						disabled: !ok || maxPieces <= SPLIT_MIN,
+						onClick: () => onMaxPieces(maxPieces - 1),
+						children: "−"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						id: id + "-n",
+						"aria-live": "polite",
+						children: maxPieces
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						"aria-label": "More sessions",
+						disabled: !ok || maxPieces >= limit,
+						onClick: () => onMaxPieces(maxPieces + 1),
+						children: "+"
+					})
+				]
+			}),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: ok ? "" : "muted",
+				children: "sessions if it's worth it"
+			}),
+			sug && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nf-split-pill",
+				title: "Your sentence lists separate pieces. Nothing is ticked for you.",
+				children: suggestionPill(sug)
+			}),
+			why && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "muted",
+				children: [
+					" (",
+					why,
+					")"
+				]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/FastTrackChoice.tsx
+function Seg({ value, options, onChange, label, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-seg",
+		role: "group",
+		"aria-label": label,
+		id,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: o.v === value ? "on" : void 0,
+			"aria-pressed": o.v === value,
+			title: o.title,
+			disabled: o.disabled || void 0,
+			onClick: () => onChange(o.v),
+			children: o.label
+		}, o.v))
+	});
+}
+function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+		id,
+		label,
+		value,
+		options: lanes.map((l) => ({
+			v: l,
+			label: laneLabel?.[l] || LANE_LABEL[l],
+			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
+			disabled: !!disabledReason?.[l]
+		})),
+		onChange
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "check rt-ask" + (askWhy ? " disabled" : ""),
+		title: askWhy || ASK_FIRST_DESC,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "checkbox",
+			id: id + "-ask",
+			checked: !askWhy && askFirst,
+			disabled: !!askWhy,
+			onChange: (e) => onAskFirst(e.target.checked)
+		}), ASK_FIRST_LABEL]
+	})] });
+}
+//#endregion
 //#region src/components/dialogs/NewList.tsx
 var PREVIEW_DEBOUNCE_MS = 300;
 function prettySource(key) {
@@ -57848,8 +57893,7 @@ function prettySource(key) {
 function useRunDraft(o) {
 	const { open, text, repoPath, program } = o;
 	const items = (0, import_react.useMemo)(() => localItems(text), [text]);
-	const listMode = isListMode(items);
-	const oneTask = splitApplies(items);
+	const listMode = o.batch && items.length > 0;
 	const asked = text.trim();
 	const [preview, setPreview] = (0, import_react.useState)(null);
 	const [laneChoice, setLaneChoice] = (0, import_react.useState)(null);
@@ -57928,17 +57972,50 @@ function useRunDraft(o) {
 		fresh,
 		repoLabel
 	]);
-	const oneForAll = o.split && oneTask || grouping === "together" && (rows.length || items.length) >= 2;
-	const batch = !o.single && (listMode || o.split && oneTask);
+	const oneForAll = o.split || listMode && grouping === "together" && (rows.length || items.length) >= 2;
+	const batch = !o.single && (listMode || o.split);
 	const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
 	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
-	const start = async ({ split }) => {
+	const start = async ({ split, maxPieces }) => {
 		if (starting) return {
 			ok: false,
 			error: ""
 		};
 		setStarting(true);
 		try {
+			if (split) {
+				if (!asked) return {
+					ok: false,
+					error: "Nothing to start — describe the task first."
+				};
+				const body = runBody({
+					name: "",
+					items: [{
+						kind: "task",
+						text: asked
+					}],
+					lane,
+					askFirst,
+					grouping: "together",
+					concurrency,
+					program,
+					repoPath,
+					split: true,
+					maxPieces
+				});
+				try {
+					return {
+						ok: true,
+						body,
+						run: (await api("/api/runs", { json: body }))?.run ?? null
+					};
+				} catch (err) {
+					return {
+						ok: false,
+						error: errMsg(err)
+					};
+				}
+			}
 			let data = fresh?.data ?? null;
 			if (!data) try {
 				data = await ask(asked, repoPath);
@@ -57973,7 +58050,7 @@ function useRunDraft(o) {
 				concurrency,
 				program,
 				repoPath,
-				split
+				split: false
 			});
 			try {
 				return {
@@ -57994,7 +58071,6 @@ function useRunDraft(o) {
 	return {
 		items,
 		listMode,
-		oneTask,
 		rows,
 		count: rows.length || items.length,
 		previewError: listMode && fresh?.error ? fresh.error : "",
@@ -58077,7 +58153,7 @@ function rememberOptionsOpen(on) {
 function optionsSummary(lane, askFirst) {
 	return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
 }
-function RunOptions({ draft, n, split, splitBox, repoPicker }) {
+function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 	const many = n >= 2 && !split;
 	const single = n < 2 && !split;
 	const offDefault = draft.lane !== draft.defaultLane;
@@ -58092,7 +58168,8 @@ function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 		lane: draft.lane,
 		askFirst: draft.askFirst,
 		grouping: draft.grouping,
-		split
+		split,
+		maxPieces
 	});
 	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -58212,7 +58289,7 @@ function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 				className: "rt-ctl",
 				children: [repoPicker, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "rt-hint",
-					children: "the lead gets a new worktree there"
+					children: "it gets a new worktree there"
 				})]
 			})]
 		}),
@@ -58244,7 +58321,7 @@ function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 				if (!split) setFoldOpen(e.currentTarget.open);
 			},
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
-				title: split ? "Stays open while Split is ticked" : void 0,
+				title: split ? "Stays open while Auto-split is ticked" : void 0,
 				onClick: (e) => {
 					if (split) {
 						e.preventDefault();
@@ -58506,6 +58583,8 @@ function NewSessionDialog() {
 	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
 	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
 	const [split, setSplit] = (0, import_react.useState)(false);
+	const [maxPieces, setMaxPieces] = (0, import_react.useState)(SPLIT_DEFAULT);
+	const [batch, setBatch] = (0, import_react.useState)(false);
 	const [runBrowse, setRunBrowse] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
@@ -58570,7 +58649,9 @@ function NewSessionDialog() {
 		setError("");
 		setPrompt("");
 		setLaunchArgs("");
-		setDescribe(useUi.getState().takeNewPrefill());
+		const prefill = useUi.getState().takeNewPrefill();
+		setDescribe(prefill);
+		setBatch(!!prefill);
 		setDescribing(false);
 		setDescribeSlow(false);
 		setPlanNote("");
@@ -58585,6 +58666,7 @@ function NewSessionDialog() {
 		setInitRepo(false);
 		setPlanFirst(false);
 		setSplit(false);
+		setMaxPieces(SPLIT_DEFAULT);
 		setAdvancedOpen(true);
 		setLaunchOpen(false);
 		setPromptOpen(false);
@@ -58746,6 +58828,7 @@ function NewSessionDialog() {
 		program
 	]);
 	const togetherOk = teamRunCaps(config?.caps).together;
+	const splitLimit = teamRunCaps(config?.caps).maxPieces;
 	const ticketingOk = !!config?.caps?.ticketing;
 	const shownTab = ticketingOk ? tab : "session";
 	const draft = useRunDraft({
@@ -58755,10 +58838,11 @@ function NewSessionDialog() {
 		program: canonAgent(program),
 		fasttrackDefault: config?.fasttrack_default,
 		single: page !== 1,
-		split: page === 1 && split && mcpOk.ok,
+		batch: page === 1 && batch,
+		split: page === 1 && !batch && split && mcpOk.ok,
 		togetherOk
 	});
-	const splitOn = page === 1 && split && mcpOk.ok && draft.oneTask;
+	const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";
 	const runMode = page === 1 && (draft.listMode || splitOn);
 	const toggleSplit = (on) => setSplit(on);
 	(0, import_react.useEffect)(() => {
@@ -58780,7 +58864,10 @@ function NewSessionDialog() {
 	const laneNeedsWorktree = draft.lane !== "leave";
 	const startRun = async () => {
 		setPlanError("");
-		const r = await draft.start({ split: splitOn });
+		const r = await draft.start({
+			split: splitOn,
+			maxPieces: clampSplit(maxPieces, splitLimit)
+		});
 		if (!r.ok) {
 			if (r.error) setPlanError(r.error);
 			return;
@@ -58789,7 +58876,7 @@ function NewSessionDialog() {
 		const name = String(r.body.name || "");
 		closeDialog();
 		refreshInstances();
-		if (splitOn) toast(`Starting the lead${name ? " for “" + name + "”" : ""} — its plan shows in its Thread tab`, { duration: 6e3 });
+		if (splitOn) toast(`Starting it${name ? " — “" + name + "”" : ""}. Its agent decides whether to split; a plan shows in its Thread tab`, { duration: 6e3 });
 		else if (n >= 2) {
 			const c = Math.min(n, draft.concurrency);
 			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`, { duration: 6e3 });
@@ -59183,7 +59270,7 @@ function NewSessionDialog() {
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "nt-head",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "What do you want to work on? One thing per line, or ticket IDs" })
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-describe-row",
@@ -59196,7 +59283,7 @@ function NewSessionDialog() {
 									autoComplete: "off",
 									spellCheck: false,
 									readOnly: describing,
-									placeholder: "e.g. fix the login bug in acme-api\n— or one per line: PAY-412 PAY-415, a task, another task",
+									placeholder: "e.g. fix the login bug in acme-api",
 									onChange: (e) => {
 										setDescribe(e.target.value);
 										setPlanError("");
@@ -59280,12 +59367,15 @@ function NewSessionDialog() {
 										}, o.value))
 									})
 								}) : null,
-								splitBox: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+								maxPieces: clampSplit(maxPieces, splitLimit),
+								splitBox: batch ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
 									id: "new-split",
 									split,
 									onSplit: toggleSplit,
 									gate: mcpOk,
-									shapeReason: splitShapeReason(draft.items),
+									maxPieces: clampSplit(maxPieces, splitLimit),
+									onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
+									limit: splitLimit,
 									text: describe
 								})
 							}),
@@ -60078,9 +60168,9 @@ function NewSessionDialog() {
 							id: "new-describe-start",
 							disabled: describing || draft.starting,
 							"aria-busy": draft.starting || void 0,
-							title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
+							title: splitOn ? "Create it now. Its agent reads the code and decides whether to split; a split waits for your approval in its Thread tab." : runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
 							onClick: runMode ? () => void startRun() : startNow,
-							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1, splitOn)
+							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
 						})
 					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -72939,7 +73029,9 @@ var SLIDES = [
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			"Press ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "New" }),
-			" (Ctrl+N) and say what to work on — one task, or one per line. Each session gets a pane in the grid and a row in the sidebar; drag rows to reorder. ",
+			" (Ctrl+N) and say what to work on — tick ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Auto-split" }),
+			" to let its agent split a big task across sessions. Each session gets a pane in the grid and a row in the sidebar; drag rows to reorder. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "View" }),
 			" at the bottom of the sidebar picks how many panes show at once. The ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Assistant" }),

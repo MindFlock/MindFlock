@@ -342,6 +342,64 @@ class TestSplitLeadTools:
         assert "do not spawn sessions" in out["note"]
         assert posted == [{"pieces": _PIECES, "why": "two seams", "from": "orch"}]
 
+    def test_an_auto_split_lead_may_decline_and_is_told_to_do_it_itself(self):
+        box, api, clock, _ = _box(me="orch", run=dict(_SPLIT, optional=True))
+        posted = []
+
+        def _plan(p, q):
+            posted.append(p)
+            return {"plan": None, "problems": [], "dissolved": True, "lane": "pr"}
+
+        api.top_routes[("POST", "/api/runs/r_abc123/plan")] = _plan
+        out = box.propose_run_plan(
+            {"run_id": "r_abc123", "pieces": [], "why": "one file"}, FakeCtx(clock)
+        )
+        assert posted == [{"pieces": [], "why": "one file", "from": "orch"}]
+        assert out["ok"] is True and out["split"] is False
+        assert "do the whole task yourself" in out["note"].lower()
+        assert "(pr)" in out["note"]
+
+    def test_a_decline_with_no_lane_promises_no_fast_track(self):
+        box, api, clock, _ = _box(me="orch", run=dict(_SPLIT, optional=True))
+        api.top_routes[("POST", "/api/runs/r_abc123/plan")] = lambda p, q: {
+            "plan": None,
+            "problems": [],
+            "dissolved": True,
+            "lane": "",
+        }
+        out = box.propose_run_plan({"run_id": "r_abc123", "pieces": []}, FakeCtx(clock))
+        assert out["ok"] is True and out["split"] is False
+        assert out["note"].endswith("Do the whole task yourself, here.")
+        assert "fast-track" not in out["note"] and "(" not in out["note"]
+
+    def test_an_empty_plan_on_a_required_split_is_the_servers_to_refuse(self):
+        from backend import client
+
+        box, api, clock, _ = _box(me="orch", run=_SPLIT)
+        problems = [{"piece": "", "error": "a split needs at least 2 pieces"}]
+        posted = []
+
+        def _plan(p, q):
+            posted.append(p)
+            raise client.ApiError(422, "bad plan", {"problems": problems})
+
+        api.top_routes[("POST", "/api/runs/r_abc123/plan")] = _plan
+        out = box.propose_run_plan({"run_id": "r_abc123", "pieces": []}, FakeCtx(clock))
+        # Reached the server (the schema no longer stops it) and came back
+        # as problems to fix, not a dissolve.
+        assert len(posted) == 1
+        assert out["ok"] is False and out["problems"] == problems
+        assert "split" not in out
+
+    def test_only_an_auto_split_lead_is_offered_an_empty_plan(self):
+        from backend.mcp import runs as mcp_runs
+
+        d = mcp_runs.D_PROPOSE_PLAN
+        assert d.count("pieces=[]") == 1
+        assert (
+            "An auto-split's lead (its brief says so) may instead pass pieces=[]" in d
+        )
+
     def test_problems_come_back_to_fix_not_as_an_error(self):
         from backend import client
 
@@ -421,6 +479,8 @@ class TestSplitLeadTools:
         item = s["properties"]["pieces"]["items"]
         assert item["required"] == ["title", "prompt", "paths"]
         assert s["properties"]["pieces"]["maxItems"] == 8
+        # 0 is an auto-split lead's "no split"; the server refuses it otherwise.
+        assert s["properties"]["pieces"]["minItems"] == 0
 
     def test_get_run_shows_the_plan_to_the_lead(self):
         run = dict(

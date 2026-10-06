@@ -82,7 +82,8 @@ From your own Claude (the MindFlock MCP): `start_team_run(items=["PAY-412",
 "PAY-415", "Per-user rate limit on /webhooks"], lane="pr", concurrency=3)`,
 then `wait_for_run(until="needs_you")`. See [mcp.md](mcp.md#start_team_run).
 
-Over HTTP: `POST /api/runs/preview {text}` parses (one thing per line; a line
+Over HTTP (batches only — Intake's Start together, MCP `start_team_run`; New's
+typed box is never parsed into a list): `POST /api/runs/preview {text}` parses (one thing per line; a line
 of only ticket IDs is that many tickets), resolves each ticket against the
 Intake ticket list and then each configured source, and says which items
 already have a session. A ticket that resolves nowhere is an error on its row
@@ -332,12 +333,31 @@ bell lists it under Needs attention.
 
 ## Splitting one task
 
-Tick **Split a big line into parallel pieces first** (or *Split into parallel
-pieces…* on a session — that session becomes the lead) and the group is a
-one-for-all group whose lines come from the lead's plan:
+Tick **Auto-split into up to N sessions if it's worth it** in New (off by
+default; N defaults to 3 and ranges from 2 to `MINDFLOCK_MAX_CHILDREN`,
+default 8), or pick *Split
+into parallel pieces…* on a session — that session becomes the lead — and the
+group is a one-for-all group whose lines come from the lead's plan. New's box
+is the whole task however many lines it holds: line breaks never split
+anything, the lead does.
+
+New's split is **optional** (`POST /api/runs` with `split_optional: true,
+max_pieces: N`). Its lead is named for the work, not `-lead`, because it may
+stay the only session: its brief says to decide first, and
+`propose_run_plan(run_id, pieces=[], why)` means *no split*. The group then
+**dissolves** — the run is removed, the lead is an ordinary session doing the
+task itself, armed with the group's fast-track (asking before a push, PR or
+merge, as the group's release would have), and the UI toasts "*<session>*
+didn't split it — it's doing the task itself". A group with lane `leave`
+arms nothing, a `commit` lane never asks first, an adopted lead (`lead:` over
+HTTP) keeps whatever fast-track it had, and if arming fails the session is
+simply left unarmed. *Split into parallel pieces…* on a session is not
+optional: there, `pieces=[]` is refused like any plan with
+fewer than two pieces.
 
 1. The lead gets the task plus a server-owned brief: read the code, commit
-   shared groundwork, and **propose** 2–8 pieces with
+   shared groundwork, and **propose** 2–N pieces (N: the user's cap, else
+   `MINDFLOCK_MAX_CHILDREN`, 8) with
    `propose_run_plan(run_id, pieces=[{title, prompt, paths}], why)` — never
    spawn sessions. The group waits in `planning`. A lead on its trunk is
    told to commit nothing there (shared groundwork goes into a piece).
@@ -345,7 +365,8 @@ one-for-all group whose lines come from the lead's plan:
    `git ls-files` and red zones: no two pieces may share a file (nor a new
    literal path one names and the other's globs cover, nor two globs that
    can match one new path), a piece may not sit
-   wholly in a red zone, at most `MINDFLOCK_MAX_CHILDREN` pieces. Problems go
+   wholly in a red zone, at most N pieces (the user's cap, else
+   `MINDFLOCK_MAX_CHILDREN`). Problems go
    back to the lead to fix (`422`); a good plan is `plan_ready`.
 3. **You approve** — one click on the plan card in the lead's Thread (each
    piece with its prompt and an `only here:` chip; Edit is inline), or

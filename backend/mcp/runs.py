@@ -118,7 +118,9 @@ D_PROPOSE_PLAN = (
     "(workers fork from your last commit). why: one line on the split. The "
     "server validates and returns problems to fix; when ok, your user "
     "approves and MindFlock starts, fences and merges the workers itself — "
-    "do not spawn sessions."
+    "do not spawn sessions. An auto-split's lead (its brief says so) may "
+    "instead pass pieces=[] with why: no split — the group dissolves and you "
+    "do the task yourself."
 )
 D_REPORT_INTEGRATED = (
     "LEAD of a split only: after MindFlock handed you a merge conflict and "
@@ -199,7 +201,7 @@ S_PROPOSE_PLAN = _obj(
         "run_id": _RUN_ID,
         "pieces": {
             "type": "array",
-            "minItems": 2,
+            "minItems": 0,
             "maxItems": 8,
             "items": _obj(
                 {
@@ -554,6 +556,21 @@ class RunTools:
                 }
             raise self._api_error(err, "propose_run_plan") from None
         resp = resp if isinstance(resp, dict) else {}
+        if resp.get("dissolved"):
+            lane = str(resp.get("lane") or "")
+            return {
+                "ok": True,
+                "problems": [],
+                "split": False,
+                "note": "no split — the group is dissolved and this is an ordinary "
+                "session now. Do the whole task yourself, here"
+                + (
+                    "; when your turn ends MindFlock fast-tracks it (%s)" % lane
+                    if lane
+                    else ""
+                )
+                + ".",
+            }
         n = len(((resp.get("plan") or {}).get("pieces")) or [])
         return {
             "ok": True,

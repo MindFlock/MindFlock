@@ -29,19 +29,19 @@ def test_the_describe_box_ships_in_the_bundle():
     js = client.get("/app.js").text
     # The strip itself, first child of .nf-body and above the Templates row.
     assert in_bundle('id: "new-describe"', js)
-    # The box the sentence is typed into — a textarea since ship lanes, so a
-    # list (one thing per line, or ticket IDs) can be typed or pasted.
+    # The box the sentence is typed into — a textarea, so a longer task can be
+    # typed or pasted. However many lines, it is ONE prompt: only Intake's
+    # "Start together…" opens New as a batch (one session per line or ticket).
     assert in_bundle('id: "new-describe-text"', js)
     assert in_bundle('"textarea", { id: "new-describe-text"', js)
     # The placeholder is the whole tutorial: it is the only place that says a
     # sentence may name a folder AND ask for a worktree, and a box labelled
-    # "Describe it" with nothing in it teaches neither. Its second line shows
-    # the list shape.
-    assert in_bundle(
-        'placeholder: "e.g. fix the login bug in acme-api\\n— or one per line: PAY-412 PAY-415, a task, another task"',
-        js,
-    )
-    assert "What do you want to work on? One thing per line, or ticket IDs" in js
+    # "Describe it" with nothing in it teaches neither. No list shape: typed
+    # lines never become a list.
+    assert in_bundle('placeholder: "e.g. fix the login bug in acme-api"', js)
+    assert "one per line: PAY-412" not in js
+    assert '"What do you want to work on?"' in js
+    assert '"Starting together — one session per line or ticket ID"' in js
 
 
 def test_the_fill_button_ships_and_still_cannot_submit_the_form():
@@ -145,3 +145,36 @@ def test_the_dialog_is_two_pages_with_the_sentence_first():
     # careful not to build.
     assert in_bundle('type: "button", id: "new-describe-start"', js)
     assert '"Create session"' in js
+
+
+def test_the_auto_split_ships_its_stepper_planning_copy_and_toast():
+    """Auto-split ("…up to N sessions if it's worth it") as built.
+
+    Behaviour lives in ``frontend/src/__tests__/{newList,splitRun}.test.ts``;
+    this only answers "did it get built" — a stale bundle would still offer
+    the old required split with no N, and a lead that declined would vanish
+    from the rail without a word.
+    """
+    js = client.get("/app.js").text
+    # The N stepper sits OUTSIDE the checkbox's label: clicking −/+ must not
+    # toggle the box.
+    assert in_bundle('"Auto-split into up to"] }), " ", /* @__PURE__ */', js)
+    assert in_bundle('className: "rt-step nf-split-n"', js)
+    assert in_bundle("disabled: !ok || maxPieces <= SPLIT_MIN", js)
+    assert in_bundle("disabled: !ok || maxPieces >= limit", js)
+    # An optional run's lead is deciding, not proposing.
+    assert in_bundle(
+        'text: run.optional ? "deciding whether to split…" : "proposing the pieces…"',
+        js,
+    )
+    # The dissolved toast: its own run.changed subscriber, never on replay.
+    assert in_bundle(
+        'ev.subscribe("run.changed", (env) => { if (env.data?.state !== "dissolved") return;',
+        js,
+    )
+    assert in_bundle("ev.isReplay(env)) return;", js)
+    assert "didn't split it — it's doing the task itself" in js
+    # The stepper's CSS ships with it.
+    css = client.get("/style.css").text
+    assert "#new-form .nf-split .nf-split-n {" in css
+    assert "#new-form .nf-split .nf-split-n button {" in css

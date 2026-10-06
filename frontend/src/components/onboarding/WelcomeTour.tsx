@@ -42,8 +42,8 @@ const SLIDES: Slide[] = [
     title: "Sessions & the grid",
     body: (
       <>
-        Press <b>New</b> (Ctrl+N) and say what to work on — one task, or one per
-        line. Each session gets a pane in the grid and a row in the sidebar; drag
+        Press <b>New</b> (Ctrl+N) and say what to work on — tick <b>Auto-split</b> to
+        let its agent split a big task across sessions. Each session gets a pane in the grid and a row in the sidebar; drag
         rows to reorder. <b>View</b> at the bottom of the sidebar picks how many
         panes show at once. The <b>Assistant</b> bar is a personal helper with a
         todo list.
