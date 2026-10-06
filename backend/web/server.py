@@ -131,6 +131,7 @@ from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
 from backend.web.core import team_run_driver as _team_run_driver
+from backend.web.core import worker_order_driver as _worker_order_driver
 from backend.web.core import code_map as _code_map
 from backend.web.core import code_outline as _code_outline
 from backend.web.core import commit_message as _commit_message
@@ -499,6 +500,11 @@ async def lifespan(app: FastAPI):
     if _team_run_loop_enabled():
         _team_run_driver.subscribe()
         _register_task(_team_run_driver.run_loop())
+    # Worker order: release an orchestrator's held workers when their turn
+    # comes, land their fences first (core.worker_order). Off under pytest
+    # like the team-run loop.
+    if _team_run_loop_enabled():
+        _register_task(_worker_order_driver.run_loop())
     # So the autopilot driver, which runs its blocking half in worker threads, can
     # still start an edge watcher (asyncio.create_task needs the loop).
     _live_stage.set_loop(asyncio.get_running_loop())
@@ -2086,7 +2092,9 @@ def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool
 def _drain_one_queue(title: str) -> None:
     """One drain decision for a single session. Never raises."""
     st = _prompt_queue.get_state(title)
-    if not st["enabled"] or not st["items"]:
+    # "held": parked by its worker order — only the order loop releases it
+    # (after its fence lands), even when someone switched the queue on.
+    if not st["enabled"] or not st["items"] or st.get("held"):
         return
     inst = ENGINE.instances.get(title)
     if inst is None:
@@ -2752,7 +2760,11 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
     now = time.time()
     try:
         queue_st = _prompt_queue.get_state(title)
-        queue_pending = bool(queue_st.get("enabled") and queue_st.get("items"))
+        # A task parked by its worker order is pending too: the idle agent
+        # has not been given its work yet, so it is not "done".
+        queue_pending = bool(
+            queue_st.get("items") and (queue_st.get("enabled") or queue_st.get("held"))
+        )
     except Exception:  # noqa: BLE001
         queue_pending = False
     activity = _agent_activity(inst, title)
@@ -8055,6 +8067,34 @@ async def instance_code_map(title: str, fp: str = "") -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=500)
 
 
+def _child_fences(title: str) -> list:
+    """The fences on ``title``'s workers — what the orchestrator's Map lists
+    as "Workers' fences": ``[{"session", "only", "keep_out", "reason",
+    "by"}]``. Never raises."""
+    out = []
+    try:
+        for c in _lineage.children_of(ENGINE.instances, title):
+            child = ENGINE.instances.get(c)
+            cwt = child.GetWorktreePath() if child is not None else ""
+            if not cwt:
+                continue
+            f = _red_zones.session_fence(cwt, tmux.to_mindflock_tmux_name(c))
+            if not f:
+                continue
+            out.append(
+                {
+                    "session": c,
+                    "only": [z.get("pattern") for z in f.get("green") or []],
+                    "keep_out": [z.get("pattern") for z in f.get("red") or []],
+                    "reason": f.get("reason") or "",
+                    "by": f.get("by") or "",
+                }
+            )
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
 @app.get("/api/instances/{title}/code-map/live")
 async def instance_code_map_live(title: str, since: float = 0.0) -> JSONResponse:
     """The Map's 2-second poll: change set, the tool feed since ``since``
@@ -8074,11 +8114,16 @@ async def instance_code_map_live(title: str, since: float = 0.0) -> JSONResponse
     def _build() -> dict:
         now = time.time()
         repo_id, repo = _rz_repo(wt)
+        tmux_name = tmux.to_mindflock_tmux_name(title)
         zones = _red_zones.effective_zones(wt, repo_id)
+        # This session's own fence (an orchestrator set it): drawn and
+        # classified like zones, scope "session", locked.
+        zones = zones + _red_zones.session_fence_zones(
+            _red_zones.session_fence(wt, tmux_name) or {}
+        )
         ci = _red_zone_monitor.root_ci(wt)
         doc = _rz_doc(wt, repo_id, zones, ci)
         enforced_n = len(doc["red"]) + len(doc["green"])
-        tmux_name = tmux.to_mindflock_tmux_name(title)
         changed = _code_map.changed_files(inst, wt)
         records = _code_map.read_feed(tmux_name, 0.0, 500)
         plan = _code_map.current_plan(inst, tmux_name, wt, records)
@@ -8133,6 +8178,7 @@ async def instance_code_map_live(title: str, since: float = 0.0) -> JSONResponse
             "plan_supported": plan_supported,
             "ci": ci,
             "others": _code_map.others(inst, repo_id, 0.0),
+            "fences": _child_fences(title),
         }
 
     try:
@@ -14824,6 +14870,50 @@ async def instance_dialog(title: str, quiet: Optional[str] = None):
         return JSONResponse({"error": derr}, status_code=500)
     _agent_io.note_dialog_seen(title, body.get("id"))
     return JSONResponse(body)
+
+
+@app.post("/api/instances/{title}/fence")
+async def instance_fence(title: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Fence one session: ``{"only": [glob], "keep_out": [glob], "reason",
+    "by", "clear"}``. A per-session fence (core.worker_order_driver) — "only
+    here" and/or "keep out" for this session alone, enforced by the guard
+    hook on every edit; never the folder's zones, so an orchestrator fencing
+    an in-place worker does not fence itself. Replaces the session's fence;
+    ``clear: true`` removes it. A held worker gets it in front of its task;
+    a running one is told. → ``{ok, fence, applied, held, told?,
+    shared_folder?, problems?, note?}``; 404 unknown session, 400 bad paths."""
+    code, body = await asyncio.to_thread(
+        _worker_order_driver.set_fence, title, payload or {}
+    )
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/instances/{title}/order")
+async def instance_order_get(title: str) -> JSONResponse:
+    """The order ``title``'s workers run in (``{"order": view | null}``) —
+    the Thread's diagram: ``{mode, max_parallel, cap, steps: [{n, workers:
+    [{title, state, word, detail, after, why, fence, planned, …}]}]}``."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    view = await asyncio.to_thread(_worker_order_driver.order_view, title)
+    return JSONResponse({"order": view})
+
+
+@app.post("/api/instances/{title}/order")
+async def instance_order_set(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Set how ``title``'s workers run: ``{"mode": "parallel"|"serial",
+    "max_parallel": 0..16 (0 = no limit), "steps": [[titles], …], "after":
+    {worker: [titles]}, "start_now": [titles]}`` — any subset. A cycle, an
+    unknown worker or a started one in ``after`` refuses the whole change
+    (400 with ``problems``). → ``{ok, order}``."""
+    code, body = await asyncio.to_thread(
+        _worker_order_driver.set_order, title, payload or {}
+    )
+    return JSONResponse(body, status_code=code)
 
 
 @app.get("/api/instances/{title}/thread")

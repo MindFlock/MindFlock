@@ -10,7 +10,7 @@ Layout:
 
 * :mod:`backend.mcp.protocol` — JSON-RPC over stdio, lifecycle, tool calls,
   cancellation and progress;
-* :mod:`backend.mcp.tools` — the 23 tools (schemas, descriptions, handlers)
+* :mod:`backend.mcp.tools` — the 27 tools (schemas, descriptions, handlers)
   and the server ``instructions``;
 * :mod:`backend.mcp.ship` — the ship and ticket tools (a ``Toolbox`` mixin);
 * :mod:`backend.mcp.runs` — the team-run tools (a ``Toolbox`` mixin);

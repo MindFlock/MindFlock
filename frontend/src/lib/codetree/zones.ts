@@ -127,3 +127,17 @@ export function patternFor(M: Model, target: { node?: TNode | null; file?: TFile
     return { error: `${n.label || n.name} share ${dir}/ with other files — fence that folder from search, or single files.` };
   return { pattern: anchoredZonePath(dir), label: dir };
 }
+
+/** Where a zone applies, for its label: "allowed in this worktree" (a waived
+ * repo zone), "this worktree", "whole repo" — or, for a fence an orchestrator
+ * set on one session, "this session · set by <orchestrator>". */
+export function zoneWhere(z: Pick<RedZone, "scope" | "by">, waived = false): string {
+  if (waived) return "allowed in this worktree";
+  if (z.scope === "session") return "this session" + (z.by ? " · set by " + z.by : "");
+  return z.scope === "worktree" ? "this worktree" : "whole repo";
+}
+
+/** A fence's zone: only the orchestrator that set it lifts it. */
+export function zoneLocked(z: Pick<RedZone, "locked" | "scope">): boolean {
+  return !!z.locked || z.scope === "session";
+}

@@ -222,7 +222,7 @@ def test_stdio_server_end_to_end(fake_server, decoy_cwd, tmp_path):
         c.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
         tools = c.request("tools/list")["result"]["tools"]
-        assert len(tools) == 25
+        assert len(tools) == 27
         assert {t["name"] for t in tools} >= {"whoami", "spawn_session", "kill_session"}
 
         me = c.call_tool("whoami")

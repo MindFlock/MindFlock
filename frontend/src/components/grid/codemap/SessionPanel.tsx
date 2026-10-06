@@ -22,6 +22,7 @@ import {
 } from "../../../lib/codemap";
 import { relTime } from "../../../lib/format";
 import { ExemptPrompt } from "./AddZoneRow";
+import { zoneLocked, zoneWhere } from "../../../lib/codetree/zones";
 
 export interface PanelModel {
   live: CodeMapLive | null;
@@ -56,6 +57,8 @@ export interface PanelModel {
   changed: CodeMapLive["changed"];
   exempt: Set<string>;
   others: CodeMapLive["others"];
+  /** Fences on this session's workers (it is their orchestrator). */
+  fences?: CodeMapLive["fences"];
   zoneBusy: string;
   reqBusy: Record<string, string>;
   levelName: (p: string) => string;
@@ -444,7 +447,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                   </span>
                   <span className={"cm-row-sub" + (n === 0 ? " cm-warn-text" : "")}>
                     {z.name ? z.pattern + " · " : ""}
-                    {z.scope === "worktree" ? "this worktree" : "whole repo"}
+                    {zoneWhere(z)}
                     {z.waived ? " · allowed here" : ""} ·{" "}
                     {n === 0
                       ? g
@@ -453,7 +456,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                       : `${n} file${n === 1 ? "" : "s"}${g ? " writable" : ""}`}
                   </span>
                 </button>
-                {z.scope !== "worktree" && !g && (
+                {z.scope !== "worktree" && !g && !zoneLocked(z) && (
                   <button
                     type="button"
                     className="cm-row-act quiet"
@@ -464,16 +467,18 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                     {z.waived ? "Re-protect" : "Allow here"}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="cm-row-act cm-x quiet"
-                  aria-label={"Remove zone " + (z.name || z.pattern)}
-                  title="Remove this zone"
-                  disabled={m.zoneBusy === z.id}
-                  onClick={() => a.removeZone(z)}
-                >
-                  ×
-                </button>
+                {!zoneLocked(z) && (
+                  <button
+                    type="button"
+                    className="cm-row-act cm-x quiet"
+                    aria-label={"Remove zone " + (z.name || z.pattern)}
+                    title="Remove this zone"
+                    disabled={m.zoneBusy === z.id}
+                    onClick={() => a.removeZone(z)}
+                  >
+                    ×
+                  </button>
+                )}
               </li>
             );
           })}
@@ -549,6 +554,44 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
       </section>
     ) : null;
 
+  const fences = m.fences || [];
+  const fencesSec =
+    fences.length > 0 ? (
+      <section className="cm-sec" key="fences">
+        <h4>
+          Workers' fences <span className="cm-count">{fences.length}</span>
+        </h4>
+        <p className="cm-hint">
+          What each worker may change — set by its orchestrator, enforced on every edit for that worker only.
+        </p>
+        <ul className="cm-list">
+          {fences.map((f) => (
+            <li key={f.session}>
+              <div className="cm-row" title={f.reason || undefined}>
+                <span className="cm-row-main">
+                  <span className="cm-other-dot" aria-hidden="true" />
+                  <span className="cm-target">{f.session}</span>
+                </span>
+                <span className="cm-row-sub">
+                  {f.only.map((p) => (
+                    <button type="button" key={"o" + p} className="cm-fence only" title="Show it on the tree" onClick={() => a.selectPath(p.replace(/^\//, "").replace(/\/?\*\*.*$/, ""))}>
+                      ✓ {p}
+                    </button>
+                  ))}
+                  {f.keep_out.map((p) => (
+                    <button type="button" key={"k" + p} className="cm-fence keep" title="Show it on the tree" onClick={() => a.selectPath(p.replace(/^\//, "").replace(/\/?\*\*.*$/, ""))}>
+                      ⛔ {p}
+                    </button>
+                  ))}
+                  {f.reason ? <span className="cm-fence-why">{f.reason}</span> : null}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ) : null;
+
   let order: ReactNode[];
   if (m.green) order = [zonesSec, activitySec, planSec, blastSec];
   else if (m.mode === "plan") order = [planSec, blastSec, zonesSec, activitySec];
@@ -559,6 +602,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
       {reqSec}
       {order}
       {changedSec}
+      {fencesSec}
       {othersSec}
       <p className="cm-hint cm-sel-hint">Click a leaf or a folder on the tree for its card.</p>
     </>

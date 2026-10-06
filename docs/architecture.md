@@ -343,7 +343,7 @@ prunes workspaces untouched for 3 days. See
 ### MindFlock MCP (`backend/mcp`, `providers/mcp_attach.py`)
 
 A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
-`mindflock mcp`, that gives an agent 25 tools over the rest of the flock:
+`mindflock mcp`, that gives an agent 27 tools over the rest of the flock:
 list and inspect sessions, read their output and diffs, message them, spawn
 workers (or start tickets as workers), wait for them, answer their dialogs,
 ship their work (commit, push, PR, merge, or arm the autopilot), close

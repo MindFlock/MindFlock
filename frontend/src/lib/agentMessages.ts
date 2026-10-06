@@ -137,7 +137,7 @@ export function lineageMark(
 
 /** The row fields the family wording reads. */
 export type FamilyRow = Pick<Instance, "title"> &
-  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report" | "lane">>;
+  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report" | "lane" | "order">>;
 
 /** THE "is a worker of" rule, shared by every surface that counts workers —
  * the fork menu's "workers · N", the palette's worker entries, the rail's
@@ -168,7 +168,7 @@ export function childrenOf<T extends Pick<Instance, "title"> & Partial<Pick<Inst
  *  - `limit`   hit the usage limit (its queue waits the window out by itself);
  *  - `working` busy with no report yet, or back at work after one;
  *  - `idle`    stopped without reporting. */
-export type WorkerState = "ask" | "blocked" | "failed" | "done" | "limit" | "working" | "idle";
+export type WorkerState = "ask" | "blocked" | "failed" | "done" | "limit" | "working" | "waiting" | "idle";
 
 /** The live activity of a row — `effectiveActivity` in the app (it smooths
  * flicker), the raw field in tests. */
@@ -197,6 +197,9 @@ export function workerState(row: FamilyRow, act: string): WorkerState {
   }
   if (act === "limit") return "limit";
   if (act === "working") return "working";
+  // Created, but MindFlock holds its task until its turn (worker order): its
+  // idle agent has not been given the work yet — not "stopped".
+  if (row.order?.state === "held") return "waiting";
   return "idle";
 }
 
@@ -244,6 +247,9 @@ export function workerLine(
     const t = Number(row.activity_since) || 0;
     text = t > 0 ? "working · " + since(t, now) : "working";
     cls = "rep-work";
+  } else if (state === "waiting") {
+    text = "waiting" + (row.order?.detail ? " · " + row.order.detail : "");
+    cls = "rep-idle";
   } else {
     text = "idle — no report";
     cls = "rep-idle";
@@ -264,6 +270,8 @@ export function workerLine(
       (r.summary ? ": " + snippet(r.summary, 140) : "");
   else if (state === "working") detail = "still working, no report yet";
   else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+  else if (state === "waiting")
+    detail = "MindFlock holds its task until its turn" + (row.order?.detail ? " (" + row.order.detail + ")" : "");
   else detail = "stopped without reporting back";
   return {
     text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
@@ -301,6 +309,7 @@ export function rollup(
   const blocked = count("blocked");
   const reported = states.filter(isReported).length;
   const working = count("working");
+  const waiting = count("waiting");
   const parts: RollupPart[] = [];
   if (ask) parts.push({ text: ask + " needs you", cls: "needs" });
   if (failed) parts.push({ text: failed + " failed", cls: "bad" });
@@ -310,6 +319,7 @@ export function rollup(
   else if (reported) parts.push({ text: reported + " of " + n + " reported", cls: "" });
   else if (working === n) parts.push({ text: n + " working", cls: "" });
   else if (working) parts.push({ text: working + " of " + n + " working", cls: "" });
+  else if (waiting) parts.push({ text: waiting + " of " + n + " waiting their turn", cls: "" });
   else parts.push({ text: plural(n, "worker") + " · no reports", cls: "" });
   const lines = children.map(
     (c) => nameOf(c.title) + " — " + workerLine(c, { nested: true, parentName: "", act: actOf(c), now }).text

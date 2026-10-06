@@ -857,6 +857,9 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
             "prompt": prompt,
             "parent": lead["title"],
             "spawned": True,
+            # The group orders and fences its own members — never the lead's
+            # worker order (core.worker_order).
+            "run_member": True,
         }
         try:
             status, body = await srv._session_create.create_result(payload)
@@ -878,6 +881,7 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
         "prompt": prompt,
         "parent": lead["title"],
         "spawned": True,
+        "run_member": True,
         "base_ref": head,
         "base_branch": branch,
     }

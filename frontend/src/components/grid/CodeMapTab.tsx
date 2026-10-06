@@ -75,7 +75,7 @@ import { cachedModel, layoutModel, LAST_INFO } from "../../lib/codetree/engine";
 import { rawFromSnapshot } from "../../lib/codetree/input";
 import { LiveBirds } from "../../lib/codetree/live";
 import { isUnder, type Model, type RawRepo, type TFile, type TNode } from "../../lib/codetree/model";
-import { patternFor, treeZones } from "../../lib/codetree/zones";
+import { patternFor, treeZones, zoneLocked } from "../../lib/codetree/zones";
 import { tailPath } from "../../lib/codetree/draw";
 import type { TZone } from "../../lib/codetree/types";
 import { AddZoneRow, newAdd, type AddState } from "./codemap/AddZoneRow";
@@ -718,6 +718,11 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   };
 
   const removeZone = async (z: RedZone, undoable = true) => {
+    if (zoneLocked(z)) {
+      // A fence an orchestrator set on this session: it lifts it (fence_session).
+      showToast({ text: `That fence was set by ${z.by || "this session's orchestrator"} — only it can lift it`, bad: true });
+      return;
+    }
     setZoneBusy(z.id);
     try {
       const r = await apiRemoveZone(title, z.id);
@@ -732,6 +737,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   };
 
   const waiveZone = async (z: RedZone, waived: boolean) => {
+    if (zoneLocked(z)) return;
     setZoneBusy(z.id);
     try {
       const r = await apiWaiveZone(title, z.id, waived);
@@ -1149,6 +1155,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
                 changed,
                 exempt,
                 others: othersList,
+                fences: live?.fences || EMPTY_FENCES,
                 zoneBusy,
                 reqBusy: shownReqBusy,
                 levelName: (p) => p || repoLabel || "repo root",
@@ -1192,5 +1199,6 @@ const EMPTY_ZONES: RedZone[] = [];
 const EMPTY_PLAN: PlanItem[] = [];
 const EMPTY_STR: string[] = [];
 const EMPTY_OTHERS: CodeMapLive["others"] = [];
+const EMPTY_FENCES: NonNullable<CodeMapLive["fences"]> = [];
 const EMPTY_BREACHES: CodeMapLive["breaches"] = [];
 const EMPTY_TZ: TZone[] = [];

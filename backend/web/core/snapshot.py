@@ -450,6 +450,10 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # The team run this session belongs to ({"id", "name", "task", "role",
         # "grouping"}) or null — what the rail groups members under.
         "run": srv._row_run(inst.Title),
+        # Where this worker stands in its orchestrator's order ({"state":
+        # held|running|done|stopped, "word", "detail", "after", "fence"}) or
+        # null when it was never ordered or fenced (core.worker_order).
+        "order": _row_order(inst.Title, getattr(inst, "Parent", "") or ""),
     }
 
 
@@ -459,6 +463,18 @@ def _mcp_attached(title: str):
         from backend.providers import mcp_attach
 
         return mcp_attach.launch_attached(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
+def _row_order(title: str, parent: str):
+    """``worker_order_driver.row_order``, never raising into the row build."""
+    if not parent:
+        return None
+    try:
+        from backend.web.core import worker_order_driver
+
+        return worker_order_driver.row_order(title, parent)
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 

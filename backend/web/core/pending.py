@@ -209,6 +209,8 @@ def rows(engine=None) -> list:
                 # …and the team run it belongs to (a run's ticket task is a
                 # provisioning row first).
                 "run": _pending_run(title),
+                # An intake start is nobody's worker: no order to keep.
+                "order": None,
                 "queue": None,
                 "tokens": 0,
                 "tokens_in": 0,

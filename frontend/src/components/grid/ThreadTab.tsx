@@ -55,6 +55,8 @@ import {
 import { AnswerStrip } from "../AnswerStrip";
 import { useRun } from "../../state/runs";
 import { RunLeadPanel } from "./RunLeadPanel";
+import { OrderDiagram } from "./OrderDiagram";
+import { fenceChips, orderWorthShowing } from "../../lib/order";
 
 /** How often an open, visible Thread re-reads the family (events refresh it
  * sooner; this catches what no event announces, like a spawn). */
@@ -360,6 +362,20 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
                 ) : null}
                 . Its reports and messages are below; {nameOf(parent)}'s Thread has the whole family.
               </p>
+              {me?.order?.state === "held" && (
+                <p className="thread-sub od-self">
+                  <b>Waiting its turn</b> — MindFlock gives it its task {me.order.detail ? me.order.detail : "when its turn comes"}.
+                </p>
+              )}
+              {!!me?.order?.fence && (
+                <div className="od-chips od-self" title={me.order.fence.reason ? "Fence: " + me.order.fence.reason : "Its fence — enforced on every edit"}>
+                  {fenceChips(me.order.fence).map((ch) => (
+                    <span key={ch.text} className={"od-chip k-" + ch.kind}>
+                      {ch.text}
+                    </span>
+                  ))}
+                </div>
+              )}
               {/* A worker on a dialog: answer it here too, as on the rail. */}
               <div className="th-self-answer">
                 <AnswerStrip
@@ -385,6 +401,10 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             </>
           )}
         </header>
+        )}
+
+        {!leadOf && orderWorthShowing(data?.order) && (
+          <OrderDiagram title={title} order={data!.order!} onChanged={() => void reload()} />
         )}
 
         {workers.length > 0 && !leadOf && (

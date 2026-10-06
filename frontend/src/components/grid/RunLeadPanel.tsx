@@ -50,6 +50,8 @@ import {
 } from "../../lib/splitRun";
 import type { SplitMode } from "../../api/types";
 import { AnswerStrip } from "../AnswerStrip";
+import { StagesDiagram } from "./OrderDiagram";
+import { runStages } from "../../lib/order";
 
 const nameOf = (t: string) => displayName(t);
 
@@ -268,6 +270,8 @@ export function RunLeadPanel({
             Restart the lead to give it the MindFlock tools — it proposes the pieces with them.
           </p>
         )}
+        {/* The order this group runs in, the running stage lit. */}
+        <StagesDiagram stages={runStages(run)} />
       </header>
 
       {run.state === "plan_ready" && (

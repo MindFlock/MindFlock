@@ -15,7 +15,7 @@ import { birdSprite, tinted } from "../../../lib/flock";
 import { baseOf, dirOf, isUnder, shortName, type Model, type TFile, type TNode } from "../../../lib/codetree/model";
 import { STATUS_TXT } from "../../../lib/codetree/live";
 import { helperLine } from "../../../lib/codetree/subagents";
-import { zoneOfFile } from "../../../lib/codetree/zones";
+import { zoneOfFile, zoneWhere } from "../../../lib/codetree/zones";
 import type { AgentState, Badge, Hit, TZone } from "../../../lib/codetree/types";
 
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
@@ -546,8 +546,8 @@ export function NodeCard(p: NodeCardProps) {
         </>
       )}
       {who}
-      {keepZ && <div className="ct-who keep">⛔ keep out · {keepZ.waived ? "allowed in this worktree" : keepZ.z.scope === "worktree" ? "this worktree" : "whole repo"}</div>}
-      {onlyZ && <div className="ct-who only">✓ only here · this worktree</div>}
+      {keepZ && <div className="ct-who keep">⛔ keep out · {zoneWhere(keepZ.z, keepZ.waived)}</div>}
+      {onlyZ && <div className="ct-who only">✓ only here · {onlyZ.z.scope === "session" ? zoneWhere(onlyZ.z) : "this worktree"}</div>}
       {inherited}
       {kids.length > 0 && (
         <>
@@ -759,7 +759,7 @@ export function TipBody({ M, hit, agents, zones, tool, folded }: { M: Model; hit
         <b>
           {hit.tag.type === "keep" ? "⛔ keep out" : "✓ only here"} · {hit.tag.label}
         </b>{" "}
-        <i>{hit.tag.waived ? "allowed in this worktree" : hit.tag.z.scope === "worktree" ? "this worktree" : "whole repo"}</i>
+        <i>{zoneWhere(hit.tag.z, hit.tag.waived)}</i>
         <div>
           <i>{hit.tag.type === "keep" ? "agents may read here but every edit is blocked" : "agents may edit only inside this; the rest is dusk"}</i>
         </div>

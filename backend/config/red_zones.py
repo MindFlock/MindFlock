@@ -100,6 +100,9 @@ __all__ = [
     "set_session_fence",
     "drop_session_fence",
     "session_fences",
+    "session_fence",
+    "session_fence_zones",
+    "fences_by_owner_prefix",
 ]
 
 STORE_VERSION = 1
@@ -1390,41 +1393,71 @@ def set_session_fence(
     name: str = "",
     owner: str = "",
     no_commit: bool = True,
+    red: Iterable[str] = (),
+    by: str = "",
+    reason: str = "",
+    companions: bool = False,
 ) -> Tuple[List[str], List[str]]:
-    """Fence ONE session in ``wt`` to ``patterns`` ("only here"), plus — with
-    ``no_commit`` — refuse it git's index/commit/branch commands (MindFlock
-    commits its paths). → ``(added patterns, problems)``. Idempotent."""
+    """Fence ONE session in ``wt`` to ``patterns`` ("only here") and/or keep it
+    out of ``red`` ("keep out"), plus — with ``no_commit`` — refuse it git's
+    index/commit/branch commands (MindFlock commits its paths). ``by`` names
+    who set it (an orchestrator's title), ``reason`` why; ``companions`` keeps
+    the repo's companions (lockfiles, snapshots, tests of its paths) writable
+    beside its "only here" paths — right for a session in its own worktree,
+    wrong in a folder several agents share. → ``(added patterns, problems)``;
+    ``added`` names green and red patterns alike. Replaces the session's
+    previous fence. Idempotent."""
     key = _session_key(tmux_name)
     if not key:
         return [], ["no session name"]
     added: List[str] = []
     problems: List[str] = []
     zones: List[dict] = []
-    for raw in patterns or ():
-        try:
-            norm, anchored = normalize_pattern(str(raw))
-            pat = ("/" + norm) if anchored else norm
-            compile_pattern(pat)
-        except (ValueError, TypeError) as err:
-            problems.append("%s (%s)" % (raw, err))
-            continue
-        if pat in added:
-            continue
-        added.append(pat)
-        zones.append({"id": _new_zone_id(), "pattern": pat, "name": name})
-    if not zones:
+    reds: List[dict] = []
+    for raws, out in ((patterns, zones), (red, reds)):
+        seen: List[str] = []
+        for raw in raws or ():
+            try:
+                norm, anchored = normalize_pattern(str(raw))
+                pat = ("/" + norm) if anchored else norm
+                compile_pattern(pat)
+            except (ValueError, TypeError) as err:
+                problems.append("%s (%s)" % (raw, err))
+                continue
+            if pat in seen:
+                continue
+            seen.append(pat)
+            added.append(pat)
+            out.append({"id": _new_zone_id(), "pattern": pat, "name": name})
+    green_pats = {z["pattern"] for z in zones}
+    for z in list(reds):
+        if z["pattern"] in green_pats:
+            # A path can't be both the only place allowed and kept out.
+            problems.append("%s (both only-here and keep-out)" % z["pattern"])
+            reds.remove(z)
+            added.remove(z["pattern"])
+    if not zones and not reds:
         return [], problems or ["no pattern"]
     real = os.path.realpath(wt)
     with _LOCK:
         data = _load()
         entry = data["worktrees"].setdefault(real, {})
         sessions = entry.setdefault("sessions", {})
-        sessions[key] = {
+        fence = {
             "green": zones,
             "owner": str(owner or ""),
             "no_commit": bool(no_commit),
             "at": int(time.time()),
         }
+        if reds:
+            fence["red"] = reds
+        if by:
+            fence["by"] = str(by)
+        if reason:
+            fence["reason"] = str(reason)[:300]
+        if companions:
+            fence["companions"] = True
+        sessions[key] = fence
         _save(data)
     return added, problems
 
@@ -1461,25 +1494,102 @@ def session_fences(wt: str) -> Dict[str, dict]:
         return {k: dict(v) for k, v in (got or {}).items() if isinstance(v, dict)}
 
 
-def _guard_sessions(wt: str) -> Dict[str, dict]:
+def fences_by_owner_prefix(prefix: str) -> List[Tuple[str, str]]:
+    """``[(worktree, session key)]`` for every session fence whose owner
+    starts with ``prefix`` (the sweep that drops fences of sessions gone)."""
+    out: List[Tuple[str, str]] = []
+    if not prefix:
+        return out
+    with _LOCK:
+        data = _load()
+        for wt, entry in (data.get("worktrees") or {}).items():
+            for k, v in ((entry or {}).get("sessions") or {}).items():
+                if isinstance(v, dict) and str(v.get("owner") or "").startswith(prefix):
+                    out.append((wt, k))
+    return out
+
+
+def session_fence_zones(fence: dict) -> List[dict]:
+    """A session fence's zones as :func:`effective_zones` lists zones — scope
+    ``session``, ``kind`` green/red, the compiled ``re`` — so the Map and the
+    live classify read a fenced session exactly like zones. ``locked``: only
+    whoever set the fence lifts it (no remove/waive from the Map)."""
+    out: List[dict] = []
+    for kind in ("green", "red"):
+        for z in (fence or {}).get(kind) or []:
+            try:
+                view = _zone_view(z, "session", False, kind)
+            except (KeyError, ValueError, TypeError):
+                continue
+            view["locked"] = True
+            if fence.get("by"):
+                view["by"] = fence["by"]
+            if fence.get("reason") and not view.get("note"):
+                view["note"] = fence["reason"]
+            out.append(view)
+    return out
+
+
+def session_fence(wt: str, tmux_name: str) -> Optional[dict]:
+    """One session's fence in ``wt`` (a fresh copy), or None."""
+    key = _session_key(tmux_name)
+    got = session_fences(wt).get(key) if key else None
+    return dict(got) if isinstance(got, dict) else None
+
+
+def _guard_sessions(
+    wt: str, root: Optional[str] = None, repo_id: Optional[str] = None, ci: bool = False
+) -> Dict[str, dict]:
     out = {}
     for k, v in session_fences(wt).items():
-        rules = []
-        for z in v.get("green") or []:
+        rules: List[dict] = []
+        reds: List[dict] = []
+        for kind, dest in (("green", rules), ("red", reds)):
+            for z in v.get(kind) or []:
+                try:
+                    dest.append(
+                        {
+                            "id": z.get("id"),
+                            "pattern": z.get("pattern"),
+                            "name": z.get("name") or "",
+                            "scope": "session",
+                            "re": compile_pattern(str(z.get("pattern") or "")),
+                        }
+                    )
+                except (ValueError, TypeError):
+                    continue
+        if not rules and not reds:
+            continue
+        entry: dict = {"green_rules": rules, "no_commit": bool(v.get("no_commit"))}
+        if reds:
+            # Keep-out for this session only. The hook's Bash checks read the
+            # pre-listed files/dirs/symlinks, so list them like a red zone's —
+            # ON TOP of the folder's own lists, never instead.
+            entry["red_rules"] = reds
+            files: List[str] = []
+            dirs: List[str] = []
+            sym: List[str] = []
+            if root:
+                try:
+                    files, dirs, _ign, _trunc = zone_files(root, reds, ci=ci)
+                    sym = _sym_targets(root, files)
+                except Exception:  # noqa: BLE001 — the rules still hold
+                    files, dirs, sym = [], [], []
+            entry["red_files"] = files
+            entry["red_dirs"] = dirs
+            entry["red_sym"] = sym
+        if rules and v.get("companions"):
+            # A fenced session in its OWN worktree keeps lockfiles, snapshots
+            # and the tests of its paths writable, as a green zone would.
             try:
-                rules.append(
-                    {
-                        "id": z.get("id"),
-                        "pattern": z.get("pattern"),
-                        "name": z.get("name") or "",
-                        "scope": "session",
-                        "re": compile_pattern(str(z.get("pattern") or "")),
-                    }
-                )
-            except (ValueError, TypeError):
-                continue
-        if rules:
-            out[k] = {"green_rules": rules, "no_commit": bool(v.get("no_commit"))}
+                tests = test_companions(wt, [dict(r, kind="green") for r in rules])
+                entry["companions"] = [
+                    {"pattern": c["pattern"], "re": c["re"]}
+                    for c in _companion_rules(repo_id, tests)
+                ]
+            except Exception:  # noqa: BLE001
+                pass
+        out[k] = entry
     return out
 
 
@@ -1826,6 +1936,12 @@ def sync_guard(
         ]
         if pre_green:
             test_companions(lroot or real_root, pre_green)
+        for fence in session_fences(lroot or real_root).values():
+            if fence.get("companions") and fence.get("green"):
+                test_companions(
+                    lroot or real_root,
+                    [dict(z, kind="green") for z in fence["green"]],
+                )
     except Exception:  # noqa: BLE001
         pass
     with _LOCK:
@@ -1846,7 +1962,7 @@ def sync_guard(
         if rules:
             files, dirs, _ignored, _trunc = zone_files(real_root, rules, ci=ci)
             sym = _sym_targets(real_root, files)
-        sessions = _guard_sessions(lroot or real_root)
+        sessions = _guard_sessions(lroot or real_root, real_root, repo_id, ci)
         # enforcing(g) = rules or green_rules: the control files must be
         # protected whichever kind is armed (a green-only guard that left
         # the zone store writable was a one-command bypass) — and so must a

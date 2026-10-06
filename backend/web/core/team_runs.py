@@ -1316,6 +1316,58 @@ def _globs_overlap(ga: str, gb: str) -> bool:
     return False
 
 
+def _shared_paths(
+    a_paths: List[str],
+    res_a: List[str],
+    cover_a: set,
+    b_paths: List[str],
+    res_b: List[str],
+    cover_b: set,
+) -> List[str]:
+    """What two path sets share: existing files both cover (``cover_*``, from
+    ``git ls-files``), else a literal path one names that the other's globs
+    cover (it may not exist yet), else two globs that can match one new path.
+    ``[]`` when they are disjoint."""
+    shared = sorted(cover_a & cover_b)
+    if shared:
+        return shared
+    for other_res, lits in ((res_b, a_paths), (res_a, b_paths)):
+        for lit in lits:
+            bare = lit.strip().lstrip("/").rstrip("/")
+            if bare and not _GLOB_CHARS.search(bare):
+                if other_res and _hits(other_res, bare):
+                    return [bare]
+    for ga in a_paths:
+        if not _GLOB_CHARS.search(ga):
+            continue
+        for gb in b_paths:
+            if _GLOB_CHARS.search(gb) and _globs_overlap(ga, gb):
+                return ["%s / %s" % (ga, gb)]
+    return []
+
+
+def paths_overlap(
+    a_paths: Iterable[str], b_paths: Iterable[str], files: Iterable[str]
+) -> str:
+    """The first path two path-glob sets share (see :func:`_shared_paths`),
+    with ``(+N more)`` when there are more, or "" when they are disjoint —
+    the rule a split plan's pieces are held to, for any two fences."""
+    a = [str(p) for p in a_paths or () if str(p or "").strip()]
+    b = [str(p) for p in b_paths or () if str(p or "").strip()]
+    if not a or not b:
+        return ""
+    res_a, _ea = _compile_paths(a)
+    res_b, _eb = _compile_paths(b)
+    files = [f for f in files or () if f]
+    cover_a = {f for f in files if res_a and _hits(res_a, f)}
+    cover_b = {f for f in files if res_b and _hits(res_b, f)}
+    shared = _shared_paths(a, res_a, cover_a, b, res_b, cover_b)
+    if not shared:
+        return ""
+    more = " (+%d more)" % (len(shared) - 1) if len(shared) > 1 else ""
+    return shared[0] + more
+
+
 def validate_plan(
     pieces, files: Iterable[str], red_res: Iterable[str], max_pieces: int
 ) -> Tuple[List[dict], List[dict]]:
@@ -1385,34 +1437,9 @@ def validate_plan(
     for i, (a, res_a) in enumerate(compiled):
         for j in range(i + 1, len(compiled)):
             b, res_b = compiled[j]
-            shared = sorted(covers[i] & covers[j])
-            if not shared:
-                # A literal path one piece names (it may not exist yet) that
-                # the other's globs also cover is the same overlap.
-                for lit_owner, other_res, lits in (
-                    (a, res_b, a["paths"]),
-                    (b, res_a, b["paths"]),
-                ):
-                    for lit in lits:
-                        bare = lit.strip().lstrip("/").rstrip("/")
-                        if bare and not _GLOB_CHARS.search(bare):
-                            if other_res and _hits(other_res, bare):
-                                shared = [bare]
-                                break
-                    if shared:
-                        break
-            if not shared:
-                # Two GLOBS over files neither has created yet: the green zones
-                # would fence both pieces onto the same new path.
-                for ga in a["paths"]:
-                    if not _GLOB_CHARS.search(ga):
-                        continue
-                    for gb in b["paths"]:
-                        if _GLOB_CHARS.search(gb) and _globs_overlap(ga, gb):
-                            shared = ["%s / %s" % (ga, gb)]
-                            break
-                    if shared:
-                        break
+            shared = _shared_paths(
+                a["paths"], res_a, covers[i], b["paths"], res_b, covers[j]
+            )
             if shared:
                 more = " (+%d more)" % (len(shared) - 1) if len(shared) > 1 else ""
                 problems.append(

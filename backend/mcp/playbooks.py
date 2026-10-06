@@ -85,6 +85,8 @@ TOOL_NAMES = (
     "answer_prompt",
     "kill_session",
     "set_parent",
+    "fence_session",
+    "set_order",
     "list_tickets",
     "spawn_ticket_session",
     "ship_session",

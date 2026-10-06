@@ -19,6 +19,8 @@ from typing import Tuple
 
 from fastapi.responses import JSONResponse
 
+from backend.web.core import git_merge as _git_merge
+
 __all__ = ["create", "create_result"]
 
 
@@ -74,6 +76,14 @@ async def create(payload: dict) -> JSONResponse:
     * ``spawned`` — boolean (strict): an agent, not a human, created this
       session. Only settable here, never afterwards; it is what lets an agent
       later delete the session.
+    * ``after`` — titles this worker runs after (needs ``parent``): created
+      now, its task held in its prompt queue until they are done
+      (core.worker_order). ``fence`` — ``{"only", "keep_out", "reason"}``: a
+      per-session fence, in place before its task starts. ``overlap`` —
+      ``"wait"`` (default: a fence overlapping an unfinished sibling's runs
+      after it) or ``"parallel"``. ``run_member`` — a team run's own member:
+      never ordered here. The 202 says ``prompt_delivery: "held"`` and
+      ``order`` when the task is held.
     * ``base_ref`` — plain worktree sessions only (400 for provisioned or
       in-place): cut the new branch from this commit-ish of ``repo_path``
       instead of its HEAD; 400 when it names no commit. ``repo_path`` stays the
@@ -175,6 +185,21 @@ async def create(payload: dict) -> JSONResponse:
         return JSONResponse(
             {"error": "unknown parent session: %s" % parent}, status_code=400
         )
+    # Worker order + fences (see core.worker_order): checked before anything
+    # is claimed, so a bad fence costs nothing.
+    order_files = None
+    if payload.get("fence") or payload.get("after"):
+        _f, fence_problems = srv._worker_order_driver.fence_from(payload)
+        if fence_problems:
+            return JSONResponse({"error": "; ".join(fence_problems)}, status_code=400)
+        if _f and _f.get("only") and parent:
+            # The parent's tracked files: two fences covering one existing
+            # file overlap even when their globs look unrelated.
+            try:
+                pwt = srv.ENGINE.instances[parent].GetWorktreePath()
+                order_files = await asyncio.to_thread(_git_merge.tracked_files, pwt)
+            except Exception:  # noqa: BLE001
+                order_files = None
     if parent and await asyncio.to_thread(srv._budget_locked, parent):
         return JSONResponse(
             {
@@ -475,15 +500,36 @@ async def create(payload: dict) -> JSONResponse:
             return JSONResponse({"error": limit_err}, status_code=409)
         srv.ENGINE.instances[title] = inst
 
+    # An ordered worker (it runs after another, is fenced, or waits for a free
+    # slot) is created now but its task is parked until its turn.
+    order = None
+    if parent or payload.get("fence"):
+        # It parks the task itself (queue off + held) before registering the
+        # worker, so the order loop never sees a held worker without it.
+        order, order_err = srv._worker_order_driver.on_create(
+            parent, title, inst, payload, order_files, prompt
+        )
+        if order_err:
+            with srv.ENGINE.lock:
+                if srv.ENGINE.instances.get(title) is inst:
+                    srv.ENGINE.instances.pop(title, None)
+            return JSONResponse({"error": order_err}, status_code=400)
     # How the initial prompt reaches the agent: seeded at launch (the CLI takes
     # a prompt argument, or the provisioned launcher types it in), or held in
     # the prompt queue and typed once the agent is idle. A plain session on a
     # CLI with no prompt argument (a custom script, aider, goose, …) has no
     # launch-time seed at all — without the queue its task silently vanished.
     prompt_delivery = "seeded" if prompt else "none"
-    hold_prompt = bool(prompt) and (
-        (setup_cfg is not None and setup_cfg.has_setup)
-        or (not is_provisioned and not srv._provider_seeds_prompt(program))
+    if prompt and order and order.get("held"):
+        inst.Prompt = ""  # parked in its queue by on_create
+        prompt_delivery = "held"
+    hold_prompt = (
+        bool(prompt)
+        and prompt_delivery != "held"
+        and (
+            (setup_cfg is not None and setup_cfg.has_setup)
+            or (not is_provisioned and not srv._provider_seeds_prompt(program))
+        )
     )
     if hold_prompt:
         # Hold the initial prompt until setup succeeds: deliver it via the
@@ -497,7 +543,8 @@ async def create(payload: dict) -> JSONResponse:
         try:
             inst.Prompt = ""
             srv._prompt_queue.enqueue(title, prompt)
-            srv._prompt_queue.set_flags(title, enabled=True)
+            # held=False: a namesake's stale "held" must not park this one.
+            srv._prompt_queue.set_flags(title, enabled=True, held=False)
             prompt_delivery = "queued"
         except Exception as err:  # noqa: BLE001
             # A FULL OR UNWRITABLE QUEUE MUST NOT COST THE SESSION. Both calls
@@ -599,6 +646,8 @@ async def create(payload: dict) -> JSONResponse:
     )
     body = srv._instance_json(inst)
     body["prompt_delivery"] = prompt_delivery
+    if order:
+        body["order"] = order
     # An account with no route for this agent runs the session on the CLI's own
     # login. The New dialog says so at selection time; API and CLI callers had
     # no way to hear it at all, and a session quietly launching as the wrong
