@@ -500,6 +500,9 @@ class ShortcutProvider(TicketProvider):
         return {
             "member_id": str(member.get("id", "")),
             "name": member.get("mention_name"),
+            # The person's real name, for the "taking this on" comment —
+            # ``name`` stays the @mention handle the connection line shows.
+            "display_name": (member.get("profile") or {}).get("name"),
         }, ""
 
     async def list_states(self) -> list[dict]:

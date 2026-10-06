@@ -348,6 +348,30 @@ def start_state_id(cfg) -> str:
     return target if provider in STATE_SETTING_PROVIDERS else ""
 
 
+def comments_on_start(cfg) -> bool:
+    """Whether this source posts a "taking this on" comment when it moves a
+    ticket into its ``start_state``.
+
+    A companion to the move, never a feature of its own: without a start state
+    there is no move to announce, so this answers ``False`` wherever
+    :func:`start_state_id` answers ``""``.
+    """
+    return bool(getattr(cfg, "start_comment", False)) and bool(start_state_id(cfg))
+
+
+def start_comment_text(name: str) -> str:
+    """The comment posted on a ticket when MindFlock moves it on start.
+
+    ``name`` is the tracker account's display name; its first word is enough to
+    say whose MindFlock took the ticket ("MindFlock (Ethan)") without reading
+    like a signature. No name — the account didn't report one — drops the
+    parenthetical rather than printing an empty one.
+    """
+    first = (name or "").strip().split(" ")[0]
+    who = f" ({first})" if first else ""
+    return f"MindFlock{who} is taking this on."
+
+
 def ingests_any_assignee(cfg) -> bool:
     """Whether this source takes tickets regardless of who they're assigned to.
 

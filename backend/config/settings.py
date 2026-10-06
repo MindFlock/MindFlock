@@ -274,6 +274,11 @@ class TicketingSource:
     # has nowhere to move them to. Only Shortcut / Jira / Linear can move a
     # ticket at all; the other providers never offer the field.
     start_state: str = ""
+    # Optional: "on" posts "MindFlock (<name>) is taking this on." on the ticket
+    # whenever the move above actually happens. Blank = move silently. Stored as
+    # the string the Intake card's select writes, so a bool from a hand-edited
+    # file is normalized to it on read.
+    start_comment: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -294,6 +299,7 @@ class TicketingSource:
             "assignee_scope",
             "ingest_labels",
             "start_state",
+            "start_comment",
         ):
             v = getattr(self, k)
             if v:
@@ -328,6 +334,7 @@ class TicketingSource:
             assignee_scope=str(d.get("assignee_scope", "") or ""),
             ingest_labels=str(d.get("ingest_labels", "") or ""),
             start_state=str(d.get("start_state", "") or ""),
+            start_comment=_on_or_blank(d.get("start_comment")),
         )
 
 
@@ -1310,6 +1317,13 @@ def _effort_level(v: Any) -> str:
         return level if level in _effort.EFFORTS else ""
     except Exception:  # noqa: BLE001 — a partial install keeps the old behaviour
         return ""
+
+
+def _on_or_blank(v: Any) -> str:
+    """An on/off source setting in its stored spelling: ``"on"`` or ``""``."""
+    if isinstance(v, bool):
+        return "on" if v else ""
+    return "on" if str(v or "").strip().lower() in ("on", "true", "yes", "1") else ""
 
 
 def _opt_int(v: Any) -> Optional[int]:

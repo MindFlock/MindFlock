@@ -146,6 +146,11 @@ class TicketProviderConfig:
       what every source did before this setting existed. Only Shortcut / Jira /
       Linear can move a ticket; see
       :func:`~backend.ticket_ingestion.providers.base.start_state_id`.
+    * ``start_comment`` — optional: when MindFlock moves a ticket into
+      ``start_state``, also post "MindFlock (<name>) is taking this on." on it,
+      so the people watching the ticket see who picked it up. Off by default;
+      meaningless without a ``start_state``; see
+      :func:`~backend.ticket_ingestion.providers.base.comments_on_start`.
     * ``assignee_scope`` — whose tickets to ingest: ``""``/``"mine"`` (assigned to
       ``member_id``, the historic behavior) or ``"anyone"`` (every ticket sitting
       in ``workflow_state``, whoever owns it — a QA queue picks work up by state,
@@ -176,6 +181,9 @@ class TicketProviderConfig:
     #: Provider-native state id a ticket is moved into when its session starts,
     #: or ``""`` to leave it alone. See the class docstring.
     start_state: str = ""
+    #: Post a "taking this on" comment when moving into ``start_state``. See the
+    #: class docstring.
+    start_comment: bool = False
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -237,6 +245,15 @@ def known_agents() -> tuple[str, ...]:
         return tuple(p.name for p in providers.all_providers() if p.name != "generic")
     except Exception:  # noqa: BLE001 — validation is a convenience, not a gate
         return ()
+
+
+def flag_on(value) -> bool:
+    """A per-source on/off setting, as stored. The Intake card writes the
+    strings its select offers (``"on"`` / ``""``), a hand-edited config.toml
+    writes a bool — both mean the same thing here."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("on", "true", "yes", "1")
 
 
 def _validate_effort(value, label: str, problems: list[str]) -> str:
@@ -1015,6 +1032,7 @@ def _parse_source(
         assignee_scope=scope,
         ingest_labels=ingest_labels,
         start_state=start_state,
+        start_comment=flag_on(src.get("start_comment")),
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),

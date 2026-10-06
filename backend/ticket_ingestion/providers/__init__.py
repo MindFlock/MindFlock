@@ -93,6 +93,34 @@ def _start_state_field(noun: str, hint: str) -> dict:
     }
 
 
+def _start_comment_field(noun: str) -> dict:
+    """The optional "say so on the ticket" toggle that rides on the move above.
+
+    A select rather than a checkbox because every catalog field is a string the
+    card round-trips as-is; ``"on"`` / ``""`` is that string. Listed right after
+    the start-state picker on every provider that has one, since it does
+    nothing without it (:func:`~backend.ticket_ingestion.providers.base.comments_on_start`).
+    """
+    return {
+        "key": "start_comment",
+        "label": "Comment when moved",
+        "type": "choice",
+        "secret": False,
+        "required": False,
+        "options": [
+            {"value": "", "label": "Off — move it silently"},
+            {"value": "on", "label": "On — “MindFlock (you) is taking this on.”"},
+        ],
+        "hint": (
+            f"Optional: when MindFlock moves the {noun} into the state above, "
+            "also post a comment on it saying MindFlock is taking it on, with "
+            "your first name from this connection. Only posted when the move "
+            f"actually changes the {noun}'s state, so relaunching one that is "
+            "already there doesn't comment twice."
+        ),
+    }
+
+
 PROVIDER_META: list[dict] = [
     {
         "id": "github_issues",
@@ -179,6 +207,7 @@ PROVIDER_META: list[dict] = [
                 "whether the pipeline picked it up or you ran it by hand — move "
                 "the story here. Leave it unset and the story stays where it is.",
             ),
+            _start_comment_field("story"),
         ],
     },
     {
@@ -238,6 +267,7 @@ PROVIDER_META: list[dict] = [
                 "is none, the session still starts and the move is logged as a "
                 "warning.",
             ),
+            _start_comment_field("issue"),
         ],
     },
     {
@@ -281,6 +311,7 @@ PROVIDER_META: list[dict] = [
                 "whether the pipeline picked it up or you ran it by hand — move "
                 "the issue here. Leave it unset and the issue stays where it is.",
             ),
+            _start_comment_field("issue"),
         ],
     },
     {
