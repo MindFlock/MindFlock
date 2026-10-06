@@ -87,6 +87,10 @@ class TestFirstRun:
             src.index("const SLIDES: Slide[] = [") : src.index("/** The brand mark")
         ]
         assert len(re.findall(r"^\s{4}title: ", slides, flags=re.M)) == 5
+        # Verify always shows in the top bar, and there is no Outbox to name.
+        assert "Outbox" not in slides
+        assert "joins the top bar" not in slides
+        assert "holds extra bars and your" in slides
         assert 's.openDialog === "setup"' in src
         assert "LEGACY_SCREEN_TABS" in src
 

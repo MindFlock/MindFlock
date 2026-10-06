@@ -1,9 +1,9 @@
 /** Server state for ship lanes: the runs behind the rail's group headers, and
- * the Outbox behind the top-bar badge.
+ * `/api/outbox` behind the bell's waiting rows.
  *
  * Both routes are new (SPEC §5). A server that predates them answers 404; that
- * is read as "no runs" / "no Outbox" — the rail stays flat and the badge stays
- * hidden — and polled rarely, so an older server's log isn't a wall of 404s.
+ * is read as "no runs" / "nothing waiting" — the rail stays flat and the bell
+ * lists only the sessions' own items — and polled rarely, so an older server's log isn't a wall of 404s.
  * Run events invalidate both at once (`run.changed` is the "refetch" event),
  * and so does a fast-track change, which is what moves a session along its
  * lane. */
@@ -98,7 +98,7 @@ export function useRun(id: string | null | undefined) {
   });
 }
 
-/** null = this server has no Outbox route. */
+/** null = this server has no `/api/outbox` route. */
 async function fetchOutbox(): Promise<OutboxResponse | null> {
   try {
     return await api<OutboxResponse>("/api/outbox?group=all");
@@ -108,8 +108,9 @@ async function fetchOutbox(): Promise<OutboxResponse | null> {
   }
 }
 
-/** The Outbox — always every group: the dialog's tabs filter client-side, so
- * a tab's badge and its list are cut from one response and can't disagree. */
+/** `GET /api/outbox?group=all` — every group in one response: the bell's
+ * waiting rows and the finished groups' summaries (a group header's "Copy
+ * summary"). Nothing else in the UI reads it. */
 export function useOutbox() {
   useEffect(bridgeRunEvents, []);
   return useQuery({

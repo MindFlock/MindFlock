@@ -1,11 +1,11 @@
-"""Customize (Sidebar · Prompts · Outbox) and the bell as the one "needs you"
-list — source-level pins, so they hold before the bundle is rebuilt.
+"""Customize (Sidebar · Prompts) and the bell as the one "needs you" list —
+source-level pins, so they hold before the bundle is rebuilt.
 
-The owner's ask: the Outbox and Prompts stop being top-bar destinations and
-become tabs of a real Customize dialog, and everything that waits on you lives
-in the bell. These pin the wiring that makes that true — and that the old
-doors are ABSENT, since a leftover button is exactly how a surface ends up
-with two names.
+The owner's ask: Prompts stops being a top-bar destination and becomes a tab
+of a real Customize dialog, the Outbox is dropped as a place altogether, and
+everything that waits on you lives in the bell. These pin the wiring that
+makes that true — and that the old doors are ABSENT, since a leftover button
+is exactly how a surface ends up with two names.
 """
 
 from __future__ import annotations
@@ -27,21 +27,22 @@ def _code(rel: str) -> str:
     return re.sub(r"(?m)^\s*//[^\n]*|\s//[^\n]*", "", code)
 
 
-def test_customize_renders_for_its_three_dialog_names():
+def test_customize_renders_for_its_two_dialog_names():
     src = _src("components/customize/CustomizeDialog.tsx")
     assert 'if (name === "customize") return "sidebar";' in src
-    assert 'if (name === "prompts" || name === "outbox") return name;' in src
+    assert 'if (name === "prompts") return name;' in src
     # Tabs ARE dialog names, so every existing caller lands on its tab.
     for t in (
         '{ key: "sidebar", label: "Sidebar", dialog: "customize" }',
         '{ key: "prompts", label: "Prompts", dialog: "prompts" }',
-        '{ key: "outbox", label: "Outbox", dialog: "outbox" }',
     ):
         assert t in src, t
+    assert 'type CustomizeTab = "sidebar" | "prompts";' in src
     assert 'id="customize-dialog"' in src
     assert 'id="customize-close"' in src
     assert 'nav id="customize-tabs"' in src
-    assert "<OutboxPanel target={target} />" in src
+    code = _code("components/customize/CustomizeDialog.tsx")
+    assert "Outbox" not in code and '"outbox"' not in code
     assert "<PromptsPanel />" in src
     assert "<SidebarBarsPicker />" in src
     # Esc closes unless a child (the Prompts preview) claimed it first.
@@ -52,6 +53,9 @@ def test_customize_renders_for_its_three_dialog_names():
     assert "OutboxDialog" not in app and "PromptsDialog" not in app
     store = _src("state/store.ts")
     assert '| "customize"' in store
+    # The Outbox is no dialog at all any more.
+    assert '| "outbox"' not in store
+    assert not (_SRC / "components/outbox/OutboxDialog.tsx").exists()
 
 
 def test_customize_css_is_registered_in_the_components_layer():
@@ -84,8 +88,22 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
     assert 'title="Command palette — Ctrl+P / ⌘P"' in src
     assert 'aria-label="Open command palette"' in src
     assert src.index('id="settings-btn"') < src.index('id="palette-btn"')
-    assert "useVerifySettings()" in src
-    assert '"mf_tb_verify"' in src
+
+
+def test_verify_always_shows_in_the_top_bar():
+    """The owner: Verify should "always show" — no earn-its-slot rule, no
+    per-device memory of it; the badge still says nothing on zero."""
+    src = _code("components/TopBar.tsx")
+    assert 'id="verify-btn"' in src
+    assert "showVerify" not in src
+    assert "useVerifySettings" not in src
+    assert "mf_tb_verify" not in src
+    assert '{due > 0 && <span className="tb-count">{due}</span>}' in src
+    assert (
+        src.index('id="intake-btn"')
+        < src.index('id="verify-btn"')
+        < src.index('id="settings-btn"')
+    )
 
 
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
@@ -99,14 +117,12 @@ def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     assert "Needs attention" in src
     # Every clarify row answers in place; only a family's can redirect.
     assert 'variant="bell"' in src
-    # The Outbox tab no longer lists them; it points at the bell.
-    outbox = _code("components/outbox/OutboxDialog.tsx")
-    assert "Waiting on you" not in outbox
-    assert "<WaitingRow" not in outbox
-    assert "waiting on you — in the bell" in outbox
-    # A run toast that needs you opens the bell; a finished one the Outbox.
+    # A run toast that needs you opens the bell; a finished one reveals its
+    # group's header on the rail.
     toasts = _src("components/EventToasts.tsx")
     assert 'new CustomEvent("mf-open-bell"' in toasts
+    assert "else revealGroup(n.run);" in toasts
+    assert 'openDialogFor("outbox"' not in _code("components/EventToasts.tsx")
 
 
 def test_a_click_that_replaces_its_own_control_keeps_the_bell_open():
@@ -125,11 +141,26 @@ def test_a_click_that_replaces_its_own_control_keeps_the_bell_open():
     assert '"run:" + n.run' in _src("components/EventToasts.tsx")
 
 
-def test_the_outbox_tab_names_sessions_like_the_rail():
-    """One name per session: the Outbox tab and the bell both use windowName."""
-    src = _code("components/outbox/OutboxDialog.tsx")
-    assert "const shown = windowName;" in src
-    assert "aliases[t] || t" not in src
+def test_a_group_row_in_the_bell_reveals_its_header_on_the_rail():
+    """No Outbox to open on a group: the bell's history row (and a needs-you
+    row that was already answered) shows the group where it lives — its rail
+    header, scrolled to and flashed. A pruned group is a quiet no-op."""
+    bell = _code("components/NotificationsBell.tsx")
+    assert 'openDialogFor("outbox"' not in bell
+    assert bell.count("revealGroup(n.run);") == 2
+    assert "openThread(n.lead);" in bell
+    reveal = _code("lib/revealGroup.ts")
+    assert (
+        'document.querySelectorAll<HTMLElement>("li.run-group-head[data-run]")'
+        in reveal
+    )
+    assert "el.dataset.run === runId" in reveal
+    assert "if (!head) return false;" in reveal
+    assert "head.classList.add(FLASH);" in reveal
+    assert "data-run={group.id}" in _src("components/sidebar/RunGroupHeader.tsx")
+    css = _src("components/sidebar/RunGroup.css")
+    assert ".run-group-head.rg-flash {" in css
+    assert "animation: notif-flash 1.4s ease-out;" in css
 
 
 def test_the_moved_rows_keep_their_names():
@@ -156,7 +187,6 @@ def test_no_native_dialog_calls_in_the_new_or_edited_files():
         "components/customize/SidebarBarsPicker.tsx",
         "components/sidebar/FooterCustomize.tsx",
         "components/dialogs/PromptsDialog.tsx",
-        "components/outbox/OutboxDialog.tsx",
         "components/outbox/WaitingRow.tsx",
         "components/outbox/outbox.ts",
         "components/NotificationsBell.tsx",
@@ -165,6 +195,8 @@ def test_no_native_dialog_calls_in_the_new_or_edited_files():
         "components/sidebar/VerifyBar.tsx",
         "components/palette/CommandPalette.tsx",
         "lib/keymap.ts",
+        "lib/revealGroup.ts",
+        "components/sidebar/RunGroupHeader.tsx",
         "App.tsx",
     ):
         code = _code(rel)
@@ -191,7 +223,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         "label: `Make PR — ${t}`",
         "label: `Merge PR — ${t}`",
         'label: "Verify — check what shipped"',
-        'label: "Outbox — what\'s on its way out"',
+        'label: "Customize…", hint: "sidebar bars, prompts"',
     ):
         assert label in src, label
     for gone in (
@@ -202,6 +234,9 @@ def test_the_palette_lists_commands_before_focus_rows():
         'hint: "session"',
         # Ctrl+Shift+T reopens the LAST session; it never opened this dialog.
         'label: "Recently closed…", hint: "Ctrl+Shift+T"',
+        # The Outbox is gone as a place.
+        "Outbox",
+        'openDialogFor("outbox")',
     ):
         assert gone not in src, gone
 

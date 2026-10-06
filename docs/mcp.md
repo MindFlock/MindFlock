@@ -886,8 +886,8 @@ them, so an orchestrator cannot override what the run decided. The user sees
 them as an ordinary group in the rail, with every row's status line leading
 with its lane. Whatever the group needs from them — an ask-first approval, a
 stuck line, a budget pause, the plan or the release — waits in MindFlock's
-bell; the log of what the group is shipping and has shipped lives in
-Customize → Outbox.
+bell; the group's own controls (queued lines, Pause, Cancel, and a finished
+group's **Copy summary**) are on its rail header's ⋯ menu.
 
 ### `get_run`
 

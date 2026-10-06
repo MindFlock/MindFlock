@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   KEYMAP,
   comboLabel,
@@ -121,30 +121,53 @@ describe("a newer chord whose letter an older rebinding took", () => {
   });
 });
 
-describe("Alt+O opens the Outbox (a tab of Customize)", () => {
-  it("is bound, on the sheet, and taken by nothing else", () => {
-    // The id stays "outbox": a saved rebind in mf_keymap is keyed by it.
-    const o = byId("outbox");
-    expect(o).toMatchObject({ key: "o", alt: true });
-    expect(o.help?.[1]).toBe("Alt+O");
-    expect(o.help?.[2]).toBe("Outbox — what's on its way out (in Customize)");
-    const combo = defaultCombosFor("outbox")[0];
-    const clash = KEYMAP.filter((e) => e !== o && e.key.toLowerCase() === "o" && sameCombo(combo, { key: e.key, mod: e.mod, shift: e.shift, alt: e.alt }));
-    expect(clash).toEqual([]);
-    // Not a Ctrl+K chord: O there is still "Open / focus IDE".
+describe("Alt+O is gone with the Outbox", () => {
+  it("binds nothing, and the sheet lists no Outbox", () => {
+    expect(KEYMAP.some((e) => e.id === "outbox")).toBe(false);
+    expect(KEYMAP.some((e) => e.help && /Outbox/.test(e.help[2]))).toBe(false);
+    expect(defaultCombosFor("outbox")).toEqual([]);
+    // Alt+O is free for a rebind again.
+    expect(comboProblem({ key: "o", alt: true }, "palette")).toBeNull();
+    // Not a Ctrl+K chord either: O there is still "Open / focus IDE".
     expect(chordForKey("o")).toBe("o");
   });
 
-  it("guards like Alt+I: it never eats a keystroke meant for a text field", () => {
-    expect(typeof byId("outbox").when).toBe("function");
+  it("drops a rebind saved for it in mf_keymap on load, and keeps the rest", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const prev = g.localStorage;
+    let saved: string | null = JSON.stringify({
+      keys: { outbox: [{ key: "x", alt: true }], palette: [{ key: "j", mod: true }] },
+      chords: {},
+    });
+    g.localStorage = {
+      getItem: (k: string) => (k === "mf_keymap" ? saved : null),
+      setItem: (k: string, v: string) => {
+        if (k === "mf_keymap") saved = v;
+      },
+      removeItem: () => {},
+    };
+    try {
+      vi.resetModules();
+      const km = await import("../lib/keymap");
+      expect(km.getKeyOverride("outbox")).toBeUndefined();
+      expect(km.getKeyOverride("palette")).toEqual([{ key: "j", mod: true }]);
+      // Written back without it, so the next load starts clean.
+      expect(JSON.parse(saved || "{}").keys).toEqual({ palette: [{ key: "j", mod: true }] });
+      // Its old combo is not "already" anything.
+      expect(km.comboProblem({ key: "x", alt: true }, "verify")).toBeNull();
+    } finally {
+      if (prev === undefined) delete g.localStorage;
+      else g.localStorage = prev;
+      vi.resetModules();
+    }
   });
 });
 
 describe("modalOpen", () => {
   afterEach(() => useUi.getState().closeDialog());
 
-  it("counts Customize on every tab: its rows and inputs are about OTHER sessions", () => {
-    for (const name of ["customize", "prompts", "outbox"] as const) {
+  it("counts Customize on either tab: its inputs are not the session behind", () => {
+    for (const name of ["customize", "prompts"] as const) {
       useUi.getState().openDialogFor(name);
       expect(modalOpen()).toBe(true);
       useUi.getState().closeDialog();
@@ -159,8 +182,8 @@ describe("modalOpen", () => {
 });
 
 describe("Delete / Ctrl+W never end the focused session from inside the bell", () => {
-  // The Outbox's waiting rows (Retry / Skip / Commit) live in the bell's
-  // popover now; its buttons are about OTHER sessions.
+  // The waiting rows (Retry / Skip / Commit) live in the bell's popover; its
+  // buttons are about OTHER sessions.
   const g = globalThis as Record<string, unknown>;
   const hadDoc = "document" in g;
   const prevDoc = g.document;

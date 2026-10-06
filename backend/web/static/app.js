@@ -28928,7 +28928,6 @@ var MODAL_DIALOG_NAMES = [
 	"intake",
 	"customize",
 	"prompts",
-	"outbox",
 	"verify",
 	"extension",
 	"red-zones"
@@ -28955,6 +28954,7 @@ function modalOpen() {
 		return !!el && !el.classList.contains("hidden");
 	});
 }
+var RETIRED_KEY_IDS = ["outbox"];
 var _keyOv = {
 	keys: {},
 	chords: {}
@@ -28964,6 +28964,10 @@ try {
 	if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
 	if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
 	let migrated = false;
+	for (const id of RETIRED_KEY_IDS) if (id in _keyOv.keys) {
+		delete _keyOv.keys[id];
+		migrated = true;
+	}
 	Object.keys(_keyOv.keys).forEach((k) => {
 		if (!Array.isArray(_keyOv.keys[k])) {
 			_keyOv.keys[k] = [_keyOv.keys[k]];
@@ -29175,18 +29179,6 @@ var KEYMAP = [
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useUi.getState().openDialogFor("intake")
-	},
-	{
-		key: "o",
-		alt: true,
-		id: "outbox",
-		help: [
-			"Navigation",
-			"Alt+O",
-			"Outbox — what's on its way out (in Customize)"
-		],
-		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("outbox")
 	},
 	{
 		key: "v",
@@ -30143,84 +30135,6 @@ function ExtensionDialog() {
 				]
 			})]
 		})
-	});
-}
-//#endregion
-//#region src/components/sidebar/VerifyBar.tsx
-function useVerifySettings() {
-	return useQuery({
-		queryKey: ["verify-settings"],
-		queryFn: async () => {
-			return (await api("/api/settings"))?.settings?.repository || {};
-		},
-		refetchInterval: 3e4,
-		retry: false
-	});
-}
-function VerifyBar() {
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const openDialog = useUi((s) => s.openDialog);
-	const qc = useQueryClient();
-	const { data: repo, refetch } = useVerifySettings();
-	const { data: plansData } = useTestPlans();
-	(0, import_react.useEffect)(() => {
-		if (openDialog === null) refetch();
-	}, [openDialog, refetch]);
-	const repos = Array.isArray(repo?.verify_repos) ? repo.verify_repos : [];
-	const plans = plansData?.plans || [];
-	const on = repo?.verify_enabled !== false;
-	const due = dueCount(plans);
-	const running = plans.some((p) => p.state === "running");
-	const broken = plans.filter((p) => verdictOf(p) === "fail").length;
-	if (!repo || repos.length === 0 && plans.length === 0) return null;
-	const toggle = async (enable) => {
-		try {
-			await api("/api/settings", { json: { repository: { verify_enabled: enable } } });
-			toast(enable ? "Automatic checking on" : "Automatic checking paused");
-		} catch (err) {
-			toast("Verify " + (enable ? "on" : "off") + " failed: " + errMsg(err));
-		} finally {
-			refetch();
-			qc.invalidateQueries({ queryKey: ["test-plans"] });
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "verify-bar",
-		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				id: "verify-dot",
-				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
-				role: "img",
-				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
-				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				id: "verify-plans-btn",
-				type: "button",
-				className: "dc-label dc-open",
-				title: "Open Verify",
-				onClick: () => openDialogFor("verify"),
-				children: "Verify"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "dc-actions",
-				children: [broken > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "dc-count dc-count-bad",
-					title: broken + (broken === 1 ? " checklist has" : " checklists have") + " a step that failed",
-					children: "✗" + broken
-				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "dc-switch",
-					title: "Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						id: "verify-toggle",
-						checked: on,
-						onChange: (e) => void toggle(e.target.checked)
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
-				})]
-			})
-		]
 	});
 }
 //#endregion
@@ -31254,61 +31168,10 @@ function dedupe(list) {
 	}
 	return out;
 }
-function runOf(item, rowOf) {
-	if (item.run?.id) return item.run.id;
-	if (item.title) return rowOf(item.title)?.run?.id || "";
-	return "";
-}
-function viewFor(data, tab, rowOf) {
-	const g = data?.groups;
-	const keep = (it) => {
-		if (tab === "all") return true;
-		const r = runOf(it, rowOf);
-		return tab === "own" ? !r : r === tab;
-	};
-	return {
-		waiting: dedupe(g?.waiting).filter(keep),
-		shipping: dedupe(g?.shipping).filter(keep),
-		shipped: dedupe(g?.shipped).filter(keep),
-		queued: (g?.queued || []).filter((q) => tab === "all" || tab !== "own" && q.run?.id === tab),
-		summaries: (data?.summaries || []).filter((s) => tab === "all" || s.run === tab)
-	};
-}
-function viewCount(v) {
-	return v.shipping.length + v.shipped.length + v.queued.length;
-}
-function outboxTabs(data, rowOf, names = () => "") {
-	const tabs = [{
-		key: "all",
-		label: "All",
-		count: viewCount(viewFor(data, "all", rowOf))
-	}];
-	const g = data?.groups;
-	const order = [];
-	const label = /* @__PURE__ */ new Map();
-	const note = (id, name) => {
-		if (!id) return;
-		if (!label.has(id)) order.push(id);
-		if (name || !label.get(id)) label.set(id, name || label.get(id) || "");
-	};
-	const all = [...g?.shipping || [], ...g?.shipped || []];
-	for (const it of all) note(runOf(it, rowOf), it.run?.name || (it.title ? rowOf(it.title)?.run?.name : "") || "");
-	for (const q of g?.queued || []) note(q.run?.id || "", q.run?.name);
-	for (const id of order) {
-		const count = viewCount(viewFor(data, id, rowOf));
-		if (count) tabs.push({
-			key: id,
-			label: label.get(id) || names(id) || "Group",
-			count
-		});
-	}
-	const own = viewCount(viewFor(data, "own", rowOf));
-	if (own && order.length) tabs.push({
-		key: "own",
-		label: "On their own",
-		count: own
-	});
-	return tabs;
+function summaryFor(data, runId) {
+	if (!runId) return null;
+	const s = (data?.summaries || []).find((x) => x.run === runId);
+	return s && String(s.text_md || "").trim() ? s : null;
 }
 function shipVerb(step) {
 	switch (String(step || "")) {
@@ -31383,19 +31246,6 @@ function statText(p) {
 	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
 	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
 	return bits.join(" ");
-}
-function shippedChip(s) {
-	const m = String(s.pr_url || "").match(/\/pull\/(\d+)/);
-	const pr = m ? "PR #" + m[1] : s.pr_url ? "PR" : "";
-	const state = String(s.pr_state || "").toLowerCase();
-	const checks = s.checks === "pass" || s.checks === "ok" ? "checks ✓" : s.checks === "fail" || s.checks === "failed" ? "checks ✗" : s.checks === "pending" ? "checks…" : "";
-	const parts = [pr + (state === "merged" ? " merged" : state === "closed" ? " closed" : ""), checks].filter(Boolean);
-	const bad = checks === "checks ✗" || state === "closed";
-	const noPr = s.lane === "commit" ? "committed" : s.lane === "push" ? "pushed" : "shipped";
-	return {
-		text: parts.join(" · ") || noPr,
-		cls: bad ? "bad" : "ok"
-	};
 }
 var LEAD_KINDS = /* @__PURE__ */ new Set([
 	"plan",
@@ -31839,6 +31689,24 @@ function ApprovePreview({ w, row }) {
 	});
 }
 //#endregion
+//#region src/lib/revealGroup.ts
+var FLASH = "rg-flash";
+var FLASH_MS = 1600;
+function revealGroup(runId) {
+	if (!runId || typeof document === "undefined") return false;
+	const head = Array.from(document.querySelectorAll("li.run-group-head[data-run]")).find((el) => el.dataset.run === runId);
+	if (!head) return false;
+	if (typeof head.scrollIntoView === "function") head.scrollIntoView({
+		block: "nearest",
+		behavior: "smooth"
+	});
+	head.classList.remove(FLASH);
+	head.offsetWidth;
+	head.classList.add(FLASH);
+	window.setTimeout(() => head.classList.remove(FLASH), FLASH_MS);
+	return true;
+}
+//#endregion
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -32199,11 +32067,11 @@ function NotificationsBell() {
 								setFlash(row.key);
 							} else {
 								setOpen(false);
-								useUi.getState().openDialogFor("outbox", n.run);
+								revealGroup(n.run);
 							}
 						} else if (n.run) {
 							setOpen(false);
-							useUi.getState().openDialogFor("outbox", n.run);
+							revealGroup(n.run);
 						} else jump(n.session);
 					},
 					children: [
@@ -32474,7 +32342,7 @@ function EventToasts() {
 				onClick: () => {
 					if (n.lead) openThread(n.lead);
 					else if (env.event === "run.needs_you") document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") } }));
-					else useUi.getState().openDialogFor("outbox", n.run || null);
+					else revealGroup(n.run);
 				},
 				duration: 8e3
 			});
@@ -32528,26 +32396,12 @@ function applyTheme(light) {
 	document.documentElement.classList.toggle("light", light);
 }
 var engineVersion = "";
-var VERIFY_SEEN_KEY = "mf_tb_verify";
-function verifySeen() {
-	try {
-		return localStorage.getItem(VERIFY_SEEN_KEY) === "1";
-	} catch {
-		return false;
-	}
-}
 function TopBar() {
 	const ui = useUi();
 	const [light, setLight] = (0, import_react.useState)(() => document.documentElement.classList.contains("light"));
 	const [version, setVersion] = (0, import_react.useState)(engineVersion);
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
-	const { data: verifySettings } = useVerifySettings();
-	const verifyRepos = verifySettings?.verify_repos;
-	const verifyLive = Array.isArray(verifyRepos) && verifyRepos.length > 0 || (testPlans?.plans || []).length > 0;
-	const verifyKnown = !!verifySettings && !!testPlans;
-	const [verifyRemembered] = (0, import_react.useState)(verifySeen);
-	const showVerify = verifyLive || !verifyKnown && verifyRemembered;
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -32562,12 +32416,6 @@ function TopBar() {
 			off();
 		};
 	}, [mac]);
-	(0, import_react.useEffect)(() => {
-		if (!verifyLive && !verifyKnown) return;
-		try {
-			localStorage.setItem(VERIFY_SEEN_KEY, verifyLive ? "1" : "0");
-		} catch {}
-	}, [verifyKnown, verifyLive]);
 	(0, import_react.useEffect)(() => {
 		if (engineVersion) return;
 		let live = true;
@@ -32683,7 +32531,7 @@ function TopBar() {
 							onClick: () => ui.openDialogFor("intake"),
 							children: "Intake"
 						}),
-						showVerify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
@@ -34777,6 +34625,84 @@ function PrReviewBar() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/VerifyBar.tsx
+function useVerifySettings() {
+	return useQuery({
+		queryKey: ["verify-settings"],
+		queryFn: async () => {
+			return (await api("/api/settings"))?.settings?.repository || {};
+		},
+		refetchInterval: 3e4,
+		retry: false
+	});
+}
+function VerifyBar() {
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const openDialog = useUi((s) => s.openDialog);
+	const qc = useQueryClient();
+	const { data: repo, refetch } = useVerifySettings();
+	const { data: plansData } = useTestPlans();
+	(0, import_react.useEffect)(() => {
+		if (openDialog === null) refetch();
+	}, [openDialog, refetch]);
+	const repos = Array.isArray(repo?.verify_repos) ? repo.verify_repos : [];
+	const plans = plansData?.plans || [];
+	const on = repo?.verify_enabled !== false;
+	const due = dueCount(plans);
+	const running = plans.some((p) => p.state === "running");
+	const broken = plans.filter((p) => verdictOf(p) === "fail").length;
+	if (!repo || repos.length === 0 && plans.length === 0) return null;
+	const toggle = async (enable) => {
+		try {
+			await api("/api/settings", { json: { repository: { verify_enabled: enable } } });
+			toast(enable ? "Automatic checking on" : "Automatic checking paused");
+		} catch (err) {
+			toast("Verify " + (enable ? "on" : "off") + " failed: " + errMsg(err));
+		} finally {
+			refetch();
+			qc.invalidateQueries({ queryKey: ["test-plans"] });
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "verify-bar",
+		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				id: "verify-dot",
+				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
+				role: "img",
+				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
+				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "verify-plans-btn",
+				type: "button",
+				className: "dc-label dc-open",
+				title: "Open Verify",
+				onClick: () => openDialogFor("verify"),
+				children: "Verify"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "dc-actions",
+				children: [broken > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dc-count dc-count-bad",
+					title: broken + (broken === 1 ? " checklist has" : " checklists have") + " a step that failed",
+					children: "✗" + broken
+				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "dc-switch",
+					title: "Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "verify-toggle",
+						checked: on,
+						onChange: (e) => void toggle(e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dc-slider" })]
+				})]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/sidebar/SidebarBars.tsx
 var SECTION_MIME = "application/x-mf-section";
 function barContent(key, cbs) {
@@ -34863,7 +34789,7 @@ function FooterCustomize() {
 			id: "foot-customize-btn",
 			type: "button",
 			className: "foot-link",
-			title: "Sidebar bars, saved prompts and the Outbox",
+			title: "Sidebar bars and saved prompts",
 			onClick: () => openDialogFor("customize"),
 			children: "Customize"
 		})
@@ -34949,6 +34875,8 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 	const [mode, setMode] = (0, import_react.useState)("");
 	const [lines, setLines] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const { data: outbox } = useOutbox();
+	const summary = group.done ? summaryFor(outbox, group.id) : null;
 	(0, import_react.useEffect)(() => {
 		const onDown = (e) => {
 			if (!ref.current?.contains(e.target)) onClose();
@@ -35097,14 +35025,21 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 					})
 				]
 			}, t.id))] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			group.done && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				role: "menuitem",
-				onClick: () => {
-					useUi.getState().openDialogFor("outbox", id);
+				className: "rg-copy-summary",
+				disabled: !summary,
+				title: summary ? "Copy what this group did, as Markdown" : "No summary for this group yet — MindFlock writes one when a group finishes",
+				onClick: async () => {
+					if (!summary) return;
+					toast(await copyText(summary.text_md) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
 					onClose();
 				},
-				children: group.done ? "Summary" : "Open in the Outbox"
+				children: ["Copy summary", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rg-hint",
+					children: "as Markdown"
+				})]
 			}),
 			!group.done && (mode === "cancel" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "rg-inline rg-confirm",
@@ -36039,7 +35974,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						id: "customize",
 						className: "hint-footer",
 						children: [
-							"Extra sidebar bars, your saved prompts and the Outbox live under ",
+							"Extra sidebar bars and your saved prompts live under ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
 							"."
 						]
@@ -56351,18 +56286,13 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "Customize…",
-			hint: "sidebar bars, prompts, Outbox",
+			hint: "sidebar bars, prompts",
 			run: () => ui.openDialogFor("customize")
 		});
 		acts.push({
 			label: "Prompts…",
 			hint: "paste a saved prompt",
 			run: () => ui.openDialogFor("prompts")
-		});
-		acts.push({
-			label: "Outbox — what's on its way out",
-			hint: "Alt+O",
-			run: () => ui.openDialogFor("outbox")
 		});
 		acts.push({
 			label: "Recently closed…",
@@ -68845,318 +68775,23 @@ function PromptsPanel() {
 	});
 }
 //#endregion
-//#region src/components/outbox/OutboxDialog.tsx
-function openBell() {
-	useUi.getState().closeDialog();
-	document.dispatchEvent(new CustomEvent("mf-open-bell"));
-}
-function OutboxPanel({ target }) {
-	useUi((s) => s.aliases);
-	const [tab, setTab] = (0, import_react.useState)("all");
-	const { data, error, isFetching } = useOutbox();
-	const { data: instances = [] } = useInstances();
-	const { data: runs } = useRuns();
-	const folds = useToggleSet("mf_outbox_folded", true);
-	(0, import_react.useEffect)(() => {
-		setTab(target || "all");
-		refreshRuns();
-	}, [target]);
-	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-	const rowOf = (t) => byTitle.get(t);
-	const runName = (id) => runs?.find((r) => r.id === id)?.name || "";
-	const tabs = outboxTabs(data, rowOf, runName);
-	if (tab !== "all" && !tabs.some((t) => t.key === tab)) tabs.push({
-		key: tab,
-		label: tab === "own" ? "On their own" : runName(tab) || "Group",
-		count: 0
-	});
-	const view = viewFor(data, tab, rowOf);
-	const total = viewCount(view);
-	const groupLabel = (it) => {
-		if (tab !== "all") return "";
-		const id = it.run?.id || (it.title ? rowOf(it.title)?.run?.id : "") || "";
-		return id ? it.run?.name || rowOf(it.title || "")?.run?.name || runName(id) : "";
-	};
-	const shown = windowName;
-	const section = (key, name, count, detail, body) => count > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-		name,
-		count,
-		detail,
-		heading: true,
-		open: folds.isOpen(key),
-		onToggle: () => folds.toggle(key),
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "pr-open-list",
-			children: body
-		})
-	}, key) : null;
-	const waiting = view.waiting.length;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "outbox-panel",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "cz-tab-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ik-subtitle",
-					children: "What's on its way out, and what shipped today"
-				}), isFetching && data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ob-fetch",
-					children: "refreshing…"
-				}) : null]
-			}),
-			waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ob-to-bell",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [waiting, " waiting on you — in the bell"] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: openBell,
-					children: "Open the bell"
-				})]
-			}),
-			tabs.length >= 2 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-				id: "outbox-tabs",
-				"aria-label": "Outbox groups",
-				children: tabs.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "ob-chip" + (tab === t.key ? " active" : ""),
-					"data-outbox-tab": t.key,
-					"aria-pressed": tab === t.key,
-					onClick: () => setTab(t.key),
-					children: [t.label, t.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ob-chip-count",
-						children: t.count
-					})]
-				}, t.key))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				id: "outbox-body",
-				children: data === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "repo-empty",
-					children: "This MindFlock server has no Outbox yet — update it, then sessions you start together (and any session with ⏩ Fast-track on) show up here."
-				}) : error && !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "repo-empty",
-					children: ["Could not load the Outbox: ", errMsg(error)]
-				}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "repo-empty",
-					children: "Loading…"
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ik-groups ob-groups",
-					children: [
-						total === 0 && !view.summaries.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "repo-empty",
-							children: "Nothing is on its way out. Sessions show up here once ⏩ Fast-track carries them, or when you start several together from New."
-						}),
-						tab !== "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run)),
-						section("shipping", "Shipping now", view.shipping.length, "MindFlock is doing these — no action", view.shipping.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippingRow, {
-							s,
-							row: rowOf(s.title),
-							shown,
-							group: groupLabel(s)
-						}, "s:" + (s.key || s.title)))),
-						section("shipped", "Shipped today", view.shipped.length, "", view.shipped.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippedRow, {
-							s,
-							row: rowOf(s.title),
-							shown,
-							group: groupLabel(s)
-						}, "d:" + (s.key || s.title)))),
-						section("queued", "Queued", view.queued.length, "they start as slots free", view.queued.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueuedItem, {
-							q,
-							group: tab === "all" ? q.run.name || runName(q.run.id) : ""
-						}, "q:" + q.run.id + ":" + q.run.task))),
-						tab === "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run))
-					]
-				})
-			})
-		]
-	});
-}
-function ShippingRow({ s, row, shown, group }) {
-	const reported = row?.last_report && String(row.last_report.status).toLowerCase() === "done";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item ob-item ob-shipping",
-		"data-outbox-row": s.title,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: s.title,
-				text: s.text,
-				shown,
-				row
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-meta",
-				children: [
-					reported && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pr-open-chip ok",
-						children: "reported done"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.note || (s.step === "integrate" ? "merging back…" : s.step ? s.step.replace("_", " ") + "…" : "on its way") }),
-					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "ik-item-start",
-				children: row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: () => openSession(s.title),
-					children: "Open ↗"
-				})
-			})
-		]
-	});
-}
-function ShippedRow({ s, row, shown, group }) {
-	const chip = shippedChip(s);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item ob-item ob-shipped",
-		"data-outbox-row": s.title,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: s.title,
-				text: s.text,
-				shown,
-				row
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-meta",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pr-open-chip " + chip.cls,
-						children: chip.text
-					}),
-					s.commit_subject && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-						"“",
-						s.commit_subject,
-						"”",
-						s.files ? " · " + s.files + (s.files === 1 ? " file" : " files") : ""
-					] }),
-					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-item-start",
-				children: [s.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: () => window.open(s.pr_url, "_blank"),
-					children: "Review ↗"
-				}), s.verify ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn ob-verify",
-					title: "Its checklist is waiting in Verify",
-					onClick: () => useUi.getState().openDialogFor("verify"),
-					children: "Verify →"
-				}) : null]
-			})
-		]
-	});
-}
-function QueuedItem({ q, group }) {
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const id = q.run.id;
-	const task = q.run.task || "";
-	const go = async (what, verb, done) => {
-		setBusy(true);
-		try {
-			await runAction(what, taskPath(id, task, verb), {}, done);
-		} finally {
-			setBusy(false);
-		}
-	};
-	const label = q.text || q.ref || "queued line";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item ob-item ob-queued",
-		"data-outbox-row": task,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-main",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-ref ob-ref",
-					children: q.ref || "task"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-title",
-					children: q.text || ""
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pr-open-meta",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "waits for a free slot" }), group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-item-start",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy || !task,
-					title: "Start it now, past the at-a-time limit (once)",
-					onClick: () => go("Start now", "start-now", "Starting " + label),
-					children: "Start now"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy || !task,
-					title: "Take it out of the group — it never starts",
-					onClick: () => go("Remove", "skip", "Removed " + label),
-					children: "Remove"
-				})]
-			})
-		]
-	});
-}
-function SummaryCard({ s }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ob-card ob-summary",
-		"data-outbox-summary": s.run,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ob-summary-head",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: s.name }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ik-group-detail",
-					children: s.state === "cancelled" ? "cancelled" : "finished"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: async () => {
-						if (await copyText(s.text_md)) toast("Copied the summary as Markdown");
-					},
-					children: "Copy as Markdown"
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
-			className: "ob-summary-md",
-			children: s.text_md
-		})]
-	});
-}
-//#endregion
 //#region src/components/customize/CustomizeDialog.tsx
-var TABS = [
-	{
-		key: "sidebar",
-		label: "Sidebar",
-		dialog: "customize"
-	},
-	{
-		key: "prompts",
-		label: "Prompts",
-		dialog: "prompts"
-	},
-	{
-		key: "outbox",
-		label: "Outbox",
-		dialog: "outbox"
-	}
-];
+var TABS = [{
+	key: "sidebar",
+	label: "Sidebar",
+	dialog: "customize"
+}, {
+	key: "prompts",
+	label: "Prompts",
+	dialog: "prompts"
+}];
 function customizeTab(name) {
 	if (name === "customize") return "sidebar";
-	if (name === "prompts" || name === "outbox") return name;
+	if (name === "prompts") return name;
 	return null;
 }
 function CustomizeDialog() {
 	const tab = useUi((s) => customizeTab(s.openDialog));
-	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const open = tab !== null;
@@ -69219,11 +68854,7 @@ function CustomizeDialog() {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					id: "customize-body",
 					"data-tab": tab,
-					children: [
-						tab === "sidebar" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {}),
-						tab === "prompts" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, {}),
-						tab === "outbox" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutboxPanel, { target })
-					]
+					children: [tab === "sidebar" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {}), tab === "prompts" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, {})]
 				})
 			]
 		})
@@ -73168,9 +72799,10 @@ var SLIDES = [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Intake" }),
 			" turns tickets, PRs and issues into sessions (Jira, Linear, GitHub Issues, Shortcut, Asana). ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
-			" joins the top bar once it is checking what you shipped. ",
+			" checks what you shipped.",
+			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
-			" at the bottom of the sidebar holds extra bars, your saved prompts and the Outbox."
+			" at the bottom of the sidebar holds extra bars and your saved prompts."
 		] }),
 		screen: "ticketing"
 	},

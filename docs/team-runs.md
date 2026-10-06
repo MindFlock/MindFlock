@@ -87,7 +87,7 @@ of only ticket IDs is that many tickets), resolves each ticket against the
 Intake ticket list and then each configured source, and says which items
 already have a session. A ticket that resolves nowhere is an error on its row
 — never silently turned into a task. `POST /api/runs` starts it. See
-[web-api.md](web-api.md#team-runs-and-the-outbox).
+[web-api.md](web-api.md#team-runs).
 
 - **Tickets** start exactly like Intake's Begin work (`ticket_start.launch`):
   a provisioned session on the ticket's own branch, its source's agent CLI.
@@ -171,10 +171,10 @@ after two nudges, hooks failed twice, a session gone after a restart, a
 create that failed after retries, the budget spent — each with its next
 action (Retry, Retry fresh, Skip, Open, Raise budget).
 
-The **Outbox** (Customize → Outbox, `Alt+O`) is the read-only log beside it:
-what is shipping now, what shipped today, a group's queued lines and the
-finished-group summaries. It holds nothing you have to act on — a
-"waiting on you" count there only points back at the bell.
+There is no separate log beside it. A group's own controls live on its rail
+header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
+Cancel, and once it has finished **Copy summary** (the group's summary as
+Markdown). What is shipping shows on each row's status line.
 
 Controls (routes, or `control_run` from the MCP): **Pause** (nothing new starts,
 merges or ships — not even a session whose create was already under way, nor
@@ -223,8 +223,8 @@ updates.
   Per-session budgets still hold the autopilot as before.
 - **Duplicate windows** (`foo` + `foo-copy`) share one branch: ownership is
   keyed on `(repo, branch)`. Adopting a branch another group owns is refused;
-  the copy shows the owner's lane and is never armed; the Outbox lists the
-  branch once.
+  the copy shows the owner's lane and is never armed; `GET /api/outbox` and
+  the bell list the branch once.
 
 ## Notifications
 
@@ -241,8 +241,8 @@ one-for-all group "one PR opened", "its branch was pushed; the PR was not
 opened", or "N merged into one branch, nothing pushed", never "N PRs". Rules: `run_needs_you` and
 `run_finished` (on), `run_task_shipped` (off). In the web UI a `run.needs_you`
 toast opens the lead's Thread when the group has a lead and the bell
-otherwise; a `run.finished` toast opens that group's view in Customize →
-Outbox.
+otherwise; a `run.finished` toast reveals the group's header on the rail
+(scrolled into view and pulsed once).
 
 ## One PR for all
 
@@ -475,7 +475,7 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 | Lanes | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
 | Run record + planner (pure) | `backend/web/core/team_runs.py` |
 | Driver, reconcile, operations | `backend/web/core/team_run_driver.py` (loop registered in the lifespan, off under pytest) |
-| Outbox | `backend/web/core/outbox.py` |
+| Waiting list (`GET /api/outbox`) | `backend/web/core/outbox.py` |
 | Starting sessions | `backend/web/core/ticket_start.py` (`launch`), `backend/web/core/session_create.py` |
 | Merge-back / same-folder commits | `backend/web/core/git_merge.py` (merge, ancestry, subjects, diff stat; `commit_paths`, `changed_paths`, `commits_since`) |
 | Per-session fences | `backend/config/red_zones.py` (`set_session_fence`, guard `sessions`), the hook's `_mf_session_view` (`backend/providers/_tool_hook_src.py`) |

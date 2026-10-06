@@ -147,7 +147,7 @@ is never armed itself. `null` = Off (nothing armed). The autopilot
 carries the lane out; see [the guided workflow](#guided-workflow-commit--push--pr--merge).
 `run` names the team run the session belongs to (`role` `task` today; `lead`
 and `piece` come with splits), or `null` — see
-[Team runs and the Outbox](#team-runs-and-the-outbox). Pending rows carry both.
+[Team runs](#team-runs). Pending rows carry both.
 
 `mcp_attached` says whether **this launch** of the session's agent got the
 MindFlock MCP tools: `true` when the launch carried the attach flags, `false`
@@ -240,7 +240,7 @@ Independently, a prompt always names the repo's red zones when it has any —
 see [Code map & red zones](#code-map--red-zones).
 
 `playbook` (optional, **legacy**) was the New dialog's **Split across
-workers**; the dialog now starts a split as a [team run](#team-runs-and-the-outbox)
+workers**; the dialog now starts a split as a [team run](#team-runs)
 instead, and this field is kept for older clients. The only value is
 `"split"`. The prompt is decorated through the playbook registry
 (`backend/mcp/playbooks.py`): its first line becomes `Split across workers
@@ -1254,7 +1254,7 @@ v1 registry:
 | `workers` | Check on workers | C | — | has children | `list_sessions` filter children; one line per worker; answer only clearly safe read-only prompts, flag the rest; touch nothing |
 | `wrapup` | Wrap up workers | W | `only` (session) | has children | per reported worker (or just `only`): `get_diff`, merge into the branch, full test suite; stop on a conflict or failure; ask before deleting |
 
-### Team runs and the Outbox
+### Team runs
 
 A **team run** (a "group" on screen) is "work on these things together":
 one session per ticket or task line, at most `concurrency` at a time with the
@@ -1263,11 +1263,13 @@ needs you surfaced. The server keeps one record per run
 (`~/.mindflock/runs/<id>.json`) and drives it with a 5 s loop. See
 [team-runs.md](team-runs.md) for the model; the exact JSON is below.
 
-The API is unchanged by the web UI's split of it: `GET /api/outbox` still
-answers all four groups. The UI renders `waiting` in the bell's **Needs
-attention** list (merged with the per-session attention rows, so there is one
-badge) and the other groups — `shipping`, `shipped`, `queued` and the
-`summaries` — in Customize → Outbox, a read-only log.
+`GET /api/outbox` still answers all four groups, though the web UI no longer
+has an Outbox: the route feeds the bell's waiting list. The bell renders
+`waiting` in its **Needs attention** list (merged with the per-session
+attention rows, so there is one badge), and a finished group's header ⋯ menu
+copies its entry from `summaries` (**Copy summary**). Nothing else in the UI
+reads it; `shipping`, `shipped` and `queued` are there for other clients (a
+group's queued lines reach the UI through `GET /api/runs`).
 
 | Method | Path | Behavior |
 |---|---|---|

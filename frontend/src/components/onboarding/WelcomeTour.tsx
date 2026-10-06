@@ -69,9 +69,9 @@ const SLIDES: Slide[] = [
     body: (
       <>
         <b>Intake</b> turns tickets, PRs and issues into sessions (Jira, Linear,
-        GitHub Issues, Shortcut, Asana). <b>Verify</b> joins the top bar once it
-        is checking what you shipped. <b>Customize</b> at the bottom of the
-        sidebar holds extra bars, your saved prompts and the Outbox.
+        GitHub Issues, Shortcut, Asana). <b>Verify</b> checks what you shipped.{" "}
+        <b>Customize</b> at the bottom of the sidebar holds extra bars and your
+        saved prompts.
       </>
     ),
     screen: "ticketing",

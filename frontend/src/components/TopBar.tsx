@@ -4,8 +4,8 @@
  * and the Electron drag region.
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
- * bell's (one badge); the Outbox and saved prompts are tabs of Customize (the
- * sidebar footer); Recently closed sits under the session list.
+ * bell's (one badge); saved prompts are a tab of Customize (the sidebar
+ * footer); Recently closed sits under the session list.
  *
  * On macOS the whole thing mirrors: the window shows the native traffic lights
  * top-left (electron/main.js `titleBarStyle: 'hidden'`), so the bar leaves room
@@ -17,7 +17,6 @@ import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
 import { useTestPlans } from "../state/queries";
 import { dueCount } from "./dialogs/verify";
-import { useVerifySettings } from "./sidebar/VerifyBar";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
@@ -37,18 +36,6 @@ function applyTheme(light: boolean) {
  * server caches the payload anyway. */
 let engineVersion = "";
 
-/** Remembers that Verify has earned its top-bar slot, so the button does not
- * blink out on a reload while the settings are still loading. */
-const VERIFY_SEEN_KEY = "mf_tb_verify";
-
-function verifySeen(): boolean {
-  try {
-    return localStorage.getItem(VERIFY_SEEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 export function TopBar() {
   const ui = useUi();
   const [light, setLight] = useState(() => document.documentElement.classList.contains("light"));
@@ -61,19 +48,6 @@ export function TopBar() {
   // the thing you were not already looking at.
   const { data: testPlans } = useTestPlans();
   const due = dueCount(testPlans?.plans || []);
-  // Verify earns its slot the way its sidebar bar does — once there is
-  // something to govern: a tracked repository, or a checklist. Until then it is
-  // Alt+V and the palette only, and a new user never sees a button for a
-  // pipeline they have not set up. Remembered per device, so a reload does not
-  // hide it while the settings load.
-  const { data: verifySettings } = useVerifySettings();
-  const verifyRepos = verifySettings?.verify_repos;
-  const verifyLive =
-    (Array.isArray(verifyRepos) && verifyRepos.length > 0) || (testPlans?.plans || []).length > 0;
-  // Both answers in: until then "nothing tracked" is only "not loaded yet".
-  const verifyKnown = !!verifySettings && !!testPlans;
-  const [verifyRemembered] = useState(verifySeen);
-  const showVerify = verifyLive || (!verifyKnown && verifyRemembered);
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -93,15 +67,6 @@ export function TopBar() {
       off();
     };
   }, [mac]);
-
-  useEffect(() => {
-    if (!verifyLive && !verifyKnown) return; // still loading: keep what was remembered
-    try {
-      localStorage.setItem(VERIFY_SEEN_KEY, verifyLive ? "1" : "0");
-    } catch {
-      /* storage unavailable */
-    }
-  }, [verifyKnown, verifyLive]);
 
   useEffect(() => {
     if (engineVersion) return; // already known this page load
@@ -227,25 +192,23 @@ export function TopBar() {
               the "Not checked yet" group are one predicate) — deliberately not
               "things waiting on you personally", since one of them may be an
               agent mid-run. */}
-          {showVerify && (
-            <button
-              id="verify-btn"
-              className="tb-item"
-              type="button"
-              title="Verify — shipped changes nobody has checked (Alt+V)"
-              /* No aria-label, for the same reason as Intake above: the visible
-                 "Verify" IS the name, and a second wording would be the one a
-                 screen reader announced. */
-              onClick={() => ui.openDialogFor("verify")}
-            >
-              Verify
-              {/* Nothing at all on zero, the way the Intake tab counts do it: a "0"
-                  that becomes "3" a moment later reads as "nothing to do", which is
-                  the one thing this badge must never say while it is still finding
-                  out. */}
-              {due > 0 && <span className="tb-count">{due}</span>}
-            </button>
-          )}
+          <button
+            id="verify-btn"
+            className="tb-item"
+            type="button"
+            title="Verify — shipped changes nobody has checked (Alt+V)"
+            /* No aria-label, for the same reason as Intake above: the visible
+               "Verify" IS the name, and a second wording would be the one a
+               screen reader announced. */
+            onClick={() => ui.openDialogFor("verify")}
+          >
+            Verify
+            {/* Nothing at all on zero, the way the Intake tab counts do it: a "0"
+                that becomes "3" a moment later reads as "nothing to do", which is
+                the one thing this badge must never say while it is still finding
+                out. */}
+            {due > 0 && <span className="tb-count">{due}</span>}
+          </button>
           <button
             id="settings-btn"
             className="tb-item"

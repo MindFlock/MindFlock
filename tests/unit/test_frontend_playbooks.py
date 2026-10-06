@@ -327,8 +327,7 @@ def test_the_picker_holds_the_keyboard_like_a_modal(js):
 
 
 def test_the_bell_holds_the_keyboard_like_a_modal(js):
-    """The Outbox's waiting rows (Retry / Skip / Commit) moved into the bell's
-    popover; a Delete or Ctrl+W on one of its buttons ended the focused
+    """The waiting rows (Retry / Skip / Commit) live in the bell's popover; a Delete or Ctrl+W on one of its buttons ended the focused
     session behind it until the popover joined the modal guard."""
     keymap = _region(js, "src/lib/keymap.ts")
     ids = keymap[keymap.find("MODAL_DOM_IDS = [") :]

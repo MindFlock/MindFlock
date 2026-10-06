@@ -1,5 +1,5 @@
-/** Footer "Customize": the door to the Customize dialog (Sidebar · Prompts ·
- * Outbox). Sits between the session count and the shortcuts link. It used to
+/** Footer "Customize": the door to the Customize dialog (Sidebar · Prompts).
+ * Sits between the session count and the shortcuts link. It used to
  * be a popover holding only the bar checklist; that list is now the dialog's
  * Sidebar tab (customize/SidebarBarsPicker.tsx), so this is a plain button. */
 
@@ -13,7 +13,7 @@ export function FooterCustomize() {
         id="foot-customize-btn"
         type="button"
         className="foot-link"
-        title="Sidebar bars, saved prompts and the Outbox"
+        title="Sidebar bars and saved prompts"
         onClick={() => openDialogFor("customize")}
       >
         Customize

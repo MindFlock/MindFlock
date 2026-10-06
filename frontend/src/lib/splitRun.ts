@@ -1,5 +1,5 @@
 /** Split and one-for-all groups, the pure half: what the lead's Thread tab,
- * its rail row and the Outbox say about a group whose lines merge back into
+ * its rail row and the bell say about a group whose lines merge back into
  * ONE branch and ship as ONE PR (SPEC §3.4, §7.C.4).
  *
  * The server does every step — it starts the workers, fences each to its

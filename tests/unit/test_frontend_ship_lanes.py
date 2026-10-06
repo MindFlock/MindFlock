@@ -1,7 +1,7 @@
 """Ship lanes, UI part 2 (SPEC §7.C.2-3, §8): structural checks on the shipped
 bundle for the rail's run group headers, queued lines and lane-first status
-lines, the Outbox (Customize's third tab, Alt+O), the bell's waiting rows and
-its run rows.
+lines and their ⋯ menu (queued lines, Copy summary), the bell's waiting rows
+and its run rows — and that the Outbox, dropped as a place, is ABSENT.
 
 The wording and the grouping arithmetic are unit-tested in
 frontend/src/__tests__/{lanes,runs,outbox}.test.ts (runs.test.ts also
@@ -139,56 +139,86 @@ def test_every_lane_row_leads_with_its_lane():
     assert "Outbox" not in body, "what waits on you is the bell's"
 
 
-# --- The Outbox ------------------------------------------------------------------
+# --- No Outbox: the bell and the group header ------------------------------------
 
 
 def test_the_top_bar_carries_only_the_daily_loop():
-    """The Outbox, Prompts and Recent buttons are gone (Customize, the session
-    list); the palette is the last item, after Settings."""
+    """The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
+    session list); Verify always shows; the palette is the last item, after
+    Settings."""
     js = _js()
     top = squash(_fn(js, "TopBar"))
     for gone in ('"outbox-btn"', '"prompts-btn"', '"recent-btn"'):
         assert gone not in top, gone
-    i, s_, p = (
+    i, v, s_, p = (
         top.index('id: "intake-btn"'),
+        top.index('id: "verify-btn"'),
         top.index('id: "settings-btn"'),
         top.index('id: "palette-btn"'),
     )
-    assert i < s_ < p
+    assert i < v < s_ < p
     assert 'title: "Command palette — Ctrl+P / ⌘P"' in top
     assert "waitingCount" not in top and "useOutbox" not in top
+    # Always rendered: no earn-its-slot gate, no per-device memory of one.
+    assert "showVerify" not in top and "mf_tb_verify" not in _js()
 
 
-def test_alt_o_opens_the_outbox_and_is_on_the_shortcuts_sheet():
-    flat = squash(_js())
-    assert 'key: "o", alt: true, id: "outbox",' in flat
-    assert (
-        'help: [ "Navigation", "Alt+O", "Outbox — what\'s on its way out (in Customize)" ]'
-        in flat
-    )
-    assert 'run: () => useUi.getState().openDialogFor("outbox")' in flat
-    # A modal: Delete / Ctrl+W must not end the session behind it.
+def test_the_outbox_is_gone_from_every_door():
+    """No tab, no dialog, no shortcut, no palette entry, no word on screen."""
+    js = _js()
+    flat = squash(js)
+    for gone in (
+        '"outbox-btn"',
+        "Customize → Outbox",
+        "Open in the Outbox",
+        'label: "Outbox"',
+        '"Alt+O"',
+        "Outbox — what's on its way out",
+        'openDialogFor("outbox"',
+        '"outbox-dialog"',
+        '"outbox-panel"',
+        '"Shipped today"',
+        "function OutboxPanel(",
+        "function outboxTabs(",
+        "function SummaryCard(",
+        "function QueuedItem(",
+    ):
+        assert gone not in flat, gone
+    # Every "Outbox" left in the bundle is the route's name or a source path in
+    # a region marker — never a word the user reads.
+    for m in re.finditer(r"Outbox", js):
+        line = js[js.rfind("\n", 0, m.start()) + 1 : js.find("\n", m.start())]
+        assert re.search(r"fetchOutbox|useOutbox", line), line
+    # A modal: Delete / Ctrl+W must not end the session behind Customize.
     assert '"customize-dialog"' in flat
-    assert '"outbox-dialog"' not in flat
 
 
-def test_the_outbox_reads_one_response_and_renders_its_sections():
+def test_the_bell_still_reads_the_waiting_list_from_one_response():
     js = _js()
     assert '"/api/outbox?group=all"' in js
-    body = squash(_fn(js, "OutboxPanel"))
-    for heading in (
-        '"Shipping now"',
-        '"Shipped today"',
-        '"Queued"',
-    ):
-        assert heading in body, heading
-    # What waits on you is the bell's: one line that points there.
-    assert '"Waiting on you"' not in body
-    assert "waiting on you — in the bell" in body
+    bell = squash(_fn(js, "NotificationsBell"))
+    assert "needsAttention(attentionItems(instances), outbox?.groups?.waiting)" in bell
     assert '"mf-open-bell"' in js
-    assert '"MindFlock is doing these — no action"' in body
-    assert "outboxTabs(data, rowOf, runName)" in body
-    assert "viewFor(data, tab, rowOf)" in body
+
+
+def test_a_finished_groups_menu_copies_its_summary():
+    """The summary card's one job, moved to the group header's ⋯: copy the
+    group's Markdown. Disabled (with a reason) until the server has one; an
+    unfinished group has no such item — its queued lines, Pause and Cancel are
+    already in that menu, and what waits on you is the bell's."""
+    js = _js()
+    menu = squash(_fn(js, "RunGroupMenu"))
+    assert "const summary = group.done ? summaryFor(outbox, group.id) : null;" in menu
+    assert "group.done && " in menu and '"Copy summary"' in menu
+    assert "disabled: !summary" in menu
+    assert "copyText(summary.text_md)" in menu
+    assert '"Copied the summary as Markdown"' in menu
+    assert "No summary for this group yet" in menu
+    # Queued lines keep their Start now / Remove here.
+    assert 'taskPath(id, t.id, "start-now")' in menu
+    assert 'taskPath(id, t.id, "skip")' in menu
+    find = squash(_fn(js, "summaryFor"))
+    assert "x.run === runId" in find
 
 
 def test_a_prompt_row_reuses_the_answer_strip_and_an_approval_shows_the_message_first():
@@ -246,14 +276,11 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
     """Electron has no window.prompt / confirm; ship lanes act, never paste."""
     js = _js()
     for name in (
-        "OutboxPanel",
         "CustomizeDialog",
         "SidebarBarsPicker",
         "WaitingRow",
         "ApproveButtons",
         "ApprovePreview",
-        "QueuedItem",
-        "SummaryCard",
         "RunGroupHeader",
         "RunGroupMenu",
         "QueuedRow",
@@ -282,12 +309,12 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
 def test_new_source_files_have_no_native_dialog_calls():
     """Source-level twin of the above, comments stripped (they explain why)."""
     for rel in (
-        "components/outbox/OutboxDialog.tsx",
         "components/outbox/WaitingRow.tsx",
         "components/outbox/outbox.ts",
         "components/customize/CustomizeDialog.tsx",
         "components/customize/SidebarBarsPicker.tsx",
         "components/sidebar/RunGroupHeader.tsx",
+        "lib/revealGroup.ts",
         "lib/runs.ts",
         "state/runs.ts",
     ):

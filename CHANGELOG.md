@@ -168,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A calmer first run, one place for what needs you.** The surface shows
   the daily loop and keeps everything else one click away, each feature
-  under one name. Nothing was removed.
+  under one name and in one home.
   - **The bell is the one list of what waits on you.** Its *Needs attention*
     list now holds what the Outbox's *Waiting on you* held: ask-first
     approvals with the commit message (editable) and PR title, a group's
@@ -176,17 +176,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and a group's plan and release with **Open the Thread ↗**. Every agent
     question gets its answer buttons there, one badge counts it all, and
     the rail's *— open the bell* lines open it on that row.
-  - **Customize is a dialog with three tabs: Sidebar, Prompts and Outbox.**
-    The footer's **Customize** opens it. Sidebar says when each bar has
+  - **The Outbox is gone as a place.** What waited on you is in the bell; a
+    finished group's summary is **Copy summary** in its rail header's ⋯
+    menu; a group's queued lines (Start now / Remove) are in that same
+    menu; the *Shipped today* log is dropped (a session's PR and checks stay
+    on its row). `Alt+O` and the palette's Outbox entry are gone, and a
+    rebind saved for `Alt+O` is dropped on load. A group's row in the bell,
+    or its *finished* toast, scrolls to the group's header and pulses it.
+  - **Customize is a dialog with two tabs: Sidebar and Prompts.** The
+    footer's **Customize** opens it. Sidebar says when each bar has
     something to show; Prompts pastes a saved prompt into the selected
     session, another running one or all of them (the templates manager's
-    send row is gone: a template only starts a session); the Outbox is a
-    read-only log of what is on its way out and what shipped today.
-    `Alt+O` still opens it.
-  - **A shorter top bar**: New, Intake, Verify and Settings, plus a
-    magnifier for the command palette. Verify appears once it tracks a
-    repository or has a checklist (`Alt+V` and the palette always open it).
-    Recently closed is a *Recently closed (n)* link under the session list.
+    send row is gone: a template only starts a session).
+  - **A shorter top bar**: New, Intake, Verify (always, with its due
+    badge) and Settings, plus a magnifier for the command palette. Recently
+    closed is a *Recently closed (n)* link under the session list.
   - **The sidebar bars carry the Intake tabs' names** (Tickets, Pull
     requests, Issues), and each label opens its tab. View is one select,
     and the first run has no welcome hint.
@@ -217,8 +221,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Security's and Accounts' confirms are in-app, and failures that used to
     `alert()` show in a bottom-right card.
 
-  The API is unchanged: `GET /api/outbox` still serves `waiting`, and the UI
-  shows it in the bell. See [docs/web-ui.md](docs/web-ui.md#customize).
+  The API is unchanged: `GET /api/outbox` still serves every group; the UI
+  reads only `waiting` (the bell) and `summaries` (Copy summary). See
+  [docs/web-ui.md](docs/web-ui.md#customize).
 
 - **Launch flags are merged as flag/value pairs.** When per-session flags
   meet the defaults (an intake effort level, an agent's added flags), a pair

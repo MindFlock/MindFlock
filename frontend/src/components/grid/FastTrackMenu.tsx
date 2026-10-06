@@ -5,7 +5,7 @@
  *        how far MindFlock carries the session once its agent is done
  *        (POST /api/instances/{t}/lane — the API's word for the target)
  *   Ask me before it ships
- *        a toggle on the same call: stop one step short, wait in the Outbox
+ *        a toggle on the same call: stop one step short, wait in the bell
  *
  * Every item acts right away through the server; nothing is typed into the
  * agent. The current target is ticked and the highlight starts on it.

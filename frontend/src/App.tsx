@@ -264,7 +264,7 @@ export default function App() {
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
       <IntakeDialog />
-      {/* Sidebar · Prompts · Outbox — mounts for "customize", "prompts" and "outbox". */}
+      {/* Sidebar · Prompts — mounts for "customize" and "prompts". */}
       <CustomizeDialog />
       <VerifyDialog />
       <CommitDialog />

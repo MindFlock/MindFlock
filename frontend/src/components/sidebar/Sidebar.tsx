@@ -604,7 +604,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           </select>
         </div>
         <Hint id="customize" className="hint-footer">
-          Extra sidebar bars, your saved prompts and the Outbox live under <b>Customize</b>.
+          Extra sidebar bars and your saved prompts live under <b>Customize</b>.
         </Hint>
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>

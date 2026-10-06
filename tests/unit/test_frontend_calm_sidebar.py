@@ -174,11 +174,14 @@ def test_the_assistant_bar_is_chat_and_todo():
 # --- Sidebar: fewer banners, one link, one picker ------------------------------------
 
 
-def test_no_welcome_hint_and_the_customize_hint_names_its_three_tabs():
+def test_no_welcome_hint_and_the_customize_hint_names_its_two_tabs():
     side = _code("components/sidebar/Sidebar.tsx")
     assert 'id="welcome"' not in side
     assert "Welcome to MindFlock." not in side
-    assert "Extra sidebar bars, your saved prompts and the Outbox live under" in side
+    assert "Extra sidebar bars and your saved prompts live under" in side
+    assert "Outbox" not in side
+    footer = _code("components/sidebar/FooterCustomize.tsx")
+    assert 'title="Sidebar bars and saved prompts"' in footer
     assert "⚙ Customize" not in side
 
 

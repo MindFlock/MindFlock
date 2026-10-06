@@ -237,6 +237,12 @@
   background: var(--panel-2);
 }
 
+/* "Copy summary" before the server has written one: still there, plainly off. */
+.rg-menu > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .rg-menu .rg-hint {
   margin-left: auto;
   font-size: 11px;
@@ -312,4 +318,11 @@
   background: var(--red);
   border-color: var(--red);
   color: #fff;
+}
+
+/* A group asked for by name (a bell history row, a run toast — lib/revealGroup.ts):
+   the bell's one accent pulse (`notif-flash`, NotificationsBell.css), so the eye
+   lands on it after the scroll. */
+.run-group-head.rg-flash {
+  animation: notif-flash 1.4s ease-out;
 }

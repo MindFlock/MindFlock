@@ -1,10 +1,10 @@
-/* Customize: Sidebar · Prompts · Outbox in one dialog.
+/* Customize: Sidebar · Prompts in one dialog.
  *
- * The frame mirrors #intake-panel (a third of the same family, after Verify and
- * the old Outbox): the shared `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one
- * fixed height for all three tabs so switching never makes the dialog jump, and
- * only the tab's own list scrolls. Imported right after Outbox.css, so it can
- * shape the panels that live inside it. */
+ * The frame mirrors #intake-panel (the same family as Verify): the shared
+ * `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one fixed height for both tabs
+ * so switching never makes the dialog jump, and only the tab's own list
+ * scrolls. Imported right after Outbox.css, so it can shape the panels that
+ * live inside it. */
 
 #customize-panel {
   width: 760px;
@@ -47,7 +47,7 @@
   flex-direction: column;
 }
 
-/* A tab's own first line (the Outbox's subtitle, the Prompts target). */
+/* A tab's own first line (the Prompts target). */
 #customize-body .cz-tab-head {
   display: flex;
   align-items: baseline;

@@ -2,8 +2,8 @@
  * waits on you, plus what happened while you were away.
  *
  * "Needs attention" merges the sidebar's attention items (an agent asking, a
- * broken session, failing checks, ready for a PR) with the Outbox's waiting
- * rows (an ask-first approval with its commit-message preview, a stuck group
+ * broken session, failing checks, ready for a PR) with the server's waiting
+ * rows (`GET /api/outbox`: an ask-first approval with its commit-message preview, a stuck group
  * line, a spent budget, a lead's plan or PR) — `needsAttention`, one row per
  * session — and the amber badge counts exactly that list. Below it, the
  * history feed. The desktop-notification switch lives in Settings →
@@ -11,8 +11,9 @@
  *
  * Other surfaces open it with a DOM event, `mf-open-bell` (detail.title
  * optional: scroll that session's row into view and flash it) — the rail's
- * "— open the bell" lines, the Outbox tab and run toasts. A waiting row that
- * navigates closes it with `mf-close-bell`. */
+ * "— open the bell" lines and run toasts. A waiting row that navigates closes
+ * it with `mf-close-bell`. A group's history row reveals the group's header on
+ * the rail (lib/revealGroup.ts). */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -29,6 +30,7 @@ import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
+import { revealGroup } from "../lib/revealGroup";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -55,7 +57,7 @@ interface Notif {
   session: string;
   text: string;
   cls: string;
-  /** A run event's group: the row opens the Outbox on it. */
+  /** A run event's group: the row reveals its header on the rail. */
   run?: string;
   /** A group's lead whose Thread holds the click (a plan, the one PR). */
   lead?: string;
@@ -166,8 +168,8 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
 
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
-  // The Outbox's waiting rows are half of "Needs attention" — the same query
-  // (and the same polling) the top bar's Outbox badge used to keep warm.
+  // The server's waiting rows (`GET /api/outbox`) are half of "Needs
+  // attention".
   const { data: outbox } = useOutbox();
   const { data: runs } = useRuns();
   const [notifs, setNotifs] = useState<Notif[]>([]);
@@ -239,7 +241,7 @@ export function NotificationsBell() {
 
   const families = useMemo(() => childrenByParent(instances), [instances]);
   const byTitle = useMemo(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-  // ONE list: the sessions' own attention items and the Outbox's waiting rows,
+  // ONE list: the sessions' own attention items and the server's waiting rows,
   // one row per session (outbox.ts `needsAttention` says how they merge).
   const attn = needsAttention(attentionItems(instances), outbox?.groups?.waiting);
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
@@ -378,7 +380,7 @@ export function NotificationsBell() {
                 {shownAttn.map((it) => {
                   const flashing = flash !== null && (flash === it.title || flash === it.key);
                   if (it.waiting) {
-                    // An approval or an escalation: the Outbox's own row, with
+                    // An approval or an escalation: the waiting row itself, with
                     // its preview and buttons — the click lives on those.
                     const w = it.waiting;
                     const runId = w.run?.id || "";
@@ -473,14 +475,16 @@ export function NotificationsBell() {
                           if (attn.indexOf(row) >= NEEDS_SHOWN) setShowAll(true);
                           setFlash(row.key);
                         } else {
+                          // Answered already: show the group where it lives.
                           setOpen(false);
-                          useUi.getState().openDialogFor("outbox", n.run);
+                          revealGroup(n.run);
                         }
                       } else if (n.run) {
-                        // A group's row opens the Outbox on that group — where
-                        // its summary, or what it shipped, is.
+                        // A group's row shows the group where it lives: its
+                        // header on the rail (its ⋯ holds the summary, the
+                        // queued lines, Pause and Cancel).
                         setOpen(false);
-                        useUi.getState().openDialogFor("outbox", n.run);
+                        revealGroup(n.run);
                       } else jump(n.session);
                     }}
                   >

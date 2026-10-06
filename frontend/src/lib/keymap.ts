@@ -138,14 +138,12 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
   "intake",
-  // Customize, on any of its tabs: the Outbox's Start now / Remove rows are
-  // about OTHER sessions, and the Prompts tab has text fields where Ctrl+W is
-  // muscle memory — neither may end the focused session behind the dialog.
-  // (The waiting rows' Retry / Skip / Commit moved to the bell: see
-  // "notif-pop" in MODAL_DOM_IDS.)
+  // Customize, on either tab: the Prompts tab has text fields where Ctrl+W is
+  // muscle memory, and the Sidebar tab's checkboxes are about the rail — neither
+  // may end the focused session behind the dialog. (The waiting rows' Retry /
+  // Skip / Commit live in the bell: see "notif-pop" in MODAL_DOM_IDS.)
   "customize",
   "prompts",
-  "outbox",
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
   // nothing about it suggests the session behind is still taking keystrokes.
   "verify",
@@ -203,12 +201,24 @@ interface KeyOverrides {
   chords: Record<string, string>;
 }
 
+/** Action ids that are gone. A rebind saved for one is dropped on load: it
+ * would bind nothing, yet still count as a customisation ("Reset all") and
+ * leave its old combo looking taken. "outbox" was Alt+O, for a Customize tab
+ * that no longer exists — what it listed is in the bell and the group headers. */
+const RETIRED_KEY_IDS = ["outbox"];
+
 let _keyOv: KeyOverrides = { keys: {}, chords: {} };
 try {
   const v = JSON.parse(localStorage.getItem("mf_keymap") || "{}") || {};
   if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
   if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
   let migrated = false;
+  for (const id of RETIRED_KEY_IDS) {
+    if (id in _keyOv.keys) {
+      delete _keyOv.keys[id];
+      migrated = true;
+    }
+  }
   Object.keys(_keyOv.keys).forEach((k) => {
     if (!Array.isArray(_keyOv.keys[k])) {
       _keyOv.keys[k] = [_keyOv.keys[k] as unknown as Combo];
@@ -441,18 +451,6 @@ export const KEYMAP: KeymapEntry[] = [
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("intake"),
-  },
-  {
-    // The Outbox is a tab of Customize now; its key stays Alt+O (and its id
-    // stays "outbox", so a saved rebind in mf_keymap still finds it), guarded
-    // like Alt+I (Option+O types ø on macOS). Not a Ctrl+K chord — Ctrl+K O
-    // already opens the IDE.
-    key: "o",
-    alt: true,
-    id: "outbox",
-    help: ["Navigation", "Alt+O", "Outbox — what's on its way out (in Customize)"],
-    when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("outbox"),
   },
   {
     // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always

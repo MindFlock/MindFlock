@@ -6,7 +6,7 @@ a time with the rest queued, carries each one along its ship LANE (leave /
 commit / push / PR / merge, :mod:`backend.web.core.lanes`), and surfaces only
 what needs a human. On screen there is no "run" noun — sessions say how far
 they go, a batch is a group header, the bell holds what is waiting on you and
-Customize → Outbox lists what is shipping — but the server keeps a record, because that is what
+each row says what it is shipping — but the server keeps a record, because that is what
 gives deterministic spawning, queueing, retries and restart safety.
 
 This module is the record and the brain, and it is deliberately free of I/O

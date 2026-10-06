@@ -332,7 +332,7 @@
   }
 }
 
-/* --- The Outbox's waiting rows, hosted in the bell ------------------------- */
+/* --- Waiting rows (WaitingRow.tsx) in the bell ----------------------------- */
 /* WaitingRow is the Intake kit's two-column card; at the bell's 400px it
    stacks — the session and its chips, then the buttons, then the preview. */
 .attn-wait {

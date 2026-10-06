@@ -23,16 +23,14 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** (with its due badge) joins the bar once Verify tracks a repository
-or has a checklist. Until then it is a button a newcomer has no use for. The
-browser remembers that it has been shown (`mf_tb_verify` in `localStorage`),
-so it does not blink out and back in while settings load on a reload, and
-`Alt+V` and the palette open Verify whether or not the button is showing.
+**Verify** is always on the bar. Its badge counts shipped changes nobody has
+checked and says nothing at zero.
 
-Four entries left the bar, and nothing they did went with them:
+Four entries left the bar:
 
-- **Outbox** became a tab of [Customize](#customize) (`Alt+O` still opens it).
-  The part of it that waited on you moved into the bell.
+- **Outbox** is gone as a place. What waited on you is in the bell; a finished
+  group's summary is **Copy summary** in its header's ⋯ menu; a group's queued
+  lines are in that same menu (see [Team runs on the rail](#team-runs-on-the-rail)).
 - **Prompts** is Customize's **Prompts** tab (see
   [Saved prompts](#saved-prompts)).
 - **Recent** is the **Recently closed (n)** link under the session list (see
@@ -92,8 +90,8 @@ Disk management is not a screen of its own any more: it is the same page as
 A first run keeps the sidebar quiet: there is no welcome hint (the tour and the
 grid's **Get set up** card do that job), and the Doctor warning chip stays down
 while that card is showing, because the card already lists the same checks. One
-dismissible hint remains in the footer: *Extra sidebar bars, your saved prompts
-and the Outbox live under Customize.*
+dismissible hint remains in the footer: *Extra sidebar bars and your saved
+prompts live under Customize.*
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
 shared registry (`sidebar/barDefs.ts`: Usage, Tickets, Pull requests, Issues,
@@ -157,8 +155,7 @@ magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
-have to navigate), **Verify — check what shipped**, **Outbox — what's on its way
-out**, **Customize…**, **Prompts…** (*paste a saved prompt*), **Assistant
+have to navigate), **Verify — check what shipped**, **Customize…**, **Prompts…** (*paste a saved prompt*), **Assistant
 instructions…**, **Recently closed…**, Open Settings / Doctor / Setup checklist,
 Toggle sidebar, Keyboard shortcuts — then the focused session's verbs (Commit /
 Push / **Make PR** / **Merge PR** / Open in IDE, Rename…, Queue prompt… *runs
@@ -994,7 +991,8 @@ two lists: **Needs attention** on top, then the history feed.
 **Needs attention** merges two sources into one list, one row per session: the
 per-session attention reasons (an agent waiting on your answer, a broken
 session, failing checks, a branch ready for its PR) and the `waiting` group of
-`GET /api/outbox` — everything the Outbox used to hold under *Waiting on you*.
+`GET /api/outbox` (ask-first approvals, stuck group lines, budget pauses, a
+lead's plan or PR).
 It is sorted by urgency: answers first, then approvals and group escalations,
 then broken, failing and ready. The list scrolls and shows six rows before
 **+N more**. What each kind of row offers:
@@ -1029,9 +1027,8 @@ desktop-notification on/off toggle lives only in Settings → Notifications.
 **Opening it from elsewhere.** Anything can open the panel by dispatching a
 `mf-open-bell` DOM event (`document.dispatchEvent(new CustomEvent("mf-open-bell",
 {detail: {title}}))`); with a `title` it scrolls that session's row into view
-and flashes it. The rail's clickable **— open the bell** lines, a group
-`run.needs_you` toast without a lead, and the Outbox tab's *n waiting on you —
-in the bell* line all use it.
+and flashes it. The rail's clickable **— open the bell** lines and a group
+`run.needs_you` toast without a lead use it.
 
 **History** keeps a running feed of notable session events — finished,
 needs-input, stage changes, cost-over-budget, auto-sent queued prompts — fed by
@@ -1045,7 +1042,9 @@ pre-commit hooks* rather than the raw stage key, and an auto-sent prompt says
 *sent the next queued prompt (n left)*. A group's rows are labelled with the
 group's name; clicking one opens the lead's Thread when the group has a lead,
 scrolls to its Needs attention row when it is waiting on you, and otherwise
-opens that group in Customize → Outbox. *No notifications yet.* shows only when
+closes the bell and reveals the group's header on the rail (scrolled into view,
+one pulse; see [Team runs on the rail](#team-runs-on-the-rail)). *No
+notifications yet.* shows only when
 both lists are empty.
 
 **Agent messages stay out of the feed; worker reports don't.** A
@@ -1283,7 +1282,7 @@ built-in alias.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Alt+O` | Outbox — what's on its way out (opens Customize → Outbox; anything waiting on you is in the bell) |
+| `Alt+V` | Verify — shipped changes nobody has checked |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -1313,8 +1312,9 @@ Windows international layouts. Like VSCode (whose
 claimed even while a terminal is focused; readline's kill-line is the accepted
 cost (`Ctrl+U` still kills the line, `Esc` cancels a pending chord). **Merge
 PR** is deliberately unbound — palette/menu only, behind an in-app confirm.
-`Alt+O` keeps its binding id `outbox`, so a rebind saved before the Outbox moved
-into Customize still applies.
+`Alt+O` is unbound: it opened the Outbox, which is gone. A rebind saved for it
+(id `outbox` in `mf_keymap`) is dropped the next time the app loads, so it
+neither counts as a customization nor holds its old combo.
 
 ## New-session dialog
 
@@ -1587,9 +1587,8 @@ persisted in `localStorage`):
   & the grid** (New, one task or one per line; a pane and a row per session;
   View picks how many panes show; the Assistant), **Shipping** (the pane's
   next-step button, ⏩ Fast-track, and the bell for anything waiting on you),
-  **Where work comes from** (Intake, plus Verify joining the top bar once it is
-  checking what you shipped, and Customize for extra bars, saved prompts and
-  the Outbox) and **You're all set** (hints, Replay tour, Doctor). The fourth
+  **Where work comes from** (Intake, Verify for checking what you shipped, and
+  Customize for extra bars and saved prompts) and **You're all set** (hints, Replay tour, Doctor). The fourth
   slide carries **Set up now →**, which opens **Intake** on its Tickets tab
   (`LEGACY_SCREEN_TABS` decides that from the slide's `screen` key). The tour
   pauses behind Settings, Intake or Setup rather than ending, so closing one
@@ -2155,9 +2154,9 @@ Two consequences worth knowing:
 ## Customize
 
 **Extras you opt into.** The sidebar footer's **Customize** button (title
-*Sidebar bars, saved prompts and the Outbox*) opens one dialog,
-`#customize-dialog` (`components/customize/CustomizeDialog.tsx`), headed
-*Customize — Extras you can switch on*, with three tabs:
+*Sidebar bars and saved prompts*) opens one dialog, `#customize-dialog`
+(`components/customize/CustomizeDialog.tsx`), headed *Customize — Extras you
+can switch on*, with two tabs:
 
 - **Sidebar** — *Show in the sidebar*: one checkbox per bar, built-in and
   extension, in sidebar order (the same `mf_hiddenbars` set the bars always
@@ -2166,54 +2165,44 @@ Two consequences worth knowing:
   **Intake → Tickets** link (Tickets); *Appears once a repository is added*
   with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
   Issues); *Appears once Verify tracks a repository or has a checklist* with
-  **Open Verify** (Verify); *Chat and a todo list with your personal
-  assistant* (Assistant); *From an extension* for an extension's bar. A last
-  line says how to reorder: drag a bar's ⠿ grip in the sidebar.
+  **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button
+  is always there); *Chat and a todo list with your personal assistant*
+  (Assistant); *From an extension* for an extension's bar. A last line says
+  how to reorder: drag a bar's ⠿ grip in the sidebar.
 - **Prompts** — your [saved prompts](#saved-prompts): pick a target (the
   selected session, another running one, or all running sessions), click one
   to paste it there (nothing is sent), add, delete, preview.
-- **Outbox** — the read-only log of outbound work (below).
 
-Every older way in lands on the right tab: `Alt+O`, a group's **Open in the
-Outbox**, a run row in the bell or a toast, the palette's **Outbox — what's on
-its way out**, **Customize…** and **Prompts…**, and New's **Manage…** link.
-`Esc` closes the dialog unless something inside it (a prompt preview) handled
-the key first; a click on the backdrop closes it too.
+The palette's **Customize…** and **Prompts…** and New's **Manage…** link land
+on the right tab. `Esc` closes the dialog unless something inside it (a prompt
+preview) handled the key first; a click on the backdrop closes it too.
 
 Customize holds what is optional. Set-and-forget configuration stays in
 [Settings](#settings-), and anything that needs you is in the bell.
 
-## Outbox
+There is no Outbox. It used to be a third tab, a read-only log of outbound
+work; each thing it held now has one home elsewhere:
 
-**What's on its way out, and what shipped today.** The middle of the pipeline,
-Intake (in) → Outbox (out) → Verify (checked), as a read-only log: the
-**Outbox** tab of [Customize](#customize) (`Alt+O`, or the palette), panel
-`#outbox-panel`, built from the same kit as Intake. It holds nothing you have to
-act on — approvals and escalations live in the bell's **Needs attention** list
-(see [Notifications](#notifications-)). While anything is waiting, one line
-says so — *n waiting on you — in the bell* — with an **Open the bell** button.
+- what waits on you (answers, ask-first approvals, escalations, a lead's plan
+  or PR) — the bell's **Needs attention** (see [Notifications](#notifications-));
+- a group's queued lines (**Start now** / **Remove**) — the group header's ⋯
+  menu (below);
+- a finished group's summary — **Copy summary** in that same menu;
+- what is shipping — each row's own status line (`⇡ opening PR`, below).
 
-- **Group chips** filter one `GET /api/outbox?group=all`: **All**, one chip per
-  group of sessions started together, and **On their own** once any group
-  exists — shown only when there are two or more to choose between. Each count
-  is the rows that chip shows, not counting what waits in the bell. Rows are
-  de-duplicated on `(repo, branch)`, so a `foo` / `foo-copy` pair is one row.
-- **Shipping now** — MindFlock is committing / pushing / opening the PR. Read-only.
-- **Shipped today** — PR number and checks, the commit subject, **Review ↗**, and
-  **Verify →** when the branch has a checklist waiting. Closed sessions stay
-  in it for the day, which is why the log exists at all.
-- **Queued** — group lines waiting for a slot: **Start now** / **Remove**.
-- **Summary** — a finished group's card with **Copy as Markdown**.
+The *Shipped today* log is gone; a session's PR and checks stay on its row.
 
-With nothing outbound it says *Nothing is on its way out. Sessions show up here
-once ⏩ Fast-track carries them, or when you start several together from New.*
+## Team runs on the rail
 
-**On the rail.** Sessions started together sit under a group header — the same
-header family as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold
-badge is how many need you; a click folds the group, and **⋯** on hover has
-Pause / Resume, Add lines…, the queued lines (Start now / Remove), **Open in
-the Outbox** (Customize → Outbox on that group), and Cancel… (an inline
-confirm; sessions and branches are kept).
+Sessions started together sit under a group header — the same header family
+as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold badge is how
+many need you; a click folds the group, and **⋯** on hover has Pause / Resume,
+Add lines…, the queued lines (**Start now** / **Remove**) and Cancel… (an
+inline confirm; sessions and branches are kept). Once the group has finished,
+the menu has **Copy summary** instead: it copies the group's summary as
+Markdown (*Copied the summary as Markdown*), and is disabled — its tooltip
+says why — until the server has written one. The header is `li.run-group-head`
+with `data-run` set to the group's id.
 A header appears only for a group of two or more, and **On their own** only
 under at least one header. Queued lines are dim, with a hollow dot and no
 number. Headers and queued lines are never rail keys: Alt+N numbering skips
@@ -2231,9 +2220,11 @@ bell** is clickable and opens the bell on that session's row.
 **Notifications.** The bell's history lists a group's escalations, its finish,
 and each line that shipped, under the group's name. Clicking one opens the
 lead's Thread when the group has a lead; otherwise an escalation scrolls to its
-**Needs attention** row, and a finish or shipped row opens the group in
-Customize → Outbox. A `run.needs_you` toast opens the lead's Thread, else the
-bell, and a `run.finished` toast opens the group in Customize → Outbox. Rows
+**Needs attention** row, and a finish or shipped row (or an escalation already
+answered) closes the bell and reveals the group: its rail header scrolls into
+view and pulses once. A group whose header is gone (pruned, or filtered off the
+rail) just closes the bell. A `run.needs_you` toast opens the lead's Thread,
+else the bell, and a `run.finished` toast reveals the group's header. Rows
 obey the `run_needs_you` / `run_finished` switches in Settings → Notifications,
 and a prompt is never announced twice (the session's own "needs your input" row
 covers it). At most one group toast per 30 seconds.
@@ -2246,9 +2237,8 @@ merged is not verified — nobody has opened the thing and looked at it. So work
 that reaches the branch you actually ship from comes back here as a **checklist**,
 an agent works the steps it can from a shell, and whatever needs a pair of eyes
 is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`, or the
-palette's **Verify — check what shipped**) — the button joins the bar, with its
-due badge, once Verify tracks a repository or has a checklist, and `Alt+V` and
-the palette open it before then. Dialog `#verify-dialog` / panel
+palette's **Verify — check what shipped**) — the button is always on the bar,
+with its due badge. Dialog `#verify-dialog` / panel
 `#verify-panel`, from
 `frontend/src/components/dialogs/{VerifyDialog.tsx,verify.ts}`; the sidebar bar
 is `frontend/src/components/sidebar/VerifyBar.tsx` and the store is

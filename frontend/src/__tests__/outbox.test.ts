@@ -1,22 +1,18 @@
-/** The Outbox as data (components/outbox/outbox.ts): one response, filtered
- * per tab, so a tab's badge is the length of exactly what the tab shows — and
- * one branch is one row however many windows sit on it. */
+/** What waits on you, as data (components/outbox/outbox.ts): the bell's one
+ * list from `GET /api/outbox`, one branch one row however many windows sit on
+ * it, and a finished group's summary for its header's "Copy summary". */
 import { describe, it, expect } from "vitest";
-import type { Instance, OutboxResponse } from "../api/types";
+import type { OutboxResponse } from "../api/types";
 import {
   approvalKey,
   dedupe,
   messageHead,
   needsAttention,
-  outboxTabs,
-  shippedChip,
   shipVerb,
   statText,
+  summaryFor,
   thenText,
-  viewCount,
-  viewFor,
   waitingChip,
-  waitingCount,
 } from "../components/outbox/outbox";
 
 const run = { id: "r1", name: "Q4 payments" };
@@ -35,7 +31,6 @@ const DATA: OutboxResponse = {
         actions: ["ship", "diff", "edit_message"],
       },
     ],
-    // No `run` on these: the group is read off the session's row.
     shipping: [
       { title: "q4-ratelimit", step: "make_pr", note: "opening PR", lane: "pr" },
       { title: "lonely", step: "push", note: "pushing", lane: "push" },
@@ -52,75 +47,30 @@ const DATA: OutboxResponse = {
   },
   summaries: [{ run: "r0", name: "Auth cleanup", text_md: "## Auth cleanup\n- 3 PRs" }],
 };
-const ROWS: Record<string, Partial<Instance>> = {
-  "q4-ratelimit": { run: { ...run, task: "t2", role: "task", grouping: "each" } },
-  "jira-PAY-412": { run: { ...run, task: "t1", role: "task", grouping: "each" } },
-};
-const rowOf = (t: string) => ROWS[t] as Instance | undefined;
 
-describe("Outbox tabs: badges count what the tab shows", () => {
+describe("one response, one row per branch", () => {
   it("dedupes one branch to one row", () => {
     expect(dedupe(DATA.groups.shipped).map((s) => s.title)).toEqual(["jira-PAY-412"]);
     // No key: falls back to the title.
     expect(dedupe([{ title: "a" }, { title: "a" }, { title: "b" }]).length).toBe(2);
   });
+});
 
-  it("filters to a group, using the session's own run when the row has none", () => {
-    const g = viewFor(DATA, "r1", rowOf);
-    expect(g.waiting.map((w) => w.title)).toEqual(["jira-PAY-419"]);
-    expect(g.shipping.map((s) => s.title)).toEqual(["q4-ratelimit"]);
-    expect(g.shipped.map((s) => s.title)).toEqual(["jira-PAY-412"]);
-    expect(g.queued).toHaveLength(2);
-    const own = viewFor(DATA, "own", rowOf);
-    expect(own.waiting.map((w) => w.title)).toEqual(["web-dark-mode"]);
-    expect(own.shipping.map((s) => s.title)).toEqual(["lonely"]);
-    expect(own.queued).toEqual([]);
+describe("a finished group's summary: what its header's Copy summary copies", () => {
+  it("finds the group's own summary by run id", () => {
+    expect(summaryFor(DATA, "r0")?.text_md).toBe("## Auth cleanup\n- 3 PRs");
   });
 
-  it("builds All · one chip per group · On their own, each counting its own rows", () => {
-    const tabs = outboxTabs(DATA, rowOf);
-    // What waits on you is the bell's: no chip counts it.
-    expect(tabs.map((t) => [t.key, t.label, t.count])).toEqual([
-      ["all", "All", 5],
-      ["r1", "Q4 payments", 4],
-      ["own", "On their own", 1],
-    ]);
-    for (const t of tabs) expect(t.count).toBe(viewCount(viewFor(DATA, t.key, rowOf)));
-  });
-
-  it("has no On their own tab when there is no group, and nothing at all without data", () => {
-    const solo: OutboxResponse = { ...DATA, groups: { waiting: [DATA.groups.waiting[1]], shipping: [], shipped: [], queued: [] } };
-    expect(outboxTabs(solo, () => undefined).map((t) => t.key)).toEqual(["all"]);
-    expect(outboxTabs(null, rowOf).map((t) => [t.key, t.count])).toEqual([["all", 0]]);
-  });
-
-  it("leaves what waits on you out of every count, but keeps it in the view", () => {
-    const all = viewFor(DATA, "all", rowOf);
-    expect(all.waiting).toHaveLength(2);
-    expect(viewCount(all)).toBe(5);
-    // A group whose only rows wait on you gets no chip.
-    const waitOnly: OutboxResponse = {
-      ...DATA,
-      groups: { waiting: [DATA.groups.waiting[0]], shipping: [], shipped: [], queued: [] },
-    };
-    expect(outboxTabs(waitOnly, rowOf).map((t) => [t.key, t.count])).toEqual([["all", 0]]);
-  });
-
-  it("counts what's waiting on YOU, across every group — 0 is none", () => {
-    expect(waitingCount(DATA)).toBe(2);
-    expect(waitingCount(null)).toBe(0);
-    expect(waitingCount(undefined)).toBe(0);
-    expect(waitingCount({ ...DATA, groups: { ...DATA.groups, waiting: [] } })).toBe(0);
-  });
-
-  it("keeps a group's summary on its own tab", () => {
-    expect(viewFor(DATA, "r0", rowOf).summaries.map((s) => s.name)).toEqual(["Auth cleanup"]);
-    expect(viewFor(DATA, "r1", rowOf).summaries).toEqual([]);
-    expect(viewFor(DATA, "all", rowOf).summaries).toHaveLength(1);
+  it("is null for a group with none, an empty one, no id, or no data", () => {
+    expect(summaryFor(DATA, "r1")).toBeNull();
+    expect(summaryFor({ ...DATA, summaries: [{ run: "r0", name: "x", text_md: "  " }] }, "r0")).toBeNull();
+    expect(summaryFor(DATA, "")).toBeNull();
+    expect(summaryFor(null, "r0")).toBeNull();
+    expect(summaryFor(undefined, "r0")).toBeNull();
   });
 });
 
-describe("Outbox rows: say it before it happens", () => {
+describe("waiting rows: say it before it happens", () => {
   it("names the approve button for the step it will take", () => {
     expect(shipVerb("commit")).toBe("Commit");
     expect(shipVerb(undefined)).toBe("Commit");
@@ -144,18 +94,6 @@ describe("Outbox rows: say it before it happens", () => {
     expect(waitingChip({ title: "x", kind: "ship_halted", reason: "hooks failed twice at mypy" }).cls).toBe("bad");
     expect(statText(DATA.groups.waiting[1].preview)).toBe("5 files +210 −32");
   });
-
-  it("chips a shipped row with its PR and checks", () => {
-    expect(shippedChip(DATA.groups.shipped[0])).toEqual({ text: "PR #318 · checks ✓", cls: "ok" });
-    expect(shippedChip({ title: "x", pr_url: "https://g/pull/9", pr_state: "merged", checks: "pass" }).text).toBe(
-      "PR #9 merged · checks ✓"
-    );
-    expect(shippedChip({ title: "x", pr_url: "https://g/pull/9", checks: "fail" }).cls).toBe("bad");
-    expect(shippedChip({ title: "x" }).text).toBe("shipped");
-    // Without a PR the chip says how far the lane went.
-    expect(shippedChip({ title: "x", lane: "push" }).text).toBe("pushed");
-    expect(shippedChip({ title: "x", lane: "commit" }).text).toBe("committed");
-  });
 });
 
 describe("the approval card's message (review findings 23, 24)", () => {
@@ -177,7 +115,7 @@ describe("the bell's one list: needsAttention", () => {
   const approve = DATA.groups.waiting[1];
   const prompt = DATA.groups.waiting[0];
 
-  it("drops the Outbox's prompt item: the session's own answer row is that question", () => {
+  it("drops the server's prompt item: the session's own answer row is that question", () => {
     const rows = needsAttention([{ p: 0, title: "jira-PAY-419", reason: "needs your answer" }], [prompt]);
     expect(rows.map((r) => [r.key, r.rank, !!r.attn, !!r.waiting])).toEqual([["jira-PAY-419", 0, true, false]]);
   });
@@ -189,7 +127,7 @@ describe("the bell's one list: needsAttention", () => {
     expect(rows[0].rank).toBe(1);
   });
 
-  it("keeps an answer row over an Outbox item for the same session", () => {
+  it("keeps an answer row over a waiting item for the same session", () => {
     const rows = needsAttention(
       [{ p: 0, title: "web-dark-mode", reason: "needs your answer" }],
       [{ ...approve, kind: "ship_halted" }]
@@ -234,7 +172,7 @@ describe("the bell's one list: needsAttention", () => {
     expect(rows.map((r) => r.rank)).toEqual([0, 1, 1, 2, 3, 4]);
   });
 
-  it("is empty with nothing on either side, and tolerates no Outbox at all", () => {
+  it("is empty with nothing on either side, and tolerates no waiting list at all", () => {
     expect(needsAttention([], undefined)).toEqual([]);
     expect(needsAttention([{ p: 3, title: "a", reason: "pushed — ready for PR" }], undefined)).toHaveLength(1);
   });

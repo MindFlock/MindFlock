@@ -1,7 +1,7 @@
 /** The team-run routes, as the UI calls them (server: docs/web-api.md "Team
- * runs and the Outbox"). One place for the paths and the "act, refetch, say
- * so" shape, so the rail's group menu, the Outbox and the row › menu
- * can never drift apart on what a button posts.
+ * runs"). One place for the paths and the "act, refetch, say so" shape, so
+ * the rail's group menu, the bell's waiting rows and the row › menu can never
+ * drift apart on what a button posts.
  *
  * What each control posts:
  *  - Pause / Resume        POST /api/runs/{id}/pause {reason:"user"} · /resume {}
@@ -43,13 +43,13 @@ export async function runAction(what: string, path: string, body: unknown = {}, 
   }
 }
 
-/** The Outbox's "Raise to $N": a budget pause is lifted by resuming with the
+/** A budget row's "Raise to $N" (the bell): a budget pause is lifted by resuming with the
  * new budget — one call, never a separate PUT. */
 export function raiseBudget(runId: string, usd: number, name = ""): Promise<boolean> {
   return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
 }
 
-/** The Outbox's "Stop" on a budget item, and the group menu's Cancel. */
+/** The bell's "Stop" on a budget item, and the group menu's Cancel. */
 export function cancelRun(runId: string, name = ""): Promise<boolean> {
   return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
 }

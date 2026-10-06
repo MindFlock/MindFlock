@@ -98,11 +98,8 @@ export type DialogName =
   | "settings"
   | "intake"
   // Customize (CustomizeDialog): "customize" opens its Sidebar tab, and
-  // "prompts" / "outbox" below open it on those tabs.
+  // "prompts" below opens it on that tab.
   | "customize"
-  // Customize → Outbox: what's on its way out and what shipped today (ship
-  // lanes); dialogTarget may name a run id ("own" = sessions on their own).
-  | "outbox"
   | "verify"
   | "commit"
   | "make-pr"

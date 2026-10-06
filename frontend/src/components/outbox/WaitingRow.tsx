@@ -1,6 +1,6 @@
 /** The bell's waiting rows — what MindFlock stopped for, and the one click
- * that moves it on (SPEC §7.C.3; the rows the Outbox used to list under
- * "Waiting on you", moved whole into the bell's "Needs attention").
+ * that moves it on (SPEC §7.C.3), listed in the bell's "Needs attention". They
+ * come from `GET /api/outbox` (the folder keeps the route's name).
  *
  * There are only two kinds of "you" here: ANSWER a prompt an agent is stuck
  * on (the shared AnswerStrip), or APPROVE a ship you asked to see first — and
@@ -37,9 +37,9 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import type { RunInfo } from "../../lib/runs";
 
-/** Take the user to a session's pane (optionally a tab of it), closing the
- * Outbox — the pane is where the thing being pointed at lives. The bell
- * closes too ("mf-close-bell"): a row there navigates the same way. */
+/** Take the user to a session's pane (optionally a tab of it), closing any
+ * open dialog and the bell ("mf-close-bell") — the pane is where the thing
+ * being pointed at lives. */
 export function openSession(title: string, tab?: string) {
   selectSession(title);
   if (tab) useUi.getState().setLastTab(title, tab);

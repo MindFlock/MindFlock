@@ -38,8 +38,7 @@ interface RepositorySettings {
 }
 
 /** The repository half of the settings Verify runs on (`verify_enabled`,
- * `verify_repos`) — one query, shared by this bar and the top bar's Verify
- * button, which shows on the same "anything to govern" rule as the bar. */
+ * `verify_repos`) — one query for this bar. */
 export function useVerifySettings() {
   return useQuery({
     queryKey: ["verify-settings"],

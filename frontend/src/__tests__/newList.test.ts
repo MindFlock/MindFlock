@@ -221,9 +221,9 @@ describe("the sentence", () => {
     });
   });
 
-  it("points at the row a PR shows on, never at the Outbox", () => {
-    // The Outbox is a log under Customize now, not where anybody looks for a
-    // session's PR: the row's next-step chip already carries the link.
+  it("points at the row a PR shows on, never at a log elsewhere", () => {
+    // There is no Outbox to point at any more, and a session's PR was never
+    // looked for there: the row's next-step chip already carries the link.
     expect(summarySentence({ ...base, lane: "merge" })!.tail).toBe("Each PR shows on its row.");
     for (const lane of ["leave", "commit", "push", "pr", "merge"] as const)
       for (const grouping of ["each", "together"] as const)

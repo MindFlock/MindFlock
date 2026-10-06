@@ -26,6 +26,7 @@ import { messageToastText, type MessageEventData } from "../lib/agentMessages";
 import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
+import { revealGroup } from "../lib/revealGroup";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -413,7 +414,8 @@ export function EventToasts() {
           notifyOnce("*run", "run", n.text, {
             // A plan / the one PR: their click is on the lead's Thread tab.
             // Anything else that needs you waits in the bell; a finished
-            // group's summary is on its Outbox view.
+            // group is shown where it lives — its header on the rail, whose
+            // ⋯ copies the summary.
             onClick: () => {
               if (n.lead) openThread(n.lead);
               else if (env.event === "run.needs_you")
@@ -424,7 +426,7 @@ export function EventToasts() {
                     detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") },
                   })
                 );
-              else useUi.getState().openDialogFor("outbox", n.run || null);
+              else revealGroup(n.run);
             },
             duration: 8000,
           });

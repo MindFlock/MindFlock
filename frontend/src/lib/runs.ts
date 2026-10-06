@@ -243,7 +243,7 @@ export function groupTitle(g: RunGroup): string {
 export interface RunNote {
   text: string;
   cls: string;
-  /** The run the row is about — a click opens the Outbox on its group. */
+  /** The run the row is about — a click reveals its group header on the rail. */
   run: string;
   /** Same fact = same key: a replayed or re-sent event never adds a row. */
   dedupe: string;

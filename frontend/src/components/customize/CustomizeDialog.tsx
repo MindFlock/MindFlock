@@ -1,13 +1,10 @@
-/** Customize — the extras you opt into, in one dialog: Sidebar · Prompts ·
- * Outbox.
+/** Customize — the extras you opt into, in one dialog: Sidebar · Prompts.
  *
- * Three things that are nobody's daily loop and so have no top-bar slot: which
- * bars the sidebar shows, your saved prompts, and the Outbox's log of what is
- * on its way out. Each tab IS a dialog name — "customize" (Sidebar), "prompts",
- * "outbox" — so every caller that opened the old Prompts or Outbox dialog
- * (Alt+O, the bell's and toasts' run rows with a run id in dialogTarget, a
- * group header's "Open in the Outbox", New's "Manage…") lands on its tab with
- * no change, and a tab click is just openDialogFor(that name).
+ * Two things that are nobody's daily loop and so have no top-bar slot: which
+ * bars the sidebar shows, and your saved prompts. Each tab IS a dialog name —
+ * "customize" (Sidebar), "prompts" — so every caller that opened the old
+ * Prompts dialog (New's "Manage…") lands on its tab with no change, and a tab
+ * click is just openDialogFor(that name).
  *
  * Esc closes the dialog unless something inside claimed it first
  * (`defaultPrevented` — the Prompts preview, an inline edit). The listener sits
@@ -18,26 +15,23 @@ import { useEffect } from "react";
 import { useUi, type DialogName } from "../../state/store";
 import { SidebarBarsPicker } from "./SidebarBarsPicker";
 import { PromptsPanel } from "../dialogs/PromptsDialog";
-import { OutboxPanel } from "../outbox/OutboxDialog";
 
-type CustomizeTab = "sidebar" | "prompts" | "outbox";
+type CustomizeTab = "sidebar" | "prompts";
 
 const TABS: Array<{ key: CustomizeTab; label: string; dialog: DialogName }> = [
   { key: "sidebar", label: "Sidebar", dialog: "customize" },
   { key: "prompts", label: "Prompts", dialog: "prompts" },
-  { key: "outbox", label: "Outbox", dialog: "outbox" },
 ];
 
 /** The tab a dialog name opens on, or null when it is not one of Customize's. */
 export function customizeTab(name: DialogName | null): CustomizeTab | null {
   if (name === "customize") return "sidebar";
-  if (name === "prompts" || name === "outbox") return name;
+  if (name === "prompts") return name;
   return null;
 }
 
 export function CustomizeDialog() {
   const tab = useUi((s) => customizeTab(s.openDialog));
-  const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const openDialogFor = useUi((s) => s.openDialogFor);
   const open = tab !== null;
@@ -93,7 +87,6 @@ export function CustomizeDialog() {
         <div id="customize-body" data-tab={tab}>
           {tab === "sidebar" && <SidebarBarsPicker />}
           {tab === "prompts" && <PromptsPanel />}
-          {tab === "outbox" && <OutboxPanel target={target} />}
         </div>
       </div>
     </div>

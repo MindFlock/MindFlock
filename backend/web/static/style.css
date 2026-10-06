@@ -4964,7 +4964,7 @@ p.set-hint {
   }
 }
 
-/* --- The Outbox's waiting rows, hosted in the bell ------------------------- */
+/* --- Waiting rows (WaitingRow.tsx) in the bell ----------------------------- */
 /* WaitingRow is the Intake kit's two-column card; at the bell's 400px it
    stacks — the session and its chips, then the buttons, then the preview. */
 .attn-wait {
@@ -17695,95 +17695,14 @@ button.linklike {
 
 @layer components{
 
-/* The Outbox tab of Customize: Intake's kit, a third time.
+/* The bell's waiting rows (WaitingRow.tsx): Intake's kit, once more.
  *
- * The frame is Customize's (CustomizeDialog.css); everything inside is the
- * shared kit — `.ik-subtitle`, `.ik-groups`, `.pr-open-item`, `.pr-open-chip`,
- * `.btn-primary`, `.test-btn`. Imported after VerifyDialog.css so the few rules
- * that reach into those shared classes win the equal-specificity ties. What has
- * no counterpart there lives under `ob-`. The waiting rows (WaitingRow.tsx)
- * render in the bell, but their `ob-` rules stay here with the kit they extend. */
-
-#outbox-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-#outbox-panel .ob-fetch {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-/* "<n> waiting on you — in the bell": one quiet line, never a list. */
-.ob-to-bell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--gold-fill) 55%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--gold-fill) 8%, transparent);
-  font-size: 12px;
-}
-
-.ob-to-bell span {
-  flex: 1;
-}
-
-/* Group chips — shown only once there are at least two (All + a group). */
-#outbox-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  flex: none;
-}
-
-#outbox-tabs .ob-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-}
-
-#outbox-tabs .ob-chip:hover {
-  color: var(--text);
-}
-
-#outbox-tabs .ob-chip.active {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-#outbox-tabs .ob-chip-count {
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-#outbox-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 4px 4px 0 0;
-}
-
-.ob-groups {
-  gap: 12px;
-}
-
-.ob-groups .ik-group-body {
-  padding-top: 8px;
-}
+ * Everything here extends the shared kit — `.ik-subtitle`, `.pr-open-item`,
+ * `.pr-open-chip`, `.btn-primary`, `.test-btn` — and is imported after
+ * VerifyDialog.css so the few rules that reach into those shared classes win
+ * the equal-specificity ties. What has no counterpart there lives under `ob-`
+ * (a name kept from when these rows had a dialog of their own); the bell's own
+ * layout for them is in NotificationsBell.css. */
 
 /* A session's name is a button that opens it — styled as the kit's link-ref. */
 .pr-open-item .ob-ref {
@@ -17923,36 +17842,6 @@ span.pr-open-ref.ob-ref {
   font-weight: 600;
 }
 
-/* A finished group's summary card. */
-.ob-summary {
-  background: var(--panel-2);
-}
-
-.ob-summary-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ob-summary-head b {
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.ob-summary-head .test-btn {
-  margin-left: auto;
-}
-
-.ob-summary-md {
-  margin: 8px 0 0;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  color: var(--text);
-}
-
 /* A budget item's "Raise to $N": the amount is typed inline. */
 .ob-usd {
   display: inline-flex;
@@ -17973,18 +17862,18 @@ span.pr-open-ref.ob-ref {
 }
 }
 
-/* 257 — the
-   same kit a third time; after VerifyDialog.css for the same reason */
+/* 257 — the bell's
+   waiting rows: the same kit again; after VerifyDialog.css for the same reason */
 
 @layer components{
 
-/* Customize: Sidebar · Prompts · Outbox in one dialog.
+/* Customize: Sidebar · Prompts in one dialog.
  *
- * The frame mirrors #intake-panel (a third of the same family, after Verify and
- * the old Outbox): the shared `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one
- * fixed height for all three tabs so switching never makes the dialog jump, and
- * only the tab's own list scrolls. Imported right after Outbox.css, so it can
- * shape the panels that live inside it. */
+ * The frame mirrors #intake-panel (the same family as Verify): the shared
+ * `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one fixed height for both tabs
+ * so switching never makes the dialog jump, and only the tab's own list
+ * scrolls. Imported right after Outbox.css, so it can shape the panels that
+ * live inside it. */
 
 #customize-panel {
   width: 760px;
@@ -18027,7 +17916,7 @@ span.pr-open-ref.ob-ref {
   flex-direction: column;
 }
 
-/* A tab's own first line (the Outbox's subtitle, the Prompts target). */
+/* A tab's own first line (the Prompts target). */
 #customize-body .cz-tab-head {
   display: flex;
   align-items: baseline;
@@ -18101,7 +17990,7 @@ span.pr-open-ref.ob-ref {
 }
 
 /* 258 —
-   the frame the Outbox and Prompts panels sit in; after Outbox.css */
+   the frame the Sidebar and Prompts panels sit in; after Outbox.css */
 
 @layer components{
 /* Settings → Mobile: white QR card + URL rows.
@@ -18734,6 +18623,12 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   background: var(--panel-2);
 }
 
+/* "Copy summary" before the server has written one: still there, plainly off. */
+.rg-menu > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .rg-menu .rg-hint {
   margin-left: auto;
   font-size: 11px;
@@ -18809,6 +18704,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   background: var(--red);
   border-color: var(--red);
   color: #fff;
+}
+
+/* A group asked for by name (a bell history row, a run toast — lib/revealGroup.ts):
+   the bell's one accent pulse (`notif-flash`, NotificationsBell.css), so the eye
+   lands on it after the scroll. */
+.run-group-head.rg-flash {
+  animation: notif-flash 1.4s ease-out;
 }
 }
 

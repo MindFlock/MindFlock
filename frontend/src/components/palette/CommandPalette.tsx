@@ -112,13 +112,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.openDialogFor("verify"),
     });
     // Customize and its tabs: the extras you opt into.
-    acts.push({ label: "Customize…", hint: "sidebar bars, prompts, Outbox", run: () => ui.openDialogFor("customize") });
+    acts.push({ label: "Customize…", hint: "sidebar bars, prompts", run: () => ui.openDialogFor("customize") });
     acts.push({ label: "Prompts…", hint: "paste a saved prompt", run: () => ui.openDialogFor("prompts") });
-    acts.push({
-      label: "Outbox — what's on its way out",
-      hint: "Alt+O",
-      run: () => ui.openDialogFor("outbox"),
-    });
     acts.push({ label: "Recently closed…", hint: "reopen or clean up closed sessions", run: () => ui.openDialogFor("recent") });
     acts.push({ label: "Assistant instructions…", run: () => ui.openDialogFor("assistant-agent") });
     if (caps.git)
