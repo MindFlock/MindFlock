@@ -435,6 +435,15 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
             merged,
             rel.get("branch") or lead or "one branch",
         )
+        local = str(rel.get("local_origin") or "")
+        if local:
+            # The lead's origin is a folder on this machine: the release can
+            # only push there — never promise a PR it cannot open.
+            reason = (
+                "%d merged into %s — its origin is a folder on this machine "
+                "(%s): releasing pushes there, no PR can be opened"
+                % (merged, rel.get("branch") or lead or "one branch", local)
+            )
         if rel.get("state") == "failed" and rel.get("detail"):
             reason = "the release stopped: %s" % rel["detail"]
         return dict(
@@ -451,7 +460,8 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
                 "check": (run.get("check") or {}).get("state") or None,
                 # The group's lane labels the buttons: "Open the PR" never
                 # merges; a merge group's primary is "merge when checks pass".
-                "lane": run["policy"]["lane"],
+                "lane": "push" if local else run["policy"]["lane"],
+                "local_origin": local or None,
             },
             actions=list(WAITING_ACTIONS["release"]),
         )

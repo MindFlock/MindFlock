@@ -284,6 +284,7 @@ def compact_run(run: dict) -> dict:
                     "tests",
                     "pr_url",
                     "compare_url",
+                    "local_origin",
                     "detail",
                 )
                 if block.get(k) not in (None, "")

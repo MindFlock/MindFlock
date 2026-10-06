@@ -312,8 +312,20 @@ export function checkLine(run: Pick<RunDTO, "check">): string {
  * (the server caps it at a PR); only the explicit "merge when checks pass"
  * does; a push group pushes its branch and opens nothing. */
 export function releaseChoices(
-  lane: string | null | undefined
+  lane: string | null | undefined,
+  localOrigin?: string | null
 ): Array<{ merge: boolean; label: string; primary: boolean; title: string }> {
+  // The lead's origin is a folder on this machine: a push is all a release
+  // can do there (the server never attempts the PR), so that is all it offers.
+  if (localOrigin)
+    return [
+      {
+        merge: false,
+        label: "Push to the local folder",
+        primary: true,
+        title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened",
+      },
+    ];
   if (lane === "push")
     return [{ merge: false, label: "Push the branch", primary: true, title: "Push the group's branch — no PR is opened" }];
   const pr = {
@@ -349,9 +361,10 @@ export function releaseOutcome(run: RunDTO): {
 } | null {
   const r = run.release;
   const lane = run.policy?.lane || "";
+  const local = r?.local_origin || "";
   if (run.state === "releasing" || r?.state === "releasing")
     return {
-      text: lane === "push" ? "Pushing the branch…" : "Opening the PR…",
+      text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
       cls: "work",
       url: "",
       link: "",
@@ -365,6 +378,21 @@ export function releaseOutcome(run: RunDTO): {
       link: "Open the PR ↗",
     };
   }
+  // Pushed into a folder on this machine: say where, and that no PR exists —
+  // the title and body below are the hand-off for opening it on the forge.
+  if ((r?.state === "handoff" || r?.state === "done") && local)
+    return {
+      text:
+        "Pushed " +
+        (r.branch || run.lead?.branch || "the branch") +
+        " to " +
+        local +
+        " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" +
+        (r.title ? " (copy its title and body below)" : ""),
+      cls: "idle",
+      url: "",
+      link: "",
+    };
   if (r?.state === "handoff")
     return {
       text: r.compare_url
@@ -472,6 +500,8 @@ export function leadLine(
   // The release pushed but couldn't open the PR here (no gh, no token): that
   // is how it is meant to end without them — the PR is one click away, never
   // a red "fast-track stopped".
+  if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done"))
+    return { text: "⇡ pushed to a local folder — no PR", cls: "" };
   if (run.release?.state === "handoff")
     return { text: "⇡ pushed — open the PR", cls: "", url: run.release.compare_url || undefined };
   if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)))

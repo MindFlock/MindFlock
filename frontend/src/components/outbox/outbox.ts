@@ -261,7 +261,7 @@ export function waitingActions(
   if (w.kind === "release") {
     // Labelled from the group's own lane: "Open the PR" never merges.
     if (a.has("release") && can.run)
-      for (const c of releaseChoices(w.preview?.lane))
+      for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin))
         out.push({ key: c.merge ? "release_merge" : "release", label: c.label, primary: c.primary, title: c.title });
     open("The lead's Thread has the PR's title, body and the merged diff");
     return out;

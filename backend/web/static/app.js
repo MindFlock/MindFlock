@@ -30367,7 +30367,13 @@ function checkLine(run) {
 		default: return "";
 	}
 }
-function releaseChoices(lane) {
+function releaseChoices(lane, localOrigin) {
+	if (localOrigin) return [{
+		merge: false,
+		label: "Push to the local folder",
+		primary: true,
+		title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
+	}];
 	if (lane === "push") return [{
 		merge: false,
 		label: "Push the branch",
@@ -30396,8 +30402,9 @@ function laneNote(lane) {
 function releaseOutcome(run) {
 	const r = run.release;
 	const lane = run.policy?.lane || "";
+	const local = r?.local_origin || "";
 	if (run.state === "releasing" || r?.state === "releasing") return {
-		text: lane === "push" ? "Pushing the branch…" : "Opening the PR…",
+		text: local ? "Pushing the branch to " + local + "…" : lane === "push" ? "Pushing the branch…" : "Opening the PR…",
 		cls: "work",
 		url: "",
 		link: ""
@@ -30411,6 +30418,12 @@ function releaseOutcome(run) {
 			link: "Open the PR ↗"
 		};
 	}
+	if ((r?.state === "handoff" || r?.state === "done") && local) return {
+		text: "Pushed " + (r.branch || run.lead?.branch || "the branch") + " to " + local + " — a folder on this machine, not GitHub, so no PR was opened. Push the branch to your forge and open the PR there" + (r.title ? " (copy its title and body below)" : ""),
+		cls: "idle",
+		url: "",
+		link: ""
+	};
 	if (r?.state === "handoff") return {
 		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
 		cls: "idle",
@@ -30505,6 +30518,10 @@ function leadLine(run) {
 			url: run.release.pr_url
 		};
 	}
+	if (run.release?.local_origin && (run.release.state === "handoff" || run.release.state === "done")) return {
+		text: "⇡ pushed to a local folder — no PR",
+		cls: ""
+	};
 	if (run.release?.state === "handoff") return {
 		text: "⇡ pushed — open the PR",
 		cls: "",
@@ -30710,7 +30727,7 @@ function waitingActions(w, can) {
 		return out;
 	}
 	if (w.kind === "release") {
-		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane)) out.push({
+		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane, w.preview?.local_origin)) out.push({
 			key: c.merge ? "release_merge" : "release",
 			label: c.label,
 			primary: c.primary,
@@ -38241,19 +38258,30 @@ function RunLeadPanel({ title, me, run, rows }) {
 					})
 				}) : run.state === "release_ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "rb-btns",
-					children: [releaseChoices(run.policy?.lane).map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "th-btn" + (c.primary ? " primary" : ""),
-						title: c.title,
-						disabled: !!busy,
-						onClick: () => void release(c.merge),
-						children: c.label
-					}, c.label)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "th-btn",
-						onClick: reviewDiff,
-						children: "Review the diff"
-					})]
+					children: [
+						run.release?.local_origin && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "rb-status th-idle",
+							children: [
+								"Its origin is ",
+								run.release.local_origin,
+								" — a folder on this machine, not GitHub: releasing pushes there, and no PR can be opened"
+							]
+						}),
+						releaseChoices(run.policy?.lane, run.release?.local_origin).map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn" + (c.primary ? " primary" : ""),
+							title: c.title,
+							disabled: !!busy,
+							onClick: () => void release(c.merge),
+							children: c.label
+						}, c.label)),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							onClick: reviewDiff,
+							children: "Review the diff"
+						})
+					]
 				}) : outcome ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "rb-btns",
 					children: [
@@ -38268,7 +38296,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 							rel: "noreferrer",
 							children: outcome.link
 						}),
-						run.release?.state === "handoff" && run.release.title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						(run.release?.state === "handoff" || run.release?.state === "done" && !!run.release.local_origin) && run.release.title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "th-btn",
 							onClick: () => void copyText(run.release?.title || "").then((ok) => toast(ok ? "PR title copied" : "Couldn't copy")),

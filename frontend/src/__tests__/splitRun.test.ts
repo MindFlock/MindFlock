@@ -152,6 +152,22 @@ describe("the ship card", () => {
     const local = S.releaseOutcome(run({ state: "done", policy: { lane: "commit", ask_first: false, grouping: "together" } }))!;
     expect(local.text).toMatch(/nothing pushed \(this group is fast-tracked to Commit\)/);
   });
+
+  it("a lead whose origin is a folder on this machine: push only, and the outcome never claims a PR", () => {
+    const choices = S.releaseChoices("pr", "/home/u/app");
+    expect(choices.map((c) => [c.label, c.merge])).toEqual([["Push to the local folder", false]]);
+    expect(choices[0].title).toMatch(/\/home\/u\/app — a folder on this machine, not GitHub: no PR can be opened/);
+    expect(S.releaseChoices("pr").map((c) => c.label)).toEqual(["Open the PR", "Open it, merge when checks pass"]);
+    expect(S.releaseOutcome(run({ state: "releasing", release: { state: "releasing", local_origin: "/home/u/app" } }))!.text).toBe(
+      "Pushing the branch to /home/u/app…"
+    );
+    const ho = S.releaseOutcome(
+      run({ state: "done", release: { state: "handoff", local_origin: "/home/u/app", branch: "feature/sc-1/x", title: "T" } })
+    )!;
+    expect(ho.text).toMatch(/^Pushed feature\/sc-1\/x to \/home\/u\/app — a folder on this machine, not GitHub, so no PR was opened/);
+    expect(ho.text).not.toMatch(/no gh or token/);
+    expect(ho.url).toBe("");
+  });
 });
 
 describe("a piece's status", () => {

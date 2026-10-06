@@ -345,7 +345,13 @@ export function RunLeadPanel({
               )
             ) : run.state === "release_ready" ? (
               <div className="rb-btns">
-                {releaseChoices(run.policy?.lane).map((c) => (
+                {run.release?.local_origin && (
+                  <span className="rb-status th-idle">
+                    Its origin is {run.release.local_origin} — a folder on this machine, not GitHub: releasing pushes there,
+                    and no PR can be opened
+                  </span>
+                )}
+                {releaseChoices(run.policy?.lane, run.release?.local_origin).map((c) => (
                   <button
                     key={c.label}
                     type="button"
@@ -369,7 +375,8 @@ export function RunLeadPanel({
                     {outcome.link}
                   </a>
                 )}
-                {run.release?.state === "handoff" && run.release.title && (
+                {(run.release?.state === "handoff" || (run.release?.state === "done" && !!run.release.local_origin)) &&
+                  run.release.title && (
                   // No compare page (a non-GitHub origin, no gh, no token):
                   // the PR MindFlock built is yours to paste wherever it goes.
                   <>

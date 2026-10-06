@@ -77,7 +77,19 @@ def _repo_name(inst: session.Instance) -> str:
         repo_path = inst.Path or ""
     if not repo_path or repo_path == ".":
         return ""
-    return os.path.basename(os.path.normpath(repo_path))
+    name = os.path.basename(os.path.normpath(repo_path))
+    if provisioning.is_base_repo_dirname(name):
+        # A plain worktree of MindFlock's base clone — a piece of a ticket
+        # session's split: name the repository, not the ``_base_`` folder,
+        # so it reads (and groups) as its lead does.
+        try:
+            s = provisioning.settings_for_workspace(repo_path)
+            url = getattr(s, "repo_url", "") if s else ""
+            if url:
+                return provisioning.repo_display_name(url) or name
+        except Exception:  # noqa: BLE001
+            pass
+    return name
 
 
 def _folder_label(folder: str) -> str:
