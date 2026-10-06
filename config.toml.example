@@ -43,6 +43,10 @@ poll_interval_seconds = 20
 # (auto-ingested or started by hand). Unset = leave it where it is. Shortcut /
 # Jira / Linear only. UI field: Intake → Tickets → Move to state on start.
 # start_state = "500000008"
+# Optional: when the move above happens, also comment "MindFlock (<your first
+# name>) is taking this on." on the story. Off by default; skipped when the story
+# was already in that state. UI field: Intake → Tickets → Comment when moved.
+# start_comment = true
 # Optional: clone URL this source's tickets provision into (defaults to
 # [repository].url).
 # repo_url = ""

@@ -1858,7 +1858,7 @@ credential.
   the sidebar's **Tickets** bar, so the two never disagree), one card per
   connected source (provider, optional label, Repo URL, its own **Agent CLI**,
   its **Thinking effort**, ingest-state picker, **Move to state on start**,
-  credentials, **Test connection**, **Remove**), then
+  **Comment when moved**, credentials, **Test connection**, **Remove**), then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -1894,6 +1894,13 @@ credential.
   live and never fails a launch — a tracker that refuses it (most often a Jira
   status with no transition into it from where the issue sits) logs a warning
   and the session keeps running.
+  **Comment when moved** (Shortcut/Jira/Linear only) sits directly under the
+  start-state picker: **Off — move it silently** (the default) or **On —
+  "MindFlock (you) is taking this on."**, signed with the first name of the
+  connected tracker account. It does nothing without a start state, and posts
+  only when the move actually changed the ticket's state — so **Run ticket** on
+  a ticket already in that state doesn't comment twice. A refused comment is a
+  warning; the session keeps running.
 - **Pull requests** — **Automated review** (absent = on once repos exist),
   **Open pull requests** with **Begin review**, then the repository cards. This
   tab also owns the shared GitHub token, under **Advanced options**.

@@ -537,6 +537,62 @@ def test_settings_roundtrip_start_state():
     assert "start_state" not in plain.to_dict()["ticketing"]["sources"][0]
 
 
+@pytest.mark.parametrize("raw,on", [("true", True), ('"on"', True), ("false", False)])
+def test_start_comment_parses_from_toml(tmp_path, raw, on):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            f"""
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+start_state = "500000012"
+start_comment = {raw}
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.start_comment is on
+
+
+def test_start_comment_is_off_by_default(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.start_comment is False
+
+
+def test_settings_roundtrip_start_comment():
+    # The Intake card's select writes "on" / ""; a hand-edited bool is
+    # normalized to that spelling, and off is dropped like every blank field.
+    for stored in ("on", True):
+        s = Settings.from_dict(
+            {
+                "ticketing": {
+                    "sources": [{"provider": "linear", "start_comment": stored}]
+                }
+            }
+        )
+        assert s.to_dict()["ticketing"]["sources"][0]["start_comment"] == "on"
+    for stored in ("", False, None):
+        s = Settings.from_dict(
+            {
+                "ticketing": {
+                    "sources": [{"provider": "linear", "start_comment": stored}]
+                }
+            }
+        )
+        assert "start_comment" not in s.to_dict()["ticketing"]["sources"][0]
+
+
 def test_source_for_matches_on_id_then_provider():
     cfg = PipelineConfig(
         repo_url="git@github.com:o/r.git",
@@ -612,3 +668,124 @@ def test_source_for_hands_back_the_whole_source_not_just_its_state():
     # moving a ticket on a board nobody named is worse than moving nothing.
     assert cfg.source_for("jira") is None
     assert cfg.source_for("") is None
+
+
+@pytest.mark.parametrize(
+    "raw,stored",
+    [
+        (True, "on"),
+        (False, ""),
+        ("true", "on"),
+        ("YES", "on"),
+        (" on ", "on"),
+        ("1", "on"),
+        ("off", ""),
+        ("", ""),
+        (None, ""),
+        (0, ""),
+    ],
+)
+def test_the_settings_store_normalizes_start_comment_to_on_or_blank(raw, stored):
+    from backend.config.settings import TicketingSource, _on_or_blank
+
+    assert _on_or_blank(raw) == stored
+    assert TicketingSource.from_dict({"start_comment": raw}).start_comment == stored
+
+
+@pytest.mark.parametrize(
+    "raw,on",
+    [
+        (True, True),
+        (False, False),
+        ("on", True),
+        ("ON ", True),
+        ("yes", True),
+        ("1", True),
+        ("", False),
+        (None, False),
+        ("off", False),
+        ("0", False),
+        ("false", False),
+    ],
+)
+def test_flag_on_reads_both_the_card_and_a_hand_edited_bool(raw, on):
+    from backend.ticket_ingestion.config import flag_on
+
+    assert flag_on(raw) is on
+
+
+def test_start_comment_on_a_provider_that_cannot_move_a_ticket_is_silent(tmp_path):
+    # Unlike start_state, the toggle alone is not a problem: it only rides on a
+    # move, and this source has none, so it simply never comments.
+    from backend.ticket_ingestion.providers.base import comments_on_start
+
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "github_issues"
+start_comment = true
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.start_comment is True
+    assert not comments_on_start(cfg.ticketing)
+
+
+def test_start_comment_is_per_source(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[[ticketing.source]]
+id = "sc"
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+start_state = "500000012"
+start_comment = "on"
+
+[[ticketing.source]]
+id = "lin"
+provider = "linear"
+api_token = "lin_key"
+start_state = "state-uuid"
+""" + COMMON,
+        )
+    )
+    assert cfg.source_for("sc").start_comment is True
+    assert cfg.source_for("lin").start_comment is False
+
+
+def test_a_start_comment_saved_in_settings_reaches_the_pipeline(
+    tmp_path, monkeypatch, isolate_settings_store
+):
+    # What the Intake card writes ("on") is what the pipeline reads as on,
+    # through the layered (env → settings.json → config.toml) load it runs.
+    from backend.config import settings as S
+
+    monkeypatch.chdir(tmp_path)  # no stray config.toml under the layers
+    monkeypatch.delenv("MINDFLOCK_TICKET_PROVIDER", raising=False)
+    S.save_settings(
+        Settings.from_dict(
+            {
+                "repository": {"url": "git@github.com:org/repo.git"},
+                "ticketing": {
+                    "sources": [
+                        {
+                            "id": "sc",
+                            "provider": "shortcut",
+                            "api_token": "tok",
+                            "member_id": "m",
+                            "start_state": "500000012",
+                            "start_comment": "on",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    S.invalidate()
+    cfg = load_config()
+    assert cfg.source_for("sc").start_comment is True

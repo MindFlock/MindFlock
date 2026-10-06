@@ -392,6 +392,21 @@ Notes on individual keys:
   from the issue's current status, so a status that is real but unreachable is
   reported as a warning and the session still starts — the move never fails a
   launch.
+- `start_comment` (per source, optional, **off by default**) — when the
+  `start_state` move happens, also post `MindFlock (<first name>) is taking this
+  on.` on the ticket, so the people watching it see who picked it up. The name
+  is the connected tracker account's (Shortcut profile name, Jira
+  `displayName`, Linear `name`), looked up once per account per process; with
+  no name it reads `MindFlock is taking this on.` Does nothing without a
+  `start_state`, and is skipped when the ticket was already in that state, so
+  relaunching a ticket doesn't comment twice. Best-effort like the move: a
+  refused comment is a warning. The Intake card stores it as `"on"`/`""` (a
+  `choice` field in the catalog); `config.toml` also accepts `true`/`false`.
+  Unlike `start_state`, setting it on a provider that can't move tickets
+  produces no validation warning — it is simply inert. The name is cached for
+  the process lifetime (the pipeline and the server each keep their own), so a
+  renamed account needs the pipeline restarted — and the server too, for
+  **Run ticket**.
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
   In the web UI this is a live dropdown (Intake → Tickets) populated from the
   provider, so you rarely need the raw id. For Shortcut you can also list ids with

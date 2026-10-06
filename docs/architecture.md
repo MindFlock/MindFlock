@@ -333,7 +333,8 @@ payload is the pipeline's own `tickets_enabled`.
 source's `start_state` once its session is live — shared by both launch paths
 (the pipeline process and the in-server force-start), reading config from disk at
 launch time, and never raising: the session is the work, the board is bookkeeping
-about it.
+about it. It also posts the optional `start_comment` ("MindFlock (Ethan) is
+taking this on.") after a move that changed the ticket's state.
 
 Plus a **testmon refresher** that keeps a warm `.testmondata` seed so provisioned
 workspaces only run diff-impacted tests, and a startup **workspace cleanup** that

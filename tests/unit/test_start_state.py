@@ -225,3 +225,283 @@ async def test_the_move_happens_once_and_reports_what_it_did():
         ):
             assert await start_state.move_started(story) == "500"
     assert provider.set_state.await_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# start_comment: announcing the move on the ticket
+# --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _forget_names():
+    start_state._NAMES.clear()
+    yield
+    start_state._NAMES.clear()
+
+
+def _commenting_provider(name="Ethan Mandel"):
+    provider = AsyncMock()
+    provider.test_connection.return_value = ({"member_id": "m", "name": name}, "")
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_the_move_is_announced_when_the_source_asks():
+    story = make_ticket(id=123)
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == "500"
+    provider.add_comment.assert_awaited_once_with(
+        "123", "MindFlock (Ethan) is taking this on."
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_comment_unless_the_source_asks():
+    # Off is the default: every source that existed before the toggle moves
+    # tickets exactly as silently as it used to.
+    story = make_ticket()
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    with _on_disk(_config(_source(start_state="500"))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == "500"
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_comment_without_a_move():
+    # The comment announces the move; with no start state there is nothing to
+    # announce, toggle or not.
+    story = make_ticket()
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    with _on_disk(_config(_source(start_state="", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == ""
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_move_is_not_announced():
+    story = make_ticket()
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    provider.set_state.side_effect = RuntimeError("Jira said no")
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == ""
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value", [("state_id", "500"), ("state", "In Development")]
+)
+async def test_a_ticket_already_in_the_start_state_is_not_announced_again(field, value):
+    # Relaunching a ticket that is already in development must not stack a
+    # second "taking this on" under the first. Jira configs may name the status.
+    story = make_ticket()
+    story.source_key = "sc-main"
+    setattr(story, field, value)
+    target = "500" if field == "state_id" else "in development"
+    provider = _commenting_provider()
+    with _on_disk(_config(_source(start_state=target, start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == target
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_comment_warns_and_keeps_the_move(caplog):
+    story = make_ticket()
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    provider.add_comment.side_effect = RuntimeError("comments are locked")
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            with caplog.at_level(logging.WARNING):
+                assert await start_state.move_started(story) == "500"
+    assert "comments are locked" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_nameless_account_still_gets_a_clean_comment():
+    story = make_ticket(id=9)
+    story.source_key = "sc-main"
+    provider = AsyncMock()
+    provider.test_connection.return_value = (None, "HTTP 500")
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            await start_state.move_started(story)
+    provider.add_comment.assert_awaited_once_with("9", "MindFlock is taking this on.")
+
+
+@pytest.mark.asyncio
+async def test_the_name_is_looked_up_once_per_account():
+    provider = _commenting_provider()
+    provider.test_connection.return_value = (
+        {"name": "ethan", "display_name": "Ethan Mandel"},
+        "",
+    )
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            for n in (1, 2):
+                story = make_ticket(id=n)
+                story.source_key = "sc-main"
+                await start_state.move_started(story)
+    assert provider.test_connection.await_count == 1
+    # display_name (Shortcut's real name) beats name (its @mention handle).
+    provider.add_comment.assert_awaited_with(
+        "2", "MindFlock (Ethan) is taking this on."
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [None, {}])
+async def test_a_failed_name_lookup_is_retried_on_the_next_ticket(identity):
+    # Only a successful lookup is remembered: a flaky identity call costs one
+    # nameless comment, not a nameless comment for the rest of the process.
+    provider = AsyncMock()
+    provider.test_connection.return_value = (identity, "HTTP 500")
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            for n in (1, 2):
+                story = make_ticket(id=n)
+                story.source_key = "sc-main"
+                assert await start_state.move_started(story) == "500"
+    provider.add_comment.assert_awaited_with("2", "MindFlock is taking this on.")
+    assert provider.test_connection.await_count == 2
+    assert start_state._NAMES == {}
+
+
+@pytest.mark.asyncio
+async def test_a_name_lookup_that_raises_warns_once_and_keeps_the_move(caplog):
+    story = make_ticket()
+    story.source_key = "sc-main"
+    provider = AsyncMock()
+    provider.test_connection.side_effect = RuntimeError("identity endpoint down")
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            with caplog.at_level(logging.WARNING):
+                assert await start_state.move_started(story) == "500"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "identity endpoint down" in warnings[0].getMessage()
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "second",
+    [
+        {"api_token": "t2"},  # a second account on the same tracker
+        {"base_url": "https://two.atlassian.net"},  # a second Jira site
+    ],
+)
+async def test_each_account_is_named_by_its_own_lookup(second):
+    jira = dict(provider="jira", email="e@x", base_url="https://one.atlassian.net")
+    one = _source(id="j1", start_state="3", start_comment=True, **jira)
+    two = _source(id="j2", start_state="3", start_comment=True, **{**jira, **second})
+    by_source = {
+        "j1": _commenting_provider("Ann One"),
+        "j2": _commenting_provider("Bo Two"),
+    }
+    with _on_disk(_config(one, two)):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider",
+            side_effect=lambda cfg: by_source[cfg.id],
+        ):
+            for key in ("j1", "j2"):
+                story = make_ticket(id=key)
+                story.source_key = key
+                await start_state.move_started(story)
+    for key, who in (("j1", "Ann"), ("j2", "Bo")):
+        by_source[key].test_connection.assert_awaited_once()
+        by_source[key].add_comment.assert_awaited_once_with(
+            key, f"MindFlock ({who}) is taking this on."
+        )
+
+
+@pytest.mark.asyncio
+async def test_already_in_matches_the_state_name_loosely():
+    # A hand-edited Jira config names the status; the tracker's casing and
+    # padding don't make a relaunch look like a fresh move.
+    story = make_ticket()
+    story.source_key = "jira"
+    story.state = "in progress "
+    provider = _commenting_provider()
+    src = _source(
+        provider="jira",
+        id="jira",
+        email="e@x",
+        base_url="https://x.atlassian.net",
+        start_state="In Progress",
+        start_comment=True,
+    )
+    with _on_disk(_config(src)):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await start_state.move_started(story) == "In Progress"
+    provider.set_state.assert_awaited_once()
+    provider.add_comment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_ticket_that_reports_no_state_is_announced():
+    # Announcing once too often beats never announcing.
+    story = make_ticket(id=5)
+    story.source_key = "sc-main"
+    assert story.state == "" and story.state_id == ""
+    provider = _commenting_provider()
+    with _on_disk(_config(_source(start_state="500", start_comment=True))):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            await start_state.move_started(story)
+    provider.add_comment.assert_awaited_once_with(
+        "5", "MindFlock (Ethan) is taking this on."
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_force_start_path_announces_the_move_too(monkeypatch):
+    # The web force-start goes through the same mover, so a ticket started by
+    # hand from the panel says so on the ticket exactly like a pipeline one.
+    from backend.web.core import ticket_start
+
+    cfg = _config(_source(start_state="500", start_comment=True))
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: cfg)
+    story = make_ticket(id=77)
+    story.source_key = "sc-main"
+    provider = _commenting_provider()
+    with _on_disk(cfg):
+        with patch(
+            "backend.ticket_ingestion.providers.get_provider", return_value=provider
+        ):
+            assert await ticket_start.move_to_start_state(story) == "500"
+    provider.set_state.assert_awaited_once_with("77", "500")
+    provider.add_comment.assert_awaited_once_with(
+        "77", "MindFlock (Ethan) is taking this on."
+    )

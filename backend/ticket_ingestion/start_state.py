@@ -17,6 +17,15 @@ from a provider switch costs a warning in the log — never a launch.
 The source is resolved from the config **on disk right now**, matching
 ``source_agent_now`` / ``source_effort_now``: a state picked in the UI applies to
 the next ticket rather than the next pipeline restart.
+
+A source can also ask for the move to be announced (``start_comment``): a
+"MindFlock (Ethan) is taking this on." comment on the ticket, because the
+people watching a ticket read its comments, not its column history. It rides
+on the move — posted only after the move succeeds, and only when the move
+actually CHANGED the ticket's state, so relaunching a ticket that is already
+in development does not stack a second "taking this on" under the first. Same
+best-effort contract: a refused comment is a warning, and it never undoes or
+un-reports the move.
 """
 
 from __future__ import annotations
@@ -24,6 +33,11 @@ from __future__ import annotations
 import logging
 
 _logger = logging.getLogger(__name__)
+
+#: Display name per tracker account, so announcing a move costs one identity
+#: request per account per process rather than one per ticket. Keyed by what
+#: identifies the account (never logged).
+_NAMES: dict[tuple[str, str, str], str] = {}
 
 
 def source_key_of(story) -> str:
@@ -85,7 +99,8 @@ async def move_started(story, config=None) -> str:
         src, target = target_for(story, config)
         if src is None or not target:
             return ""
-        await get_provider(src).set_state(str(story.id), target)
+        provider = get_provider(src)
+        await provider.set_state(str(story.id), target)
     except Exception as err:  # noqa: BLE001 — bookkeeping, never the launch
         _logger.warning(
             "Could not move ticket %s into its source's start state: %s",
@@ -98,4 +113,68 @@ async def move_started(story, config=None) -> str:
         getattr(story, "slug", "") or story.id,
         target,
     )
+    await _announce(story, src, target, provider)
     return target
+
+
+def _already_in(story, target: str) -> bool:
+    """Whether the ticket snapshot says it was sitting in ``target`` already.
+
+    Matches the native state id or, for a hand-edited Jira config that names
+    the status, the state name — the same two keys ``ingest_filter_miss`` and
+    Jira's ``set_state`` accept. A ticket that reports no state is treated as
+    moved: announcing once too often beats never announcing.
+    """
+    want = target.strip().casefold()
+    return want in {
+        str(getattr(story, "state_id", "") or "").strip().casefold(),
+        str(getattr(story, "state", "") or "").strip().casefold(),
+    } - {""}
+
+
+async def _display_name(provider, src) -> str:
+    """The connected account's name, as the tracker reports it. ``""`` when it
+    won't say — the comment then reads "MindFlock is taking this on." """
+    key = (
+        str(getattr(src, "provider", "") or ""),
+        str(getattr(src, "base_url", "") or ""),
+        str(getattr(src, "api_token", "") or ""),
+    )
+    if key in _NAMES:
+        return _NAMES[key]
+    identity, _err = await provider.test_connection()
+    identity = identity or {}
+    name = str(identity.get("display_name") or identity.get("name") or "").strip()
+    if identity:
+        # Only a successful lookup is remembered; a flaky one is retried on the
+        # next ticket instead of pinning a nameless comment for the process.
+        _NAMES[key] = name
+    return name
+
+
+async def _announce(story, src, target: str, provider) -> None:
+    """Post the source's "taking this on" comment, if it asked for one.
+
+    Never raises — the move it follows has already happened and been reported.
+    """
+    from backend.ticket_ingestion.providers.base import (
+        comments_on_start,
+        start_comment_text,
+    )
+
+    if not comments_on_start(src) or _already_in(story, target):
+        return
+    try:
+        name = await _display_name(provider, src)
+        await provider.add_comment(str(story.id), start_comment_text(name))
+    except Exception as err:  # noqa: BLE001 — bookkeeping, never the launch
+        _logger.warning(
+            "Moved ticket %s but could not post its start comment: %s",
+            getattr(story, "slug", "") or story.id,
+            err,
+        )
+        return
+    _logger.info(
+        "Commented on ticket %s that MindFlock is taking it on.",
+        getattr(story, "slug", "") or story.id,
+    )

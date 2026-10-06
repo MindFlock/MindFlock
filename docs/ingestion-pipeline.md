@@ -50,8 +50,11 @@ built from. It takes an id from exactly that list and backs the source's
 `start_state` setting. `STATE_SETTING_PROVIDERS = {shortcut, jira, linear}` —
 the base class raises `ProviderError` for everyone else, so a `start_state` left
 in a hand-edited config after a provider switch hits a backstop rather than a
-crash (`start_state_id()` already answers `""` for those providers). The
-mechanics differ per tracker:
+crash (`start_state_id()` already answers `""` for those providers). Its
+companion `comments_on_start()` gates the optional `start_comment`: a source
+with it on follows a successful, state-changing `set_state` with `add_comment`
+(`start_state.py::_announce`), and it is `False` wherever `start_state_id()` is
+`""`. The mechanics differ per tracker:
 
 | Provider | How a state is written |
 |---|---|
@@ -101,10 +104,11 @@ neither table can be read as the adapters' whole write story.
 
 The merge half is four methods —
 `append_description`, `add_comment`, `carry_attachments`, `delete_ticket` — used
-by exactly one caller, `backend.web.core.ticket_merge`, behind Intake → Tickets
-→ **Merge into…**. Duplicate tickets are a tracker problem, so the fix has to
-land in the tracker both filers will go back to; hiding a duplicate in MindFlock
-would leave it in Shortcut, still assigned, still getting ingested.
+by `backend.web.core.ticket_merge`, behind Intake → Tickets → **Merge into…**.
+`add_comment` has one other caller: the opt-in start comment
+(`ticket_ingestion/start_state.py::_announce`, gated by `comments_on_start()`).
+Duplicate tickets are a tracker problem, so the fix has to land in the tracker
+both filers will go back to; hiding a duplicate in MindFlock would leave it in Shortcut, still assigned, still getting ingested.
 
 `can_merge` is the gate. An adapter that leaves it `False` keeps the base
 class's four refusals, which name the provider rather than half-performing a
@@ -255,6 +259,10 @@ a model on your own machine with no subscription and nothing leaving the box.
 Adding a provider = one new module implementing `search_assigned` / `fetch` /
 `test_connection`, plus a `PROVIDER_REGISTRY` + `PROVIDER_META` entry. Acceptance-
 criteria mining and link/attachment extraction are shared in `providers/base.py`.
+`test_connection`'s identity dict may carry an optional `display_name` (a human
+name), which the start comment prefers over `name`; Shortcut sets it because its
+`name` is the @mention handle, so a new adapter whose `name` is a handle should
+too.
 
 Optionally an adapter also implements **`search_assigned_all()`** (`base.py`),
 which backs Intake → Tickets → *Assigned tickets*: every ticket assigned to you
@@ -435,7 +443,9 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    one helper (`ticket_ingestion/start_state.py`), and it is strictly
    best-effort: a tracker that is down, or a Jira status with no transition into
    it from where the issue sits, logs a warning and leaves the session running.
-   Blank (the default) moves nothing.
+   Blank (the default) moves nothing. With `start_comment` on, a successful move
+   that actually changed the ticket's state is followed by a `MindFlock (<first
+   name>) is taking this on.` comment (same helper, same best-effort rule).
 
    **Which source a ticket moves under is carried by `Ticket.source_key`** —
    the `id or provider` key, stamped by whoever produced the ticket (the

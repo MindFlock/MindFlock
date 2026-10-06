@@ -2476,6 +2476,84 @@ def test_catalog_offers_start_state_exactly_where_it_works():
                 assert not f.get("required")
 
 
+def test_catalog_offers_the_start_comment_right_after_the_start_state():
+    # The comment announces the move, so it lives exactly where the move does
+    # and sits directly under its picker. Off ("") is the first option, so a
+    # fresh card reads as off.
+    for p in PROVIDER_META:
+        keys = [f["key"] for f in p["fields"]]
+        if "start_state" not in keys:
+            assert "start_comment" not in keys
+            continue
+        assert keys[keys.index("start_state") + 1] == "start_comment"
+        field = p["fields"][keys.index("start_comment")]
+        assert field["type"] == "choice"
+        assert [o["value"] for o in field["options"]] == ["", "on"]
+
+
+def test_comments_on_start_needs_the_toggle_and_a_start_state():
+    from backend.ticket_ingestion.providers.base import comments_on_start
+
+    assert comments_on_start(
+        TicketProviderConfig(provider="jira", start_state="3", start_comment=True)
+    )
+    assert not comments_on_start(TicketProviderConfig(provider="jira", start_state="3"))
+    assert not comments_on_start(
+        TicketProviderConfig(provider="jira", start_comment=True)
+    )
+    # A stale start state on a provider that can't move a ticket moves nothing,
+    # so there is nothing to announce either.
+    assert not comments_on_start(
+        TicketProviderConfig(
+            provider="github_issues", start_state="Doing", start_comment=True
+        )
+    )
+
+
+def test_start_comment_text_uses_the_first_name():
+    from backend.ticket_ingestion.providers.base import start_comment_text
+
+    assert start_comment_text("Ethan Mandel") == "MindFlock (Ethan) is taking this on."
+    assert start_comment_text("ethan") == "MindFlock (ethan) is taking this on."
+    assert start_comment_text("  ") == "MindFlock is taking this on."
+    # No name reported at all reads the same as a blank one.
+    assert start_comment_text(None) == "MindFlock is taking this on."
+    assert start_comment_text("") == "MindFlock is taking this on."
+    # Padding and doubled spaces are not part of anyone's first name.
+    assert (
+        start_comment_text("  Ethan Mandel ") == "MindFlock (Ethan) is taking this on."
+    )
+    assert start_comment_text("Ethan  Mandel") == "MindFlock (Ethan) is taking this on."
+
+
+def test_catalog_start_comment_is_an_optional_plain_field_naming_the_ticket():
+    nouns = {"shortcut": "story", "jira": "issue", "linear": "issue"}
+    for p in PROVIDER_META:
+        fields = {f["key"]: f for f in p["fields"]}
+        if "start_comment" not in fields:
+            continue
+        field = fields["start_comment"]
+        assert field["secret"] is False
+        assert field["required"] is False
+        assert f"the {nouns[p['id']]} " in field["hint"]
+    # Exactly the providers that can move a ticket offer it.
+    assert {
+        p["id"]
+        for p in PROVIDER_META
+        if any(f["key"] == "start_comment" for f in p["fields"])
+    } == set(nouns)
+
+
+def test_comments_on_start_on_a_config_without_the_toggle_is_off():
+    # Duck-typed configs (older snapshots, hand-built test doubles) predate the
+    # attribute; missing means off, never an AttributeError on the launch path.
+    from types import SimpleNamespace
+
+    from backend.ticket_ingestion.providers.base import comments_on_start
+
+    assert not comments_on_start(SimpleNamespace(provider="jira", start_state="3"))
+
+
 @pytest.mark.asyncio
 async def test_set_state_unsupported_provider_raises():
     prov = GithubIssuesProvider(TicketProviderConfig(provider="github_issues"))
@@ -2489,6 +2567,33 @@ class TestShortcutSetState:
         return ShortcutProvider(
             TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
         )
+
+    async def test_test_connection_reports_the_real_name_beside_the_handle(self):
+        # ``name`` stays the @mention handle the connection line shows;
+        # ``display_name`` is the person, for the "taking this on" comment.
+        member = {
+            "id": "uuid-1",
+            "mention_name": "ethanm",
+            "profile": {"name": "Ethan Mandel"},
+        }
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=member)])
+        with _patch_session(session):
+            identity, err = await self._prov().test_connection()
+        assert err == ""
+        assert identity == {
+            "member_id": "uuid-1",
+            "name": "ethanm",
+            "display_name": "Ethan Mandel",
+        }
+        assert session.get_calls[0][0] == f"{_SHORTCUT_API_BASE}/member"
+
+    @pytest.mark.parametrize("member", [{"id": "u"}, {"id": "u", "profile": None}])
+    async def test_test_connection_without_a_profile_has_no_display_name(self, member):
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=member)])
+        with _patch_session(session):
+            identity, err = await self._prov().test_connection()
+        assert err == ""
+        assert identity["display_name"] is None
 
     async def test_puts_the_workflow_state_id(self):
         session = _FakeSession(put_responses=[_FakeResp(200, json_data={})])

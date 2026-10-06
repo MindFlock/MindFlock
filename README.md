@@ -68,9 +68,10 @@ a hand-started session runs whichever agent CLI you point it at.
 **What is not automatic** — because a pipeline you can't trust is worse than
 none. MindFlock never commits, pushes, opens or merges a PR by itself: every one
 of those is your click, you write the commit message, and the PR text is filled
-in from your commits. It never writes to your tracker — no comments, no status
-transitions. It polls (every 20 s) rather than listening for
-webhooks, works one ticket at a time, and only picks up review comments on *your
+in from your commits. It doesn't write to your tracker unless you opt in per
+source: **Move to state on start**, optionally announced with a one-line
+"taking this on" comment — both off by default. It polls (every 20 s) rather
+than listening for webhooks, works one ticket at a time, and only picks up review comments on *your
 own* PRs.
 
 ## Where your code goes
@@ -91,7 +92,7 @@ Everything MindFlock itself talks to over the network, in full:
 
 | It calls | When | What it sends |
 |---|---|---|
-| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing on its own — **no automatic writes by default**. It never comments; the only automatic write is the optional per-source *Move to state on start*, off unless you pick a state. Filing a ticket (New → Ticket) and merging duplicates are writes you press a button for |
+| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing on its own — **no automatic writes by default**. The only automatic writes are two opt-in per-source ones: *Move to state on start* (off unless you pick a state) and *Comment when moved* — a `MindFlock (<first name>) is taking this on.` note that only posts alongside that move and is off unless enabled. Filing a ticket (New → Ticket) and merging duplicates are writes you press a button for |
 | your local model server, if you configure one | every turn of a session on a local model | your prompt and code — to `127.0.0.1` (or whatever host you pointed it at). Never leaves your machine unless you aim it off-box |
 | `api.github.com` | polling *your own* PRs for review comments; the **Make PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
 | `aipricing.guru` | at most once a day, for the model price table behind the cost display | nothing. Falls back to a built-in table offline |
@@ -311,12 +312,13 @@ a feature race; those two change what your day looks like:
   with review comments. Each one gets a worktree, an installed environment and
   an agent seeded with the ticket — title, description, mined acceptance
   criteria, comments. It never writes to your tracker on its own: the only
-  automatic write is opt-in per source — **Move to state on start**, which moves
+  automatic writes are opt-in per source — **Move to state on start**, which moves
   a ticket into a state you pick once its session is live, so a board stops
-  showing work an agent is already doing as untouched. Everything else it writes
-  is a button you pressed (below). **GitHub Issues needs no configuration at
-  all** — the token comes from your existing `gh auth login` and the repo from
-  this checkout's `origin`.
+  showing work an agent is already doing as untouched, and **Comment when
+  moved** (off by default), which announces that move with a one-line "taking
+  this on" comment. Everything else it writes is a button you pressed (below).
+  **GitHub Issues needs no configuration at all** — the token comes from your
+  existing `gh auth login` and the repo from this checkout's `origin`.
 - 📝 **File a ticket by describing it** — **New → Ticket** takes a sentence about
   what needs doing, writes a real ticket from it (title, description, acceptance
   criteria), files it on one of your configured sources and hands you the link.
