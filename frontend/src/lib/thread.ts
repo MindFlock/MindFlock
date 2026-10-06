@@ -13,6 +13,7 @@
 
 import type { DiffStat, Instance, LastReport, ThreadItem, ThreadMember, ThreadResponse, FinishedChild } from "../api/types";
 import { childrenOf, workerState, type WorkerState } from "./agentMessages";
+import { normOrder } from "./order";
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {});
@@ -109,6 +110,7 @@ export function normThread(v: unknown, title = ""): ThreadResponse {
     finished,
     items,
     more: o.more === true,
+    order: normOrder(o.order),
   };
 }
 
@@ -136,6 +138,7 @@ export type FamilyInst = Pick<Instance, "title"> &
       | "diff_stat"
       | "provider"
       | "stage"
+      | "order"
     >
   >;
 
@@ -205,6 +208,8 @@ export interface WorkerRow {
   baseSha: string | null;
   /** Its git stage (agent → committed → pushed → pr), "" when unknown. */
   stage: string;
+  /** What its held task waits on ("after w1"), "" when it is not held. */
+  waitDetail: string;
 }
 
 /** Where each state sorts: needs-you first, then the reported ones (what you
@@ -216,7 +221,8 @@ const RANK: Record<WorkerState, number> = {
   done: 2,
   limit: 3,
   working: 4,
-  idle: 5,
+  waiting: 5,
+  idle: 6,
 };
 
 /** The worker rows, needs-you first; stable within a group (rail order). */
@@ -243,6 +249,7 @@ export function workerRows(
       diff: c.diff_stat ?? m?.diff_stat ?? null,
       baseSha: m?.base_sha ?? null,
       stage: c.stage || "",
+      waitDetail: c.order?.state === "held" ? String(c.order.detail || "") : "",
     };
   });
   return rows
@@ -292,6 +299,7 @@ export function headerSummary(rows: readonly WorkerRow[], finished = 0): Summary
   if (done) parts.push({ text: done + " reported", cls: bad ? "" : "ok" });
   if (n("limit")) parts.push({ text: n("limit") + " at the usage limit", cls: "" });
   if (n("working")) parts.push({ text: n("working") + " working", cls: "" });
+  if (n("waiting")) parts.push({ text: n("waiting") + " waiting their turn", cls: "" });
   if (n("idle")) parts.push({ text: n("idle") + " idle without a report", cls: "" });
   if (finished) parts.push({ text: finished + " finished", cls: "ok" });
   return parts;
@@ -324,7 +332,7 @@ export function progressOf(
     { key: "bad" as const, n: n("failed", "blocked") + finBad, label: "failed or blocked" },
     { key: "needs" as const, n: n("ask"), label: "need your answer" },
     { key: "working" as const, n: n("working", "limit"), label: "working" },
-    { key: "idle" as const, n: n("idle"), label: "idle without a report" },
+    { key: "idle" as const, n: n("idle", "waiting"), label: "idle or waiting their turn" },
   ].filter((s) => s.n > 0);
   return { total, done, segs, text: total ? `${done} of ${total} done` : "" };
 }
@@ -374,6 +382,8 @@ export function workerStatus(
       return { word: "usage limit", cls: "bad", detail: "its queue resumes when the window resets" };
     case "working":
       return { word: "working", cls: "work", detail: [t ? since(t, now) : "", "no report yet"].filter(Boolean).join(" · ") };
+    case "waiting":
+      return { word: "waiting its turn", cls: "idle", detail: row.waitDetail || "MindFlock starts it when its turn comes" };
     default:
       return { word: "idle", cls: "idle", detail: "stopped without a report" };
   }

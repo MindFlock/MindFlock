@@ -188,6 +188,55 @@ export interface Instance {
    * none. `owner` names the window that actually drives a duplicated branch —
    * a copy window on the same branch shows the lane but is never armed. */
   lane?: LaneInfo | null;
+  /** Where this worker stands in its orchestrator's order (core.worker_order):
+   * held until its turn, running, done or stopped — null when it was never
+   * ordered or fenced. Optional: an older server doesn't send it. */
+  order?: RowOrder | null;
+}
+
+/** A fence an orchestrator set on one worker: the only paths it may change
+ * and/or paths it may not (globs, red-zone syntax). */
+export interface WorkerFence {
+  only: string[];
+  keep_out: string[];
+  reason?: string;
+  by?: string;
+}
+
+/** A worker's row field: its order state and what it waits on. */
+export interface RowOrder {
+  state: "held" | "running" | "done" | "stopped" | string;
+  word: string;
+  detail: string;
+  after: string[];
+  fence: WorkerFence | null;
+}
+
+/** One card of the Thread's order diagram. `planned` = a title a step names
+ * that no worker has yet. */
+export interface OrderCard {
+  title: string;
+  state: "held" | "running" | "done" | "stopped" | "planned" | string;
+  word: string;
+  detail: string;
+  after: string[];
+  /** Why it runs after each predecessor: "asked", "step", "one at a time",
+   * or "overlap: <path>". */
+  why: Record<string, string>;
+  fence: WorkerFence | null;
+  released_at: number | null;
+  ended_at: number | null;
+  planned: boolean;
+}
+
+/** The order an orchestrator's workers run in (`GET …/order`, and the
+ * thread's `order`): steps left to right, each one's cards run together. */
+export interface WorkerOrder {
+  mode: "parallel" | "serial" | string;
+  max_parallel: number;
+  /** How many may run at once: 1 for serial, max_parallel, 0 = no limit. */
+  cap: number;
+  steps: Array<{ n: number; workers: OrderCard[] }>;
 }
 
 /** A row's place in a group of sessions started together. */
@@ -317,6 +366,8 @@ export interface ThreadResponse {
   finished: FinishedChild[];
   items: ThreadItem[];
   more: boolean;
+  /** The order its workers run in, or null (absent on an older server). */
+  order?: WorkerOrder | null;
 }
 
 // --- Code map + red zones (docs/web-api.md "Code map & red zones") ----------
@@ -337,6 +388,10 @@ export interface RedZone {
    * here — while any enforced green zone exists, everything outside every
    * green zone is read-only. Green zones are worktree-scope only. */
   kind?: "red" | "green" | string;
+  /** A per-session fence's zone (scope "session"): only the orchestrator that
+   * set it (`by`) lifts it — no remove / allow from the Map. */
+  locked?: boolean;
+  by?: string;
 }
 
 export interface RedZoneSummary {
@@ -490,6 +545,9 @@ export interface CodeMapLive {
   /** v3: companion rules (see CompanionRule) and exact companion files. */
   companions?: Array<CompanionRule | string> | null;
   companion_files?: string[] | null;
+  /** The fences on this session's workers (an orchestrator's Map lists them
+   * as "Workers' fences"). Absent on older servers. */
+  fences?: Array<WorkerFence & { session: string }>;
 }
 
 /** POST /api/instances/{title}/red-zones/preview. The green-only fields are

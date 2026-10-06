@@ -121,6 +121,18 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_FINISHED_CHILDREN_FILE",
         str(tmp_path / "mindflock" / "finished_children.json"),
     )
+    # Worker order (``~/.mindflock/worker_order.json``): every spawn by an
+    # orchestrator that ordered or fenced anything writes it.
+    monkeypatch.setenv(
+        "MINDFLOCK_WORKER_ORDER_FILE",
+        str(tmp_path / "mindflock" / "worker_order.json"),
+    )
+    try:
+        from backend.web.core import worker_order as _worker_order
+
+        monkeypatch.setitem(_worker_order._CACHE, "key", None)
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
     # Red-zone stores (roadmap: Code Map + red zones). Point the zone store, the
     # per-root guard-file dir and the per-session tool-feed dir at tmp so the
     # suite never reads or writes the owner's real ~/.mindflock /

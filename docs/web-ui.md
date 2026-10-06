@@ -526,9 +526,27 @@ What it looks like in the app:
   newest first, with its final report, its last stage, its diff size and
   its PR (**Open PR ↗**), or **Recently closed…** when it can be reopened.
   Its spawn record and report stay in the log below.
+- **The orchestrator's Thread shows the order its workers run in** when it
+  set one (`set_order`, `spawn_session(after=…)`, or a fence that overlaps
+  another worker's): an **Order** section, one column per step, left to
+  right — a column's workers run together, the next column starts once
+  every one of them is done. The line beside the heading says the rule
+  (**One at a time**, **Up to 2 at a time, in 3 steps**, **All at once**).
+  Each card: the worker (click to go to it), its state (**running**,
+  **waiting** — *after w1*, *for a free slot*, **done**, **stopped**), why
+  it waits when its fence overlaps another's (*same files as w1
+  (src/api.py)*), and its fence as chips (**only src/api/\*\*** green,
+  **⛔ db/** red). A waiting card has **Start now**. A title a step names
+  that has no worker yet is a dashed card, **not started**. No connector
+  lines: the columns are the order. A split's lead shows its group's
+  stages the same way under its header — **Plan → Pieces → Merge back**
+  (**Commit each** in its folder) **→ Check → One PR**, the running stage
+  lit. A held worker's own Thread says **Waiting its turn** and shows its
+  fence.
 - **Each worker's status line** replaces the `↳` line: **✓ reported**
   (green), **✗ blocked** / **✗ failed** (red), **? needs your answer**
-  (gold), **working · 6m**, or **idle — no report**. A worker that is not
+  (gold), **working · 6m**, **waiting · after w1** (MindFlock holds its task
+  until its turn), or **idle — no report**. A worker that is not
   directly under its family names it: **`↳ api · ✓ reported`**.
 - **The orchestrator's roll-up**, most urgent first: **1 needs you ·
   3 workers**, **2 of 3 reported**, **all 3 reported**, **3 working**. Hover
@@ -886,8 +904,16 @@ it off. **+ Zone** types a pattern instead.
 twin of the picture: **Breaches**, **Scope requests** (green mode, each with
 **Allow this file**), **Activity**, **Plan** (Ask for plan / Go / Go — only the
 planned files), **Blast radius** (direct importers of what changed, per
-folder), **Zones**, **Changed** and **Other agents here**. Blocks and breaches
-are also announced through a polite live region.
+folder), **Zones**, **Changed**, **Workers' fences** and **Other agents
+here**. Blocks and breaches are also announced through a polite live region.
+
+**Fences an orchestrator set.** A worker its orchestrator fenced
+(`fence_session`, `spawn_session(only=…, keep_out=…)`) sees the fence on its
+own Map like zones — painted on the tree, listed under **Zones** as *this
+session · set by orch* — but without **×** or **Allow here**: only the
+orchestrator lifts it. The orchestrator's Map lists **Workers' fences**: each
+worker with its **✓ only** and **⛔ keep-out** paths (click one to find it on
+the tree) and the reason it gave.
 
 **Cost:** nothing mounts until the tab is first opened, and nothing polls or
 draws unless it is showing and the window is visible (`GET …/code-map/live`

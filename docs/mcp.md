@@ -33,6 +33,7 @@ any other MCP client yourself.
 - [Messages](#messages)
 - [Lineage: parents, workers, limits](#lineage-parents-workers-limits)
 - [Tickets and shipping](#list_tickets)
+- [Fences and order: workers that don't collide](#fences-and-order-workers-that-dont-collide)
 - [Team runs: several things at once](#start_team_run)
 - [Scopes and policy (a guard-rail, not a security boundary)](#scopes-and-policy)
 - [Worked example: one orchestrator, three workers](#worked-example-one-orchestrator-three-workers)
@@ -322,7 +323,7 @@ against every fresh listing.
 
 ## The tools
 
-The 25 tools. Every result is JSON text. Clients that negotiate protocol
+The 27 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -348,6 +349,8 @@ it.
 | `answer_prompt` | write, managed only | **no** |
 | `kill_session` | destructive, managed only | **no** |
 | `set_parent` | write | **no** |
+| `fence_session` | write, managed only | **no** |
+| `set_order` | write (your own workers); no arguments reads | **no** |
 | `list_tickets` | read (the Intake ticket list) | yes |
 | `spawn_ticket_session` | write | **no** |
 | `ship_session` | write, pushes code; destructive at `merge` | **no** |
@@ -529,9 +532,14 @@ typed into your terminal.
 | `report_back` | true | append the report-back footer to the prompt |
 | `wait_ready` | true | wait up to 45 s for the session to leave `loading` |
 | `repo_path` | your canonical repo | another repository (required for an external client) |
+| `after` | none | hold its task until these sessions are done (see [Fences and order](#fences-and-order-workers-that-dont-collide)) |
+| `only` / `keep_out` | none | fence it before it starts: the only paths it may change / paths it may not change |
+| `fence_reason` | — | one line shown with the fence |
+| `overlap` | `wait` | a fence (`only`) that overlaps an unfinished worker's waits for it; `parallel` lets them run together |
 
 → `{title, branch, folder, base_sha, status, ready, report_back, reason?,
-prompt_delivery?, warnings?, hint?}`.
+prompt_delivery?, order?, warnings?, hint?}`. `prompt_delivery: "held"` and
+`order: {held, after, why, fence}` mean MindFlock is holding its task.
 
 How the worker is created:
 
@@ -666,6 +674,24 @@ under one of your descendants, or detaches it. Under `children` scope:
 - The new parent must be you or one of your descendants.
 
 Cycles and self-parenting are refused. → `{ok, title, parent, session}`.
+
+### `fence_session`
+
+`title` (one of your workers), `only`, `keep_out` (path globs, the red-zone
+syntax), `reason`, `clear`. Replaces the worker's fence; `clear: true` lifts
+it. Managed sessions only. `POST /api/instances/{title}/fence` with `by:
+<you>` → `{ok, fence, applied, held, told?, shared_folder?, problems?,
+note?}`. See [Fences and order](#fences-and-order-workers-that-dont-collide).
+
+### `set_order`
+
+`mode` (`parallel` | `serial`), `max_parallel` (0–16, 0 = no limit), `steps`
+(`[["w1","w2"],["w3"]]`), `after` (`{worker: [titles]}`, held workers only),
+`start_now` (`[titles]`) — any subset; no arguments reads the order. Applies
+to **your** workers (a title that is a live session must be one you manage;
+a title no session has yet is a planned one). `POST
+/api/instances/{you}/order` → `{ok, order}`; a cycle, an unknown worker, or a
+started one in `after` refuses the whole change with its `problems`.
 
 ### `list_tickets`
 
@@ -1144,6 +1170,99 @@ See [cli.md](cli.md#mindflock-msg-title-text). The HTTP routes are in
 [web-api.md](web-api.md#inter-agent-messages), and every message also emits a
 `session.message` event ([extensions.md](extensions.md)).
 
+## Fences and order: workers that don't collide
+
+Two workers that edit the same files at the same time clobber each other's
+work, or produce branches that conflict. An orchestrator has two levers, and
+MindFlock **enforces** both: the agent states them once, it never has to
+remember to wait or to stay in its lane.
+
+### Fences
+
+A **fence** limits what one worker may change: `only` = the only paths it may
+change, `keep_out` = paths that are read-only for it. Set one at spawn time
+(`spawn_session(only=…, keep_out=…)`: the worker's task is held until the
+fence is in place, so it is never unfenced for a moment) or later
+(`fence_session`).
+
+- It is a **per-session fence** in the zone store
+  (`worktrees[<folder>].sessions[<tmux name>]`, `owner: "orch:<you>"`, `by`,
+  `reason`), the mechanism a split's "in this folder" pieces use. The guard
+  hook, which resolves the session that fired it from its own pane, enforces
+  it for **that session only**: never for you, and never for a person's
+  window that shares the folder. An in-place worker in your folder can be
+  fenced without fencing you.
+- `only` replaces the folder's green scope for that session. In its **own**
+  worktree, the repo's companions (lockfiles, snapshots, the tests that
+  import its paths) stay writable, as with a green zone; in a folder several
+  agents share, only its paths are. `keep_out` adds to the folder's red
+  zones (Bash commands that name a kept-out path are checked too). Red
+  always wins.
+- The deny names who fenced it; the worker's task starts with its
+  fence; a running worker whose fence changes is told (queued mid-turn).
+- It shows on the **Code Map**: the worker's own Map draws it like zones
+  (scope `session`, locked: only the orchestrator lifts it), and the
+  orchestrator's Map lists **Workers' fences**.
+- A fence goes when its session goes (the sweep drops every `orch:` fence
+  whose session is gone, so a reused name never inherits one). A CLI without
+  the guard hook gets the fence in its task text only.
+
+### Order
+
+A worker can be created at once (worktree, fence, agent) with its task
+**held**: it waits, idle, in the worker's own prompt queue with the queue
+switched off and marked held — the task is parked before the worker is
+registered, nothing that queues a message switches it on, and the drain never
+sends a held queue. When its turn comes (and its fence is in place) MindFlock
+lifts the hold and the ordinary drain types the task in. A spawn with no task
+has nothing to hold: it runs at once (its fence still lands). What decides its turn:
+
+- **`after`** (on `spawn_session`): every named session is done first. A
+  name may be a worker you have not spawned yet.
+- **`mode: "serial"`** (`set_order`): one at a time; each new worker runs
+  after the one you spawned before it.
+- **`max_parallel: N`**: at most N of your workers at once; the rest wait
+  for a free slot, oldest first.
+- **`steps`**: a plan up front — every title in step *k* runs after every
+  title in step *k−1*, for held workers and ones you spawn later under those
+  titles.
+- **Overlap**: a worker fenced with `only` paths that overlap an unfinished
+  worker's `only` paths (a shared tracked file, a literal path one names that
+  the other covers, or two globs that can match one new path — the split
+  plan's rule) runs after it, unless you spawn it with `overlap: "parallel"`.
+
+A worker is **done** when it reports `done` (since it started) or is gone
+(closed or deleted) — a report counts from the mailbox, so it still does
+after your window closes. One that reports `blocked` or `failed` frees its slot
+but the workers after it stay held until it reports `done` — or you
+`set_order(start_now=[…])`. The user can start a held worker by hand by
+switching its queue on (its Queue tab) — MindFlock then releases it on its
+next pass, once its fence is in place. `after` may not name your own session
+(an orchestrator never reports), and `fence_session` refuses a team run's
+member (its group fences it to the plan's paths).
+
+**Starting from the work it waited for.** When a held worker in its own
+worktree is released with its branch untouched (no commits, a clean tree, an
+idle agent), MindFlock fast-forwards it to **your current HEAD** — what it
+would have forked from had you spawned it now — and moves its base commit
+with it, so its diff and PR stay its own work. A predecessor's branch you
+have **not** merged by then (the release follows its report within seconds)
+is never pulled in — its commits would show up as the next worker's own: the
+worker's task names it instead ("Not in your tree yet: w1 (branch …) —
+`git merge` it first if your task builds on it"). Only a fast-forward, never a
+merge; in-place and provisioned workers are never moved.
+
+`wait_for_session` treats a held worker as not started: it never reads its
+idle agent as finished. Its row carries `order: {state, word, detail, after,
+fence}` (`state`: `held`, `running`, `done`, `stopped`); the fast-track
+autopilot treats a held task as pending. The order is kept per orchestrator
+in `~/.mindflock/worker_order.json` (`MINDFLOCK_WORKER_ORDER_FILE`) and
+carried out by a loop every 3 s (`backend/web/core/worker_order_driver.py`);
+it keeps going if the orchestrator's window closes.
+
+The orchestrator's **Thread** shows the order as a diagram — see [The rows
+and the thread](#the-rows-and-the-thread).
+
 ## Lineage: parents, workers, limits
 
 Each session can name a **parent**, the live session that spawned or adopted
@@ -1210,7 +1329,7 @@ minutes.
 
 The scope decides what an MCP server may **steer**. It never limits reading.
 
-| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`) | Ship (`ship_session`, `set_autopilot`) |
+| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) |
 |---|---|---|---|---|
 | `readonly` | yes | no | no | no |
 | `children` (default) | yes | yes, to any local session | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
@@ -1352,6 +1471,12 @@ follows it — a numbered prompt in the transcript never becomes buttons.
   (launched before this server process started).
 - `last_report` on a worker's row: its newest `report_result` to its current
   parent, consumed or not — `{"id", "status", "summary", "ts"}`.
+- `order` on a worker's row: where it stands in its orchestrator's order —
+  `{state: held|running|done|stopped, word, detail, after, fence}` — or
+  `null`. The rail says **waiting · after w1** for a held one.
+- The thread's `order` is the orchestrator's **Order** diagram (steps left
+  to right, a step's workers together; see [Fences and
+  order](#fences-and-order-workers-that-dont-collide)).
 - `GET /api/instances/{t}/thread` is the family view behind the Thread tab:
   the session, its live parent and children, the spawn records (with the
   start of each worker's seed prompt and its fork commit) and every message
@@ -1625,6 +1750,7 @@ message the lane types (`mailbox typed <id> from … into …`).
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
 | Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |
+| Fences + worker order | `backend/web/core/worker_order.py` (store + planner), `worker_order_driver.py` (fences, releases, the loop); per-session fences in `backend/config/red_zones.py`; routes `POST /api/instances/{t}/fence`, `GET/POST /api/instances/{t}/order` |
 | Lineage | `backend/web/core/lineage.py`; `/output`, `/dialog` and `/answer` helpers in `core/agent_io.py` |
 | Playbooks | `backend/mcp/playbooks.py`; routes `/api/playbooks*` in `server.py` |
 | Dialog parsing | `backend/providers/dialogs.py` (`parse_dialog` in `providers/claude.py`, `providers/codex.py`); golden screens in `tests/unit/data/dialogs/` |

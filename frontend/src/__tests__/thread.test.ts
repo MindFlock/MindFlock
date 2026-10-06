@@ -242,7 +242,7 @@ describe("the Between sessions log", () => {
 
 describe("normThread", () => {
   it("never throws on a half-built body", () => {
-    expect(normThread(null, "t")).toEqual({ title: "t", parent: "", members: [], finished: [], items: [], more: false });
+    expect(normThread(null, "t")).toEqual({ title: "t", parent: "", members: [], finished: [], items: [], more: false, order: null });
     const t = normThread({ members: [{ title: "a", base_sha: "" }, {}], items: [{ id: "x", type: "result" }, { id: "" }], more: true });
     expect(t.members.map((m) => [m.title, m.base_sha])).toEqual([["a", null]]);
     expect(t.items.map((i) => i.id)).toEqual(["x"]);

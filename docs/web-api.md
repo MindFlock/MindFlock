@@ -1192,6 +1192,28 @@ A body over 1500 characters (after it is flattened to one line) is typed as a
 one-line notice with a 300-character preview. The message stays `held` so the
 full text can still be fetched.
 
+### Worker order and fences
+
+An orchestrator's say over its workers ([mcp.md](mcp.md#fences-and-order-workers-that-dont-collide)):
+what each may change, and in what order they run. MindFlock enforces both.
+
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/api/instances/{title}/fence` | `{only: [glob], keep_out: [glob], reason, by, clear}` → `{ok, fence, applied, held, told?, shared_folder?, problems?, note?}`. A **per-session** fence (the zone store's `worktrees[<folder>].sessions[<tmux name>]`, owner `orch:<by>`): `only` = the only paths this session may change, `keep_out` = paths it may not; enforced by the guard hook for this session alone. In its own worktree its companions stay writable; in a shared folder only its paths. Replaces its fence; `clear: true` removes it. A held worker gets it in front of its task; a running one is told (`told`). `applied: false` with a `note` = its folder isn't there yet (it lands before its task starts). **404** unknown session, **400** a bad glob, a path in both lists, or neither list, **409** a team run's member (its group fences it) |
+| GET | `/api/instances/{title}/order` | → `{order}`: `null`, or `{mode: "parallel"\|"serial", max_parallel, cap, steps: [{n, workers: [{title, state: held\|running\|done\|stopped\|planned, word, detail, after, why: {title: "asked"\|"step"\|"one at a time"\|"overlap: <path>"}, fence, released_at, ended_at, planned}]}]}` — a worker's step is one more than its latest predecessor's |
+| POST | `/api/instances/{title}/order` | `{mode, max_parallel (0–16, 0 = no limit), steps: [[title]], after: {worker: [title]}, start_now: [title]}`, any subset → `{ok, order}`. `steps` replaces the declared plan (titles may name workers not spawned yet); `after` re-orders a **held** worker; `start_now` releases held workers at once. **400** with `problems` (nothing applied) for a cycle, a title in two steps, an unknown or already-started worker, a bad mode or cap; **404** unknown session |
+
+`POST /api/instances` takes `after: [title]` (hold the task until those are
+done; needs `parent`), `fence: {only, keep_out, reason}` and `overlap:
+"wait"|"parallel"`. An ordered create answers `prompt_delivery: "held"` and
+`order: {held, after, why, fence}`: the session is created, its task waits in
+its prompt queue (switched off and marked `held`, so a queued message never
+switches it on) until its turn. `run_member: true` (set by team runs on their
+own members) opts out. Each row carries `order: {state, word, detail, after,
+fence}` for an ordered worker, else `null`; `code-map/live` adds the session's
+own fence to `zones` (scope `session`, `locked`, `by`) and lists its workers'
+fences as `fences: [{session, only, keep_out, reason, by}]`.
+
 ### Family thread
 
 The mail an orchestrator and its workers exchanged, for a person to read — the
@@ -1201,7 +1223,7 @@ the report an orchestrator is waiting on.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/instances/{title}/thread?limit=50&before=<item id>` | → `{title, parent, members, finished, items, more}`. `finished`: its children that were closed or deleted, oldest first — `{title, branch, created_at, ended_at, how ("closed" = reopenable from Recently closed, or "deleted"), stage, pr_url, diff_stat, last_report, seed}`, recorded from each child's last row as it left and kept with this session (a reused title doesn't inherit them); their spawn records and messages are in `items` too. Messages count only when sent since both their sender and their recipient were created (a reused title doesn't inherit its deleted namesake's mail — the rule the row's `last_report` applies). A `before` id that is no longer stored (inboxes drop their oldest messages over their caps) pages back from the time its id carries (`m<ms>_<n>`, `spawn:<title>:<ms>`). **404** unknown session, **400** a non-integer/non-positive `limit` or a `before` id that is neither stored nor time-stamped |
+| GET | `/api/instances/{title}/thread?limit=50&before=<item id>` | → `{title, parent, members, finished, items, more, order}`. `order`: the order its workers run in (the shape of `GET …/order` below), or `null`. `finished`: its children that were closed or deleted, oldest first — `{title, branch, created_at, ended_at, how ("closed" = reopenable from Recently closed, or "deleted"), stage, pr_url, diff_stat, last_report, seed}`, recorded from each child's last row as it left and kept with this session (a reused title doesn't inherit them); their spawn records and messages are in `items` too. Messages count only when sent since both their sender and their recipient were created (a reused title doesn't inherit its deleted namesake's mail — the rule the row's `last_report` applies). A `before` id that is no longer stored (inboxes drop their oldest messages over their caps) pages back from the time its id carries (`m<ms>_<n>`, `spawn:<title>:<ms>`). **404** unknown session, **400** a non-integer/non-positive `limit` or a `before` id that is neither stored nor time-stamped |
 
 - `parent`: the session's live parent, or `""`.
 - `members`: the session itself (`role: "self"`), its live parent

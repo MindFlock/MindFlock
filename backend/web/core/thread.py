@@ -356,7 +356,7 @@ def thread(title: str, limit: int = DEFAULT_LIMIT, before: Optional[str] = None)
     already checked that ``title`` is a live session.
 
     ``body``: ``{"title", "parent", "members", "finished", "items",
-    "more"}`` — members are the session (role ``self``), its live parent and
+    "more", "order"}`` — members are the session (role ``self``), its live parent and
     its live children; ``finished`` are its children that were closed or
     deleted (``finished_children``), oldest first, each with its final report;
     items (oldest first, newest last) are a spawn record per parent→child
@@ -413,4 +413,15 @@ def thread(title: str, limit: int = DEFAULT_LIMIT, before: Optional[str] = None)
         "finished": finished,
         "items": page,
         "more": more,
+        # The order its workers run in (the Thread's diagram), or null.
+        "order": _order_view(title),
     }, None
+
+
+def _order_view(title: str) -> Optional[dict]:
+    try:
+        from backend.web.core import worker_order_driver
+
+        return worker_order_driver.order_view(title)
+    except Exception:  # noqa: BLE001 — the diagram is enrichment
+        return None

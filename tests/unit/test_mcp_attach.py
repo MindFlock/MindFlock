@@ -810,6 +810,8 @@ def test_send_message_is_not_auto_approved():
         "spawn_ticket_session",
         "start_team_run",
         "control_run",
+        "fence_session",
+        "set_order",
     ],
 )
 def test_ship_and_ticket_writes_are_never_auto_approved(tool):

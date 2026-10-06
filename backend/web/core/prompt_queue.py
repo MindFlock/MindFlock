@@ -157,6 +157,11 @@ def _normalize(entry) -> dict:
         ls = entry.get("last_sent")
         e["last_sent"] = float(ls) if isinstance(ls, (int, float)) else None
         e["last_text"] = str(entry.get("last_text", "") or "")
+        if entry.get("held"):
+            # Parked by its worker order (core.worker_order): nothing that
+            # enqueues may switch the queue on — only the release, or the
+            # user's own toggle.
+            e["held"] = True
     return e
 
 
@@ -205,7 +210,8 @@ def enqueue(title: str, text: str, index: Optional[int] = None) -> dict:
             else:
                 pos = max(0, min(int(index), len(entry["items"])))
                 entry["items"].insert(pos, item)
-            entry["enabled"] = True
+            if not entry.get("held"):
+                entry["enabled"] = True
             data[title] = entry
             _save(data)
         return entry
@@ -230,7 +236,8 @@ def enqueue_many(title: str, texts) -> tuple:
         for t in take:
             entry["items"].append({"id": _new_id(), "text": t, "added": now})
         if take:
-            entry["enabled"] = True
+            if not entry.get("held"):
+                entry["enabled"] = True
             data[title] = entry
             _save(data)
         return entry, len(take), len(cleaned) - len(take)
@@ -318,14 +325,21 @@ def set_flags(
     loop: Optional[bool] = None,
     loop_interval: Optional[int] = None,
     wait_for_limit: Optional[bool] = None,
+    held: Optional[bool] = None,
 ) -> dict:
     """Toggle the per-session ``enabled`` (drain on/off), ``loop`` (re-queue sent
-    prompts), ``loop_interval`` (minutes between looped sends; 0 = immediate), and
+    prompts), ``loop_interval`` (minutes between looped sends; 0 = immediate),
     ``wait_for_limit`` (hold + auto-resume across usage limits vs. stop when
-    limited) flags. Any left ``None`` is unchanged."""
+    limited) and ``held`` (parked by a worker order: an enqueue leaves the
+    queue off) flags. Any left ``None`` is unchanged."""
     with _LOCK:
         data = _load()
         entry = _normalize(data.get(title))
+        if held is not None:
+            if held:
+                entry["held"] = True
+            else:
+                entry.pop("held", None)
         if enabled is not None:
             entry["enabled"] = bool(enabled)
         if loop is not None:

@@ -26930,6 +26930,7 @@ function workerState(row, act) {
 	}
 	if (act === "limit") return "limit";
 	if (act === "working") return "working";
+	if (row.order?.state === "held") return "waiting";
 	return "idle";
 }
 var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
@@ -26963,6 +26964,9 @@ function workerLine(row, opts) {
 		const t = Number(row.activity_since) || 0;
 		text = t > 0 ? "working · " + since$1(t, now) : "working";
 		cls = "rep-work";
+	} else if (state === "waiting") {
+		text = "waiting" + (row.order?.detail ? " · " + row.order.detail : "");
+		cls = "rep-idle";
 	} else {
 		text = "idle — no report";
 		cls = "rep-idle";
@@ -26975,6 +26979,7 @@ function workerLine(row, opts) {
 	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
 	else if (state === "working") detail = "still working, no report yet";
 	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+	else if (state === "waiting") detail = "MindFlock holds its task until its turn" + (row.order?.detail ? " (" + row.order.detail + ")" : "");
 	else detail = "stopped without reporting back";
 	return {
 		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
@@ -26994,6 +26999,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 	const blocked = count("blocked");
 	const reported = states.filter(isReported$1).length;
 	const working = count("working");
+	const waiting = count("waiting");
 	const parts = [];
 	if (ask) parts.push({
 		text: ask + " needs you",
@@ -27025,6 +27031,10 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 	});
 	else if (working) parts.push({
 		text: working + " of " + n + " working",
+		cls: ""
+	});
+	else if (waiting) parts.push({
+		text: waiting + " of " + n + " waiting their turn",
 		cls: ""
 	});
 	else parts.push({
@@ -27376,53 +27386,53 @@ var LEAD_ASKS = {
 	lead_gone: "its lead is gone — nothing can merge or ship",
 	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
 };
-var num$3 = (v) => Number(v) || 0;
-var str$3 = (v) => v == null ? "" : String(v);
+var num$4 = (v) => Number(v) || 0;
+var str$4 = (v) => v == null ? "" : String(v);
 function runNote(event, data, info = {}) {
 	const d = data || {};
-	const run = str$3(d.run);
-	const name = str$3(d.name) || info.name?.(run) || "A group";
-	const who = str$3(d.ref) || str$3(d.title) || str$3(d.task) || "a line";
+	const run = str$4(d.run);
+	const name = str$4(d.name) || info.name?.(run) || "A group";
+	const who = str$4(d.ref) || str$4(d.title) || str$4(d.task) || "a line";
 	switch (event) {
 		case "run.needs_you": {
-			const reason = str$3(d.reason);
+			const reason = str$4(d.reason);
 			if (reason === "prompt") return null;
 			if (reason in LEAD_ASKS) {
-				const lead = str$3(d.title) || str$3(d.session);
+				const lead = str$4(d.title) || str$4(d.session);
 				return {
-					text: name + ": " + (str$3(d.text) || LEAD_ASKS[reason]),
+					text: name + ": " + (str$4(d.text) || LEAD_ASKS[reason]),
 					cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
 					run,
-					dedupe: d.key ? "needs:" + str$3(d.key) : [
+					dedupe: d.key ? "needs:" + str$4(d.key) : [
 						"needs",
 						run,
 						reason,
-						str$3(d.round) || str$3(d.incarnation)
+						str$4(d.round) || str$4(d.incarnation)
 					].join(":"),
 					rule: "run_needs_you",
 					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
 				};
 			}
 			return {
-				text: name + ": " + who + " " + (str$3(d.text) || escalationText(reason)),
+				text: name + ": " + who + " " + (str$4(d.text) || escalationText(reason)),
 				cls: "n-warn",
 				run,
-				dedupe: d.key ? "needs:" + str$3(d.key) : [
+				dedupe: d.key ? "needs:" + str$4(d.key) : [
 					"needs",
 					run,
-					str$3(d.task),
+					str$4(d.task),
 					reason,
-					str$3(d.incarnation)
+					str$4(d.incarnation)
 				].join(":"),
 				rule: "run_needs_you"
 			};
 		}
 		case "run.finished": {
-			const shipped = num$3(d.shipped);
-			const failed = num$3(d.failed);
+			const shipped = num$4(d.shipped);
+			const failed = num$4(d.failed);
 			const lane = info.lane?.(run) || "";
 			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
-			const what = str$3(d.outcome) || shipped + word;
+			const what = str$4(d.outcome) || shipped + word;
 			return {
 				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
 				cls: failed ? "n-warn" : "n-done",
@@ -27432,7 +27442,7 @@ function runNote(event, data, info = {}) {
 			};
 		}
 		case "run.task_shipped": {
-			const m = str$3(d.pr_url).match(/\/pull\/(\d+)/);
+			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
 			return {
 				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
 				cls: "n-done",
@@ -27440,7 +27450,7 @@ function runNote(event, data, info = {}) {
 				dedupe: [
 					"shipped",
 					run,
-					str$3(d.task)
+					str$4(d.task)
 				].join(":"),
 				rule: ""
 			};
@@ -30319,27 +30329,27 @@ function focusQueueInput(title) {
 }
 //#endregion
 //#region src/lib/flockActions.ts
-var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
-var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var str$3 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
 function normOption(v) {
-	const o = obj$2(v);
-	const key = str$2(o.key).trim();
+	const o = obj$3(v);
+	const key = str$3(o.key).trim();
 	if (!/^[1-9]$/.test(key)) return null;
 	return {
 		key,
-		label: str$2(o.label).trim() || key,
-		kind: str$2(o.kind, "other")
+		label: str$3(o.label).trim() || key,
+		kind: str$3(o.kind, "other")
 	};
 }
 function normDialog(v) {
-	const o = obj$2(v);
+	const o = obj$3(v);
 	const parsed = o.parsed === true;
-	const command = o.command == null ? null : str$2(o.command).trim() || null;
+	const command = o.command == null ? null : str$3(o.command).trim() || null;
 	const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x) => !!x) : [];
 	return {
-		id: str$2(o.id),
+		id: str$3(o.id),
 		parsed: parsed && options.length > 0,
-		question: str$2(o.question).trim(),
+		question: str$3(o.question).trim(),
 		command,
 		options
 	};
@@ -30418,11 +30428,11 @@ function answerDialog(title, key, dialogId) {
 }
 function isDialogAnswered(err) {
 	const e = err;
-	return e?.status === 409 && obj$2(e.body).dialog_answered === true;
+	return e?.status === 409 && obj$3(e.body).dialog_answered === true;
 }
 function isDialogChanged(err) {
 	const e = err;
-	return e?.status === 409 && obj$2(e.body).dialog_changed === true;
+	return e?.status === 409 && obj$3(e.body).dialog_changed === true;
 }
 var wrapping = /* @__PURE__ */ new Set();
 async function pasteWrapup(title) {
@@ -38508,6 +38518,172 @@ function InsertComposer({ value, onChange, onSave, onCancel }) {
 	});
 }
 //#endregion
+//#region src/lib/order.ts
+var obj$2 = (v) => v && typeof v === "object" ? v : {};
+var str$2 = (v) => typeof v === "string" ? v : "";
+var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+var num$3 = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
+function normFence(v) {
+	if (!v || typeof v !== "object") return null;
+	const o = obj$2(v);
+	const only = strs(o.only);
+	const keep_out = strs(o.keep_out);
+	if (!only.length && !keep_out.length) return null;
+	return {
+		only,
+		keep_out,
+		reason: str$2(o.reason),
+		by: str$2(o.by)
+	};
+}
+function normCard(v) {
+	const o = obj$2(v);
+	const title = str$2(o.title);
+	if (!title) return null;
+	const why = {};
+	for (const [k, w] of Object.entries(obj$2(o.why))) if (typeof w === "string") why[k] = w;
+	return {
+		title,
+		state: str$2(o.state) || "held",
+		word: str$2(o.word),
+		detail: str$2(o.detail),
+		after: strs(o.after),
+		why,
+		fence: normFence(o.fence),
+		released_at: num$3(o.released_at),
+		ended_at: num$3(o.ended_at),
+		planned: o.planned === true
+	};
+}
+function normOrder(v) {
+	if (!v || typeof v !== "object") return null;
+	const o = obj$2(v);
+	const steps = (Array.isArray(o.steps) ? o.steps : []).map((s, i) => {
+		const so = obj$2(s);
+		const workers = (Array.isArray(so.workers) ? so.workers : []).map(normCard).filter((c) => !!c);
+		return {
+			n: num$3(so.n) ?? i + 1,
+			workers
+		};
+	}).filter((s) => s.workers.length > 0);
+	if (!steps.length) return null;
+	return {
+		mode: str$2(o.mode) || "parallel",
+		max_parallel: num$3(o.max_parallel) ?? 0,
+		cap: num$3(o.cap) ?? 0,
+		steps
+	};
+}
+function modeLine(o) {
+	const parts = [];
+	if (o.mode === "serial") parts.push("One at a time");
+	else if (o.cap > 0) parts.push("Up to " + o.cap + " at a time");
+	if (o.steps.length > 1 && o.mode !== "serial") parts.push("in " + o.steps.length + " steps");
+	if (!parts.length) parts.push("All at once");
+	const s = parts.join(", ");
+	return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function cardTone(c) {
+	if (c.state === "done") return "ok";
+	if (c.state === "running") return "work";
+	if (c.state === "stopped") return "bad";
+	return "idle";
+}
+function overlapLines(c, nameOf = (t) => t) {
+	const out = [];
+	for (const [t, w] of Object.entries(c.why || {})) if (w.startsWith("overlap: ")) out.push("same files as " + nameOf(t) + " (" + w.slice(9) + ")");
+	return out;
+}
+function fenceChips(f) {
+	if (!f) return [];
+	return [...f.only.map((p) => ({
+		kind: "only",
+		text: "only " + p
+	})), ...f.keep_out.map((p) => ({
+		kind: "out",
+		text: "⛔ " + p
+	}))];
+}
+function stepCaption(i, cards, o) {
+	const base = "Step " + (i + 1);
+	if (cards < 2) return base;
+	if (o.cap > 0 && cards > o.cap) return base + " · " + o.cap + " at a time";
+	return base + " · together";
+}
+function orderWorthShowing(o) {
+	if (!o || !o.steps.length) return false;
+	if (o.steps.length > 1 || o.cap > 0 || o.mode === "serial") return true;
+	return o.steps.some((s) => s.workers.some((c) => !!c.fence || c.state === "held" || c.planned));
+}
+var TERMINAL_OK = /* @__PURE__ */ new Set(["shipped", "integrated"]);
+var TERMINAL = /* @__PURE__ */ new Set([
+	"shipped",
+	"integrated",
+	"failed",
+	"cancelled",
+	"skipped"
+]);
+function runStages(run) {
+	const tasks = (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
+	const n = tasks.length;
+	const sf = run.mode === "same_folder";
+	const st = run.state;
+	const planning = st === "planning" || st === "plan_ready";
+	const out = [];
+	if (run.split) {
+		const pieces = run.plan?.pieces?.length || 0;
+		out.push({
+			key: "plan",
+			label: "Plan",
+			how: "the lead proposes, you approve",
+			state: st === "planning" ? "now" : st === "plan_ready" ? "now" : "done",
+			detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — waiting for you" : pieces ? pieces + " pieces" : ""
+		});
+	}
+	const working = tasks.filter((t) => !TERMINAL.has(t.state) && t.state !== "queued" && t.state !== "integrating").length;
+	const queued = tasks.filter((t) => t.state === "queued").length;
+	const finishedWork = tasks.filter((t) => TERMINAL.has(t.state) || t.state === "integrating").length;
+	const failed = tasks.filter((t) => t.state === "failed").length;
+	const cap = Number(run.concurrency) || 0;
+	out.push({
+		key: "pieces",
+		label: run.split ? "Pieces" : "Lines",
+		how: sf ? "together, in this folder" : cap && n > cap ? "together, " + cap + " at a time" : "together",
+		state: planning ? "next" : failed ? "bad" : n && finishedWork === n ? "done" : n ? "now" : "next",
+		detail: n ? [
+			finishedWork + " of " + n + " done",
+			working ? working + " working" : "",
+			queued ? queued + " queued" : ""
+		].filter(Boolean).join(" · ") : ""
+	});
+	const merged = tasks.filter((t) => TERMINAL_OK.has(t.state)).length;
+	const merging = tasks.filter((t) => t.state === "integrating").length;
+	out.push({
+		key: "merge",
+		label: sf ? "Commit each" : "Merge back",
+		how: "one at a time",
+		state: planning || !n ? "next" : merged === n ? "done" : merging || merged ? "now" : "next",
+		detail: n && !planning ? merged + " of " + n + (sf ? " committed" : " merged") : ""
+	});
+	const check = run.check?.state || "none";
+	out.push({
+		key: "check",
+		label: "Check",
+		how: "the whole branch",
+		state: check === "ok" || check === "skipped" ? "done" : check === "failed" ? "bad" : check === "running" || check === "pending" ? "now" : "next",
+		detail: check === "ok" ? run.check?.summary || "passed" : check === "failed" ? run.check?.summary || "failed" : check === "skipped" ? "no check command" : ""
+	});
+	const rel = run.release?.state || "none";
+	out.push({
+		key: "release",
+		label: "One PR",
+		how: "you release it",
+		state: rel === "done" || rel === "handoff" ? "done" : rel === "failed" ? "bad" : rel === "releasing" || st === "release_ready" ? "now" : "next",
+		detail: rel === "done" ? run.release?.pr_url ? "opened" : "released" : st === "release_ready" ? "waiting for you" : ""
+	});
+	return out;
+}
+//#endregion
 //#region src/lib/thread.ts
 var obj$1 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str$1 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
@@ -38594,7 +38770,8 @@ function normThread(v, title = "") {
 		members,
 		finished,
 		items,
-		more: o.more === true
+		more: o.more === true,
+		order: normOrder(o.order)
 	};
 }
 function mergeOlder(older, current) {
@@ -38639,7 +38816,8 @@ var RANK = {
 	done: 2,
 	limit: 3,
 	working: 4,
-	idle: 5
+	waiting: 5,
+	idle: 6
 };
 function workerRows(children, members, actOf) {
 	const byTitle = new Map(members.map((m) => [m.title, m]));
@@ -38659,7 +38837,8 @@ function workerRows(children, members, actOf) {
 			report: merged.last_report ?? null,
 			diff: c.diff_stat ?? m?.diff_stat ?? null,
 			baseSha: m?.base_sha ?? null,
-			stage: c.stage || ""
+			stage: c.stage || "",
+			waitDetail: c.order?.state === "held" ? String(c.order.detail || "") : ""
 		};
 	}).map((r, i) => ({
 		r,
@@ -38718,6 +38897,10 @@ function headerSummary(rows, finished = 0) {
 		text: n("working") + " working",
 		cls: ""
 	});
+	if (n("waiting")) parts.push({
+		text: n("waiting") + " waiting their turn",
+		cls: ""
+	});
 	if (n("idle")) parts.push({
 		text: n("idle") + " idle without a report",
 		cls: ""
@@ -38759,8 +38942,8 @@ function progressOf(rows, finished) {
 			},
 			{
 				key: "idle",
-				n: n("idle"),
-				label: "idle without a report"
+				n: n("idle", "waiting"),
+				label: "idle or waiting their turn"
 			}
 		].filter((s) => s.n > 0),
 		text: total ? `${done} of ${total} done` : ""
@@ -38812,6 +38995,11 @@ function workerStatus(row, parentName, now = Date.now() / 1e3) {
 			word: "working",
 			cls: "work",
 			detail: [t ? since(t, now) : "", "no report yet"].filter(Boolean).join(" · ")
+		};
+		case "waiting": return {
+			word: "waiting its turn",
+			cls: "idle",
+			detail: row.waitDetail || "MindFlock starts it when its turn comes"
 		};
 		default: return {
 			word: "idle",
@@ -38952,6 +39140,149 @@ function quoteTitle(title) {
 function decidePrompt(worker, dialog, provider) {
 	const q = dialog ? oneLine([dialog.command, dialog.question].filter(Boolean).join(" — "), 160) : "";
 	return `Your MindFlock worker ${quoteTitle(worker)} is waiting on a prompt` + (q ? `: “${q}”.` : ".") + ` Look at it with ${toolName("read_output", provider)} (view screen) and answer it with ${toolName("answer_prompt", provider)} if you are sure that is safe for this task; otherwise leave it and tell me why.`;
+}
+//#endregion
+//#region src/components/grid/OrderDiagram.tsx
+function OrderDiagram({ title, order, onChanged }) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const startNow = async (worker) => {
+		setBusy(worker);
+		try {
+			await instApi(title, "/order", {
+				method: "POST",
+				json: { start_now: [worker] }
+			});
+			toast(displayName(worker) + " starts now — before what it was waiting on");
+			onChanged?.();
+		} catch (err) {
+			toast("Couldn't start it: " + errMsg(err));
+		} finally {
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "thread-sec od-sec",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "thread-sec-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "thread-label",
+				children: "Order"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "od-mode",
+				title: "How MindFlock runs these workers — set by the orchestrator (set_order / spawn_session after=)",
+				children: modeLine(order)
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "od-steps",
+			role: "list",
+			"aria-label": "The order the workers run in",
+			children: order.steps.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "od-step-wrap",
+				role: "listitem",
+				children: [i > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "od-then",
+					"aria-hidden": "true",
+					children: "→"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "od-step",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "od-step-cap",
+						children: stepCaption(i, s.workers.length, order)
+					}), s.workers.map((c) => {
+						const chips = fenceChips(c.fence);
+						const overlaps = overlapLines(c, displayName);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "od-card is-" + c.state,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "od-card-head",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "th-dot " + cardTone(c),
+											"aria-hidden": "true"
+										}),
+										c.planned ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "od-name",
+											children: displayName(c.title)
+										}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "od-name od-link",
+											title: "Go to " + displayName(c.title),
+											onClick: () => selectSession(c.title),
+											children: displayName(c.title)
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "od-word",
+											children: c.word
+										})
+									]
+								}),
+								c.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "od-detail",
+									children: c.detail
+								}),
+								overlaps.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "od-detail od-why",
+									children: t
+								}, t)),
+								chips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "od-chips",
+									title: c.fence?.reason ? "Fence: " + c.fence.reason : "Its fence — enforced on every edit",
+									children: chips.map((ch) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "od-chip k-" + ch.kind,
+										children: ch.text
+									}, ch.text))
+								}),
+								c.state === "held" && !c.planned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "od-actions",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "th-btn",
+										disabled: !!busy,
+										title: "Hand it its task now, whatever it is waiting on",
+										onClick: () => void startNow(c.title),
+										children: "Start now"
+									})
+								})
+							]
+						}, c.title);
+					})]
+				})]
+			}, s.n))
+		})]
+	});
+}
+function StagesDiagram({ stages }) {
+	if (!stages.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "od-stages",
+		"aria-label": "The order this group runs in",
+		children: stages.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "od-stage is-" + s.state,
+			children: [i > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "od-then",
+				"aria-hidden": "true",
+				children: "→"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "od-stage-box",
+				title: s.how,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "od-stage-label",
+						children: s.label
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "od-stage-how",
+						children: s.how
+					}),
+					s.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "od-stage-detail",
+						children: s.detail
+					})
+				]
+			})]
+		}, s.key))
+	});
 }
 //#endregion
 //#region src/components/grid/RunLeadPanel.tsx
@@ -39113,7 +39444,8 @@ function RunLeadPanel({ title, me, run, rows }) {
 				noTools && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "thread-sub th-bad rb-warn",
 					children: "Restart the lead to give it the MindFlock tools — it proposes the pieces with them."
-				})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StagesDiagram, { stages: runStages(run) })
 			]
 		}),
 		run.state === "plan_ready" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
@@ -39797,6 +40129,23 @@ function ThreadTab({ title, active }) {
 								"'s Thread has the whole family."
 							]
 						}),
+						me?.order?.state === "held" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-sub od-self",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Waiting its turn" }),
+								" — MindFlock gives it its task ",
+								me.order.detail ? me.order.detail : "when its turn comes",
+								"."
+							]
+						}),
+						!!me?.order?.fence && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "od-chips od-self",
+							title: me.order.fence.reason ? "Fence: " + me.order.fence.reason : "Its fence — enforced on every edit",
+							children: fenceChips(me.order.fence).map((ch) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "od-chip k-" + ch.kind,
+								children: ch.text
+							}, ch.text))
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "th-self-answer",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
@@ -39831,6 +40180,11 @@ function ThreadTab({ title, active }) {
 							" below; it is typed into its prompt as you."
 						]
 					})] })
+				}),
+				!leadOf && orderWorthShowing(data?.order) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderDiagram, {
+					title,
+					order: data.order,
+					onChanged: () => void reload()
 				}),
 				workers.length > 0 && !leadOf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "thread-sec",
@@ -44690,6 +45044,14 @@ function patternFor(M, target) {
 		pattern: anchoredZonePath(dir),
 		label: dir
 	};
+}
+function zoneWhere(z, waived = false) {
+	if (waived) return "allowed in this worktree";
+	if (z.scope === "session") return "this session" + (z.by ? " · set by " + z.by : "");
+	return z.scope === "worktree" ? "this worktree" : "whole repo";
+}
+function zoneLocked(z) {
+	return !!z.locked || z.scope === "session";
 }
 //#endregion
 //#region src/lib/flock.ts
@@ -50385,11 +50747,11 @@ function NodeCard(p) {
 		who,
 		keepZ && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ct-who keep",
-			children: ["⛔ keep out · ", keepZ.waived ? "allowed in this worktree" : keepZ.z.scope === "worktree" ? "this worktree" : "whole repo"]
+			children: ["⛔ keep out · ", zoneWhere(keepZ.z, keepZ.waived)]
 		}),
-		onlyZ && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		onlyZ && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ct-who only",
-			children: "✓ only here · this worktree"
+			children: ["✓ only here · ", onlyZ.z.scope === "session" ? zoneWhere(onlyZ.z) : "this worktree"]
 		}),
 		inherited,
 		kids.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Sub-folders" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -50693,7 +51055,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			hit.tag.label
 		] }),
 		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: hit.tag.waived ? "allowed in this worktree" : hit.tag.z.scope === "worktree" ? "this worktree" : "whole repo" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: zoneWhere(hit.tag.z, hit.tag.waived) }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: hit.tag.type === "keep" ? "agents may read here but every edit is blocked" : "agents may edit only inside this; the rest is dusk" }) }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "act",
@@ -53570,7 +53932,7 @@ function SessionPanel({ m, a }) {
 									className: "cm-row-sub" + (n === 0 ? " cm-warn-text" : ""),
 									children: [
 										z.name ? z.pattern + " · " : "",
-										z.scope === "worktree" ? "this worktree" : "whole repo",
+										zoneWhere(z),
 										z.waived ? " · allowed here" : "",
 										" ·",
 										" ",
@@ -53578,7 +53940,7 @@ function SessionPanel({ m, a }) {
 									]
 								})]
 							}),
-							z.scope !== "worktree" && !g && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							z.scope !== "worktree" && !g && !zoneLocked(z) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "cm-row-act quiet",
 								disabled: m.zoneBusy === z.id,
@@ -53586,7 +53948,7 @@ function SessionPanel({ m, a }) {
 								onClick: () => a.waiveZone(z, !z.waived),
 								children: z.waived ? "Re-protect" : "Allow here"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							!zoneLocked(z) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "cm-row-act cm-x quiet",
 								"aria-label": "Remove zone " + (z.name || z.pattern),
@@ -53700,6 +54062,59 @@ function SessionPanel({ m, a }) {
 			}) }, o.session + o.path + o.ts))
 		})]
 	}, "others") : null;
+	const fences = m.fences || [];
+	const fencesSec = fences.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Workers' fences ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-count",
+				children: fences.length
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-hint",
+				children: "What each worker may change — set by its orchestrator, enforced on every edit for that worker only."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: fences.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cm-row",
+					title: f.reason || void 0,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-row-main",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-other-dot",
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-target",
+							children: f.session
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-row-sub",
+						children: [
+							f.only.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "cm-fence only",
+								title: "Show it on the tree",
+								onClick: () => a.selectPath(p.replace(/^\//, "").replace(/\/?\*\*.*$/, "")),
+								children: ["✓ ", p]
+							}, "o" + p)),
+							f.keep_out.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "cm-fence keep",
+								title: "Show it on the tree",
+								onClick: () => a.selectPath(p.replace(/^\//, "").replace(/\/?\*\*.*$/, "")),
+								children: ["⛔ ", p]
+							}, "k" + p)),
+							f.reason ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-fence-why",
+								children: f.reason
+							}) : null
+						]
+					})]
+				}) }, f.session))
+			})
+		]
+	}, "fences") : null;
 	let order;
 	if (m.green) order = [
 		zonesSec,
@@ -53724,6 +54139,7 @@ function SessionPanel({ m, a }) {
 		reqSec,
 		order,
 		changedSec,
+		fencesSec,
 		othersSec,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "cm-hint cm-sel-hint",
@@ -54353,6 +54769,13 @@ function CodeMap({ title, active }) {
 		}
 	};
 	const removeZone$1 = async (z, undoable = true) => {
+		if (zoneLocked(z)) {
+			showToast({
+				text: `That fence was set by ${z.by || "this session's orchestrator"} — only it can lift it`,
+				bad: true
+			});
+			return;
+		}
 		setZoneBusy(z.id);
 		try {
 			const r = await removeZone(title, z.id);
@@ -54371,6 +54794,7 @@ function CodeMap({ title, active }) {
 		}
 	};
 	const waiveZone$1 = async (z, waived) => {
+		if (zoneLocked(z)) return;
 		setZoneBusy(z.id);
 		try {
 			const r = await waiveZone(title, z.id, waived);
@@ -54896,6 +55320,7 @@ function CodeMap({ title, active }) {
 								changed,
 								exempt,
 								others: othersList,
+								fences: live?.fences || EMPTY_FENCES,
 								zoneBusy,
 								reqBusy: shownReqBusy,
 								levelName: (p) => p || repoLabel || "repo root",
@@ -54946,6 +55371,7 @@ var EMPTY_ZONES = [];
 var EMPTY_PLAN = [];
 var EMPTY_STR = [];
 var EMPTY_OTHERS = [];
+var EMPTY_FENCES = [];
 var EMPTY_BREACHES = [];
 var EMPTY_TZ = [];
 //#endregion

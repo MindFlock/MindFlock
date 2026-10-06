@@ -302,11 +302,19 @@ def _mf_session_view(g):
         return g
     me = re.sub(r"[^A-Za-z0-9_.-]", "_", _MF_SESSION or "")
     mine = sess.get(me) if me else None
-    if not isinstance(mine, dict) or not mine.get("green_rules"):
+    if not isinstance(mine, dict) or not (
+        mine.get("green_rules") or mine.get("red_rules")
+    ):
         return g
     v = dict(g)
-    v["green_rules"] = list(mine.get("green_rules") or [])
-    v["companions"] = []
+    if mine.get("green_rules"):
+        v["green_rules"] = list(mine.get("green_rules") or [])
+        v["companions"] = list(mine.get("companions") or [])
+    if mine.get("red_rules"):
+        # Keep-out for this session only, on top of the folder's red zones.
+        v["rules"] = list(g.get("rules") or []) + list(mine["red_rules"])
+        for k in ("files", "dirs", "sym"):
+            v[k] = list(g.get(k) or []) + list(mine.get("red_" + k) or [])
     sib = []
     for k, x in sess.items():
         if k != me and isinstance(x, dict):
