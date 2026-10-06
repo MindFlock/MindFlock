@@ -1300,7 +1300,7 @@ function TicketSourceCard({
         </span>
       </label>
       <label className="set-row">
-        <span className="set-label">Take tickets as far as</span>
+        <span className="set-label">Fast-track tickets to</span>
         <select
           className="tk-depth"
           data-tk-field="depth"

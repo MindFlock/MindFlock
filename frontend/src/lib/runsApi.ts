@@ -1,6 +1,6 @@
 /** The team-run routes, as the UI calls them (server: docs/web-api.md "Team
  * runs and the Outbox"). One place for the paths and the "act, refetch, say
- * so" shape, so the rail's group menu, the Outbox and the Ship & split menu
+ * so" shape, so the rail's group menu, the Outbox and the row › menu
  * can never drift apart on what a button posts.
  *
  * What each control posts:

@@ -136,8 +136,9 @@ describe("the ship card", () => {
     expect(c.body).toBe("a section per piece: what changed, the tests it ran");
   });
 
-  it("the lane note at the right", () => {
-    expect(S.laneNote({ target: "pr", ask_first: true })).toBe("this session's lane: → PR, asks first");
+  it("the fast-track note at the right", () => {
+    expect(S.laneNote({ target: "pr", ask_first: true })).toBe("fast-track: → PR, asks first");
+    expect(S.laneNote({ target: "leave", ask_first: false })).toBe("fast-track: off");
     expect(S.laneNote(null)).toBe("");
   });
 
@@ -149,7 +150,7 @@ describe("the ship card", () => {
     const ho = S.releaseOutcome(run({ state: "done", release: { state: "handoff", compare_url: "https://x/compare/main...b" } }))!;
     expect(ho.link).toBe("Open the compare page ↗");
     const local = S.releaseOutcome(run({ state: "done", policy: { lane: "commit", ask_first: false, grouping: "together" } }))!;
-    expect(local.text).toMatch(/nothing pushed \(this group's lane is Commit\)/);
+    expect(local.text).toMatch(/nothing pushed \(this group is fast-tracked to Commit\)/);
   });
 
   it("a lead whose origin is a folder on this machine: push only, and the outcome never claims a PR", () => {

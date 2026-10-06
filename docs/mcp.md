@@ -837,7 +837,7 @@ doesn't count.
 
 → `{title, autopilot: {depth, state, step, reason, note, url, …}, hint}`, or
 `{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own autopilot
-(`POST /api/instances/{title}/fast-track`, the ⏩ button; `DELETE` for
+(`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
 `off`). The autopilot waits until the agent's turn has ended and stayed idle
 for 30 s with nothing queued, then ships it up to `depth` through the same
 buttons, retries (then skips) a pre-commit hook Settings allow-lists, runs
@@ -864,7 +864,7 @@ it surfaces to the user.
 |---|---|---|
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
 | `name` | suggested | the group's name |
-| `lane` | the user's fast-track setting | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
+| `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
 | `ask_first` | false | stop before each item's first commit / push and wait for the user's go (the Outbox) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |

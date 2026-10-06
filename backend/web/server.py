@@ -2635,11 +2635,14 @@ def _row_run(title: str):
 
 
 def _fasttrack_depth() -> str:
-    """The configured default rung for the fast-track button.
+    """The rung an EXPLICIT ``POST /fast-track`` with no ``depth`` arms.
 
-    Read fresh at decision time (never memoized at startup) so changing it in
-    Settings takes effect on the next press with no restart — the house rule for
-    every settings consumer.
+    That request already says "arm it", so it needs a real rung: the stored
+    setting when it names one, else the built-in "pr" (an Off or unset setting
+    cannot be armed). This is an explicit-arm convenience only — nothing that
+    SEEDS a choice reads it; they read :func:`_fasttrack_default`, where unset
+    means Off. Read fresh at decision time (never memoized at startup), the
+    house rule for every settings consumer.
     """
     try:
         from backend.config import settings as _settings
@@ -2650,6 +2653,29 @@ def _fasttrack_depth() -> str:
         return d if d in _autopilot.DEPTHS else "pr"
     except Exception:  # noqa: BLE001
         return "pr"
+
+
+def _fasttrack_default() -> str:
+    """THE fast-track default — Settings → Workspace "Fast-track goes as far
+    as" — for everything that SEEDS a choice: the New dialog's list mode,
+    Intake's Start together, and a team run created with no lane (the MCP's
+    ``start_team_run``). A single new session never reads it: it starts Off
+    unless the user picks.
+
+    The stored rung (``commit`` / ``push`` / ``pr`` / ``merge``) when one is
+    set, else ``"off"``: out of the box nothing is fast-tracked unless asked.
+    An explicit ``"off"``, a blank, junk and an unreadable settings file all
+    read as Off. Read fresh, like every settings consumer.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        d = _autopilot.normalize_depth(
+            _settings.load_settings().repository.fasttrack_depth
+        )
+    except Exception:  # noqa: BLE001
+        return "off"
+    return d if d in ("commit", "push", "pr", "merge") else "off"
 
 
 def _precommit_retry_hooks() -> list:
@@ -6621,6 +6647,10 @@ def get_config() -> JSONResponse:
             # request omits one, which is what keeps this setting authoritative
             # instead of shadowed by a sticky client value.
             "fasttrack_depth": _fasttrack_depth(),
+            # THE default every fast-track picker starts on (the New dialog,
+            # Start together): a rung, or "off" — which the resolved rung above
+            # can never say.
+            "fasttrack_default": _fasttrack_default(),
         }
     )
 

@@ -589,11 +589,11 @@
   filter: none;
 }
 
-/* Fast-track (⏩): a SECONDARY control that sits beside the guided button and
-   arms the rest of the stack in one press. Deliberately an accent OUTLINE, not a
-   filled accent — the guided next step must stay the one obvious default action,
-   and two filled accent buttons side by side would compete. Icon-only, so it
-   costs almost no width in a tiled layout. */
+/* Fast-track (⏩): a SECONDARY control that sits beside the guided button. It
+   names where MindFlock will carry the session ("⏩ PR") and opens the picker.
+   Deliberately an accent OUTLINE, not a filled accent — the guided next step
+   must stay the one obvious default action, and two filled accent buttons side
+   by side would compete. Short text, so it costs little width in a tiled layout. */
 .pane-head .actions .nextstep.nextstep-fast {
   background: transparent;
   color: var(--accent);
@@ -655,10 +655,11 @@
    no longer fits, does it hide too. Fast-track is secondary, so it goes one step
    earlier — the primary action must never be the thing that gets squeezed out. */
 /* Fast-track is secondary, so it drops one step before the primary button —
-   EXCEPT while it carries state. Hiding an armed toggle would take away the only
-   way to turn it off, which is the bug this control was reworked to fix. */
+   EXCEPT while it carries state (a target is set, a run is working or halted).
+   Hiding it then would hide the only place that says where the session is going
+   and the way to turn it off. */
 @container (max-width: 500px) {
-  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.nextstep-fast-halted) {
+  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
     display: none !important;
   }
   /* ↺ carries no state at all — it is a one-shot action, so there is nothing to

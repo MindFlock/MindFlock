@@ -1,6 +1,6 @@
 /** The New dialog's list mode (SPEC §7.C.1): the describe box read as "one
  * thing per line, or ticket IDs", shown back as a list of rows, plus the
- * choices that decide how far each one goes and how they ship.
+ * choices that decide how far each one is fast-tracked and how they ship.
  *
  * `useRunDraft` owns the state and the server's reading of the box
  * (`POST /api/runs/preview`, debounced, stamped with the text it answers so an
@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { errMsg } from "../../lib/format";
-import { SERVER_NO_TOGETHER, LANE_CHOICES, LANE_LABEL, type Lane } from "../../lib/laneActions";
+import { SERVER_NO_TOGETHER, type Lane } from "../../lib/laneActions";
+import { FastTrackChoice, Seg } from "./FastTrackChoice";
 import {
   CONCURRENCY_DEFAULT,
   CONCURRENCY_MAX,
@@ -70,8 +71,8 @@ export interface RunDraft {
   /** The server takes "One for all" (caps.team_runs.together). */
   togetherOk: boolean;
   /** One PR for all (or a split): every line is committed into the group's
-   * branch, so "Leave it" and "ask me first" do not apply (the lane shown is
-   * the one sent — see runStart.oneForAllLane). */
+   * branch, so Off and "ask me first" do not apply (the target shown is the
+   * one sent — see runStart.oneForAllLane). */
   oneForAll: boolean;
   concurrency: number;
   setConcurrency(n: number): void;
@@ -92,7 +93,12 @@ export function useRunDraft(o: {
   text: string;
   repoPath: string;
   program: string;
-  fasttrackDepth: string | undefined;
+  /** Settings → Workspace "Fast-track goes as far as" — what a BATCH starts
+   * on (Off when unset). A single session starts Off. */
+  fasttrackDefault: string | undefined;
+  /** The dialog is creating ONE session whatever the box holds (the "Set it
+   * up myself" form): it starts Off. */
+  single?: boolean;
   /** The split box is ticked (and the agent can take one). */
   split: boolean;
   /** caps.team_runs.together — false: every group is one PR per line. */
@@ -183,14 +189,12 @@ export function useRunDraft(o: {
     [listMode, items, fresh, repoLabel]
   );
 
-  // One line keeps today's behaviour (nothing ships unless the user says so);
-  // a list or a split starts on the server's suggestion or the fast-track
-  // default. An explicit pick wins either way.
+  // "Off unless I pick": one session starts Off; a batch (a list, tickets,
+  // a split) starts on Settings → Workspace's default. An explicit pick wins.
   const oneForAll =
     (o.split && oneTask) || (grouping === "together" && (rows.length || items.length) >= 2);
-  const chosen =
-    laneChoice ??
-    defaultLaneFor(listMode || (o.split && oneTask), fresh?.data?.lane_default, o.fasttrackDepth);
+  const batch = !o.single && (listMode || (o.split && oneTask));
+  const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
   const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 
   const start: RunDraft["start"] = async ({ split }) => {
@@ -314,48 +318,7 @@ export function RunItems({ rows, onRemove }: { rows: ItemRow[]; onRemove(row: It
   );
 }
 
-/** A small segmented control: one pressed button out of a few. */
-function Seg<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-  id,
-}: {
-  value: T;
-  options: ReadonlyArray<{ v: T; label: string; title?: string; disabled?: boolean }>;
-  onChange(v: T): void;
-  label: string;
-  id?: string;
-}) {
-  return (
-    <div className="rt-seg" role="group" aria-label={label} id={id}>
-      {options.map((o) => (
-        <button
-          key={o.v}
-          type="button"
-          className={o.v === value ? "on" : undefined}
-          aria-pressed={o.v === value}
-          title={o.title}
-          disabled={o.disabled || undefined}
-          onClick={() => onChange(o.v)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-const LANE_TITLES: Record<Lane, string> = {
-  leave: "MindFlock doesn't commit anything — you take it from there",
-  commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-  push: "Commit and push once the agent stops and your hooks pass",
-  pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-  merge: "…and merge the PR once its checks pass",
-};
-
-/** Everything under the list: the lane (always), the batch rows (two or
+/** Everything under the list: the fast-track (always), the batch rows (two or
  * more), the split box (passed in — it is shared with the single flow), and
  * the sentence that says what all of it means. */
 export function RunOptions({
@@ -377,22 +340,6 @@ export function RunOptions({
 }) {
   const many = n >= 2 && !split;
   const oneForAll = split || (n >= 2 && draft.grouping === "together");
-  const laneOpts = LANE_CHOICES.map((l) => ({
-    v: l,
-    label: LANE_LABEL[l],
-    title:
-      oneForAll && l === "leave"
-        ? "One PR for all commits each line into the group's branch — Commit keeps it all on this machine"
-        : LANE_TITLES[l],
-    disabled: oneForAll && l === "leave",
-  }));
-  if (draft.lane === "push")
-    laneOpts.splice(2, 0, {
-      v: "push",
-      label: LANE_LABEL.push,
-      title: LANE_TITLES.push,
-      disabled: false,
-    });
   const sum = summarySentence({
     n,
     concurrency: draft.concurrency,
@@ -404,34 +351,29 @@ export function RunOptions({
   return (
     <div className="rt-opts">
       <div className="rt-row rt-row-top">
-        <span className="rt-label">{many ? "When each is done" : "When it's done"}</span>
+        <span className="rt-label">{many ? "Fast-track each to" : "Fast-track to"}</span>
         <div className="rt-ctl">
-          <Seg
+          <FastTrackChoice
             id="new-lane"
-            label={many ? "When each is done" : "When it's done"}
+            label={many ? "Fast-track each to" : "Fast-track to"}
             value={draft.lane}
-            options={laneOpts}
             onChange={draft.setLane}
-          />
-          <label
-            className={"check rt-ask" + (draft.lane === "leave" || oneForAll ? " disabled" : "")}
-            title={
+            askFirst={draft.askFirst}
+            onAskFirst={draft.setAskFirst}
+            disabledReason={
+              oneForAll
+                ? {
+                    leave:
+                      "One PR for all commits each line into the group's branch — Commit keeps it all on this machine",
+                  }
+                : undefined
+            }
+            askReason={
               oneForAll
                 ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish"
-                : draft.lane === "leave"
-                  ? "Nothing ships while it's “Leave it”"
-                  : "Stop one step before the first commit and show it in the Outbox first"
+                : undefined
             }
-          >
-            <input
-              type="checkbox"
-              id="new-ask-first"
-              checked={!oneForAll && draft.lane !== "leave" && draft.askFirst}
-              disabled={draft.lane === "leave" || oneForAll}
-              onChange={(e) => draft.setAskFirst(e.target.checked)}
-            />
-            Ask me before it ships
-          </label>
+          />
         </div>
       </div>
       {many && (

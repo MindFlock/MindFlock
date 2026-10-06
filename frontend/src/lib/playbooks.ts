@@ -1,8 +1,8 @@
 /** MindFlock MCP from the UI: who gets the agent tools, the New dialog's
  * split gate and its "suggested" pill, and the one remaining PASTE path.
  *
- * The pane's fork-icon menu, the row › menu and the palette no longer paste
- * anything — they ACT, through lib/laneActions (Ship & split). What is left
+ * The row › menu, the palette and the ⏩ fast-track picker never paste
+ * anything — they ACT, through lib/laneActions. What is left
  * here pastes only for the Thread tab's worker buttons and the rail's wrap-up
  * chip (`runPlaybook` / `pastePlaybook`), which the split runs replace once
  * the server merges pieces back itself.

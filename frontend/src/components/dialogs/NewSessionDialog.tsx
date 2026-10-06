@@ -42,6 +42,7 @@ import { FlagChips, tokenize } from "./FlagChips";
 import { NewTicketPane } from "./NewTicketPane";
 import { SplitCheck } from "./SplitCheck";
 import { RunItems, RunOptions, useRunDraft } from "./NewList";
+import { FastTrackChoice } from "./FastTrackChoice";
 import { splitGate } from "../../lib/playbooks";
 import {
   SERVER_NO_SPLIT,
@@ -1273,7 +1274,11 @@ export function NewSessionDialog() {
     text: describe,
     repoPath,
     program: canonAgent(program),
-    fasttrackDepth: config?.fasttrack_depth,
+    // What a BATCH starts on (Settings → Workspace; Off when unset). Never
+    // the resolved `fasttrack_depth`, which reads "pr" when nothing is set.
+    fasttrackDefault: config?.fasttrack_default,
+    // The "Set it up myself" form makes ONE session: it starts Off.
+    single: page !== 1,
     split: page === 1 && split && mcpOk.ok,
     togetherOk,
   });
@@ -1295,10 +1300,10 @@ export function NewSessionDialog() {
   }, [runBrowse]);
   const laneAtPress = useRef<{ lane: Lane; askFirst: boolean }>({ lane: "leave", askFirst: false });
   laneAtPress.current = { lane: draft.lane, askFirst: draft.askFirst };
-  // A lane COMMITS for this session: it never drives a checkout other
+  // Fast-track COMMITS for this session: it never drives a checkout other
   // sessions share (two in-place sessions on main had one approval card, and
-  // approving it committed both sessions' files). With a lane, the session
-  // gets its own worktree.
+  // approving it committed both sessions' files). With fast-track on, the
+  // session gets its own worktree.
   const laneNeedsWorktree = draft.lane !== "leave";
 
   /** Page 1's start in run mode: POST /api/runs, and the dialog closes only
@@ -1322,7 +1327,7 @@ export function NewSessionDialog() {
     else if (n >= 2) {
       const c = Math.min(n, draft.concurrency);
       toast(
-        `Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · ${LANE_LABEL[draft.lane]}`,
+        `Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`,
         { duration: 6000 }
       );
     } else toast("Starting it — the session appears in the rail", { duration: 4000 });
@@ -1851,7 +1856,7 @@ export function NewSessionDialog() {
    * values, so it passes the answer's own fields and this function cannot tell
    * the two apart. */
   const postCreate = async (body: Record<string, unknown>) => {
-    // The lane picked on page 1 ("When it's done"), as it stood at the press.
+    // The fast-track picked in the dialog, as it stood at the press.
     // Read through a ref: an immediate start reaches here after a model turn,
     // from a closure that is several renders old.
     const { lane, askFirst } = laneAtPress.current;
@@ -2671,6 +2676,25 @@ export function NewSessionDialog() {
               />
             )}
   
+            {config?.caps?.git !== false && (
+              // The same fast-track choice page 1 shows (and the same draft):
+              // a session made from the form goes as far as this says, and
+              // it is never set out of sight.
+              <div id="new-ft-row" className="rt-row rt-row-top" data-caps="git">
+                <span className="rt-label">Fast-track to</span>
+                <div className="rt-ctl">
+                  <FastTrackChoice
+                    id="new-lane-form"
+                    label="Fast-track to"
+                    value={draft.lane}
+                    onChange={draft.setLane}
+                    askFirst={draft.askFirst}
+                    onAskFirst={draft.setAskFirst}
+                  />
+                </div>
+              </div>
+            )}
+
             <details
               id="new-advanced"
               className="nf-advanced"
@@ -2732,8 +2756,11 @@ export function NewSessionDialog() {
                       name="new-workspace-mode"
                       id="new-in-place"
                       checked={inPlace && !laneNeedsWorktree}
-                      disabled={laneNeedsWorktree}
                       onChange={() => {
+                        // Fast-track commits for THIS session, so it never
+                        // drives a checkout others share: choosing the shared
+                        // folder turns it off (said on the line, not hidden).
+                        if (laneNeedsWorktree) draft.setLane("leave");
                         setInPlace(true);
                         setProvision(false);
                       }}
@@ -2741,7 +2768,7 @@ export function NewSessionDialog() {
                     Work directly in this folder{" "}
                     <span className="muted">
                       {laneNeedsWorktree
-                        ? "(not with a lane — it commits for this session, so it gets its own worktree)"
+                        ? "(turns fast-track off — it commits for this session, so it needs its own worktree)"
                         : "(no worktree — edits the original; multiple sessions can share it)"}
                     </span>
                   </label>

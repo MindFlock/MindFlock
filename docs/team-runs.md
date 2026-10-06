@@ -1,13 +1,13 @@
-# Team runs and ship lanes
+# Team runs and fast-track
 
 "Work on these tickets together, 3 at a time, PR each." A **team run** (a
 *group* on screen) takes a few ticket IDs and task lines, starts one session
-per item, keeps at most N running with the rest queued, carries each one as
-far as its **ship lane** says, and surfaces only what needs you. The server
+per item, keeps at most N running with the rest queued, **fast-tracks** each
+one as far as you chose, and surfaces only what needs you. The server
 does the plumbing — spawning, queueing, retries, nudges, restart safety —
 deterministically; an agent only does the work.
 
-- [Ship lanes](#ship-lanes)
+- [Fast-track](#fast-track)
 - [Starting a group](#starting-a-group)
 - [What the server does on its own](#what-the-server-does-on-its-own)
 - [What needs you](#what-needs-you)
@@ -18,27 +18,31 @@ deterministically; an agent only does the work.
 - [Splitting one task](#splitting-one-task)
 - [Where it lives](#where-it-lives)
 
-## Ship lanes
+## Fast-track
 
-A lane is your answer to "when it's done, what then?":
+**Fast-track** is your answer to "when it's done, what then?" — the one name
+every screen uses (the ⏩ button, the New and Commit dialogs, Settings,
+Intake). The API calls a fast-track target a **lane** (`POST
+/api/instances/{t}/lane`, the row's `lane`, the MCP's `lane` parameters);
+this page uses both words, the API's where it names a field.
 
-| Lane | MindFlock, once the agent is done |
-|---|---|
-| `leave` | Nothing. The work stays in the tree for you. |
-| `commit` | Commits it, with a message written from the diff. |
-| `push` | Commits and pushes the branch. |
-| `pr` | Commits, pushes and opens a pull request. |
-| `merge` | …and merges it once CI is green. |
+| On screen | `lane` | MindFlock, once the agent is done |
+|---|---|---|
+| Off | `leave` | Nothing. The work stays in the tree for you. |
+| Commit | `commit` | Commits it, with a message written from the diff. |
+| Push | `push` | Commits and pushes the branch. |
+| Open a PR | `pr` | Commits, pushes and opens a pull request. |
+| Merge when green | `merge` | …and merges it once CI is green. |
 
 Plus **Ask me before it ships**: the session stops one rung short of its first
-outward step (a commit lane before the commit, the others before the push)
+outward step (a Commit target before the commit, the others before the push)
 and waits in the Outbox; approving it (`POST /ship-now`) ships it at once. A
 commit lane that parks for approval has its message written from the diff
 right then: the card shows the exact message, and approving it unedited
 commits exactly that text. The card's size is what will be committed.
 
-A lane is **not a second engine**. It is carried out by the fast-track
-autopilot — the same record the ⏩ button arms, with its guards intact: the
+Fast-track is **one engine**: the autopilot — the same record whichever
+control set it, with its guards intact: the
 30 s idle dwell, proof the agent worked, the usage-limit freeze, the
 pre-commit retry allow-list, the push gate's check, CI before a merge. One
 driver per session, whoever asked. `POST /api/instances/{t}/lane` sets one on
@@ -49,19 +53,21 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
 
 **Nothing ships beyond what you chose for that session or group:**
 
-- A session with a lane gets its own worktree (the New dialog never creates
-  it in place), and a lane on an in-place session whose folder another
+- A session with fast-track on gets its own worktree (the New dialog never
+  creates it in place — choosing "Work directly in this folder" there turns
+  fast-track Off), and a lane on an in-place session whose folder another
   session shares is refused (409 `shared_with`): it would commit every
   sharer's work as one.
-- A copy window on the same branch shows the lane of the window that drives
-  it (`owner`) and is never armed: `/lane`, `/fast-track` and `/ship-now`
-  answer **409** on it (naming the driver; "Leave it" is always allowed).
-- **Ship it now** ships the lane the row showed (the UI sends it) or the
-  session's own record — never the Settings fast-track default: a session
-  with no lane of its own is refused (409).
+- A copy window on the same branch shows the target of the window that
+  drives it (`owner`) and is never armed: `/lane`, `/fast-track` and
+  `/ship-now` answer **409** on it (naming the driver; Off — `leave` — is
+  always allowed).
+- `POST /ship-now` (the Outbox's approval) ships the lane the session's own
+  record holds — never the Settings fast-track default: a session with no
+  lane of its own is refused (409).
 - A group's **lead** ships once, through the group's release, and a
-  **one-for-all member**'s work is the group's one PR: neither takes a lane of
-  its own (409; the Ship menu says so). A **paused** group's member cannot be
+  **one-for-all member**'s work is the group's one PR: neither takes a
+  fast-track of its own (409; the ⏩ picker says so). A **paused** group's member cannot be
   shipped now; a lane set on it while paused is recorded and armed on resume.
 - A lane (and "ask first") you set on a member of an each-their-own group is
   recorded on the task (`task.lane`, `task.ask_first`): every re-arm — a fix
@@ -336,8 +342,8 @@ one-for-all group whose lines come from the lead's plan:
    writable, red always wins. The fence lands just after the worker starts,
    so nothing it changed before is exempted (those are breaches); a piece
    none of whose paths could be fenced stops shipping and needs you.
-   *Split…* on a session turns that session's own lane off: the group ships
-   it once, at the release.
+   *Split into parallel pieces…* on a session turns that session's own
+   fast-track off: the group ships it once, at the release.
 5. From there it is the one-for-all path above: committed, merged back one at
    a time, conflicts to the lead, the check, and your release.
 

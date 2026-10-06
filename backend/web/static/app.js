@@ -25708,7 +25708,7 @@ var useUi = create((set, get) => ({
 	prBaseByRepo: load$1("mf_prbase", {}),
 	threadComposeTarget: null,
 	threadLastSeen: load$1("mf_thread_seen", {}),
-	playbookMenu: null,
+	fastTrackMenu: null,
 	newPrefill: "",
 	setFocused: (title) => set({ focused: title }),
 	touchMru: (title) => {
@@ -25920,7 +25920,7 @@ var useUi = create((set, get) => ({
 		}
 		get().setLastTab(title, "thread");
 		set({
-			playbookMenu: null,
+			fastTrackMenu: null,
 			threadComposeTarget: {
 				title,
 				to: opts?.composeTo || title,
@@ -25937,7 +25937,7 @@ var useUi = create((set, get) => ({
 		save("mf_thread_seen", threadLastSeen);
 		set({ threadLastSeen });
 	},
-	setPlaybookMenu: (menu) => set({ playbookMenu: menu }),
+	setFastTrackMenu: (menu) => set({ fastTrackMenu: menu }),
 	openNewWith: (text) => set({
 		newPrefill: text,
 		openDialog: "new-session",
@@ -25956,78 +25956,6 @@ function tourDecision(opts) {
 	if (opts.tourDone || !opts.hintsEnabled) return "skip";
 	if (opts.onboarded === void 0) return "wait";
 	return opts.onboarded ? "skip" : "open";
-}
-//#endregion
-//#region src/lib/autopilot.ts
-var DEPTHS = [
-	"agent",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SESSION_DEPTHS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SOURCE_DEPTHS = [
-	"agent",
-	"commit",
-	"push",
-	"pr"
-];
-var DEPTH_LABELS = {
-	off: "Off",
-	agent: "Agent only",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge"
-};
-var DEPTH_STEP_LABELS = {
-	off: "Off",
-	agent: "Agent only",
-	commit: "Commit only",
-	push: "Then push",
-	pr: "Then open PR",
-	merge: "Then merge"
-};
-var DEPTH_SHORT = {
-	agent: "→ agent",
-	commit: "→ commit",
-	push: "→ push",
-	pr: "→ PR",
-	merge: "→ merge"
-};
-function depthLabel(depth) {
-	return DEPTH_LABELS[depth] || depth || "Off";
-}
-function normalizeDepth(value) {
-	const d = String(value || "").trim().toLowerCase();
-	if (d === "off") return "off";
-	return DEPTHS.includes(d) ? d : "";
-}
-function autopilotChipTitle(run) {
-	const target = depthLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
-	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
-	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-	return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
-}
-function mergeBlockerLabel(ms) {
-	switch (ms.state) {
-		case "dirty": return "conflicts";
-		case "behind": return "behind base";
-		case "draft": return "draft PR";
-		case "blocked":
-			if (ms.checks === "failed") return "checks ✗";
-			if (ms.checks === "pending") return "checks…";
-			return "review needed";
-		default: return ms.mergeable === null ? "checking…" : "can't merge";
-	}
 }
 //#endregion
 //#region src/lib/terminals.ts
@@ -26786,51 +26714,6 @@ async function pushSession(title, force = false, overrideRedZones = false) {
 	}
 	freshStage(title);
 }
-function resolveDepth() {
-	return normalizeDepth(queryClient.getQueryData(["config"])?.fasttrack_depth) || "pr";
-}
-async function startFastTrack(title, depth, message, base) {
-	if (!title || !requireGit()) return;
-	const chosen = normalizeDepth(depth || "");
-	const d = chosen || resolveDepth();
-	if (d === "merge") {
-		const where = base ? " into " + base : "";
-		if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?")) return;
-	}
-	const before = instances$1().find((i) => i.title === title)?.autopilot ?? null;
-	patchInstance(title, { autopilot: {
-		depth: d,
-		state: "running",
-		step: "",
-		reason: "",
-		source: "session",
-		item: ""
-	} });
-	try {
-		const r = await instApi(title, "/fast-track", { json: {
-			...chosen ? { depth: chosen } : {},
-			...message ? { message } : {},
-			...base ? { base } : {}
-		} });
-		if (r?.autopilot) patchInstance(title, { autopilot: r.autopilot });
-		toast("Fast-tracking to " + depthLabel(d), { duration: 4e3 });
-	} catch (err) {
-		patchInstance(title, { autopilot: before });
-		toast("Fast-track failed: " + errMsg(err), { duration: 6e3 });
-	}
-}
-async function stopFastTrack(title) {
-	if (!title) return;
-	const before = instances$1().find((i) => i.title === title)?.autopilot ?? null;
-	patchInstance(title, { autopilot: null });
-	try {
-		await instApi(title, "/fast-track", { method: "DELETE" });
-		toast("Fast-track stopped");
-	} catch (err) {
-		patchInstance(title, { autopilot: before });
-		toast("Could not stop fast-track: " + errMsg(err), { duration: 6e3 });
-	}
-}
 async function resetStage(title, opts) {
 	if (!title || !requireGit()) return;
 	markLoopReset(title);
@@ -26931,6 +26814,1023 @@ async function resumeSession(title) {
 		toast("Resume failed: " + errMsg(err), { duration: 5e3 });
 	}
 	await refreshInstances();
+}
+//#endregion
+//#region src/lib/agentMessages.ts
+var MESSAGE_SNIPPET = 80;
+function snippet(text, max = MESSAGE_SNIPPET) {
+	const s = String(text ?? "").replace(/\s+/g, " ").trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function senderName(from, nameOf) {
+	return from ? nameOf(from) : "external";
+}
+function resultStatus(d) {
+	return String(d.status || "").trim().toLowerCase();
+}
+function resultMark(status) {
+	return status === "blocked" || status === "failed" ? "⚠" : "✓";
+}
+function messageToastText(recipient, data, nameOf) {
+	const d = data || {};
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	if (d.kind === "result") {
+		const status = resultStatus(d);
+		const head = resultMark(status) + " worker " + from + " reported";
+		if (status) return head + ": " + status + (body ? " — " + body : "");
+		return head + (body ? ": " + body : "");
+	}
+	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
+}
+function messageNotif(data, nameOf) {
+	const d = data || {};
+	if (d.kind !== "result") return null;
+	const status = resultStatus(d);
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	const warn = status === "blocked" || status === "failed";
+	return {
+		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
+		cls: warn ? "n-warn" : "n-done"
+	};
+}
+function lineageMark(parent, spawned, nameOf) {
+	const p = String(parent || "");
+	const s = !!spawned;
+	if (!p && !s) return null;
+	if (p) {
+		const name = nameOf(p);
+		return {
+			text: "↳ " + name,
+			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
+			spawned: s
+		};
+	}
+	return {
+		text: "↳ agent",
+		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
+		spawned: true
+	};
+}
+function isChildOf(row, title) {
+	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
+}
+function childrenOf(title, rows) {
+	return rows.filter((r) => isChildOf(r, title));
+}
+var rawActivity = (r) => String(r.activity || "idle");
+function currentReport(row, act) {
+	const r = row.last_report;
+	if (!r || !String(r.status || "").trim()) return null;
+	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
+	return r;
+}
+function workerState(row, act) {
+	if (act === "clarify") return "ask";
+	const r = currentReport(row, act);
+	if (r) {
+		const s = String(r.status).trim().toLowerCase();
+		return s === "blocked" || s === "failed" ? s : "done";
+	}
+	if (act === "limit") return "limit";
+	if (act === "working") return "working";
+	return "idle";
+}
+var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
+function since$1(ts, now) {
+	const secs = Math.max(0, Math.floor(now - ts));
+	if (secs < 60) return secs + "s";
+	if (secs < 3600) return Math.floor(secs / 60) + "m";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h";
+	return Math.floor(secs / 86400) + "d";
+}
+function workerLine(row, opts) {
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const state = workerState(row, act);
+	const r = currentReport(row, act);
+	let text;
+	let cls;
+	if (state === "ask") {
+		text = "? needs your answer";
+		cls = "rep-ask";
+	} else if (state === "blocked" || state === "failed") {
+		text = "✗ " + state;
+		cls = "rep-blocked";
+	} else if (state === "done") {
+		text = "✓ reported";
+		cls = "rep-done";
+	} else if (state === "limit") {
+		text = "usage limit — waiting";
+		cls = "rep-blocked";
+	} else if (state === "working") {
+		const t = Number(row.activity_since) || 0;
+		text = t > 0 ? "working · " + since$1(t, now) : "working";
+		cls = "rep-work";
+	} else {
+		text = "idle — no report";
+		cls = "rep-idle";
+	}
+	const lead = laneLead(row.lane);
+	if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) text = lead + " · " + text;
+	const parent = opts.parentName;
+	let detail;
+	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
+	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
+	else if (state === "working") detail = "still working, no report yet";
+	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+	else detail = "stopped without reporting back";
+	return {
+		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
+		cls,
+		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
+		state
+	};
+}
+var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
+	const n = children.length;
+	if (!n) return null;
+	const states = children.map((c) => workerState(c, actOf(c)));
+	const count = (s) => states.filter((x) => x === s).length;
+	const ask = count("ask");
+	const failed = count("failed");
+	const blocked = count("blocked");
+	const reported = states.filter(isReported$1).length;
+	const working = count("working");
+	const parts = [];
+	if (ask) parts.push({
+		text: ask + " needs you",
+		cls: "needs"
+	});
+	if (failed) parts.push({
+		text: failed + " failed",
+		cls: "bad"
+	});
+	if (blocked) parts.push({
+		text: blocked + " blocked",
+		cls: "bad"
+	});
+	if (ask) parts.push({
+		text: plural$6(n, "worker"),
+		cls: ""
+	});
+	else if (reported === n) parts.push({
+		text: n === 1 ? "worker reported" : "all " + n + " reported",
+		cls: "ok"
+	});
+	else if (reported) parts.push({
+		text: reported + " of " + n + " reported",
+		cls: ""
+	});
+	else if (working === n) parts.push({
+		text: n + " working",
+		cls: ""
+	});
+	else if (working) parts.push({
+		text: working + " of " + n + " working",
+		cls: ""
+	});
+	else parts.push({
+		text: plural$6(n, "worker") + " · no reports",
+		cls: ""
+	});
+	return {
+		parts,
+		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
+			nested: true,
+			parentName: "",
+			act: actOf(c),
+			now
+		}).text).join("\n") + "\nClick to open the Thread"
+	};
+}
+function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
+	const n = children.length;
+	if (!n || actOf(parent) !== "idle") return null;
+	if (parent.status && parent.status !== "running") return null;
+	const name = nameOf(parent.title);
+	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
+	if (reported === n && blocked) return {
+		kind: "blocked",
+		label: "wrap up",
+		cls: "s-waiting",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
+	};
+	if (reported === n) return {
+		kind: "wrap",
+		label: "wrap up",
+		cls: "wrapchip",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
+	};
+	return {
+		kind: "waiting",
+		label: "waiting",
+		cls: "s-waiting",
+		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
+	};
+}
+function childrenByParent(rows) {
+	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
+	const out = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		const p = String(r.parent || "");
+		if (!live.has(p) || !isChildOf(r, p)) continue;
+		if (!out.has(p)) out.set(p, []);
+		out.get(p).push(r);
+	}
+	return out;
+}
+function inFamily(row, isWorker, kids) {
+	return isWorker || kids > 0 || !!row.playbook;
+}
+function workerOf(parent, nameOf) {
+	return parent ? "· worker of " + nameOf(parent) : "";
+}
+var LANE_HEAD = {
+	leave: "agent only",
+	commit: "→ commit",
+	push: "→ push",
+	pr: "→ PR",
+	merge: "→ merge"
+};
+var LANE_MEANS = {
+	leave: "MindFlock commits nothing for it",
+	commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
+	push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
+	pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
+	merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass"
+};
+var LANE_RANK = {
+	leave: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function laneOf(row) {
+	const l = row.lane;
+	if (l && l.target && l.target in LANE_RANK) return l;
+	const ap = row.autopilot;
+	if (ap && ap.depth) {
+		const target = ap.depth === "agent" ? "leave" : ap.depth;
+		if (target in LANE_RANK) return {
+			target,
+			ask_first: false
+		};
+	}
+	return null;
+}
+function laneLead(lane) {
+	const t = String(lane?.target || "");
+	if (!t || t === "leave") return "";
+	return LANE_HEAD[t] || "→ " + t;
+}
+var LANE_DEPTH_RANK = {
+	agent: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function awaitingApproval(row) {
+	const lane = laneOf(row);
+	const ap = row.autopilot;
+	if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
+	return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
+}
+function prNumber(row) {
+	const n = row.merge_state?.number;
+	if (n) return String(n);
+	const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
+	return m ? m[1] : "";
+}
+function checksText(row) {
+	const c = String(row.merge_state?.checks || "");
+	if (c === "ok") return {
+		text: "checks ✓",
+		bad: false
+	};
+	if (c === "failed") return {
+		text: "checks ✗",
+		bad: true
+	};
+	if (c === "pending") return {
+		text: "checks…",
+		bad: false
+	};
+	return {
+		text: "",
+		bad: false
+	};
+}
+function stageRank(stage) {
+	return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
+}
+function escalationText(reason) {
+	const r = String(reason || "").trim();
+	switch (r) {
+		case "stuck": return "stalled twice — no diff, no report";
+		case "blocked": return "its agent reported blocked";
+		case "ship_halted": return "hooks failed twice";
+		case "conflict": return "merge conflict";
+		case "budget": return "the group's budget is used up";
+		case "restart": return "couldn't pick it back up after a restart";
+		case "": return "needs you";
+		default: return r;
+	}
+}
+function shipLine(row, opts = {}) {
+	const lane = laneOf(row);
+	if (!lane && !row.run) return null;
+	const target = lane?.target || "leave";
+	if (target === "leave" && !row.run) return null;
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const task = opts.task || null;
+	const ap = row.autopilot || null;
+	const stage = String(row.stage || "");
+	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
+	const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
+	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
+	const base = {
+		restCls: "",
+		title: (means ? "Fast-track: " + means + "." : "") + copy
+	};
+	const line = (lead, rest, cls, state, why = "") => ({
+		...base,
+		lead,
+		rest,
+		cls,
+		state,
+		title: (why ? why + "\n" : "") + base.title
+	});
+	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
+	const tstate = String(task?.state || "");
+	const reason = String(task?.reason || "");
+	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
+	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
+	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
+	const rank = LANE_RANK[target] ?? 0;
+	const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
+	if ((tstate === "shipped" || tstate === "integrated" || rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank || target === "merge" && !!ap && ap.state === "done" && ap.step === "merge") && rank > 0) {
+		if (target === "pr" || target === "merge") {
+			const n = prNumber(row);
+			const pr = n ? "PR #" + n : "PR";
+			if (target === "merge" && ap?.state === "done" && ap.step === "merge") return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
+			const ck = checksText(row);
+			return {
+				...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."),
+				restCls: ck.bad ? "bad" : ""
+			};
+		}
+		return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
+	}
+	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
+		const s = stageRank(stage);
+		const note = String(ap?.note || "");
+		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+	}
+	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
+	let rest;
+	let state = "idle";
+	if (act === "working") {
+		const t = Number(row.activity_since) || 0;
+		rest = t > 0 ? " · working " + since$1(t, now) : " · working";
+		state = "working";
+	} else if (act === "limit") {
+		rest = " · usage limit — waiting";
+		state = "limit";
+	} else if (act === "offline") rest = " · offline";
+	else rest = " · idle";
+	return line(head, rest, "rep-lane", state);
+}
+//#endregion
+//#region src/lib/runs.ts
+var RUN_DONE_STATES = /* @__PURE__ */ new Set([
+	"done",
+	"done_with_failures",
+	"cancelled"
+]);
+var TOGETHER_DETAIL_S = 604800;
+function needsRunDetail(r, nowS) {
+	if (!RUN_DONE_STATES.has(r.state)) return true;
+	return r.policy?.grouping === "together" && nowS - (Number(r.created_at) || 0) <= TOGETHER_DETAIL_S;
+}
+function splitRail(entries, runs, opts = {}) {
+	const act = opts.act || ((i) => String(i.activity || "idle"));
+	const byId = new Map(runs.map((r) => [r.id, r]));
+	const members = /* @__PURE__ */ new Map();
+	const firstAt = /* @__PURE__ */ new Map();
+	const named = /* @__PURE__ */ new Map();
+	entries.forEach((e, i) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		if (!run || !run.id) return;
+		if (!members.has(run.id)) members.set(run.id, []);
+		members.get(run.id).push(e);
+		if (!firstAt.has(run.id)) firstAt.set(run.id, i);
+		if (run.name && !named.has(run.id)) named.set(run.id, run.name);
+	});
+	const ids = [.../* @__PURE__ */ new Set([...members.keys(), ...runs.map((r) => r.id)])];
+	const groups = [];
+	for (const id of ids) {
+		const info = byId.get(id) || null;
+		const mine = members.get(id) || [];
+		if (info?.policy?.grouping === "together" || info?.split || mine.some((e) => e.inst?.run?.role === "lead" || e.inst?.run?.grouping === "together")) continue;
+		const tasks = info?.tasks || [];
+		const done = !!info && RUN_DONE_STATES.has(info.state);
+		const queued = done ? [] : tasks.filter((t) => t.state === "queued");
+		if (!mine.length && !queued.length) continue;
+		if (opts.filtering && !mine.length) continue;
+		const total = Math.max(info?.counts?.total || 0, tasks.length, mine.length + queued.length);
+		if (total < 2) continue;
+		const taskOf = /* @__PURE__ */ new Map();
+		for (const t of tasks) if (t.title) taskOf.set(t.title, t);
+		const needsTitles = /* @__PURE__ */ new Set();
+		let limited = false;
+		for (const e of mine) {
+			const a = act(e.inst);
+			if (a === "clarify") needsTitles.add(e.key);
+			if (a === "limit") limited = true;
+		}
+		for (const t of tasks) if (t.state === "needs_you") needsTitles.add(t.title || t.id);
+		const localShipped = mine.filter((e) => shipLine(e.inst, {
+			act: act(e.inst),
+			task: taskOf.get(e.key)
+		})?.state === "shipped").length;
+		const shipped = info?.counts ? Math.max(info.counts.shipped || 0, 0) : localShipped;
+		const failed = info?.counts?.failed || tasks.filter((t) => t.state === "failed").length;
+		const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
+		groups.push({
+			id,
+			name: info?.name || named.get(id) || "Group",
+			lane,
+			state: info?.state || "running",
+			paused: !!info?.paused,
+			pauseReason: info?.pause_reason || "",
+			done,
+			cancelled: info?.state === "cancelled",
+			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+			collapsed: !!opts.collapsed?.has(id),
+			entries: mine,
+			queued,
+			needs: needsTitles.size,
+			shipped,
+			failed,
+			total,
+			taskOf
+		});
+	}
+	const at = (g) => firstAt.get(g.id) ?? Number.MAX_SAFE_INTEGER;
+	const created = (g) => byId.get(g.id)?.created_at || 0;
+	groups.sort((a, b) => at(a) - at(b) || created(a) - created(b));
+	const grouped = new Set(groups.flatMap((g) => g.entries.map((e) => e.key)));
+	const rest = entries.filter((e) => !grouped.has(e.key));
+	const family = (e) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		return !!run && (run.role === "lead" || run.grouping === "together");
+	};
+	return {
+		groups,
+		families: rest.filter(family),
+		own: rest.filter((e) => !family(e))
+	};
+}
+function splitKeys(split) {
+	const out = [];
+	for (const g of split.groups) if (!g.collapsed) for (const e of g.entries) out.push(e.key);
+	for (const e of split.families || []) out.push(e.key);
+	for (const e of split.own) out.push(e.key);
+	return out;
+}
+function queuedLine(i) {
+	if (i <= 0) return "queued · next free slot";
+	const n = i + 1;
+	const suf = n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
+	return "queued · " + n + suf;
+}
+function queuedTitle(t) {
+	const ref = String(t.ticket_id || "").trim();
+	const text = String(t.text || "").trim();
+	if (ref && text) return ref + " " + text;
+	return ref || text || t.title || "queued line";
+}
+function shippedBadge(g) {
+	return g.shipped + "/" + g.total + " shipped";
+}
+function groupTitle(g) {
+	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
+	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
+	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
+	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
+	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
+	else if (g.waitingUsage) bits.push("waiting for usage to come back");
+	bits.push("Click to fold");
+	return bits.join("\n");
+}
+var LEAD_ASKS = {
+	plan: "the lead proposed the pieces — approve them",
+	release: "one PR is ready to open",
+	check_failed: "the check failed on the merged branch",
+	lead_gone: "its lead is gone — nothing can merge or ship"
+};
+var num$3 = (v) => Number(v) || 0;
+var str$3 = (v) => v == null ? "" : String(v);
+function runNote(event, data, info = {}) {
+	const d = data || {};
+	const run = str$3(d.run);
+	const name = str$3(d.name) || info.name?.(run) || "A group";
+	const who = str$3(d.ref) || str$3(d.title) || str$3(d.task) || "a line";
+	switch (event) {
+		case "run.needs_you": {
+			const reason = str$3(d.reason);
+			if (reason === "prompt") return null;
+			if (reason in LEAD_ASKS) {
+				const lead = str$3(d.title) || str$3(d.session);
+				return {
+					text: name + ": " + (str$3(d.text) || LEAD_ASKS[reason]),
+					cls: reason === "check_failed" || reason === "lead_gone" ? "n-warn" : "n-info",
+					run,
+					dedupe: d.key ? "needs:" + str$3(d.key) : [
+						"needs",
+						run,
+						reason,
+						str$3(d.round) || str$3(d.incarnation)
+					].join(":"),
+					rule: "run_needs_you",
+					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
+				};
+			}
+			return {
+				text: name + ": " + who + " " + (str$3(d.text) || escalationText(reason)),
+				cls: "n-warn",
+				run,
+				dedupe: d.key ? "needs:" + str$3(d.key) : [
+					"needs",
+					run,
+					str$3(d.task),
+					reason,
+					str$3(d.incarnation)
+				].join(":"),
+				rule: "run_needs_you"
+			};
+		}
+		case "run.finished": {
+			const shipped = num$3(d.shipped);
+			const failed = num$3(d.failed);
+			const lane = info.lane?.(run) || "";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const what = str$3(d.outcome) || shipped + word;
+			return {
+				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
+				cls: failed ? "n-warn" : "n-done",
+				run,
+				dedupe: "finished:" + run,
+				rule: "run_finished"
+			};
+		}
+		case "run.task_shipped": {
+			const m = str$3(d.pr_url).match(/\/pull\/(\d+)/);
+			return {
+				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				cls: "n-done",
+				run,
+				dedupe: [
+					"shipped",
+					run,
+					str$3(d.task)
+				].join(":"),
+				rule: ""
+			};
+		}
+		default: return null;
+	}
+}
+//#endregion
+//#region src/state/runs.ts
+var RUNS_LIVE_MS = 5e3;
+var RUNS_IDLE_MS = 3e4;
+var ROUTE_MISSING_MS = 12e4;
+var missing = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
+async function fetchRuns() {
+	let list;
+	try {
+		list = (await api("/api/runs"))?.runs || [];
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+	const nowS = Date.now() / 1e3;
+	const live = list.filter((r) => needsRunDetail(r, nowS));
+	const details = await Promise.all(live.map((r) => api("/api/runs/" + encodeURIComponent(r.id)).then((d) => d?.run || null, () => null)));
+	const byId = new Map(details.filter((d) => !!d).map((d) => [d.id, d]));
+	return list.map((r) => ({
+		...r,
+		...byId.get(r.id) || {}
+	}));
+}
+function liveRuns(data) {
+	return !!data && data.some((r) => !RUN_DONE_STATES.has(r.state));
+}
+function useRuns() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["runs"],
+		queryFn: fetchRuns,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : liveRuns(q.state.data) && !document.hidden ? RUNS_LIVE_MS : RUNS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useRun(id) {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["run", id || ""],
+		queryFn: async () => {
+			try {
+				return (await api("/api/runs/" + encodeURIComponent(String(id))))?.run || null;
+			} catch (e) {
+				if (missing(e)) return null;
+				throw e;
+			}
+		},
+		enabled: !!id,
+		refetchInterval: (q) => q.state.data && RUN_DONE_STATES.has(q.state.data.state) ? RUNS_IDLE_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev, prevQuery) => prevQuery?.queryKey[1] === (id || "") ? prev : void 0,
+		retry: false
+	});
+}
+async function fetchOutbox() {
+	try {
+		return await api("/api/outbox?group=all");
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+}
+function useOutbox() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["outbox"],
+		queryFn: fetchOutbox,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useNotifyConfig() {
+	return useQuery({
+		queryKey: ["notify-config"],
+		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
+		staleTime: 6e4,
+		refetchInterval: 12e4,
+		retry: false
+	});
+}
+function ruleOn(id) {
+	if (!id) return true;
+	const rule = queryClient.getQueryData(["notify-config"])?.rules?.find((r) => r.id === id);
+	return !rule || rule.enabled !== false;
+}
+var runLookups = {
+	name: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.name || "",
+	lane: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.policy?.lane || ""
+};
+function refreshRuns() {
+	queryClient.invalidateQueries({ queryKey: ["runs"] });
+	queryClient.invalidateQueries({ queryKey: ["run"] });
+	return queryClient.invalidateQueries({ queryKey: ["outbox"] });
+}
+var runsBridged = false;
+function bridgeRunEvents() {
+	const ev = window.mindflock?.events;
+	if (runsBridged || !ev) return;
+	runsBridged = true;
+	const bump = (_env) => void refreshRuns();
+	for (const name of [
+		"run.changed",
+		"run.needs_you",
+		"run.task_shipped",
+		"run.finished",
+		"session.autopilot_changed"
+	]) ev.subscribe(name, bump);
+}
+//#endregion
+//#region src/lib/runsApi.ts
+var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
+var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
+async function runAction(what, path, body = {}, done = "") {
+	try {
+		await api(path, { json: body });
+		if (done) toast(done);
+		return true;
+	} catch (err) {
+		errorPop(what + " failed", errMsg(err));
+		return false;
+	} finally {
+		refreshRuns();
+		refreshInstances();
+	}
+}
+function raiseBudget(runId, usd, name = "") {
+	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
+}
+function cancelRun(runId, name = "") {
+	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
+}
+function suggestedBudget(budget, spent) {
+	const floor = Math.max(spent, budget) * 1.5;
+	const step = floor < 10 ? 1 : floor < 100 ? 5 : 25;
+	return Math.max(step, Math.ceil(floor / step) * step);
+}
+//#endregion
+//#region src/lib/laneActions.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = LANE_ORDER;
+var LANE_LABEL = {
+	leave: "Off",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open a PR",
+	merge: "Merge when green"
+};
+var LANE_SHORT = {
+	leave: "off",
+	commit: "Commit",
+	push: "Push",
+	pr: "PR",
+	merge: "Merge"
+};
+var LANE_DESC = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "Commit, push, open a PR and merge it once its checks pass"
+};
+var LANE_KEY = {
+	leave: "O",
+	commit: "C",
+	push: "U",
+	pr: "P",
+	merge: "M"
+};
+var ASK_FIRST_LABEL = "Ask me before it ships";
+var ASK_FIRST_DESC = "Stop one step short and show it in the Outbox first";
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(setting) {
+	return normalizeLane(setting) || "leave";
+}
+function laneChoice(inst) {
+	const l = laneOf(inst);
+	const lane = l ? normalizeLane(l.target) : "";
+	if (!l || !lane) return {
+		lane: "leave",
+		askFirst: false,
+		owner: ""
+	};
+	return {
+		lane,
+		askFirst: !!l.ask_first,
+		owner: l.owner || ""
+	};
+}
+function teamRunCaps(caps) {
+	const t = caps?.team_runs;
+	return {
+		split: t?.split === true,
+		together: t?.together === true
+	};
+}
+var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
+var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a group — update it";
+function askFirstApplies(lane) {
+	return lane !== "leave";
+}
+function splitBlockReason(caps, inst) {
+	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
+	const m = caps?.agent_mcp;
+	if (m) {
+		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → General";
+		const provider = inst.provider || inst.program || "";
+		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
+	}
+	if (inst.mcp_attached === false) return "Restart this agent to give it the MindFlock tools";
+	if (inst.activity === "clarify") return "Answer its prompt first";
+	if (inst.activity === "limit") return "It's at its usage limit — split once it's back";
+	return "";
+}
+function splitTaskOf(inst) {
+	return String(inst.last_prompt_full || inst.last_prompt || inst.last_turn || "").trim();
+}
+function detachableGroup(inst) {
+	const run = inst.run;
+	if (!run || !run.id || !run.task || run.role === "lead") return null;
+	return {
+		id: run.id,
+		task: run.task,
+		name: run.name || "its group"
+	};
+}
+function laneLockReason(inst) {
+	const run = inst.run;
+	if (run && run.id) {
+		const group = run.name || "its group";
+		if (run.role === "lead") return `It leads ${group} — the group ships it once, through the group's release`;
+		if (run.grouping === "together") return `Its work merges into ${group}'s one PR — move it out of the group to fast-track it on its own`;
+	}
+	const owner = inst.lane?.owner;
+	if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that window`;
+	return "";
+}
+function fastTrackModel(inst) {
+	const cur = laneChoice(inst);
+	const lock = laneLockReason(inst);
+	return {
+		current: {
+			lane: cur.lane,
+			askFirst: cur.askFirst
+		},
+		lock,
+		items: LANE_CHOICES.map((lane) => ({
+			lane,
+			label: LANE_LABEL[lane],
+			desc: LANE_DESC[lane],
+			key: LANE_KEY[lane],
+			current: lane === cur.lane
+		})),
+		ask: {
+			on: cur.askFirst && askFirstApplies(cur.lane),
+			why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first")
+		}
+	};
+}
+function fastTrackSaid(name, lane, askFirst) {
+	if (lane === "leave") return `${name}: fast-track off — MindFlock won't commit anything`;
+	return `${name}: fast-track → ${LANE_LABEL[lane]}${askFirstApplies(lane) && askFirst ? ", asks first" : ""}`;
+}
+async function setLane(title, lane, askFirst, opts = {}) {
+	return instApi(title, "/lane", { json: {
+		lane,
+		ask_first: askFirstApplies(lane) && askFirst,
+		...opts.message ? { message: opts.message } : {}
+	} });
+}
+async function pickFastTrack(title, name, lane, askFirst, opts = {}) {
+	const row = instances$1().find((r) => r.title === title);
+	const before = {
+		lane: row?.lane ?? null,
+		autopilot: row?.autopilot ?? null
+	};
+	patchInstance(title, {
+		lane: lane === "leave" ? null : {
+			target: lane,
+			ask_first: askFirstApplies(lane) && askFirst,
+			owner: title,
+			by: "user"
+		},
+		...lane === "leave" ? { autopilot: null } : {}
+	});
+	try {
+		const r = await setLane(title, lane, askFirst, opts);
+		patchInstance(title, {
+			lane: r?.lane ?? null,
+			...r && "autopilot" in r ? { autopilot: r.autopilot ?? null } : {}
+		});
+		if (!opts.quiet) toast(r?.held ? `${name}: its group is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes` : fastTrackSaid(name, lane, askFirst), { duration: 4500 });
+		return true;
+	} catch (err) {
+		patchInstance(title, before);
+		toast(`${name}: ${errMsg(err)}`, { duration: 6e3 });
+		return false;
+	}
+}
+async function moveOutOfGroup(runId, taskId) {
+	await api(taskPath(runId, taskId, "skip"), { json: {} });
+}
+async function startSplitOf(inst, name, lane, askFirst) {
+	return api("/api/runs", { json: {
+		name,
+		items: [{
+			kind: "task",
+			text: splitTaskOf(inst)
+		}],
+		policy: {
+			lane,
+			ask_first: askFirstApplies(lane) && askFirst,
+			grouping: "together",
+			release: "ask"
+		},
+		concurrency: 3,
+		program: inst.provider || inst.program,
+		split: true,
+		lead: inst.title
+	} });
+}
+async function splitSession(inst, name) {
+	const cur = laneChoice(inst);
+	await startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst);
+	useUi.getState().threadOpen(inst.title);
+	return `${name} is proposing the pieces — approve the plan in its Thread tab`;
+}
+async function setLaneWhenReady(title, lane, askFirst, delays = [
+	1500,
+	3e3,
+	5e3,
+	8e3,
+	12e3,
+	2e4
+]) {
+	if (lane === "leave") return true;
+	for (let i = 0;; i++) try {
+		await setLane(title, lane, askFirst);
+		return true;
+	} catch (err) {
+		if (!(err instanceof ApiError && err.status === 409 && i < delays.length)) {
+			toast(`Couldn't fast-track ${title} to “${LANE_LABEL[lane]}”: ${errMsg(err)}`, { duration: 7e3 });
+			return false;
+		}
+		await new Promise((r) => setTimeout(r, delays[i]));
+	}
+}
+function openFastTrackMenu(title) {
+	const inst = instances$1().find((r) => r.title === title);
+	if (!inst || inst.pending) {
+		toast("That session isn't ready yet");
+		return;
+	}
+	selectSession(title, { noKeyboard: true });
+	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
+}
+//#endregion
+//#region src/lib/autopilot.ts
+var DEPTHS = [
+	"agent",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var SOURCE_DEPTHS = [
+	"agent",
+	"commit",
+	"push",
+	"pr"
+];
+var DEPTH_LABELS = {
+	off: "Off",
+	agent: "Agent only",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open a PR",
+	merge: "Merge when green"
+};
+var DEPTH_SHORT = {
+	agent: "→ agent",
+	commit: "→ commit",
+	push: "→ push",
+	pr: "→ PR",
+	merge: "→ merge"
+};
+function depthLabel(depth) {
+	return DEPTH_LABELS[depth] || depth || "Off";
+}
+function autopilotChipTitle(run) {
+	const target = depthLabel(run.depth);
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
+	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+	return "Fast-tracking to " + target + where + skipped;
+}
+function mergeBlockerLabel(ms) {
+	switch (ms.state) {
+		case "dirty": return "conflicts";
+		case "behind": return "behind base";
+		case "draft": return "draft PR";
+		case "blocked":
+			if (ms.checks === "failed") return "checks ✗";
+			if (ms.checks === "pending") return "checks…";
+			return "review needed";
+		default: return ms.mergeable === null ? "checking…" : "can't merge";
+	}
 }
 //#endregion
 //#region src/lib/stage.ts
@@ -27297,31 +28197,33 @@ function fastTrackStep(inst) {
 	const title = inst.title;
 	const caps = queryClient.getQueryData(["config"])?.caps;
 	if (caps && !caps.git) return null;
-	if (!title) return null;
+	if (!title || inst.workspace_missing) return null;
+	const { lane, askFirst } = laneChoice(inst);
 	const run = inst.autopilot;
-	if (!!!(run && run.depth && (run.state === "running" || run.state === "halted"))) {
-		if (inst.status === "loading" || inst.status === "paused") return null;
-		if (inst.workspace_missing) return null;
-		const stage = guidedStage(inst);
-		if (stage === "provisioning" || stage === "precommit") return null;
+	const running = !!(run && run.depth && run.state === "running");
+	const halted = !!(run && run.depth && run.state === "halted");
+	if (!running && !halted) {
+		if (inst.status === "loading") return null;
+		if (lane === "leave" && guidedStage(inst) === "provisioning") return null;
 	}
-	if (run && run.depth && run.state === "running") return {
-		label: "⏩",
-		active: true,
-		title: autopilotChipTitle(run) + "\n\nClick ⏩ to turn fast-track off.",
-		run: () => stopFastTrack(title)
-	};
-	if (run && run.depth && run.state === "halted") return {
-		label: "⏩✗",
-		hint: true,
-		title: autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
-		run: () => startFastTrack(title, run.depth)
-	};
-	const depth = resolveDepth();
+	const ask = askFirstApplies(lane) && askFirst;
+	const where = LANE_LABEL[lane] + (ask ? ", asks first" : "");
+	const change = "\n\nClick to change it or turn it off (Ctrl+K F).";
+	let tip;
+	if (running && run) {
+		const doing = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waits for the agent to finish)";
+		const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+		tip = "Fast-track → " + where + doing + skipped + change;
+	} else if (halted && run) tip = "Fast-track stopped: " + (run.reason || "unknown reason") + "\n\nClick to pick it again or turn it off (Ctrl+K F).";
+	else if (lane === "leave") tip = "Fast-track is off. Click to choose how far MindFlock carries this session once its agent is done — commit, push, open a PR, or merge when green (Ctrl+K F).";
+	else tip = "Fast-track → " + where + ": " + LANE_DESC[lane] + ".\n\nClick to change it or turn it off (Ctrl+K F).";
 	return {
-		label: "⏩",
-		title: "Fast-track: carry this session to " + depthLabel(depth) + " on its own.\nWaits for the agent to finish, then commits, pushes and stops at your\nchosen rung. Click again to turn it off.\nChange the default in Settings → Workspace.",
-		run: () => startFastTrack(title, depth)
+		lane,
+		askFirst: ask,
+		label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : ""),
+		active: running,
+		halted,
+		title: tip
 	};
 }
 function nextStep(inst) {
@@ -27392,400 +28294,6 @@ function nextStep(inst) {
 		} : null;
 		default: return null;
 	}
-}
-//#endregion
-//#region src/lib/agentMessages.ts
-var MESSAGE_SNIPPET = 80;
-function snippet(text, max = MESSAGE_SNIPPET) {
-	const s = String(text ?? "").replace(/\s+/g, " ").trim();
-	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
-}
-function senderName(from, nameOf) {
-	return from ? nameOf(from) : "external";
-}
-function resultStatus(d) {
-	return String(d.status || "").trim().toLowerCase();
-}
-function resultMark(status) {
-	return status === "blocked" || status === "failed" ? "⚠" : "✓";
-}
-function messageToastText(recipient, data, nameOf) {
-	const d = data || {};
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	if (d.kind === "result") {
-		const status = resultStatus(d);
-		const head = resultMark(status) + " worker " + from + " reported";
-		if (status) return head + ": " + status + (body ? " — " + body : "");
-		return head + (body ? ": " + body : "");
-	}
-	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
-}
-function messageNotif(data, nameOf) {
-	const d = data || {};
-	if (d.kind !== "result") return null;
-	const status = resultStatus(d);
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	const warn = status === "blocked" || status === "failed";
-	return {
-		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
-		cls: warn ? "n-warn" : "n-done"
-	};
-}
-function lineageMark(parent, spawned, nameOf) {
-	const p = String(parent || "");
-	const s = !!spawned;
-	if (!p && !s) return null;
-	if (p) {
-		const name = nameOf(p);
-		return {
-			text: "↳ " + name,
-			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
-			spawned: s
-		};
-	}
-	return {
-		text: "↳ agent",
-		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
-		spawned: true
-	};
-}
-function isChildOf(row, title) {
-	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
-}
-function childrenOf(title, rows) {
-	return rows.filter((r) => isChildOf(r, title));
-}
-var rawActivity = (r) => String(r.activity || "idle");
-function currentReport(row, act) {
-	const r = row.last_report;
-	if (!r || !String(r.status || "").trim()) return null;
-	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
-	return r;
-}
-function workerState(row, act) {
-	if (act === "clarify") return "ask";
-	const r = currentReport(row, act);
-	if (r) {
-		const s = String(r.status).trim().toLowerCase();
-		return s === "blocked" || s === "failed" ? s : "done";
-	}
-	if (act === "limit") return "limit";
-	if (act === "working") return "working";
-	return "idle";
-}
-var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
-function since$1(ts, now) {
-	const secs = Math.max(0, Math.floor(now - ts));
-	if (secs < 60) return secs + "s";
-	if (secs < 3600) return Math.floor(secs / 60) + "m";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h";
-	return Math.floor(secs / 86400) + "d";
-}
-function workerLine(row, opts) {
-	const act = opts.act ?? rawActivity(row);
-	const now = opts.now ?? Date.now() / 1e3;
-	const state = workerState(row, act);
-	const r = currentReport(row, act);
-	let text;
-	let cls;
-	if (state === "ask") {
-		text = "? needs your answer";
-		cls = "rep-ask";
-	} else if (state === "blocked" || state === "failed") {
-		text = "✗ " + state;
-		cls = "rep-blocked";
-	} else if (state === "done") {
-		text = "✓ reported";
-		cls = "rep-done";
-	} else if (state === "limit") {
-		text = "usage limit — waiting";
-		cls = "rep-blocked";
-	} else if (state === "working") {
-		const t = Number(row.activity_since) || 0;
-		text = t > 0 ? "working · " + since$1(t, now) : "working";
-		cls = "rep-work";
-	} else {
-		text = "idle — no report";
-		cls = "rep-idle";
-	}
-	const lead = laneLead(row.lane);
-	if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) text = lead + " · " + text;
-	const parent = opts.parentName;
-	let detail;
-	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
-	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
-	else if (state === "working") detail = "still working, no report yet";
-	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
-	else detail = "stopped without reporting back";
-	return {
-		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
-		cls,
-		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
-		state
-	};
-}
-var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
-function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
-	const n = children.length;
-	if (!n) return null;
-	const states = children.map((c) => workerState(c, actOf(c)));
-	const count = (s) => states.filter((x) => x === s).length;
-	const ask = count("ask");
-	const failed = count("failed");
-	const blocked = count("blocked");
-	const reported = states.filter(isReported$1).length;
-	const working = count("working");
-	const parts = [];
-	if (ask) parts.push({
-		text: ask + " needs you",
-		cls: "needs"
-	});
-	if (failed) parts.push({
-		text: failed + " failed",
-		cls: "bad"
-	});
-	if (blocked) parts.push({
-		text: blocked + " blocked",
-		cls: "bad"
-	});
-	if (ask) parts.push({
-		text: plural$6(n, "worker"),
-		cls: ""
-	});
-	else if (reported === n) parts.push({
-		text: n === 1 ? "worker reported" : "all " + n + " reported",
-		cls: "ok"
-	});
-	else if (reported) parts.push({
-		text: reported + " of " + n + " reported",
-		cls: ""
-	});
-	else if (working === n) parts.push({
-		text: n + " working",
-		cls: ""
-	});
-	else if (working) parts.push({
-		text: working + " of " + n + " working",
-		cls: ""
-	});
-	else parts.push({
-		text: plural$6(n, "worker") + " · no reports",
-		cls: ""
-	});
-	return {
-		parts,
-		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
-			nested: true,
-			parentName: "",
-			act: actOf(c),
-			now
-		}).text).join("\n") + "\nClick to open the Thread"
-	};
-}
-function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
-	const n = children.length;
-	if (!n || actOf(parent) !== "idle") return null;
-	if (parent.status && parent.status !== "running") return null;
-	const name = nameOf(parent.title);
-	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
-	if (reported === n && blocked) return {
-		kind: "blocked",
-		label: "wrap up",
-		cls: "s-waiting",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
-	};
-	if (reported === n) return {
-		kind: "wrap",
-		label: "wrap up",
-		cls: "wrapchip",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
-	};
-	return {
-		kind: "waiting",
-		label: "waiting",
-		cls: "s-waiting",
-		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
-	};
-}
-function childrenByParent(rows) {
-	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
-	const out = /* @__PURE__ */ new Map();
-	for (const r of rows) {
-		const p = String(r.parent || "");
-		if (!live.has(p) || !isChildOf(r, p)) continue;
-		if (!out.has(p)) out.set(p, []);
-		out.get(p).push(r);
-	}
-	return out;
-}
-function inFamily(row, isWorker, kids) {
-	return isWorker || kids > 0 || !!row.playbook;
-}
-function workerOf(parent, nameOf) {
-	return parent ? "· worker of " + nameOf(parent) : "";
-}
-var LANE_HEAD = {
-	leave: "agent only",
-	commit: "→ commit",
-	push: "→ push",
-	pr: "→ PR",
-	merge: "→ merge"
-};
-var LANE_MEANS = {
-	leave: "MindFlock commits nothing for it",
-	commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
-	push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
-	pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
-	merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass"
-};
-var LANE_RANK = {
-	leave: 0,
-	commit: 1,
-	push: 2,
-	pr: 3,
-	merge: 4
-};
-function laneOf(row) {
-	const l = row.lane;
-	if (l && l.target && l.target in LANE_RANK) return l;
-	const ap = row.autopilot;
-	if (ap && ap.depth) {
-		const target = ap.depth === "agent" ? "leave" : ap.depth;
-		if (target in LANE_RANK) return {
-			target,
-			ask_first: false
-		};
-	}
-	return null;
-}
-function laneLead(lane) {
-	const t = String(lane?.target || "");
-	if (!t || t === "leave") return "";
-	return LANE_HEAD[t] || "→ " + t;
-}
-var LANE_DEPTH_RANK = {
-	agent: 0,
-	commit: 1,
-	push: 2,
-	pr: 3,
-	merge: 4
-};
-function awaitingApproval(row) {
-	const lane = laneOf(row);
-	const ap = row.autopilot;
-	if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
-	return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
-}
-function prNumber(row) {
-	const n = row.merge_state?.number;
-	if (n) return String(n);
-	const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
-	return m ? m[1] : "";
-}
-function checksText(row) {
-	const c = String(row.merge_state?.checks || "");
-	if (c === "ok") return {
-		text: "checks ✓",
-		bad: false
-	};
-	if (c === "failed") return {
-		text: "checks ✗",
-		bad: true
-	};
-	if (c === "pending") return {
-		text: "checks…",
-		bad: false
-	};
-	return {
-		text: "",
-		bad: false
-	};
-}
-function stageRank(stage) {
-	return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
-}
-function escalationText(reason) {
-	const r = String(reason || "").trim();
-	switch (r) {
-		case "stuck": return "stalled twice — no diff, no report";
-		case "blocked": return "its agent reported blocked";
-		case "ship_halted": return "hooks failed twice";
-		case "conflict": return "merge conflict";
-		case "budget": return "the group's budget is used up";
-		case "restart": return "couldn't pick it back up after a restart";
-		case "": return "needs you";
-		default: return r;
-	}
-}
-function shipLine(row, opts = {}) {
-	const lane = laneOf(row);
-	if (!lane && !row.run) return null;
-	const target = lane?.target || "leave";
-	if (target === "leave" && !row.run) return null;
-	const act = opts.act ?? rawActivity(row);
-	const now = opts.now ?? Date.now() / 1e3;
-	const task = opts.task || null;
-	const ap = row.autopilot || null;
-	const stage = String(row.stage || "");
-	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
-	const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
-	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
-	const base = {
-		restCls: "",
-		title: (means ? "Lane: " + means + "." : "") + copy
-	};
-	const line = (lead, rest, cls, state, why = "") => ({
-		...base,
-		lead,
-		rest,
-		cls,
-		state,
-		title: (why ? why + "\n" : "") + base.title
-	});
-	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
-	const tstate = String(task?.state || "");
-	const reason = String(task?.reason || "");
-	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
-	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
-	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
-	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
-	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
-	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
-	const rank = LANE_RANK[target] ?? 0;
-	const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
-	if ((tstate === "shipped" || tstate === "integrated" || rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank || target === "merge" && !!ap && ap.state === "done" && ap.step === "merge") && rank > 0) {
-		if (target === "pr" || target === "merge") {
-			const n = prNumber(row);
-			const pr = n ? "PR #" + n : "PR";
-			if (target === "merge" && ap?.state === "done" && ap.step === "merge") return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
-			const ck = checksText(row);
-			return {
-				...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."),
-				restCls: ck.bad ? "bad" : ""
-			};
-		}
-		return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its lane ends at " + target + ".");
-	}
-	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
-		const s = stageRank(stage);
-		const note = String(ap?.note || "");
-		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
-	}
-	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
-	let rest;
-	let state = "idle";
-	if (act === "working") {
-		const t = Number(row.activity_since) || 0;
-		rest = t > 0 ? " · working " + since$1(t, now) : " · working";
-		state = "working";
-	} else if (act === "limit") {
-		rest = " · usage limit — waiting";
-		state = "limit";
-	} else if (act === "offline") rest = " · offline";
-	else rest = " · idle";
-	return line(head, rest, "rep-lane", state);
 }
 //#endregion
 //#region src/components/sidebar/ordering.ts
@@ -28385,749 +28893,6 @@ function Appearance(_) {
 	] });
 }
 //#endregion
-//#region src/lib/playbooks.ts
-var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
-var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
-var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
-function isRemote(inst) {
-	return !!inst.device || String(inst.title || "").includes("::");
-}
-function forkBlockReason(inst) {
-	if (inst.mcp_attached === false) return RESTART_REASON;
-	if (inst.activity === "clarify" || inst.activity === "limit") return ANSWER_FIRST_REASON;
-	return "";
-}
-function splitGate(caps, provider) {
-	const m = caps?.agent_mcp;
-	if (!m) return {
-		ok: true,
-		reason: ""
-	};
-	if (!m.enabled) return {
-		ok: false,
-		reason: "MindFlock tools are switched off for new sessions — Settings → General"
-	};
-	if (!(m.providers || []).includes(provider)) {
-		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
-		return {
-			ok: false,
-			reason: names.length ? `Needs a CLI that gets the MindFlock tools — ${names.join(" or ")}` : NO_TOOLS_REASON
-		};
-	}
-	return {
-		ok: true,
-		reason: ""
-	};
-}
-var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
-var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
-var NOT_A_PIECE = /* @__PURE__ */ new Set([
-	"it",
-	"them",
-	"then",
-	"also",
-	"this",
-	"that"
-]);
-function splitSuggestion(text) {
-	const s = String(text || "");
-	const m = LIST_RE.exec(s);
-	if (m) {
-		const middle = m[2].split(",").map((x) => x.trim().replace(/^the\s+/i, "")).filter(Boolean);
-		const all = [
-			m[1],
-			...middle,
-			m[3]
-		].map((x) => x.toLowerCase());
-		const pieces = all.filter((x, i) => !NOT_A_PIECE.has(x) && all.indexOf(x) === i);
-		if (pieces.length >= 3) return { pieces: pieces.slice(0, 5) };
-	}
-	if (CUE_RE.test(s)) return { pieces: [] };
-	return null;
-}
-function suggestionPill(sug) {
-	return ["suggested", ...sug.pieces].join(" · ");
-}
-async function fetchPlaybooks(title) {
-	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
-}
-var pasting = /* @__PURE__ */ new Set();
-async function pastePlaybook(title, pb, args = {}) {
-	if (pasting.has(title)) return false;
-	pasting.add(title);
-	try {
-		return await pasteNow(title, pb, args);
-	} finally {
-		pasting.delete(title);
-	}
-}
-async function pasteNow(title, pb, args) {
-	const name = displayName(title);
-	try {
-		const { text } = await api("/api/playbooks/" + encodeURIComponent(pb.id) + "/render", { json: {
-			title,
-			args
-		} });
-		if (!text) throw new Error("the server rendered an empty prompt");
-		await api("/api/instances/" + encodeURIComponent(title) + "/send", { json: {
-			text,
-			submit: false,
-			dialog_safe: true
-		} });
-		const ui = useUi.getState();
-		if (ui.lastTab[title] !== "agent") ui.setLastTab(title, "agent");
-		selectSession(title);
-		setTimeout(() => focusTerm(title), 60);
-		const label = pb.label.replace(/…$/, "");
-		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
-		return true;
-	} catch (err) {
-		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
-		return false;
-	}
-}
-async function runPlaybook(title, id, args = {}, label) {
-	let list;
-	try {
-		list = await fetchPlaybooks(title);
-	} catch (err) {
-		toast("Couldn't load the playbooks: " + errMsg(err), { duration: 6e3 });
-		return false;
-	}
-	const pb = list.find((p) => p.id === id);
-	if (!pb) {
-		toast(`That isn't available for ${displayName(title)} right now`);
-		return false;
-	}
-	if (!pb.available) {
-		toast(pb.disabled_reason || `That isn't available for ${displayName(title)} right now`, { duration: 5e3 });
-		return false;
-	}
-	return pastePlaybook(title, label ? {
-		id: pb.id,
-		label
-	} : pb, args);
-}
-function focusQueueInput(title) {
-	selectSession(title, { noKeyboard: true });
-	useUi.getState().setLastTab(title, "queue");
-	let tries = 0;
-	const tick = () => {
-		const box = document.querySelector(`.pane[data-title="${CSS.escape(title)}"]`)?.querySelector(".pane-queue .queue-input");
-		if (box) {
-			box.focus();
-			return;
-		}
-		if (++tries < 40) setTimeout(tick, 50);
-	};
-	setTimeout(tick, 0);
-}
-//#endregion
-//#region src/lib/runs.ts
-var RUN_DONE_STATES = /* @__PURE__ */ new Set([
-	"done",
-	"done_with_failures",
-	"cancelled"
-]);
-var TOGETHER_DETAIL_S = 604800;
-function needsRunDetail(r, nowS) {
-	if (!RUN_DONE_STATES.has(r.state)) return true;
-	return r.policy?.grouping === "together" && nowS - (Number(r.created_at) || 0) <= TOGETHER_DETAIL_S;
-}
-function splitRail(entries, runs, opts = {}) {
-	const act = opts.act || ((i) => String(i.activity || "idle"));
-	const byId = new Map(runs.map((r) => [r.id, r]));
-	const members = /* @__PURE__ */ new Map();
-	const firstAt = /* @__PURE__ */ new Map();
-	const named = /* @__PURE__ */ new Map();
-	entries.forEach((e, i) => {
-		const run = e.inst && !e.inst.device ? e.inst.run : null;
-		if (!run || !run.id) return;
-		if (!members.has(run.id)) members.set(run.id, []);
-		members.get(run.id).push(e);
-		if (!firstAt.has(run.id)) firstAt.set(run.id, i);
-		if (run.name && !named.has(run.id)) named.set(run.id, run.name);
-	});
-	const ids = [.../* @__PURE__ */ new Set([...members.keys(), ...runs.map((r) => r.id)])];
-	const groups = [];
-	for (const id of ids) {
-		const info = byId.get(id) || null;
-		const mine = members.get(id) || [];
-		if (info?.policy?.grouping === "together" || info?.split || mine.some((e) => e.inst?.run?.role === "lead" || e.inst?.run?.grouping === "together")) continue;
-		const tasks = info?.tasks || [];
-		const done = !!info && RUN_DONE_STATES.has(info.state);
-		const queued = done ? [] : tasks.filter((t) => t.state === "queued");
-		if (!mine.length && !queued.length) continue;
-		if (opts.filtering && !mine.length) continue;
-		const total = Math.max(info?.counts?.total || 0, tasks.length, mine.length + queued.length);
-		if (total < 2) continue;
-		const taskOf = /* @__PURE__ */ new Map();
-		for (const t of tasks) if (t.title) taskOf.set(t.title, t);
-		const needsTitles = /* @__PURE__ */ new Set();
-		let limited = false;
-		for (const e of mine) {
-			const a = act(e.inst);
-			if (a === "clarify") needsTitles.add(e.key);
-			if (a === "limit") limited = true;
-		}
-		for (const t of tasks) if (t.state === "needs_you") needsTitles.add(t.title || t.id);
-		const localShipped = mine.filter((e) => shipLine(e.inst, {
-			act: act(e.inst),
-			task: taskOf.get(e.key)
-		})?.state === "shipped").length;
-		const shipped = info?.counts ? Math.max(info.counts.shipped || 0, 0) : localShipped;
-		const failed = info?.counts?.failed || tasks.filter((t) => t.state === "failed").length;
-		const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
-		groups.push({
-			id,
-			name: info?.name || named.get(id) || "Group",
-			lane,
-			state: info?.state || "running",
-			paused: !!info?.paused,
-			pauseReason: info?.pause_reason || "",
-			done,
-			cancelled: info?.state === "cancelled",
-			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
-			collapsed: !!opts.collapsed?.has(id),
-			entries: mine,
-			queued,
-			needs: needsTitles.size,
-			shipped,
-			failed,
-			total,
-			taskOf
-		});
-	}
-	const at = (g) => firstAt.get(g.id) ?? Number.MAX_SAFE_INTEGER;
-	const created = (g) => byId.get(g.id)?.created_at || 0;
-	groups.sort((a, b) => at(a) - at(b) || created(a) - created(b));
-	const grouped = new Set(groups.flatMap((g) => g.entries.map((e) => e.key)));
-	const rest = entries.filter((e) => !grouped.has(e.key));
-	const family = (e) => {
-		const run = e.inst && !e.inst.device ? e.inst.run : null;
-		return !!run && (run.role === "lead" || run.grouping === "together");
-	};
-	return {
-		groups,
-		families: rest.filter(family),
-		own: rest.filter((e) => !family(e))
-	};
-}
-function splitKeys(split) {
-	const out = [];
-	for (const g of split.groups) if (!g.collapsed) for (const e of g.entries) out.push(e.key);
-	for (const e of split.families || []) out.push(e.key);
-	for (const e of split.own) out.push(e.key);
-	return out;
-}
-function queuedLine(i) {
-	if (i <= 0) return "queued · next free slot";
-	const n = i + 1;
-	const suf = n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
-	return "queued · " + n + suf;
-}
-function queuedTitle(t) {
-	const ref = String(t.ticket_id || "").trim();
-	const text = String(t.text || "").trim();
-	if (ref && text) return ref + " " + text;
-	return ref || text || t.title || "queued line";
-}
-function shippedBadge(g) {
-	return g.shipped + "/" + g.total + " shipped";
-}
-function groupTitle(g) {
-	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
-	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
-	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
-	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
-	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
-	else if (g.waitingUsage) bits.push("waiting for usage to come back");
-	bits.push("Click to fold");
-	return bits.join("\n");
-}
-var LEAD_ASKS = {
-	plan: "the lead proposed the pieces — approve them",
-	release: "one PR is ready to open",
-	check_failed: "the check failed on the merged branch",
-	lead_gone: "its lead is gone — nothing can merge or ship"
-};
-var num$3 = (v) => Number(v) || 0;
-var str$3 = (v) => v == null ? "" : String(v);
-function runNote(event, data, info = {}) {
-	const d = data || {};
-	const run = str$3(d.run);
-	const name = str$3(d.name) || info.name?.(run) || "A group";
-	const who = str$3(d.ref) || str$3(d.title) || str$3(d.task) || "a line";
-	switch (event) {
-		case "run.needs_you": {
-			const reason = str$3(d.reason);
-			if (reason === "prompt") return null;
-			if (reason in LEAD_ASKS) {
-				const lead = str$3(d.title) || str$3(d.session);
-				return {
-					text: name + ": " + (str$3(d.text) || LEAD_ASKS[reason]),
-					cls: reason === "check_failed" || reason === "lead_gone" ? "n-warn" : "n-info",
-					run,
-					dedupe: d.key ? "needs:" + str$3(d.key) : [
-						"needs",
-						run,
-						reason,
-						str$3(d.round) || str$3(d.incarnation)
-					].join(":"),
-					rule: "run_needs_you",
-					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
-				};
-			}
-			return {
-				text: name + ": " + who + " " + (str$3(d.text) || escalationText(reason)),
-				cls: "n-warn",
-				run,
-				dedupe: d.key ? "needs:" + str$3(d.key) : [
-					"needs",
-					run,
-					str$3(d.task),
-					reason,
-					str$3(d.incarnation)
-				].join(":"),
-				rule: "run_needs_you"
-			};
-		}
-		case "run.finished": {
-			const shipped = num$3(d.shipped);
-			const failed = num$3(d.failed);
-			const lane = info.lane?.(run) || "";
-			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
-			const what = str$3(d.outcome) || shipped + word;
-			return {
-				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
-				cls: failed ? "n-warn" : "n-done",
-				run,
-				dedupe: "finished:" + run,
-				rule: "run_finished"
-			};
-		}
-		case "run.task_shipped": {
-			const m = str$3(d.pr_url).match(/\/pull\/(\d+)/);
-			return {
-				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
-				cls: "n-done",
-				run,
-				dedupe: [
-					"shipped",
-					run,
-					str$3(d.task)
-				].join(":"),
-				rule: ""
-			};
-		}
-		default: return null;
-	}
-}
-//#endregion
-//#region src/state/runs.ts
-var RUNS_LIVE_MS = 5e3;
-var RUNS_IDLE_MS = 3e4;
-var ROUTE_MISSING_MS = 12e4;
-var missing = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
-async function fetchRuns() {
-	let list;
-	try {
-		list = (await api("/api/runs"))?.runs || [];
-	} catch (e) {
-		if (missing(e)) return null;
-		throw e;
-	}
-	const nowS = Date.now() / 1e3;
-	const live = list.filter((r) => needsRunDetail(r, nowS));
-	const details = await Promise.all(live.map((r) => api("/api/runs/" + encodeURIComponent(r.id)).then((d) => d?.run || null, () => null)));
-	const byId = new Map(details.filter((d) => !!d).map((d) => [d.id, d]));
-	return list.map((r) => ({
-		...r,
-		...byId.get(r.id) || {}
-	}));
-}
-function liveRuns(data) {
-	return !!data && data.some((r) => !RUN_DONE_STATES.has(r.state));
-}
-function useRuns() {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["runs"],
-		queryFn: fetchRuns,
-		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : liveRuns(q.state.data) && !document.hidden ? RUNS_LIVE_MS : RUNS_IDLE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useRun(id) {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["run", id || ""],
-		queryFn: async () => {
-			try {
-				return (await api("/api/runs/" + encodeURIComponent(String(id))))?.run || null;
-			} catch (e) {
-				if (missing(e)) return null;
-				throw e;
-			}
-		},
-		enabled: !!id,
-		refetchInterval: (q) => q.state.data && RUN_DONE_STATES.has(q.state.data.state) ? RUNS_IDLE_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev, prevQuery) => prevQuery?.queryKey[1] === (id || "") ? prev : void 0,
-		retry: false
-	});
-}
-async function fetchOutbox() {
-	try {
-		return await api("/api/outbox?group=all");
-	} catch (e) {
-		if (missing(e)) return null;
-		throw e;
-	}
-}
-function useOutbox() {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["outbox"],
-		queryFn: fetchOutbox,
-		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useNotifyConfig() {
-	return useQuery({
-		queryKey: ["notify-config"],
-		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
-		staleTime: 6e4,
-		refetchInterval: 12e4,
-		retry: false
-	});
-}
-function ruleOn(id) {
-	if (!id) return true;
-	const rule = queryClient.getQueryData(["notify-config"])?.rules?.find((r) => r.id === id);
-	return !rule || rule.enabled !== false;
-}
-var runLookups = {
-	name: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.name || "",
-	lane: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.policy?.lane || ""
-};
-function refreshRuns() {
-	queryClient.invalidateQueries({ queryKey: ["runs"] });
-	queryClient.invalidateQueries({ queryKey: ["run"] });
-	return queryClient.invalidateQueries({ queryKey: ["outbox"] });
-}
-var runsBridged = false;
-function bridgeRunEvents() {
-	const ev = window.mindflock?.events;
-	if (runsBridged || !ev) return;
-	runsBridged = true;
-	const bump = (_env) => void refreshRuns();
-	for (const name of [
-		"run.changed",
-		"run.needs_you",
-		"run.task_shipped",
-		"run.finished",
-		"session.autopilot_changed"
-	]) ev.subscribe(name, bump);
-}
-//#endregion
-//#region src/lib/runsApi.ts
-var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
-var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
-async function runAction(what, path, body = {}, done = "") {
-	try {
-		await api(path, { json: body });
-		if (done) toast(done);
-		return true;
-	} catch (err) {
-		errorPop(what + " failed", errMsg(err));
-		return false;
-	} finally {
-		refreshRuns();
-		refreshInstances();
-	}
-}
-function raiseBudget(runId, usd, name = "") {
-	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
-}
-function cancelRun(runId, name = "") {
-	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
-}
-function suggestedBudget(budget, spent) {
-	const floor = Math.max(spent, budget) * 1.5;
-	const step = floor < 10 ? 1 : floor < 100 ? 5 : 25;
-	return Math.max(step, Math.ceil(floor / step) * step);
-}
-//#endregion
-//#region src/lib/laneActions.ts
-var LANE_ORDER = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var LANE_CHOICES = [
-	"leave",
-	"commit",
-	"pr",
-	"merge"
-];
-var LANE_LABEL = {
-	leave: "Leave it",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open a PR",
-	merge: "Merge when green"
-};
-var LANE_MENU = [
-	{
-		lane: "leave",
-		label: "Leave it",
-		key: "L",
-		desc: "MindFlock doesn't commit anything"
-	},
-	{
-		lane: "commit",
-		label: "Commit",
-		key: "C",
-		desc: "Commit with a message from the diff once the agent stops and hooks pass"
-	},
-	{
-		lane: "pr",
-		label: "Open a PR",
-		key: "P",
-		desc: "Commit, push, open the PR"
-	},
-	{
-		lane: "merge",
-		label: "Merge when checks pass",
-		key: "M",
-		desc: "…and merge it once CI is green"
-	}
-];
-function normalizeLane(v) {
-	const s = String(v || "").trim().toLowerCase();
-	if (s === "agent" || s === "off" || s === "none") return "leave";
-	return LANE_ORDER.includes(s) ? s : "";
-}
-function laneDefault(fasttrackDepth) {
-	return normalizeLane(fasttrackDepth) || "pr";
-}
-function laneChoice(inst) {
-	const l = laneOf(inst);
-	const lane = l ? normalizeLane(l.target) : "";
-	if (!l || !lane) return {
-		lane: "leave",
-		askFirst: false,
-		owner: ""
-	};
-	return {
-		lane,
-		askFirst: !!l.ask_first,
-		owner: l.owner || ""
-	};
-}
-function teamRunCaps(caps) {
-	const t = caps?.team_runs;
-	return {
-		split: t?.split === true,
-		together: t?.together === true
-	};
-}
-var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
-var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a group — update it";
-function askFirstApplies(lane) {
-	return lane !== "leave";
-}
-function splitBlockReason(caps, inst) {
-	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
-	const m = caps?.agent_mcp;
-	if (m) {
-		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → General";
-		const provider = inst.provider || inst.program || "";
-		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
-	}
-	if (inst.mcp_attached === false) return "Restart this agent to give it the MindFlock tools";
-	if (inst.activity === "clarify") return "Answer its prompt first";
-	if (inst.activity === "limit") return "It's at its usage limit — split once it's back";
-	return "";
-}
-function splitTaskOf(inst) {
-	return String(inst.last_prompt_full || inst.last_prompt || inst.last_turn || "").trim();
-}
-function groupSize(inst, rows) {
-	const id = inst.run?.id;
-	if (!id) return 0;
-	return rows.filter((r) => r.run?.id === id).length;
-}
-async function setLane(title, lane, askFirst) {
-	return instApi(title, "/lane", { json: {
-		lane,
-		ask_first: askFirstApplies(lane) && askFirst
-	} });
-}
-async function shipNow(title, lane) {
-	await instApi(title, "/ship-now", { json: lane && lane !== "leave" ? { lane } : {} });
-}
-function laneLockReason(inst) {
-	const run = inst.run;
-	if (run && run.id) {
-		const group = run.name || "its group";
-		if (run.role === "lead") return `It leads ${group} — the group ships it once, through the group's release`;
-		if (run.grouping === "together") return `Its work merges into ${group}'s one PR — move it out of the group to give it a lane of its own`;
-	}
-	const owner = inst.lane?.owner;
-	if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its lane from that window`;
-	return "";
-}
-async function moveOutOfGroup(runId, taskId) {
-	await api(taskPath(runId, taskId, "skip"), { json: {} });
-}
-async function startSplitOf(inst, name, lane, askFirst) {
-	return api("/api/runs", { json: {
-		name,
-		items: [{
-			kind: "task",
-			text: splitTaskOf(inst)
-		}],
-		policy: {
-			lane,
-			ask_first: askFirstApplies(lane) && askFirst,
-			grouping: "together",
-			release: "ask"
-		},
-		concurrency: 3,
-		program: inst.provider || inst.program,
-		split: true,
-		lead: inst.title
-	} });
-}
-async function setLaneWhenReady(title, lane, askFirst, delays = [
-	1500,
-	3e3,
-	5e3,
-	8e3,
-	12e3,
-	2e4
-]) {
-	if (lane === "leave") return true;
-	for (let i = 0;; i++) try {
-		await setLane(title, lane, askFirst);
-		return true;
-	} catch (err) {
-		if (!(err instanceof ApiError && err.status === 409 && i < delays.length)) {
-			toast(`Couldn't set “${LANE_LABEL[lane]}” on ${title}: ${errMsg(err)}`, { duration: 7e3 });
-			return false;
-		}
-		await new Promise((r) => setTimeout(r, delays[i]));
-	}
-}
-function shipMenuModel(inst, rows, caps) {
-	const cur = laneChoice(inst);
-	const lock = laneLockReason(inst);
-	const lanes = LANE_MENU.map((m) => ({
-		kind: "lane",
-		...m,
-		current: m.lane === cur.lane,
-		why: lock
-	}));
-	lanes.push({
-		kind: "ask",
-		key: "A",
-		on: cur.askFirst && askFirstApplies(cur.lane),
-		why: lock || (askFirstApplies(cur.lane) ? "" : "Nothing ships while it's “Leave it” — pick a lane first")
-	});
-	const split = [{
-		kind: "split",
-		key: "S",
-		why: splitBlockReason(caps, inst)
-	}];
-	const member = inst.run && inst.run.id ? inst.run : null;
-	const tail = [{
-		kind: "shipnow",
-		key: "N",
-		why: lock || (cur.lane === "leave" ? "Pick how far it goes first — “Leave it” ships nothing" : "")
-	}];
-	if (member && member.task && member.role !== "lead") tail.push({
-		kind: "detach",
-		key: "O"
-	});
-	tail.push({ kind: "message" });
-	return {
-		current: {
-			lane: cur.lane,
-			askFirst: cur.askFirst
-		},
-		lanes,
-		split,
-		group: member ? {
-			name: member.name || "group",
-			count: Math.max(1, groupSize(inst, rows))
-		} : null,
-		tail
-	};
-}
-function shipEntries(m) {
-	return [
-		...m.lanes,
-		...m.split,
-		...m.tail
-	];
-}
-function entryKey(e) {
-	return e.kind === "message" ? "" : e.key;
-}
-function entryWhy(e) {
-	return e.kind === "lane" || e.kind === "ask" || e.kind === "split" || e.kind === "shipnow" ? e.why : "";
-}
-async function runShipEntry(e, inst, name, current) {
-	const title = inst.title;
-	switch (e.kind) {
-		case "lane":
-			await setLane(title, e.lane, current.askFirst);
-			return e.lane === "leave" ? `${name}: MindFlock won't commit anything` : `${name} → ${LANE_LABEL[e.lane]}${current.askFirst ? ", asks first" : ""}`;
-		case "ask":
-			await setLane(title, current.lane, !e.on);
-			return e.on ? `${name} ships without asking` : `${name} stops before it ships and asks in the Outbox`;
-		case "split":
-			await startSplitOf(inst, name, current.lane === "leave" ? "pr" : current.lane, current.askFirst);
-			useUi.getState().threadOpen(title);
-			return `${name} is proposing the pieces — approve the plan in its Thread tab`;
-		case "shipnow":
-			await shipNow(title, current.lane);
-			return `Shipping ${name} now → ${LANE_LABEL[current.lane]}`;
-		case "detach": {
-			const run = inst.run;
-			if (!run) return "";
-			await moveOutOfGroup(run.id, run.task);
-			return `${name} is out of ${run.name} — its session and lane stay as they are`;
-		}
-		case "message": return "";
-	}
-}
-function openShipMenu(title, sub = null) {
-	const inst = instances$1().find((r) => r.title === title);
-	if (!inst || inst.pending) {
-		toast("That session isn't ready yet");
-		return;
-	}
-	if (isRemote(inst)) {
-		toast("Ship & split works on this machine's sessions — open it on its own device");
-		return;
-	}
-	selectSession(title, { noKeyboard: true });
-	requestAnimationFrame(() => useUi.getState().setPlaybookMenu({
-		title,
-		sub
-	}));
-}
-//#endregion
 //#region src/lib/keymap.ts
 var _host = null;
 function isEditingTarget(el) {
@@ -29169,7 +28934,7 @@ var MODAL_DOM_IDS = [
 	"verify-dialog",
 	"red-zones-dialog",
 	"break-screen",
-	"ship-menu"
+	"fast-track-menu"
 ];
 function modalOpen() {
 	const open = useUi.getState().openDialog;
@@ -29292,12 +29057,8 @@ var CHORDS = {
 		run: (t) => useUi.getState().threadOpen(t, { composeTo: t })
 	},
 	f: {
-		desc: "Ship & split…",
-		run: (t) => openShipMenu(t)
-	},
-	l: {
-		desc: "When it's done… (lane)",
-		run: (t) => openShipMenu(t, "lane")
+		desc: "Fast-track…",
+		run: (t) => openFastTrackMenu(t)
 	},
 	t: {
 		desc: "Thread — workers and messages",
@@ -30636,7 +30397,7 @@ function releaseChoices(lane, localOrigin) {
 function laneNote(lane) {
 	const t = String(lane?.target || "");
 	if (!t) return "";
-	return "this session's lane: " + (t === "leave" ? "leave it" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
+	return "fast-track: " + (t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
 }
 function releaseOutcome(run) {
 	const r = run.release;
@@ -30682,7 +30443,7 @@ function releaseOutcome(run) {
 		link: ""
 	};
 	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
-		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group's lane is " + (lane === "commit" ? "Commit" : "Leave it") + ")",
+		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
 		cls: "ok",
 		url: "",
 		link: ""
@@ -30880,7 +30641,7 @@ function thenText(step, laneTarget) {
 	const lane = String(laneTarget || s);
 	const from = LADDER.indexOf(s);
 	const to = LADDER.indexOf(lane);
-	if (from < 0 || to <= from) return s === "commit" ? "stays local — this session's lane ends at commit" : "this session's lane ends at " + (STEP_WORD[s] || s);
+	if (from < 0 || to <= from) return s === "commit" ? "stays local — its fast-track ends at commit" : "its fast-track ends at " + (STEP_WORD[s] || s);
 	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
 }
 function waitingChip(w) {
@@ -31018,8 +30779,146 @@ function waitingActions(w, can) {
 	return out;
 }
 //#endregion
-//#region src/lib/flockActions.ts
+//#region src/lib/playbooks.ts
 var import_react_dom = require_react_dom();
+var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
+var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
+var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
+function isRemote(inst) {
+	return !!inst.device || String(inst.title || "").includes("::");
+}
+function forkBlockReason(inst) {
+	if (inst.mcp_attached === false) return RESTART_REASON;
+	if (inst.activity === "clarify" || inst.activity === "limit") return ANSWER_FIRST_REASON;
+	return "";
+}
+function splitGate(caps, provider) {
+	const m = caps?.agent_mcp;
+	if (!m) return {
+		ok: true,
+		reason: ""
+	};
+	if (!m.enabled) return {
+		ok: false,
+		reason: "MindFlock tools are switched off for new sessions — Settings → General"
+	};
+	if (!(m.providers || []).includes(provider)) {
+		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
+		return {
+			ok: false,
+			reason: names.length ? `Needs a CLI that gets the MindFlock tools — ${names.join(" or ")}` : NO_TOOLS_REASON
+		};
+	}
+	return {
+		ok: true,
+		reason: ""
+	};
+}
+var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
+var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
+var NOT_A_PIECE = /* @__PURE__ */ new Set([
+	"it",
+	"them",
+	"then",
+	"also",
+	"this",
+	"that"
+]);
+function splitSuggestion(text) {
+	const s = String(text || "");
+	const m = LIST_RE.exec(s);
+	if (m) {
+		const middle = m[2].split(",").map((x) => x.trim().replace(/^the\s+/i, "")).filter(Boolean);
+		const all = [
+			m[1],
+			...middle,
+			m[3]
+		].map((x) => x.toLowerCase());
+		const pieces = all.filter((x, i) => !NOT_A_PIECE.has(x) && all.indexOf(x) === i);
+		if (pieces.length >= 3) return { pieces: pieces.slice(0, 5) };
+	}
+	if (CUE_RE.test(s)) return { pieces: [] };
+	return null;
+}
+function suggestionPill(sug) {
+	return ["suggested", ...sug.pieces].join(" · ");
+}
+async function fetchPlaybooks(title) {
+	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
+}
+var pasting = /* @__PURE__ */ new Set();
+async function pastePlaybook(title, pb, args = {}) {
+	if (pasting.has(title)) return false;
+	pasting.add(title);
+	try {
+		return await pasteNow(title, pb, args);
+	} finally {
+		pasting.delete(title);
+	}
+}
+async function pasteNow(title, pb, args) {
+	const name = displayName(title);
+	try {
+		const { text } = await api("/api/playbooks/" + encodeURIComponent(pb.id) + "/render", { json: {
+			title,
+			args
+		} });
+		if (!text) throw new Error("the server rendered an empty prompt");
+		await api("/api/instances/" + encodeURIComponent(title) + "/send", { json: {
+			text,
+			submit: false,
+			dialog_safe: true
+		} });
+		const ui = useUi.getState();
+		if (ui.lastTab[title] !== "agent") ui.setLastTab(title, "agent");
+		selectSession(title);
+		setTimeout(() => focusTerm(title), 60);
+		const label = pb.label.replace(/…$/, "");
+		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
+		return true;
+	} catch (err) {
+		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
+		return false;
+	}
+}
+async function runPlaybook(title, id, args = {}, label) {
+	let list;
+	try {
+		list = await fetchPlaybooks(title);
+	} catch (err) {
+		toast("Couldn't load the playbooks: " + errMsg(err), { duration: 6e3 });
+		return false;
+	}
+	const pb = list.find((p) => p.id === id);
+	if (!pb) {
+		toast(`That isn't available for ${displayName(title)} right now`);
+		return false;
+	}
+	if (!pb.available) {
+		toast(pb.disabled_reason || `That isn't available for ${displayName(title)} right now`, { duration: 5e3 });
+		return false;
+	}
+	return pastePlaybook(title, label ? {
+		id: pb.id,
+		label
+	} : pb, args);
+}
+function focusQueueInput(title) {
+	selectSession(title, { noKeyboard: true });
+	useUi.getState().setLastTab(title, "queue");
+	let tries = 0;
+	const tick = () => {
+		const box = document.querySelector(`.pane[data-title="${CSS.escape(title)}"]`)?.querySelector(".pane-queue .queue-input");
+		if (box) {
+			box.focus();
+			return;
+		}
+		if (++tries < 40) setTimeout(tick, 50);
+	};
+	setTimeout(tick, 0);
+}
+//#endregion
+//#region src/lib/flockActions.ts
 var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
 function normOption(v) {
@@ -32708,87 +32607,75 @@ function redZoneChip(rz, seenAt) {
 	return null;
 }
 //#endregion
-//#region src/components/sidebar/PlaybookRowItems.tsx
-function PlaybookRowItems({ inst }) {
+//#region src/components/sidebar/SessionRowItems.tsx
+function SessionRowItems({ inst }) {
 	const title = inst.title;
 	const { data: config } = useConfig();
-	const { data: rows } = useInstances();
-	const [laneOpen, setLaneOpen] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const model = (0, import_react.useMemo)(() => shipMenuModel(inst, rows || [], config?.caps), [
-		inst,
-		rows,
-		config?.caps
-	]);
-	if (isRemote(inst) || inst.pending) return null;
+	if (inst.pending) return null;
 	const name = displayName(title);
-	const run = (e) => {
-		const why = entryWhy(e);
+	const remote = isRemote(inst);
+	const ft = fastTrackStep(inst);
+	const cur = laneChoice(inst);
+	const splitWhy = remote ? "" : splitBlockReason(config?.caps, inst);
+	const group = remote ? null : detachableGroup(inst);
+	const act = (why, fn) => (ev) => {
+		ev.stopPropagation();
 		if (why) {
 			toast(why, { duration: 5e3 });
 			return;
 		}
-		if (e.kind === "message") {
-			useUi.getState().threadOpen(title, { composeTo: title });
-			return;
-		}
 		if (busy) return;
 		setBusy(true);
-		runShipEntry(e, inst, name, model.current).then((said) => {
+		fn().then((said) => {
 			if (said) toast(said, { duration: 4500 });
 			refreshInstances();
 		}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 })).finally(() => setBusy(false));
 	};
-	const button = (e, label, title2, extra = "") => {
-		const why = entryWhy(e);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			className: (why ? "pb-row-off " : "") + extra || void 0,
-			"aria-disabled": why ? true : void 0,
-			title: why || title2,
-			"data-ship": e.kind === "lane" ? "lane-" + e.lane : e.kind,
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		ft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-row": "fast-track",
+			title: ft.title,
 			onClick: (ev) => {
 				ev.stopPropagation();
-				run(e);
+				openFastTrackMenu(title);
 			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: label })
-		}, e.kind + (e.kind === "lane" ? e.lane : ""));
-	};
-	const cur = model.current;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			"aria-expanded": laneOpen,
-			title: "How far MindFlock carries this session once its agent is done",
-			"data-ship": "lanes",
-			onClick: (e) => {
-				e.stopPropagation();
-				setLaneOpen((v) => !v);
-			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-				"When it's done: ",
-				LANE_LABEL[cur.lane],
-				cur.askFirst && cur.lane !== "leave" ? ", asks first" : ""
-			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Fast-track… ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: LANE_SHORT[cur.lane]
+			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
-				children: laneOpen ? "▾" : "›"
+				children: "Ctrl+K F"
 			})]
 		}),
-		laneOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "pb-row-sub",
-			role: "group",
-			"aria-label": "When it's done",
-			children: model.lanes.map((e) => e.kind === "lane" ? button(e, e.label + (e.current ? " ✓" : ""), e.desc, e.current ? "on" : "") : e.kind === "ask" ? button(e, "Ask me before it ships" + (e.on ? " ✓" : ""), "Stop at the next step and show it in the Outbox first") : null)
+		!remote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			"data-row": "split",
+			className: splitWhy ? "pb-row-off" : void 0,
+			"aria-disabled": splitWhy ? true : void 0,
+			title: splitWhy || "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back",
+			onClick: act(splitWhy, () => splitSession(inst, name)),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Split into parallel pieces…" })
 		}),
-		model.split.map((e) => button(e, "Split into parallel pieces…", "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back")),
-		model.tail.map((e) => e.kind === "shipnow" ? button(e, "Ship it now", "Don't wait for the agent — take what's there through the lane now") : e.kind === "detach" ? button(e, "Move out of " + (model.group?.name || "the group"), "The group stops driving it; the session and its lane stay") : e.kind === "message" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			"data-row": "detach",
+			title: "The group stops driving it; the session and its fast-track stay",
+			onClick: act("", async () => {
+				await moveOutOfGroup(group.id, group.task);
+				return `${name} is out of ${group.name} — its session and fast-track stay as they are`;
+			}),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Move out of ", group.name] })
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"data-row": "message",
 			onClick: (ev) => {
 				ev.stopPropagation();
-				run(e);
+				useUi.getState().threadOpen(title, { composeTo: title });
 			},
 			children: ["Message…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
 				children: "Ctrl+K S"
 			})]
-		}, "message") : null),
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 	] });
 }
@@ -33240,7 +33127,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 							] }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlaybookRowItems, { inst }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionRowItems, { inst }),
 							inst.setup?.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: (e) => act(async () => {
 									try {
@@ -38309,7 +38196,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "thread-label",
-						children: "Ship · one PR"
+						children: "Release · one PR"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
 					lane && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -54003,25 +53890,17 @@ function AccountChip({ inst }) {
 	})] });
 }
 //#endregion
-//#region src/components/grid/ShipMenu.tsx
-function ShipMenu({ title, anchor, onClose }) {
+//#region src/components/grid/FastTrackMenu.tsx
+function FastTrackMenu({ title, anchor, onClose }) {
 	const { data: rows } = useInstances();
-	const { data: config } = useConfig();
 	const name = useUi((s) => s.aliases[title]) || title;
-	const inst = (rows || []).find((r) => r.title === title && !r.device);
-	const model = (0, import_react.useMemo)(() => shipMenuModel(inst || {
-		provider: "",
-		program: "",
-		mcp_attached: null,
-		activity: ""
-	}, rows || [], config?.caps), [
-		inst,
-		rows,
-		config?.caps
-	]);
-	const entries = (0, import_react.useMemo)(() => shipEntries(model), [model]);
-	const [sel, setSel] = (0, import_react.useState)(() => Math.max(0, entries.findIndex((e) => e.kind === "lane" && e.current)));
-	const [busy, setBusy] = (0, import_react.useState)(false);
+	const inst = (rows || []).find((r) => r.title === title && !r.device) || (rows || []).find((r) => r.title === title);
+	const model = (0, import_react.useMemo)(() => fastTrackModel(inst || {}), [inst]);
+	const entries = (0, import_react.useMemo)(() => [...model.items.map((i) => ({
+		kind: "lane",
+		lane: i.lane
+	})), { kind: "ask" }], [model]);
+	const [sel, setSel] = (0, import_react.useState)(() => Math.max(0, model.items.findIndex((i) => i.current)));
 	const menuRef = (0, import_react.useRef)(null);
 	const onCloseRef = (0, import_react.useRef)(onClose);
 	onCloseRef.current = onClose;
@@ -54030,7 +53909,8 @@ function ShipMenu({ title, anchor, onClose }) {
 	(0, import_react.useEffect)(() => {
 		menuRef.current?.focus({ preventScroll: true });
 	}, []);
-	(0, import_react.useLayoutEffect)(() => {
+	const placeRef = (0, import_react.useRef)(() => {});
+	placeRef.current = () => {
 		const m = menuRef.current;
 		if (!m) return;
 		const r = anchor.getBoundingClientRect();
@@ -54050,14 +53930,21 @@ function ShipMenu({ title, anchor, onClose }) {
 		let left = r.right - m.offsetWidth + 10;
 		left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
 		m.style.left = Math.max(8, left) + "px";
-	});
+	};
+	(0, import_react.useLayoutEffect)(() => placeRef.current());
 	(0, import_react.useEffect)(() => {
 		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
 		const onDown = (e) => {
 			if (!inside(e.target)) onCloseRef.current(false);
 		};
 		const onScroll = (e) => {
-			if (!inside(e.target)) onCloseRef.current(false);
+			const t = e.target;
+			if (inside(t)) return;
+			if (t instanceof Node && t !== document && t.contains(anchor)) {
+				placeRef.current();
+				return;
+			}
+			onCloseRef.current(false);
 		};
 		const onResize = () => onCloseRef.current(false);
 		document.addEventListener("mousedown", onDown, true);
@@ -54070,25 +53957,20 @@ function ShipMenu({ title, anchor, onClose }) {
 		};
 	}, [anchor]);
 	const close = (refocus = false) => onCloseRef.current(refocus);
+	const whyOf = (e) => e.kind === "ask" ? model.ask.why : model.lock;
+	const keyOf = (e) => e.kind === "ask" ? "A" : model.items.find((i) => i.lane === e.lane)?.key || "";
 	const activate = (e) => {
 		if (!e) return;
-		const why = entryWhy(e);
+		const why = whyOf(e);
 		if (why) {
 			toast(why, { duration: 5e3 });
 			return;
 		}
-		if (e.kind === "message") {
-			useUi.getState().threadOpen(title, { composeTo: title });
-			close();
-			return;
-		}
-		if (!inst || busy) return;
-		setBusy(true);
+		if (!inst) return;
 		close();
-		runShipEntry(e, inst, name, model.current).then((said) => {
-			if (said) toast(said, { duration: 4500 });
-			refreshInstances();
-		}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 })).finally(() => setBusy(false));
+		const cur = model.current;
+		if (e.kind === "ask") pickFastTrack(title, name, cur.lane, !model.ask.on);
+		else pickFastTrack(title, name, e.lane, cur.askFirst);
 	};
 	const onKeyDown = (e) => {
 		if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -54103,14 +53985,14 @@ function ShipMenu({ title, anchor, onClose }) {
 		} else if (k === "ArrowUp") {
 			handled();
 			setSel((i) => (i - 1 + entries.length) % entries.length);
-		} else if (k === "Enter") {
+		} else if (k === "Enter" || k === " ") {
 			handled();
 			activate(entries[sel]);
 		} else if (k === "Escape") {
 			handled();
 			close(true);
 		} else if (k.length === 1 && /[a-z]/i.test(k)) {
-			const i = entries.findIndex((x) => entryKey(x) === k.toUpperCase());
+			const i = entries.findIndex((x) => keyOf(x) === k.toUpperCase());
 			if (i >= 0) {
 				handled();
 				setSel(i);
@@ -54118,74 +54000,51 @@ function ShipMenu({ title, anchor, onClose }) {
 			}
 		}
 	};
-	const item = (e) => {
-		const i = entries.indexOf(e);
-		const why = entryWhy(e);
-		let label = "";
-		let desc = "";
-		let key = entryKey(e);
-		switch (e.kind) {
-			case "lane":
-				label = e.label + (e.current ? " ✓" : "");
-				desc = e.desc + (e.current ? " — this session's lane now" : "");
-				break;
-			case "ask":
-				label = "Ask me before it ships" + (e.on ? " ✓" : "");
-				desc = "Stop at the next step and show it in the Outbox first";
-				break;
-			case "split":
-				label = "Split into parallel pieces…";
-				desc = "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back";
-				break;
-			case "shipnow":
-				label = "Ship it now";
-				desc = "Don't wait for the agent — take what's there through the lane now";
-				break;
-			case "detach":
-				label = "Move out of " + (model.group?.name || "the group");
-				desc = "The group stops driving it; the session and its lane stay";
-				break;
-			case "message":
-				label = "Message…";
-				desc = "Write to a session yourself, in the Thread tab";
-				key = "Ctrl+K S";
-		}
+	const row = (e, i) => {
+		const why = whyOf(e);
+		const it = e.kind === "lane" ? model.items.find((x) => x.lane === e.lane) : null;
+		const checked = it ? it.current : model.ask.on;
+		const label = it ? it.label : ASK_FIRST_LABEL;
+		const desc = it ? it.desc : ASK_FIRST_DESC;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: itemId(i),
-			className: "pb-item" + (i === sel ? " sel" : "") + (why ? " off" : ""),
-			role: e.kind === "lane" ? "menuitemradio" : e.kind === "ask" ? "menuitemcheckbox" : "menuitem",
-			"aria-checked": e.kind === "lane" ? e.current : e.kind === "ask" ? e.on : void 0,
+			className: "pb-item" + (i === sel ? " sel" : "") + (why ? " off" : "") + (checked ? " on" : ""),
+			role: e.kind === "lane" ? "menuitemradio" : "menuitemcheckbox",
+			"aria-checked": checked,
 			tabIndex: -1,
 			"aria-disabled": why ? true : void 0,
 			title: why || void 0,
-			"data-ship": e.kind === "lane" ? "lane-" + e.lane : e.kind,
+			"data-ft": e.kind === "lane" ? e.lane : "ask",
 			onMouseMove: () => setSel(i),
 			onClick: () => activate(e),
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "pb-name",
-					children: label
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ft-check",
+						"aria-hidden": "true",
+						children: checked ? "✓" : ""
+					}), label]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pb-key",
-					children: key
+					children: keyOf(e)
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pb-desc" + (why ? " pb-why" : ""),
 					children: why || desc
 				})
 			]
-		}, e.kind + (e.kind === "lane" ? e.lane : ""));
+		}, e.kind === "lane" ? e.lane : "ask");
 	};
 	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "ship-menu",
-		className: "pb-menu",
+		id: "fast-track-menu",
+		className: "pb-menu ft-menu",
 		role: "menu",
-		"aria-label": `Ship & split — ${name}`,
+		"aria-label": `Fast-track — ${name}`,
 		tabIndex: -1,
 		ref: menuRef,
 		"aria-activedescendant": itemId(sel),
-		"aria-busy": busy || void 0,
 		style: {
 			top: 0,
 			left: 0
@@ -54195,38 +54054,24 @@ function ShipMenu({ title, anchor, onClose }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pb-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship & split" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "muted",
 					children: ["→ ", name]
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pb-sec",
-				children: "When it's done"
+				children: "When the agent is done, go as far as"
 			}),
-			model.lanes.map(item),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pb-sec",
-				children: "Split"
-			}),
-			model.split.map(item),
-			model.group ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pb-sec",
-				children: [
-					model.group.name,
-					" · ",
-					model.group.count
-				]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
-			model.tail.map(item),
+			entries.slice(0, -1).map((e, i) => row(e, i)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
+			row(entries[entries.length - 1], entries.length - 1),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pb-foot",
 				children: [
-					"Every item acts right away — nothing is pasted into the agent. The ",
+					"Acts right away — nothing is typed into the agent. To do one step yourself, use the button beside ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩" }),
-					" button and the row ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "›" }),
-					" menu show the same lane."
+					". New sessions start at Settings → Workspace's default."
 				]
 			})
 		]
@@ -54248,38 +54093,6 @@ function paneTab(t, git) {
 	if (GIT_TABS.has(t) && !git) return "agent";
 	return t;
 }
-function shipShown(inst) {
-	return !isRemote(inst) && !inst.pending;
-}
-var FORK_ICON = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-	width: "12",
-	height: "12",
-	viewBox: "0 0 16 16",
-	fill: "none",
-	stroke: "currentColor",
-	strokeWidth: "1.6",
-	strokeLinecap: "round",
-	strokeLinejoin: "round",
-	"aria-hidden": "true",
-	children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "4",
-			cy: "3.2",
-			r: "1.7"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "12",
-			cy: "3.2",
-			r: "1.7"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-			cx: "8",
-			cy: "12.8",
-			r: "1.7"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4 5v1.2c0 1.6 1.2 2.6 2.8 2.6h2.4C10.8 8.8 12 7.8 12 6.2V5M8 8.8v2.3" })
-	]
-});
 function queueRelTime(ms) {
 	const m = Math.ceil(ms / 6e4);
 	if (m < 60) return m + "m";
@@ -54301,8 +54114,8 @@ function Pane({ inst, drag, dragging }) {
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
 	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
 	const newestReport = newestReportTs(family.children);
-	const playbookMenu = useUi((s) => s.playbookMenu?.title === title ? s.playbookMenu : null);
-	const [forkEl, setForkEl] = (0, import_react.useState)(null);
+	const ftMenu = useUi((s) => s.fastTrackMenu?.title === title ? s.fastTrackMenu : null);
+	const [ftEl, setFtEl] = (0, import_react.useState)(null);
 	const caps = config?.caps ?? {
 		git: true,
 		tailscale: true,
@@ -54532,10 +54345,10 @@ function Pane({ inst, drag, dragging }) {
 			drag.commit();
 		}
 	};
-	const forkGone = missing || loading || !shipShown(inst);
+	const ftGone = missing || loading || !fastTrackStep(inst);
 	(0, import_react.useEffect)(() => {
-		if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
-	}, [playbookMenu, forkGone]);
+		if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
+	}, [ftMenu, ftGone]);
 	if (missing) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane missing-pane" + (focused ? " focused" : ""),
@@ -54669,7 +54482,6 @@ function Pane({ inst, drag, dragging }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
-	const forkShown = shipShown(inst);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane" + (focused ? " focused" : "") + (dragging ? " dragging" : ""),
@@ -54774,6 +54586,25 @@ function Pane({ inst, drag, dragging }) {
 								},
 								children: ns.label
 							}) : null,
+							ft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								ref: setFtEl,
+								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + (ftMenu ? " open" : ""),
+								type: "button",
+								"aria-haspopup": "menu",
+								"aria-expanded": !!ftMenu,
+								"aria-label": "Fast-track: " + (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) + (ft.askFirst ? ", asks first" : ""),
+								title: ft.title,
+								"data-ft-lane": ft.lane,
+								onClick: (ev) => {
+									ev.stopPropagation();
+									useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+								},
+								children: [ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ft-ask",
+									"aria-hidden": "true",
+									children: "?"
+								})]
+							}),
 							step && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
 								title: step.title,
@@ -54795,17 +54626,6 @@ function Pane({ inst, drag, dragging }) {
 										children: step.target
 									})
 								]
-							}),
-							ft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.hint ? " nextstep-fast-halted" : ""),
-								type: "button",
-								"aria-pressed": !!ft.active,
-								title: ft.title,
-								onClick: (ev) => {
-									ev.stopPropagation();
-									ft.run();
-								},
-								children: ft.label
 							}),
 							rs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "nextstep nextstep-reset",
@@ -54839,19 +54659,6 @@ function Pane({ inst, drag, dragging }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "head-tail",
 						children: [
-							forkShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								ref: setForkEl,
-								className: "act playbooks" + (playbookMenu ? " open" : ""),
-								type: "button",
-								"aria-haspopup": "menu",
-								"aria-expanded": !!playbookMenu,
-								title: "Ship & split — how far MindFlock carries this session, split it, message (Ctrl+K F)",
-								onClick: (e) => {
-									e.stopPropagation();
-									useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
-								},
-								children: FORK_ICON
-							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "act copyhist",
 								type: "button",
@@ -55039,12 +54846,12 @@ function Pane({ inst, drag, dragging }) {
 					})
 				]
 			}),
-			playbookMenu && forkShown && forkEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShipMenu, {
+			ftMenu && ft && ftEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackMenu, {
 				title,
-				anchor: forkEl,
+				anchor: ftEl,
 				onClose: (refocus) => {
 					const ui = useUi.getState();
-					if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
+					if (ui.fastTrackMenu?.title === title) ui.setFastTrackMenu(null);
 					if (refocus) setTimeout(() => focusTerm(title), 0);
 				}
 			})
@@ -55920,27 +55727,12 @@ function CommandPalette({ host }) {
 				run: () => focusQueueInput(t)
 			});
 			const inst = rows.find((r) => r.title === t);
+			if (inst && !inst.pending && fastTrackStep(inst)) acts.push({
+				label: `Fast-track… — ${t}`,
+				hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
+				run: () => openFastTrackMenu(t)
+			});
 			if (inst && !inst.device && !inst.pending && !t.includes("::")) {
-				const cur = laneChoice(inst);
-				const ship = (lane) => async () => {
-					try {
-						await setLane(t, lane, cur.askFirst);
-						toast(`${ui.aliases[t] || t} → ${LANE_LABEL[lane]}`, { duration: 4e3 });
-						refreshInstances();
-					} catch (err) {
-						toast(`${t}: ${errMsg(err)}`, { duration: 6e3 });
-					}
-				};
-				acts.push({
-					label: `Ship: open a PR when done — ${t}`,
-					hint: cur.lane === "pr" ? "its lane now" : "lane",
-					run: () => void ship("pr")()
-				});
-				acts.push({
-					label: `Ship: commit when done — ${t}`,
-					hint: cur.lane === "commit" ? "its lane now" : "lane",
-					run: () => void ship("commit")()
-				});
 				const why = splitBlockReason(caps, inst);
 				acts.push({
 					label: `Split into parallel pieces… — ${t}`,
@@ -55951,16 +55743,8 @@ function CommandPalette({ host }) {
 							return;
 						}
 						const name = ui.aliases[t] || t;
-						startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst).then(() => {
-							ui.threadOpen(t);
-							toast(`${name} is proposing the pieces — approve the plan in its Thread tab`, { duration: 5e3 });
-						}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
+						splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
 					}
-				});
-				acts.push({
-					label: `Ship & split… — ${t}`,
-					hint: "Ctrl+K F",
-					run: () => openShipMenu(t)
 				});
 			}
 			acts.push({
@@ -56966,6 +56750,50 @@ function SplitCheck({ id, split, onSplit, gate, shapeReason, text }) {
 	});
 }
 //#endregion
+//#region src/components/dialogs/FastTrackChoice.tsx
+function Seg({ value, options, onChange, label, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-seg",
+		role: "group",
+		"aria-label": label,
+		id,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: o.v === value ? "on" : void 0,
+			"aria-pressed": o.v === value,
+			title: o.title,
+			disabled: o.disabled || void 0,
+			onClick: () => onChange(o.v),
+			children: o.label
+		}, o.v))
+	});
+}
+function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+		id,
+		label,
+		value,
+		options: lanes.map((l) => ({
+			v: l,
+			label: laneLabel?.[l] || LANE_LABEL[l],
+			title: disabledReason?.[l] || laneTitle?.[l] || LANE_DESC[l],
+			disabled: !!disabledReason?.[l]
+		})),
+		onChange
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "check rt-ask" + (askWhy ? " disabled" : ""),
+		title: askWhy || ASK_FIRST_DESC,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "checkbox",
+			id: id + "-ask",
+			checked: !askWhy && askFirst,
+			disabled: !!askWhy,
+			onChange: (e) => onAskFirst(e.target.checked)
+		}), ASK_FIRST_LABEL]
+	})] });
+}
+//#endregion
 //#region src/lib/runStart.ts
 var TICKET_TOKEN = /^(?:[A-Za-z][A-Za-z0-9]{0,15}-\d+|#\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+)$/;
 function isTicketToken(tok) {
@@ -57131,9 +56959,8 @@ function runBody(o) {
 		split: o.split
 	};
 }
-function defaultLaneFor(batch, serverDefault, fasttrackDepth) {
-	if (!batch) return "leave";
-	return laneDefault(serverDefault || fasttrackDepth);
+function defaultLaneFor(batch, setting) {
+	return batch ? laneDefault(setting) : "leave";
 }
 function startLabel(n, split) {
 	if (split) return "Start the lead";
@@ -57298,7 +57125,8 @@ function useRunDraft(o) {
 		repoLabel
 	]);
 	const oneForAll = o.split && oneTask || grouping === "together" && (rows.length || items.length) >= 2;
-	const chosen = laneChoice ?? defaultLaneFor(listMode || o.split && oneTask, fresh?.data?.lane_default, o.fasttrackDepth);
+	const batch = !o.single && (listMode || o.split && oneTask);
+	const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
 	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 	const start = async ({ split }) => {
 		if (starting) return {
@@ -57428,45 +57256,9 @@ function RunItems({ rows, onRemove }) {
 		}, r.key))
 	});
 }
-function Seg({ value, options, onChange, label, id }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "rt-seg",
-		role: "group",
-		"aria-label": label,
-		id,
-		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: o.v === value ? "on" : void 0,
-			"aria-pressed": o.v === value,
-			title: o.title,
-			disabled: o.disabled || void 0,
-			onClick: () => onChange(o.v),
-			children: o.label
-		}, o.v))
-	});
-}
-var LANE_TITLES = {
-	leave: "MindFlock doesn't commit anything — you take it from there",
-	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-	push: "Commit and push once the agent stops and your hooks pass",
-	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-	merge: "…and merge the PR once its checks pass"
-};
 function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 	const many = n >= 2 && !split;
 	const oneForAll = split || n >= 2 && draft.grouping === "together";
-	const laneOpts = LANE_CHOICES.map((l) => ({
-		v: l,
-		label: LANE_LABEL[l],
-		title: oneForAll && l === "leave" ? "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" : LANE_TITLES[l],
-		disabled: oneForAll && l === "leave"
-	}));
-	if (draft.lane === "push") laneOpts.splice(2, 0, {
-		v: "push",
-		label: LANE_LABEL.push,
-		title: LANE_TITLES.push,
-		disabled: false
-	});
 	const sum = summarySentence({
 		n,
 		concurrency: draft.concurrency,
@@ -57482,26 +57274,19 @@ function RunOptions({ draft, n, split, splitBox, repoPicker }) {
 				className: "rt-row rt-row-top",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "rt-label",
-					children: many ? "When each is done" : "When it's done"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					children: many ? "Fast-track each to" : "Fast-track to"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "rt-ctl",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
 						id: "new-lane",
-						label: many ? "When each is done" : "When it's done",
+						label: many ? "Fast-track each to" : "Fast-track to",
 						value: draft.lane,
-						options: laneOpts,
-						onChange: draft.setLane
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check rt-ask" + (draft.lane === "leave" || oneForAll ? " disabled" : ""),
-						title: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : draft.lane === "leave" ? "Nothing ships while it's “Leave it”" : "Stop one step before the first commit and show it in the Outbox first",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "checkbox",
-							id: "new-ask-first",
-							checked: !oneForAll && draft.lane !== "leave" && draft.askFirst,
-							disabled: draft.lane === "leave" || oneForAll,
-							onChange: (e) => draft.setAskFirst(e.target.checked)
-						}), "Ask me before it ships"]
-					})]
+						onChange: draft.setLane,
+						askFirst: draft.askFirst,
+						onAskFirst: draft.setAskFirst,
+						disabledReason: oneForAll ? { leave: "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" } : void 0,
+						askReason: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : void 0
+					})
 				})]
 			}),
 			many && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -58111,7 +57896,8 @@ function NewSessionDialog() {
 		text: describe,
 		repoPath,
 		program: canonAgent(program),
-		fasttrackDepth: config?.fasttrack_depth,
+		fasttrackDefault: config?.fasttrack_default,
+		single: page !== 1,
 		split: page === 1 && split && mcpOk.ok,
 		togetherOk
 	});
@@ -58149,7 +57935,7 @@ function NewSessionDialog() {
 		if (splitOn) toast(`Starting the lead${name ? " for “" + name + "”" : ""} — its plan shows in its Thread tab`, { duration: 6e3 });
 		else if (n >= 2) {
 			const c = Math.min(n, draft.concurrency);
-			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · ${LANE_LABEL[draft.lane]}`, { duration: 6e3 });
+			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`, { duration: 6e3 });
 		} else toast("Starting it — the session appears in the rail", { duration: 4e3 });
 	};
 	const setAccount = (id) => {
@@ -59018,6 +58804,25 @@ function NewSessionDialog() {
 								path: p
 							})
 						}),
+						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "new-ft-row",
+							className: "rt-row rt-row-top",
+							"data-caps": "git",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rt-label",
+								children: "Fast-track to"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "rt-ctl",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
+									id: "new-lane-form",
+									label: "Fast-track to",
+									value: draft.lane,
+									onChange: draft.setLane,
+									askFirst: draft.askFirst,
+									onAskFirst: draft.setAskFirst
+								})
+							})]
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 							id: "new-advanced",
 							className: "nf-advanced",
@@ -59065,8 +58870,8 @@ function NewSessionDialog() {
 													name: "new-workspace-mode",
 													id: "new-in-place",
 													checked: inPlace && !laneNeedsWorktree,
-													disabled: laneNeedsWorktree,
 													onChange: () => {
+														if (laneNeedsWorktree) draft.setLane("leave");
 														setInPlace(true);
 														setProvision(false);
 													}
@@ -59075,7 +58880,7 @@ function NewSessionDialog() {
 												" ",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "muted",
-													children: laneNeedsWorktree ? "(not with a lane — it commits for this session, so it gets its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
+													children: laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
 												})
 											]
 										}),
@@ -60133,8 +59938,8 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 								value: depth,
 								"data-picked": depth || void 0,
 								disabled: state !== "idle",
-								title: "How far to take this one on its own — just this start, not the whole queue" + (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : ""),
-								"aria-label": "How far to take " + reference,
+								title: "Fast-track this one to — just this start, not the whole queue" + (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : ""),
+								"aria-label": "Fast-track " + reference + " to",
 								onChange: (e) => setDepth(e.target.value),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 									value: "",
@@ -61290,7 +61095,7 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Take tickets as far as"
+						children: "Fast-track tickets to"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 						className: "tk-depth",
@@ -61781,7 +61586,7 @@ function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, li
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "set-label",
-											children: "Take them as far as"
+											children: "Fast-track them to"
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 											"data-repo-field": "depth",
@@ -65330,34 +65135,41 @@ function Workspace({ gotoScreen }) {
 					options: [
 						{
 							value: "",
-							label: "Open PR (default)"
+							label: "Off (default)"
 						},
 						{
 							value: "commit",
-							label: "Commit only"
+							label: "Commit"
 						},
 						{
 							value: "push",
-							label: "…then push"
+							label: "Push"
 						},
 						{
 							value: "pr",
-							label: "…then open PR"
+							label: "Open a PR"
 						},
 						{
 							value: "merge",
-							label: "…then merge"
+							label: "Merge when green"
 						}
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
 					children: [
-						"Where the ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New sessions start Off; batches and ticket runs start at this default." }),
+						" ",
+						"A batch is a list in the New dialog or Intake's ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
+						". Fast-track waits for the agent to finish, then commits, pushes and carries on to this rung. Change one session any time with its ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "⏩" }),
-						" button stops. It waits for the agent to finish, then commits, pushes and carries on to this rung. Merging is irreversible, so it is never the default and an intake ",
+						" button. A ticket ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "source" }),
-						" can't default to it — only an individual item."
+						" ",
+						"keeps its own ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Fast-track tickets to" }),
+						" (Intake), which never merges."
 					]
 				})
 			]
@@ -70208,6 +70020,12 @@ function VerifyDialog() {
 }
 //#endregion
 //#region src/components/dialogs/CommitDialog.tsx
+var AFTER_COMMIT = [
+	"leave",
+	"push",
+	"pr",
+	"merge"
+];
 var lastCommitMsg = /* @__PURE__ */ new Map();
 function CommitDialog() {
 	const open = useUi((s) => s.openDialog === "commit");
@@ -70216,13 +70034,15 @@ function CommitDialog() {
 	const [msg, setMsg] = (0, import_react.useState)("");
 	const [error, setError] = (0, import_react.useState)("");
 	const [writing, setWriting] = (0, import_react.useState)(false);
-	const [depth, setDepth] = (0, import_react.useState)("commit");
+	const [lane, setLane] = (0, import_react.useState)("leave");
+	const [askFirst, setAskFirst] = (0, import_react.useState)(false);
 	const msgRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		setError("");
 		setMsg(target && lastCommitMsg.get(target) || "");
-		setDepth("commit");
+		setLane("leave");
+		setAskFirst(false);
 		setWriting(false);
 		msgRef.current?.focus();
 	}, [open, target]);
@@ -70254,11 +70074,12 @@ function CommitDialog() {
 	}, [open, closeDialog]);
 	if (!open) return null;
 	const submitLabel = {
+		leave: "Commit",
 		commit: "Commit",
 		push: "Commit & push",
 		pr: "Commit & open PR",
 		merge: "Commit & merge"
-	}[depth] || "Commit";
+	}[lane] || "Commit";
 	async function writeMessage() {
 		const title = target;
 		if (!title || writing) return;
@@ -70289,15 +70110,18 @@ function CommitDialog() {
 		}
 		if (!title) return;
 		lastCommitMsg.set(title, m);
-		const chosen = normalizeDepth(depth) || "commit";
+		const chosen = {
+			lane,
+			askFirst
+		};
 		closeDialog();
 		useUi.getState().setLastTab(title, "shell");
 		selectSession(title);
 		try {
 			await instApi(title, "/commit", { json: { message: m } });
-			if (chosen !== "commit") await startFastTrack(title, chosen, m);
+			if (chosen.lane !== "leave") await pickFastTrack(title, useUi.getState().aliases[title] || title, chosen.lane, chosen.askFirst, { message: m });
 		} catch (err) {
-			alert("Commit failed: " + errMsg(err));
+			toast("Commit failed: " + errMsg(err), { duration: 7e3 });
 		}
 		freshStage(title);
 	}
@@ -70358,25 +70182,24 @@ function CommitDialog() {
 						}
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					id: "commit-depth-row",
-					children: [
-						"Then keep going",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "(fast-track — stops at the rung you pick)"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-							id: "commit-depth",
-							value: depth,
-							onChange: (e) => setDepth(e.target.value),
-							children: SESSION_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: d,
-								children: DEPTH_STEP_LABELS[d]
-							}, d))
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					id: "commit-ft-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-ft-label",
+						children: "Then fast-track to"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "cm-ft-ctl",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
+							id: "commit-ft",
+							label: "Then fast-track to",
+							value: lane,
+							onChange: setLane,
+							askFirst,
+							onAskFirst: setAskFirst,
+							lanes: AFTER_COMMIT,
+							laneTitle: { leave: "Just this commit — MindFlock goes no further" }
 						})
-					]
+					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",

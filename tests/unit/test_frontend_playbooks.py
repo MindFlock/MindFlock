@@ -1,18 +1,22 @@
-"""Ship & split (ship lanes, SPEC §7.C.5) and what is left of the playbook UI:
-structural checks against the COMMITTED bundle.
+"""Fast-track (the ONE "how far does this session go" control) and what is
+left of the playbook UI: structural checks against the COMMITTED bundle.
 
-The pane's fork-icon menu used to be "Work with other sessions": four
-playbooks that PASTED a prompt into the agent's input for the user to send.
-It is now "Ship & split" (grid/ShipMenu.tsx), whose items ACT through the
-server — the session's lane (``POST /api/instances/{t}/lane``), ship now,
-split into parallel pieces (a split run), move out of a group, and Message….
-The row › menu (sidebar/PlaybookRowItems.tsx) and the palette offer the same
-items through the same function (lib/laneActions.runShipEntry). The pure half
-is pinned by vitest (shipMenu.test.ts, newList.test.ts).
+The pane's fork-icon menu was first "Work with other sessions" (four
+playbooks that PASTED a prompt), then "Ship & split" (lanes, ship now, split,
+move out, Message…). Both are gone. Fast-track is now one control under one
+name: the pane head's ⏩ button names the target and opens the picker
+(grid/FastTrackMenu.tsx — Off / Commit / Push / Open a PR / Merge when
+green, and "Ask me before it ships"), every item a ``POST
+/api/instances/{t}/lane``. The row › menu (sidebar/SessionRowItems.tsx), the
+palette and Ctrl+K F open that same picker; Split into parallel pieces… and
+Move out of a group are row › menu (and palette) actions of their own; the
+New and Commit dialogs draw the same choices (dialogs/FastTrackChoice.tsx).
+The pure half is pinned by vitest (fastTrack.test.ts, autopilot.test.ts,
+newList.test.ts).
 
-The removal is pinned as the OLD call sites being ABSENT, not only the new
+Every removal is pinned as the OLD call site being ABSENT, not only the new
 behaviour being present: both could be true at once, and only the absence
-proves the paste no longer runs from these surfaces. The same goes for
+proves the old surface no longer runs. The same goes for
 ``window.prompt``/``confirm``/``alert``, which Electron never implements.
 
 What still pastes, on purpose until split runs merge pieces back themselves:
@@ -40,16 +44,18 @@ SRC = ROOT / "frontend" / "src"
 # count, and an optional `window.` because both spellings reach the same API.
 DEAD_DIALOG = re.compile(r"(?<![\w.$])(?:window\.)?(?:prompt|confirm|alert)\(")
 
-# Every module ship lanes adds or rewrote. None may call a dead dialog, and
-# none may paste.
+# Every module the fast-track controls live in. None may call a dead dialog,
+# and none may paste.
 SHIP_MODULES = (
     "src/lib/laneActions.ts",
     "src/lib/runStart.ts",
     "src/lib/playbooks.ts",
-    "src/components/grid/ShipMenu.tsx",
-    "src/components/sidebar/PlaybookRowItems.tsx",
+    "src/components/grid/FastTrackMenu.tsx",
+    "src/components/sidebar/SessionRowItems.tsx",
+    "src/components/dialogs/FastTrackChoice.tsx",
     "src/components/dialogs/NewList.tsx",
     "src/components/dialogs/SplitCheck.tsx",
+    "src/components/dialogs/CommitDialog.tsx",
     "src/components/palette/CommandPalette.tsx",
 )
 NO_PASTE_MODULES = tuple(m for m in SHIP_MODULES if m != "src/lib/playbooks.ts")
@@ -82,11 +88,11 @@ def _function(js: str, name: str) -> str:
     return js[m.start() : m.end() + (nxt.start() if nxt else len(js))]
 
 
-# --- The paste playbooks are gone from the menus -------------------------------
+# --- The paste playbooks and Ship & split are gone ------------------------------
 
 
 def test_the_paste_surfaces_are_absent(js):
-    # The old menu and its strings, by name.
+    # The old paste menu and its strings, by name.
     assert "src/components/grid/PlaybookMenu.tsx" not in js
     assert "Work with other sessions" not in js
     assert "pastes the prompt" not in js
@@ -96,7 +102,7 @@ def test_the_paste_surfaces_are_absent(js):
     assert "function askTargets(" not in js
     assert "function withSplit(" not in js
     assert '"playbook-menu"' not in js
-    # No surface of Ship & split pastes, at the source and in the bundle.
+    # No fast-track surface pastes, at the source and in the bundle.
     for mod in NO_PASTE_MODULES:
         region = _region(js, mod)
         assert "pastePlaybook(" not in region, mod
@@ -109,6 +115,48 @@ def test_the_paste_surfaces_are_absent(js):
     assert "withSplit(" not in dlg
 
 
+def test_the_ship_and_split_menu_is_gone_everywhere(js):
+    """The fork-icon menu, its "Ship it now", its lane rows and every door to
+    it: the old CALL SITES are absent, not just the new control present."""
+    assert "src/components/grid/ShipMenu.tsx" not in js
+    assert "src/components/sidebar/PlaybookRowItems.tsx" not in js
+    for gone in (
+        "function ShipMenu(",
+        "function PlaybookRowItems(",
+        "function openShipMenu(",
+        "function shipMenuModel(",
+        "function runShipEntry(",
+        "function shipEntries(",
+        "function shipNow(",
+        "function shipShown(",
+        "var LANE_MENU = ",
+        "setPlaybookMenu(",
+        "playbookMenu",
+        '"ship-menu"',
+        '"act playbooks',
+    ):
+        assert gone not in js, gone
+    # Its words, on any screen.
+    for words in (
+        "Ship & split",
+        "Ship &amp; split",
+        "Ship it now",
+        "Ship: open a PR when done",
+        "Ship: commit when done",
+        "When it's done",
+        "When each is done",
+        "When it\\'s done",
+        '"Leave it"',
+        "“Leave it”",
+        "its lane now",
+        "Merge when checks pass",
+    ):
+        assert words not in js, words
+    # ship-now is the Outbox's approval and nothing else's.
+    assert js.count('"/ship-now"') == 1
+    assert '"/ship-now"' in _region(js, "src/components/outbox/OutboxDialog.tsx")
+
+
 def test_new_modules_never_call_a_dead_dialog(js):
     for mod in SHIP_MODULES:
         hits = DEAD_DIALOG.findall(_region(js, mod))
@@ -117,6 +165,16 @@ def test_new_modules_never_call_a_dead_dialog(js):
     for mod in SHIP_MODULES:
         src = (ROOT / "frontend" / mod).read_text(encoding="utf-8")
         assert not DEAD_DIALOG.search(src), mod
+    # The fast-track helpers that confirm()ed a merge are gone with the
+    # one-press ⏩ (the picker's "Merge when green" is the explicit choice).
+    for gone in (
+        "function startFastTrack(",
+        "function stopFastTrack(",
+        "function resolveDepth(",
+    ):
+        assert gone not in js, gone
+    assert "Fast-track will commit, push, open a PR and MERGE it" not in js
+    assert 'alert("Commit failed: "' not in js
 
 
 def test_palette_send_and_queue_no_longer_use_window_prompt(js):
@@ -144,19 +202,17 @@ def test_queue_prompt_focuses_the_queue_tab_textarea(js):
 # --- Every item is a server call -------------------------------------------------
 
 
-def test_lane_ship_now_split_and_move_out_are_server_calls(js):
+def test_fast_track_split_and_move_out_are_server_calls(js):
     lane = _function(js, "setLane")
     assert in_bundle('instApi(title, "/lane", { json: {', lane)
     assert "ask_first: askFirstApplies(lane) && askFirst" in lane
-    ship = _function(js, "shipNow")
-    assert in_bundle('instApi(title, "/ship-now", {', ship)
-    # It sends the lane the row SHOWED: the server never falls back to the
-    # Settings default for a row with no lane of its own.
-    assert in_bundle("{ lane }", ship)
-    assert 'case "shipnow"' in _function(js, "runShipEntry")
-    assert "shipNow(title, current.lane)" in _function(js, "runShipEntry")
-    # A copy window / a lead / a one-for-all member is locked in the menu.
-    assert "drives this branch" in _function(js, "laneLockReason")
+    pick = _function(js, "pickFastTrack")
+    assert "setLane(title, lane, askFirst, opts)" in pick
+    # The row flips at once and rolls back on a refusal.
+    assert pick.count("patchInstance(title,") == 3
+    # A copy window / a lead / a one-for-all member is locked in the picker.
+    lock = _function(js, "laneLockReason")
+    assert "drives this branch — set its fast-track from that window" in lock
     # Every run route goes through lib/runsApi's one path builder.
     out = _function(js, "moveOutOfGroup")
     assert 'taskPath(runId, taskId, "skip")' in out
@@ -165,141 +221,195 @@ def test_lane_ship_now_split_and_move_out_are_server_calls(js):
     assert in_bundle('api("/api/runs", { json: {', split)
     assert "split: true" in split and "lead: inst.title" in split
     assert in_bundle('grouping: "together"', split)
-    # One action per item, shared by the pane menu and the row › menu.
-    run = _function(js, "runShipEntry")
-    for kind in (
-        'case "lane"',
-        'case "ask"',
-        'case "split"',
-        'case "shipnow"',
-        'case "detach"',
-    ):
-        assert kind in run, kind
-    assert "runShipEntry(e, inst, name, model.current)" in _region(
-        js, "src/components/grid/ShipMenu.tsx"
+    # The row › menu and the palette split through one function.
+    assert "startSplitOf(inst, name," in _function(js, "splitSession")
+    assert "splitSession(inst, name)" in _region(
+        js, "src/components/sidebar/SessionRowItems.tsx"
     )
-    assert "runShipEntry(e, inst, name, model.current)" in _region(
-        js, "src/components/sidebar/PlaybookRowItems.tsx"
+    assert "splitSession(inst, name)" in _region(
+        js, "src/components/palette/CommandPalette.tsx"
     )
 
 
-def test_a_new_single_session_gets_its_lane_once_it_can_take_it(js):
+def test_a_new_single_session_gets_its_fast_track_once_it_can_take_it(js):
     fn = _function(js, "setLaneWhenReady")
     assert 'if (lane === "leave") return true;' in fn
     # 409 "workspace not ready" is retried; anything else is said.
     assert "err.status === 409" in fn
+    assert "Couldn't fast-track " in fn
     dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
     assert 'if (lane !== "leave") setLaneWhenReady(inst.title, lane, askFirst);' in dlg
 
 
-# --- The fork-icon button and the menu -------------------------------------------
+# --- The ⏩ button and its picker -------------------------------------------------
 
 
-def test_fork_button_is_first_in_head_tail_for_every_local_session(js):
+def test_the_fast_track_button_names_the_target_and_opens_the_picker(js):
     pane = _region(js, "src/components/grid/Pane.tsx")
-    assert "const forkShown = shipShown(inst);" in pane
-    assert "return !isRemote(inst) && !inst.pending;" in _function(js, "shipShown")
-    # No longer gated on the MindFlock tools or blocked by a dialog: lanes are
-    # server calls; only Split needs the tools, and says so on that item.
-    assert "mcpCapable(caps, inst)" not in pane
-    assert "is-blocked" not in pane
-    tail = pane.rfind('className: "head-tail"')
-    fork = pane.find('"act playbooks"', tail)
-    copy = pane.find('className: "act copyhist"', tail)
-    assert tail >= 0 and 0 <= fork < copy, "the fork button must lead .head-tail"
-    assert (
-        "Ship & split — how far MindFlock carries this session, split it, message (Ctrl+K F)"
-        in pane
+    assert "const ft = fastTrackStep(inst);" in pane
+    assert in_bundle(
+        'className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + '
+        '(ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + '
+        '(ftMenu ? " open" : "")',
+        pane,
     )
+    assert '"aria-haspopup": "menu"' in pane
+    assert "useUi.getState().setFastTrackMenu(ftMenu ? null : { title });" in pane
+    assert in_bundle("jsx)(FastTrackMenu, {", pane)
+    assert 'className: "ft-ask"' in pane
+    # A control, not a status chip (a .stagechip in a pane head is never drawn).
+    btn = pane[pane.find('className: "nextstep nextstep-fast"') :]
+    btn = btn[: btn.find("rs && ")]
+    assert "stagechip" not in btn
+    # The old one-press toggle is gone: a click never arms by itself.
+    assert "ft.run()" not in pane
+    assert "aria-pressed" not in btn
+    step = _function(js, "fastTrackStep")
+    assert in_bundle('label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : "")', step)
+    assert "Click to change it or turn it off (Ctrl+K F)." in step
+    short = js[js.find("var LANE_SHORT = {") :]
+    short = short[: short.find("};")]
+    for k, v in (
+        ("leave", "off"),
+        ("commit", "Commit"),
+        ("push", "Push"),
+        ("pr", "PR"),
+        ("merge", "Merge"),
+    ):
+        assert f'{k}: "{v}"' in short, k
 
 
-def test_menu_header_sections_footer_and_keys(js):
-    menu = _region(js, "src/components/grid/ShipMenu.tsx")
-    assert 'id: "ship-menu"' in menu
-    assert '"Ship & split"' in menu
-    assert '"When it\'s done"' in menu and '"Split"' in menu
-    assert '"Split into parallel pieces…"' in menu
-    assert '"Ship it now"' in menu
-    assert '"Message…"' in menu and '"Ctrl+K S"' in menu
-    assert "Every item acts right away — nothing is pasted into the agent." in menu
-    # The current lane is ticked and pre-selected.
-    assert 'e.label + (e.current ? " ✓" : "")' in menu
-    assert in_bundle('entries.findIndex((e) => e.kind === "lane" && e.current)', menu)
+def test_the_picker_offers_every_rung_and_ask_first(js):
+    menu = _region(js, "src/components/grid/FastTrackMenu.tsx")
+    assert 'id: "fast-track-menu"' in menu
+    assert '"⏩ Fast-track"' in menu
+    assert '"When the agent is done, go as far as"' in menu
+    assert "ASK_FIRST_LABEL" in menu and "fastTrackModel(inst || {})" in menu
+    # Each pick is ONE call, through the server.
+    assert "pickFastTrack(title, name, e.lane, cur.askFirst)" in menu
+    assert "pickFastTrack(title, name, cur.lane, !model.ask.on)" in menu
+    # The current rung is ticked and pre-selected.
+    assert in_bundle("model.items.findIndex((i) => i.current)", menu)
     # Arrows, Enter, Esc and each item's letter.
     for key in ('"ArrowDown"', '"ArrowUp"', '"Escape"', '"Enter"'):
         assert key in menu, key
-    assert "entryKey(x) === k.toUpperCase()" in menu
-    # Message… is the user's own words: the Thread composer, not a paste.
-    assert in_bundle("useUi.getState().threadOpen(title, { composeTo: title })", menu)
-    # The lane rows and their letters.
-    lanes = js[js.find("var LANE_MENU = [") :]
-    lanes = lanes[: lanes.find("];")]
-    for label, key in (
-        ("Leave it", "L"),
-        ("Commit", "C"),
-        ("Open a PR", "P"),
-        ("Merge when checks pass", "M"),
+    assert "keyOf(x) === k.toUpperCase()" in menu
+    # Nothing in it pastes or messages: Message… stays in the Thread.
+    assert "threadOpen(" not in menu
+    labels = js[js.find("var LANE_LABEL = {") :]
+    labels = labels[: labels.find("};")]
+    keys = js[js.find("var LANE_KEY = {") :]
+    keys = keys[: keys.find("};")]
+    for lane, label, key in (
+        ("leave", "Off", "O"),
+        ("commit", "Commit", "C"),
+        ("push", "Push", "U"),
+        ("pr", "Open a PR", "P"),
+        ("merge", "Merge when green", "M"),
     ):
-        assert f'label: "{label}"' in lanes and f'key: "{key}"' in lanes, label
+        assert f'{lane}: "{label}"' in labels, lane
+        assert f'{lane}: "{key}"' in keys, lane
+    # All five are offered — Push included (the old menu lacked it).
+    assert in_bundle(
+        'var LANE_ORDER = [ "leave", "commit", "push", "pr", "merge" ];', js
+    )
+    assert "var LANE_CHOICES = LANE_ORDER;" in js
+    assert 'var ASK_FIRST_LABEL = "Ask me before it ships";' in js
 
 
-def test_menu_holds_the_keyboard_like_a_modal(js):
+def test_the_picker_holds_the_keyboard_like_a_modal(js):
     keymap = _region(js, "src/lib/keymap.ts")
     ids = keymap[keymap.find("MODAL_DOM_IDS = [") :]
     ids = ids[: ids.find("];")]
-    assert '"ship-menu"' in ids
+    assert '"fast-track-menu"' in ids
+    assert '"ship-menu"' not in ids
 
 
-def test_review_menu_items_are_announced(js):
-    menu = _region(js, "src/components/grid/ShipMenu.tsx")
+def test_the_picker_survives_its_own_pane_head_scrolling(js):
+    """Found with the screenshot harness: on a busy header (a running run's
+    live step) a click on ⏩ scrolls the pane head sideways to show it, and
+    the picker's close-on-any-scroll shut it the instant it opened. A scroll
+    of something that HOLDS the button now repositions the picker; any other
+    scroll still closes it. And ⏩ sits right after the guided button, ahead
+    of the live step's free text, so a scrolled-away target is rare anyway."""
+    menu = _region(js, "src/components/grid/FastTrackMenu.tsx")
+    assert in_bundle(
+        "if (t instanceof Node && t !== document && t.contains(anchor)) { placeRef.current(); return; }",
+        menu,
+    )
+    assert "useLayoutEffect)(() => placeRef.current())" in menu
+    pane = _region(js, "src/components/grid/Pane.tsx")
+    guided = pane.find('"nextstep" + (ns.hint ?')
+    fast = pane.find('className: "nextstep nextstep-fast"')
+    live = pane.find('className: "stepnow is-"')
+    assert 0 <= guided < fast < live, (guided, fast, live)
+
+
+def test_the_picker_items_are_announced(js):
+    menu = _region(js, "src/components/grid/FastTrackMenu.tsx")
     assert '"aria-activedescendant": itemId(sel)' in menu
     assert "id: itemId(i)" in menu
     assert '"menuitemradio"' in menu and '"menuitemcheckbox"' in menu
     assert menu.count("tabIndex: -1") >= 2  # the menu + its items
 
 
-def test_row_menu_group(js):
+# --- The other doors: row › menu, palette, chords ---------------------------------
+
+
+def test_row_menu_items(js):
     row = _region(js, "src/components/sidebar/SidebarRow.tsx")
-    assert "PlaybookRowItems" in row
-    group = _region(js, "src/components/sidebar/PlaybookRowItems.tsx")
-    assert "shipMenuModel(inst, rows || [], config?.caps)" in group
-    assert "if (isRemote(inst) || inst.pending) return null;" in group
-    assert "When it's done: " in group
+    assert in_bundle("jsx)(SessionRowItems, { inst })", row)
+    group = _region(js, "src/components/sidebar/SessionRowItems.tsx")
+    # Fast-track… opens THE picker, never a second copy of its choices.
+    assert "openFastTrackMenu(title);" in group
+    assert '"Fast-track… "' in group and '"Ctrl+K F"' in group
+    assert "LANE_SHORT[cur.lane]" in group
+    assert "setLane(" not in group and "pickFastTrack(" not in group
+    # Split is its own action; Move out is a member's; Message… stays.
+    assert '"Split into parallel pieces…"' in group
+    assert "detachableGroup(inst)" in group
+    assert "moveOutOfGroup(group.id, group.task)" in group
+    assert '"Move out of ", group.name' in group or "Move out of " in group
+    assert in_bundle("threadOpen(title, { composeTo: title })", group)
+    assert "if (inst.pending) return null;" in group
     assert in_bundle('className: "menu-sep"', group)
+    assert "pb-row-sub" not in group and "When it" not in group
 
 
 def test_palette_entries(js):
     palette = _region(js, "src/components/palette/CommandPalette.tsx")
     for label in (
         'label: "Start several sessions…"',
-        "label: `Ship: open a PR when done — ${t}`",
-        "label: `Ship: commit when done — ${t}`",
+        "label: `Fast-track… — ${t}`",
         "label: `Split into parallel pieces… — ${t}`",
-        "label: `Ship & split… — ${t}`",
         "label: `Thread — ${t}`",
     ):
         assert in_bundle(label, palette), label
     assert 'run: () => ui.openNewWith("")' in palette
-    assert "run: () => openShipMenu(t)" in palette
+    assert "run: () => openFastTrackMenu(t)" in palette
+    # The two hard-wired lane entries and the menu entry are gone.
+    assert "Ship:" not in palette and "Ship & split" not in palette
+    assert "setLane(" not in palette
 
 
-def test_chords_s_f_l_t(js):
+def test_chords_s_f_t_and_no_l(js):
     keymap = _region(js, "src/lib/keymap.ts")
     assert in_bundle(
         's: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) }',
         keymap,
     )
     assert in_bundle(
-        'f: { desc: "Ship & split…", run: (t) => openShipMenu(t) }', keymap
-    )
-    assert in_bundle(
-        'l: { desc: "When it\'s done… (lane)", run: (t) => openShipMenu(t, "lane") }',
-        keymap,
+        'f: { desc: "Fast-track…", run: (t) => openFastTrackMenu(t) }', keymap
     )
     assert in_bundle(
         't: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) }',
         keymap,
     )
+    # Ctrl+K L only ever opened the removed menu.
+    chords = keymap[keymap.find("var CHORDS = {") :]
+    chords = chords[: chords.find("\n};")]
+    assert "\tl: {" not in chords and "\n  l: {" not in chords
+    assert "(lane)" not in keymap and "openShipMenu" not in keymap
 
 
 def test_review_chords_taken_by_an_older_rebinding(js):
@@ -310,6 +420,68 @@ def test_review_chords_taken_by_an_older_rebinding(js):
     assert "function chordShadowedBy(id)" in keymap
     sheet = _region(js, "src/components/palette/ShortcutsSheet.tsx")
     assert "chordShadowedBy(k)" in sheet and '" (taken)"' in sheet
+
+
+# --- The dialogs draw the same choice ---------------------------------------------
+
+
+def test_new_and_commit_dialogs_draw_one_fast_track_choice(js):
+    choice = _region(js, "src/components/dialogs/FastTrackChoice.tsx")
+    assert "function FastTrackChoice(" in choice and "function Seg(" in choice
+    assert "lanes = LANE_CHOICES" in choice
+    assert "LANE_LABEL[l]" in choice and "ASK_FIRST_LABEL" in choice
+    new = _region(js, "src/components/dialogs/NewList.tsx")
+    assert '"Fast-track each to" : "Fast-track to"' in new
+    assert in_bundle("jsx)(FastTrackChoice, {", new)
+    # THE default is Settings', for every shape: the preview's own is unread.
+    # "Off unless I pick": a single session starts Off, a batch on Settings'
+    # default (Off when unset). The preview's own default is never read.
+    assert "const batch = !o.single && (listMode || o.split && oneTask);" in new
+    assert "defaultLaneFor(batch, o.fasttrackDefault)" in new
+    assert "lane_default" not in new
+    fn = _function(js, "defaultLaneFor")
+    assert 'return batch ? laneDefault(setting) : "leave";' in fn
+    assert 'return normalizeLane(setting) || "leave";' in _function(js, "laneDefault")
+    dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
+    assert 'id: "new-ft-row"' in dlg
+    # Never the resolved fasttrack_depth (it reads "pr" when nothing is set),
+    # and the "Set it up myself" form is a single session.
+    assert "fasttrackDefault: config?.fasttrack_default," in dlg
+    assert "config?.fasttrack_depth" not in dlg
+    assert "single: page !== 1" in dlg
+    # The shared-folder radio turns fast-track off instead of being disabled.
+    assert "(turns fast-track off — it commits for this session" in dlg
+    assert 'if (laneNeedsWorktree) draft.setLane("leave");' in dlg
+    assert "(not with a lane" not in dlg
+    commit = _region(js, "src/components/dialogs/CommitDialog.tsx")
+    assert '"Then fast-track to"' in commit
+    assert in_bundle(
+        "pickFastTrack(title, useUi.getState().aliases[title] || title, chosen.lane, chosen.askFirst, { message: m })",
+        commit,
+    )
+    assert in_bundle('var AFTER_COMMIT = [ "leave", "push", "pr", "merge" ];', js)
+    assert '"commit-depth"' not in commit and "Then keep going" not in commit
+    assert "startFastTrack(" not in commit
+
+
+def test_settings_holds_the_one_default_off_out_of_the_box(js):
+    ws = _region(js, "src/components/settings/screens/Workspace.tsx")
+    assert '"Fast-track goes as far as"' in ws
+    # Unset is Off, and the screen says who reads it.
+    assert in_bundle('value: "", label: "Off (default)"', ws)
+    assert "Open a PR (default)" not in ws
+    assert (
+        '"New sessions start Off; batches and ticket runs start at this default."' in ws
+    )
+    for value, label in (
+        ("commit", "Commit"),
+        ("push", "Push"),
+        ("pr", "Open a PR"),
+        ("merge", "Merge when green"),
+    ):
+        assert in_bundle(f'value: "{value}", label: "{label}"', ws), value
+    # The hint no longer calls it "where the ⏩ button stops" (⏩ opens a picker).
+    assert "button stops" not in ws
 
 
 # --- What still pastes (Thread buttons, the wrap-up chip) ------------------------
@@ -386,28 +558,44 @@ def test_split_check_copy_and_pill(js):
 
 def test_styles(css):
     for sel in (
-        ".pane-head .act.playbooks",
-        ".pane-head .act.playbooks.open",
+        ".pane-head .actions .nextstep.nextstep-fast.open",
+        ".pane-head .actions .nextstep-fast .ft-ask",
         ".pb-menu",
         ".pb-menu .pb-item.sel",
-        ".inst-actions .pb-row-sub",
-        ".inst-actions .pb-row-sub button.on",
+        ".pb-menu .ft-check",
         ".nf-split-pill",
         ".light .pb-menu",
+        "#commit-form #commit-ft-row",
     ):
         assert sel in css, sel
-    # The Ask › picker went with its playbook.
-    assert ".pb-sub" not in css
+    # A set target keeps the button on screen in a narrow pane.
+    assert (
+        ".pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted)"
+        in css
+    )
+    # The fork-icon button, the row's unfolded lanes and the Ask › picker went.
+    for gone in (
+        ".pane-head .act.playbooks",
+        ".pb-row-sub",
+        ".pb-sub",
+        "#commit-depth",
+    ):
+        assert gone not in css, gone
 
 
-def test_review_remote_rows_get_no_ship_menu_and_one_children_rule(js):
-    """A remote device's row gets no fork button, row items or palette
-    entries (only /api/instances/dev::… is forwarded, so the group and split
-    routes would 404); one "children of" rule for every surface."""
+def test_review_remote_rows_get_no_split_and_one_children_rule(js):
+    """A remote device's row gets no Split or Move out (only
+    /api/instances/dev::… is forwarded, so the group and split routes would
+    404); its ⏩ stays, since /lane is forwarded. One "children of" rule for
+    every surface."""
     remote = _function(js, "isRemote")
     assert 'String(inst.title || "").includes("::")' in remote
-    opener = _function(js, "openShipMenu")
-    assert "isRemote(inst)" in opener
+    group = _region(js, "src/components/sidebar/SessionRowItems.tsx")
+    assert "const remote = isRemote(inst);" in group
+    assert 'const splitWhy = remote ? "" : splitBlockReason' in group
+    assert "const group = remote ? null : detachableGroup(inst);" in group
+    palette = _region(js, "src/components/palette/CommandPalette.tsx")
+    assert '!inst.device && !inst.pending && !t.includes("::")' in palette
     rule = _function(js, "isChildOf")
     assert in_bundle(
         'String(row.parent || "") === title && !row.pending && !row.device', rule

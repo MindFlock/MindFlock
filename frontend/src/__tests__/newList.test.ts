@@ -25,11 +25,13 @@ import {
 describe("one plain line is today's single session", () => {
   const one = localItems("fix the login bug in acme-api");
 
-  it("is not a list, keeps 'Create session', and ships nothing by default", () => {
+  it("is not a list, keeps 'Create session', and starts Off whatever Settings says", () => {
     expect(one).toEqual([{ kind: "task", text: "fix the login bug in acme-api" }]);
     expect(isListMode(one)).toBe(false);
     expect(startLabel(1, false)).toBe("Create session");
-    expect(defaultLaneFor(false, "pr", "merge")).toBe("leave");
+    // "Off unless I pick": a single session never reads the setting.
+    for (const setting of ["merge", "pr", "commit", "off", "", undefined])
+      expect(defaultLaneFor(false, setting), String(setting)).toBe("leave");
   });
 
   it("says nothing extra while it is Leave it", () => {
@@ -179,11 +181,17 @@ describe("POST /api/runs body (SPEC §5)", () => {
     expect(clampConcurrency(Number.NaN)).toBe(3);
   });
 
-  it("a batch starts on the server's lane, else the fast-track default, else a PR", () => {
-    expect(defaultLaneFor(true, "commit", "merge")).toBe("commit");
-    expect(defaultLaneFor(true, "", "merge")).toBe("merge");
-    expect(defaultLaneFor(true, "", "agent")).toBe("leave");
-    expect(defaultLaneFor(true, undefined, undefined)).toBe("pr");
+  it("a batch starts on the Settings default (never the preview's own), Off when unset", () => {
+    // An explicit stored value keeps working exactly as before.
+    expect(defaultLaneFor(true, "pr")).toBe("pr");
+    expect(defaultLaneFor(true, "commit")).toBe("commit");
+    expect(defaultLaneFor(true, "merge")).toBe("merge");
+    // Unset (or anything that isn't a rung) is Off.
+    expect(defaultLaneFor(true, "off")).toBe("leave");
+    expect(defaultLaneFor(true, "agent")).toBe("leave");
+    expect(defaultLaneFor(true, "")).toBe("leave");
+    expect(defaultLaneFor(true, undefined)).toBe("leave");
+    expect(defaultLaneFor(true, "junk")).toBe("leave");
   });
 
   it("the button says how many, or that a split starts its lead", () => {

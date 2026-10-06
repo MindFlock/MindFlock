@@ -75,6 +75,7 @@ def pair(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
     # The owner's real Settings say merge: nothing below may ever reach it.
     monkeypatch.setattr(server, "_fasttrack_depth", lambda: "merge")
+    monkeypatch.setattr(server, "_fasttrack_default", lambda: "merge")
     monkeypatch.setattr(drv, "wake", lambda: None)
     return d
 

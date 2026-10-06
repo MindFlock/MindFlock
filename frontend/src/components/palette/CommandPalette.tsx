@@ -10,16 +10,14 @@ import { focusQueueInput } from "../../lib/playbooks";
 import {
   LANE_LABEL,
   laneChoice,
-  openShipMenu,
-  setLane,
+  openFastTrackMenu,
   splitBlockReason,
+  splitSession,
   teamRunCaps,
-  startSplitOf,
-  type Lane,
 } from "../../lib/laneActions";
+import { fastTrackStep } from "../../lib/stage";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
-import { refreshInstances } from "../../state/queries";
 import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
@@ -114,31 +112,20 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => ui.threadOpen(t, { composeTo: t }),
       });
       acts.push({ label: `Queue prompt… — ${t}`, hint: "auto-run", run: () => focusQueueInput(t) });
-      // Ship & split: the pane menu's lanes and split, each acting at once
-      // through the server — nothing is pasted into the agent. Local rows only
-      // (another device's group and split routes aren't forwarded).
+      // Fast-track: ONE entry, which opens the pane's ⏩ picker (the same
+      // control as the button and Ctrl+K F, never a second copy of its
+      // choices). Split is its own action, acting at once through the
+      // server — nothing is pasted into the agent. Split is for local rows
+      // only (another device's group and split routes aren't forwarded).
       const inst = rows.find((r) => r.title === t);
+      if (inst && !inst.pending && fastTrackStep(inst)) {
+        acts.push({
+          label: `Fast-track… — ${t}`,
+          hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
+          run: () => openFastTrackMenu(t),
+        });
+      }
       if (inst && !inst.device && !inst.pending && !t.includes("::")) {
-        const cur = laneChoice(inst);
-        const ship = (lane: Lane) => async () => {
-          try {
-            await setLane(t, lane, cur.askFirst);
-            toast(`${ui.aliases[t] || t} → ${LANE_LABEL[lane]}`, { duration: 4000 });
-            refreshInstances();
-          } catch (err) {
-            toast(`${t}: ${errMsg(err)}`, { duration: 6000 });
-          }
-        };
-        acts.push({
-          label: `Ship: open a PR when done — ${t}`,
-          hint: cur.lane === "pr" ? "its lane now" : "lane",
-          run: () => void ship("pr")(),
-        });
-        acts.push({
-          label: `Ship: commit when done — ${t}`,
-          hint: cur.lane === "commit" ? "its lane now" : "lane",
-          run: () => void ship("commit")(),
-        });
         const why = splitBlockReason(caps, inst);
         acts.push({
           label: `Split into parallel pieces… — ${t}`,
@@ -149,17 +136,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
               return;
             }
             const name = ui.aliases[t] || t;
-            startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst)
-              .then(() => {
-                ui.threadOpen(t);
-                toast(`${name} is proposing the pieces — approve the plan in its Thread tab`, {
-                  duration: 5000,
-                });
-              })
+            splitSession(inst, name)
+              .then((said) => toast(said, { duration: 5000 }))
               .catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6000 }));
           },
         });
-        acts.push({ label: `Ship & split… — ${t}`, hint: "Ctrl+K F", run: () => openShipMenu(t) });
       }
       acts.push({ label: `Thread — ${t}`, hint: "Ctrl+K T", run: () => ui.threadOpen(t) });
       if (caps.git) {

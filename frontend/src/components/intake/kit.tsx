@@ -624,10 +624,10 @@ export function WorkItemRow({
               data-picked={depth || undefined}
               disabled={state !== "idle"}
               title={
-                "How far to take this one on its own — just this start, not the whole queue" +
+                "Fast-track this one to — just this start, not the whole queue" +
                 (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : "")
               }
-              aria-label={"How far to take " + reference}
+              aria-label={"Fast-track " + reference + " to"}
               onChange={(e) => setDepth(e.target.value)}
             >
               {/* Always NAME what the empty choice resolves to. A bare

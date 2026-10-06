@@ -57,7 +57,7 @@ import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
 import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
-import { PlaybookRowItems } from "./PlaybookRowItems";
+import { SessionRowItems } from "./SessionRowItems";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -632,10 +632,10 @@ export const SidebarRow = memo(function SidebarRow({
                     <div className="menu-sep" />
                   </>
                 )}
-                {/* Agent teams: the fork-icon menu's playbooks + Message…, with
-                    a separator of its own (renders nothing for a CLI that
-                    gets no MindFlock tools). */}
-                <PlaybookRowItems inst={inst} />
+                {/* Hand-offs: Fast-track… (the ⏩ picker), Split into parallel
+                    pieces…, Move out of a group, Message… — with a separator
+                    of its own. */}
+                <SessionRowItems inst={inst} />
                 {inst.setup?.state === "failed" && (
                   <button
                     onClick={(e) =>

@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Work on several things at once: team runs.** Give MindFlock a few ticket
   IDs and task lines — from your own Claude with the new `start_team_run`
   MCP tool, or `POST /api/runs` — and it starts one session per item, keeps
-  at most N running with the rest queued, carries each one as far as you said
-  (leave it, commit, push, a PR each, or merge when green), and surfaces only
+  at most N running with the rest queued, fast-tracks each one as far as you
+  said (off, commit, push, a PR each, or merge when green), and surfaces only
   what needs you. The server does the plumbing deterministically: queueing,
   create retries with backoff, a fixed nudge for an agent that went quiet
   (twice, only after its work was corroborated), the failed hook handed back
@@ -26,15 +26,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out; the sessions belong to MindFlock, not to the agent that asked. See
   [docs/team-runs.md](docs/team-runs.md).
 
-- **Ship lanes.** Any session can be given a lane — how far MindFlock carries
-  it once its agent is done — with `POST /api/instances/{title}/lane`, plus
-  "ask me before it ships", which parks it one rung short of its first push
-  (or of the commit) until you approve with `POST …/ship-now` (also "ship what
-  is there now", no 30-second wait). Lanes are the fast-track autopilot
-  underneath, so every guard still applies. Every row carries `lane` and
-  `run`; a copy window shows the lane of the window that drives its branch.
-  The rail's status line now leads with the lane: `→ PR · working 12m`,
-  `⇡ opening PR`, `✓ PR #318 · checks ✓`.
+- **Fast-track is one control under one name.** The ⏩ button in each pane
+  head now says where the session is going (**⏩ off**, **⏩ Commit**,
+  **⏩ PR**, **⏩ Merge**, with a small **?** when it asks first) and a click
+  opens a picker: Off, Commit, Push, Open a PR, Merge when green, and **Ask me
+  before it ships**, which parks the session one step short of its first
+  outward step until you approve it in the Outbox. The same choices appear in
+  the New dialog (**Fast-track to** / **Fast-track each to**) and
+  the Commit dialog (**Then fast-track to**); `Ctrl+K F`, the row's › menu
+  and the palette open the ⏩ picker. **Split into parallel pieces…** and
+  **Move out of a group** are row › menu actions of their own. The rail's
+  status line leads with the target: `→ PR · working 12m`, `⇡ opening PR`,
+  `✓ PR #318 · checks ✓`. Over the API a fast-track target is a **lane**:
+  `POST /api/instances/{title}/lane` (`leave` is Off), approval with
+  `POST …/ship-now`; every row carries `lane` and `run`, a copy window shows
+  the target of the window that drives its branch, and `/api/config` reports
+  the default as `fasttrack_default`.
+
+- **Off unless you pick.** A single new session starts with fast-track Off
+  whatever Settings says. Batches and ticket runs (a list in New, Intake's
+  Start together, a team run started over MCP without a lane) start at
+  Settings → Workspace "Fast-track goes as far as" — which is now **Off**
+  when unset instead of Open a PR. A value you stored keeps working as
+  before. Ticket sources keep their own depth and never fall back to it.
 
 - **`GET /api/outbox`**: what is waiting on you (a prompt, an approval, a
   group's escalation with its next action), what is shipping, what shipped

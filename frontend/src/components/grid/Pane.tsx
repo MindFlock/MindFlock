@@ -33,8 +33,7 @@ import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
-import { ShipMenu } from "./ShipMenu";
-import { isRemote } from "../../lib/playbooks";
+import { FastTrackMenu } from "./FastTrackMenu";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
@@ -56,34 +55,6 @@ function paneTab(t: string, git: boolean): Tab {
   if (GIT_TABS.has(t) && !git) return "agent";
   return t as Tab;
 }
-
-/** The fork icon (two branches joining) of the "Work with other sessions"
- * button. */
-/** Whether a row gets the Ship & split button: a local, created session.
- * Another device's row is out — only /api/instances/<dev::…> is forwarded,
- * so the group and split routes would 404 there. */
-function shipShown(inst: Pick<Instance, "title"> & Partial<Pick<Instance, "device" | "pending">>): boolean {
-  return !isRemote(inst) && !inst.pending;
-}
-
-const FORK_ICON = (
-  <svg
-    width="12"
-    height="12"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <circle cx="4" cy="3.2" r="1.7" />
-    <circle cx="12" cy="3.2" r="1.7" />
-    <circle cx="8" cy="12.8" r="1.7" />
-    <path d="M4 5v1.2c0 1.6 1.2 2.6 2.8 2.6h2.4C10.8 8.8 12 7.8 12 6.2V5M8 8.8v2.3" />
-  </svg>
-);
 
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
@@ -124,12 +95,14 @@ export function Pane({
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
   const newestReport = newestReportTs(family.children);
-  // This pane's Ship & split menu, when it is the one open (Ctrl+K F / L
-  // open it from anywhere, so it lives in the store rather than here).
-  const playbookMenu = useUi((s) => (s.playbookMenu?.title === title ? s.playbookMenu : null));
-  // State, not a ref: the menu measures itself against the button, and a menu
-  // opened in the same frame the pane mounts must re-render once it exists.
-  const [forkEl, setForkEl] = useState<HTMLButtonElement | null>(null);
+  // This pane's ⏩ fast-track picker, when it is the one open (Ctrl+K F, the
+  // row › menu and the palette open it from anywhere, so it lives in the
+  // store rather than here).
+  const ftMenu = useUi((s) => (s.fastTrackMenu?.title === title ? s.fastTrackMenu : null));
+  // State, not a ref: the picker measures itself against the ⏩ button, and a
+  // picker opened in the same frame the pane mounts must re-render once it
+  // exists.
+  const [ftEl, setFtEl] = useState<HTMLButtonElement | null>(null);
   // Same "assume capable until the server says otherwise" fallback as the other
   // caps consumers (SidebarRow, CommandPalette, lib/sessionActions) — keep the
   // four literals identical so a PR affordance added here can't silently start
@@ -451,12 +424,12 @@ export function Pane({
     },
   };
 
-  // A menu whose button has gone (the pane lost its workspace, or is still
-  // loading) closes rather than waiting to reappear later.
-  const forkGone = missing || loading || !shipShown(inst);
+  // A picker whose ⏩ button has gone (the pane lost its workspace, is still
+  // loading, or has no git) closes rather than waiting to reappear later.
+  const ftGone = missing || loading || !fastTrackStep(inst);
   useEffect(() => {
-    if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
-  }, [playbookMenu, forkGone]);
+    if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
+  }, [ftMenu, ftGone]);
 
   if (missing) {
     return (
@@ -565,10 +538,6 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
-  // "Ship & split": every local session. Its lane items are plain server
-  // calls that work for any CLI; only Split needs the MindFlock tools, and
-  // the menu says so on that item rather than hiding the whole button.
-  const forkShown = shipShown(inst);
 
   return (
     <section
@@ -670,6 +639,44 @@ export function Pane({
               {ns.label}
             </button>
           ) : null}
+          {ft && (
+            // THE per-session fast-track control: it names the target and
+            // opens the picker. A control, not a status chip. Right after
+            // the guided button, ahead of the live step's free text, so a
+            // busy header that scrolls sideways never hides where the
+            // session is going.
+            <button
+              ref={setFtEl}
+              className={
+                "nextstep nextstep-fast" +
+                (ft.active ? " is-on" : "") +
+                (ft.halted ? " nextstep-fast-halted" : "") +
+                (ft.lane !== "leave" ? " is-set" : "") +
+                (ftMenu ? " open" : "")
+              }
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={!!ftMenu}
+              aria-label={
+                "Fast-track: " +
+                (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
+                (ft.askFirst ? ", asks first" : "")
+              }
+              title={ft.title}
+              data-ft-lane={ft.lane}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+              }}
+            >
+              {ft.label}
+              {ft.askFirst && (
+                <span className="ft-ask" aria-hidden="true">
+                  ?
+                </span>
+              )}
+            </button>
+          )}
           {step && (
             <span
               className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
@@ -687,24 +694,6 @@ export function Pane({
               <span className="stepnow-text">{step.label}</span>
               {step.target && <span className="stepnow-target">{step.target}</span>}
             </span>
-          )}
-          {ft && (
-            <button
-              className={
-                "nextstep nextstep-fast" +
-                (ft.active ? " is-on" : "") +
-                (ft.hint ? " nextstep-fast-halted" : "")
-              }
-              type="button"
-              aria-pressed={!!ft.active}
-              title={ft.title}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                ft.run();
-              }}
-            >
-              {ft.label}
-            </button>
           )}
           {rs && (
             <button
@@ -742,22 +731,6 @@ export function Pane({
         {/* Pinned right even when the header scrolls: history, copy-all, close
             stay reachable without scrolling to the end of a long header. */}
         <div className="head-tail">
-        {forkShown && (
-          <button
-            ref={setForkEl}
-            className={"act playbooks" + (playbookMenu ? " open" : "")}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={!!playbookMenu}
-            title="Ship & split — how far MindFlock carries this session, split it, message (Ctrl+K F)"
-            onClick={(e) => {
-              e.stopPropagation();
-              useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
-            }}
-          >
-            {FORK_ICON}
-          </button>
-        )}
         <button
           className="act copyhist"
           type="button"
@@ -945,17 +918,16 @@ export function Pane({
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}
       </div>
-      {playbookMenu && forkShown && forkEl && (
-        <ShipMenu
+      {ftMenu && ft && ftEl && (
+        <FastTrackMenu
           title={title}
-          anchor={forkEl}
+          anchor={ftEl}
           onClose={(refocus) => {
             const ui = useUi.getState();
-            if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
-            // Esc hands the keyboard back to the terminal the menu took it
-            // from. Nothing else does: Message… hands it to the Thread
-            // composer, and an outside click has put it wherever the user
-            // clicked.
+            if (ui.fastTrackMenu?.title === title) ui.setFastTrackMenu(null);
+            // Esc hands the keyboard back to the terminal the picker took it
+            // from. Nothing else does: an outside click has put it wherever
+            // the user clicked.
             if (refocus) setTimeout(() => focusTerm(title), 0);
           }}
         />

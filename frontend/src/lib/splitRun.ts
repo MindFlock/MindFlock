@@ -343,12 +343,12 @@ export function releaseChoices(
   return lane === "merge" ? [merge, pr] : [pr, merge];
 }
 
-/** "this session's lane: → PR, asks first" — the lead row's lane. */
+/** "fast-track: → PR, asks first" — the lead row's fast-track. */
 export function laneNote(lane: { target?: string; ask_first?: boolean } | null | undefined): string {
   const t = String(lane?.target || "");
   if (!t) return "";
-  const head = t === "leave" ? "leave it" : LANE_HEAD[t] || "→ " + t;
-  return "this session's lane: " + head + (lane?.ask_first ? ", asks first" : "");
+  const head = t === "leave" ? "off" : LANE_HEAD[t] || "→ " + t;
+  return "fast-track: " + head + (lane?.ask_first ? ", asks first" : "");
 }
 
 /** What the release half says once it is past ready (null while there is
@@ -421,8 +421,8 @@ export function releaseOutcome(run: RunDTO): {
       text:
         "All merged into " +
         (run.lead?.branch || "the lead's branch") +
-        " — nothing pushed (this group's lane is " +
-        (lane === "commit" ? "Commit" : "Leave it") +
+        " — nothing pushed (this group is fast-tracked to " +
+        (lane === "commit" ? "Commit" : "Off") +
         ")",
       cls: "ok",
       url: "",
