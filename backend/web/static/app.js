@@ -28976,6 +28976,7 @@ var MODAL_DOM_IDS = [
 	"red-zones-dialog",
 	"break-screen",
 	"fast-track-menu",
+	"prompts-menu",
 	"notif-pop"
 ];
 function modalOpen() {
@@ -34807,6 +34808,164 @@ function findPreset(value) {
 	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
 }
 //#endregion
+//#region src/components/sidebar/PromptsMenu.tsx
+function PromptsMenu({ anchor, mine, builtins, targetLabel, onPick, onManage, onClose }) {
+	const entries = [
+		...mine.map((preset) => ({
+			kind: "prompt",
+			preset,
+			mine: true
+		})),
+		...builtins.map((preset) => ({
+			kind: "prompt",
+			preset,
+			mine: false
+		})),
+		{ kind: "manage" }
+	];
+	const [sel, setSel] = (0, import_react.useState)(0);
+	const menuRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	const uid = (0, import_react.useId)();
+	const itemId = (i) => uid + "-item-" + i;
+	(0, import_react.useEffect)(() => {
+		menuRef.current?.focus({ preventScroll: true });
+	}, []);
+	(0, import_react.useLayoutEffect)(() => {
+		const m = menuRef.current;
+		if (!m) return;
+		const r = anchor.getBoundingClientRect();
+		m.style.maxHeight = "none";
+		const natural = m.scrollHeight;
+		const below = window.innerHeight - r.bottom - 18;
+		const above = r.top - 18;
+		if (natural > below && above > below) {
+			const h = Math.min(natural, above);
+			m.style.top = Math.max(8, Math.round(r.top - 6 - h)) + "px";
+			m.style.maxHeight = h + "px";
+		} else {
+			const top = Math.round(r.bottom + 6);
+			m.style.top = top + "px";
+			m.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px";
+		}
+		const left = Math.min(r.left, window.innerWidth - m.offsetWidth - 8);
+		m.style.left = Math.max(8, Math.round(left)) + "px";
+	}, [anchor]);
+	(0, import_react.useEffect)(() => {
+		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
+		const onDown = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onScroll = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onResize = () => onCloseRef.current(false);
+		document.addEventListener("mousedown", onDown, true);
+		window.addEventListener("scroll", onScroll, true);
+		window.addEventListener("resize", onResize);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			window.removeEventListener("scroll", onScroll, true);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [anchor]);
+	(0, import_react.useEffect)(() => {
+		document.getElementById(uid + "-item-" + sel)?.scrollIntoView({ block: "nearest" });
+	}, [sel, uid]);
+	const activate = (e) => {
+		if (!e) return;
+		onCloseRef.current(false);
+		if (e.kind === "manage") onManage();
+		else onPick(e.preset);
+	};
+	const onKeyDown = (e) => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		const k = e.key;
+		const handled = () => {
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		if (k === "ArrowDown") {
+			handled();
+			setSel((i) => (i + 1) % entries.length);
+		} else if (k === "ArrowUp") {
+			handled();
+			setSel((i) => (i - 1 + entries.length) % entries.length);
+		} else if (k === "Home") {
+			handled();
+			setSel(0);
+		} else if (k === "End") {
+			handled();
+			setSel(entries.length - 1);
+		} else if (k === "Enter" || k === " ") {
+			handled();
+			activate(entries[sel]);
+		} else if (k === "Escape" || k === "Tab") {
+			handled();
+			onCloseRef.current(true);
+		}
+	};
+	const row = (e, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: itemId(i),
+		className: "pb-item" + (i === sel ? " sel" : "") + (e.kind === "manage" ? " pm-manage" : ""),
+		role: "menuitem",
+		tabIndex: -1,
+		title: e.kind === "prompt" ? e.preset.prompt : "Add, read or delete saved prompts",
+		onMouseMove: () => setSel(i),
+		onClick: () => activate(e),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pb-name",
+			children: e.kind === "manage" ? "Manage prompts…" : e.preset.name
+		}), e.kind === "prompt" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pb-desc",
+			children: e.preset.prompt
+		})]
+	}, e.kind === "manage" ? "manage" : (e.mine ? "u:" : "b:") + e.preset.name);
+	const builtinStart = mine.length;
+	const manageAt = entries.length - 1;
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "prompts-menu",
+		className: "pb-menu pm-menu",
+		role: "menu",
+		"aria-label": "Paste a saved prompt",
+		tabIndex: -1,
+		ref: menuRef,
+		"aria-activedescendant": itemId(sel),
+		style: {
+			top: 0,
+			left: 0
+		},
+		onKeyDown,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Paste a prompt" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: targetLabel ? "→ " + targetLabel : "— select a session first"
+				})]
+			}),
+			mine.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sec",
+				children: "Yours"
+			}),
+			entries.slice(0, builtinStart).map((e, i) => row(e, i)),
+			builtins.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sec",
+				children: "Built-in"
+			}),
+			entries.slice(builtinStart, manageAt).map((e, i) => row(e, builtinStart + i)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
+			row(entries[manageAt], manageAt),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-foot",
+				children: "Pasted, not sent — press Enter in the session to send it."
+			})
+		]
+	}), document.body);
+}
+//#endregion
 //#region src/components/sidebar/PromptsBar.tsx
 function PromptsBar() {
 	const focused = useUi((s) => s.focused);
@@ -34816,6 +34975,8 @@ function PromptsBar() {
 	const { data: instances } = useInstances();
 	const [picked, setPicked] = (0, import_react.useState)(null);
 	const [saved, setSaved] = (0, import_react.useState)(() => loadUserPresets());
+	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const menuBtn = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		const reload = () => setSaved(loadUserPresets());
 		document.addEventListener(PRESETS_CHANGED, reload);
@@ -34832,56 +34993,59 @@ function PromptsBar() {
 		aliases
 	]);
 	const target = resolveTarget(picked, focused, options);
-	const prompts = [...saved, ...BUILTIN_PRESETS];
+	const targetLabel = options.find((o) => o.value === target)?.label || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "prompts-bar",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "pb-head",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pb-label",
-					children: "Prompts"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "pb-target",
-					title: "Where a clicked prompt is pasted",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						"aria-hidden": "true",
-						children: "→"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						id: "prompts-bar-target",
-						"aria-label": "Paste into",
-						value: target,
-						disabled: !options.length,
-						onChange: (e) => setPicked(e.target.value || null),
-						children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "no session selected"
-						}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: o.value,
-							children: o.label
-						}, o.value))]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "prompts-bar-manage",
-					type: "button",
-					className: "as-toggle",
-					title: "Add, read or delete saved prompts",
-					onClick: () => openDialogFor("prompts"),
-					children: "Manage"
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "pb-chips",
-			children: prompts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "pb-label",
+				children: "Prompts"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "pb-target",
+				title: "Where a picked prompt is pasted",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					"aria-hidden": "true",
+					children: "→"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "prompts-bar-target",
+					"aria-label": "Paste into",
+					value: target,
+					disabled: !options.length,
+					onChange: (e) => setPicked(e.target.value || null),
+					children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "no session selected"
+					}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: o.value,
+						children: o.label
+					}, o.value))]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "prompts-bar-menu",
+				ref: menuBtn,
 				type: "button",
-				className: "pb-chip",
-				title: (target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session") + " (Enter there sends it):\n\n" + p.prompt,
-				onClick: () => void pastePrompt(target, running, p.prompt),
-				children: p.name
-			}, (i < saved.length ? "u:" : "b:") + p.name))
-		})]
+				className: "as-toggle" + (menuOpen ? " active" : ""),
+				title: "Pick a saved prompt to paste (or manage them)",
+				"aria-haspopup": "menu",
+				"aria-expanded": menuOpen,
+				onClick: () => setMenuOpen((o) => !o),
+				children: "Paste ▾"
+			}),
+			menuOpen && menuBtn.current && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsMenu, {
+				anchor: menuBtn.current,
+				mine: saved,
+				builtins: BUILTIN_PRESETS,
+				targetLabel,
+				onPick: (p) => void pastePrompt(target, running, p.prompt),
+				onManage: () => openDialogFor("prompts"),
+				onClose: (refocus) => {
+					setMenuOpen(false);
+					if (refocus) menuBtn.current?.focus();
+				}
+			})
+		]
 	});
 }
 //#endregion
@@ -68750,7 +68914,7 @@ var NOTES = {
 	},
 	assistant: { text: "Chat, a todo list, and its editable agent file" },
 	prompts: {
-		text: "Your saved prompts — click one to paste it into any session",
+		text: "Your saved prompts — pick one to paste it into any session",
 		link: {
 			label: "Manage prompts",
 			dialog: "prompts"

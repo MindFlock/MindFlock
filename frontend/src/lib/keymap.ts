@@ -173,6 +173,8 @@ const MODAL_DOM_IDS = [
   // The ⏩ fast-track picker holds the keyboard for its arrows and letters; a
   // Delete or Ctrl+W pressed at it must not end the session it hangs from.
   "fast-track-menu",
+  // The Prompts bar's menu holds the keyboard for its arrows the same way.
+  "prompts-menu",
   // The bell holds the waiting rows (Retry / Skip / Commit / Raise budget /
   // Start the workers) about OTHER sessions; a stray Delete or Ctrl+W on one
   // of its buttons must never end the focused session behind it. The popover

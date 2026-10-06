@@ -1564,17 +1564,20 @@ Saved prompts are text you reuse — mostly to paste straight into a session.
 They have three doors, one job each:
 
 - **The Prompts bar** (sidebar; switch it on in [Customize](#customize), like
-  the Assistant) is the daily one. Its head reads **Prompts → [target ▾]
-  Manage**; under it, one chip per prompt (yours first, then the built-ins).
-  The target is the selected session by default, any other running session by
+  the Assistant) is the daily one. It is one row at any number of prompts:
+  **Prompts → [target ▾] Paste ▾**. **Paste ▾** opens a menu
+  (`#prompts-menu`): yours first, then the built-ins, each name over a
+  one-line preview of its text, and **Manage prompts…** last (arrows, Enter,
+  Esc). The target is the selected session by default, any other running session by
   the name its rail row shows, or **All running sessions (n)** once two or more
   are running ("running" = status `running` or started, but not paused; verify
-  sessions are left out). Click a chip to paste it there
+  sessions are left out). Pick a prompt to paste it there
   (`POST /api/instances/{title}/send` with `submit: false` and
   `dialog_safe: true`, once per session for *All*) — *nothing is sent until you
   press Enter in that session*, and a session sitting on a permission or limit
-  prompt is skipped rather than typed into. Hover a chip to read the prompt.
-- **The Prompts dialog** (`#prompts-dialog`, from the bar's **Manage**, the
+  prompt is skipped rather than typed into. Hover a menu item to read the
+  whole prompt.
+- **The Prompts dialog** (`#prompts-dialog`, from the bar menu's **Manage prompts…**, the
   palette's **Prompts…** or New's **Manage…**) adds and deletes them, previews
   a long one (⋮), and pastes the same way with the same target picker. Both
   surfaces use one paste path, `lib/promptPaste.ts`.
@@ -2184,7 +2187,7 @@ added* with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
 always there); *Chat, a todo list, and its editable agent file* (Assistant);
-*Your saved prompts — click one to paste it into any session* with **Manage
+*Your saved prompts — pick one to paste it into any session* with **Manage
 prompts** (Prompts); *From an extension* for an extension's bar. A last line
 says how to reorder: drag a bar's ⠿ grip in the sidebar.
 
