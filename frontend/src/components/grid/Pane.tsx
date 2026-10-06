@@ -639,27 +639,12 @@ export function Pane({
               {ns.label}
             </button>
           ) : null}
-          {step && (
-            <span
-              className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
-              title={step.title}
-              onClick={
-                step.href
-                  ? (ev) => {
-                      ev.stopPropagation();
-                      window.open(step.href!, "_blank");
-                    }
-                  : undefined
-              }
-            >
-              <span className="stepnow-dot" aria-hidden="true" />
-              <span className="stepnow-text">{step.label}</span>
-              {step.target && <span className="stepnow-target">{step.target}</span>}
-            </span>
-          )}
           {ft && (
             // THE per-session fast-track control: it names the target and
-            // opens the picker. A control, not a status chip.
+            // opens the picker. A control, not a status chip. Right after
+            // the guided button, ahead of the live step's free text, so a
+            // busy header that scrolls sideways never hides where the
+            // session is going.
             <button
               ref={setFtEl}
               className={
@@ -691,6 +676,24 @@ export function Pane({
                 </span>
               )}
             </button>
+          )}
+          {step && (
+            <span
+              className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
+              title={step.title}
+              onClick={
+                step.href
+                  ? (ev) => {
+                      ev.stopPropagation();
+                      window.open(step.href!, "_blank");
+                    }
+                  : undefined
+              }
+            >
+              <span className="stepnow-dot" aria-hidden="true" />
+              <span className="stepnow-text">{step.label}</span>
+              {step.target && <span className="stepnow-target">{step.target}</span>}
+            </span>
           )}
           {rs && (
             <button

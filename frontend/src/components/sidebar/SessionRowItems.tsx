@@ -17,7 +17,7 @@ import type { Instance } from "../../api/types";
 import { refreshInstances, useConfig } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import {
-  LANE_LABEL,
+  LANE_SHORT,
   detachableGroup,
   laneChoice,
   moveOutOfGroup,
@@ -73,12 +73,10 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
             openFastTrackMenu(title);
           }}
         >
+          {/* The short word, as on the ⏩ button: the full sentence (and
+              "asks first") is the tooltip — a row menu is narrow. */}
           <span>
-            Fast-track…{" "}
-            <span className="muted">
-              {LANE_LABEL[cur.lane]}
-              {ft.askFirst ? ", asks first" : ""}
-            </span>
+            Fast-track… <span className="muted">{LANE_SHORT[cur.lane]}</span>
           </span>
           <span className="kbd">Ctrl+K F</span>
         </button>

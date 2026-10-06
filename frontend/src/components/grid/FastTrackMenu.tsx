@@ -76,7 +76,8 @@ export function FastTrackMenu({
   // in the grid has little room below its head, so the picker opens UPWARD
   // when it doesn't fit below and there is more room above; whatever still
   // doesn't fit scrolls rather than running off the screen.
-  useLayoutEffect(() => {
+  const placeRef = useRef<() => void>(() => {});
+  placeRef.current = () => {
     const m = menuRef.current;
     if (!m) return;
     const r = anchor.getBoundingClientRect();
@@ -96,10 +97,15 @@ export function FastTrackMenu({
     let left = r.right - m.offsetWidth + 10;
     left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
     m.style.left = Math.max(8, left) + "px";
-  });
+  };
+  useLayoutEffect(() => placeRef.current());
 
   // Outside click, resize and a scroll anywhere but inside the picker close
-  // it. The anchor is exempt: its own click handler toggles.
+  // it. The anchor is exempt: its own click handler toggles. A scroll of
+  // something that HOLDS the ⏩ button follows it instead: the pane head
+  // scrolls sideways, and a click on a button it has half hidden scrolls it
+  // into view in the same gesture — closing on that scroll made the picker
+  // vanish the instant it opened on any busy header.
   useEffect(() => {
     const inside = (t: EventTarget | null) =>
       t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
@@ -107,7 +113,13 @@ export function FastTrackMenu({
       if (!inside(e.target)) onCloseRef.current(false);
     };
     const onScroll = (e: Event) => {
-      if (!inside(e.target)) onCloseRef.current(false);
+      const t = e.target;
+      if (inside(t)) return;
+      if (t instanceof Node && t !== document && t.contains(anchor)) {
+        placeRef.current();
+        return;
+      }
+      onCloseRef.current(false);
     };
     const onResize = () => onCloseRef.current(false);
     document.addEventListener("mousedown", onDown, true);

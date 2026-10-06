@@ -32623,14 +32623,10 @@ function SessionRowItems({ inst }) {
 				ev.stopPropagation();
 				openFastTrackMenu(title);
 			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-				"Fast-track…",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "muted",
-					children: [LANE_LABEL[cur.lane], ft.askFirst ? ", asks first" : ""]
-				})
-			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Fast-track… ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: LANE_SHORT[cur.lane]
+			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
 				children: "Ctrl+K F"
 			})]
@@ -53885,7 +53881,8 @@ function FastTrackMenu({ title, anchor, onClose }) {
 	(0, import_react.useEffect)(() => {
 		menuRef.current?.focus({ preventScroll: true });
 	}, []);
-	(0, import_react.useLayoutEffect)(() => {
+	const placeRef = (0, import_react.useRef)(() => {});
+	placeRef.current = () => {
 		const m = menuRef.current;
 		if (!m) return;
 		const r = anchor.getBoundingClientRect();
@@ -53905,14 +53902,21 @@ function FastTrackMenu({ title, anchor, onClose }) {
 		let left = r.right - m.offsetWidth + 10;
 		left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
 		m.style.left = Math.max(8, left) + "px";
-	});
+	};
+	(0, import_react.useLayoutEffect)(() => placeRef.current());
 	(0, import_react.useEffect)(() => {
 		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
 		const onDown = (e) => {
 			if (!inside(e.target)) onCloseRef.current(false);
 		};
 		const onScroll = (e) => {
-			if (!inside(e.target)) onCloseRef.current(false);
+			const t = e.target;
+			if (inside(t)) return;
+			if (t instanceof Node && t !== document && t.contains(anchor)) {
+				placeRef.current();
+				return;
+			}
+			onCloseRef.current(false);
 		};
 		const onResize = () => onCloseRef.current(false);
 		document.addEventListener("mousedown", onDown, true);
@@ -54554,6 +54558,25 @@ function Pane({ inst, drag, dragging }) {
 								},
 								children: ns.label
 							}) : null,
+							ft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								ref: setFtEl,
+								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + (ftMenu ? " open" : ""),
+								type: "button",
+								"aria-haspopup": "menu",
+								"aria-expanded": !!ftMenu,
+								"aria-label": "Fast-track: " + (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) + (ft.askFirst ? ", asks first" : ""),
+								title: ft.title,
+								"data-ft-lane": ft.lane,
+								onClick: (ev) => {
+									ev.stopPropagation();
+									useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+								},
+								children: [ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ft-ask",
+									"aria-hidden": "true",
+									children: "?"
+								})]
+							}),
 							step && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
 								title: step.title,
@@ -54575,25 +54598,6 @@ function Pane({ inst, drag, dragging }) {
 										children: step.target
 									})
 								]
-							}),
-							ft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								ref: setFtEl,
-								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.halted ? " nextstep-fast-halted" : "") + (ft.lane !== "leave" ? " is-set" : "") + (ftMenu ? " open" : ""),
-								type: "button",
-								"aria-haspopup": "menu",
-								"aria-expanded": !!ftMenu,
-								"aria-label": "Fast-track: " + (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) + (ft.askFirst ? ", asks first" : ""),
-								title: ft.title,
-								"data-ft-lane": ft.lane,
-								onClick: (ev) => {
-									ev.stopPropagation();
-									useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
-								},
-								children: [ft.label, ft.askFirst && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ft-ask",
-									"aria-hidden": "true",
-									children: "?"
-								})]
 							}),
 							rs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "nextstep nextstep-reset",

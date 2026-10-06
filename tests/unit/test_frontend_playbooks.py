@@ -325,6 +325,26 @@ def test_the_picker_holds_the_keyboard_like_a_modal(js):
     assert '"ship-menu"' not in ids
 
 
+def test_the_picker_survives_its_own_pane_head_scrolling(js):
+    """Found with the screenshot harness: on a busy header (a running run's
+    live step) a click on ⏩ scrolls the pane head sideways to show it, and
+    the picker's close-on-any-scroll shut it the instant it opened. A scroll
+    of something that HOLDS the button now repositions the picker; any other
+    scroll still closes it. And ⏩ sits right after the guided button, ahead
+    of the live step's free text, so a scrolled-away target is rare anyway."""
+    menu = _region(js, "src/components/grid/FastTrackMenu.tsx")
+    assert in_bundle(
+        "if (t instanceof Node && t !== document && t.contains(anchor)) { placeRef.current(); return; }",
+        menu,
+    )
+    assert "useLayoutEffect)(() => placeRef.current())" in menu
+    pane = _region(js, "src/components/grid/Pane.tsx")
+    guided = pane.find('"nextstep" + (ns.hint ?')
+    fast = pane.find('className: "nextstep nextstep-fast"')
+    live = pane.find('className: "stepnow is-"')
+    assert 0 <= guided < fast < live, (guided, fast, live)
+
+
 def test_the_picker_items_are_announced(js):
     menu = _region(js, "src/components/grid/FastTrackMenu.tsx")
     assert '"aria-activedescendant": itemId(sel)' in menu
@@ -342,7 +362,8 @@ def test_row_menu_items(js):
     group = _region(js, "src/components/sidebar/SessionRowItems.tsx")
     # Fast-track… opens THE picker, never a second copy of its choices.
     assert "openFastTrackMenu(title);" in group
-    assert '"Fast-track…"' in group and '"Ctrl+K F"' in group
+    assert '"Fast-track… "' in group and '"Ctrl+K F"' in group
+    assert "LANE_SHORT[cur.lane]" in group
     assert "setLane(" not in group and "pickFastTrack(" not in group
     # Split is its own action; Move out is a member's; Message… stays.
     assert '"Split into parallel pieces…"' in group

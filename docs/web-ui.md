@@ -242,7 +242,7 @@ Push / Make PR / Merge. Someone who just opened a PR and wants to carry on writi
 code on that same branch has no control on the window that isn't about advancing a
 cycle they consider done. ↺, beside the guided button, says so.
 
-It is a **one-shot action, not a mode** like ⏩ next to it: "back to idle" is
+It is a **one-shot action, not a toggle** (nor a setting like ⏩ next to it): "back to idle" is
 something you do to a window, not a mode the window is in, and a control lingering
 in an ON state would assert otherwise. It appears only where the ladder has
 somewhere to be put back *from* (a clean branch at `committed` / `pushed` / `pr`,
