@@ -60,6 +60,19 @@ class TestNewDialog:
         code = _code(_read(_NEW))
         assert code.index('className="nf-describe-help"') < code.index("<RunOptions")
 
+    def test_page_one_is_only_the_prompt(self):
+        # The owner: "too much on that new first page — I should be able to
+        # just prompt and it fills out the second menu if I want more detail,
+        # or I just create session". Options (Fast-track, "Starts in") draw on
+        # page 1 for an Intake batch only; Auto-split lives on the form.
+        code = _code(_read(_NEW))
+        i = code.index("<RunOptions")
+        assert "{batch && (" in code[i - 400 : i]
+        assert code.index('id="new-ft-row"') < code.index('id="new-split-row"')
+        assert code.index('id="new-split-row"') < code.index('id="new-advanced"')
+        # Review details first is back for every single-session prompt.
+        assert "const runMode = (page === 1 && draft.listMode) || splitOn;" in code
+
     def test_one_session_folds_its_options_with_the_rung_in_the_summary(self):
         code = _code(_read("components/dialogs/NewList.tsx"))
         assert 'id="new-options"' in code

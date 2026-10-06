@@ -1387,16 +1387,20 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs a CLI with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Auto-split into up to N sessions if it's worth it** sits under the
-fast-track in the Describe page's **Options** fold, off by default, with a
+**Auto-split into up to N sessions if it's worth it** sits on the form,
+under **Fast-track to** (`#new-split-row`), off by default, with a
 − / + stepper for N (2 up to the server's `caps.team_runs.max_pieces`,
 `MINDFLOCK_MAX_CHILDREN`; default 3). On a server that doesn't take splits
 (`caps.team_runs.split` false) it is not shown at all, rather than shown
-disabled. The whole box is the task, however many lines it holds — line
-breaks never split anything. Ticked, the primary button still reads **Create
-session** and starts an optional split run (`POST /api/runs`, `split: true,
-split_optional: true, max_pieces: N`): MindFlock creates one session in a new
-worktree of the folder shown on **Starts in**, named for the work, and its
+disabled. The form's **Prompt** is the task, however many lines it holds —
+line breaks never split anything — and an empty Prompt is refused with
+"Auto-split needs a task". Ticked, a sentence under the box says what will
+happen, **Create** starts an optional split run (`POST /api/runs`, `split: true,
+split_optional: true, max_pieces: N`, the Name as the group's name), and the
+account, Plan first, launch flags and Git & workspace choices do not apply
+(choosing *Work directly in this folder* unticks it). Off on Fast-track reads
+Commit, as for any one-PR group. MindFlock creates one session in a new
+worktree of the form's **Folder**, named for the work, and its
 agent reads the code and decides. Not worth splitting: it says so, the group
 dissolves (a 7-second toast says "*<session>* didn't split it — it's doing the
 task itself: *<why>*", the reason cut at 120 characters) and that session does the task, fast-tracked as chosen. Worth it: it
@@ -1488,8 +1492,8 @@ its outcome rather than for the app's own vocabulary:
 - **Set it up myself instead** — straight to page 2. Nothing is read and no model
   runs. It cannot be dropped: every opening lands here, so it is the only route
   to the form for someone with no coding CLI installed.
-- **Review details first ↵** — what Enter in the box does (hidden for a list
-  or a split, which have no single form to fill in). Sends the sentence to
+- **Review details first ↵** — what Enter in the box does (hidden for an
+  Intake batch, which has no single form to fill in). Sends the sentence to
   [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
   the filesystem, asks one headless model turn, and fills in page 2 for you to
   change before anything is created. Enter here has always meant "read this",
@@ -1509,19 +1513,19 @@ would say anything. A **Cancel** link appears beside the box, which goes
 read-only rather than disabled so the caret and the selection survive the wait.
 
 **One prompt, however many lines; batches come from Intake.** The box is a textarea (three lines,
-growing to eight). One plain line is everything above, unchanged — the only
-addition is a folded **Options** row (`#new-options`) whose summary says what it
-holds, e.g. **Options · Fast-track: Off** or **Options · Fast-track: Open a PR,
-asks first**. Inside it: **Fast-track to** (Off / Commit / Push / Open a PR /
-Merge when green, starting **Off** unless you pick), **Ask me before it ships**
-and the split box. The fold opens by itself when the fast-track differs from
-the dialog's default or split is on, and otherwise remembers whether you left
-it open (`mf_new_options_open`). Anything but Off is armed on the new session
-as soon as its worktree exists. The "Set it up myself" form shows the same
-fast-track row. Shift+Enter starts another line; the box stays ONE prompt
-however many lines it holds. Only Intake's **Start together…** opens New as a
-**batch** — its ticked tickets in the box, one session per line or ticket —
-and a batch shows its choices unfolded (it has no auto-split box):
+growing to eight), and for a single session it is the whole page: no folder,
+no options. The model works out the folder, name and first instruction;
+**Review details first** shows them on the form, where **Fast-track to** (Off /
+Commit / Push / Open a PR / Merge when green, starting **Off** unless you pick),
+**Ask me before it ships** and **Auto-split** sit with the rest of the details,
+and **Create session** skips the review. Anything but Off is armed on the new
+session as soon as its worktree exists. Shift+Enter starts another line; the
+box stays ONE prompt however many lines it holds. Only Intake's **Start
+together…** opens New as a **batch** — its ticked tickets in the box, one
+session per line or ticket — and only a batch shows choices on page 1: the
+folded **Options** row (`#new-options`, e.g. **Options · Fast-track: Off**,
+remembered in `mf_new_options_open`) for one row, unfolded for several (it has
+no auto-split box):
 
 - Rows under the box, read by the server (`POST /api/runs/preview`, 300 ms
   after you stop typing): a `TICKET`/`TASK` chip, the ID, the title, where it

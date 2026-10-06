@@ -333,12 +333,12 @@ bell lists it under Needs attention.
 
 ## Splitting one task
 
-Tick **Auto-split into up to N sessions if it's worth it** in New (off by
+Tick **Auto-split into up to N sessions if it's worth it** on New's form (off by
 default; N defaults to 3 and ranges from 2 to `MINDFLOCK_MAX_CHILDREN`,
 default 8), or pick *Split
 into parallel pieces…* on a session — that session becomes the lead — and the
-group is a one-for-all group whose lines come from the lead's plan. New's box
-is the whole task however many lines it holds: line breaks never split
+group is a one-for-all group whose lines come from the lead's plan. New's
+Prompt is the whole task however many lines it holds: line breaks never split
 anything, the lead does.
 
 New's split is **optional** (`POST /api/runs` with `split_optional: true,

@@ -89,6 +89,8 @@ export interface RunDraft {
     split: boolean;
     /** N of "Auto-split into up to N" (a split only). */
     maxPieces?: number;
+    /** The group's name (a split only; empty lets the server name it). */
+    name?: string;
   }): Promise<
     { ok: true; body: Record<string, unknown>; run: unknown } | { ok: false; error: string }
   >;
@@ -108,8 +110,8 @@ export function useRunDraft(o: {
   /** New was opened as a batch (Intake's "Start together…"): the box is a
    * list, one session per line or ticket. Typing never makes one. */
   batch: boolean;
-  /** The auto-split box is ticked (and the agent can take one): the whole
-   * box is the one task its lead may split. */
+  /** The auto-split box is ticked (and the agent can take one): `text` is the
+   * one task its lead may split. */
   split: boolean;
   /** caps.team_runs.together — false: every group is one PR per line. */
   togetherOk?: boolean;
@@ -206,16 +208,16 @@ export function useRunDraft(o: {
   const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
   const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 
-  const start: RunDraft["start"] = async ({ split, maxPieces }) => {
+  const start: RunDraft["start"] = async ({ split, maxPieces, name: splitName }) => {
     if (starting) return { ok: false, error: "" };
     setStarting(true);
     try {
       if (split) {
         // The whole box is the one task: never read as a list, never
-        // previewed. The server names the group from it.
+        // previewed. The server names the group from it unless the form did.
         if (!asked) return { ok: false, error: "Nothing to start — describe the task first." };
         const body = runBody({
-          name: "",
+          name: splitName || "",
           items: [{ kind: "task", text: asked }],
           lane,
           askFirst,

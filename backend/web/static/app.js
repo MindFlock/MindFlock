@@ -58366,7 +58366,7 @@ function useRunDraft(o) {
 	const batch = !o.single && (listMode || o.split);
 	const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
 	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
-	const start = async ({ split, maxPieces }) => {
+	const start = async ({ split, maxPieces, name: splitName }) => {
 		if (starting) return {
 			ok: false,
 			error: ""
@@ -58379,7 +58379,7 @@ function useRunDraft(o) {
 					error: "Nothing to start — describe the task first."
 				};
 				const body = runBody({
-					name: "",
+					name: splitName || "",
 					items: [{
 						kind: "task",
 						text: asked
@@ -59223,17 +59223,26 @@ function NewSessionDialog() {
 	const shownTab = ticketingOk ? tab : "session";
 	const draft = useRunDraft({
 		open,
-		text: describe,
+		text: page === 1 ? describe : prompt,
 		repoPath,
 		program: canonAgent(program),
 		fasttrackDefault: config?.fasttrack_default,
 		single: page !== 1,
 		batch: page === 1 && batch,
-		split: page === 1 && !batch && split && mcpOk.ok,
+		split: page === 2 && split && mcpOk.ok,
 		togetherOk
 	});
-	const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";
-	const runMode = page === 1 && (draft.listMode || splitOn);
+	const splitOn = page === 2 && split && mcpOk.ok;
+	const runMode = page === 1 && draft.listMode || splitOn;
+	const splitSum = splitOn ? summarySentence({
+		n: 1,
+		concurrency: draft.concurrency,
+		lane: draft.lane,
+		askFirst: draft.askFirst,
+		grouping: draft.grouping,
+		split: true,
+		maxPieces: clampSplit(maxPieces, splitLimit)
+	}) : null;
 	const toggleSplit = (on) => setSplit(on);
 	(0, import_react.useEffect)(() => {
 		if (!open) setRunBrowse(false);
@@ -59253,13 +59262,21 @@ function NewSessionDialog() {
 	};
 	const laneNeedsWorktree = draft.lane !== "leave";
 	const startRun = async () => {
+		const fail = splitOn ? setError : setPlanError;
 		setPlanError("");
+		setError("");
+		if (splitOn && !prompt.trim()) {
+			setPromptOpen(true);
+			fail("Auto-split needs a task — write it in the Prompt below, or untick Auto-split.");
+			return;
+		}
 		const r = await draft.start({
 			split: splitOn,
-			maxPieces: clampSplit(maxPieces, splitLimit)
+			maxPieces: clampSplit(maxPieces, splitLimit),
+			name: title.trim()
 		});
 		if (!r.ok) {
-			if (r.error) setPlanError(r.error);
+			if (r.error) fail(r.error);
 			return;
 		}
 		const n = Array.isArray(r.body.items) ? r.body.items.length : 0;
@@ -59565,6 +59582,10 @@ function NewSessionDialog() {
 	};
 	const submit = async () => {
 		if (runMode) {
+			if (splitOn && isNameQuery(repoPath)) {
+				setError(`“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path.`);
+				return;
+			}
 			startRun();
 			return;
 		}
@@ -59729,11 +59750,11 @@ function NewSessionDialog() {
 								className: "rt-note",
 								children: w
 							}, w)),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunOptions, {
+							batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunOptions, {
 								draft,
 								n: draft.listMode ? draft.count : 1,
-								split: splitOn,
-								repoPicker: runMode && (splitOn || draft.items.some((i) => i.kind === "task")) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								split: false,
+								repoPicker: runMode && draft.items.some((i) => i.kind === "task") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "rt-repo-pick",
 									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 										id: "new-run-repo",
@@ -59757,17 +59778,7 @@ function NewSessionDialog() {
 										}, o.value))
 									})
 								}) : null,
-								maxPieces: clampSplit(maxPieces, splitLimit),
-								splitBox: batch ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
-									id: "new-split",
-									split,
-									onSplit: toggleSplit,
-									gate: mcpOk,
-									maxPieces: clampSplit(maxPieces, splitLimit),
-									onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
-									limit: splitLimit,
-									text: describe
-								})
+								splitBox: null
 							}),
 							runMode && runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "rt-browse",
@@ -60158,8 +60169,40 @@ function NewSessionDialog() {
 									value: draft.lane,
 									onChange: draft.setLane,
 									askFirst: draft.askFirst,
-									onAskFirst: draft.setAskFirst
+									onAskFirst: draft.setAskFirst,
+									disabledReason: splitOn ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" } : void 0,
+									askReason: splitOn ? "An auto-split always asks you before anything leaves this machine" : void 0
 								})
+							})]
+						}),
+						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "new-split-row",
+							"data-caps": "git",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+								id: "new-split",
+								split,
+								onSplit: toggleSplit,
+								gate: mcpOk,
+								maxPieces: clampSplit(maxPieces, splitLimit),
+								onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
+								limit: splitLimit,
+								text: prompt || describe
+							}), splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "rt-sum",
+								"aria-live": "polite",
+								children: [
+									splitSum.lead,
+									" ",
+									splitSum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "muted",
+										children: splitSum.tail
+									}),
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "muted",
+										children: "The account, plan-first, launch flags and Git & workspace choices don't apply to a split."
+									})
+								]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -60211,6 +60254,7 @@ function NewSessionDialog() {
 													checked: inPlace && !laneNeedsWorktree,
 													onChange: () => {
 														if (laneNeedsWorktree) draft.setLane("leave");
+														setSplit(false);
 														setInPlace(true);
 														setProvision(false);
 													}
@@ -60219,7 +60263,7 @@ function NewSessionDialog() {
 												" ",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "muted",
-													children: laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
+													children: splitOn ? "(turns auto-split off — a split works in its own worktree)" : laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
 												})
 											]
 										}),
@@ -60558,7 +60602,7 @@ function NewSessionDialog() {
 							id: "new-describe-start",
 							disabled: describing || draft.starting,
 							"aria-busy": draft.starting || void 0,
-							title: splitOn ? "Create it now. Its agent reads the code and decides whether to split; a split waits for your approval in its Thread tab." : runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
+							title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
 							onClick: runMode ? () => void startRun() : startNow,
 							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
 						})
@@ -60570,7 +60614,9 @@ function NewSessionDialog() {
 						children: "← Back"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
-						children: "Create"
+						disabled: draft.starting,
+						"aria-busy": draft.starting || void 0,
+						children: draft.starting ? "Starting…" : "Create"
 					})] })]
 				})
 			]

@@ -13025,7 +13025,7 @@ button.ct-chip:hover {
 
 
 /* "Auto-split into up to N sessions if it's worth it" (SplitCheck.tsx), on
-   page 1 under the lane rows. The checkbox's label stops before N: the − / +
+   the form under the Fast-track row. The checkbox's label stops before N: the − / +
    stepper sits outside it, so a click there never toggles the box. */
 #new-form .nf-split {
   font-size: 13px;
