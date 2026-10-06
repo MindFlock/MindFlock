@@ -425,7 +425,7 @@ the session's title, the server port and the scope. The default is `()`, no
 auto-attach. Two providers override it:
 
 - **`claude`** writes a 0600 run file and returns
-  `--mcp-config=<file>` and `--allowedTools=<the nine read, wait and report tools>`,
+  `--mcp-config=<file>` and `--allowedTools=<the ten read, wait and report tools>`,
   both in the single-token form, since a spaced value would swallow the seed
   prompt.
 - **`codex`** returns `-c mcp_servers.mindflock={…}`, one TOML inline table.

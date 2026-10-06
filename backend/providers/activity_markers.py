@@ -75,12 +75,17 @@ def marker_dir():
     import os
     from pathlib import Path
 
+    from backend.config.home_guard import guard
+
     return Path(
-        os.environ.get(
-            "MINDFLOCK_ACTIVITY_MARKER_DIR",
-            os.path.join(
-                os.path.expanduser("~"), ".mindflock-assistant", ".activity-markers"
+        guard(
+            os.environ.get(
+                "MINDFLOCK_ACTIVITY_MARKER_DIR",
+                os.path.join(
+                    os.path.expanduser("~"), ".mindflock-assistant", ".activity-markers"
+                ),
             ),
+            "activity-marker dir",
         )
     )
 

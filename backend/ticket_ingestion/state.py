@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from backend.ticket_ingestion.models import (
     ProcessedIssue,
@@ -19,6 +20,11 @@ _STATE_FILENAME = "state.json"
 
 
 def _state_path(state_dir: Path | str) -> Path:
+    from backend.config.home_guard import guard_ledger_dir
+
+    # Under pytest, refuse the real pipeline ledger (the app checkout's
+    # state.json) — a test must point its _REPO_ROOT at a tmp dir.
+    guard_ledger_dir(state_dir)
     return Path(state_dir) / _STATE_FILENAME
 
 
@@ -191,10 +197,45 @@ def record_processed_story(state_dir: Path | str, record: ProcessingRecord) -> N
     }
     if record.failure_reason is not None:
         entry["failure_reason"] = record.failure_reason
+    if record.reserved_by:
+        entry["reserved_by"] = record.reserved_by
 
     stories.append(entry)
     data["processed_stories"] = stories
     _write_state(state_dir, data)
+
+
+def latest_story_entry(state_dir: Path | str, story_id: int | str) -> Optional[dict]:
+    """The most recent ``processed_stories`` entry for ``story_id`` (a copy),
+    or None."""
+    data = _read_state(state_dir)
+    stories = data.get("processed_stories")
+    if not isinstance(stories, list):
+        return None
+    for entry in reversed(stories):
+        if isinstance(entry, dict) and entry.get("story_id") == story_id:
+            return dict(entry)
+    return None
+
+
+def claim_reservation(state_dir: Path | str, story_id: int | str) -> bool:
+    """Turn a reservation (the latest entry ``in_flight`` with a
+    ``reserved_by``) into a started marker IN PLACE — the session exists now —
+    instead of stacking a second ``in_flight`` entry on it. Returns whether
+    there was one."""
+    data = _read_state(state_dir)
+    stories = data.get("processed_stories")
+    if not isinstance(stories, list):
+        return False
+    for entry in reversed(stories):
+        if isinstance(entry, dict) and entry.get("story_id") == story_id:
+            if entry.get("status") != "in_flight" or not entry.get("reserved_by"):
+                return False
+            entry.pop("reserved_by", None)
+            entry["processed_at"] = datetime.now(timezone.utc).isoformat()
+            _write_state(state_dir, data)
+            return True
+    return False
 
 
 def update_processed_story(
@@ -261,11 +302,44 @@ def update_processed_story(
     return False
 
 
+def remove_in_flight_story(
+    state_dir: Path | str, story_id: int | str, reserved_by: str | None = None
+) -> bool:
+    """Drop ``story_id``'s LATEST ledger entry while it is an ``in_flight``
+    reservation — and only that one entry.
+
+    The undo of a reservation that never launched: a team run records a ticket
+    ``in_flight`` the moment it queues it (so ingestion never also spawns it),
+    and cancelling the run before the ticket started has to hand it back.
+    Every EARLIER entry is history (a completed or failed run of the ticket)
+    and is never touched; any other latest status is a real outcome and is
+    left alone. With ``reserved_by``, the entry must carry exactly that holder
+    — a run never hands back a marker the pipeline (or another run) set.
+    Returns whether anything was removed."""
+    data = _read_state(state_dir)
+    stories = data.get("processed_stories")
+    if not isinstance(stories, list):
+        return False
+    idx = None
+    for i, entry in enumerate(stories):
+        if isinstance(entry, dict) and entry.get("story_id") == story_id:
+            idx = i
+    if idx is None or stories[idx].get("status") != "in_flight":
+        return False
+    if reserved_by is not None and stories[idx].get("reserved_by") != reserved_by:
+        return False
+    del stories[idx]
+    data["processed_stories"] = stories
+    _write_state(state_dir, data)
+    return True
+
+
 def reap_stale_in_flight(
     state_dir: Path | str,
     is_alive=None,
     max_age_seconds: float = 24 * 60 * 60,
     now: datetime | None = None,
+    reservation_alive=None,
 ) -> list:
     """Flip crashed-mid-session ``in_flight`` entries to ``failed`` at startup.
 
@@ -290,8 +364,39 @@ def reap_stale_in_flight(
         if not isinstance(entry, dict) or entry.get("status") != "in_flight":
             continue
         sid = entry.get("story_id")
+        holder = entry.get("reserved_by")
+        if holder:
+            # A RESERVATION (a team run's queued ticket — no session yet, by
+            # design): never "crashed mid-session". Its holder hands it back;
+            # only a holder that is gone (``reservation_alive`` says False) or
+            # an unknown one past the age cap is reaped.
+            try:
+                held = reservation_alive(str(holder)) if reservation_alive else None
+            except Exception:  # noqa: BLE001
+                held = None
+            if held is True:
+                continue
+            if held is None:
+                raw = entry.get("processed_at")
+                try:
+                    at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)
+                if (now - at).total_seconds() <= max_age_seconds:
+                    continue
+            # Its holder is gone and nothing ever started: hand the ticket
+            # back to ingestion (drop the reservation) rather than calling a
+            # session that never existed "crashed".
+            entry["_release"] = True
+            reaped.append(sid)
+            _logger.warning(
+                "Released the reservation of %s: its holder %s is gone", sid, holder
+            )
+            continue
         alive = None
-        if is_alive is not None:
+        if is_alive is not None and not holder:
             try:
                 alive = is_alive(str(sid))
             except Exception as e:  # noqa: BLE001
@@ -325,6 +430,11 @@ def reap_stale_in_flight(
             "delete its state.json entry to re-run it)",
             sid,
         )
+    if any(isinstance(e, dict) and e.get("_release") for e in stories):
+        stories[:] = [
+            e for e in stories if not (isinstance(e, dict) and e.get("_release"))
+        ]
+        data["processed_stories"] = stories
     if reaped:
         data["processed_stories"] = stories
         _write_state(state_dir, data)

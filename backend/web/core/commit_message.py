@@ -226,6 +226,26 @@ def clean_message(raw: str) -> str:
     return "\n".join(out).strip()[:MESSAGE_MAX]
 
 
+def neutral_cwd() -> str:
+    """Where a one-shot generator runs: a MindFlock-owned directory that is
+    never a session's workdir. Run inside the session's worktree, a CLI like
+    ``claude -p`` writes its transcript into the SAME project directory as the
+    session's own conversation — and becomes the session's "newest
+    transcript", so its last turn and pane head showed the generator's prompt
+    and answer. The diff is already in the prompt; the CLI needs no cwd."""
+    base = os.environ.get("MINDFLOCK_ASSISTANT_DIR") or os.path.join(
+        os.path.expanduser("~"), ".mindflock-assistant"
+    )
+    path = os.path.join(base, "oneshot")
+    try:
+        from backend.config.home_guard import guard
+
+        os.makedirs(guard(path, "one-shot dir"), exist_ok=True)
+        return path
+    except OSError:
+        return os.path.expanduser("~")
+
+
 def _run(argv: Sequence[str], cwd: str, timeout: float) -> str:
     """Run a one-shot CLI and return its stdout, or raise with a reason.
 
@@ -329,7 +349,8 @@ def suggest(
         raise CommitMessageError("nothing to describe — the tree is clean")
     prompt = build_prompt(stat, patch, branch=branch, hint=hint)
     argv = pick_argv(prompt, program, fallback_program)
-    message = clean_message(_run(argv, worktree, timeout))
+    # Never the worktree as cwd (see neutral_cwd): the diff is in the prompt.
+    message = clean_message(_run(argv, neutral_cwd(), timeout))
     if not message:
         raise CommitMessageError("%s returned no message" % argv[0])
     return message

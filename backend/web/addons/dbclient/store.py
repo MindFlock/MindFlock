@@ -79,7 +79,9 @@ def store_path() -> Path:
     MUST set it, alongside ``MINDFLOCK_SETTINGS_FILE``), else the config dir."""
     env = os.environ.get("MINDFLOCK_DBCLIENT_FILE")
     if env:
-        return Path(env)
+        from backend.config.home_guard import guard
+
+        return Path(guard(env, "dbclient store"))
     return Path(GetConfigDir()) / STORE_FILE_NAME
 
 

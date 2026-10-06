@@ -527,6 +527,11 @@ server merges on save so multiple processes can share it.
   session is removed. Written atomically under an `fcntl` lock, because more
   than one process writes it. Override with `$MINDFLOCK_MAILBOX_FILE`. See
   [mcp.md](mcp.md#messages).
+- `runs/` — one file per team run (`<id>.json`: its tasks, their states and
+  the facts the server needs to resume it after a restart) plus a `<id>.lease`
+  naming the server that drives it, so two servers never drive one run.
+  Finished runs move to `runs/archive/` after 30 days. Override with
+  `$MINDFLOCK_RUNS_DIR`. See [team-runs.md](team-runs.md).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
   (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
   `CODEX_HOME` when a session runs under that profile. **Holds real
@@ -593,6 +598,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_MCP_PYTHONPATH` | the directory holding the running `backend/` | `PYTHONPATH` auto-attach gives the MCP. Travels with `MINDFLOCK_MCP_PYTHON` to the pipeline child |
 | `MINDFLOCK_SERVER_PORT` | — | The web server's port as auto-attach should bake it, checked before `UVICORN_PORT`, a `--port` argument and 8765 (never `PORT`, which inside an agent shell is the session's dev port). The web server passes it to the pipeline child |
 | `MINDFLOCK_MAILBOX_FILE` | `~/.mindflock/mailbox.json` | Path of the inter-agent mailbox store |
+| `MINDFLOCK_RUNS_DIR` | `~/.mindflock/runs` | Directory of the team-run files (`<id>.json` + `<id>.lease`; finished runs move to `archive/` after 30 days) |
 | `MINDFLOCK_MSG_MAX_HOPS` | `6` | Reply-chain ceiling for inter-agent messages. A pushed reply deeper than this is held in the recipient's inbox instead of typed in. Read on every send |
 | `MINDFLOCK_MAX_CHILDREN` | `8` | Live children one session may have (`POST /api/instances` with `parent`, and adopting through `POST /api/instances/{title}/parent`; 409 beyond). Read per request; a malformed or negative value falls back to the default |
 | `MINDFLOCK_MAX_SPAWN_DEPTH` | `3` | Deepest a session may sit in a parent chain (root = 0), checked at create and on adoption |

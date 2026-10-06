@@ -15,14 +15,18 @@ import {
   mergeSession,
   pushSession,
   resetStage,
-  resolveDepth,
-  startFastTrack,
-  stopFastTrack,
 } from "./sessionActions";
+import {
+  LANE_DESC,
+  LANE_LABEL,
+  LANE_SHORT,
+  askFirstApplies,
+  laneChoice,
+  type Lane,
+} from "./laneActions";
 import {
   DEPTH_SHORT,
   autopilotChipTitle,
-  depthLabel,
   mergeBlockerLabel,
 } from "./autopilot";
 import { useUi } from "../state/store";
@@ -563,69 +567,82 @@ export function followAutopilot(
   return null;
 }
 
-/** The ⏩ sibling of the guided button: a per-session TOGGLE for autopilot.
+/** The ⏩ button: THE per-session fast-track control.
  *
- * It stays visible while a chain is armed and turns it off on click. It used to
- * hide itself once armed, leaving the only off-switch on the primary button —
- * which read as "the button I pressed disappeared and I can't undo it". A toggle
- * is what a one-press control has to be.
+ * It SAYS where fast-track will carry this session ("⏩ off", "⏩ Commit",
+ * "⏩ PR", "⏩ Merge"; `askFirst` adds the "ask me first" mark) and a click
+ * opens the picker (grid/FastTrackMenu) — Off / Commit / Push / Open a PR /
+ * Merge when green, and "Ask me before it ships". It is a control, never a
+ * status chip (a `.stagechip` in a pane head is display:none by design).
  *
- * Returns null only when a press would be meaningless: no git, a session that
- * isn't running, a missing workspace, or a commit already in flight. */
-export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
+ * What it keeps from the old one-press toggle: it is visibly ON while a run is
+ * working (`active`), says ✗ and why on a halt (`halted`), and an ARMED target
+ * is never hidden — an intake-armed session spends its first minutes
+ * provisioning, which is precisely when you might change your mind.
+ *
+ * Returns null only when there is nothing it could set: no git, a session
+ * that isn't there yet, a missing workspace, or a workspace still being made
+ * for a session with no target. */
+export interface FastTrackButton {
+  lane: Lane;
+  askFirst: boolean;
+  /** "⏩ PR" — plus " ✗" on a halt. */
+  label: string;
+  /** A run is working toward the target right now. */
+  active: boolean;
+  /** The run stopped short and said why (in `title`). */
+  halted: boolean;
+  title: string;
+}
+
+export function fastTrackStep(inst: Partial<Instance>): FastTrackButton | null {
   const title = inst.title;
   const caps = queryClient.getQueryData<Config>(["config"])?.caps;
   if (caps && !caps.git) return null;
-  if (!title) return null;
+  if (!title || inst.workspace_missing) return null;
 
+  const { lane, askFirst } = laneChoice(inst);
   const run = inst.autopilot;
-  // Only a LIVE run is armed. A run that has finished its task — or failed at it —
-  // turns itself off for this window; the outcome stays readable in the header, and
-  // pressing the button is how you start another. A halted one still shows here so
-  // its reason is one hover away rather than vanishing silently.
-  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted"));
-  // AN ARMED RUN IS ALWAYS CANCELLABLE. The guards below hide the OFF state where
-  // a press would be meaningless (still provisioning, a commit in flight), but
-  // they must never hide the ON state: an intake-armed session spends its first
-  // minutes provisioning, and that is precisely when you might change your mind.
-  // Hiding the toggle there left no way to stop it at all.
-  if (!armed) {
-    if (inst.status === "loading" || inst.status === "paused") return null;
-    if (inst.workspace_missing) return null;
-    const stage = guidedStage(inst);
-    if (stage === "provisioning" || stage === "precommit") return null;
+  const running = !!(run && run.depth && run.state === "running");
+  const halted = !!(run && run.depth && run.state === "halted");
+  // Nothing it could set yet — the session or its workspace is still being
+  // made — unless a run is armed: that one must stay visible and changeable.
+  if (!running && !halted) {
+    if (inst.status === "loading") return null;
+    if (lane === "leave" && guidedStage(inst) === "provisioning") return null;
   }
 
-  // Armed: show it ON and make the click turn it off.
-  if (run && run.depth && run.state === "running")
-    return {
-      label: "⏩",
-      active: true,
-      title: autopilotChipTitle(run) + "\n\nClick ⏩ to turn fast-track off.",
-      run: () => stopFastTrack(title),
-    };
-  // Halted: say so on the control itself, and let a click arm it again. A chain
-  // that stopped without saying why is the failure mode that kills trust here.
-  if (run && run.depth && run.state === "halted")
-    return {
-      label: "⏩✗",
-      hint: true,
-      title:
-        autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
-      run: () => startFastTrack(title, run.depth),
-    };
-
-  const depth = resolveDepth();
+  const ask = askFirstApplies(lane) && askFirst;
+  const where = LANE_LABEL[lane] + (ask ? ", asks first" : "");
+  const change = "\n\nClick to change it or turn it off (Ctrl+K F).";
+  let tip: string;
+  if (running && run) {
+    const doing = run.note
+      ? " — " + run.note
+      : run.step
+        ? " (last step: " + run.step + ")"
+        : " (waits for the agent to finish)";
+    const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+    tip = "Fast-track → " + where + doing + skipped + change;
+  } else if (halted && run) {
+    tip =
+      "Fast-track stopped: " +
+      (run.reason || "unknown reason") +
+      "\n\nClick to pick it again or turn it off (Ctrl+K F).";
+  } else if (lane === "leave") {
+    tip =
+      "Fast-track is off. Click to choose how far MindFlock carries this session once its " +
+      "agent is done — commit, push, open a PR, or merge when green (Ctrl+K F).";
+  } else {
+    tip = "Fast-track → " + where + ": " + LANE_DESC[lane] + "." + change;
+  }
   return {
-    label: "⏩",
-    title:
-      "Fast-track: carry this session to " +
-      depthLabel(depth) +
-      " on its own.\n" +
-      "Waits for the agent to finish, then commits, pushes and stops at your\n" +
-      "chosen rung. Click again to turn it off.\n" +
-      "Change the default in Settings → Workspace.",
-    run: () => startFastTrack(title, depth),
+    lane,
+    askFirst: ask,
+    label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : ""),
+    active: running,
+    halted,
+    title: tip,
   };
 }
 

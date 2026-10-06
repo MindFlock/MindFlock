@@ -33,8 +33,7 @@ import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
-import { PlaybookMenu } from "./PlaybookMenu";
-import { forkBlockReason, mcpCapable } from "../../lib/playbooks";
+import { FastTrackMenu } from "./FastTrackMenu";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
@@ -56,27 +55,6 @@ function paneTab(t: string, git: boolean): Tab {
   if (GIT_TABS.has(t) && !git) return "agent";
   return t as Tab;
 }
-
-/** The fork icon (two branches joining) of the "Work with other sessions"
- * button. */
-const FORK_ICON = (
-  <svg
-    width="12"
-    height="12"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <circle cx="4" cy="3.2" r="1.7" />
-    <circle cx="12" cy="3.2" r="1.7" />
-    <circle cx="8" cy="12.8" r="1.7" />
-    <path d="M4 5v1.2c0 1.6 1.2 2.6 2.8 2.6h2.4C10.8 8.8 12 7.8 12 6.2V5M8 8.8v2.3" />
-  </svg>
-);
 
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
@@ -109,18 +87,22 @@ export function Pane({
   const family = familyOf(title, allRows ?? []);
   const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
   const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
+  // A group's lead always has one: its plan and its one PR live there, from
+  // before its first worker exists.
   const threadShown = threadTabShown(
-    !!family.parent || family.children.length > 0,
+    !!family.parent || family.children.length > 0 || inst.run?.role === "lead",
     threadOpened || lastTab === "thread"
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
   const newestReport = newestReportTs(family.children);
-  // This pane's fork-icon menu, when it is the one open (Ctrl+K F opens it
-  // from anywhere, so it lives in the store rather than here).
-  const playbookMenu = useUi((s) => (s.playbookMenu?.title === title ? s.playbookMenu : null));
-  // State, not a ref: the menu measures itself against the button, and a menu
-  // opened in the same frame the pane mounts must re-render once it exists.
-  const [forkEl, setForkEl] = useState<HTMLButtonElement | null>(null);
+  // This pane's ⏩ fast-track picker, when it is the one open (Ctrl+K F, the
+  // row › menu and the palette open it from anywhere, so it lives in the
+  // store rather than here).
+  const ftMenu = useUi((s) => (s.fastTrackMenu?.title === title ? s.fastTrackMenu : null));
+  // State, not a ref: the picker measures itself against the ⏩ button, and a
+  // picker opened in the same frame the pane mounts must re-render once it
+  // exists.
+  const [ftEl, setFtEl] = useState<HTMLButtonElement | null>(null);
   // Same "assume capable until the server says otherwise" fallback as the other
   // caps consumers (SidebarRow, CommandPalette, lib/sessionActions) — keep the
   // four literals identical so a PR affordance added here can't silently start
@@ -442,12 +424,12 @@ export function Pane({
     },
   };
 
-  // A menu whose button has gone (the agent hit a permission dialog, the pane
-  // lost its workspace) closes rather than waiting to reappear later.
-  const forkGone = missing || loading || !mcpCapable(caps, inst) || !!forkBlockReason(inst);
+  // A picker whose ⏩ button has gone (the pane lost its workspace, is still
+  // loading, or has no git) closes rather than waiting to reappear later.
+  const ftGone = missing || loading || !fastTrackStep(inst);
   useEffect(() => {
-    if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
-  }, [playbookMenu, forkGone]);
+    if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
+  }, [ftMenu, ftGone]);
 
   if (missing) {
     return (
@@ -556,10 +538,6 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
-  // "Work with other sessions": only on a CLI that gets the MindFlock tools,
-  // and blocked (with the reason) while this launch can't take a playbook.
-  const forkShown = mcpCapable(caps, inst);
-  const forkBlocked = forkShown ? forkBlockReason(inst) : "";
 
   return (
     <section
@@ -661,6 +639,44 @@ export function Pane({
               {ns.label}
             </button>
           ) : null}
+          {ft && (
+            // THE per-session fast-track control: it names the target and
+            // opens the picker. A control, not a status chip. Right after
+            // the guided button, ahead of the live step's free text, so a
+            // busy header that scrolls sideways never hides where the
+            // session is going.
+            <button
+              ref={setFtEl}
+              className={
+                "nextstep nextstep-fast" +
+                (ft.active ? " is-on" : "") +
+                (ft.halted ? " nextstep-fast-halted" : "") +
+                (ft.lane !== "leave" ? " is-set" : "") +
+                (ftMenu ? " open" : "")
+              }
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={!!ftMenu}
+              aria-label={
+                "Fast-track: " +
+                (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
+                (ft.askFirst ? ", asks first" : "")
+              }
+              title={ft.title}
+              data-ft-lane={ft.lane}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
+              }}
+            >
+              {ft.label}
+              {ft.askFirst && (
+                <span className="ft-ask" aria-hidden="true">
+                  ?
+                </span>
+              )}
+            </button>
+          )}
           {step && (
             <span
               className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
@@ -678,24 +694,6 @@ export function Pane({
               <span className="stepnow-text">{step.label}</span>
               {step.target && <span className="stepnow-target">{step.target}</span>}
             </span>
-          )}
-          {ft && (
-            <button
-              className={
-                "nextstep nextstep-fast" +
-                (ft.active ? " is-on" : "") +
-                (ft.hint ? " nextstep-fast-halted" : "")
-              }
-              type="button"
-              aria-pressed={!!ft.active}
-              title={ft.title}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                ft.run();
-              }}
-            >
-              {ft.label}
-            </button>
           )}
           {rs && (
             <button
@@ -733,32 +731,6 @@ export function Pane({
         {/* Pinned right even when the header scrolls: history, copy-all, close
             stay reachable without scrolling to the end of a long header. */}
         <div className="head-tail">
-        {forkShown && (
-          <button
-            ref={setForkEl}
-            className={
-              "act playbooks" + (playbookMenu ? " open" : "") + (forkBlocked ? " is-blocked" : "")
-            }
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={!!playbookMenu}
-            aria-disabled={forkBlocked ? true : undefined}
-            title={
-              forkBlocked ||
-              "Work with other sessions — split across workers, ask, review, hand off (Ctrl+K F)"
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              if (forkBlocked) {
-                toast(forkBlocked, { duration: 5000 });
-                return;
-              }
-              useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
-            }}
-          >
-            {FORK_ICON}
-          </button>
-        )}
         <button
           className="act copyhist"
           type="button"
@@ -946,18 +918,16 @@ export function Pane({
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}
       </div>
-      {playbookMenu && forkShown && !forkBlocked && forkEl && (
-        <PlaybookMenu
+      {ftMenu && ft && ftEl && (
+        <FastTrackMenu
           title={title}
-          anchor={forkEl}
-          initialSub={playbookMenu.sub ?? null}
+          anchor={ftEl}
           onClose={(refocus) => {
             const ui = useUi.getState();
-            if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
-            // Esc hands the keyboard back to the terminal the menu took it
-            // from. Nothing else does: a paste focuses the terminal itself,
-            // Message… hands it to the Thread composer, and an outside click
-            // has put it wherever the user clicked.
+            if (ui.fastTrackMenu?.title === title) ui.setFastTrackMenu(null);
+            // Esc hands the keyboard back to the terminal the picker took it
+            // from. Nothing else does: an outside click has put it wherever
+            // the user clicked.
             if (refocus) setTimeout(() => focusTerm(title), 0);
           }}
         />

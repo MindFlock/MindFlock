@@ -46,12 +46,17 @@ def marker_dir() -> Path:
     Defaults to ``~/.mindflock-assistant/.thread-markers``;
     ``MINDFLOCK_THREAD_MARKER_DIR`` overrides it (tests point it at a tmp dir).
     """
+    from backend.config.home_guard import guard
+
     return Path(
-        os.environ.get(
-            "MINDFLOCK_THREAD_MARKER_DIR",
-            os.path.join(
-                os.path.expanduser("~"), ".mindflock-assistant", ".thread-markers"
+        guard(
+            os.environ.get(
+                "MINDFLOCK_THREAD_MARKER_DIR",
+                os.path.join(
+                    os.path.expanduser("~"), ".mindflock-assistant", ".thread-markers"
+                ),
             ),
+            "thread-marker dir",
         )
     )
 

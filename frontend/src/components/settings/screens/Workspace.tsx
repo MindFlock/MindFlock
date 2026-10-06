@@ -63,17 +63,19 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           group="repository"
           field="fasttrack_depth"
           options={[
-            { value: "", label: "Open PR (default)" },
-            { value: "commit", label: "Commit only" },
-            { value: "push", label: "…then push" },
-            { value: "pr", label: "…then open PR" },
-            { value: "merge", label: "…then merge" },
+            { value: "", label: "Off (default)" },
+            { value: "commit", label: "Commit" },
+            { value: "push", label: "Push" },
+            { value: "pr", label: "Open a PR" },
+            { value: "merge", label: "Merge when green" },
           ]}
         />
         <span className="set-hint">
-          Where the <strong>⏩</strong> button stops. It waits for the agent to finish, then
-          commits, pushes and carries on to this rung. Merging is irreversible, so it is never
-          the default and an intake <em>source</em> can't default to it — only an individual item.
+          <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
+          A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+          waits for the agent to finish, then commits, pushes and carries on to this rung. Change
+          one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
+          keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.
         </span>
       </label>
       <label className="set-row">

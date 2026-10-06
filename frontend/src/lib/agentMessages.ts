@@ -137,7 +137,7 @@ export function lineageMark(
 
 /** The row fields the family wording reads. */
 export type FamilyRow = Pick<Instance, "title"> &
-  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report">>;
+  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report" | "lane">>;
 
 /** THE "is a worker of" rule, shared by every surface that counts workers —
  * the fork menu's "workers · N", the palette's worker entries, the rail's
@@ -247,6 +247,13 @@ export function workerLine(
   } else {
     text = "idle — no report";
     cls = "rep-idle";
+  }
+  // The lane leads (when the row has one) so a narrow rail cuts the detail,
+  // never how far MindFlock carries the session. A worker waiting on you or
+  // blocked says THAT first instead — it is the thing to act on.
+  const lead = laneLead(row.lane);
+  if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) {
+    text = lead + " · " + text;
   }
   const parent = opts.parentName;
   let detail: string;
@@ -386,4 +393,263 @@ export function inFamily(row: { playbook?: string }, isWorker: boolean, kids: nu
 /** The bell's lineage suffix on a worker's attention item: "· worker of api". */
 export function workerOf(parent: string | undefined, nameOf: (t: string) => string): string {
   return parent ? "· worker of " + nameOf(parent) : "";
+}
+
+// --- Ship lanes on the rail -----------------------------------------------------
+//
+// Every session can say how far MindFlock carries it once its agent stops — its
+// LANE: leave it / commit / push / open a PR / merge. The rail's status line
+// leads with that lane ("→ PR · working 12m"), so a narrow rail cuts the
+// detail and never the destination. Pure, like the rest of this module: it
+// reads only row fields (`lane`, `autopilot`, `stage`, `pr_url`, `merge_state`)
+// plus, for a session started in a group, its run task's state.
+
+/** The row fields the ship line reads. */
+export type ShipRow = FamilyRow &
+  Partial<Pick<Instance, "lane" | "autopilot" | "stage" | "pr_url" | "merge_state" | "run">>;
+
+/** The task fields the ship line reads (a run's view of this session). */
+export interface ShipTask {
+  state: string;
+  reason?: string;
+  /** Set while a merge-back conflict is handed to the lead. */
+  conflict?: { files: string[] } | null;
+  /** A piece of a split run IN its lead's folder: MindFlock commits it,
+   * nothing is merged back. */
+  sameFolder?: boolean;
+}
+
+/** How the lane names itself at the head of the line. */
+export const LANE_HEAD: Record<string, string> = {
+  leave: "agent only",
+  commit: "→ commit",
+  push: "→ push",
+  pr: "→ PR",
+  merge: "→ merge",
+};
+
+/** What each lane promises, for the tooltip. */
+const LANE_MEANS: Record<string, string> = {
+  leave: "MindFlock commits nothing for it",
+  commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
+  push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
+  pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
+  merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass",
+};
+
+const LANE_RANK: Record<string, number> = { leave: 0, commit: 1, push: 2, pr: 3, merge: 4 };
+
+/** The session's lane: the server's `lane` field, else (a server that predates
+ * it) what an armed fast-track record implies. null = no lane. */
+export function laneOf(
+  row: Partial<Pick<Instance, "lane" | "autopilot">>
+): { target: string; ask_first: boolean; owner?: string } | null {
+  const l = row.lane;
+  if (l && l.target && l.target in LANE_RANK) return l;
+  const ap = row.autopilot;
+  if (ap && ap.depth) {
+    const target = ap.depth === "agent" ? "leave" : ap.depth;
+    if (target in LANE_RANK) return { target, ask_first: false };
+  }
+  return null;
+}
+
+/** The lane's head phrase for a line that leads with it ("→ PR"), or "" when
+ * the row has no lane or its lane ships nothing — a worker's status line
+ * prefixes this (THE lane phrase is LANE_HEAD; nothing else spells it). */
+export function laneLead(lane: { target?: string } | null | undefined): string {
+  const t = String(lane?.target || "");
+  if (!t || t === "leave") return "";
+  return LANE_HEAD[t] || "→ " + t;
+}
+
+const LANE_DEPTH_RANK: Record<string, number> = { agent: 0, commit: 1, push: 2, pr: 3, merge: 4 };
+
+/** Whether an "asks first" lane is parked at its held rung waiting for your go
+ * (server: lanes.awaiting_approval): its fast-track finished short of the
+ * lane. A grouped line says the same through its task (`needs_you`/`approve`). */
+export function awaitingApproval(row: ShipRow): boolean {
+  const lane = laneOf(row);
+  const ap = row.autopilot;
+  if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
+  return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
+}
+
+/** The PR number off the merge lookup, else off the URL. "" when unknown. */
+export function prNumber(row: ShipRow): string {
+  const n = row.merge_state?.number;
+  if (n) return String(n);
+  const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
+  return m ? m[1] : "";
+}
+
+/** "checks ✓" / "checks ✗" / "checks…" for an open PR, "" when unknown. */
+export function checksText(row: ShipRow): { text: string; bad: boolean } {
+  const c = String(row.merge_state?.checks || "");
+  if (c === "ok") return { text: "checks ✓", bad: false };
+  if (c === "failed") return { text: "checks ✗", bad: true };
+  if (c === "pending") return { text: "checks…", bad: false };
+  return { text: "", bad: false };
+}
+
+/** Which lane the session's git stage already satisfies (0 = none). */
+function stageRank(stage: string): number {
+  return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
+}
+
+/** A run escalation, said in a few words (the Outbox has the full sentence). */
+export function escalationText(reason: string): string {
+  const r = String(reason || "").trim();
+  switch (r) {
+    case "stuck":
+      return "stalled twice — no diff, no report";
+    case "blocked":
+      return "its agent reported blocked";
+    case "ship_halted":
+      return "hooks failed twice";
+    case "conflict":
+      return "merge conflict";
+    case "budget":
+      return "the group's budget is used up";
+    case "restart":
+      return "couldn't pick it back up after a restart";
+    case "":
+      return "needs you";
+    default:
+      return r;
+  }
+}
+
+/** One rail status line in two parts: `lead` (never truncated — the lane, or
+ * the state that replaces it) and `rest` (the detail a narrow rail cuts). */
+export interface ShipLine {
+  lead: string;
+  rest: string;
+  cls: string;
+  /** Extra class for `rest` alone ("bad" for a red checks mark). */
+  restCls: string;
+  title: string;
+  state: "ask" | "escalated" | "approve" | "shipped" | "shipping" | "working" | "limit" | "idle";
+}
+
+/** The rail's status line for a session with a lane (or in a group), or null
+ * for a session MindFlock isn't carrying anywhere — that row keeps today's
+ * line. Most urgent first:
+ *  - `? needs your answer` (gold): its agent is on a prompt;
+ *  - `! hooks failed twice — open the Outbox` (red): a run escalation, or a
+ *    fast-track that stopped;
+ *  - `✓ PR #318 · checks ✓` (green): the lane is reached;
+ *  - `⇡ opening PR` (accent): MindFlock is carrying it now;
+ *  - `→ commit, asks first · ready — see the Outbox`: waiting on your OK;
+ *  - `→ PR · working 12m` / `· idle` / `· usage limit`: the agent's turn. */
+export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?: ShipTask | null } = {}): ShipLine | null {
+  const lane = laneOf(row);
+  if (!lane && !row.run) return null;
+  const target = lane?.target || "leave";
+  if (target === "leave" && !row.run) return null;
+  const act = opts.act ?? rawActivity(row);
+  const now = opts.now ?? Date.now() / 1000;
+  const task = opts.task || null;
+  const ap = row.autopilot || null;
+  const stage = String(row.stage || "");
+  const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
+  const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
+  const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
+  const base = { restCls: "", title: (means ? "Fast-track: " + means + "." : "") + copy };
+  const line = (lead: string, rest: string, cls: string, state: ShipLine["state"], why = ""): ShipLine => ({
+    ...base,
+    lead,
+    rest,
+    cls,
+    state,
+    title: (why ? why + "\n" : "") + base.title,
+  });
+
+  if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
+  const tstate = String(task?.state || "");
+  const reason = String(task?.reason || "");
+  if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve")
+    return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+  if (tstate === "failed")
+    return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+  if (ap && ap.state === "halted")
+    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+
+  // A one-for-all / split line merges back into its lead's branch: that IS
+  // its outcome (its own lane is only "commit"), so say so before the lane.
+  if (tstate === "integrated" && task?.sameFolder)
+    return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
+  if (tstate === "integrating" && task?.sameFolder)
+    return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
+  if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
+  if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict))
+    return line(
+      "! conflict",
+      " — open the Thread",
+      "rep-ask",
+      "shipping",
+      "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is."
+    );
+  if (tstate === "integrating")
+    return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
+
+  // The lane is reached: say what it produced.
+  const rank = LANE_RANK[target] ?? 0;
+  // A one-for-all / split member's own commit is not its outcome — merging
+  // back is — so its git stage never says it is done; only its task does.
+  const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
+  const reached =
+    tstate === "shipped" ||
+    tstate === "integrated" ||
+    (rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank) ||
+    (target === "merge" && !!ap && ap.state === "done" && ap.step === "merge");
+  if (reached && rank > 0) {
+    if (target === "pr" || target === "merge") {
+      const n = prNumber(row);
+      const pr = n ? "PR #" + n : "PR";
+      if (target === "merge" && ap?.state === "done" && ap.step === "merge")
+        return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
+      const ck = checksText(row);
+      return { ...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."), restCls: ck.bad ? "bad" : "" };
+    }
+    return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
+  }
+
+  // MindFlock is carrying it now: the next outward step, by what git says.
+  const moving =
+    tstate === "shipping" ||
+    tstate === "integrating" ||
+    (!!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent");
+  if (moving && rank > 0) {
+    const s = stageRank(stage);
+    const note = String(ap?.note || "");
+    const verb =
+      ap?.step === "check" || /\bcheck/i.test(note)
+        ? "running checks"
+        : tstate === "integrating"
+          ? "merging back"
+          : s === 0
+            ? "committing"
+            : s === 1
+              ? "pushing"
+              : s === 2
+                ? "opening PR"
+                : "merging";
+    return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+  }
+  if ((tstate === "needs_you" && reason === "approve") || (!tstate && awaitingApproval(row)))
+    return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
+
+  let rest: string;
+  let state: ShipLine["state"] = "idle";
+  if (act === "working") {
+    const t = Number(row.activity_since) || 0;
+    rest = t > 0 ? " · working " + since(t, now) : " · working";
+    state = "working";
+  } else if (act === "limit") {
+    rest = " · usage limit — waiting";
+    state = "limit";
+  } else if (act === "offline") rest = " · offline";
+  else rest = " · idle";
+  return line(head, rest, "rep-lane", state);
 }

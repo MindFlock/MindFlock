@@ -138,6 +138,10 @@ class ProcessingRecord:
     status: str
     processed_at: datetime
     failure_reason: str | None = None
+    # Who holds an ``in_flight`` entry that is only a RESERVATION (no session
+    # yet): ``"run:<id>"`` for a team run's queued ticket. Only that holder may
+    # hand it back (:func:`state.remove_in_flight_story`).
+    reserved_by: str | None = None
 
 
 @dataclass

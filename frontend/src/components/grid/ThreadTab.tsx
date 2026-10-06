@@ -50,6 +50,8 @@ import {
   type WorkerRow,
 } from "../../lib/thread";
 import { AnswerStrip } from "../AnswerStrip";
+import { useRun } from "../../state/runs";
+import { RunLeadPanel } from "./RunLeadPanel";
 
 /** How often an open, visible Thread re-reads the family (events refresh it
  * sooner; this catches what no event announces, like a spawn). */
@@ -78,6 +80,11 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   const rows = useMemo(() => (rowsData ?? []) as Instance[], [rowsData]);
   const me = rows.find((r) => r.title === title && !r.device);
   const { parent, children } = useMemo(() => familyOf(title, rows), [title, rows]);
+  // A split's lead (or a one-for-all group's): MindFlock merges its workers
+  // back itself, so its Thread shows the plan, the pieces and the one PR —
+  // not the paste buttons a hand-run family uses.
+  const leadOf = me?.run?.role === "lead" ? me.run : null;
+  const { data: leadRun } = useRun(leadOf?.id);
   const [data, setData] = useState<ThreadResponse | null>(threadCache.get(title) ?? null);
   const [filter, setFilter] = useState<LogFilter>("all");
   const [loadErr, setLoadErr] = useState("");
@@ -314,6 +321,9 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   return (
     <div className="thread-root">
       <div className="thread-scroll">
+        {leadOf ? (
+          <RunLeadPanel title={title} me={me} run={leadRun} rows={rows} />
+        ) : (
         <header className="thread-head">
           {hasWorkers ? (
             <>
@@ -367,8 +377,9 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             </>
           )}
         </header>
+        )}
 
-        {hasWorkers && (
+        {hasWorkers && !leadOf && (
           <section className="thread-sec">
             <div className="thread-sec-head">
               <span className="thread-label">Workers</span>

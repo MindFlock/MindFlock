@@ -451,6 +451,27 @@ def test_the_first_commit_attempt_is_always_spent():
     assert action == "commit"
 
 
+def test_an_index_lock_collision_is_retried_then_halts_for_a_person():
+    """git's own index.lock (another git process held it for a moment — found
+    driving a real server) is not a failing hook: it is retried like the first
+    attempt, and only a lock that outlives every attempt halts, named."""
+    from backend.web.core.agent_state import INDEX_LOCK_STEP
+
+    rec = _rec(retryable=[], commits=1)
+    action, _ = ap.next_action(
+        rec, _snap(stage="interrupt", failed_step=INDEX_LOCK_STEP)
+    )
+    assert action == "commit"
+    rec = _rec(retryable=[], commits=ap.MAX_COMMIT_ATTEMPTS)
+    action, detail = ap.next_action(
+        rec, _snap(stage="interrupt", failed_step=INDEX_LOCK_STEP)
+    )
+    assert action == "stop" and "index.lock" in detail["reason"]
+    from backend.web.core import team_runs
+
+    assert team_runs.classify_halt(detail["reason"]) == "human"
+
+
 def test_test_hooks_are_never_skippable_even_if_configured():
     """The deny set is enforced at the decision, not only in the UI, so a
     hand-edited settings file cannot route around it."""

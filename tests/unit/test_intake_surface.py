@@ -571,7 +571,7 @@ class TestStartAgentOverride:
         stamping there is what makes the pick reach the CLI."""
         import inspect
 
-        src = inspect.getsource(server.ticket_force_start)
+        src = inspect.getsource(server._ticket_start.launch)
         assert "story.agent = agent_override" in src
 
 
@@ -658,7 +658,12 @@ class TestStartEffortOverride:
         import inspect
         import re
 
-        src = inspect.getsource(getattr(server, route))
+        fn = (
+            server._ticket_start.launch  # the route's launch, shared with runs
+            if route == "ticket_force_start"
+            else getattr(server, route)
+        )
+        src = inspect.getsource(fn)
         flags = re.search(r"_start_launch_args\(program, (\w+)\)", src)
         keyword = re.search(r"decorate_prompt\(prompt, program, (\w+)\)", src)
         assert flags, route + " does not pass an effort to the launch flags"
@@ -678,8 +683,8 @@ class TestStartEffortOverride:
         depending on which button you pressed."""
         import inspect
 
-        src = inspect.getsource(server.ticket_force_start)
-        assert "effort_override or _ticket_start.effort_for(story)" in src
+        src = inspect.getsource(server._ticket_start.launch)
+        assert "effort_override or effort_for(story)" in src
 
 
 # --------------------------------------------------------------------------- #

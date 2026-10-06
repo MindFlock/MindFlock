@@ -9,8 +9,14 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { selectSession, startFastTrack } from "../../lib/sessionActions";
-import { DEPTH_STEP_LABELS, SESSION_DEPTHS, normalizeDepth } from "../../lib/autopilot";
+import { selectSession } from "../../lib/sessionActions";
+import { pickFastTrack, type Lane } from "../../lib/laneActions";
+import { toast } from "../../lib/toast";
+import { FastTrackChoice } from "./FastTrackChoice";
+
+/** What "Then fast-track to" offers once this commit has landed: Commit itself
+ * is what the press does, so the first choice is Off — commit and stop. */
+const AFTER_COMMIT: readonly Lane[] = ["leave", "push", "pr", "merge"];
 
 /** Last commit message per session (pre-fills the prompt on retry).
  * In-memory only, like the vanilla Map. */
@@ -25,9 +31,13 @@ export function CommitDialog() {
   // The ✨ button's in-flight latch. A generation is one CLI turn (~10s), long
   // enough that without a visible busy state the button reads as broken.
   const [writing, setWriting] = useState(false);
-  // How far this commit should carry the session. "commit" keeps the historical
-  // behaviour (commit and stop), and is what the plain path still does.
-  const [depth, setDepth] = useState("commit");
+  // How far to fast-track the session after this commit: the same choice as
+  // the ⏩ picker, in context. Off keeps the historical behaviour (commit and
+  // stop). Deliberately NOT persisted and never seeded from anything shared:
+  // the pick applies to THIS commit (a shared sticky value once re-targeted
+  // every ⏩ on the machine with no way to see or undo it).
+  const [lane, setLane] = useState<Lane>("leave");
+  const [askFirst, setAskFirst] = useState(false);
   const msgRef = useRef<HTMLTextAreaElement | null>(null);
 
   // On open: clear the error, pre-fill from the per-title memory, focus.
@@ -35,7 +45,8 @@ export function CommitDialog() {
     if (!open) return;
     setError("");
     setMsg((target && lastCommitMsg.get(target)) || "");
-    setDepth("commit");
+    setLane("leave");
+    setAskFirst(false);
     setWriting(false);
     msgRef.current?.focus();
   }, [open, target]);
@@ -86,11 +97,12 @@ export function CommitDialog() {
   // a hidden setting.
   const submitLabel =
     {
+      leave: "Commit",
       commit: "Commit",
       push: "Commit & push",
       pr: "Commit & open PR",
       merge: "Commit & merge",
-    }[depth] || "Commit";
+    }[lane] || "Commit";
 
   /** ✨ — have the session's coding CLI read the diff and write the message.
    *
@@ -138,9 +150,7 @@ export function CommitDialog() {
     }
     if (!title) return;
     lastCommitMsg.set(title, m);
-    // The merge rung's confirm has to happen while the dialog is still up —
-    // closeDialog() below is what makes "abort the whole submit" meaningful.
-    const chosen = normalizeDepth(depth) || "commit";
+    const chosen = { lane, askFirst };
     closeDialog();
     // Watch the pre-commit hooks run (vanilla switchToTerminal: focus the
     // pane and show its shell tab).
@@ -153,9 +163,18 @@ export function CommitDialog() {
     // pressed Commit; the commit has to happen.
     try {
       await instApi(title, "/commit", { json: { message: m } });
-      if (chosen !== "commit") await startFastTrack(title, chosen, m);
+      // Then fast-track the rest — the ⏩ button flips at once and says so.
+      if (chosen.lane !== "leave")
+        await pickFastTrack(
+          title,
+          useUi.getState().aliases[title] || title,
+          chosen.lane,
+          chosen.askFirst,
+          { message: m }
+        );
     } catch (err) {
-      alert("Commit failed: " + errMsg(err));
+      // A toast, never a native alert dialog: the desktop app has none.
+      toast("Commit failed: " + errMsg(err), { duration: 7000 });
     }
     // One fresh read so the pill flips to "pre-commit" the moment the hooks start
     // (the old 1s invalidate provably observed nothing — GET /api/instances serves
@@ -241,25 +260,21 @@ export function CommitDialog() {
             }}
           />
         </div>
-        <label id="commit-depth-row">
-          Then keep going{" "}
-          <span className="muted">(fast-track — stops at the rung you pick)</span>
-          <select
-            id="commit-depth"
-            value={depth}
-            // Deliberately NOT persisted: this pick applies to THIS commit. The
-            // previous version wrote a shared localStorage key that outranked
-            // Settings, so touching this dropdown once silently re-targeted every
-            // ⏩ button on the machine with no way to see or undo it.
-            onChange={(e) => setDepth(e.target.value)}
-          >
-            {SESSION_DEPTHS.map((d) => (
-              <option key={d} value={d}>
-                {DEPTH_STEP_LABELS[d]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div id="commit-ft-row">
+          <span className="cm-ft-label">Then fast-track to</span>
+          <div className="cm-ft-ctl">
+            <FastTrackChoice
+              id="commit-ft"
+              label="Then fast-track to"
+              value={lane}
+              onChange={setLane}
+              askFirst={askFirst}
+              onAskFirst={setAskFirst}
+              lanes={AFTER_COMMIT}
+              laneTitle={{ leave: "Just this commit — MindFlock goes no further" }}
+            />
+          </div>
+        </div>
         <div className="modal-actions">
           <button type="button" id="commit-cancel" onClick={closeDialog}>
             Cancel

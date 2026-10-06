@@ -1,0 +1,188 @@
+/* Fast-track: the ⏩ picker the pane head's ⏩ button opens
+   (FastTrackMenu.tsx), the button's own marks, and the row › menu's
+   session items (SessionRowItems.tsx). Written against the theme tokens only,
+   so light mode and every surface set need nothing of their own beyond the
+   shadow (theme-light.css). The ⏩ button's base look (outline / filled while
+   a run works / red on a halt) is Pane.css's .nextstep-fast. */
+
+/* Open: the accent fill, so the picker below reads as hanging from it. */
+.pane-head .actions .nextstep.nextstep-fast.open {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* "Ask me before it ships" is on: a small circled ? after the target. A MARK
+   on a control, not a status chip. */
+.pane-head .actions .nextstep-fast .ft-ask {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  margin-left: 4px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
+}
+
+/* ---- The menu -------------------------------------------------------------- */
+
+.pb-menu {
+  position: fixed;
+  z-index: 3000;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  outline: none;
+}
+
+.pb-menu .pb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pb-menu .pb-head b {
+  font-size: 12.5px;
+  flex: none;
+}
+
+.pb-menu .pb-head .muted {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "When the agent is done, go as far as" */
+.pb-menu .pb-sec {
+  padding: 8px 8px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pb-menu .pb-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
+/* One item: name + key on the first line, the plain-language description
+   under it. */
+.pb-menu .pb-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 10px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.pb-menu .pb-item.sel {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pb-menu .pb-name {
+  font-weight: 600;
+  min-width: 0;
+}
+
+/* The ✓ column of the ⏩ picker: every rung lines up, ticked or not. */
+.pb-menu .ft-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
+}
+
+.pb-menu .pb-item.sel .ft-check {
+  color: #fff;
+}
+
+.pb-menu.ft-menu .pb-desc {
+  padding-left: 14px;
+}
+
+.pb-menu .pb-key {
+  grid-row: 1 / 2;
+  grid-column: 2;
+  align-self: center;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pb-menu .pb-desc {
+  grid-column: 1 / 2;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.pb-menu .pb-item.sel .pb-desc,
+.pb-menu .pb-item.sel .pb-key {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* Not available for this session right now: the reason replaces the
+   description, so it is read where the description would have been. */
+.pb-menu .pb-item.off {
+  cursor: default;
+}
+
+.pb-menu .pb-item.off .pb-name {
+  opacity: 0.55;
+}
+
+.pb-menu .pb-item.off .pb-why {
+  font-style: italic;
+}
+
+.pb-menu .pb-foot {
+  margin-top: 4px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.pb-menu .pb-foot b {
+  color: var(--text);
+}
+
+/* ---- The sidebar row's › menu items ----------------------------------------- */
+
+/* An item this session can't take right now (its reason is the tooltip, and
+   a click says it in a toast). */
+.inst-actions button.pb-row-off {
+  color: var(--muted);
+  cursor: default;
+}
+
+.inst-actions button.pb-row-off:hover {
+  background: none;
+}

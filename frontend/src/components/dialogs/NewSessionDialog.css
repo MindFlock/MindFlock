@@ -1268,25 +1268,11 @@
 }
 
 
-/* "Split across workers" (SplitCheck.tsx), under the sentence on page 1 and
-   under Plan first in the Prompt fold. The note under it is a .nf-git-nudge
-   aligned with the label text (16px box + 9px gap) rather than tucked under
-   an input, so it takes ordinary margins. */
-.nf-split {
-  margin-top: 10px;
-}
-
-.nf-advanced-body .nf-split {
-  margin-top: 0;
-}
-
+/* "Split a big line into parallel pieces first" (SplitCheck.tsx), on page 1
+   under the lane rows. */
 #new-form .nf-split label.check.disabled {
   cursor: not-allowed;
   color: var(--muted);
-}
-
-.nf-split-nudge {
-  margin: 4px 0 0 25px;
 }
 
 /* "suggested · billing · search · upload": a suggestion only, so an outline
@@ -1303,4 +1289,278 @@
   vertical-align: 1px;
   color: var(--gold);
   white-space: nowrap;
+}
+
+/* ---- List mode (NewList.tsx) ------------------------------------------------
+   The describe box as "one thing per line, or ticket IDs": a textarea (rows
+   set by the component, 3 to 8), the parsed list under it, then the rows of
+   choices — label column on the left, control on the right — and the sentence
+   that says what all of it means. Two classes deep where a #new-form element
+   rule would otherwise win (inputs, labels). */
+#new-form #new-describe-text {
+  resize: none;
+  min-height: 0;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 8px 10px;
+}
+
+.rt-items {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.rt-item {
+  display: grid;
+  grid-template-columns: 54px auto minmax(0, 1fr) auto 22px;
+  align-items: center;
+  column-gap: 8px;
+  padding: 4px 6px 4px 10px;
+  font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.rt-item:first-child {
+  border-top: none;
+}
+
+/* A task has no ref: its words start where a ticket's ref would. */
+.rt-item.rt-task .rt-title {
+  grid-column: 2 / 4;
+}
+
+.rt-kind {
+  justify-self: start;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.rt-ticket .rt-kind {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rt-ref {
+  font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rt-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rt-where {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#new-form .rt-x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
+}
+
+#new-form .rt-x:hover {
+  color: var(--text);
+}
+
+/* Never quietly a task: an unresolved ticket stays red, with the reason. */
+.rt-item.rt-err .rt-title,
+.rt-item.rt-err .rt-ref {
+  color: var(--red);
+}
+
+.rt-item.rt-pending .rt-title {
+  font-style: italic;
+}
+
+.rt-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.rt-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.rt-row {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+}
+
+.rt-label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* The lane row holds two lines (the control, then Ask me before it ships):
+   its label sits with the control, not between the two. */
+.rt-row.rt-row-top {
+  align-items: start;
+}
+
+.rt-row-top > .rt-label {
+  padding-top: 6px;
+}
+
+.rt-ctl {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.rt-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The segmented control: one pressed button out of a few, joined. */
+.rt-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+:is(#new-form, #commit-form) .rt-seg button {
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+:is(#new-form, #commit-form) .rt-seg button:first-child {
+  border-left: none;
+}
+
+:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
+  background: var(--panel-2);
+}
+
+/* A choice an older server can't take (caps.team_runs): shown, not offered. */
+:is(#new-form, #commit-form) .rt-seg button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+:is(#new-form, #commit-form) .rt-seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+#new-form label.check.rt-ask {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+#new-form label.check.rt-ask.disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* At a time: − N + */
+.rt-step {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+#new-form .rt-step button {
+  border: none;
+  background: none;
+  color: var(--text);
+  width: 26px;
+  padding: 4px 0;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+#new-form .rt-step button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.rt-step span {
+  min-width: 22px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+#new-form input.rt-name {
+  width: 180px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+
+#new-form select.rt-repo {
+  padding: 5px 8px;
+  font-size: 12.5px;
+  max-width: 220px;
+}
+
+/* What it all means, in a sentence. The follow-on clause is quieter. */
+.rt-sum {
+  margin: 2px 0 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* List mode → "tasks start in" → Browse…: the Folder field's own browser,
+   inline under the choices. */
+#new-form .rt-browse {
+  margin: 8px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+#new-form .rt-browse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#new-form .rt-browse-done {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
 }

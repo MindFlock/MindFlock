@@ -83,6 +83,7 @@ import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from backend.config.config import GetConfigDir
+from backend.config.home_guard import guard
 
 __all__ = [
     "mailbox_path",
@@ -173,7 +174,7 @@ def mailbox_path() -> str:
     """
     env = os.environ.get("MINDFLOCK_MAILBOX_FILE")
     if env:
-        return env
+        return guard(env, "mailbox")
     return os.path.join(GetConfigDir(), _FileName)
 
 

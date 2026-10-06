@@ -28,11 +28,65 @@ client = TestClient(server.app)
 # --------------------------------------------------------------------------- #
 def test_config_exposes_caps_booleans():
     caps = client.get("/api/config").json()["caps"]
-    assert set(caps) == {"git", "tailscale", "ticketing", "github", "agent_mcp"}
-    # agent_mcp is the one structured cap (see test_mcp_attach.py); the
-    # integration caps stay plain booleans.
-    assert all(isinstance(v, bool) for k, v in caps.items() if k != "agent_mcp")
+    assert set(caps) == {
+        "git",
+        "tailscale",
+        "ticketing",
+        "github",
+        "agent_mcp",
+        "team_runs",
+    }
+    # agent_mcp and team_runs are the structured caps (see test_mcp_attach.py);
+    # the integration caps stay plain booleans.
+    structured = {"agent_mcp", "team_runs"}
+    assert all(isinstance(v, bool) for k, v in caps.items() if k not in structured)
     assert set(caps["agent_mcp"]) == {"enabled", "providers"}
+
+
+def test_config_team_runs_caps_match_what_create_accepts(monkeypatch):
+    # The UI offers One-for-all and the split box off `caps.team_runs`; the
+    # create route refuses them off the same table, so the switch the UI reads
+    # and the refusal can never disagree. Phase 3 turned both on.
+    from backend.web.core import team_runs
+
+    caps = client.get("/api/config").json()["caps"]["team_runs"]
+    assert caps == team_runs.CAPABILITIES == {"split": True, "together": True}
+    # Taken now: what refuses them is the request's own shape, not the table.
+    r = client.post(
+        "/api/runs",
+        json={
+            "items": [{"kind": "task", "text": "x"}],
+            "policy": {"grouping": "together"},
+        },
+    )
+    assert r.status_code == 400 and "single repository" in r.json()["error"]
+    r = client.post(
+        "/api/runs",
+        json={
+            "items": [{"kind": "task", "text": "x"}, {"kind": "task", "text": "y"}],
+            "split": True,
+        },
+    )
+    assert r.status_code == 400 and "exactly one line" in r.json()["error"]
+    # And with the table off again, the create route says so.
+    monkeypatch.setitem(team_runs.CAPABILITIES, "together", False)
+    monkeypatch.setitem(team_runs.CAPABILITIES, "split", False)
+    assert client.get("/api/config").json()["caps"]["team_runs"] == {
+        "split": False,
+        "together": False,
+    }
+    r = client.post(
+        "/api/runs",
+        json={
+            "items": [{"kind": "task", "text": "x"}],
+            "policy": {"grouping": "together"},
+        },
+    )
+    assert r.status_code == 400 and "isn't available" in r.json()["error"]
+    r = client.post(
+        "/api/runs", json={"items": [{"kind": "task", "text": "x"}], "split": True}
+    )
+    assert r.status_code == 400 and "isn't available" in r.json()["error"]
 
 
 def test_caps_github_follows_the_pr_probe(monkeypatch):

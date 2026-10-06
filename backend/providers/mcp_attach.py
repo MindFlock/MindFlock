@@ -108,7 +108,18 @@ _PYTHON_ARGS = ("-P", "-m", MODULE)
 #: a prompt-injected issue) steer a session that needs none — so in a gated
 #: session it asks, like any other way of reaching outside the session.
 #: Spawning, killing, re-parenting and answering another session's dialog keep
-#: prompting too.
+#: prompting too — and so do ``spawn_ticket_session`` (it provisions a session
+#: and may move the ticket on its board), ``ship_session`` and
+#: ``set_autopilot`` (they push code, open PRs and can merge them).
+#: ``list_tickets`` only reads the Intake panel's cached ticket list. Of the
+#: team-run tools the reads (``get_run``, ``list_runs``, ``wait_for_run``) are
+#: here, and a split LEAD's two reports, which are report-only like
+#: ``report_result``: ``propose_run_plan`` only stores a plan for the USER to
+#: approve, and ``report_integrated`` only claims a merge the server re-verifies
+#: by ancestry (lead-only, a waiting member with commits) — without them a lead
+#: in a permission-gated session parks on a dialog in planning. ``start_team_run``
+#: starts sessions that push and open PRs, and ``control_run`` cancels / retries
+#: / releases a group: those keep asking.
 AUTO_APPROVED_TOOLS = (
     "whoami",
     "list_sessions",
@@ -119,6 +130,12 @@ AUTO_APPROVED_TOOLS = (
     "wait_for_message",
     "wait_for_session",
     "report_result",
+    "list_tickets",
+    "get_run",
+    "list_runs",
+    "wait_for_run",
+    "propose_run_plan",
+    "report_integrated",
 )
 
 #: Management scopes the MCP server understands, narrowest first; the attach
@@ -475,7 +492,9 @@ def run_dir() -> str:
     ``~/.mindflock/run``."""
     env = (os.environ.get("MINDFLOCK_RUN_DIR") or "").strip()
     if env:
-        return env
+        from backend.config.home_guard import guard
+
+        return guard(env, "MCP run dir")
     from backend.config.config import GetConfigDir
 
     return os.path.join(GetConfigDir(), "run")

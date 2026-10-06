@@ -127,6 +127,21 @@ def live_ticket_sessions(state_dir: Path | str = _STATE_DIR) -> int | None:
     return count
 
 
+def _reservation_alive(holder: str) -> bool | None:
+    """Whether the holder of a ledger RESERVATION still exists: ``run:<id>``
+    is a team run that has not finished (it hands its queued tickets back
+    itself). None when it cannot be told."""
+    if not holder.startswith("run:"):
+        return None
+    try:
+        from backend.web.core import team_runs
+
+        run = team_runs.load(holder[len("run:") :])
+    except Exception:  # noqa: BLE001
+        return None
+    return run is not None and run["state"] not in team_runs.RUN_FINISHED
+
+
 def _tmux_session_alive(slug: str) -> bool | None:
     """Best-effort tmux liveness for a story's session.
 
@@ -271,7 +286,11 @@ class PipelineOrchestrator:
         # A crash mid-session leaves a ledger entry in_flight forever; flip
         # entries with no live tmux session to failed so they're visible (and
         # manually unblockable) instead of masquerading as running.
-        reaped = reap_stale_in_flight(_STATE_DIR, is_alive=_tmux_session_alive)
+        reaped = reap_stale_in_flight(
+            _STATE_DIR,
+            is_alive=_tmux_session_alive,
+            reservation_alive=_reservation_alive,
+        )
         if reaped:
             _logger.warning(
                 "Startup reaper flipped %d stale in_flight stor%s to failed: %s",

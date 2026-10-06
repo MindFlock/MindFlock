@@ -53,7 +53,9 @@ def templates_path() -> str:
     """
     env = os.environ.get("MINDFLOCK_TEMPLATES_FILE")
     if env:
-        return env
+        from backend.config.home_guard import guard
+
+        return guard(env, "template store")
     return os.path.join(GetConfigDir(), _FileName)
 
 

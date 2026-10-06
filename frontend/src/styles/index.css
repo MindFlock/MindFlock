@@ -42,9 +42,9 @@
    DiffTab.css, whose .stagechip base the rail's red-zone chip extends */
 @import "../components/grid/paneOverlays.css" layer(components); /* 160 */
 @import "../components/grid/HistoryOverlay.css" layer(components); /* 160 */
-@import "../components/grid/PlaybookMenu.css" layer(components); /* 165 — after
-   Pane.css, whose .pane-head .act the fork-icon button extends, and after
-   SidebarRow.css, whose .inst-actions the row's playbook group extends */
+@import "../components/grid/FastTrackMenu.css" layer(components); /* 165 — after
+   Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
+   SidebarRow.css, whose .inst-actions the row's session items extend */
 @import "../components/grid/ThreadTab.css" layer(components); /* 166 — after
    Pane.css (.pane-head .tabs button), QueueTab.css (.queue-tab-badge, which the
    Thread tab's badge reuses) and AnswerStrip.css (the .fa-thread host) */
@@ -65,10 +65,15 @@
 @import "../components/dialogs/VerifyDialog.css" layer(components); /* 256 — after
    IntakeDialog.css, whose .ik-tab / .ik-groups / .pr-open-chip rules the Verify
    panel reuses wholesale and, in a few places, extends */
+@import "../components/outbox/Outbox.css" layer(components); /* 257 — the
+   same kit a third time; after VerifyDialog.css for the same reason */
 @import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
 @import "../components/settings/screens/notifications.css" layer(components); /* 260 */
 @import "../components/capsGate.css" layer(components); /* 270 */
 @import "../components/dialogs/DeviceDialog.css" layer(components); /* 270 */
+@import "../components/sidebar/RunGroup.css" layer(components); /* 271 — after
+   DeviceDialog.css (the .device-group header the run group header extends) and
+   SidebarRow.css (.inst .lineage, which the lane-first status line extends) */
 @import "../components/settings/screens/Appearance.css" layer(components); /* 280 */
 @import "../components/settings/screens/traffic.css" layer(components); /* 290 */
 @import "../components/breaks/breaks.css" layer(components); /* 300 — after

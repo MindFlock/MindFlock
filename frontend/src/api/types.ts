@@ -180,6 +180,32 @@ export interface Instance {
   /** On a WORKER's row: the newest `kind=result` message it sent its current
    * parent (consumed or not), or null when it has not reported. */
   last_report?: LastReport | null;
+  /** Ship lanes (team runs, SPEC §5): the group this session was started in,
+   * or null for a session on its own. Optional: an older server doesn't send
+   * it. */
+  run?: RunRef | null;
+  /** How far MindFlock carries this session once its agent stops, or null for
+   * none. `owner` names the window that actually drives a duplicated branch —
+   * a copy window on the same branch shows the lane but is never armed. */
+  lane?: LaneInfo | null;
+}
+
+/** A row's place in a group of sessions started together. */
+export interface RunRef {
+  id: string;
+  name: string;
+  task: string;
+  role: "task" | "lead" | "piece" | string;
+  grouping: "each" | "together" | string;
+}
+
+/** A session's ship lane. `target` "leave" means: MindFlock commits nothing. */
+export interface LaneInfo {
+  target: "leave" | "commit" | "push" | "pr" | "merge" | string;
+  ask_first: boolean;
+  owner?: string;
+  /** Who chose it: "user", or "agent:<title>" (an agent's set_autopilot). */
+  by?: string;
 }
 
 /** A worker's report as the rail and the playbook menu read it. `summary` is
@@ -533,12 +559,20 @@ export interface Caps {
    * and which CLIs it attaches to. The one non-boolean cap; absent on an
    * older server. */
   agent_mcp?: { enabled: boolean; providers: string[] };
+  /** Which team-run shapes `POST /api/runs` accepts yet: `together` = one PR
+   * for the whole group, `split` = one line into parallel pieces. Both false
+   * until the server's phase 3; absent on an older server (= false). Read
+   * through laneActions.teamRunCaps, never directly. */
+  team_runs?: { split: boolean; together: boolean };
 }
 
 export interface Config {
-  /** The resolved fast-track rung, for LABELLING the ⏩ button. The server still
-   * decides the actual depth when a request omits one. */
+  /** The resolved fast-track rung (never "off") — what `POST /fast-track`
+   * arms when a request omits a depth. */
   fasttrack_depth?: string;
+  /** THE fast-track default for new sessions (Settings → Workspace "Fast-track
+   * goes as far as"): a rung, or "off". Seeds the New dialog. */
+  fasttrack_default?: string;
   default_program: string;
   provisioning_available: boolean;
   caps: Caps;
@@ -970,4 +1004,283 @@ export interface TestPlansResponse {
    * inherits. What an individual plan waits on is its own
    * `effective_live_branch`, which may differ. */
   live_branch: string;
+}
+
+// --- Team runs and the Outbox (SPEC §5) --------------------------------------
+//
+// A "run" is the server's object for sessions started together; on screen it is
+// only ever a group header and the Outbox's tabs. Every field the UI reads is
+// optional beyond the identity: the routes are new, and a server that predates
+// one of them must degrade to "no groups", never to a crash.
+
+export interface RunCounts {
+  queued: number;
+  active: number;
+  needs_you: number;
+  shipped: number;
+  failed: number;
+  total: number;
+}
+
+export interface RunPolicy {
+  lane: string;
+  ask_first: boolean;
+  grouping: string;
+  release?: string;
+}
+
+/** `GET /api/runs` → `{runs: RunSummary[]}`. */
+export interface RunSummary {
+  id: string;
+  name: string;
+  /** running | planning | plan_ready | checking | release_ready | releasing |
+   * done | done_with_failures | cancelled */
+  state: string;
+  paused: boolean;
+  /** user | budget | limit ("" when not paused) */
+  pause_reason: string;
+  policy: RunPolicy;
+  counts: RunCounts;
+  cost_usd: number;
+  created_at: number;
+}
+
+/** One line of a run. `title` is reserved at plan time (the session it becomes).
+ * `state`: queued | starting | working | needs_you | shipping | integrating |
+ * shipped | integrated | failed | cancelled | skipped. */
+export interface RunTask {
+  id: string;
+  kind: string;
+  source?: string;
+  ticket_id?: string;
+  text: string;
+  title: string;
+  branch?: string;
+  state: string;
+  /** Set with needs_you / failed: prompt | stuck | blocked | ship_halted |
+   * conflict | budget | restart | approve, or the server's own sentence. */
+  reason: string;
+  /** The one-line why behind needs_you / failed / a queued retry. */
+  detail?: string;
+  /** A failed create waits until this epoch second before its next try. */
+  retry_at?: number;
+  /** "checks_failed" = shipped (the PR is open) but not merged. */
+  flag?: string;
+  lane?: string | null;
+  pr_url?: string;
+  row_present?: boolean;
+  /** A piece's "only here" paths (split runs). */
+  paths?: string[];
+  /** One-for-all / split: the branch head that was merged back. */
+  head_sha?: string;
+  /** Subjects of the piece's own commits. */
+  commits?: string[];
+  /** While handed to the lead to resolve a merge conflict, else null. */
+  conflict?: { files: string[]; attempts?: number; at?: number } | null;
+  /** The lead resolved its conflict. */
+  conflict_fixed?: boolean;
+  /** The `Tests:` line of the worker's report, or "". */
+  tests?: string;
+  merged_at?: number;
+}
+
+/** A split's lead (or a one-for-all group's integration session). */
+export interface RunLead {
+  title: string;
+  branch?: string;
+  base_branch?: string;
+  incarnation?: number;
+  adopted?: boolean;
+  row_present?: boolean;
+  /** The lead works directly in its folder (an in-place session). */
+  in_place?: boolean;
+  /** The lead sits on its base/trunk branch (or a detached HEAD). */
+  trunk?: boolean;
+}
+
+/** Where a split's pieces run (`""` until the plan is approved). */
+export type SplitMode = "" | "worktrees" | "same_folder";
+
+/** The session a split was started from when MindFlock had to start a lead
+ * of its own for the pieces (it worked in its folder, or sat on its trunk):
+ * never merged into, switched or pushed. */
+export interface RunOrigin {
+  title: string;
+  branch?: string;
+  head?: string;
+  in_place?: boolean;
+  trunk?: boolean;
+}
+
+export interface PlanPiece {
+  title: string;
+  prompt: string;
+  paths: string[];
+}
+
+export interface RunPlan {
+  state: "proposed" | "approved" | string;
+  round?: number;
+  pieces: PlanPiece[];
+  why?: string;
+  by?: string;
+  proposed_at?: number;
+  approved_at?: number;
+  base_sha?: string;
+  note?: string;
+}
+
+/** The check on the merged branch. `none` = the repo has no check command. */
+export interface RunCheck {
+  state: "none" | "pending" | "running" | "ok" | "failed" | "skipped" | string;
+  command?: string;
+  tests?: number | null;
+  summary?: string;
+  sha?: string;
+  attempts?: number;
+  finished_at?: number;
+}
+
+/** The one PR a together/split group releases. */
+export interface RunRelease {
+  state: "none" | "ready" | "releasing" | "done" | "handoff" | "failed" | string;
+  title?: string;
+  body?: string;
+  base?: string;
+  branch?: string;
+  lane?: string;
+  pr_url?: string;
+  compare_url?: string;
+  head_sha?: string;
+  files?: number;
+  add?: number;
+  del?: number;
+  commits?: number;
+  conflict_fixes?: number;
+  /** The lead's origin when it is a folder on this machine: the release can
+   * only push there, and no PR is ever opened. */
+  local_origin?: string;
+  detail?: string;
+}
+
+/** `GET /api/runs/{id}` → `{run: RunDTO}`. */
+export interface RunDTO extends RunSummary {
+  tasks: RunTask[];
+  concurrency?: number;
+  budget_usd?: number | null;
+  /** Bumped on every change (the long-poll's `rev`). */
+  rev?: number;
+  /** A member is at its usage limit: nothing new starts on that CLI. */
+  waiting_for_usage?: boolean;
+  /** Phase 3: one-for-all and split groups. */
+  split?: boolean;
+  /** A split's one line (what the lead was asked to split). */
+  goal?: string;
+  lead?: RunLead | null;
+  plan?: RunPlan | null;
+  check?: RunCheck | null;
+  release?: RunRelease | null;
+  /** Where the pieces run, chosen on the plan card. */
+  mode?: SplitMode;
+  origin?: RunOrigin | null;
+  /** Same folder: changes (and commits) in the lead's folder no piece owns. */
+  stray?: { paths: string[]; commits: string[] } | null;
+}
+
+export interface OutboxRunRef {
+  id: string;
+  name?: string;
+  task?: string;
+}
+
+/** One "Waiting on you" row. `kind` "prompt" = an agent's permission prompt
+ * (answered with the shared AnswerStrip), "approve" = a ship you asked to see
+ * first (with `preview`), anything else = a run escalation with `reason`. */
+export interface OutboxWaiting {
+  key?: string;
+  title: string;
+  run?: OutboxRunRef | null;
+  kind: string;
+  reason?: string;
+  since?: number;
+  /** approve: the step it is held before — "commit" or "push". */
+  step?: string;
+  /** approve: the session's lane (how far the approval carries it). */
+  lane?: string;
+  /** approve: when its lane was armed — this approval's identity (an edited
+   * message belongs to one card, never the next). */
+  armed_at?: number;
+  text?: string;
+  preview?: {
+    commit_message?: string | null;
+    pr_title?: string | null;
+    files?: number;
+    add?: number;
+    del?: number;
+    /** plan: the proposed pieces. */
+    pieces?: Array<{ title: string; paths: string[] }>;
+    /** release: where the one PR goes. */
+    base?: string;
+    branch?: string;
+    check?: string;
+    /** release: the group's lane (labels the buttons; "Open the PR" never merges). */
+    lane?: string;
+    /** release: the lead's origin when it is a folder on this machine (push only, no PR). */
+    local_origin?: string | null;
+  } | null;
+  actions?: string[];
+}
+
+export interface OutboxShipping {
+  key?: string;
+  title: string;
+  run?: OutboxRunRef | null;
+  step?: string;
+  note?: string;
+  lane?: string;
+  text?: string;
+}
+
+export interface OutboxShipped {
+  key?: string;
+  title: string;
+  run?: OutboxRunRef | null;
+  pr_url?: string;
+  pr_state?: string;
+  checks?: string;
+  commit_subject?: string;
+  lane?: string | null;
+  files?: number | null;
+  /** The Verify checklist covering its branch, or null. */
+  verify?: { id: string } | null;
+  text?: string;
+}
+
+export interface OutboxQueued {
+  run: OutboxRunRef;
+  ref?: string | null;
+  text?: string;
+  /** The title reserved for it, when it has one. */
+  title?: string | null;
+  retry_at?: number | null;
+}
+
+export interface OutboxSummary {
+  run: string;
+  name: string;
+  state?: string;
+  finished_at?: number;
+  text_md: string;
+}
+
+/** `GET /api/outbox?group=<run_id|own|all>`. */
+export interface OutboxResponse {
+  counts: { waiting: number; shipping: number; shipped: number; queued: number };
+  groups: {
+    waiting: OutboxWaiting[];
+    shipping: OutboxShipping[];
+    shipped: OutboxShipped[];
+    queued: OutboxQueued[];
+  };
+  summaries?: OutboxSummary[];
 }

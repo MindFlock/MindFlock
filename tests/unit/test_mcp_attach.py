@@ -46,6 +46,13 @@ _TOOLS = (
     "wait_for_message",
     "wait_for_session",
     "report_result",
+    "list_tickets",
+    "get_run",
+    "list_runs",
+    "wait_for_run",
+    # A split lead's two reports (review finding 34).
+    "propose_run_plan",
+    "report_integrated",
 )
 
 
@@ -780,11 +787,56 @@ def test_launcher_attach_stale(tmp_path, monkeypatch):
     )
 
 
+def test_a_split_leads_reports_never_park_on_a_permission_dialog():
+    """A lead in a permission-gated session would sit in planning on a
+    dialog: proposing is report-only (the user approves the plan)."""
+    for tool in ("propose_run_plan", "report_integrated"):
+        assert tool in mcp_attach.AUTO_APPROVED_TOOLS
+        assert ("mcp__mindflock__" + tool) in mcp_attach.claude_tool_names()
+
+
 def test_send_message_is_not_auto_approved():
     """Pre-approved send_message let an approval-gated session type into a
     skip-permissions session with no human in the loop."""
     assert "send_message" not in mcp_attach.AUTO_APPROVED_TOOLS
     assert "report_result" in mcp_attach.AUTO_APPROVED_TOOLS
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "ship_session",
+        "set_autopilot",
+        "spawn_ticket_session",
+        "start_team_run",
+        "control_run",
+    ],
+)
+def test_ship_and_ticket_writes_are_never_auto_approved(tool):
+    """They push code, open and merge PRs, provision sessions and move
+    tickets: a gated session must ask, as for spawn/kill."""
+    assert tool not in mcp_attach.AUTO_APPROVED_TOOLS
+    assert ("mcp__mindflock__" + tool) not in mcp_attach.claude_tool_names()
+    table = _parse(mcp_attach.codex_server_table(_spec(title="t")))
+    assert tool not in table["tools"]
+    assert "list_tickets" in table["tools"]
+
+
+def test_every_auto_approved_tool_is_a_read_or_the_report():
+    """Both lists come from AUTO_APPROVED_TOOLS; each entry must be a real
+    tool, and every one but the reports (report_result, and a split lead's
+    propose_run_plan / report_integrated — the user approves the plan, the
+    server re-verifies the merge) must be read-only."""
+    from backend.mcp.tools import build_tools
+    from tests.unit._mcp_fakes import make_box
+
+    box, _, _ = make_box([])
+    by = {t.name: t for t in build_tools(box)}
+    for name in mcp_attach.AUTO_APPROVED_TOOLS:
+        assert name in by, name
+        if name not in ("report_result", "propose_run_plan", "report_integrated"):
+            assert by[name].annotations["readOnlyHint"] is True, name
+    assert "list_tickets" in mcp_attach.AUTO_APPROVED_TOOLS
 
 
 def test_supported_providers_are_claude_and_codex():

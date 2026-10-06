@@ -234,6 +234,12 @@
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
+  /* The title inside is flex:none with a 34px floor; a column that shrank
+     below it let the name spill out UNDER the chips beside it (a nested
+     piece with three chips drew "merged" across its own name). The column
+     holds the same floor and clips, so the chips give way instead. */
+  min-width: 34px;
+  overflow: hidden;
 }
 
 .inst .meta.has-lineage .title {
@@ -631,3 +637,10 @@
   color: #fff;
 }
 
+
+/* A finished group's lead: its PR, or the compare page when the release had
+   to hand the PR over to the browser. */
+.inst .lineage .lead-link {
+  color: var(--accent);
+  text-decoration: none;
+}

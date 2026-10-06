@@ -29,12 +29,19 @@ def test_the_describe_box_ships_in_the_bundle():
     js = client.get("/app.js").text
     # The strip itself, first child of .nf-body and above the Templates row.
     assert in_bundle('id: "new-describe"', js)
-    # The input the sentence is typed into.
+    # The box the sentence is typed into — a textarea since ship lanes, so a
+    # list (one thing per line, or ticket IDs) can be typed or pasted.
     assert in_bundle('id: "new-describe-text"', js)
+    assert in_bundle('"textarea", { id: "new-describe-text"', js)
     # The placeholder is the whole tutorial: it is the only place that says a
     # sentence may name a folder AND ask for a worktree, and a box labelled
-    # "Describe it" with nothing in it teaches neither.
-    assert in_bundle('placeholder: "e.g. fix the login bug in acme-api"', js)
+    # "Describe it" with nothing in it teaches neither. Its second line shows
+    # the list shape.
+    assert in_bundle(
+        'placeholder: "e.g. fix the login bug in acme-api\\n— or one per line: PAY-412 PAY-415, a task, another task"',
+        js,
+    )
+    assert "What do you want to work on? One thing per line, or ticket IDs" in js
 
 
 def test_the_fill_button_ships_and_still_cannot_submit_the_form():

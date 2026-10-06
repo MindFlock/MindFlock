@@ -316,6 +316,26 @@ def test_parse_failed_step_raw_hook_fallback():
     )
 
 
+def test_parse_failed_step_names_an_index_lock_even_wrapped():
+    # The exact shape a 50-column shell pane showed (real-server check): the
+    # lock path wraps, and the generic fallback used to surface a fragment
+    # ("are terminated then try again. If it still fails, a git process").
+    text = (
+        'user@host:~/wt$ L="$(git rev-parse --absolute-git-dir)/mindflock_preco\n'
+        'mmit.lock"; rm -f .mindflock_commit_status; git commit -F .mindflock_commit_msg\n'
+        "fatal: Unable to create '/home/u/code/demo/.git/worktrees/write-delta-notes_1\n"
+        "8dbbc1b839992f7/index.lock': File exists.\n"
+        "Another git process seems to be running in this rep\n"
+        "ository, e.g.\n"
+        "are terminated then try again. If it still fails, a\n"
+        " git process\n"
+        "user@host:~/wt$\n"
+    )
+    from backend.web.core.agent_state import INDEX_LOCK_STEP
+
+    assert server._parse_failed_step(text) == INDEX_LOCK_STEP
+
+
 def test_parse_failed_step_truncates_long_lines():
     text = (
         "$ touch .mindflock_precommit.lock; git commit -F .mindflock_commit_msg\n"
@@ -443,7 +463,7 @@ def test_diff_stat_counts_committed_plus_uncommitted(tmp_path, monkeypatch):
         "files": 2,
         "additions": 3,
         "deletions": 0,
-        "uncommitted": {"additions": 1, "deletions": 0},
+        "uncommitted": {"files": 1, "additions": 1, "deletions": 0},
     }
 
 
@@ -454,7 +474,7 @@ def test_diff_stat_counts_untracked_files(tmp_path):
     (wt / "new.txt").write_text("n1\nn2\nn3\n")
     stat = server._session_diff_stat(inst)
     assert stat["files"] == 1 and stat["additions"] == 3
-    assert stat["uncommitted"] == {"additions": 3, "deletions": 0}
+    assert stat["uncommitted"] == {"files": 1, "additions": 3, "deletions": 0}
 
 
 def test_diff_stat_is_cached_about_ten_seconds(tmp_path):
@@ -465,7 +485,7 @@ def test_diff_stat_is_cached_about_ten_seconds(tmp_path):
         "files": 0,
         "additions": 0,
         "deletions": 0,
-        "uncommitted": {"additions": 0, "deletions": 0},
+        "uncommitted": {"files": 0, "additions": 0, "deletions": 0},
     }
     # New change inside the TTL -> the cached answer is returned as-is.
     (wt / "a.txt").write_text("one\ntwo\n")

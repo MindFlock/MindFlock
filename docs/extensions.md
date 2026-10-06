@@ -58,6 +58,10 @@ Core vocabulary (emitted by the server):
 | `session.red_zone_blocked` | The red-zone guard denied the agent an edit — or a push/PR while zoned files are committed (`push: true`) — once per session and zone (or push) per work cycle | `data: {count, zone_ids, patterns, paths, tool, push, detail}` |
 | `session.red_zone_breached` | A file inside a red zone actually changed (verified against git / the content baseline) — once per worktree and path, seeded silently on first sight | `data: {paths, patterns, total, blocks_push, detail}` |
 | `session.red_zone_tampered` | The guard file, the hook config or the zone store was interfered with (`session` may be `""` for a store change) | `data: {what: guard·hooks·store, detail}` |
+| `run.changed` | A team run (group) changed: a task moved, paused, lines added — for refetching only | `data: {run, state, counts}` |
+| `run.needs_you` | A group escalation, once per (run, task, reason, incarnation): stuck after two nudges, ship halted twice, blocked, restart, budget. Never for a dialog (`needs_input` covers it); `session` is the member, `""` for the budget | `new` = reason; `data: {run, task, title, reason, text, detail}` |
+| `run.task_shipped` | A group member reached its lane | `data: {run, task, title, pr_url, detail}` |
+| `run.finished` | A group's last task finished — once, across restarts | `data: {run, name, shipped, failed, cost_usd, duration_s, detail}` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:

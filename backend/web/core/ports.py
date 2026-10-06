@@ -30,6 +30,7 @@ import threading
 from typing import Dict, Optional
 
 from backend.config.config import GetConfigDir
+from backend.config.home_guard import guard
 
 _FileName = "ports.json"
 
@@ -52,7 +53,7 @@ def _path() -> str:
     """
     env = os.environ.get("MINDFLOCK_PORTS_FILE")
     if env:
-        return env
+        return guard(env, "port store")
     return os.path.join(GetConfigDir(), _FileName)
 
 

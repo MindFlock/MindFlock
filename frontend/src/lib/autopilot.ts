@@ -24,13 +24,15 @@ export const SESSION_DEPTHS = ["commit", "push", "pr", "merge"] as const;
  * available on an individual item. */
 export const SOURCE_DEPTHS = ["agent", "commit", "push", "pr"] as const;
 
+/** The rungs in the words every fast-track control uses (lib/laneActions'
+ * LANE_LABEL); "agent" is the intake-only "stop once the agent stops". */
 export const DEPTH_LABELS: Record<string, string> = {
   off: "Off",
   agent: "Agent only",
   commit: "Commit",
   push: "Push",
-  pr: "Open PR",
-  merge: "Merge",
+  pr: "Open a PR",
+  merge: "Merge when green",
 };
 
 /** How the ladder reads in a dropdown. No leading "…": inside a CLOSED select a
@@ -113,7 +115,7 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   const skipped = run.skipped?.length
     ? "\nSkipped hooks: " + run.skipped.join(", ")
     : "";
-  return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
+  return "Fast-tracking to " + target + where + skipped;
 }
 
 /** A short header label naming WHY a PR cannot merge.

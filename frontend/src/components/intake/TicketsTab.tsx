@@ -29,6 +29,8 @@ import {
 } from "../../state/queries";
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
+import { useUi } from "../../state/store";
+import { startTogetherText } from "../../lib/runStart";
 import {
   AutomationSwitch,
   SourceCard,
@@ -626,6 +628,18 @@ function AssignedTickets({
 
   const [shown, setShown] = useState<string[] | null>(loadShownBuckets);
   const [mineOnly, setMineOnly] = useState<boolean>(loadMineOnly);
+  // Tickets ticked to start together, keyed source:id, in the order ticked —
+  // the order they will be listed (and started) in. Not persisted: a pick is
+  // a moment's intent, not a setting.
+  const [picked, setPicked] = useState<Map<string, AssignedTicket>>(() => new Map());
+  const pickKey = (t: AssignedTicket) => t.source + ":" + t.id;
+  const setPick = (t: AssignedTicket, on: boolean) =>
+    setPicked((m) => {
+      const next = new Map(m);
+      if (on) next.set(pickKey(t), t);
+      else next.delete(pickKey(t));
+      return next;
+    });
   // The key predates the source level, when an entry was a bare state name.
   // Those can never match a `source::state` key again, so they are dropped on
   // load rather than accumulating forever; the cost is that a previously
@@ -876,6 +890,10 @@ function AssignedTickets({
                         configuredDepth={sourceDepths[t.source] || ""}
                         configuredEffort={sourceEfforts[t.source] || ""}
                         onStarted={relistTickets}
+                        pick={{
+                          checked: picked.has(pickKey(t)),
+                          onChange: (on) => setPick(t, on),
+                        }}
                       />
                     ))}
                   </WorkGroup>
@@ -935,6 +953,32 @@ function AssignedTickets({
           );
         })
       )}
+      {picked.size > 0 && (
+        // Sticky to the bottom of the dialog's scroll, so it stays in reach
+        // while more rows are ticked further down. Opens New in list mode with
+        // the tickets already in its box — the lane, PR grouping and pace are
+        // chosen there, in the one place a batch is described.
+        <div className="ik-pickbar" role="region" aria-label="Picked tickets">
+          <span>
+            {picked.size} ticket{picked.size === 1 ? "" : "s"} ·{" "}
+          </span>
+          <button
+            type="button"
+            id="tk-start-together"
+            className="ik-pick-go"
+            onClick={() => {
+              const text = startTogetherText([...picked.values()]);
+              setPicked(new Map());
+              useUi.getState().openNewWith(text);
+            }}
+          >
+            Start together…
+          </button>
+          <button type="button" className="linklike" onClick={() => setPicked(new Map())}>
+            Clear
+          </button>
+        </div>
+      )}
     </WorkListPanel>
   );
 }
@@ -947,8 +991,11 @@ function AssignedTicketRow({
   configuredDepth,
   configuredEffort,
   onStarted,
+  pick,
 }: {
   t: AssignedTicket;
+  /** The "start together" tick box. */
+  pick?: { checked: boolean; onChange(on: boolean): void };
   /** Every ticket the panel holds, for the Merge picker's candidate list. */
   all: AssignedTicket[];
   agents: string[];
@@ -969,6 +1016,7 @@ function AssignedTicketRow({
     all.some((o) => o.source === t.source && String(o.id) !== String(t.id));
   return (
     <WorkItemRow
+      pick={pick}
       agents={agents}
       configuredAgent={configuredAgent}
       configuredDepth={configuredDepth}
@@ -1252,7 +1300,7 @@ function TicketSourceCard({
         </span>
       </label>
       <label className="set-row">
-        <span className="set-label">Take tickets as far as</span>
+        <span className="set-label">Fast-track tickets to</span>
         <select
           className="tk-depth"
           data-tk-field="depth"

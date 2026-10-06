@@ -101,6 +101,50 @@ def exclude_artifacts(directory: Path | str) -> None:
                     f.write(a + "\n")
     except OSError as err:  # noqa: BLE001
         _logger.debug("workspace: could not update info/exclude: %s", err)
+    _drop_intent_to_add_artifacts(directory)
+
+
+def _drop_intent_to_add_artifacts(directory: Path) -> None:
+    """Take MindFlock's own scratch files back OUT of the index when they
+    were only intent-to-added (best-effort).
+
+    The diff-stat probe runs ``git add -N .`` so untracked files count; in a
+    worktree whose ``info/exclude`` was not written yet (a plain worktree that
+    never went through a guided commit) that marks e.g. the verification
+    check's ``.mindflock_check.json`` intent-to-add — after which the tree
+    reads dirty forever, ``git merge`` refuses outright ("not uptodate"), and
+    the next ``git add -A`` would commit it. Only ``" A"`` entries (intent to
+    add, nothing staged) are touched, so a file a repo genuinely tracks is
+    never unstaged."""
+    names = [a.rstrip("/") for a in WORKSPACE_ARTIFACTS]
+    try:
+        cp = subprocess.run(
+            ["git", "-C", str(directory), "status", "--porcelain", "--", *names],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    if cp.returncode != 0:
+        return
+    ita = []
+    for line in cp.stdout.decode("utf-8", "replace").splitlines():
+        if line.startswith(" A ") and len(line) > 3:
+            path = line[3:].strip()
+            if any(path == n or path.startswith(n + "/") for n in names):
+                ita.append(path)
+    if not ita:
+        return
+    try:
+        subprocess.run(
+            ["git", "-C", str(directory), "rm", "--cached", "-q", "--", *ita],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 @dataclass

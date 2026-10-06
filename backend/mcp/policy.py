@@ -21,6 +21,10 @@ kill_session, set_parent):
   THIS server process, plus their descendants;
 * never itself, never a remote ``device::title`` row, never a pending row.
 
+Shipping (ship_session, set_autopilot) is "managed" plus the caller's OWN
+session; a merge additionally needs ``confirm_merge`` and, under
+``children``, a target that is a descendant (never the caller itself).
+
 Messaging (delivery ``auto``/``inbox``) to any local session is allowed in
 every scope but ``readonly``.
 """
@@ -199,6 +203,89 @@ class Policy:
             "session identity). Start the server with --scope all to manage "
             "other sessions." % (action, title, scope)
         )
+
+    def require_ship(
+        self,
+        flock: Flock,
+        title: str,
+        action: str,
+        merge: bool = False,
+        confirm_merge: bool = False,
+        depth: str = "",
+    ) -> dict:
+        """ship_session / set_autopilot: the target must be the caller itself
+        or a session it manages (never remote, never pending). ``merge`` —
+        the one step that cannot be undone — also needs ``confirm_merge`` and
+        either scope ``all`` or a target that is the caller's own descendant
+        (under ``children`` a session may not merge ITSELF: that is its
+        parent's or the user's call).
+
+        Whatever the scope, an agent never ships PAST what the user chose:
+        a team run's member or lead ships only with its group; a lane the
+        user set with "ask me before it ships" waits for the user's own go;
+        and ``depth`` may not go further than a lane the user set (``"off"``
+        — stopping — is always allowed)."""
+        self.require_write(flock, action)
+        row = self.require_local(flock, title)
+        self.require_user_lane(row, title, action, depth)
+        me = flock.self_title
+        is_self = bool(me) and title == me
+        if not is_self and not self.is_managed(flock, title):
+            if me:
+                raise ToolError(
+                    "%s needs %r to be you or one of your descendants (scope %s); "
+                    "it is not. Ask its parent or the user to ship it."
+                    % (action, title, self.scope(me))
+                )
+            raise ToolError(self._unmanaged_message(flock, title, action))
+        if merge:
+            if not confirm_merge:
+                raise ToolError(
+                    "merging is the one step that cannot be undone: pass "
+                    "confirm_merge=true once the user (or your task) clearly "
+                    "asked for a merge; otherwise stop at depth pr"
+                )
+            if is_self and self.scope(me) != "all":
+                raise ToolError(
+                    "merging your own session needs scope all; stop at depth pr "
+                    "and let your parent or the user merge it"
+                )
+        return row
+
+    @staticmethod
+    def require_user_lane(row: dict, title: str, action: str, depth: str) -> None:
+        """Refuse a ship that would override the user's own choice for
+        ``title`` (see :meth:`require_ship`)."""
+        run = row.get("run") if isinstance(row.get("run"), dict) else None
+        if run and run.get("id"):
+            raise ToolError(
+                "%s refused: %r is %s group %r — MindFlock ships it with the "
+                "group, and your user steers the group"
+                % (
+                    action,
+                    title,
+                    "the lead of" if run.get("role") == "lead" else "part of",
+                    run.get("name") or run.get("id"),
+                )
+            )
+        if depth in ("", "off"):
+            return
+        lane = row.get("lane") if isinstance(row.get("lane"), dict) else None
+        if not lane or str(lane.get("by") or "user") != "user":
+            return
+        if lane.get("ask_first"):
+            raise ToolError(
+                "%s refused: your user set %r to ask them before it ships — "
+                "only they can approve it (MindFlock's Outbox)" % (action, title)
+            )
+        order = ("leave", "commit", "push", "pr", "merge")
+        want = {"agent": "leave", "off": "leave"}.get(depth, depth)
+        have = str(lane.get("target") or "")
+        if have in order and want in order and order.index(want) > order.index(have):
+            raise ToolError(
+                "%s refused: your user set %r to stop at %s; depth %s would go "
+                "further — ask them" % (action, title, have, depth)
+            )
 
     def require_set_parent(self, flock: Flock, target: str, new_parent: str) -> dict:
         """Adopt / re-parent / detach rules (see set_parent's description)."""

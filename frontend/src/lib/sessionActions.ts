@@ -5,7 +5,7 @@
  * dialog components own their submit logic. */
 
 import { ApiError, api, instApi } from "../api/client";
-import type { AutopilotRun, Caps, Config, Instance } from "../api/types";
+import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { patchInstance, queryClient, refreshInstances } from "../state/queries";
@@ -14,7 +14,6 @@ import { displayName, setSessionSelector, useUi, windowKey } from "../state/stor
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
-import { depthLabel, normalizeDepth } from "./autopilot";
 import { focusTerm, releaseTerms } from "./terminals";
 import { errorPop } from "./errorPop";
 
@@ -501,96 +500,6 @@ export async function pushSession(title: string, force = false, overrideRedZones
   // the one session fresh instead — and the server's push watcher republishes the
   // moment the branch reaches origin, so "Make PR" appears without another poll.
   void freshStage(title);
-}
-
-/* --- Fast-track (autopilot) ------------------------------------------------
- * Arm-and-WAIT, deliberately: a press records the target rung and the server
- * driver takes each step as the session becomes ready for it. That is what lets
- * you arm a session the moment you kick it off instead of babysitting it — and
- * it is what makes this button and the intake depth option the same mechanism.
- * The cost is that the effect is not instant, so the pane must show the armed
- * chip immediately or the press reads as broken. */
-
-/** The rung the ⏩ button will stop at, for LABELLING only.
- *
- * Display-only on purpose. There used to be a sticky `localStorage` value that
- * outranked the server setting — and the commit dialog wrote it on every dropdown
- * change — so browsing that dropdown once pinned every ⏩ button on the machine
- * forever and Settings appeared to do nothing. There is now exactly one
- * authority: the server. It resolves the depth whenever a request omits one, and
- * reports the resolved value on /api/config purely so the UI can name it. */
-export function resolveDepth(): string {
-  const cfg = queryClient.getQueryData<Config>(["config"]);
-  return normalizeDepth(cfg?.fasttrack_depth) || "pr";
-}
-
-/** Arm the chain. `message` is only needed when there is uncommitted work and
- * nothing is on disk to reuse — the same rule POST /commit applies. */
-export async function startFastTrack(
-  title: string,
-  depth?: string,
-  message?: string,
-  base?: string
-) {
-  if (!title || !requireGit()) return;
-  // An explicit pick (the commit dialog, an intake row) is honoured; otherwise the
-  // body carries NO depth and the server applies the configured rung. That is what
-  // makes changing Settings take effect on every open window immediately.
-  const chosen = normalizeDepth(depth || "");
-  const d = chosen || resolveDepth();
-  // One up-front confirm for the irreversible rung, before anything is armed.
-  if (d === "merge") {
-    const where = base ? " into " + base : "";
-    if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
-      return;
-  }
-  // Flip the toggle NOW. The button's appearance is derived from the cached
-  // `autopilot` block, so waiting for the round trip made a local, instant action
-  // feel like a laggy one. The server's answer settles it a moment later; a
-  // failure rolls it back and says so.
-  const before = instances().find((i) => i.title === title)?.autopilot ?? null;
-  patchInstance(title, {
-    autopilot: {
-      depth: d,
-      state: "running",
-      step: "",
-      reason: "",
-      source: "session",
-      item: "",
-    },
-  });
-  try {
-    const r = await instApi<{ autopilot?: AutopilotRun | null }>(title, "/fast-track", {
-      json: {
-        ...(chosen ? { depth: chosen } : {}),
-        ...(message ? { message } : {}),
-        ...(base ? { base } : {}),
-      },
-    });
-    // Reconcile with the authoritative record the route already returns — no
-    // follow-up read needed, and arming changes no git state, so the old
-    // freshStage() call here was a full row recompute for nothing.
-    if (r?.autopilot) patchInstance(title, { autopilot: r.autopilot });
-    toast("Fast-tracking to " + depthLabel(d), { duration: 4000 });
-  } catch (err) {
-    patchInstance(title, { autopilot: before });
-    toast("Fast-track failed: " + errMsg(err), { duration: 6000 });
-  }
-}
-
-/** Disarm. Anything already typed into the shell keeps running — this only stops
- * the driver from taking the NEXT step, which is all it controls. */
-export async function stopFastTrack(title: string) {
-  if (!title) return;
-  const before = instances().find((i) => i.title === title)?.autopilot ?? null;
-  patchInstance(title, { autopilot: null }); // toggle off immediately
-  try {
-    await instApi(title, "/fast-track", { method: "DELETE" });
-    toast("Fast-track stopped");
-  } catch (err) {
-    patchInstance(title, { autopilot: before });
-    toast("Could not stop fast-track: " + errMsg(err), { duration: 6000 });
-  }
 }
 
 /** POST /reset-stage — the ↺ control: put this window back to idle.

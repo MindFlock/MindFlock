@@ -180,6 +180,27 @@ EVENT_NAMES = (
     # live session is on (data: {"what": "guard"|"hooks"|"store",
     # "detail": str}).
     "session.red_zone_tampered",
+    # Team runs (core.team_run_driver is their ONE emitter; ``session`` is the
+    # member's title where there is one, "" for the group as a whole).
+    #
+    # Any material change to a group — a task moved, the group paused, a
+    # line added (data: {"run", "state", "counts"}). For UI refetch only; no
+    # rule notifies on it.
+    "run.changed",
+    # An escalation the GROUP originated, once per (run, task, reason,
+    # incarnation): stuck after two nudges, ship halted twice, a blocked
+    # report, a conflict, the budget spent, a session gone after a restart.
+    # Never for a dialog — ``needs_input`` already covers that (data: {"run",
+    # "task", "title", "reason", "text", "detail"}).
+    "run.needs_you",
+    # A member reached its lane (data: {"run", "task", "title", "pr_url",
+    # "detail"}).
+    "run.task_shipped",
+    # The group's last task is done, once (persisted; a group that finished
+    # while the server was down announces after the boot quiet window)
+    # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
+    # "detail"}).
+    "run.finished",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

@@ -13,6 +13,8 @@ import { slotNumber } from "../lib/windowName";
 import { childrenByParent, inFamily, messageNotif, workerOf, type MessageEventData } from "../lib/agentMessages";
 import { openThread } from "../lib/flockActions";
 import { AnswerStrip } from "./AnswerStrip";
+import { runNote } from "../lib/runs";
+import { ruleOn, runLookups, useNotifyConfig } from "../state/runs";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -37,12 +39,36 @@ interface Notif {
   session: string;
   text: string;
   cls: string;
+  /** A run event's group: the row opens the Outbox on it. */
+  run?: string;
+  /** A group's lead whose Thread holds the click (a plan, the one PR). */
+  lead?: string;
+  /** Same fact, same key — a replay under a new seq adds no second row. */
+  dedupe?: string;
+}
+
+/** A bell row as notifFromEvent produces it. `rule` names the notify rule that
+ * gates it (the bell is the third, otherwise ungated channel). */
+export interface NotifRow {
+  text: string;
+  cls: string;
+  run?: string;
+  lead?: string;
+  dedupe?: string;
+  rule?: string;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
-export function notifFromEvent(env: EventEnvelope): { text: string; cls: string } | null {
+export function notifFromEvent(env: EventEnvelope): NotifRow | null {
   const d = env.data || {};
   switch (env.event) {
+    // Ship lanes: a group's escalation, a line shipped, a group finished. One
+    // emitter on the server sends each once; `run.changed` is a refetch, not
+    // news, and a "prompt" needs-you is the session's own clarify row above.
+    case "run.needs_you":
+    case "run.task_shipped":
+    case "run.finished":
+      return runNote(env.event, d, runLookups);
     case "session.created":
       return { text: "created", cls: "n-info" };
     case "session.create_failed":
@@ -144,15 +170,20 @@ export function NotificationsBell() {
 
   // Feed from the event bus; the replayed backlog IS the away-history,
   // deduped by seq. "Unread" keys on ts (seq resets on server restart).
+  // The per-rule switches (Settings → Notifications), read for the rows that
+  // name a rule — kept warm here because the bell is always mounted.
+  useNotifyConfig();
   useEffect(() => {
     const bus = window.mindflock?.events;
     if (!bus) return;
     return bus.subscribe("*", (env) => {
       const n = notifFromEvent(env);
       if (!n) return;
+      if (n.rule && !ruleOn(n.rule)) return;
       const seq = typeof env.seq === "number" ? env.seq : 0;
       setNotifs((prev) => {
         if (seq && prev.some((x) => x.seq === seq)) return prev;
+        if (n.dedupe && prev.some((x) => x.dedupe === n.dedupe)) return prev;
         const next = [
           ...prev,
           { seq, ts: env.ts || Date.now() / 1000, session: env.session || "", ...n },
@@ -324,11 +355,25 @@ export function NotificationsBell() {
                     key={n.seq || n.ts + ":" + i}
                     className={"notif-item " + n.cls + (n.ts > seenTs ? " unread" : "")}
                     data-session={n.session}
-                    onClick={() => jump(n.session)}
+                    onClick={() => {
+                      // A group's row opens the Outbox on that group — where
+                      // its escalation, or its summary, is.
+                      if (n.lead) {
+                        // The plan to approve / the one PR to open live on
+                        // the lead's Thread tab — the click goes there.
+                        setOpen(false);
+                        openThread(n.lead);
+                      } else if (n.run) {
+                        setOpen(false);
+                        useUi.getState().openDialogFor("outbox", n.run);
+                      } else jump(n.session);
+                    }}
                   >
                     <span className="notif-sess">
-                      {(slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
-                        (aliases[n.session] || n.session || "—")}
+                      {n.run && !n.session
+                        ? "Outbox"
+                        : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
+                          (aliases[n.session] || n.session || "—")}
                     </span>
                     <span className="notif-text">{n.text}</span>
                     <span className="notif-time">{relTime(n.ts)}</span>

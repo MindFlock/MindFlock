@@ -520,8 +520,9 @@ class RepositorySettings:
     # blank = unset, which falls through the resolution chain to "auto".
     # NOT a rewrite of `url` — that spelling is always used verbatim.
     git_transport: str = ""
-    # How far the fast-track button carries a session by default: one of
-    # "commit" / "push" / "pr" / "merge". Blank = the built-in default ("pr").
+    # THE fast-track default for new sessions (the New dialog and Start
+    # together start on it): one of "commit" / "push" / "pr" / "merge", or
+    # "off". Blank = the built-in default ("pr").
     fasttrack_depth: str = ""
     # Comma-separated pre-commit hook IDs (NOT display names) whose failure the
     # fast-track driver may retry, and then skip via ``SKIP=`` on a final
@@ -1549,7 +1550,9 @@ def settings_path() -> Path:
     """
     env = os.environ.get("MINDFLOCK_SETTINGS_FILE")
     if env:
-        return Path(env)
+        from backend.config.home_guard import guard
+
+        return Path(guard(env, "settings store"))
     return Path(GetConfigDir()) / SettingsFileName
 
 

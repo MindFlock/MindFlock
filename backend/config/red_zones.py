@@ -97,6 +97,9 @@ __all__ = [
     "green_deny_reason",
     "green_scope_message",
     "exact_re",
+    "set_session_fence",
+    "drop_session_fence",
+    "session_fences",
 ]
 
 STORE_VERSION = 1
@@ -197,23 +200,35 @@ def _assistant_dir() -> str:
 
 def store_path() -> str:
     """The zone store JSON file."""
+    from backend.config.home_guard import guard
+
     env = os.environ.get("MINDFLOCK_RED_ZONES_FILE")
     if env:
-        return env
+        return guard(env, "red-zone store")
     return os.path.join(_config_dir(), "red_zones.json")
 
 
 def guard_dir() -> str:
     """The directory holding per-root guard files (what the hook reads)."""
-    return os.environ.get(
-        "MINDFLOCK_RED_ZONE_DIR", os.path.join(_assistant_dir(), ".red-zones")
+    from backend.config.home_guard import guard
+
+    return guard(
+        os.environ.get(
+            "MINDFLOCK_RED_ZONE_DIR", os.path.join(_assistant_dir(), ".red-zones")
+        ),
+        "red-zone guard dir",
     )
 
 
 def feed_dir() -> str:
     """The directory holding per-session tool-feed ``.jsonl`` files."""
-    return os.environ.get(
-        "MINDFLOCK_TOOL_FEED_DIR", os.path.join(_assistant_dir(), ".tool-feed")
+    from backend.config.home_guard import guard
+
+    return guard(
+        os.environ.get(
+            "MINDFLOCK_TOOL_FEED_DIR", os.path.join(_assistant_dir(), ".tool-feed")
+        ),
+        "tool-feed dir",
     )
 
 
@@ -1353,6 +1368,121 @@ def plan_first(repo_id: Optional[str]) -> bool:
         return bool((data["repos"].get(repo_id) or {}).get("plan_first"))
 
 
+# --------------------------------------------------------------------------- #
+# Per-SESSION fences in a shared folder (a same-folder split's pieces)
+# --------------------------------------------------------------------------- #
+# A worktree's green zones fence EVERY session in it — the guard file is per
+# root. Several agents sharing one folder (a split run "in this folder") each
+# need their OWN fence, so these live beside the worktree's zones, keyed by
+# the session's tmux name (sanitized, as the hook resolves it at fire time
+# from its own pane), and the guard carries them as ``sessions``: the hook
+# overlays its own entry's rules as its green scope; a session with no entry
+# (the lead, a person's own window) sees the folder's zones unchanged.
+def _session_key(tmux_name: str) -> str:
+    return _sanitize(str(tmux_name or ""))
+
+
+def set_session_fence(
+    wt: str,
+    tmux_name: str,
+    patterns: Iterable[str],
+    *,
+    name: str = "",
+    owner: str = "",
+    no_commit: bool = True,
+) -> Tuple[List[str], List[str]]:
+    """Fence ONE session in ``wt`` to ``patterns`` ("only here"), plus — with
+    ``no_commit`` — refuse it git's index/commit/branch commands (MindFlock
+    commits its paths). → ``(added patterns, problems)``. Idempotent."""
+    key = _session_key(tmux_name)
+    if not key:
+        return [], ["no session name"]
+    added: List[str] = []
+    problems: List[str] = []
+    zones: List[dict] = []
+    for raw in patterns or ():
+        try:
+            norm, anchored = normalize_pattern(str(raw))
+            pat = ("/" + norm) if anchored else norm
+            compile_pattern(pat)
+        except (ValueError, TypeError) as err:
+            problems.append("%s (%s)" % (raw, err))
+            continue
+        if pat in added:
+            continue
+        added.append(pat)
+        zones.append({"id": _new_zone_id(), "pattern": pat, "name": name})
+    if not zones:
+        return [], problems or ["no pattern"]
+    real = os.path.realpath(wt)
+    with _LOCK:
+        data = _load()
+        entry = data["worktrees"].setdefault(real, {})
+        sessions = entry.setdefault("sessions", {})
+        sessions[key] = {
+            "green": zones,
+            "owner": str(owner or ""),
+            "no_commit": bool(no_commit),
+            "at": int(time.time()),
+        }
+        _save(data)
+    return added, problems
+
+
+def drop_session_fence(wt: str, tmux_name: str = "", owner: str = "") -> int:
+    """Remove one session's fence in ``wt`` (``tmux_name``), or every fence
+    ``owner`` set there. Returns how many went."""
+    real = os.path.realpath(wt)
+    key = _session_key(tmux_name) if tmux_name else ""
+    gone = 0
+    with _LOCK:
+        data = _load()
+        entry = data["worktrees"].get(real) or data["worktrees"].get(wt)
+        sessions = (entry or {}).get("sessions")
+        if not isinstance(sessions, dict):
+            return 0
+        for k in list(sessions):
+            v = sessions.get(k) or {}
+            if (key and k == key) or (owner and v.get("owner") == owner):
+                sessions.pop(k, None)
+                gone += 1
+        if gone:
+            if not sessions:
+                entry.pop("sessions", None)
+            _save(data)
+    return gone
+
+
+def session_fences(wt: str) -> Dict[str, dict]:
+    """``{session key: {"green": [zone], "owner", "no_commit"}}`` in ``wt``."""
+    with _LOCK:
+        data = _load()
+        got = _wt_entry(data, wt).get("sessions")
+        return {k: dict(v) for k, v in (got or {}).items() if isinstance(v, dict)}
+
+
+def _guard_sessions(wt: str) -> Dict[str, dict]:
+    out = {}
+    for k, v in session_fences(wt).items():
+        rules = []
+        for z in v.get("green") or []:
+            try:
+                rules.append(
+                    {
+                        "id": z.get("id"),
+                        "pattern": z.get("pattern"),
+                        "name": z.get("name") or "",
+                        "scope": "session",
+                        "re": compile_pattern(str(z.get("pattern") or "")),
+                    }
+                )
+            except (ValueError, TypeError):
+                continue
+        if rules:
+            out[k] = {"green_rules": rules, "no_commit": bool(v.get("no_commit"))}
+    return out
+
+
 def forget_worktree(wt: str) -> None:
     """Drop a worktree's own zones + waivers (called when it is removed)."""
     key = os.path.realpath(wt)
@@ -1716,10 +1846,12 @@ def sync_guard(
         if rules:
             files, dirs, _ignored, _trunc = zone_files(real_root, rules, ci=ci)
             sym = _sym_targets(real_root, files)
+        sessions = _guard_sessions(lroot or real_root)
         # enforcing(g) = rules or green_rules: the control files must be
         # protected whichever kind is armed (a green-only guard that left
-        # the zone store writable was a one-command bypass).
-        if rules or green_rules:
+        # the zone store writable was a one-command bypass) — and so must a
+        # folder whose only fences are per-session ones.
+        if rules or green_rules or sessions:
             protect = _control_protect_set(real_root)
         if green_rules:
             tests = test_companions(lroot or real_root, green_rules)
@@ -1745,6 +1877,10 @@ def sync_guard(
             "breaches": list(breaches or []),
             "ts": int(time.time()),
         }
+        if sessions:
+            # Only when there are some: every other guard keeps its exact
+            # bytes (and hash), so nothing is rewritten for this feature.
+            content["sessions"] = sessions
         new_hash = _guard_content_hash(content)
         path = guard_path(real_root)
 

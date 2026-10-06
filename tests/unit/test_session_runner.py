@@ -807,3 +807,106 @@ def test_pipeline_pr_review_is_decorated_off_its_workspace(
     prompt = options_seen[0].kwargs["prompt"]
     assert prompt.startswith("REVIEW IT")
     assert red_zones.PLAN_PROMPT in prompt and "`config/`" in prompt
+
+
+# --------------------------------------------------------------------------- #
+# Depth is configured per SOURCE, not per provider                             #
+# --------------------------------------------------------------------------- #
+def _two_jira_sources(monkeypatch, tmp_path):
+    from backend.config import settings as settings_store
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    settings_store.invalidate()
+    settings_store.update_settings(
+        ticketing={
+            "sources": [
+                {"id": "jira-web", "provider": "jira", "depth": "commit"},
+                {"id": "jira-pay", "provider": "jira", "depth": "pr"},
+            ]
+        }
+    )
+
+
+def test_depth_is_looked_up_by_the_tickets_source_key(config, monkeypatch, tmp_path):
+    """Two sources of one provider: the ticket's own source decides its rung.
+    Looking it up by ``story.provider`` matched whichever jira source came
+    first, so the payments project ran at the web project's rung."""
+    from backend.web.core import autopilot as ap
+
+    _two_jira_sources(monkeypatch, tmp_path)
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
+    runner = SessionRunner(config)
+    story = make_ticket(id=7, provider="jira")
+    story.source_key = "jira-pay"
+    seen = {}
+
+    def _arm(title, kind, lookup, item, message):
+        seen["lookup"] = lookup
+
+    monkeypatch.setattr(runner, "_arm_autopilot", _arm)
+    monkeypatch.setattr(
+        runner, "_create_instance", lambda *a, **k: MagicMock(GetWorktreePath=str)
+    )
+    monkeypatch.setattr(runner, "_post_start", AsyncMock())
+    with patch("backend.ticket_ingestion.session_runner.move_started", AsyncMock()):
+        import asyncio as _asyncio
+
+        _asyncio.run(runner.run(story))
+    assert seen["lookup"] == "jira-pay"
+    assert runner._depth_for("jira-pay") == "pr"
+    assert runner._depth_for("jira-web") == "commit"
+
+
+def test_a_source_without_its_own_depth_never_falls_back_to_the_global_default(
+    config, monkeypatch, tmp_path
+):
+    """Ticket ingestion is per source. A source with no depth of its own (and
+    an unknown source) is Off — never the Settings fast-track default, even
+    when that is explicitly "pr": an unattended pipeline is only ever armed by
+    the source it came from."""
+    from backend.config import settings as settings_store
+    from backend.web import server
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    settings_store.invalidate()
+    settings_store.update_settings(
+        repository={"fasttrack_depth": "pr"},
+        ticketing={"sources": [{"id": "jira-pay", "provider": "jira"}]},
+    )
+    runner = SessionRunner(config)
+    assert runner._depth_for("jira-pay") == ""
+    assert runner._depth_for("nowhere") == ""
+    assert server._source_intake_depth("jira-pay") == ""
+    assert server._fasttrack_default() == "pr"  # the global one is untouched
+
+
+def test_a_provider_name_still_resolves_an_unkeyed_lookup(
+    config, monkeypatch, tmp_path
+):
+    _two_jira_sources(monkeypatch, tmp_path)
+    runner = SessionRunner(config)
+    # The provider is only a fallback, so it answers with the first such source.
+    assert runner._depth_for("jira") == "commit"
+
+
+def test_an_exact_key_beats_an_earlier_provider_match(config, monkeypatch, tmp_path):
+    """A source keyed by the bare provider name ("jira") must not be shadowed
+    by an earlier source whose PROVIDER is jira."""
+    from backend.config import settings as settings_store
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    settings_store.invalidate()
+    settings_store.update_settings(
+        ticketing={
+            "sources": [
+                {"id": "jira-web", "provider": "jira", "depth": "commit"},
+                {"id": "jira", "provider": "jira", "depth": "push"},
+            ]
+        }
+    )
+    runner = SessionRunner(config)
+    assert runner._depth_for("jira") == "push"
+    from backend.web import server
+
+    assert server._source_intake_depth("jira") == "push"
+    assert server._source_intake_depth("jira-web") == "commit"

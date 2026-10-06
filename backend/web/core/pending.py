@@ -30,6 +30,7 @@ from typing import Dict, Optional, Set
 from backend import providers
 from backend.session.storage import Loading
 from backend.web.core import autopilot as _autopilot
+from backend.web.core import lanes as _lanes
 from backend.web.core.engine import get_engine
 
 # title -> {"kind": "pr"|"iss"|"tix", "since": epoch, **display meta}
@@ -122,6 +123,24 @@ def provisioning_kinds(engine=None) -> Set[str]:
     return {k for k in kinds if k}
 
 
+def _pending_lane(title: str):
+    try:
+        from backend.web import server
+
+        return server._row_lane(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return _lanes.lane_dto(title)
+
+
+def _pending_run(title: str):
+    try:
+        from backend.web import server
+
+        return server._row_run(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
 def rows(engine=None) -> list:
     """Sidebar entries for accepted starts with no instance yet.
 
@@ -159,9 +178,12 @@ def rows(engine=None) -> list:
                 "provisioned": True,
                 "workspace_strategy": meta.get("workspace_strategy", "clone"),
                 "in_place": False,
-                # Intake starts are human-side roots, never agent-spawned.
-                "parent": "",
-                "spawned": False,
+                # Intake starts are human-side roots — unless an agent started
+                # the item as its own worker (the MCP's spawn_ticket_session),
+                # which the start route records here so the provisioning row
+                # already reads as that agent's child.
+                "parent": str(meta.get("parent") or ""),
+                "spawned": bool(meta.get("spawned")),
                 "playbook": "",
                 "created_at": None,  # no session record exists yet
                 "diff_stat": None,
@@ -182,6 +204,11 @@ def rows(engine=None) -> list:
                 # for the whole clone+provision window — exactly when you would
                 # want to change your mind and turn it off.
                 "autopilot": _autopilot.dto(title),
+                # …and the lane it carries out, for the same reason.
+                "lane": _pending_lane(title),
+                # …and the team run it belongs to (a run's ticket task is a
+                # provisioning row first).
+                "run": _pending_run(title),
                 "queue": None,
                 "tokens": 0,
                 "tokens_in": 0,

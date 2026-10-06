@@ -32,6 +32,8 @@ any other MCP client yourself.
 - [The tools](#the-tools)
 - [Messages](#messages)
 - [Lineage: parents, workers, limits](#lineage-parents-workers-limits)
+- [Tickets and shipping](#list_tickets)
+- [Team runs: several things at once](#start_team_run)
 - [Scopes and policy (a guard-rail, not a security boundary)](#scopes-and-policy)
 - [Worked example: one orchestrator, three workers](#worked-example-one-orchestrator-three-workers)
 - [Troubleshooting](#troubleshooting)
@@ -75,13 +77,15 @@ the MCP, exactly as it did before this feature.
 - The `--opt=value` form matters. Both options take several values, and the
   seed prompt follows the launch args. In the spaced form Claude reads the
   prompt as a second config path and exits with "MCP config file not found".
-- `--allowedTools` pre-approves the nine tools that read, wait, or report
-  back to the caller's own parent. Without that, a worker running without
+- `--allowedTools` pre-approves the fifteen tools that read, wait, or report
+  back (to the caller's own parent, or — a split's lead — to the server, which
+  re-verifies). Without that, a worker running without
   skip-permissions would stall on a permission dialog the first time it
   reports. The list is **added to** your own permission rules and does not
-  replace them. The other five tools (`send_message`, `spawn_session`,
-  `answer_prompt`, `kill_session`, `set_parent`) still ask for permission
-  unless the session skips permissions. See
+  replace them. The other ten tools (`send_message`, `spawn_session`,
+  `spawn_ticket_session`, `answer_prompt`, `kill_session`, `set_parent`,
+  `ship_session`, `set_autopilot`, `start_team_run`, `control_run`) still ask
+  for permission unless the session skips permissions. See
   [Permission prompts](#permission-prompts).
 - There is no `--strict-mcp-config`, so your own MCP servers keep loading
   alongside it.
@@ -104,7 +108,7 @@ per launch rather than a `config.toml` edit, it also covers auth profiles that
 point `CODEX_HOME` at their own directory. Codex starts MCP servers with a
 cleared environment, so the session's identity is passed in `env` and the tmux
 and token variables are forwarded by name in `env_vars`. The `tools` table
-pre-approves the same nine tools as Claude's `--allowedTools`. Verified against
+pre-approves the same fifteen tools as Claude's `--allowedTools`. Verified against
 codex-cli 0.146: the override parses and the server registers. A Codex tool
 call has not yet been run end to end.
 
@@ -316,7 +320,7 @@ against every fresh listing.
 
 ## The tools
 
-Fourteen tools. Every result is JSON text. Clients that negotiate protocol
+The 25 tools. Every result is JSON text. Clients that negotiate protocol
 `2025-06-18` or later also get `structuredContent`. Arguments are checked
 against each tool's JSON schema, and a violation comes back as a tool error
 with a fix-it message, not a protocol error. The check is lenient about what
@@ -342,6 +346,17 @@ it.
 | `answer_prompt` | write, managed only | **no** |
 | `kill_session` | destructive, managed only | **no** |
 | `set_parent` | write | **no** |
+| `list_tickets` | read (the Intake ticket list) | yes |
+| `spawn_ticket_session` | write | **no** |
+| `ship_session` | write, pushes code; destructive at `merge` | **no** |
+| `set_autopilot` | write, pushes code; destructive at `merge` | **no** |
+| `start_team_run` | write, starts sessions that push code | **no** |
+| `get_run` | read | yes |
+| `list_runs` | read | yes |
+| `wait_for_run` | wait | yes |
+| `control_run` | write (pause, resume, cancel, retry, skip, release) | **no** |
+| `propose_run_plan` | report, a split's lead only (the user approves) | yes |
+| `report_integrated` | report, a split's lead only (the server re-verifies) | yes |
 
 "Auto-approved" is the `--allowedTools` list for Claude and the
 `approval_mode = "approve"` table for Codex. The server also sends
@@ -351,18 +366,29 @@ teach the worker and orchestrator workflows below. In the tables that follow,
 
 ### Permission prompts
 
-Only the tools that read, wait, or report to the caller's own parent are
-pre-approved: `whoami`, `list_sessions`, `get_session`, `read_output`,
-`get_diff`, `check_inbox`, `wait_for_message`, `wait_for_session` and
-`report_result`. Everything else asks first, **unless the session runs with
+Only the tools that read, wait, or report are pre-approved: `whoami`,
+`list_sessions`, `get_session`, `read_output`, `get_diff`, `check_inbox`,
+`wait_for_message`, `wait_for_session`, `report_result`, `list_tickets`,
+`get_run`, `list_runs`, `wait_for_run`, and a split lead's two reports,
+`propose_run_plan` (it only stores a plan for the user to approve) and
+`report_integrated` (the server re-verifies the merge by ancestry) — without
+them a lead in a permission-gated session would park on a dialog in planning.
+Everything else asks first, **unless the session runs with
 skip-permissions**:
 
 - `send_message` can type text into any local session, including one that
   runs with skip-permissions. If it were pre-approved, a session where a
   human approves every Bash or network call (one reading an untrusted issue,
   say) could steer a session that has no such gate.
-- `spawn_session`, `answer_prompt`, `kill_session` and `set_parent` act on
-  other sessions.
+- `spawn_session`, `spawn_ticket_session`, `answer_prompt`, `kill_session`
+  and `set_parent` act on other sessions (and `spawn_ticket_session` moves the
+  ticket on its board).
+- `ship_session` and `set_autopilot` push code and open PRs, and at depth
+  `merge` merge them. Their annotations say so (`destructiveHint` and
+  `openWorldHint` true).
+- `start_team_run` starts sessions that MindFlock then commits, pushes and
+  opens PRs for; `control_run` cancels, retries and releases a group
+  (`openWorldHint` true).
 
 So an orchestrator launched **without** skip-permissions stops on a
 permission dialog for each message, spawn, answer and kill. Run orchestrators
@@ -394,7 +420,8 @@ narrower than configured. Call it first.
 (`running|ready|loading|paused`), `activity`
 (`working|idle|clarify|limit|offline`), `activity_since`, `stage`, `program`,
 `branch`, `folder`, `parent`, `spawned`, `last_turn`, `is_self`, `managed`,
-plus `remote`/`pending` when true. Sessions you manage come first. Remote
+plus `remote`/`pending` when true, and `autopilot` (depth, state, step,
+reason, url) and `pr_url` when set. Sessions you manage come first. Remote
 `device::title` rows are listed but are never managed. Don't poll this to wait
 for workers. Use `wait_for_session`.
 
@@ -638,6 +665,297 @@ under one of your descendants, or detaches it. Under `children` scope:
 
 Cycles and self-parenting are refused. → `{ok, title, parent, session}`.
 
+### `list_tickets`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `query` | — | matches the slug or name (substring) or the id (exact) |
+| `source` | — | only this Intake ticket source |
+| `startable_only` | false | drop tickets that already have a session |
+| `limit` | 30 (max 200) | rows returned |
+
+→ `{tickets: [{source, id, slug, name, url, state, session, has_session,
+eligible, reasons, assignee}], more, sources, errors?, stale?}`. A thin view of
+`GET /api/tickets`, the list Intake → Tickets shows: the tickets on your
+configured sources, with the reasons auto-ingestion did or didn't take each
+one (`state` is the workflow-state bucket). The server serves it from its
+stale-while-revalidate cache, so calling it costs no tracker round trip most of
+the time, and the tool cannot force a refresh. A source that failed (a bad
+token, the network) is listed in `errors` instead of failing the call.
+
+### `spawn_ticket_session`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `ticket` | required | the ticket's slug (`sc-23588`), id or URL as `list_tickets` shows it |
+| `source` | — | the Intake source; needed when the ticket is not in `list_tickets` or matches on several sources |
+| `agent` | the source's | agent CLI for this ticket (a provider name) |
+| `effort` | the source's | thinking-effort rung for this launch |
+| `note` | — | ≤ 4000 chars appended after the ticket text, under "Note from session `<you>`" |
+| `autopilot` | `off` | `off`, `commit`, `push`, `pr` or `merge` (merge needs `confirm_merge: true`) |
+| `report_back` | true | append the report-back footer |
+| `wait_ready` | true | wait up to 45 s for the session to finish provisioning |
+
+→ `{title, ticket: {source, id, slug, name, url}, branch, program, status,
+ready, report_back, reason?, autopilot, warnings, hint?}`.
+
+Why a separate tool rather than a `ticket` argument on `spawn_session`: almost
+nothing about the two creates is shared. A ticket session's title, branch,
+repository, prompt and default CLI all come from the ticket and its source,
+it is always provisioned (never forked from your HEAD), and the server route
+is a different one. Folding that into `spawn_session` would have made half
+its arguments mean nothing for half its calls.
+
+How it works:
+
+- It starts the ticket through `POST /api/tickets/start`, the route behind
+  the Intake panel's **Begin work**, so the session is exactly what the panel
+  would make: titled by the ticket's slug, on its `feature/<slug>/<name>`
+  branch, provisioned from the ticket source's repository, seeded with the
+  ticket text, its attachments downloaded, the ticket moved to its source's
+  start state, and the processed-stories ledger updated.
+- The request carries `parent` = you, `spawned: true`, `report_back` and your
+  `note`. The server appends the same report-back footer `spawn_session` does,
+  when there is a parent and the ticket's CLI gets the MindFlock tools, and
+  says in `reason` when it didn't.
+- **The source's default fast-track rung is not applied.** `autopilot`
+  defaults to `off`: the worker reports back and you decide what ships. Pass
+  `autopilot` to arm one rung at creation (the per-start override the panel's
+  rung picker sends).
+- **It forks from the ticket repository's base branch, not your HEAD**, like a
+  provisioned worker of `spawn_session` (`base_ref` is not supported for
+  provisioned sessions). A warning says so.
+- The spawn limits hold: the server checks `MINDFLOCK_MAX_CHILDREN`,
+  `MINDFLOCK_MAX_SPAWN_DEPTH` and `MINDFLOCK_MAX_SPAWNED` before answering, and
+  again under the registry lock when the background launch claims the title.
+  A refusal at the claim, or any provisioning failure, makes the session
+  vanish; the tool then reports the server's reason from
+  `GET /api/create_failures`.
+- A ticket that already has a session is refused (409 from the server). Adopt
+  an agent-spawned one with `set_parent`, or message it.
+- A first provisioning can take minutes (a cold clone). A session still
+  provisioning after 45 s is not an error: `ready: false`, and
+  `wait_for_session` waits for it.
+- Resolving `ticket`: it is matched against `list_tickets` by slug, id, URL or
+  session title (case-insensitive). With `source` and no match, the reference
+  is sent as the tracker's own id, except that a Shortcut slug `sc-<n>` is
+  sent as `<n>`; a URL is refused there.
+
+Only the Intake → **Tickets** sources are covered (Shortcut, Jira, Linear,
+GitHub Issues and Asana sources). The Intake → **Issues** panel's repository
+issues (`POST /api/github/issues/start`) are not wired to the MCP yet.
+
+### `ship_session`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `title` | you | yourself or a session you manage |
+| `depth` | required | `commit`, `push`, `pr` or `merge` |
+| `message` | written from the diff | the commit message |
+| `pr_title` / `pr_body` | from the commits / the worker's report | the PR's title and body |
+| `base` | the configured PR base | the branch the PR targets |
+| `confirm_merge` | false | required for `depth: "merge"` |
+| `wait` | true | wait for the commit hooks and the push |
+| `timeout_s` | 600 (max 1500) | how long to wait in this call |
+
+→ `{title, depth, ok, steps: [{step, state, …}], branch?, pr_url?, warnings?,
+hint?, timed_out?}`. `state` is `done`, `skipped` (with a `reason`: nothing to
+commit, already pushed, a PR already open), `started` (`wait: false`),
+`running` (on timeout) or `handoff` (see below).
+
+It ships **now**, through the same routes as the session's own Commit, Push,
+Make PR and Merge buttons, in order, and stops at `depth`:
+
+1. **commit** — skipped on a clean tree. The message is yours, else the
+   message of an earlier attempt the hooks blocked (so a retry keeps its
+   subject), else one written from the diff by the session's own CLI (the ✨
+   button, `POST /commit-message/suggest`), else the first line of the
+   worker's last report, else a generic one (a warning says which). Then
+   `POST /commit`, which runs the repo's pre-commit hooks in the session's
+   shell, and the tool watches `GET /ship-status` until the commit lands or is
+   blocked. → `{sha, message}`.
+2. **push** — skipped when `HEAD` is already on `origin/<branch>`. Refused when
+   the branch has no commits beyond its base. `POST /push-branch`, then
+   watched until the local `origin/<branch>` ref is `HEAD`, or the shell shows
+   the push failing. → `{branch, sha}`.
+3. **pr** — skipped when the branch already has an open PR (its URL is
+   returned). Else `POST /make-pr` → `{url}`. The PR's title is the first
+   commit's subject. Its body is `pr_body`, else the worker's `report_result`
+   summary (what changed, the tests it ran, open issues), else the commits'
+   bodies.
+4. **merge** — only with `confirm_merge: true`, only when the branch has an
+   open PR, and only when the PR is mergeable: refused when GitHub names a
+   blocker (conflicts, a required review), when CI failed, and while CI is
+   still running (use `set_autopilot(depth="merge")` to merge once it
+   passes). Then `POST /merge-pr`, a true merge commit.
+
+Steps that are already done are skipped, so **calling it again resumes**:
+after a timeout, after `wait: false`, or after fixing a failed hook.
+
+When a step fails the tool returns an error naming it, with the steps done so
+far in its data:
+
+| Failure | What the error carries |
+|---|---|
+| a pre-commit hook blocked the commit | the hook's name and id (`failed_hook`) and the last 40 lines of the shell (`output_tail`); a retry reuses the same message |
+| the push was rejected or could not authenticate | the shell's error output after the push command (`output_tail`) |
+| the repo gates pushes on a check that has not passed | a pointer to `set_autopilot`, which runs the check and pushes once it passes |
+| a red-zone (or outside-green-zone) file is committed | the zone and the path; zoned files need a human |
+| no `origin` remote | the server's sentence |
+| nothing to push | the branch and its base |
+| the PR can't be merged / CI failed / CI running | the blockers, and `pr_url` |
+
+**Handoffs.** Without the `gh` CLI or a GitHub token, MindFlock can push but
+can't open or merge the PR itself. The step then reads `state: "handoff"`
+with a `url` (a prefilled compare page, or the PR page), the result has
+`ok: false`, and `hint` says to give the URL to your user. Nothing after it
+runs.
+
+**It refuses a session that is mid-turn.** "The agent is done" is not
+something MindFlock can know, only that a turn ended. Shipping a session whose
+agent is `working`, on a dialog (`clarify`), at its usage limit, still
+starting or paused would commit half-finished work, so it is refused with a
+pointer to `wait_for_session` or `set_autopilot`. Shipping **yourself** skips
+this check: you are mid-turn by definition, and you decide when your work is
+done.
+
+**It never races the autopilot.** A session whose autopilot is armed and
+running (its row's `autopilot.state` is `running`) is refused, yourself
+included: two drivers typing into one shell would commit and push twice.
+Disarm it with `set_autopilot(depth="off")` first. A finished or halted run
+doesn't count.
+
+### `set_autopilot`
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `title` | you | yourself or a session you manage |
+| `depth` | required | `off` (disarm), `commit`, `push`, `pr` or `merge` |
+| `message` | — | the commit subject to use (else a placeholder replaced at commit time by one written from the final diff) |
+| `base` | — | the PR base branch |
+| `confirm_merge` | false | required for `merge` |
+
+→ `{title, autopilot: {depth, state, step, reason, note, url, …}, hint}`, or
+`{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own autopilot
+(`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
+`off`). The autopilot waits until the agent's turn has ended and stayed idle
+for 30 s with nothing queued, then ships it up to `depth` through the same
+buttons, retries (then skips) a pre-commit hook Settings allow-lists, runs
+a gating check before the push, waits for CI before a merge, and halts with a reason on anything that
+needs a human (a failing test hook, a red zone, a merge blocker). Arming works
+while the agent is still working; that is the point. The state shows on the
+session's row as `autopilot`, in `get_session` and in `list_sessions`' compact
+rows. See [web-ui.md](web-ui.md) for the autopilot itself.
+
+Use `ship_session` for a worker that has reported and is idle, and
+`set_autopilot` for one that is still working (or for yourself, to ship after
+your current turn).
+
+### `start_team_run`
+
+"Work on PAY-412, PAY-415 and the webhook rate limit, 3 at a time, PR each"
+is one call. A **team run** is a server-driven group: one session per item,
+at most `concurrency` at a time with the rest queued, each carried along its
+**lane** by MindFlock's autopilot. See [team-runs.md](team-runs.md) for what
+the server does on its own (queueing, retries, nudges, restart safety) and what
+it surfaces to the user.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
+| `name` | suggested | the group's name |
+| `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
+| `ask_first` | false | stop before each item's first commit / push and wait for the user's go (the Outbox) |
+| `grouping` | `each` | `together` (one PR for all) is not available yet |
+| `concurrency` | 3 | 1–8 at a time |
+| `program` | the tickets' / the default CLI | the agent CLI for every item |
+| `repo_path` | your session's repo | where task lines run; tickets use their own repository |
+| `budget_usd` | — | pause the group when its members have spent this much |
+| `split` | false | not available yet |
+| `confirm_merge` | false | required for `lane: merge` |
+
+It previews first (`POST /api/runs/preview`): a ticket that resolves in no
+source is an error naming it — never silently turned into a task. Then
+`POST /api/runs` with `created_by: "agent:<you>"`. → `{run_id, name, lane,
+tasks: [{id, ref, title, state}], warnings, note}`. A ticket that already has a
+session is added to the group, not restarted (a warning says so).
+
+**The sessions are MindFlock's, not yours.** They have no parent, never enter
+your managed set, and don't report to you: you cannot answer, steer or kill
+them, so an orchestrator cannot override what the run decided. The user sees
+them as an ordinary group in the rail, with every row's status line leading
+with its lane.
+
+### `get_run`
+
+`{run_id}` → the run summary (`id, name, state, paused, pause_reason, policy,
+counts {queued, active, needs_you, shipped, failed, total}, cost_usd,
+created_at`) plus `tasks: [{id, ref, title, state, reason, detail, pr_url}]`.
+`needs_you` carries a reason (`prompt`, `stuck`, `blocked`, `ship_halted`,
+`restart`, `budget`, `approve`) and a one-line `detail`.
+
+### `list_runs`
+
+`{active_only?}` → `{runs: [summary]}`, newest first.
+
+### `wait_for_run`
+
+`{run_id, until: needs_you|done|change, timeout_s ≤1500}` → `{reason, run}`.
+Long-polls `GET /api/runs/{id}?wait=25&until=…&rev=…` in rounds like
+`wait_for_message`. `needs_you` also returns when the run finishes; `change`
+returns on any new revision. A `timeout` reason means nothing happened.
+
+### `control_run`
+
+`{run_id, action, task_id?, fresh?, budget_usd?}`. `pause` (nothing new
+starts or ships; agents keep working), `resume` (`budget_usd` raises the
+budget in the same call), `cancel` (stop starting and shipping; sessions and
+branches stay; queued tickets go back to ingestion), and per task `retry`
+(`fresh: true` starts `<title>-2` on a new branch and keeps the old one),
+`start_now` (past the concurrency cap once) and `skip` (a queued task is
+removed; a running one is detached and keeps its session and lane). `release`
+opens a one-for-all group's one PR once it is `release_ready` (the user's
+click does the same; it opens the PR and never merges — a push group pushes
+its branch). Only a group
+you started, or one your user started, can be steered — never another
+agent's — and on a group **your user** started, `release` and `resume` are
+refused: the one outward step and lifting a pause (or the budget stop) are
+theirs. It never answers an agent's prompt: that stays the user's (the rail
+strip or the Outbox).
+
+### `propose_run_plan`
+
+`{run_id, pieces: [{title, prompt, paths: [glob]}], why?}` → `{ok, problems,
+note}`. **The lead of a split only** (checked by identity, here and by the
+server). The lead does not spawn workers: it proposes 2–8 pieces, each a
+self-contained prompt plus the path globs it may change. The server checks
+them against the lead worktree's `git ls-files` and red zones — no two pieces
+may share a file, a piece may not sit wholly in a red zone, at most
+`MINDFLOCK_MAX_CHILDREN`, no two globs that can match one new path — and
+answers `{ok: false, problems: [{piece, error}]}` to fix, or `{ok: true}`. The user then approves the plan in one
+click (the lead's Thread tab, or the Outbox) and picks where the pieces run —
+the lead cannot approve (there is no MCP tool for it). **In separate
+worktrees** (the default): every piece a worker of the lead, forked from its
+last commit, fenced to its paths, committed, merged back, then the check; a
+lead that works directly in its folder or sits on its trunk is not merged
+into — MindFlock starts a new lead (`<lead>-split`) from its last commit and
+the group runs on that one. **In this folder**: every piece an extra agent in
+the lead's own folder, fenced to its paths per session, and MindFlock commits
+each piece's paths itself (one commit per piece, nothing to merge); the
+lead's folder must be on its own branch. Commit shared groundwork before
+proposing — unless you are on the trunk (your brief says so): then put it
+into a piece. See [team-runs.md](team-runs.md#splitting-one-task).
+
+### `report_integrated`
+
+`{run_id, task_id, head_sha}` → `{ok, verified, note?}`. **The lead of a split
+(or a one-for-all group) only.** When a merge conflicts, MindFlock aborts it
+and messages the lead with the files and the task id; the lead merges that
+branch itself, resolves, commits, and reports its new HEAD. The server never
+takes the word for it: `verified` is true only when the worker's branch head is
+in `head_sha` and `head_sha` is in the lead's HEAD; false leaves the piece in
+the merge queue (MindFlock also notices a finished merge on its own).
+
 ## Messages
 
 A message is stored in the **recipient's mailbox** (`~/.mindflock/mailbox.json`)
@@ -878,11 +1196,11 @@ minutes.
 
 The scope decides what an MCP server may **steer**. It never limits reading.
 
-| Scope | Read tools, `wait_*`, `check_inbox` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`) |
-|---|---|---|---|
-| `readonly` | yes | no | no |
-| `children` (default) | yes | yes, to any local session | sessions it **manages** |
-| `all` | yes | yes | any local session |
+| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`) | Ship (`ship_session`, `set_autopilot`) |
+|---|---|---|---|---|
+| `readonly` | yes | no | no | no |
+| `children` (default) | yes | yes, to any local session | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
+| `all` | yes | yes | any local session | any local session, itself included |
 
 What "manages" means under `children`:
 
@@ -892,6 +1210,23 @@ What "manages" means under `children`:
 
 Remote `device::title` rows and pending placeholder rows are never managed.
 Nothing may ever kill, answer or re-parent its own session.
+
+**Shipping.** A session may ship **itself** (it decides when its own work is
+done) as well as the sessions it manages. A **merge**, the one step that
+cannot be undone, needs `confirm_merge: true` on every call that can cause one
+(`ship_session` and `set_autopilot` at depth `merge`, `spawn_ticket_session`
+with `autopilot: "merge"`), and under `children` scope its target must be a
+descendant: a session cannot merge its own PR, that is its parent's or the
+user's call.
+
+**The user's choice wins, whatever the scope.** `ship_session` and
+`set_autopilot` refuse a session that belongs to a team run (a member or a
+lead — MindFlock ships it with the group, and the user steers the group); a
+session whose lane the user set with "ask me before it ships" (only the user
+approves it, in the Outbox — `depth: "off"` is still allowed); and any depth
+past a lane the user set (a lane an agent set — the row's `lane.by` is
+`agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
+on the lane it arms.
 
 An unknown scope value, or an auto-attached server that can't confirm its
 session, runs `readonly`.
@@ -945,7 +1280,8 @@ are left out until it has live children, and every item is disabled with a
 reason when the CLI gets no MindFlock tools, when this launch of it didn't
 (the row's `mcp_attached: false` — restart the agent), or while it is waiting
 on a prompt (a paste would answer the dialog). The New Session dialog's
-**Split across workers** sends `"playbook": "split"` to `POST /api/instances`:
+**Split across workers** sent `"playbook": "split"` to `POST /api/instances`
+(still accepted, legacy — the New dialog now starts a split as a team run):
 the launch prompt is decorated the same way, task first, and the session is
 forced into a worktree so its workers can fork from its commits. The session
 records it (`Playbook`, persisted; the row's `playbook: "split"`): it is an
@@ -1072,6 +1408,23 @@ get_diff {title: "api-billing", files: ["services/billing/limits.py"]}
 (git merge you/api-billing you/api-search you/api-upload && uv run pytest -q)
 ```
 
+**5b. Or give each worker its own PR.** When the pieces should be reviewed
+separately, ship a reported worker instead of merging it locally. The PR body
+is the worker's report:
+
+```
+ship_session {title: "api-billing", depth: "pr"}
+→ {ok: true, steps: [{step: "commit", state: "skipped", …},
+                     {step: "push", state: "done", branch: "you/api-billing", sha: "a91…"},
+                     {step: "pr", state: "done", url: "https://github.com/o/r/pull/42"}],
+   pr_url: "https://github.com/o/r/pull/42"}
+set_autopilot {title: "api-upload", depth: "pr"}    # still working: PR it when its turn ends
+```
+
+A worker forked from `api`'s HEAD records `api`'s branch as its base, so its
+PR targets that branch unless Settings names a default PR base or you pass
+`base`. Push `api`'s branch first, or pass `base: "main"`.
+
 **6. Follow up or tear down.** If a merge reveals a problem:
 
 ```
@@ -1161,11 +1514,31 @@ worker's branch or workspace "already exists" (a closed or paused session with
 that title keeps it). Default titles skip those; for an explicit `title`, pick
 another one.
 
-**A worker asks for permission to use a mindflock tool.** Only the nine
+**A worker asks for permission to use a mindflock tool.** Only the fifteen
 read, wait and report tools are pre-approved, so `send_message`,
-`spawn_session`, `answer_prompt`, `kill_session` and `set_parent` ask unless
-the worker skips permissions. Pass `launch_args` when spawning if workers must
+`spawn_session`, `spawn_ticket_session`, `answer_prompt`, `kill_session`,
+`set_parent`, `ship_session`, `set_autopilot`, `start_team_run` and
+`control_run` ask unless the worker skips permissions. Pass `launch_args` when spawning if workers must
 message, spawn or steer on their own.
+
+**`ship_session` says the session is mid-turn.** Its agent is working, on a
+dialog or at its usage limit, and shipping now could commit half-finished
+work. `wait_for_session` until it is done, or `set_autopilot` to ship it when
+its turn ends.
+
+**`ship_session` timed out at the commit or push.** The hooks or the push are
+still running in the session's shell (watch its Terminal tab). Call
+`ship_session` again with the same depth: finished steps are skipped. A commit
+that never starts usually means the session's shell is busy with something
+else.
+
+**`ship_session` returns a `handoff`.** Neither the `gh` CLI nor a GitHub token
+is available, so the PR (or the merge) is one click on GitHub instead. Add a
+token in Intake → Pull requests, or install `gh`, to let it finish on its own.
+
+**`spawn_ticket_session` can't find the ticket.** It matches against the
+Intake ticket list (`list_tickets`). For a ticket that isn't listed (not
+assigned to you, or filtered out), pass `source` and the tracker's own id.
 
 **Debug logging.** Set `MINDFLOCK_MCP_LOG=DEBUG` in the MCP's environment. Its
 logs go to stderr, which the agent CLI captures. The server log records every
@@ -1190,6 +1563,18 @@ message the lane types (`mailbox typed <id> from … into …`).
   launcher keeps its old args, though with attaching off Claude's run file is
   still emptied. Between web relaunches, the launcher's own restart loop
   reuses whatever it was written with.
+- **Ticket workers fork from the base branch.** `spawn_ticket_session`
+  provisions from the ticket source's repository, so the worker starts from
+  that repository's base branch, never from your HEAD (the same limitation as
+  provisioned workers below).
+- **Repository issues aren't startable from the MCP.** `spawn_ticket_session`
+  covers the Intake → Tickets sources; the Intake → Issues panel's route
+  (`POST /api/github/issues/start`) does not accept a parent yet.
+- **Push failures are read off the shell.** `/push-branch` types `git push`
+  into the session's shell and returns, so `ship_session` sees a push land by
+  the local `origin/<branch>` ref and sees it fail by error lines (`error:
+  failed to push`, `[rejected]`, `fatal:`, …) after the push command in the
+  shell's tail. A failure that prints none of them shows up as a timeout.
 - **`base_ref` is unsupported for provisioned parents.** Workers of a
   provisioned (e.g. ticket) orchestrator fork from the repository's base
   branch, not the orchestrator's commit (`spawn_session` warns). They share
@@ -1216,7 +1601,11 @@ message the lane types (`mailbox typed <id> from … into …`).
 
 | What | Where |
 |---|---|
-| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
+| MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
+| Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
+| Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
+| Autopilot | `backend/web/core/autopilot.py` and the driver in `server.py`; route `/api/instances/{title}/fast-track` |
+| Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
 | Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |
 | Lineage | `backend/web/core/lineage.py`; `/output`, `/dialog` and `/answer` helpers in `core/agent_io.py` |

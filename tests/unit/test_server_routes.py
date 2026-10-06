@@ -1810,6 +1810,8 @@ def test_list_workspaces_mtime_is_none_when_stat_fails(monkeypatch, tmp_path):
 def test_clear_workspaces_removes_idle_keeps_active_and_protected(
     registered, monkeypatch, tmp_path
 ):
+    # The sweep resolves ~/.mindflock/worktrees: never the real one under pytest.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     root = tmp_path / "workspaces"
     root.mkdir()
     idle = root / "idle-ws"

@@ -76,7 +76,7 @@ describe("the ladder", () => {
   });
 
   it("falls back to the raw value for an unknown label", () => {
-    expect(depthLabel("pr")).toBe("Open PR");
+    expect(depthLabel("pr")).toBe("Open a PR");
     expect(depthLabel("")).toBe("Off");
   });
 });
@@ -113,8 +113,8 @@ describe("atOrPastDepth", () => {
 
 describe("chip text", () => {
   it("names the target while running", () => {
-    expect(autopilotChipLabel(run({ depth: "pr" }))).toBe("auto → Open PR");
-    expect(autopilotChipTitle(run({ depth: "pr" }))).toContain("Open PR");
+    expect(autopilotChipLabel(run({ depth: "pr" }))).toBe("auto → Open a PR");
+    expect(autopilotChipTitle(run({ depth: "pr" }))).toContain("Open a PR");
   });
 
   it("always explains a halt", () => {
@@ -142,23 +142,66 @@ describe("chip text", () => {
   });
 });
 
-describe("the ⏩ control is a toggle", () => {
-  // Regression: it used to return null once a chain was armed, so the button you
-  // just pressed vanished and the only way to turn it off was the primary
-  // button — which read as "I can't undo this".
-  it("stays visible and turns OFF while a chain is armed", () => {
+describe("the ⏩ control: THE per-session fast-track control", () => {
+  // It names the target and opens the picker. It keeps the old toggle's
+  // promises: visibly ON while a run works, ✗ and why on a halt, and an armed
+  // run is never hidden.
+  it("names the target, and is ON while a run works toward it", () => {
     const s = fastTrackStep({
       title: "t",
       status: "running",
       stage: "agent",
+      lane: { target: "pr", ask_first: false, owner: "t" },
       autopilot: run(),
     });
     expect(s).not.toBeNull();
+    expect(s!.label).toBe("⏩ PR");
+    expect(s!.lane).toBe("pr");
     expect(s!.active).toBe(true);
-    expect(s!.title).toContain("turn fast-track off");
+    expect(s!.halted).toBe(false);
+    expect(s!.title).toContain("Fast-track → Open a PR");
+    expect(s!.title).toContain("change it or turn it off");
   });
 
-  it("offers to arm again after a halt, and says why it stopped", () => {
+  it("reads 'off' with no target, and says what a click does", () => {
+    const s = fastTrackStep({ title: "t", status: "running", stage: "agent" });
+    expect(s).not.toBeNull();
+    expect(s!.label).toBe("⏩ off");
+    expect(s!.lane).toBe("leave");
+    expect(s!.active).toBe(false);
+    expect(s!.title).toMatch(/^Fast-track is off\. Click to choose/);
+  });
+
+  it("says each rung in its own short word", () => {
+    const label = (target: string) =>
+      fastTrackStep({
+        title: "t",
+        status: "running",
+        stage: "agent",
+        lane: { target, ask_first: false, owner: "t" },
+      })!.label;
+    expect(["commit", "push", "pr", "merge"].map(label)).toEqual([
+      "⏩ Commit",
+      "⏩ Push",
+      "⏩ PR",
+      "⏩ Merge",
+    ]);
+  });
+
+  it("carries 'ask me first' only where it means something", () => {
+    const ask = (target: string) =>
+      fastTrackStep({
+        title: "t",
+        status: "running",
+        stage: "agent",
+        lane: { target, ask_first: true, owner: "t" },
+      })!;
+    expect(ask("pr").askFirst).toBe(true);
+    expect(ask("pr").title).toContain("Open a PR, asks first");
+    expect(ask("leave").askFirst).toBe(false);
+  });
+
+  it("says ✗ and why after a halt, and offers to pick again", () => {
     const s = fastTrackStep({
       title: "t",
       status: "running",
@@ -166,40 +209,24 @@ describe("the ⏩ control is a toggle", () => {
       autopilot: run({ state: "halted", reason: "checks failed" }),
     });
     expect(s).not.toBeNull();
-    expect(s!.active).toBeFalsy();
-    expect(s!.hint).toBe(true);
+    expect(s!.active).toBe(false);
+    expect(s!.halted).toBe(true);
+    expect(s!.label).toBe("⏩ PR ✗");
     expect(s!.title).toContain("checks failed");
   });
 
-  it("is OFF with no run, and mentions the toggle", () => {
-    const s = fastTrackStep({ title: "t", status: "running", stage: "agent" });
-    expect(s).not.toBeNull();
-    expect(s!.active).toBeFalsy();
-    expect(s!.title).toContain("turn it off");
+  it("is absent only when there is nothing it could set", () => {
+    for (const o of [{ status: "loading" }, { workspace_missing: true }, { stage: "provisioning" }])
+      expect(fastTrackStep({ title: "t", status: "running", stage: "agent", ...o }), JSON.stringify(o)).toBeNull();
+    // A paused session or one mid-commit can still have its target changed.
+    for (const o of [{ status: "paused" }, { stage: "precommit" }])
+      expect(fastTrackStep({ title: "t", status: "running", stage: "agent", ...o }), JSON.stringify(o)).not.toBeNull();
   });
 
-  it("is absent only when a press would be meaningless", () => {
-    for (const o of [
-      { status: "loading" },
-      { status: "paused" },
-      { workspace_missing: true },
-      { stage: "provisioning" },
-      { stage: "precommit" },
-    ])
-      expect(
-        fastTrackStep({ title: "t", status: "running", stage: "agent", ...o })
-      ).toBeNull();
-  });
-
-  it("stays cancellable even while provisioning or committing", () => {
+  it("stays visible and changeable while provisioning or committing", () => {
     // An intake-armed session spends its first minutes provisioning, which is
-    // precisely when you might change your mind — and the guards above used to
-    // hide the toggle there entirely, leaving no way to stop it at all.
-    for (const o of [
-      { status: "loading" },
-      { stage: "provisioning" },
-      { stage: "precommit" },
-    ]) {
+    // precisely when you might change your mind.
+    for (const o of [{ status: "loading" }, { stage: "provisioning" }, { stage: "precommit" }]) {
       const s = fastTrackStep({
         title: "t",
         status: "running",
@@ -212,22 +239,16 @@ describe("the ⏩ control is a toggle", () => {
     }
   });
 
-  it("turns itself OFF once the run has finished its task", () => {
+  it("is not ON once the run has finished — it still names the target", () => {
     const s = fastTrackStep({
-      title: "t", status: "running", stage: "pr", autopilot: run({ state: "done" }),
+      title: "t",
+      status: "running",
+      stage: "pr",
+      lane: { target: "pr", ask_first: false, owner: "t" },
+      autopilot: run({ state: "done" }),
     });
-    expect(s?.active).toBeFalsy();
-    // …and offers to start a fresh one.
-    expect(s?.title).toContain("Fast-track:");
-  });
-
-  it("turns itself OFF when the run failed, but still says why", () => {
-    const s = fastTrackStep({
-      title: "t", status: "running", stage: "interrupt",
-      autopilot: run({ state: "halted", reason: "checks failed" }),
-    });
-    expect(s?.active).toBeFalsy();
-    expect(s?.title).toContain("checks failed");
+    expect(s?.active).toBe(false);
+    expect(s?.label).toBe("⏩ PR");
   });
 
   it("still surfaces a halted run while provisioning", () => {
@@ -236,7 +257,7 @@ describe("the ⏩ control is a toggle", () => {
       status: "loading",
       autopilot: run({ state: "halted", reason: "checks failed" }),
     });
-    expect(s?.label).toBe("⏩✗");
+    expect(s?.label).toBe("⏩ PR ✗");
   });
 });
 

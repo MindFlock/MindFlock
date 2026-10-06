@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_fourteen_tools_with_annotations(self):
+    def test_twenty_five_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -58,6 +58,17 @@ class TestRegistry:
             "answer_prompt",
             "kill_session",
             "set_parent",
+            "list_tickets",
+            "spawn_ticket_session",
+            "ship_session",
+            "set_autopilot",
+            "start_team_run",
+            "get_run",
+            "list_runs",
+            "wait_for_run",
+            "control_run",
+            "propose_run_plan",
+            "report_integrated",
         ]
         by = {t.name: t for t in tools}
         for name in (
@@ -81,6 +92,22 @@ class TestRegistry:
             assert by[name].annotations["destructiveHint"] is False
             assert by[name].annotations["openWorldHint"] is False
         assert by["kill_session"].annotations["destructiveHint"] is True
+        # Shipping pushes code, opens PRs and can merge them.
+        for name in ("ship_session", "set_autopilot"):
+            assert by[name].annotations["destructiveHint"] is True
+            assert by[name].annotations["openWorldHint"] is True
+            assert by[name].annotations["readOnlyHint"] is False
+        assert by["list_tickets"].annotations["readOnlyHint"] is True
+        assert by["list_tickets"].annotations["openWorldHint"] is True
+        assert by["spawn_ticket_session"].annotations["readOnlyHint"] is False
+        assert by["spawn_ticket_session"].annotations["openWorldHint"] is True
+        # Team runs: the reads are reads; starting and steering one reach out
+        # (its members push code and open PRs) and always prompt.
+        for name in ("get_run", "list_runs", "wait_for_run"):
+            assert by[name].annotations["readOnlyHint"] is True
+        for name in ("start_team_run", "control_run"):
+            assert by[name].annotations["readOnlyHint"] is False
+            assert by[name].annotations["openWorldHint"] is True
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())

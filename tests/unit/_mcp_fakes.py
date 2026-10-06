@@ -124,6 +124,12 @@ class FakeFlockApi(Api):
         self.route_missing: set = set()
         #: title -> error text served by GET /api/create_failures
         self.create_failures: Dict[str, str] = {}
+        #: Extra per-instance routes: (method, rest) -> value, or
+        #: callable(title, payload, query) (ship-status, commit, fast-track…).
+        self.routes: Dict[tuple, Any] = {}
+        #: Extra top-level routes: (method, path) -> value, or
+        #: callable(payload, query) (/api/tickets, /api/tickets/start).
+        self.top_routes: Dict[tuple, Any] = {}
 
     # -- helpers for tests ---------------------------------------------------- #
     def deliver(
@@ -180,6 +186,10 @@ class FakeFlockApi(Api):
         key = (method, parsed.path)
         if key in self.errors:
             raise self.errors[key]
+        if (method, parsed.path) in self.top_routes:
+            route = self.top_routes[(method, parsed.path)]
+            out = route(copy.deepcopy(payload), q) if callable(route) else route
+            return copy.deepcopy(out)
         if parsed.path == "/api/config":
             return copy.deepcopy(self.config_payload)
         if parsed.path == "/api/create_failures":
@@ -204,6 +214,10 @@ class FakeFlockApi(Api):
         known = any(r["title"] == title for r in self.rows)
         if not known:
             raise client.ApiError(404, "instance not found: %s" % title)
+        if (method, rest) in self.routes:
+            route = self.routes[(method, rest)]
+            out = route(title, copy.deepcopy(payload), q) if callable(route) else route
+            return copy.deepcopy(out)
         if rest == "messages" and method == "GET":
             return self._get_messages(title, q)
         if rest == "messages" and method == "POST":

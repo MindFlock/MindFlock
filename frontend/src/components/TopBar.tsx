@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
 import { useTestPlans } from "../state/queries";
 import { dueCount } from "./dialogs/verify";
+import { useOutbox } from "../state/runs";
+import { waitingCount } from "./outbox/outbox";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
@@ -44,6 +46,10 @@ export function TopBar() {
   // the thing you were not already looking at.
   const { data: testPlans } = useTestPlans();
   const due = dueCount(testPlans?.plans || []);
+  // The Outbox badge: the same query (and the same count helper) the dialog's
+  // "Waiting on you" section renders from, so the two can't disagree.
+  const { data: outbox } = useOutbox();
+  const waiting = waitingCount(outbox);
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -178,6 +184,20 @@ export function TopBar() {
             onClick={() => ui.openDialogFor("intake")}
           >
             Intake
+          </button>
+          {/* The middle of the pipeline: Intake (in) → Outbox (out) → Verify
+              (checked). The count is what is WAITING ON YOU — a prompt to
+              answer or a ship you asked to see first — never what MindFlock is
+              merely busy with, and nothing at all on zero, like Verify's. */}
+          <button
+            id="outbox-btn"
+            className="tb-item"
+            type="button"
+            title="Outbox — what's shipping, and what's waiting on you (Alt+O)"
+            onClick={() => ui.openDialogFor("outbox")}
+          >
+            Outbox
+            {waiting > 0 && <span className="tb-count">{waiting}</span>}
           </button>
           {/* Verify closes the loop Intake opens: work came in there, and this is
               where it comes back once it has actually shipped. The count is the

@@ -1,13 +1,16 @@
-/** The New dialog's "Split across workers" box. It appears twice and shares
- * one `split` state: under the sentence on the Describe page, and under Plan
- * first in the form's Prompt fold.
+/** The New dialog's "Split a big line into parallel pieces first" box, under
+ * the describe box on page 1.
  *
- * Ticking it makes the create send `playbook: "split"`. The server then adds
- * the split playbook to the launch prompt, and the agent uses its own
- * MindFlock tools to fork one worker per independent piece. It never ticks
- * itself. When the sentence looks splittable it shows a "suggested · …" pill
- * and leaves the choice to the user. Closed (with the reason) when the agent
- * in the form doesn't get the MindFlock tools. */
+ * Ticking it makes the start a SPLIT run (`POST /api/runs` with
+ * `split: true`): MindFlock creates a lead session in its own worktree, the
+ * lead proposes the pieces with separate paths, the user approves the plan in
+ * its Thread tab, and the server starts the workers, fences each to its
+ * paths and merges them back. Nothing is pasted into an agent.
+ *
+ * It applies to exactly one task line — a list is already parallel — and to
+ * an agent that gets the MindFlock tools (the lead proposes the plan with
+ * them). It never ticks itself: a sentence that reads splittable gets a
+ * "suggested · …" pill and the choice stays the user's. */
 
 import { splitSuggestion, suggestionPill } from "../../lib/playbooks";
 
@@ -16,6 +19,7 @@ export function SplitCheck({
   split,
   onSplit,
   gate,
+  shapeReason,
   text,
 }: {
   id: string;
@@ -23,45 +27,46 @@ export function SplitCheck({
   onSplit(on: boolean): void;
   /** lib/playbooks.splitGate for the agent in the form. */
   gate: { ok: boolean; reason: string };
-  /** The words the pill reads: the sentence, or the prompt. */
+  /** Why what is in the box can't be split ("" = it can). */
+  shapeReason: string;
+  /** The words the pill reads. */
   text: string;
 }) {
-  const on = split && gate.ok;
-  const sug = gate.ok ? splitSuggestion(text) : null;
+  const why = gate.ok ? shapeReason : gate.reason;
+  const ok = !why;
+  const on = split && ok;
+  const sug = ok ? splitSuggestion(text) : null;
   return (
-    <div className={"nf-split" + (gate.ok ? "" : " disabled")}>
+    <div className={"nf-split" + (ok ? "" : " disabled")}>
       <label
-        className={"check" + (gate.ok ? "" : " disabled")}
+        className={"check" + (ok ? "" : " disabled")}
         title={
-          gate.ok
-            ? "The agent forks one worker session per independent piece of the task, waits for " +
-              "their reports, then merges them. Works with the CLIs that get the MindFlock tools."
-            : gate.reason
+          ok
+            ? "MindFlock starts a lead session that proposes the pieces, each with its own paths. " +
+              "You approve the split; MindFlock starts the workers and merges them back."
+            : why
         }
       >
         <input
           type="checkbox"
           id={id}
           checked={on}
-          disabled={!gate.ok}
+          disabled={!ok}
           onChange={(e) => onSplit(e.target.checked)}
         />
-        Split across workers
+        Split a big line into parallel pieces first
         {sug && (
-          <span className="nf-split-pill" title="Your sentence lists separate pieces. Nothing is ticked for you.">
+          <span
+            className="nf-split-pill"
+            title="Your sentence lists separate pieces. Nothing is ticked for you."
+          >
             {suggestionPill(sug)}
           </span>
         )}
-        {!gate.ok && <span className="muted"> ({gate.reason})</span>}
+        {why && <span className="muted"> ({why})</span>}
       </label>
-      {on && (
-        <p className="nf-git-nudge nf-split-nudge">
-          The agent commits shared groundwork, starts one worker session per independent piece,
-          waits for their reports, then merges. Workers appear under it in the rail. Runs in a new
-          worktree. Each spawn asks your permission unless this agent skips permissions — answer
-          from the rail.
-        </p>
-      )}
+      {/* What a tick does is said once, in the sentence under the choices
+          (RunOptions' summary), not again here. */}
     </div>
   );
 }

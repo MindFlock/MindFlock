@@ -81,6 +81,34 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "mindflock" / "autopilot.json")
     )
+    # The prompt queue (``~/.mindflock/prompt_queues.json``): a team run nudges
+    # and hands fix prompts to its members through it, and a live server's
+    # drain loop rewrites (and prunes) the real file — a test enqueuing there
+    # races the owner's own queued prompts.
+    monkeypatch.setenv(
+        "MINDFLOCK_PROMPT_QUEUE_FILE",
+        str(tmp_path / "mindflock" / "prompt_queues.json"),
+    )
+    # The ingestion ledger a forced ticket start writes (``<repo root>/
+    # state.json``, resolved once at import — in a checkout under the app
+    # that is the owner's REAL pipeline ledger): a team run reserves queued
+    # tickets there. Tests that exercise the ledger re-point it themselves.
+    try:
+        from backend.web.core import ticket_start as _ticket_start
+
+        monkeypatch.setattr(_ticket_start, "_REPO_ROOT", tmp_path / "pipeline")
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
+    # Team runs (``~/.mindflock/runs/``): one file per run plus its lease. The
+    # row builder reads the run index for every session, and a run-driving
+    # test must never see — or write — the owner's real groups.
+    monkeypatch.setenv("MINDFLOCK_RUNS_DIR", str(tmp_path / "mindflock" / "runs"))
+    try:
+        from backend.web.core import team_runs as _team_runs
+
+        monkeypatch.setitem(_team_runs._INDEX, "at", 0.0)
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
     # The inter-agent mailbox (``~/.mindflock/mailbox.json``): the drain loop a
     # lifespan test starts runs the delivery lane, which reads — and prunes —
     # this store, so it must never be the developer's live one.
@@ -107,6 +135,15 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     # every launch path writes one for a Claude session, so a test that starts
     # a session would otherwise drop files into the owner's real run dir.
     monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "mindflock" / "run"))
+    # Per-session hook markers (``~/.mindflock-assistant/.activity-markers`` and
+    # ``.thread-markers``): the stores refuse the real dirs under pytest
+    # (backend.config.home_guard), so every test starts with empty ones.
+    monkeypatch.setenv(
+        "MINDFLOCK_ACTIVITY_MARKER_DIR", str(tmp_path / "assistant" / "activity")
+    )
+    monkeypatch.setenv(
+        "MINDFLOCK_THREAD_MARKER_DIR", str(tmp_path / "assistant" / "threads")
+    )
     # ...and each launch records whether it attached (the row's
     # ``mcp_attached``), in process memory: start every test with none seen.
     try:

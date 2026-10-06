@@ -116,6 +116,10 @@ def test_event_names_vocabulary_is_complete():
         "session.red_zone_blocked",
         "session.red_zone_breached",
         "session.red_zone_tampered",
+        "run.changed",
+        "run.needs_you",
+        "run.task_shipped",
+        "run.finished",
     }
 
 
