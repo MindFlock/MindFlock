@@ -76,12 +76,12 @@ def test_settings_general_binds_agent_mcp_and_scope():
 def test_agent_mcp_settings_never_use_native_dialogs():
     # Electron implements no window.prompt — and alert/confirm are as bad in a
     # settings row. Pin the absence in the component's source.
-    src = (_SRC / "components" / "settings" / "screens" / "General.tsx").read_text(
-        encoding="utf-8"
-    )
-    block = src[src.index("function AgentMcpRows(") :]
-    block = block[: block.index("\nfunction ", 1)]
-    assert not re.search(r"\b(prompt|alert|confirm)\(", block)
+    src = (
+        _SRC / "components" / "settings" / "screens" / "AgentOrchestration.tsx"
+    ).read_text(encoding="utf-8")
+    # The whole Agent orchestration screen (the MCP rows and the cap rows).
+    assert "function AgentMcpRows(" in src
+    assert not re.search(r"\b(prompt|alert|confirm)\(", src)
 
 
 def test_row_types_carry_lineage_fields():

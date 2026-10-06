@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings → Agent orchestration.** The MindFlock MCP switch and scope moved
+  out of General into their own screen under Agents, with the spawn limits
+  beside them: sub-sessions per orchestrator, agent-spawned sessions in total,
+  and nesting depth (were env vars only). A change applies to the next spawn;
+  an env var on the server still overrides, and the row says so. An agent that
+  hits a limit is told where to raise it.
+- **Finished workers stay on the orchestrator's Thread.** A worker that is
+  closed or deleted is listed under **Finished**, with its final report, how
+  far its branch got, its diff size and its PR, and its report stays in the
+  log. A progress bar over every worker, live and finished, reads **3 of 5
+  done**, and each live worker shows its stage (agent, committed, pushed, PR).
+- **Fold an orchestrator's sub-sessions out of the sidebar.** A **hide** at the
+  end of its roll-up line tucks every session below it away (**show 3** brings
+  them back). The roll-up still says what needs you, folded rows leave the
+  Alt+N numbering, a search still finds them, and the focused session is never
+  hidden.
+
 - **Work on several things at once: team runs.** Give MindFlock a few ticket
   IDs and task lines — from your own Claude with the new `start_team_run`
   MCP tool, or `POST /api/runs` — and it starts one session per item, keeps

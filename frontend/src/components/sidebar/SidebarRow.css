@@ -693,3 +693,44 @@
   color: var(--accent);
   text-decoration: none;
 }
+
+/* An orchestrator's roll-up line and its "hide" / "show N" fold toggle
+   (lib/familyFold). Words, not a chevron: the row's › is its actions menu. */
+.inst .roll-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.inst .roll-line > .lineage {
+  flex: 0 1 auto;
+}
+
+.inst .fold-kids {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.inst .fold-kids:hover,
+.inst .fold-kids:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  background: var(--panel-2);
+  outline: none;
+}
+
+/* Folded: the toggle is how you know rows are tucked away, so it shows. */
+.inst .fold-kids[aria-expanded="false"] {
+  opacity: 1;
+  color: rgba(var(--accent-rgb), 0.95);
+}

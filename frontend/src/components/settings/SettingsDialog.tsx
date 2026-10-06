@@ -21,6 +21,7 @@ import { Notifications } from "./screens/Notifications";
 import { CodingCli } from "./screens/CodingCli";
 import { Accounts } from "./screens/Accounts";
 import { LocalModel } from "./screens/LocalModel";
+import { AgentOrchestration } from "./screens/AgentOrchestration";
 import { Workspace } from "./screens/Workspace";
 import { Ide } from "./screens/Ide";
 import { Providers } from "./screens/Providers";
@@ -58,6 +59,7 @@ const SCREENS: Array<{
   { key: "providers", label: "Agent providers", group: "Agents", el: (p) => <Providers {...p} /> },
   { key: "accounts", label: "Accounts", group: "Agents", el: (p) => <Accounts {...p} /> },
   { key: "localmodel", label: "Local model", group: "Agents", el: (p) => <LocalModel {...p} /> },
+  { key: "orchestration", label: "Agent orchestration", group: "Agents", el: (p) => <AgentOrchestration {...p} /> },
   { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
   { key: "ide", label: "IDE", group: "Code", el: (p) => <Ide {...p} /> },
   { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },

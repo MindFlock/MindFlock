@@ -163,9 +163,9 @@ upgraded, or when you flipped the toggle, gets the change on its next
 
 | Knob | Where | Effect |
 |---|---|---|
-| `general.agent_mcp` | Settings → General → **Give agents the MindFlock MCP**, or `settings.json` (`POST /api/settings` → `{"general": {"agent_mcp": false}}`) | `false` stops attaching it to new launches. Unset means **on**. |
+| `general.agent_mcp` | Settings → Agent orchestration → **Give agents the MindFlock MCP**, or `settings.json` (`POST /api/settings` → `{"general": {"agent_mcp": false}}`) | `false` stops attaching it to new launches. Unset means **on**. |
 | `MINDFLOCK_AGENT_MCP=0` | the server's environment | Kill switch (`0`/`false`/`no`/`off`). Wins over settings; the Settings switch then says it is overridden. A truthy value does **not** force attaching on. |
-| `general.agent_mcp_scope` | Settings → General → **Agent MCP scope**, or `settings.json` | `readonly`, `children` (default; `""` means this too) or `all`. Handed to every attached server as `MINDFLOCK_MCP_SCOPE`. Unknown values read as the default. |
+| `general.agent_mcp_scope` | Settings → Agent orchestration → **Agent MCP scope**, or `settings.json` | `readonly`, `children` (default; `""` means this too) or `all`. Handed to every attached server as `MINDFLOCK_MCP_SCOPE`. Unknown values read as the default. |
 
 Both settings are read fresh from the settings file at each launch. A save
 reaches the next launch without a restart, including launches from the ticket
@@ -195,8 +195,10 @@ a missing `--mcp-config` file, so the file is emptied rather than deleted).
 - **The bell.** The notifications feed lists worker **reports** only
   (`kind: "result"`), filed under the parent, as `worker <name> reported done
   — …`. Plain messages between agents stay out of the feed.
-- **Settings → General** holds the on/off switch and the scope select above.
-  Both apply from each session's next launch.
+- **Settings → Agent orchestration** holds the on/off switch and the scope
+  select above (both apply from each session's next launch) and the spawn
+  limits (from the next spawn); see
+  [configuration.md](configuration.md#environment-variables).
 
 See [web-ui.md](web-ui.md#agent-teams-mindflock-mcp).
 
@@ -1355,7 +1357,10 @@ follows it — a numbered prompt in the transcript never becomes buttons.
   start of each worker's seed prompt and its fork commit) and every message
   between two members in both directions, sent since both were created (a
   worker re-spawned under an old name doesn't inherit its namesake's
-  reports). It is read-only: nothing is marked
+  reports). It also lists the children that were closed or deleted
+  (`finished`, kept in `~/.mindflock/finished_children.json` from each
+  child's last row as it left), with their spawn records and reports in the
+  log. It is read-only: nothing is marked
   read, so looking never cancels a delivery or eats a report a parent is
   waiting on.
 
@@ -1624,6 +1629,7 @@ message the lane types (`mailbox typed <id> from … into …`).
 | Playbooks | `backend/mcp/playbooks.py`; routes `/api/playbooks*` in `server.py` |
 | Dialog parsing | `backend/providers/dialogs.py` (`parse_dialog` in `providers/claude.py`, `providers/codex.py`); golden screens in `tests/unit/data/dialogs/` |
 | Thread + `last_report` | `backend/web/core/thread.py`; `mailbox.between` / `mailbox.last_result` |
+| Finished children | `backend/web/core/finished_children.py` (`~/.mindflock/finished_children.json`, `MINDFLOCK_FINISHED_CHILDREN_FILE`); recorded by `_remember_finished_child` in `server.py` |
 | Run files | `~/.mindflock/run/mcp-<tmux name>.json`, plus a digest when the name had to be sanitized (`MINDFLOCK_RUN_DIR`), removed with the session and by `mindflock uninstall` |
 | Create failures | `GET /api/create_failures?title=…` ([web-api.md](web-api.md#get-apicreate_failures)) |
 | Mailbox store | `~/.mindflock/mailbox.json` (`MINDFLOCK_MAILBOX_FILE`) |

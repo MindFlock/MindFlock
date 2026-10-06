@@ -174,6 +174,10 @@ interface UiState {
    * Same contract as collapsedDevices: a folded group's rows leave railOrder,
    * so Alt+N numbering skips them exactly as it skips a folded device. */
   collapsedRuns: Set<string>;
+  /** Orchestrators whose sub-sessions are folded away in the sidebar, by the
+   * parent's title (lib/familyFold). Same contract as collapsedRuns: folded
+   * rows leave railOrder, so Alt+N numbering skips them. */
+  collapsedFamilies: Set<string>;
   /** Sidebar bars hidden via the footer Customize menu (keys in BAR_KEYS). */
   hiddenBars: Set<string>;
   /** User drag order of the sidebar bars (keys; see barDefs.ts). Empty = default. */
@@ -256,6 +260,7 @@ interface UiState {
   setAlias(title: string, alias: string): void;
   toggleDeviceCollapsed(device: string): void;
   toggleRunCollapsed(runId: string): void;
+  toggleFamilyCollapsed(parent: string): void;
   toggleBarHidden(key: string): void;
   setBarOrder(order: string[]): void;
   /** Toggle the reduce-motion terminal cover. */
@@ -334,6 +339,7 @@ export const useUi = create<UiState>((set, get) => ({
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
   collapsedRuns: new Set(load<string[]>("mf_runcollapse", [])),
+  collapsedFamilies: new Set(load<string[]>("mf_familycollapse", [])),
   // Fresh users start with the essentials (Usage + Tickets + Assistant)
   // so a first run isn't overwhelming; the rest are one click away in Customize.
   // Once the user touches Customize the saved set wins, empty included.
@@ -481,6 +487,13 @@ export const useUi = create<UiState>((set, get) => ({
     else next.add(runId);
     save("mf_runcollapse", [...next]);
     set({ collapsedRuns: next });
+  },
+  toggleFamilyCollapsed: (parent) => {
+    const next = new Set(get().collapsedFamilies);
+    if (next.has(parent)) next.delete(parent);
+    else next.add(parent);
+    save("mf_familycollapse", [...next]);
+    set({ collapsedFamilies: next });
   },
   toggleBarHidden: (key) => {
     const next = new Set(get().hiddenBars);

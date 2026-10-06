@@ -416,7 +416,10 @@ def test_the_leads_thread_shows_plan_ship_card_and_pieces():
     # The Thread tab hands a run lead to the panel and drops the paste buttons.
     tab = squash(_fn(js, "ThreadTab"))
     assert 'me?.run?.role === "lead" ? me.run : null' in tab
-    assert "hasWorkers && !leadOf &&" in tab
+    # Neither the live workers' paste buttons nor the Finished list (the
+    # panel already lists a group's pieces) render for a lead.
+    assert "workers.length > 0 && !leadOf &&" in tab
+    assert "finished.length > 0 && !leadOf &&" in tab
 
 
 def test_the_lead_chip_asks_for_your_click_only():

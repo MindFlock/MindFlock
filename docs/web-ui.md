@@ -508,8 +508,24 @@ What it looks like in the app:
   directly below its orchestrator's family, and while it sits there it is
   indented (from the status dot onwards) with a thin accent connector. The
   nesting is only drawn: the row numbers, Alt+N, Ctrl+Tab and drag-and-drop
-  keep working on the rail exactly as listed, and there is no folding. Drag
-  a worker somewhere else and it stays there, un-indented.
+  keep working on the rail exactly as listed. Drag a worker somewhere else
+  and it stays there, un-indented.
+- **Fold a family away.** The orchestrator's roll-up line ends in a small
+  **hide**; click it and every session below it (workers, their workers)
+  leaves the rail, and it reads **show 3**. The roll-up stays, so a folded
+  family still says **1 needs you**. Folded rows leave the numbering too
+  (Alt+N skips them, as with a folded run group), a search shows every match
+  regardless, and the session you are focused on is never hidden. Remembered
+  per browser (`mf_familycollapse`). It is a word, not a chevron: the row's
+  › is its actions menu.
+- **The orchestrator's Thread shows progress and finished workers.** A bar
+  under its header counts every worker, live and finished — **3 of 5 done**,
+  in runs of done, failed or blocked, needs you, working and idle — and each
+  live worker shows how far its branch has got (agent, committed, pushed,
+  PR open). A worker that is closed or deleted moves to **Finished (n)**,
+  newest first, with its final report, its last stage, its diff size and
+  its PR (**Open PR ↗**), or **Recently closed…** when it can be reopened.
+  Its spawn record and report stay in the log below.
 - **Each worker's status line** replaces the `↳` line: **✓ reported**
   (green), **✗ blocked** / **✗ failed** (red), **? needs your answer**
   (gold), **working · 6m**, or **idle — no report**. A worker that is not
@@ -582,8 +598,14 @@ terminal with `mindflock msg TITLE "…"`, and use the same tools from your own
 Claude Code outside MindFlock: `mindflock mcp --print-config` prints the line
 to register it.
 
-Settings → General has the on/off switch and the scope (see
-[Settings](#settings-)). Both apply from each session's next launch.
+**Settings → Agent orchestration** (under Agents) has the on/off switch and
+the scope, which apply from each session's next launch, and the **spawn
+limits**: sub-sessions per orchestrator (default 8, also the most pieces a
+split can make), agent-spawned sessions in total (24) and nesting depth (3).
+A limit applies to the next spawn, no relaunch; an empty box means the
+default, and each row says what applies now, including when a
+`MINDFLOCK_MAX_*` env var on the server overrides it. An agent that hits a
+limit is told which one and where to raise it.
 
 ### Fast-track (⏩)
 
