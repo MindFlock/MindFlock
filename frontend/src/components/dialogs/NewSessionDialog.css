@@ -1445,7 +1445,7 @@
   overflow: hidden;
 }
 
-#new-form .rt-seg button {
+:is(#new-form, #commit-form) .rt-seg button {
   border: none;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -1457,22 +1457,22 @@
   white-space: nowrap;
 }
 
-#new-form .rt-seg button:first-child {
+:is(#new-form, #commit-form) .rt-seg button:first-child {
   border-left: none;
 }
 
-#new-form .rt-seg button:hover:not(.on):not(:disabled) {
+:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
   background: var(--panel-2);
 }
 
 /* A choice an older server can't take (caps.team_runs): shown, not offered. */
-#new-form .rt-seg button:disabled {
+:is(#new-form, #commit-form) .rt-seg button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-#new-form .rt-seg button.on {
+:is(#new-form, #commit-form) .rt-seg button.on {
   background: var(--accent);
   color: #fff;
 }

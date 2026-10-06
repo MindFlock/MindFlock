@@ -620,7 +620,7 @@ export function RepoSourceList({
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Take them as far as</span>
+                      <span className="set-label">Fast-track them to</span>
                       <select
                         data-repo-field="depth"
                         value={depth}

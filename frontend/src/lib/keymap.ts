@@ -33,7 +33,7 @@ import {
   selectSession,
   undoLastClose,
 } from "./sessionActions";
-import { openShipMenu } from "./laneActions";
+import { openFastTrackMenu } from "./laneActions";
 import { toast } from "./toast";
 import { useUi, type DialogName } from "../state/store";
 
@@ -166,9 +166,9 @@ const MODAL_DOM_IDS = [
   // its own buttons; a Delete meant for the card must not reach the session
   // running behind it.
   "break-screen",
-  // The Ship & split menu holds the keyboard for its arrows and letters; a
+  // The ⏩ fast-track picker holds the keyboard for its arrows and letters; a
   // Delete or Ctrl+W pressed at it must not end the session it hangs from.
-  "ship-menu",
+  "fast-track-menu",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -313,14 +313,13 @@ export const CHORDS: Record<string, ChordEntry> = {
       useUi.getState().setLastTab(t, "map");
     },
   },
-  // Ship & split. Message… opens the Thread composer addressed to the
-  // focused session — what you type there goes in as YOU, never through the
-  // agents' mailbox. Ctrl+K F is the pane's Ship & split menu (lanes, split,
-  // ship now — each acts at once, nothing is pasted), Ctrl+K L the same menu
-  // landed on the session's lane, Ctrl+K T the Thread itself.
+  // Message… opens the Thread composer addressed to the focused session —
+  // what you type there goes in as YOU, never through the agents' mailbox.
+  // Ctrl+K F opens the pane's ⏩ fast-track picker (how far MindFlock carries
+  // the session; each item acts at once, nothing is pasted), Ctrl+K T the
+  // Thread itself.
   s: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) },
-  f: { desc: "Ship & split…", run: (t) => openShipMenu(t) },
-  l: { desc: "When it's done… (lane)", run: (t) => openShipMenu(t, "lane") },
+  f: { desc: "Fast-track…", run: (t) => openFastTrackMenu(t) },
   t: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) },
 };
 

@@ -2652,6 +2652,26 @@ def _fasttrack_depth() -> str:
         return "pr"
 
 
+def _fasttrack_default() -> str:
+    """THE fast-track default for a new session — Settings → Workspace
+    "Fast-track goes as far as" — as the UI seeds its pickers with it: the
+    configured rung, or ``"off"`` when the user chose Off.
+
+    :func:`_fasttrack_depth` stays the rung ``POST /fast-track`` arms when a
+    request names none (an "off" setting cannot arm anything, so it reads as
+    the built-in "pr" there). Read fresh, like every settings consumer.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        raw = _settings.load_settings().repository.fasttrack_depth
+        if _autopilot.normalize_depth(raw) == "off":
+            return "off"
+    except Exception:  # noqa: BLE001
+        pass
+    return _fasttrack_depth()
+
+
 def _precommit_retry_hooks() -> list:
     """Pre-commit hook IDs whose failure the driver may retry, then skip.
 
@@ -6621,6 +6641,10 @@ def get_config() -> JSONResponse:
             # request omits one, which is what keeps this setting authoritative
             # instead of shadowed by a sticky client value.
             "fasttrack_depth": _fasttrack_depth(),
+            # THE default every fast-track picker starts on (the New dialog,
+            # Start together): a rung, or "off" — which the resolved rung above
+            # can never say.
+            "fasttrack_default": _fasttrack_default(),
         }
     )
 

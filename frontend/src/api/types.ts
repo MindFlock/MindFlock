@@ -567,9 +567,12 @@ export interface Caps {
 }
 
 export interface Config {
-  /** The resolved fast-track rung, for LABELLING the ⏩ button. The server still
-   * decides the actual depth when a request omits one. */
+  /** The resolved fast-track rung (never "off") — what `POST /fast-track`
+   * arms when a request omits a depth. */
   fasttrack_depth?: string;
+  /** THE fast-track default for new sessions (Settings → Workspace "Fast-track
+   * goes as far as"): a rung, or "off". Seeds the New dialog. */
+  fasttrack_default?: string;
   default_program: string;
   provisioning_available: boolean;
   caps: Caps;

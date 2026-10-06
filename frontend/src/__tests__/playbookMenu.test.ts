@@ -1,8 +1,8 @@
-/** What is left of lib/playbooks after Ship & split replaced the paste menu:
- * who gets the tools, why a paste is blocked (the Thread's worker buttons),
- * the New dialog's split gate and its "suggested" heuristic, and the family
- * rule. Also the store's threadOpen and the Ctrl+K S / F / L / T chords. The
- * menu itself is pinned in shipMenu.test.ts. */
+/** What is left of lib/playbooks after the paste menu went: who gets the
+ * tools, why a paste is blocked (the Thread's worker buttons), the New
+ * dialog's split gate and its "suggested" heuristic, and the family rule.
+ * Also the store's threadOpen and the Ctrl+K S / F / T chords (and Ctrl+K L,
+ * gone with the menu it opened). Fast-track is pinned in fastTrack.test.ts. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Caps, Instance } from "../api/types";
 import {
@@ -148,7 +148,7 @@ describe("threadOpen", () => {
   beforeEach(() => {
     picked.length = 0;
     setSessionSelector((t, o) => picked.push([t, o]));
-    useUi.setState({ playbookMenu: { title: "api" }, threadComposeTarget: null });
+    useUi.setState({ fastTrackMenu: { title: "api" }, threadComposeTarget: null });
   });
   afterEach(() => setSessionSelector(selectSession));
 
@@ -158,12 +158,12 @@ describe("threadOpen", () => {
     expect(useUi.getState().lastTab.api).toBe("thread");
   });
 
-  it("addresses the composer (default: the session itself) and closes the fork menu", () => {
+  it("addresses the composer (default: the session itself) and closes the ⏩ picker", () => {
     useUi.getState().threadOpen("api");
     const a = useUi.getState().threadComposeTarget!;
     expect(a.title).toBe("api");
     expect(a.to).toBe("api");
-    expect(useUi.getState().playbookMenu).toBeNull();
+    expect(useUi.getState().fastTrackMenu).toBeNull();
     useUi.getState().threadOpen("api", { composeTo: "api-search" });
     const b = useUi.getState().threadComposeTarget!;
     expect(b.to).toBe("api-search");
@@ -184,12 +184,19 @@ describe("threadOpen", () => {
   });
 });
 
-describe("Ctrl+K S / F / L / T", () => {
+describe("Ctrl+K S / F / T", () => {
   it("are bound, and to the letters the spec reserves", () => {
     expect(CHORDS.s.desc).toBe("Message…");
-    expect(CHORDS.f.desc).toBe("Ship & split…");
-    expect(CHORDS.l.desc).toMatch(/^When it's done/);
+    expect(CHORDS.f.desc).toBe("Fast-track…");
     expect(CHORDS.t.desc).toMatch(/^Thread/);
+  });
+
+  it("Ctrl+K L went with the menu it opened, and no two chords share a letter", () => {
+    expect(CHORDS.l).toBeUndefined();
+    const descs = Object.values(CHORDS).map((c) => c.desc);
+    expect(descs.join(" | ")).not.toMatch(/Ship|lane|When it's done/);
+    const letters = Object.keys(CHORDS);
+    expect(new Set(letters).size).toBe(letters.length);
   });
 
   it("S opens the Thread composer addressed to the focused session; T just the Thread", () => {

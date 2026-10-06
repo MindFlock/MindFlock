@@ -85,6 +85,7 @@ export interface PreviewItem {
 export interface PreviewResponse {
   items: PreviewItem[];
   name_suggestion?: string;
+  /** Not read: the New dialog's one default is Settings' (defaultLaneFor). */
   lane_default?: string;
   warnings?: string[];
 }
@@ -259,7 +260,7 @@ export function requestItems(preview: PreviewResponse): Array<Record<string, str
 }
 
 /** One PR for all (or a split) commits every line into the group's branch —
- * that IS the shape — so "Leave it" means "Commit" there (nothing leaves
+ * that IS the shape — so fast-track Off means "Commit" there (nothing leaves
  * this machine), and "ask me first" is the group's release, which always
  * asks. The dialog shows exactly what is sent. */
 export function oneForAllLane(lane: Lane): Lane {
@@ -295,16 +296,13 @@ export function runBody(o: {
   };
 }
 
-/** The lane the dialog starts on. One plain line keeps today's behaviour —
- * nothing ships unless the user says so — and a list (or a split) starts on
- * the server's suggestion, else the fast-track default from Settings. */
-export function defaultLaneFor(
-  batch: boolean,
-  serverDefault: string | null | undefined,
-  fasttrackDepth: string | null | undefined
-): Lane {
-  if (!batch) return "leave";
-  return laneDefault(serverDefault || fasttrackDepth);
+/** The fast-track the dialog starts on, whatever is in the box (one line, a
+ * list, a split): THE default — Settings → Workspace "Fast-track goes as far
+ * as", which may be Off. The preview's own `lane_default` is not read: one
+ * setting, one default, so the dialog can never start somewhere Settings
+ * doesn't say. */
+export function defaultLaneFor(setting: string | null | undefined): Lane {
+  return laneDefault(setting);
 }
 
 /** The primary button. One item keeps today's words; a list says how many;
@@ -319,7 +317,7 @@ export function startLabel(n: number, split: boolean): string {
 
 /** What will happen, in the user's words, from the choices on screen. `lead`
  * is the main clause, `tail` the quieter follow-on; null when there is
- * nothing to say beyond today's single session (one line, Leave it). */
+ * nothing to say beyond a single session with fast-track off. */
 export function summarySentence(o: {
   n: number;
   concurrency: number;

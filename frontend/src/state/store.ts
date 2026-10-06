@@ -218,9 +218,8 @@ interface UiState {
   /** When this browser last looked at each session's Thread tab (epoch ms) —
    * the tab's badge counts results newer than this. Persisted. */
   threadLastSeen: Record<string, number>;
-  /** The pane whose Ship & split (fork-icon) menu is open, and where its
-   * highlight starts. Transient. */
-  playbookMenu: PlaybookMenuState | null;
+  /** The pane whose ⏩ fast-track picker is open. Transient. */
+  fastTrackMenu: FastTrackMenuState | null;
   /** Text the New dialog's describe box opens with, once — Intake's "Start
    * together…" hands its ticked tickets over this way. Transient. */
   newPrefill: string;
@@ -285,8 +284,8 @@ interface UiState {
   threadOpen(title: string, opts?: { composeTo?: string }): void;
   /** Record that the Thread tab of `title` was looked at (now, by default). */
   setThreadLastSeen(title: string, ts?: number): void;
-  /** Open the fork-icon menu on a session's pane, or close it (null). */
-  setPlaybookMenu(menu: PlaybookMenuState | null): void;
+  /** Open the ⏩ fast-track picker on a session's pane, or close it (null). */
+  setFastTrackMenu(menu: FastTrackMenuState | null): void;
   /** Open New with `text` already in its describe box (list mode when it is
    * a list or ticket IDs). */
   openNewWith(text: string): void;
@@ -300,11 +299,8 @@ export interface ThreadComposeTarget {
   seq: number;
 }
 
-export interface PlaybookMenuState {
+export interface FastTrackMenuState {
   title: string;
-  /** Where the highlight starts: "lane" = on the session's current lane
-   * (Ctrl+K L), which is also the default. */
-  sub?: "lane" | null;
 }
 
 /** How the store brings a session forward. The real one is
@@ -359,7 +355,7 @@ export const useUi = create<UiState>((set, get) => ({
   prBaseByRepo: load<Record<string, string>>("mf_prbase", {}),
   threadComposeTarget: null,
   threadLastSeen: load<Record<string, number>>("mf_thread_seen", {}),
-  playbookMenu: null,
+  fastTrackMenu: null,
   newPrefill: "",
 
   setFocused: (title) => set({ focused: title }),
@@ -567,7 +563,7 @@ export const useUi = create<UiState>((set, get) => ({
     }
     get().setLastTab(title, "thread");
     set({
-      playbookMenu: null,
+      fastTrackMenu: null,
       threadComposeTarget: { title, to: opts?.composeTo || title, seq: ++_threadSeq },
     });
   },
@@ -577,7 +573,7 @@ export const useUi = create<UiState>((set, get) => ({
     save("mf_thread_seen", threadLastSeen);
     set({ threadLastSeen });
   },
-  setPlaybookMenu: (menu) => set({ playbookMenu: menu }),
+  setFastTrackMenu: (menu) => set({ fastTrackMenu: menu }),
   openNewWith: (text) => set({ newPrefill: text, openDialog: "new-session", dialogTarget: null }),
   takeNewPrefill: () => {
     const t = get().newPrefill;

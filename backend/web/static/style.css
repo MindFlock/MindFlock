@@ -6117,11 +6117,11 @@ p.set-hint {
   filter: none;
 }
 
-/* Fast-track (⏩): a SECONDARY control that sits beside the guided button and
-   arms the rest of the stack in one press. Deliberately an accent OUTLINE, not a
-   filled accent — the guided next step must stay the one obvious default action,
-   and two filled accent buttons side by side would compete. Icon-only, so it
-   costs almost no width in a tiled layout. */
+/* Fast-track (⏩): a SECONDARY control that sits beside the guided button. It
+   names where MindFlock will carry the session ("⏩ PR") and opens the picker.
+   Deliberately an accent OUTLINE, not a filled accent — the guided next step
+   must stay the one obvious default action, and two filled accent buttons side
+   by side would compete. Short text, so it costs little width in a tiled layout. */
 .pane-head .actions .nextstep.nextstep-fast {
   background: transparent;
   color: var(--accent);
@@ -6183,10 +6183,11 @@ p.set-hint {
    no longer fits, does it hide too. Fast-track is secondary, so it goes one step
    earlier — the primary action must never be the thing that gets squeezed out. */
 /* Fast-track is secondary, so it drops one step before the primary button —
-   EXCEPT while it carries state. Hiding an armed toggle would take away the only
-   way to turn it off, which is the bug this control was reworked to fix. */
+   EXCEPT while it carries state (a target is set, a run is working or halted).
+   Hiding it then would hide the only place that says where the session is going
+   and the way to turn it off. */
 @container (max-width: 500px) {
-  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.nextstep-fast-halted) {
+  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.is-set):not(.nextstep-fast-halted) {
     display: none !important;
   }
   /* ↺ carries no state at all — it is a one-shot action, so there is nothing to
@@ -10159,35 +10160,35 @@ button.ct-chip:hover {
 
 @layer components{
 
-/* "Ship & split": the pane head's fork-icon button and the menu it opens
-   (ShipMenu.tsx), plus the same lane choices in the sidebar row's › menu
-   (PlaybookRowItems.tsx). Written against the theme tokens only, so light
-   mode and every surface set need nothing of their own beyond the shadow
-   (theme-light.css). */
+/* Fast-track: the ⏩ picker the pane head's ⏩ button opens
+   (FastTrackMenu.tsx), the button's own marks, and the row › menu's
+   session items (SessionRowItems.tsx). Written against the theme tokens only,
+   so light mode and every surface set need nothing of their own beyond the
+   shadow (theme-light.css). The ⏩ button's base look (outline / filled while
+   a run works / red on a halt) is Pane.css's .nextstep-fast. */
 
-/* The fork-icon button: first in .head-tail, icon-only like its neighbours
-   (history, copy-all). A CONTROL, not a status chip — the rule that hides
-   .stagechip in pane heads is about status and does not apply here. */
-.pane-head .act.playbooks {
+/* Open: the accent fill, so the picker below reads as hanging from it. */
+.pane-head .actions .nextstep.nextstep-fast.open {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* "Ask me before it ships" is on: a small circled ? after the target. A MARK
+   on a control, not a status chip. */
+.pane-head .actions .nextstep-fast .ft-ask {
   display: inline-flex;
   align-items: center;
-  padding: 4px 6px;
-  color: var(--muted);
-}
-
-.pane-head .act.playbooks svg {
-  display: block;
-}
-
-.pane-head .act.playbooks:hover {
-  color: var(--text);
-}
-
-/* Open: the accent fill, so the menu below reads as hanging from it. */
-.pane-head .act.playbooks.open {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  margin-left: 4px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
 }
 
 /* ---- The menu -------------------------------------------------------------- */
@@ -10231,7 +10232,7 @@ button.ct-chip:hover {
   text-overflow: ellipsis;
 }
 
-/* "When it's done", "Split", "Q4 payments · 6" */
+/* "When the agent is done, go as far as" */
 .pb-menu .pb-sec {
   padding: 8px 8px 3px;
   font-size: 10px;
@@ -10270,6 +10271,21 @@ button.ct-chip:hover {
 .pb-menu .pb-name {
   font-weight: 600;
   min-width: 0;
+}
+
+/* The ✓ column of the ⏩ picker: every rung lines up, ticked or not. */
+.pb-menu .ft-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
+}
+
+.pb-menu .pb-item.sel .ft-check {
+  color: #fff;
+}
+
+.pb-menu.ft-menu .pb-desc {
+  padding-left: 14px;
 }
 
 .pb-menu .pb-key {
@@ -10320,27 +10336,10 @@ button.ct-chip:hover {
   color: var(--text);
 }
 
-/* ---- The sidebar row's › menu group --------------------------------------- */
+/* ---- The sidebar row's › menu items ----------------------------------------- */
 
-/* The lanes, unfolded in place under "When it's done: …" (the row menu is an
-   inline list, not a popover). */
-.inst-actions .pb-row-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding-left: 14px;
-}
-
-.inst-actions .pb-row-sub button {
-  font-size: 11.5px;
-  padding: 4px 10px;
-}
-
-.inst-actions .pb-row-sub button.on {
-  color: var(--accent);
-  font-weight: 600;
-}
-
+/* An item this session can't take right now (its reason is the tooltip, and
+   a click says it in a toast). */
 .inst-actions button.pb-row-off {
   color: var(--muted);
   cursor: default;
@@ -10352,8 +10351,8 @@ button.ct-chip:hover {
 }
 
 /* 165 — after
-   Pane.css, whose .pane-head .act the fork-icon button extends, and after
-   SidebarRow.css, whose .inst-actions the row's ship group extends */
+   Pane.css, whose .nextstep-fast the ⏩ button's marks extend, and after
+   SidebarRow.css, whose .inst-actions the row's session items extend */
 
 @layer components{
 
@@ -12605,7 +12604,7 @@ button.ct-chip:hover {
   overflow: hidden;
 }
 
-#new-form .rt-seg button {
+:is(#new-form, #commit-form) .rt-seg button {
   border: none;
   border-left: 1px solid var(--border);
   border-radius: 0;
@@ -12617,22 +12616,22 @@ button.ct-chip:hover {
   white-space: nowrap;
 }
 
-#new-form .rt-seg button:first-child {
+:is(#new-form, #commit-form) .rt-seg button:first-child {
   border-left: none;
 }
 
-#new-form .rt-seg button:hover:not(.on):not(:disabled) {
+:is(#new-form, #commit-form) .rt-seg button:hover:not(.on):not(:disabled) {
   background: var(--panel-2);
 }
 
 /* A choice an older server can't take (caps.team_runs): shown, not offered. */
-#new-form .rt-seg button:disabled {
+:is(#new-form, #commit-form) .rt-seg button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-#new-form .rt-seg button.on {
+:is(#new-form, #commit-form) .rt-seg button.on {
   background: var(--accent);
   color: #fff;
 }
@@ -12915,49 +12914,48 @@ button.ct-chip:hover {
   border-color: var(--accent);
 }
 
-/* Fast-track rung picker.
-   A <select> does NOT inherit the card's typography: the UA stylesheet sets the
-   `font` shorthand on form controls, so without this rule it rendered as a raw
-   Arial platform widget (square corners, ButtonFace grey) inside a rounded dark
-   card whose every other control is --bg + 1px --border + 7px radius.
-   `align-self: start` matters too: `#commit-form label` is a column flexbox with
-   the default `align-items: stretch`, which spread a four-option picker across
-   the whole 480px card with ~300px of dead space. */
-#commit-form #commit-depth {
-  align-self: start;
-  min-width: 210px;
-  max-width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 7px;
-  padding: 7px 10px;
-  font-family: inherit;
+/* "Then fast-track to": the same segmented control and "Ask me before it
+   ships" as the New dialog (FastTrackChoice; the .rt-seg look lives in
+   NewSessionDialog.css), caption above, control and checkbox on one wrapping
+   line. */
+#commit-form #commit-ft-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#commit-form .cm-ft-label {
   font-size: 13px;
+  color: var(--muted);
+}
+
+#commit-form .cm-ft-ctl {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+/* `#commit-form label` is a column flexbox for the message field; the ask
+   checkbox is one inline row. */
+#commit-form label.check.rt-ask {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text);
   cursor: pointer;
 }
 
-#commit-form #commit-depth:focus {
-  outline: none;
-  border-color: var(--accent);
+#commit-form label.check.rt-ask input {
+  accent-color: var(--accent);
+  margin: 0;
 }
 
-#commit-form #commit-depth:hover {
-  border-color: var(--accent);
-}
-
-/* Caption and hint on ONE line: the label is a column flexbox, so a bare text
-   node plus the hint span would otherwise stack into two rows and make this row
-   taller than the message row's caption. */
-#commit-form #commit-depth-row {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: baseline;
-  gap: 4px 6px;
-}
-
-#commit-form #commit-depth-row > select {
-  grid-column: 1 / -1;
+#commit-form label.check.rt-ask.disabled {
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 /* Rename dialog (single-line display name; same card style as #commit-form) */
@@ -19108,7 +19106,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
 }
 
-/* The fork-icon Ship & split menu (ShipMenu.css). */
+/* The ⏩ fast-track picker (FastTrackMenu.css). */
 .light .pb-menu {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
 }

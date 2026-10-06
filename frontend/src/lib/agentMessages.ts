@@ -552,7 +552,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
   const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
   const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
-  const base = { restCls: "", title: (means ? "Lane: " + means + "." : "") + copy };
+  const base = { restCls: "", title: (means ? "Fast-track: " + means + "." : "") + copy };
   const line = (lead: string, rest: string, cls: string, state: ShipLine["state"], why = ""): ShipLine => ({
     ...base,
     lead,
@@ -605,7 +605,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
       const ck = checksText(row);
       return { ...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."), restCls: ck.bad ? "bad" : "" };
     }
-    return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its lane ends at " + target + ".");
+    return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
   }
 
   // MindFlock is carrying it now: the next outward step, by what git says.

@@ -1,32 +1,32 @@
-/* "Ship & split": the pane head's fork-icon button and the menu it opens
-   (ShipMenu.tsx), plus the same lane choices in the sidebar row's › menu
-   (PlaybookRowItems.tsx). Written against the theme tokens only, so light
-   mode and every surface set need nothing of their own beyond the shadow
-   (theme-light.css). */
+/* Fast-track: the ⏩ picker the pane head's ⏩ button opens
+   (FastTrackMenu.tsx), the button's own marks, and the row › menu's
+   session items (SessionRowItems.tsx). Written against the theme tokens only,
+   so light mode and every surface set need nothing of their own beyond the
+   shadow (theme-light.css). The ⏩ button's base look (outline / filled while
+   a run works / red on a halt) is Pane.css's .nextstep-fast. */
 
-/* The fork-icon button: first in .head-tail, icon-only like its neighbours
-   (history, copy-all). A CONTROL, not a status chip — the rule that hides
-   .stagechip in pane heads is about status and does not apply here. */
-.pane-head .act.playbooks {
+/* Open: the accent fill, so the picker below reads as hanging from it. */
+.pane-head .actions .nextstep.nextstep-fast.open {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* "Ask me before it ships" is on: a small circled ? after the target. A MARK
+   on a control, not a status chip. */
+.pane-head .actions .nextstep-fast .ft-ask {
   display: inline-flex;
   align-items: center;
-  padding: 4px 6px;
-  color: var(--muted);
-}
-
-.pane-head .act.playbooks svg {
-  display: block;
-}
-
-.pane-head .act.playbooks:hover {
-  color: var(--text);
-}
-
-/* Open: the accent fill, so the menu below reads as hanging from it. */
-.pane-head .act.playbooks.open {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  margin-left: 4px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
 }
 
 /* ---- The menu -------------------------------------------------------------- */
@@ -70,7 +70,7 @@
   text-overflow: ellipsis;
 }
 
-/* "When it's done", "Split", "Q4 payments · 6" */
+/* "When the agent is done, go as far as" */
 .pb-menu .pb-sec {
   padding: 8px 8px 3px;
   font-size: 10px;
@@ -109,6 +109,21 @@
 .pb-menu .pb-name {
   font-weight: 600;
   min-width: 0;
+}
+
+/* The ✓ column of the ⏩ picker: every rung lines up, ticked or not. */
+.pb-menu .ft-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
+}
+
+.pb-menu .pb-item.sel .ft-check {
+  color: #fff;
+}
+
+.pb-menu.ft-menu .pb-desc {
+  padding-left: 14px;
 }
 
 .pb-menu .pb-key {
@@ -159,27 +174,10 @@
   color: var(--text);
 }
 
-/* ---- The sidebar row's › menu group --------------------------------------- */
+/* ---- The sidebar row's › menu items ----------------------------------------- */
 
-/* The lanes, unfolded in place under "When it's done: …" (the row menu is an
-   inline list, not a popover). */
-.inst-actions .pb-row-sub {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding-left: 14px;
-}
-
-.inst-actions .pb-row-sub button {
-  font-size: 11.5px;
-  padding: 4px 10px;
-}
-
-.inst-actions .pb-row-sub button.on {
-  color: var(--accent);
-  font-weight: 600;
-}
-
+/* An item this session can't take right now (its reason is the tooltip, and
+   a click says it in a toast). */
 .inst-actions button.pb-row-off {
   color: var(--muted);
   cursor: default;

@@ -294,7 +294,7 @@ export function RunLeadPanel({
       {showShip && (
         <section className="thread-sec">
           <div className="thread-sec-head">
-            <span className="thread-label">Ship · one PR</span>
+            <span className="thread-label">Release · one PR</span>
             <span className="th-sp" />
             {lane && <span className="rb-note">{lane}</span>}
           </div>

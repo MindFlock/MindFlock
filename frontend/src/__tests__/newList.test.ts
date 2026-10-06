@@ -25,11 +25,13 @@ import {
 describe("one plain line is today's single session", () => {
   const one = localItems("fix the login bug in acme-api");
 
-  it("is not a list, keeps 'Create session', and ships nothing by default", () => {
+  it("is not a list, keeps 'Create session', and starts on THE fast-track default", () => {
     expect(one).toEqual([{ kind: "task", text: "fix the login bug in acme-api" }]);
     expect(isListMode(one)).toBe(false);
     expect(startLabel(1, false)).toBe("Create session");
-    expect(defaultLaneFor(false, "pr", "merge")).toBe("leave");
+    // One setting seeds every shape — one line included; Off is a setting too.
+    expect(defaultLaneFor("merge")).toBe("merge");
+    expect(defaultLaneFor("off")).toBe("leave");
   });
 
   it("says nothing extra while it is Leave it", () => {
@@ -179,11 +181,12 @@ describe("POST /api/runs body (SPEC §5)", () => {
     expect(clampConcurrency(Number.NaN)).toBe(3);
   });
 
-  it("a batch starts on the server's lane, else the fast-track default, else a PR", () => {
-    expect(defaultLaneFor(true, "commit", "merge")).toBe("commit");
-    expect(defaultLaneFor(true, "", "merge")).toBe("merge");
-    expect(defaultLaneFor(true, "", "agent")).toBe("leave");
-    expect(defaultLaneFor(true, undefined, undefined)).toBe("pr");
+  it("a batch starts on the Settings default (never the preview's own), else a PR", () => {
+    expect(defaultLaneFor("commit")).toBe("commit");
+    expect(defaultLaneFor("agent")).toBe("leave");
+    expect(defaultLaneFor("off")).toBe("leave");
+    expect(defaultLaneFor("")).toBe("pr");
+    expect(defaultLaneFor(undefined)).toBe("pr");
   });
 
   it("the button says how many, or that a split starts its lead", () => {

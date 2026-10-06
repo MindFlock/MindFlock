@@ -154,8 +154,8 @@ export function thenText(step: string | undefined, laneTarget: string | undefine
   const to = LADDER.indexOf(lane);
   if (from < 0 || to <= from) {
     return s === "commit"
-      ? "stays local — this session's lane ends at commit"
-      : "this session's lane ends at " + (STEP_WORD[s] || s);
+      ? "stays local — its fast-track ends at commit"
+      : "its fast-track ends at " + (STEP_WORD[s] || s);
   }
   return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
 }
