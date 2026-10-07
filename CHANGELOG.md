@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Peer shared sessions run any agent CLI that can take the peer tools** —
+  claude, codex, opencode, cline, goose and antigravity (agy), each verified
+  starting inside the sandbox with the peer MCP attached. aider can't (it has
+  no MCP client). What a CLI needs inside — API hosts, login files, config
+  dir, how the MCP attaches — is now declared by its provider (or a TOML
+  `[peer]` section for your own CLI) and validated by the sandbox, instead of
+  a claude/codex table in the sandbox. The share form lists the installed ones,
+  your default first.
+
 - **Peer links: send a code, they paste it, you're connected.** Settings →
   Peer links now leads with **Invite someone** and **Join a peer**; every
   setting moved under *Advanced*. Inviting or joining turns peer links on (no

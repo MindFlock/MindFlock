@@ -280,7 +280,7 @@ Prefix matching works like `attach`.
 | `peer join CODE` | pairs, prints the SAS to compare with your peer |
 | `peer links` | links with their SAS, state and what the peer may do |
 | `peer unlink LINK [--delete-files]` | stops the shared session, forgets the peer |
-| `peer share LINK REPO [--branch B] [--program claude\|codex]` | clones REPO into the link's shared folder and starts its sandboxed session |
+| `peer share LINK REPO [--branch B] [--program CLI]` | clones REPO into the link's shared folder and starts its sandboxed session |
 | `peer unshare LINK [--delete-files]` | stops the shared session (keeps the folder unless told) |
 | `peer export LINK TARGET_REPO peer/BRANCH` | checkpoints the shared folder and fetches it into your repo |
 | `peer address LINK ADDRESS` | points a link you joined at the inviter's new address (`host:port`, or `wss://host/path` after their quick tunnel restarted — they see it in `peer status`) |

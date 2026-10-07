@@ -22,6 +22,7 @@ SHARE_ID = "ab" * 16  # 32 hex chars, like secrets.token_hex(16)
 def fake_sandbox(monkeypatch, ok: bool, reason: str = "no bwrap here"):
     mod = types.ModuleType("backend.peer.sandbox")
     mod.available = lambda: (ok, "" if ok else reason)
+    mod.sandboxable = lambda: ["claude", "codex"]
     mod.egress_allow = lambda provider, extra=None: [
         "api.anthropic.com",
         *(extra or []),

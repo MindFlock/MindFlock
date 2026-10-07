@@ -20,6 +20,7 @@ from .base import (
     LauncherSpec,
     LaunchContext,
     ONESHOT_PROMPT_TOKEN,
+    SandboxProfile,
     TrustSpec,
     oneshot_command,
     seed_prompt_expr,
@@ -277,6 +278,48 @@ class ClaudeProvider(BaseProvider):
         # A genuinely custom program slipped through to this provider — run it
         # as the generic base does (bare, resume with --continue).
         return super().build_launch_command(ctx)
+
+    # --- peer shared sessions (backend/peer) ------------------------------ #
+    def sandbox_profile(self) -> Optional[SandboxProfile]:
+        return SandboxProfile(
+            bin="claude",
+            egress=(
+                "api.anthropic.com",
+                "console.anthropic.com",
+                "platform.claude.com",
+                "claude.ai",
+                "statsig.anthropic.com",
+            ),
+            passthrough_env=("ANTHROPIC_API_KEY",),
+            config_env="CLAUDE_CONFIG_DIR",
+            config_dir=".claude",
+            seed_files=(".credentials.json",),
+            env=(("DISABLE_AUTOUPDATER", "1"),),
+        )
+
+    def sandbox_extra_seed(self, work_dir: str) -> dict:
+        """A MINIMAL ``.claude.json``: the account identity and our own trust
+        record for the shared folder — never the real file's projects map,
+        history or settings. ``CLAUDE_CONFIG_DIR`` moves claude's global config
+        to ``<dir>/.claude.json``, so both locations are seeded."""
+        body = _claude_minimal_json(work_dir)
+        return {".claude.json": body, ".claude/.claude.json": body}
+
+    def peer_mcp_args(self, spec) -> tuple:
+        """``--mcp-config=<run>/mcp.json --strict-mcp-config
+        --allowedTools=<peer tools>`` — strict so no other server (a project
+        ``.mcp.json`` the peer planted in the folder, the user's own) loads."""
+        from . import mcp_attach
+
+        path = spec.write_run_file(
+            mcp_attach.PEER_MCP_FILE,
+            mcp_attach.peer_claude_config(spec.share_id, spec.token),
+        )
+        return (
+            "--mcp-config=" + path,
+            "--strict-mcp-config",
+            "--allowedTools=" + ",".join(mcp_attach.peer_claude_tool_names()),
+        )
 
     # --- MindFlock MCP auto-attach ----------------------------------------- #
     def mcp_launch_args(self, spec) -> tuple:
@@ -1639,3 +1682,43 @@ def _transcript_file_tokens(
             _TT_FILE_CACHE.pop(k, None)
     _TT_FILE_CACHE[path] = (sig, agg)
     return agg
+
+
+#: Caps for reading the real ``.claude.json`` (it can be huge: projects map).
+_MAX_SOURCE_JSON = 64 * 1024 * 1024
+
+
+def _claude_minimal_json(work: str) -> bytes:
+    """The peer sandbox's ``.claude.json``: onboarding done, the account's
+    ``oauthAccount`` / ``userID`` lifted from the real file (that is what keeps
+    the copied credentials usable), and a trust record for ``work`` alone — as
+    MindFlock pre-trusts every workdir it launches claude in."""
+    import json
+
+    src = os.environ.get("MINDFLOCK_CLAUDE_JSON", "").strip()
+    if not src:
+        cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+        src = (
+            os.path.join(cfg, ".claude.json")
+            if cfg
+            else os.path.expanduser("~/.claude.json")
+        )
+    out: dict = {"hasCompletedOnboarding": True}
+    raw = None
+    try:
+        with open(src, "rb") as fh:
+            raw = fh.read(_MAX_SOURCE_JSON + 1)
+    except OSError:
+        raw = None
+    if raw and len(raw) <= _MAX_SOURCE_JSON:
+        try:
+            real = json.loads(raw)
+        except ValueError:
+            real = None
+        if isinstance(real, dict):
+            if isinstance(real.get("oauthAccount"), dict):
+                out["oauthAccount"] = real["oauthAccount"]
+            if isinstance(real.get("userID"), str):
+                out["userID"] = real["userID"]
+    out["projects"] = {work: {"hasTrustDialogAccepted": True}}
+    return json.dumps(out, indent=2).encode()

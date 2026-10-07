@@ -205,6 +205,33 @@ class ProviderConfig:
     #: ``"npm install -g @openai/codex"``). Empty = fall back to the platform
     #: package-manager hint (``brew``/``apt``) keyed on the program name.
     install_hint: str = ""
+    # --- peer shared sessions (backend/peer, docs/peer-link.md) ----------- #
+    #: Hosts the CLI must reach on 443 inside the peer sandbox (its API, its
+    #: auth refresh). Empty = this CLI can't run a peer shared session.
+    sandbox_egress: Tuple[str, ...] = ()
+    #: The CLI's config dir: the env var that relocates it (``CODEX_HOME``) and
+    #: its default under ``~`` (``.codex``). See ``SandboxProfile``.
+    sandbox_config_env: str = ""
+    sandbox_config_dir: str = ""
+    #: Login files under that dir copied into the sandbox's home.
+    sandbox_seed_files: Tuple[str, ...] = ()
+    #: Fixed env inside the sandbox, ``((name, value), …)``.
+    sandbox_env: Tuple[Tuple[str, str], ...] = ()
+    #: How the peer-mode MCP attaches, as templates. ``peer_mcp_args`` are argv
+    #: tokens, ``peer_mcp_env`` env vars, and ``peer_mcp_file`` an optional
+    #: ``(name, content)`` written read-only into the share's run dir.
+    #: Placeholders (plain substitution): ``{command}``, ``{command_json}``,
+    #: ``{args_json}``,
+    #: ``{argv_json}`` (command + args), ``{env_json}``, ``{argv_shell}``,
+    #: ``{env_shell}`` (``K=V …``), ``{argv_env_shell}`` (``env K=V … cmd``),
+    #: ``{server}``, ``{tools_csv}``,
+    #: ``{config_file}`` (the written file's path).
+    peer_mcp_args: Tuple[str, ...] = ()
+    peer_mcp_env: Tuple[Tuple[str, str], ...] = ()
+    peer_mcp_file: Tuple[str, str] = ("", "")
+    #: ``(path under the sandbox HOME, content)`` — for a CLI that reads its
+    #: MCP config only from its own home; written at launch.
+    peer_mcp_home_file: Tuple[str, str] = ("", "")
 
     def usage_window(self) -> dict:
         return {
@@ -440,6 +467,13 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         auth_env=("OPENAI_API_KEY",),
         login_command="codex login",
         install_hint="npm install -g @openai/codex",
+        # Peer shared sessions: the API + ChatGPT-login hosts, CODEX_HOME
+        # pointed into the sandbox home with only auth.json copied in. The MCP
+        # attach is CodexProvider.peer_mcp_args (a -c inline table).
+        sandbox_egress=("api.openai.com", "chatgpt.com", "auth.openai.com"),
+        sandbox_config_env="CODEX_HOME",
+        sandbox_config_dir=".codex",
+        sandbox_seed_files=("auth.json",),
     ),
     ProviderConfig(
         name="antigravity",
@@ -505,6 +539,27 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # agy authenticates through a Google sign-in on first run; there is no
         # separate login subcommand, so the one-click terminal just runs `agy`.
         login_command="agy",
+        # Peer shared sessions. agy has no MCP flag or env var: it reads
+        # ~/.gemini/config/mcp_config.json, so ours is written into the
+        # sandbox home at launch. Its login is a file once the keyring is
+        # unreachable (as in the sandbox). Folder plugins (.agents/) can't be
+        # switched off — the sandbox stays the boundary for those.
+        sandbox_egress=(
+            "cloudcode-pa.googleapis.com",
+            "daily-cloudcode-pa.googleapis.com",
+            "oauth2.googleapis.com",
+            "antigravity-unleash.goog",
+            "play.googleapis.com",
+            "generativelanguage.googleapis.com",
+        ),
+        sandbox_config_dir=".gemini/antigravity-cli",
+        sandbox_seed_files=("antigravity-oauth-token",),
+        sandbox_env=(("AGY_CLI_DISABLE_AUTO_UPDATE", "1"),),
+        peer_mcp_home_file=(
+            ".gemini/config/mcp_config.json",
+            '{"mcpServers":{"{server}":{"command":{command_json},'
+            '"args":{args_json},"env":{env_json}}}}',
+        ),
     ),
     ProviderConfig(
         name="aider",
@@ -576,6 +631,35 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         auth_files=("~/.local/share/opencode/auth.json",),
         login_command="opencode auth login",
         install_hint="npm install -g opencode-ai",
+        # Peer shared sessions. The MCP goes in through OPENCODE_CONFIG_CONTENT
+        # (schema key `environment`, not `env`), and DISABLE_PROJECT_CONFIG
+        # keeps a planted opencode.json / .opencode/ plugin in the shared folder
+        # from loading; Claude Code's own files are off too. Hosts: Zen + the
+        # model catalogue + the common provider APIs its login may point at.
+        sandbox_egress=(
+            "opencode.ai",
+            "api.opencode.ai",
+            "models.dev",
+            "api.anthropic.com",
+            "api.openai.com",
+            "generativelanguage.googleapis.com",
+            "openrouter.ai",
+        ),
+        sandbox_config_dir=".local/share/opencode",
+        sandbox_seed_files=("auth.json",),
+        sandbox_env=(
+            ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+            ("OPENCODE_DISABLE_CLAUDE_CODE", "1"),
+            ("OPENCODE_DISABLE_AUTOUPDATE", "1"),
+        ),
+        peer_mcp_env=(
+            (
+                "OPENCODE_CONFIG_CONTENT",
+                '{"$schema":"https://opencode.ai/config.json","mcp":{"{server}":'
+                '{"type":"local","command":{argv_json},"environment":{env_json},'
+                '"enabled":true}}}',
+            ),
+        ),
     ),
     ProviderConfig(
         name="cline",
@@ -608,6 +692,26 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         oneshot_args=("--auto-approve", "false", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Cline account or bring-your-own key; no MindFlock-managed window.",
+        # Peer shared sessions: CLINE_MCP_SETTINGS_PATH replaces its MCP
+        # settings file with ours (read-only in the run dir); only the provider
+        # login (providers.json) is copied in.
+        sandbox_egress=(
+            "api.cline.bot",
+            "app.cline.bot",
+            "api.anthropic.com",
+            "api.openai.com",
+            "generativelanguage.googleapis.com",
+            "openrouter.ai",
+        ),
+        sandbox_config_env="CLINE_DIR",
+        sandbox_config_dir=".cline",
+        sandbox_seed_files=("data/settings/providers.json",),
+        peer_mcp_env=(("CLINE_MCP_SETTINGS_PATH", "{config_file}"),),
+        peer_mcp_file=(
+            "cline-mcp.json",
+            '{"mcpServers":{"{server}":{"command":{command_json},'
+            '"args":{args_json},"env":{env_json}}}}',
+        ),
     ),
     ProviderConfig(
         name="goose",
@@ -640,6 +744,27 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         usage_window_note="Bring-your-own provider keys; no MindFlock-managed window.",
         # `goose configure` sets up the provider + key interactively.
         login_command="goose configure",
+        # Peer shared sessions: --no-profile drops every configured extension
+        # (so only ours loads), --with-builtin developer puts its shell/edit
+        # tools back. The extension's env goes through env(1): goose filters
+        # PYTHONPATH out of an extension's own env (verified, goose 1.41). Its keyring can't be reached in the sandbox, so secrets
+        # come from secrets.yaml (GOOSE_DISABLE_KEYRING) next to config.yaml.
+        sandbox_egress=(
+            "api.anthropic.com",
+            "api.openai.com",
+            "generativelanguage.googleapis.com",
+            "openrouter.ai",
+        ),
+        sandbox_config_dir=".config/goose",
+        sandbox_seed_files=("config.yaml", "secrets.yaml"),
+        sandbox_env=(("GOOSE_DISABLE_KEYRING", "1"), ("GOOSE_TELEMETRY_OFF", "1")),
+        peer_mcp_args=(
+            "--no-profile",
+            "--with-builtin",
+            "developer",
+            "--with-extension",
+            "{argv_env_shell}",
+        ),
     ),
 ]
 
@@ -679,6 +804,9 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
     usage = raw.get("usage", {}) or {}
     activity = raw.get("activity", {}) or {}
     connect = raw.get("connect", {}) or {}
+    peer = raw.get("peer", {}) or {}
+    peer_file = peer.get("mcp_file", {}) or {}
+    peer_home = peer.get("mcp_home_file", {}) or {}
     program = prov.get("program") or prov.get("name")
     aliases = tuple(program) if isinstance(program, (list, tuple)) else (program,)
     return ProviderConfig(
@@ -741,6 +869,29 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         auth_env=tuple(str(x) for x in (connect.get("auth_env", ()) or ())),
         login_command=str(connect.get("login_command", "") or ""),
         install_hint=str(connect.get("install_hint", "") or ""),
+        # [peer] — opt-in peer shared sessions (see the field docs above; the
+        # sandbox validates every value again before use).
+        sandbox_egress=tuple(str(x) for x in (peer.get("egress", ()) or ())),
+        sandbox_config_env=str(peer.get("config_env", "") or ""),
+        sandbox_config_dir=str(peer.get("config_dir", "") or ""),
+        sandbox_seed_files=tuple(str(x) for x in (peer.get("seed_files", ()) or ())),
+        sandbox_env=tuple(
+            (str(k), str(v)) for k, v in (peer.get("env", {}) or {}).items()
+        ),
+        peer_mcp_args=tuple(str(x) for x in (peer.get("mcp_args", ()) or ())),
+        peer_mcp_env=tuple(
+            (str(k), str(v)) for k, v in (peer.get("mcp_env", {}) or {}).items()
+        ),
+        peer_mcp_file=(
+            (str(peer_file.get("name", "")), str(peer_file.get("content", "")))
+            if isinstance(peer_file, dict)
+            else ("", "")
+        ),
+        peer_mcp_home_file=(
+            (str(peer_home.get("path", "")), str(peer_home.get("content", "")))
+            if isinstance(peer_home, dict)
+            else ("", "")
+        ),
     )
 
 

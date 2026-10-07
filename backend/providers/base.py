@@ -215,6 +215,41 @@ def oneshot_command(
     ]
 
 
+@dataclass(frozen=True)
+class SandboxProfile:
+    """What a CLI needs to run inside a peer shared session's bubblewrap
+    sandbox (:mod:`backend.peer.sandbox`). A provider that returns one from
+    :meth:`BaseProvider.sandbox_profile` — and can attach the peer MCP
+    (:meth:`BaseProvider.peer_mcp_args`) — can run a shared session; nothing
+    else about the sandbox is per-CLI.
+
+    Every field is DATA the sandbox validates before use (hosts through its
+    egress-entry check, env names through its deny lists, seed paths through
+    ``safe_write``), so a profile can widen what the agent may reach only as
+    far as these fields say.
+
+    * ``bin`` — the program on ``PATH``; its install dir and interpreter are
+      bound read-only.
+    * ``egress`` — the hosts the agent may reach on 443 (its API, its auth
+      refresh). The user's ``peer.egress_allow`` is added on top.
+    * ``passthrough_env`` — env vars copied in when set on the host (API keys).
+    * ``config_env`` / ``config_dir`` — the CLI's config directory: on the host
+      ``$config_env`` when set, else ``~/config_dir``; in the sandbox
+      ``config_env`` points at ``<home>/config_dir``. Either may be empty.
+    * ``seed_files`` — files under that directory copied into the sandbox's
+      home (login state only — never history, settings or projects).
+    * ``env`` — fixed extra env (e.g. turning a self-updater off).
+    """
+
+    bin: str
+    egress: tuple = ()
+    passthrough_env: tuple = ()
+    config_env: str = ""
+    config_dir: str = ""
+    seed_files: tuple = ()
+    env: tuple = ()  # ((name, value), ...)
+
+
 class BaseProvider:
     """Default, provider-agnostic implementation. Subclass and override only
     what differs for a specific CLI."""
@@ -257,6 +292,36 @@ class BaseProvider:
         ``mindflock mcp`` by hand.
         """
         return ()
+
+    # --- peer shared sessions (backend/peer) ------------------------------ #
+    def sandbox_profile(self) -> Optional[SandboxProfile]:
+        """How this CLI runs inside the peer sandbox, or ``None`` when it
+        can't (see :class:`SandboxProfile`). Default: ``None``."""
+        return None
+
+    def sandbox_extra_seed(self, work_dir: str) -> dict:
+        """Extra files for the sandbox home beyond ``seed_files``:
+        ``{relative path: bytes}``. ``work_dir`` is the shared folder as the
+        agent sees it. For CLIs whose login lives inside a larger state file
+        that must NOT be copied whole (claude's ``.claude.json``). Default:
+        none."""
+        return {}
+
+    def peer_mcp_args(self, spec) -> tuple:
+        """argv tokens attaching ONLY the peer-mode MindFlock MCP described by
+        ``spec`` (:class:`backend.providers.mcp_attach.PeerMcpSpec`) to a
+        shared session's launch. NOT best-effort: raise ``ValueError`` when it
+        can't be done — the launch is refused, because the peer tools are how a
+        shared session works at all. Implementations should keep any OTHER MCP
+        server (the user's, or one planted in the shared folder) from loading.
+        Default: unsupported."""
+        raise ValueError("provider %s has no peer-mode MCP attach" % (self.name or "?"))
+
+    def peer_mcp_env(self, spec) -> dict:
+        """Env vars the launch needs for :meth:`peer_mcp_args` (a CLI that
+        reads its MCP config from an env var instead of a flag). Default:
+        none."""
+        return {}
 
     # --- worktree launcher script ----------------------------------------- #
     def owns_launcher(self, ctx: LaunchContext) -> bool:

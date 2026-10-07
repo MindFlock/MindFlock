@@ -1755,10 +1755,13 @@ settings file:
 | `peer_read_file` / `peer_list_files` | the peer's shared files (if they allow it) |
 | `checkpoint` | commit OUR shared folder (what the peer's diff and export see) |
 
-Attach (`mcp_attach.peer_attach_args`): Claude gets
+Attach (`mcp_attach.peer_attach_args` / `peer_attach_env`, asked of the
+provider's `peer_mcp_args` / `peer_mcp_env` with a `PeerMcpSpec`): Claude gets
 `--mcp-config=<share>/run/mcp.json --strict-mcp-config
 --allowedTools=mcp__mindflock__<peer tools>`; Codex one `-c
-mcp_servers.mindflock={…}` table with no `env_vars` forwarding. The server's
+mcp_servers.mindflock={…}` table with no `env_vars` forwarding; the TOML-driven
+CLIs (opencode, goose, cline, antigravity, or your own `[peer]` section) fill
+templates — see [peer-link.md](peer-link.md#the-sandbox--contract-sandboxpy-egresspy-bridgepy-sandbox_execpy). The server's
 env is exactly `MINDFLOCK_MCP_MODE=peer`, `MINDFLOCK_PEER_SOCKET=<share>/run/agent.sock`,
 `MINDFLOCK_PEER_TOKEN=<per-share token>` and `PYTHONPATH` — no host, port,
 auth token, session title or settings path. Every tool is auto-approved: the

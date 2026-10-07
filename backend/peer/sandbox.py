@@ -25,7 +25,6 @@ See ``docs/peer-link.md`` ("The sandbox — CONTRACT").
 from __future__ import annotations
 
 import functools
-import json
 import os
 import pwd
 import re
@@ -37,7 +36,8 @@ import sys
 
 __all__ = [
     "SandboxError",
-    "PROFILES",
+    "profile_for",
+    "sandboxable",
     "DEFAULT_BRIDGE_PORT",
     "available",
     "find_bwrap",
@@ -74,24 +74,67 @@ EXTRA_TMPFS = ("root", "mnt", "media", "srv")
 # In-sandbox dir (on the /run tmpfs) holding symlinks to the agent runtime.
 SANDBOX_BIN = "/run/mindflock-bin"
 
-PROFILES: dict[str, dict] = {
-    "claude": {
-        "bin": "claude",
-        "egress": [
-            "api.anthropic.com",
-            "console.anthropic.com",
-            "platform.claude.com",
-            "claude.ai",
-            "statsig.anthropic.com",
-        ],
-        "passthrough": ["ANTHROPIC_API_KEY"],
-    },
-    "codex": {
-        "bin": "codex",
-        "egress": ["api.openai.com", "chatgpt.com", "auth.openai.com"],
-        "passthrough": ["OPENAI_API_KEY"],
-    },
-}
+# What a CLI needs inside (its binary, API hosts, config dir, login files) is
+# the PROVIDER's to declare — ``BaseProvider.sandbox_profile`` — not a table
+# here; ``profile_for`` fetches it and validates every field before any of it
+# reaches a bwrap argv, an env var or a file write.
+_BIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")
+
+
+def _safe_rel(rel) -> bool:
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\0" in rel:
+        return False
+    parts = [p for p in rel.split("/") if p]
+    return bool(parts) and not any(p in (".", "..") for p in parts)
+
+
+def profile_for(provider: str):
+    """``provider``'s validated :class:`~backend.providers.base.SandboxProfile`.
+    Raises :class:`SandboxError` when it has none, or one this sandbox would not
+    honour as written (a path in ``bin``, an env name on the deny lists, a seed
+    path that climbs out of its directory)."""
+    from backend import providers
+
+    try:
+        p = providers.get(provider or "")
+        prof = p.sandbox_profile() if p is not None else None
+    except Exception as err:  # noqa: BLE001 — a broken provider is "no profile"
+        raise SandboxError(f"provider {provider}: {err}") from None
+    if prof is None:
+        raise SandboxError(f"provider {provider} has no sandbox profile")
+    if not _BIN_RE.match(str(prof.bin or "")):
+        raise SandboxError(f"provider {provider}: bad sandbox binary {prof.bin!r}")
+    names = list(prof.passthrough_env) + [k for k, _v in prof.env]
+    if prof.config_env:
+        names.append(prof.config_env)
+    for key in names:
+        if not isinstance(key, str) or not _env_ok(key):
+            raise SandboxError(f"provider {provider}: env {key!r} may not enter")
+    if prof.config_dir and not _safe_rel(prof.config_dir):
+        raise SandboxError(f"provider {provider}: bad config dir")
+    for rel in prof.seed_files:
+        if not _safe_rel(rel):
+            raise SandboxError(f"provider {provider}: bad seed file {rel!r}")
+    for _k, v in prof.env:
+        if not isinstance(v, str) or "\0" in v:
+            raise SandboxError(f"provider {provider}: bad env value")
+    return prof
+
+
+def sandboxable() -> list[str]:
+    """Names of the registered providers with a valid sandbox profile."""
+    from backend import providers
+
+    out: list[str] = []
+    for p in providers.all_providers():
+        try:
+            profile_for(p.name)
+        except SandboxError:
+            continue
+        if p.name not in out:
+            out.append(p.name)
+    return out
+
 
 # Never let these into the sandbox, even through the explicit ``env`` dict.
 _ENV_DENY_EXACT = {
@@ -143,8 +186,6 @@ _ENV_RESERVED = {
     "no_proxy",
     "ALL_PROXY",
     "all_proxy",
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
 }
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 _LC_RE = re.compile(r"^LC_[A-Z_]{1,32}\Z")
@@ -484,14 +525,14 @@ def _under(p: str, base: str) -> bool:
 def _runtime(provider: str, share_root: str) -> tuple[list[str], dict[str, str]]:
     """Read-only paths for the agent runtime, and in-sandbox PATH symlinks
     ``{name: realpath}``."""
-    prof = PROFILES[provider]
+    prof = profile_for(provider)
     host_path = os.environ.get("PATH", os.defpath)
-    exe = shutil.which(prof["bin"], path=host_path)
+    exe = shutil.which(prof.bin, path=host_path)
     if not exe:
-        raise SandboxError(f"{prof['bin']} not found on PATH")
+        raise SandboxError(f"{prof.bin} not found on PATH")
     real = os.path.realpath(exe)
     binds = [real]
-    links = {prof["bin"]: real}
+    links = {prof.bin: real}
     inst = _install_dir(real)
     if inst:
         binds.append(inst)
@@ -575,8 +616,7 @@ def build_options(
 ) -> tuple[str, list[str]]:
     """``(bwrap path, options)`` — :func:`build_argv` without the inner
     command, for callers that pass the options via ``--args FD``."""
-    if provider not in PROFILES:
-        raise SandboxError(f"provider {provider} has no sandbox profile")
+    prof = profile_for(provider)
     if not inner_argv or not all(
         isinstance(a, str) and "\0" not in a for a in inner_argv
     ):
@@ -667,20 +707,23 @@ def build_options(
     for key, val in os.environ.items():
         if key in ("TERM", "COLORTERM", "LANG", "TZ") or _LC_RE.match(key):
             final[key] = val
-    if provider == "claude":
-        final["CLAUDE_CONFIG_DIR"] = os.path.join(d["home"], ".claude")
-        final["DISABLE_AUTOUPDATER"] = "1"
-    elif provider == "codex":
-        final["CODEX_HOME"] = os.path.join(d["home"], ".codex")
-    for key in PROFILES[provider]["passthrough"]:
+    if prof.config_env and prof.config_dir:
+        final[prof.config_env] = os.path.join(d["home"], prof.config_dir)
+    for key, val in prof.env:
+        final[key] = val
+    for key in prof.passthrough_env:
         if os.environ.get(key):
             final[key] = os.environ[key]
+    # The profile's own variables (its config dir, its fixed env) are set
+    # above and may not be overridden by the caller either.
+    profile_keys = {prof.config_env, *(k for k, _v in prof.env)} - {""}
     for key, val in (env or {}).items():
         if (
             not isinstance(key, str)
             or not isinstance(val, str)
             or "\0" in val
             or not _env_ok(key)
+            or key in profile_keys
         ):
             raise SandboxError(f"env var {key!r} may not enter the sandbox")
         final[key] = val
@@ -770,61 +813,40 @@ def _read_capped(path: str, cap: int) -> bytes | None:
     return data if len(data) <= cap else None
 
 
-def _claude_minimal_json(work: str) -> bytes:
-    src = os.environ.get("MINDFLOCK_CLAUDE_JSON", "").strip()
-    if not src:
-        cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
-        src = (
-            os.path.join(cfg, ".claude.json")
-            if cfg
-            else os.path.expanduser("~/.claude.json")
-        )
-    out: dict = {"hasCompletedOnboarding": True}
-    raw = _read_capped(src, _MAX_SOURCE_JSON)
-    if raw:
-        try:
-            real = json.loads(raw)
-        except ValueError:
-            real = None
-        if isinstance(real, dict):
-            if isinstance(real.get("oauthAccount"), dict):
-                out["oauthAccount"] = real["oauthAccount"]
-            if isinstance(real.get("userID"), str):
-                out["userID"] = real["userID"]
-    # Our own trust record for the share (never the user's projects map),
-    # as MindFlock pre-trusts every workdir it launches claude in.
-    out["projects"] = {work: {"hasTrustDialogAccepted": True}}
-    return json.dumps(out, indent=2).encode()
-
-
 def prepare_home(share, provider: str) -> list[str]:
     """Seed ``<home>`` with only what ``provider`` needs to log in (0600).
 
-    Returns the written paths. Never copies history, projects, settings or
-    any other provider state.
+    The profile's ``seed_files`` are copied from the CLI's host config dir
+    (``$config_env``, else ``~/config_dir``) to the same place under the
+    sandbox home, each capped in size and skipped when absent; then the
+    provider's :meth:`sandbox_extra_seed` (e.g. claude's minimal
+    ``.claude.json``). Returns the written paths. Never copies history,
+    projects, settings or any other provider state.
     """
-    if provider not in PROFILES:
-        raise SandboxError(f"provider {provider} has no sandbox profile")
+    from backend import providers
+
+    prof = profile_for(provider)
     d = share_dirs(share)
     home = d["home"]
     written: list[str] = []
-    if provider == "claude":
-        cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or os.path.expanduser(
-            "~/.claude"
-        )
-        cred = _read_capped(os.path.join(cfg, ".credentials.json"), _MAX_CREDENTIAL)
-        if cred is not None:
-            written.append(safe_write(home, ".claude/.credentials.json", cred))
-        body = _claude_minimal_json(d["work"])
-        # CLAUDE_CONFIG_DIR moves claude's global config to <dir>/.claude.json;
-        # seed both so either lookup finds the minimal one.
-        written.append(safe_write(home, ".claude.json", body))
-        written.append(safe_write(home, ".claude/.claude.json", body))
-    elif provider == "codex":
-        cfg = os.environ.get("CODEX_HOME", "").strip() or os.path.expanduser("~/.codex")
-        cred = _read_capped(os.path.join(cfg, "auth.json"), _MAX_CREDENTIAL)
-        if cred is not None:
-            written.append(safe_write(home, ".codex/auth.json", cred))
+    if prof.seed_files:
+        host_dir = ""
+        if prof.config_env:
+            host_dir = os.environ.get(prof.config_env, "").strip()
+        if not host_dir and prof.config_dir:
+            host_dir = os.path.join(os.path.expanduser("~"), prof.config_dir)
+        for rel in prof.seed_files:
+            data = _read_capped(os.path.join(host_dir, rel), _MAX_CREDENTIAL)
+            if data is not None:
+                dest = os.path.join(prof.config_dir, rel) if prof.config_dir else rel
+                written.append(safe_write(home, dest, data))
+    extra = providers.get(provider).sandbox_extra_seed(d["work"]) or {}
+    for rel, data in sorted(extra.items()):
+        if not _safe_rel(rel) or not isinstance(data, (bytes, bytearray)):
+            raise SandboxError(f"provider {provider}: bad extra seed {rel!r}")
+        if len(data) > _MAX_SOURCE_JSON:
+            raise SandboxError(f"provider {provider}: extra seed {rel!r} too large")
+        written.append(safe_write(home, rel, bytes(data)))
     return written
 
 
@@ -847,10 +869,9 @@ def egress_allow(provider: str, extra: list | None = None) -> list[str]:
     """The provider's default egress hosts plus ``extra`` (the user's
     ``peer.egress_allow`` setting, passed in by the caller). Invalid entries
     (IP literals, bare TLDs, wildcards) are dropped."""
-    if provider not in PROFILES:
-        raise SandboxError(f"provider {provider} has no sandbox profile")
+    prof = profile_for(provider)
     out: list[str] = []
-    for e in list(PROFILES[provider]["egress"]) + list(extra or []):
+    for e in list(prof.egress) + list(extra or []):
         v = _valid_allow_entry(e)
         if v and v not in out:
             out.append(v)

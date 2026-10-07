@@ -913,6 +913,9 @@ class PeerService:
             "links": [],
             "invites": [],
             "relay": self._relay_status(),
+            # The agent CLIs a shared folder can run here (each declares its
+            # own sandbox profile) — what the share form offers.
+            "agents": self._shareable_agents(),
         }
         if not s.get("enabled"):
             return out
@@ -929,6 +932,31 @@ class PeerService:
         except Exception:  # noqa: BLE001
             out["invites"] = []
         return out
+
+    @staticmethod
+    def _shareable_agents() -> list:
+        """Installed agent CLIs with a sandbox profile, default first."""
+        try:
+            import shutil
+
+            from backend import providers
+            from backend.peer import launch as _launch
+            from backend.peer import sandbox as _sandbox
+
+            names = _launch.allowed_providers()
+            out = [n for n in names if shutil.which(_sandbox.profile_for(n).bin)]
+            try:
+                from backend.config.program import resolve_default_program
+
+                first = providers.resolve(resolve_default_program()).name
+                if first in out:
+                    out.remove(first)
+                    out.insert(0, first)
+            except Exception:  # noqa: BLE001 — order is cosmetic
+                pass
+            return out
+        except Exception:  # noqa: BLE001 — the list is advisory; share() re-checks
+            return []
 
     # ------------------------------------------------------------------ #
     # Pairing
