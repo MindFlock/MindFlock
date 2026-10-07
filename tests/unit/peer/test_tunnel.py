@@ -124,6 +124,9 @@ def test_parse_ignores_matches_past_the_line_cap():
     assert parse_quick_tunnel_host(line) is None
 
 
+_LABEL_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-")  # pragma: allowlist secret
+
+
 @settings(max_examples=500)
 @given(st.text(max_size=400))
 def test_parse_never_returns_anything_but_a_strict_quick_tunnel_host(text):
@@ -133,7 +136,7 @@ def test_parse_never_returns_anything_but_a_strict_quick_tunnel_host(text):
         assert suffix == "trycloudflare.com"
         assert label not in ("api", "www")
         assert 1 <= len(label) <= 63
-        assert all(c in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in label)
+        assert set(label) <= _LABEL_CHARS
         assert not label.startswith("-") and not label.endswith("-")
 
 
@@ -296,5 +299,8 @@ def test_doctor_reports_cloudflared(tmp_path, monkeypatch):
     c = doctor.check_cloudflared()
     assert (c.status, c.detail) == ("ok", str(exe))
     monkeypatch.setenv("MINDFLOCK_CLOUDFLARED", str(tmp_path / "missing"))
+    monkeypatch.setattr(doctor, "_peer_settings", lambda: {})
     c = doctor.check_cloudflared()
-    assert c.status in ("info", "warn") and c.cmd == ""  # never auto-installed
+    # Missing with no relay wanting it: reported, installable on request, but
+    # never part of the one-shot install plan.
+    assert c.status == "info" and c.install is False
