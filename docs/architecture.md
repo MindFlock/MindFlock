@@ -118,6 +118,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   servers via `tailscale status`, namespaces their sessions `<device>::<title>`,
   and proxies every per-session route to the owning device (gated by the
   `general.remote_control` setting, tokens in `~/.mindflock/remote_devices.json`).
+- **`core/shared_link.py`** — the shared phone link: advertises this device
+  as a host of one Tailscale Service (`general.shared_link`) so the phone's
+  `/m` URL names no machine and opens on whichever device is up; withdrawn on
+  clean shutdown. Sign-in carries across devices through `core/auth.py`'s
+  cookie-per-token scheme.
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).

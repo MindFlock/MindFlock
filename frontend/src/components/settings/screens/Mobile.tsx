@@ -1,5 +1,6 @@
 /** Settings → Mobile (partial 103 + loadMobile, section 21): /m URLs + QR,
- * the tailscale-mode toggle, and the restart-to-apply flow. */
+ * the tailscale-mode toggle, the restart-to-apply flow, and the shared phone
+ * link (one Tailscale Service URL that whichever device is up answers). */
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
@@ -7,7 +8,20 @@ import { useConfig } from "../../../state/queries";
 import { useServerRestart } from "../useServerRestart";
 import type { ScreenProps } from "../SettingsDialog";
 
+interface SharedLinkState {
+  enabled?: boolean;
+  name?: string;
+  service?: string;
+  url?: string;
+  advertised?: boolean;
+  approved?: boolean;
+  tagged?: boolean;
+  error?: string;
+  devices?: Array<{ device: string; host: string; reachable: boolean }>;
+}
+
 interface MobilePayload {
+  shared?: SharedLinkState;
   serve_mode?: string;
   local_only?: boolean;
   qr_svg?: string;
@@ -135,9 +149,135 @@ export function Mobile(_: ScreenProps) {
                 <input readOnly value={data.token} onClick={(e) => (e.target as HTMLInputElement).select()} />
               </label>
             )}
+            <SharedLink shared={data.shared || {}} onChanged={load} />
           </>
         )}
       </div>
+    </>
+  );
+}
+
+const DEFAULT_SHARED_NAME = "mindflock";
+
+/** One phone URL for every device: each device that turns this on (with the
+ * same name) advertises the same Tailscale Service, and Tailscale routes the
+ * phone to whichever is up. Takes effect on save — no restart. */
+function SharedLink({ shared, onChanged }: { shared: SharedLinkState; onChanged: () => void }) {
+  const [name, setName] = useState(shared.name || DEFAULT_SHARED_NAME);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (shared.name) setName(shared.name);
+  }, [shared.name]);
+
+  const save = async (value: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      await api("/api/settings", { json: { general: { shared_link: value } } });
+    } catch (e) {
+      setError((e as Error).message || "Could not save.");
+    }
+    setBusy(false);
+    onChanged();
+  };
+
+  const on = !!shared.enabled;
+  const svc = shared.service || "svc:" + (name || DEFAULT_SHARED_NAME);
+  const others = shared.devices || [];
+  return (
+    <>
+      <h3 className="set-section-title">One link for all devices</h3>
+      <p className="set-hint">
+        Turn this on with the same name on each of your machines. The phone then keeps one URL,
+        and it opens on whichever machine is running, so it still works when this one is off.
+      </p>
+      <div className="set-row set-switch-row" title="Advertise this device as a host of the shared Tailscale Service">
+        <span className="set-label">Shared link</span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={busy}
+            onChange={(e) => save(e.target.checked ? name || DEFAULT_SHARED_NAME : "")}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <label className="set-row">
+        <span className="set-label">Name</span>
+        <input
+          value={name}
+          disabled={busy}
+          placeholder={DEFAULT_SHARED_NAME}
+          onChange={(e) => setName(e.target.value.trim().toLowerCase())}
+          onBlur={() => on && name && name !== shared.name && save(name)}
+          onKeyDown={(e) => e.key === "Enter" && on && name && name !== shared.name && save(name)}
+        />
+        <span className="set-hint">Use the same name on every device.</span>
+      </label>
+      {error && <p className="error">{error}</p>}
+      {on && (
+        <>
+          {shared.url && (
+            <div className="mobile-url-row">
+              <span className="set-label">Shared URL</span>
+              <a href={shared.url} target="_blank" rel="noopener noreferrer">
+                {shared.url}
+              </a>
+            </div>
+          )}
+          {shared.error ? (
+            <>
+              <p className="error">{shared.error}</p>
+              <button type="button" className="test-btn" disabled={busy} onClick={() => save(name || DEFAULT_SHARED_NAME)}>
+                Try again
+              </button>
+            </>
+          ) : (
+            <p className="set-hint">
+              {shared.advertised ? "✓ This device is offering the link." : "This device is not offering the link yet."}
+            </p>
+          )}
+          <p className="set-hint">
+            {shared.tagged ? "✓ This device is tagged." : "✗ This device has no tag. Tailscale only lets tagged devices host a service."}
+          </p>
+          <p className="set-hint">
+            {shared.approved
+              ? "✓ Tailscale has approved this device for " + svc + "."
+              : "Waiting for Tailscale to approve this device for " + svc + "."}
+          </p>
+          <p className="set-hint">
+            {others.length
+              ? "Also on this link: " +
+                others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") +
+                "."
+              : "No other device on this link yet. Turn it on, with the same name, on each machine."}
+          </p>
+          {!(shared.tagged && shared.approved) && (
+            <div className="set-hint">
+              One-time setup in the Tailscale admin console:
+              <ol>
+                <li>
+                  Under <strong>Services</strong>, define <code>{svc}</code> with port{" "}
+                  <code>tcp:443</code>.
+                </li>
+                <li>
+                  Tag each MindFlock machine, e.g. <code>tag:mindflock</code> (Machines → ⋯ → Edit
+                  ACL tags).
+                </li>
+                <li>
+                  So hosts are approved without a click, add this to the access policy:
+                  <pre>{`"tagOwners": { "tag:mindflock": ["autogroup:admin"] },
+"autoApprovers": { "services": { "${svc}": ["tag:mindflock"] } }`}</pre>
+                </li>
+              </ol>
+              Sign-in carries across devices that are paired under Remote control: the QR above
+              carries their access tokens too.
+            </div>
+          )}
+        </>
+      )}
     </>
   );
 }

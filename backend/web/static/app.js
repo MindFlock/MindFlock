@@ -65476,9 +65476,152 @@ function Mobile(_) {
 						value: data.token,
 						onClick: (e) => e.target.select()
 					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
+					shared: data.shared || {},
+					onChanged: load
 				})
 			] })
 		})
+	] });
+}
+var DEFAULT_SHARED_NAME = "mindflock";
+function SharedLink({ shared, onChanged }) {
+	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		if (shared.name) setName(shared.name);
+	}, [shared.name]);
+	const save = async (value) => {
+		setBusy(true);
+		setError("");
+		try {
+			await api("/api/settings", { json: { general: { shared_link: value } } });
+		} catch (e) {
+			setError(e.message || "Could not save.");
+		}
+		setBusy(false);
+		onChanged();
+	};
+	const on = !!shared.enabled;
+	const svc = shared.service || "svc:" + (name || DEFAULT_SHARED_NAME);
+	const others = shared.devices || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "One link for all devices"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Turn this on with the same name on each of your machines. The phone then keeps one URL, and it opens on whichever machine is running, so it still works when this one is off."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			title: "Advertise this device as a host of the shared Tailscale Service",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Shared link"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					checked: on,
+					disabled: busy,
+					onChange: (e) => save(e.target.checked ? name || DEFAULT_SHARED_NAME : "")
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Name"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					value: name,
+					disabled: busy,
+					placeholder: DEFAULT_SHARED_NAME,
+					onChange: (e) => setName(e.target.value.trim().toLowerCase()),
+					onBlur: () => on && name && name !== shared.name && save(name),
+					onKeyDown: (e) => e.key === "Enter" && on && name && name !== shared.name && save(name)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Use the same name on every device."
+				})
+			]
+		}),
+		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error",
+			children: error
+		}),
+		on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			shared.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mobile-url-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Shared URL"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+					href: shared.url,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: shared.url
+				})]
+			}),
+			shared.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: shared.error
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy,
+				onClick: () => save(name || DEFAULT_SHARED_NAME),
+				children: "Try again"
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: shared.advertised ? "✓ This device is offering the link." : "This device is not offering the link yet."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: shared.tagged ? "✓ This device is tagged." : "✗ This device has no tag. Tailscale only lets tagged devices host a service."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: shared.approved ? "✓ Tailscale has approved this device for " + svc + "." : "Waiting for Tailscale to approve this device for " + svc + "."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine."
+			}),
+			!(shared.tagged && shared.approved) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-hint",
+				children: [
+					"One-time setup in the Tailscale admin console:",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+							"Under ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Services" }),
+							", define ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+							" with port",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
+							"."
+						] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+							"Tag each MindFlock machine, e.g. ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tag:mindflock" }),
+							" (Machines → ⋯ → Edit ACL tags)."
+						] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["So hosts are approved without a click, add this to the access policy:", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: `"tagOwners": { "tag:mindflock": ["autogroup:admin"] },
+"autoApprovers": { "services": { "${svc}": ["tag:mindflock"] } }` })] })
+					] }),
+					"Sign-in carries across devices that are paired under Remote control: the QR above carries their access tokens too."
+				]
+			})
+		] })
 	] });
 }
 //#endregion

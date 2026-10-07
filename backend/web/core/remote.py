@@ -169,6 +169,15 @@ def token_for(device: str) -> str:
     return _tokens().get(device, "")
 
 
+def paired_tokens() -> Dict[str, str]:
+    """Every stored device token, ``{device: token}`` (a copy).
+
+    The shared phone link's QR carries these alongside this server's own, so a
+    phone that scans it here is signed in on whichever paired device Tailscale
+    routes it to (see :mod:`backend.web.core.shared_link`)."""
+    return {k: v for k, v in _tokens().items() if v}
+
+
 def set_token(device: str, token: str) -> None:
     """Persist ``token`` as the credential for ``device``."""
     _tokens()[device] = token
@@ -272,7 +281,15 @@ def hello_json() -> dict:
         "host": ident["host"],
         "remote_control": remote_control_enabled(),
         "auth": _auth_enabled(),
+        "shared_link": _shared_link_name(),
     }
+
+
+def _shared_link_name() -> str:
+    """The service this device answers the shared phone link on (``""``)."""
+    from backend.web.core import shared_link as _shared_link
+
+    return _shared_link.configured_name()
 
 
 def _auth_enabled() -> bool:
@@ -345,6 +362,7 @@ def _device_state(key: str) -> dict:
             "remote_control": False,
             "auth": False,
             "version": "",
+            "shared_link": "",
             "last_seen": 0.0,
             "instances": [],
             "instances_ok": False,
@@ -377,6 +395,7 @@ async def _discover_once() -> None:
                 remote_control=bool(hello.get("remote_control")),
                 auth=bool(hello.get("auth")),
                 version=str(hello.get("version") or ""),
+                shared_link=str(hello.get("shared_link") or ""),
             )
         else:
             dev["reachable"] = False
@@ -512,6 +531,7 @@ def devices_json() -> dict:
                 "os": dev["os"],
                 "ip": dev["ip"],
                 "version": dev["version"],
+                "shared_link": dev.get("shared_link", ""),
                 "reachable": bool(dev["reachable"]),
                 "remote_control": bool(dev["remote_control"]),
                 "auth": bool(dev["auth"]),

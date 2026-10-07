@@ -2946,6 +2946,38 @@ A few screens got quieter:
   the `mf_auth` cookie — i.e. you scanned the QR there once before. Otherwise it
   lands on the login prompt, which is the intended trade: one extra tap on a new
   device instead of this machine's token sitting on a third party's server.
+
+  **One link for all devices** (`general.shared_link`) gives the phone a URL
+  that names no machine: `https://<name>.<tailnet>.ts.net/m`, answered by
+  whichever of your machines is running MindFlock. It is a
+  [Tailscale Service](https://tailscale.com/kb/1552/tailscale-services): every
+  device that turns the switch on with the same **Name** (default
+  `mindflock`) runs `tailscale serve --service=svc:<name> --https=443
+  http://127.0.0.1:<port>`, and Tailscale routes the phone to an available
+  host. Saving applies it at once (no restart), the server re-advertises at
+  every boot, and a clean shutdown runs `tailscale serve clear` so a machine
+  that is on but not running MindFlock stops drawing the traffic. A server
+  that crashes stays advertised until it next starts. Once it is up, the QR,
+  the startup banner and the ntfy push all hand out the shared URL instead of
+  this device's own, which stays listed as **This device**. It works in local
+  mode too, because `tailscale serve` fronts 127.0.0.1 and the auth
+  middleware accepts the service hostname as one of this server's names. The
+  screen checks what it can see: whether this device offers the link,
+  whether it is **tagged** (Tailscale only lets tagged devices host a
+  service), whether Tailscale has **approved** it (read from the node's
+  service-host capability), and which other devices report the same link in
+  their discovery hello. Until all of that is in place it shows the one-time
+  admin-console setup: define `svc:<name>` with `tcp:443`, tag the machines,
+  and add an `autoApprovers.services` rule. **Sign-in carries across:** each
+  device keeps its own token, so the shared QR carries this device's token
+  plus every paired device's (`?token=a&token=b`). The browser keeps a
+  cookie per token (`mf_auth_<hash>` beside `mf_auth`), and each server
+  accepts the request if any of them is its own token. One scan therefore
+  signs the phone in on whichever device answers. A device you have not
+  paired with shows its login page once. Notification deep links name their
+  session `<device>::<title>`, the way every other device lists it. `/m`
+  strips its own device prefix back off, which it learns from the public
+  `/api/remote/hello`.
 - **Security** — view/copy this device's web-auth token, plus a **Regenerate**
   button (`POST /api/settings/auth-token/rotate`) for compromise recovery: it
   mints a new token and invalidates every issued cookie, QR code, and paired

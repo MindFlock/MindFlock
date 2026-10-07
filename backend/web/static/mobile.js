@@ -250,6 +250,37 @@
     return statusOf(title) === "loading";
   }
 
+  // The `?s=` deep link a notification taps through to. On the shared phone
+  // link (one URL that whichever of your devices is up answers) it names the
+  // session as "<device>::<title>" — how every OTHER device lists it — so
+  // the device that owns it has to strip its own prefix back off, which needs
+  // to know which device it is: the public hello says.
+  var deepLink = new URLSearchParams(location.search).get("s");
+  var selfDevice = null; // null = not known yet
+  function resolveDeepLink(s, titles) {
+    if (!s) return null;
+    if (titles.indexOf(s) >= 0) return s;
+    var i = s.indexOf("::");
+    if (i > 0 && selfDevice && s.slice(0, i) === selfDevice) {
+      var bare = s.slice(i + 2);
+      if (titles.indexOf(bare) >= 0) return bare;
+    }
+    return null;
+  }
+  if (deepLink && deepLink.indexOf("::") > 0) {
+    fetch("/api/remote/hello")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        selfDevice = (j && j.device) || "";
+        // The first render may have beaten us here and fallen back to another
+        // session — the link names THIS device's, so take it now.
+        var titles = instances.map(function (x) { return x.title; });
+        var t = resolveDeepLink(deepLink, titles);
+        if (t && t !== current) { pickerEl.value = t; select(t); }
+      })
+      .catch(function () { selfDevice = ""; });
+  }
+
   function renderPicker() {
     var prev = current;
     pickerEl.innerHTML = "";
@@ -291,8 +322,8 @@
     if (!want) {
       var saved = null;
       try { saved = localStorage.getItem("cs_mobile_last"); } catch (e) {}
-      var qs = new URLSearchParams(location.search).get("s");
-      want = (qs && titles.indexOf(qs) >= 0) ? qs
+      var qs = resolveDeepLink(deepLink, titles);
+      want = qs ? qs
            : (saved && titles.indexOf(saved) >= 0) ? saved
            : titles[0];
     }

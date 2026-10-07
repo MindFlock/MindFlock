@@ -144,6 +144,7 @@ from backend.web.core import live_stage as _live_stage
 from backend.web.core import mailbox as _mailbox
 from backend.web.core import pr_review as _pr_review
 from backend.web.core import reopen as _reopen
+from backend.web.core import shared_link as _shared_link
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import ticket_merge as _ticket_merge
@@ -550,6 +551,13 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(_clear_all_pastes)
         except Exception:  # noqa: BLE001
             pass
+        # The shared phone link (general.shared_link): advertise this device as
+        # a host of the fleet's one Tailscale Service before the banner, which
+        # then prints that URL instead of this machine's own.
+        try:
+            await asyncio.to_thread(_shared_link.apply, _server_port())
+        except Exception:  # noqa: BLE001
+            pass
         # Mobile/Tailscale banner (probes shell out -> keep off the event loop).
         # stdout gets the full banner (token + QR); the log file gets the
         # redacted copy — mindflock.log is served back out via GET /api/logs, so
@@ -597,6 +605,12 @@ async def lifespan(app: FastAPI):
         # reconciles) its runs on the first pass instead of waiting out them.
         try:
             _team_runs.release_leases(_SERVER_BOOT_ID)
+        except Exception:  # noqa: BLE001
+            pass
+        # Stop answering the shared phone link: a machine that is on but not
+        # running MindFlock must not keep drawing the phone's traffic.
+        try:
+            await asyncio.to_thread(_shared_link.withdraw)
         except Exception:  # noqa: BLE001
             pass
         # Close the remote-proxy HTTP session (owned by backend.web.core.remote).
@@ -759,16 +773,9 @@ def auth_login(payload: dict) -> JSONResponse:
     token = str((payload or {}).get("token", "") or "").strip()
     if not _auth.token_valid(token):
         return JSONResponse({"error": "invalid token"}, status_code=401)
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(
-        key=_auth.COOKIE_NAME,
-        value=_auth.get_token(),
-        httponly=True,
-        samesite="lax",
-        path="/",
-        max_age=60 * 60 * 24 * 365,
-    )
-    return resp
+    # The plain cookie plus this token's keyed copy, so signing in here never
+    # signs the browser out of another device on the shared phone link.
+    return _auth.set_auth_cookies(JSONResponse({"ok": True}))
 
 
 # Engine + the adopt/reload loop moved to core.engine. ENGINE stays a module

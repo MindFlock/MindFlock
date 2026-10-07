@@ -27,6 +27,16 @@ for the phone.
   token from the URL so it doesn't linger in history. A browser navigation with
   no valid token gets a tiny inline login page; an API/websocket call gets a
   401 / close.
+* **One origin, several servers.** The shared phone link
+  (:mod:`backend.web.core.shared_link`) is one hostname answered by whichever
+  of the user's devices is up, each with its OWN token. So the browser keeps a
+  cookie per token — ``mf_auth_<hash>`` beside the plain ``mf_auth`` — and a
+  server accepts the request when ANY of them is its token. The shared QR
+  carries every paired device's token (``?token=a&token=b``); whichever device
+  answers the scan validates its own and stores all of them, so the next
+  request is signed in no matter which device takes it. A server never accepts
+  a token that isn't its own: the fan-out widens what the browser remembers,
+  not what any server trusts.
 
 Comparisons use ``hmac.compare_digest`` (constant-time). The token is a
 capability, not a password — treat the URL+token like an SSH key. A
@@ -42,10 +52,12 @@ terminals on 127.0.0.1) and DNS-rebinding ``Host`` headers in local mode
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
+import re
 import secrets
-from typing import Optional
+from typing import Iterable, List, Optional
 from urllib.parse import parse_qs
 
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -70,6 +82,22 @@ _PUBLIC_PATHS = frozenset({"/api/auth", "/favicon.ico", "/api/remote/hello"})
 # `general.remote_control` toggle is on — that toggle is the permission the
 # user grants, independent of (and checked before) the token gate.
 _REMOTE_HEADER = b"x-mindflock-remote"
+
+#: Most ``mf_auth*`` cookies / ``?token=`` values one request is checked
+#: against — one per device on the shared link, with room to spare. A bound,
+#: so a request stuffed with candidates can't turn each check into a loop.
+_MAX_CANDIDATES = 16
+
+#: What a token may look like to be stored as a cookie. Generated tokens are
+#: ``token_urlsafe`` (base64url); an operator-set one is held to the same
+#: alphabet before it is ever echoed into a ``Set-Cookie`` header.
+_COOKIE_SAFE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
+
+#: Hostnames that reach this server through a ``tailscale serve`` front — the
+#: shared phone link's service name. ``host_ok`` accepts them in local mode
+#: (tailscale serve preserves the ``Host`` header, and the proxied request
+#: arrives on 127.0.0.1). Registered by :mod:`backend.web.core.shared_link`.
+_FRONTED_HOSTS: set = set()
 
 
 def _truthy(v: Optional[str]) -> Optional[bool]:
@@ -221,14 +249,42 @@ def token_valid(candidate: Optional[str]) -> bool:
     return hmac.compare_digest(str(candidate), tok)
 
 
-def _cookie_from(headers: list) -> Optional[str]:
+def any_token_valid(candidates: Iterable[Optional[str]]) -> bool:
+    """True when any of ``candidates`` is the active token (each compared in
+    constant time; at most :data:`_MAX_CANDIDATES` are looked at)."""
+    for i, cand in enumerate(candidates):
+        if i >= _MAX_CANDIDATES:
+            break
+        if token_valid(cand):
+            return True
+    return False
+
+
+def cookie_name_for(token: str) -> str:
+    """The per-token cookie name (``mf_auth_<12 hex>``) — stable for a token,
+    distinct across devices, and reveals nothing about the token itself."""
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    return "%s_%s" % (COOKIE_NAME, digest)
+
+
+def _cookies_from(headers: list) -> List[str]:
+    """Every ``mf_auth`` / ``mf_auth_<hash>`` cookie value, plain one first."""
+    plain: List[str] = []
+    keyed: List[str] = []
     for k, v in headers:
         if k == b"cookie":
             for part in v.decode("latin-1").split(";"):
                 name, _, val = part.strip().partition("=")
                 if name == COOKIE_NAME:
-                    return val
-    return None
+                    plain.append(val)
+                elif name.startswith(COOKIE_NAME + "_"):
+                    keyed.append(val)
+    return (plain + keyed)[:_MAX_CANDIDATES]
+
+
+def _cookie_from(headers: list) -> Optional[str]:
+    vals = _cookies_from(headers)
+    return vals[0] if vals else None
 
 
 def _bearer_from(headers: list) -> Optional[str]:
@@ -240,24 +296,60 @@ def _bearer_from(headers: list) -> Optional[str]:
     return None
 
 
-def _query_token(query_string: bytes) -> Optional[str]:
+def _query_tokens(query_string: bytes) -> List[str]:
+    """Every ``?token=`` value — the shared-link QR carries one per device."""
     if not query_string:
-        return None
-    vals = parse_qs(query_string.decode("latin-1")).get(QUERY_PARAM)
+        return []
+    vals = parse_qs(query_string.decode("latin-1")).get(QUERY_PARAM) or []
+    return vals[:_MAX_CANDIDATES]
+
+
+def _query_token(query_string: bytes) -> Optional[str]:
+    vals = _query_tokens(query_string)
     return vals[0] if vals else None
 
 
-def _set_cookie_kwargs(scope) -> dict:
-    secure = scope.get("scheme") in ("https", "wss")
-    return {
-        "key": COOKIE_NAME,
-        "value": get_token(),
+def set_auth_cookies(response, *, secure: bool = False, extra: Iterable[str] = ()):
+    """Sign ``response``'s browser in: the plain ``mf_auth`` cookie plus one
+    ``mf_auth_<hash>`` per token — this server's own and every ``extra`` one
+    (the other devices' tokens from a shared-link QR).
+
+    The plain cookie is what a single-device setup has always used; the keyed
+    copies are what survive on the shared origin, where the plain one is
+    overwritten by whichever device signed the browser in last. Only the
+    caller's already-authenticated request gets here, and each extra token is
+    held to :data:`_COOKIE_SAFE` before it is written into a header.
+    """
+    own = get_token()
+    kwargs = {
         "httponly": True,
         "samesite": "lax",
         "secure": secure,
         "path": "/",
         "max_age": 60 * 60 * 24 * 365,
     }
+    response.set_cookie(key=COOKIE_NAME, value=own, **kwargs)
+    seen = set()
+    for i, tok in enumerate([own, *extra]):
+        if i >= _MAX_CANDIDATES or not tok or tok in seen:
+            continue
+        seen.add(tok)
+        if not _COOKIE_SAFE.match(tok):
+            continue
+        response.set_cookie(key=cookie_name_for(tok), value=tok, **kwargs)
+    return response
+
+
+def allow_fronted_host(host: str) -> None:
+    """Accept ``host`` as this server's name in local mode (see
+    :data:`_FRONTED_HOSTS`)."""
+    h = _hostname(host)
+    if h:
+        _FRONTED_HOSTS.add(h)
+
+
+def forget_fronted_host(host: str) -> None:
+    _FRONTED_HOSTS.discard(_hostname(host))
 
 
 def login_page_html() -> str:
@@ -364,13 +456,16 @@ def host_ok(scope) -> bool:
     refuse it outright. Not enforced for exposed modes (real tailnet/LAN
     hostnames can't be enumerated here — the token gate covers those) or when
     the mode is unset (bare uvicorn, the test suite).
+
+    A name in :data:`_FRONTED_HOSTS` passes too: that is the shared phone
+    link's ``tailscale serve`` hostname, a ``*.ts.net`` name only the tailnet
+    resolves — no page can be rebound onto it.
     """
     mode = (os.environ.get("CS_WEB_MODE") or "").strip().lower()
     if mode not in ("local", "localhost"):
         return True
-    return (
-        _hostname(_header_value(scope.get("headers") or [], b"host")) in _LOOPBACK_HOSTS
-    )
+    host = _hostname(_header_value(scope.get("headers") or [], b"host"))
+    return host in _LOOPBACK_HOSTS or host in _FRONTED_HOSTS
 
 
 async def _deny(scope, receive, send, *, status, message, ws_code) -> None:
@@ -440,23 +535,23 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        cookie = _cookie_from(headers)
-        qtok = _query_token(scope.get("query_string") or b"")
+        cookies = _cookies_from(headers)
+        qtoks = _query_tokens(scope.get("query_string") or b"")
         bearer = _bearer_from(headers)
 
-        if token_valid(cookie) or token_valid(bearer):
+        if any_token_valid(cookies) or token_valid(bearer):
             await self.app(scope, receive, send)
             return
 
         if scope["type"] == "http":
             await self._reject_unauthenticated_http(
-                scope, receive, send, path, headers, qtok
+                scope, receive, send, path, headers, qtoks
             )
             return
 
         # websocket: a valid ?token= is enough (browsers can't set headers on a
         # WS handshake, and the cookie may be absent on a cross-origin phone).
-        if token_valid(qtok):
+        if any_token_valid(qtoks):
             await self.app(scope, receive, send)
             return
         # Reject: accept the connect frame, then close with our code.
@@ -470,16 +565,22 @@ class AuthMiddleware:
         )
 
     async def _reject_unauthenticated_http(
-        self, scope, receive, send, path: str, headers: list, qtok: Optional[str]
+        self, scope, receive, send, path: str, headers: list, qtoks: List[str]
     ) -> None:
         """Respond to an HTTP request that failed the cookie/bearer check: honor a
         valid ``?token=`` (QR path) with a cookie-setting redirect, serve the
         inline login page to a browser navigation, or 401 an API call."""
         # A valid ?token= (the QR path): set the cookie and redirect to the
-        # same path without the token so it never lingers in history.
-        if token_valid(qtok):
+        # same path without the token so it never lingers in history. The
+        # shared-link QR carries one token per device; whichever device took
+        # the scan stores them all, so the next request is signed in on any.
+        if any_token_valid(qtoks):
             resp = RedirectResponse(url=path or "/", status_code=302)
-            resp.set_cookie(**_set_cookie_kwargs(scope))
+            set_auth_cookies(
+                resp,
+                secure=scope.get("scheme") in ("https", "wss"),
+                extra=qtoks,
+            )
             await resp(scope, receive, send)
             return
         if _wants_html(headers):
