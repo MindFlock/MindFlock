@@ -75,9 +75,12 @@ def test_a_never_seen_worker_is_placed_under_its_parent():
     # Only titles the saved order has never held: a drag owns the rest.
     assert "!seen.has(r.title)" in body
     sidebar = squash(js[js.index("function Sidebar(") :])
+    # Every live row, remote ones included: another device's worker is placed
+    # under its (namespaced) parent in that device's section too.
     assert (
-        "placeNewWorkers(ui.order, listed.filter((i) => !i.device))" in sidebar
-    ), "placement must merge with the live local rows"
+        "placeNewWorkers(ui.order, listed)" in sidebar
+    ), "placement must merge with the live rows"
+    assert "deviceLineage(" in sidebar
     assert "if (order !== ui.order) ui.setOrder(order);" in sidebar
     # The rail renders and drags off the placed order, not the raw saved one.
     assert "orderedInstances(listed, order)" in sidebar

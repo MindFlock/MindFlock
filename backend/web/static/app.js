@@ -28452,6 +28452,12 @@ function sameNest(a, b) {
 	for (let k = 1; k < a.depth; k++) if (!!a.guides[k] !== !!b.guides[k]) return false;
 	return true;
 }
+function deviceLineage(rows) {
+	return rows.map((r) => r.device && r.parent && !r.parent.includes("::") ? {
+		...r,
+		parent: r.device + "::" + r.parent
+	} : r);
+}
 function placeNewWorkers(saved, live) {
 	const parentOf = new Map(live.map((r) => [r.title, r.parent || ""]));
 	const seen = new Set(saved);
@@ -36061,9 +36067,9 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const addonBarsRef = (0, import_react.useRef)(null);
 	const extBars = useExtensionBarDefs();
 	const extKeys = (0, import_react.useMemo)(() => extBars.map((b) => b.key), [extBars]);
-	const listed = (0, import_react.useMemo)(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
+	const listed = (0, import_react.useMemo)(() => deviceLineage(instances.filter((i) => !isVerifySession(i.title))), [instances]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(listed), [listed]);
-	const order = (0, import_react.useMemo)(() => placeNewRunMembers(placeNewWorkers(ui.order, listed.filter((i) => !i.device)), listed.filter((i) => !i.device)), [ui.order, listed]);
+	const order = (0, import_react.useMemo)(() => placeNewRunMembers(placeNewWorkers(ui.order, listed), listed.filter((i) => !i.device)), [ui.order, listed]);
 	const { data: runsData } = useRuns();
 	const runs = runsData || [];
 	const runById = (0, import_react.useMemo)(() => new Map((runsData || []).map((r) => [r.id, r])), [runsData]);

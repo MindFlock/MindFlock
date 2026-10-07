@@ -27,6 +27,7 @@ import {
   movedRailOrder,
   orderedInstances,
   orderedKeys,
+  deviceLineage,
   placeNewRunMembers,
   placeNewWorkers,
   railNesting,
@@ -107,20 +108,25 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // Only the RAIL filters. `computeVisible` below still gets the full list,
   // which is what gives a verify run its pane in the grid; the Verify dialog
   // offers to open or end it, so an unlisted session is never stranded.
-  const listed = useMemo(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
+  const listed = useMemo(
+    () => deviceLineage(instances.filter((i) => !isVerifySession(i.title))),
+    [instances]
+  );
   // MindFlock MCP families: each session's live workers, and the saved order
   // with every worker it has never seen slotted under its parent. An agent
   // spawns server-side, so without this a new worker files at the very bottom
   // of the rail, nowhere near the orchestrator it nests under. Rendered from
   // at once (no bottom-then-jump), persisted by the effect below; workers
-  // the order already holds are never moved again — a drag owns them.
+  // the order already holds are never moved again — a drag owns them. Remote
+  // rows too: a device section draws its rows in the same saved order, and a
+  // worker another device spawned would otherwise sit at its section's end.
   const families = useMemo(() => childrenByParent(listed), [listed]);
   // …and the same for a group's members (ship lanes), which the server starts
   // over minutes as slots free up: each lands after the last of its group.
   const order = useMemo(
     () =>
       placeNewRunMembers(
-        placeNewWorkers(ui.order, listed.filter((i) => !i.device)),
+        placeNewWorkers(ui.order, listed),
         listed.filter((i) => !i.device)
       ),
     [ui.order, listed]
