@@ -29,6 +29,7 @@ an error toast in front of someone who is merely trying to start a session.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from collections import deque
 from typing import Iterable, Optional
@@ -49,6 +50,35 @@ _SCAN_SUBDIRS = (
     "Development",
     "Documents",
 )
+
+# macOS puts these home folders behind a privacy (TCC) prompt. The first look
+# INSIDE one, from a process that hasn't been granted access, does not fail — it
+# BLOCKS in the kernel until someone answers "Allow / Don't Allow" on that Mac's
+# own screen. A server started by the desktop app is exactly such a process, and
+# a Mac reached from a phone or another device usually has nobody at it: the
+# phone's New Session sat on "Reading…" for good while a Desktop-folder dialog
+# waited on a headless Mac mini. And every Python upgrade is a new binary to
+# TCC, so a grant does not even survive. So unasked walks (the sweep, the name
+# search, the plan's folder menu) never go in. A folder the user names or
+# browses to is still opened — they are there to answer the dialog.
+_MAC_PRIVACY_DIRS = frozenset(
+    {"Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music"}
+)
+
+
+def _privacy_guarded(path: str, home: str) -> bool:
+    """Whether ``path`` is, or is under, a macOS privacy-protected folder of
+    ``home`` — never walked unasked (see :data:`_MAC_PRIVACY_DIRS`). Always
+    ``False`` off macOS."""
+    if sys.platform != "darwin" or not home:
+        return False
+    try:
+        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(home))
+    except ValueError:
+        return False
+    first = rel.split(os.sep, 1)[0]
+    return first in _MAC_PRIVACY_DIRS
+
 
 # Never the repo the user meant, yet present in bulk on real machines. Dotted
 # names are skipped wholesale (``.venv`` is listed anyway so the intent reads
@@ -169,7 +199,7 @@ def _nearby_candidates(home: str) -> list:
     found: list = []
     examined = 0
     for root in roots:
-        if not os.path.isdir(root):
+        if _privacy_guarded(root, home) or not os.path.isdir(root):
             continue
         if _has_git_dir(root):
             found.append(root)
@@ -190,6 +220,8 @@ def _nearby_candidates(home: str) -> list:
             if examined > _MAX_SCANNED:
                 return found
             full = os.path.join(root, name)
+            if _privacy_guarded(full, home):
+                continue
             if os.path.isdir(full) and _has_git_dir(full):
                 found.append(full)
     return found
@@ -375,7 +407,7 @@ def search_repos(query: str, home: str = "", limit: int = 20) -> dict:
         if path in visited:
             continue
         visited.add(path)
-        if not os.path.isdir(path):
+        if _privacy_guarded(path, base) or not os.path.isdir(path):
             continue
         # Charged per directory EXAMINED — the stat above plus the listing below
         # are what this budget is paying for — and charged before either the

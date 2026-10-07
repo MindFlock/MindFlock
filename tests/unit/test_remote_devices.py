@@ -11,6 +11,8 @@ tailscale CLI is monkeypatched away.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -370,15 +372,22 @@ def test_fwd_path_split():
 @pytest.fixture
 def _captured_proxy(monkeypatch):
     """Record what the proxy would send instead of opening a socket."""
-    seen = []
 
-    async def fake_http(self, scope, receive, send, dev, url):
+    class _Seen(list):
+        timeouts: list
+
+    seen = _Seen()
+    timeouts = []
+
+    async def fake_http(self, scope, receive, send, dev, url, timeout=None):
         seen.append((scope["method"], dev["key"], url))
+        timeouts.append(timeout)
         await remote.JSONResponse({"title": "made-there"})(scope, receive, send)
 
     monkeypatch.setattr(remote.RemoteProxyMiddleware, "_proxy_http", fake_http)
     monkeypatch.setattr(remote, "aiohttp", object())
     remote._DEVICES["otherbox"] = _fake_device()
+    seen.timeouts = timeouts
     return seen
 
 
@@ -477,3 +486,40 @@ def test_fwd_create_refreshes_the_device_before_answering(_captured_proxy, monke
     assert fetched == []  # only a create refreshes
     c.post("/api/devices/otherbox/fwd/api/instances", json={"title": "x"})
     assert fetched == ["otherbox"]
+
+
+def test_fwd_session_plan_outlasts_the_targets_own_plan_budget(_captured_proxy):
+    # The target answers a slow plan with a FALLBACK at its own TIMEOUT_PLAN;
+    # a forwarder that gives up first turns that into a bare 502 on the phone.
+    from backend.web.core import session_plan
+
+    c = TestClient(server.app)
+    c.post("/api/devices/otherbox/fwd/api/session-plan", json={"text": "x"})
+    c.get("/api/devices/otherbox/fwd/api/config")
+    plan_timeout, config_timeout = _captured_proxy.timeouts
+    assert plan_timeout > session_plan.TIMEOUT_PLAN + session_plan.CANDIDATES_BUDGET
+    assert config_timeout == remote._HTTP_TIMEOUT
+
+
+def test_fwd_timeout_says_what_happened(monkeypatch):
+    # asyncio.TimeoutError() has an empty str(), which used to produce
+    # "device 'otherbox' unreachable: " with nothing after the colon.
+    import asyncio
+
+    class _Boom:
+        def request(self, *a, **k):
+            raise asyncio.TimeoutError()
+
+    async def _session():
+        return _Boom()
+
+    monkeypatch.setattr(remote, "_http_session", _session)
+    monkeypatch.setattr(
+        remote, "aiohttp", types.SimpleNamespace(ClientTimeout=lambda total: None)
+    )
+    remote._DEVICES["otherbox"] = _fake_device()
+    r = TestClient(server.app).get("/api/devices/otherbox/fwd/api/config")
+    assert r.status_code == 502
+    assert r.json()["error"].endswith(
+        "no answer within %ds" % int(remote._HTTP_TIMEOUT)
+    )
