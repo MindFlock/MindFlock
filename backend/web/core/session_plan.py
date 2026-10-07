@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from typing import Iterable, List, Optional
 
 from backend.web.core import commit_message as _commit_message
@@ -40,6 +41,17 @@ TIMEOUT_PLAN = 75.0
 #: words, and because the fallback here is a form that is still on screen and
 #: still works — failing over sooner strictly improves the worst case. Longer
 #: than the autopilot's because nothing else is waiting on this one.
+
+#: Wall-clock budget for building the folder menu. The walks inside it are
+#: bounded already (each name search by its own deadline, the sweep by count),
+#: but those bounds are checked BETWEEN filesystem calls, and a single call can
+#: block in the kernel indefinitely: a macOS privacy prompt with nobody at the
+#: screen to answer it, a dead network mount, a spun-down drive. That is how a
+#: phone's New Session sat on "Reading…" until the request died. So the menu is
+#: built on a helper thread and abandoned when it overruns — the plan goes on
+#: without it (flagged ``truncated``), and the stuck call finishes whenever the
+#: kernel lets it go.
+CANDIDATES_BUDGET = 8.0
 
 MAX_SENTENCE = 2000  # what the box will send
 MAX_PROMPT_BYTES = 100_000  # margin under the kernel's MAX_ARG_STRLEN (131,071)
@@ -932,6 +944,41 @@ def resolve(
     }
 
 
+def _candidates_within(
+    text: str,
+    *,
+    recent_paths: Iterable[str],
+    cwd: Optional[str],
+    home: str,
+    budget: Optional[float] = None,
+):
+    """:func:`candidates_for`, but never longer than ``budget`` seconds.
+
+    Overrunning answers ``([], True)`` — no menu, flagged as cut short — so the
+    one-shot still runs and the person still gets a filled-in form. See
+    :data:`CANDIDATES_BUDGET` for why a thread rather than a deadline check.
+    """
+    if budget is None:
+        budget = CANDIDATES_BUDGET
+    recent = list(recent_paths or ())
+    box: dict = {}
+
+    def _run() -> None:
+        try:
+            box["value"] = candidates_for(text, recent_paths=recent, cwd=cwd, home=home)
+        except BaseException as err:  # noqa: BLE001 — re-raised on the caller's thread
+            box["error"] = err
+
+    worker = threading.Thread(target=_run, name="session-plan-menu", daemon=True)
+    worker.start()
+    worker.join(budget)
+    if worker.is_alive():
+        return [], True
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 # --- the one-shot ----------------------------------------------------------
 
 
@@ -953,7 +1000,7 @@ def plan(
     is still on screen and still works, so failing over is cheap by design.
     """
     home = home or os.path.expanduser("~")
-    candidates, truncated = candidates_for(
+    candidates, truncated = _candidates_within(
         text, recent_paths=recent_paths, cwd=cwd, home=home
     )
     rows = menu_rows(candidates, home)

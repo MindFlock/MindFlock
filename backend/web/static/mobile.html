@@ -146,6 +146,10 @@
             <label class="new-label" for="new-device">Run on</label>
             <select id="new-device" aria-label="Device the session runs on"></select>
           </div>
+          <!-- The way out of a slow read: shown once the plan has taken longer
+               than NEW_SLOW_MS, it drops the plan and goes straight to the
+               folder list — the same list a failed plan falls back to. -->
+          <button type="button" id="new-skip" class="new-skip hidden">Pick the folder myself</button>
           <div class="sheet-actions">
             <button type="button" id="new-cancel">Cancel</button>
             <button type="button" id="new-go">Continue</button>

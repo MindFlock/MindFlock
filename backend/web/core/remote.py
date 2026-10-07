@@ -86,6 +86,12 @@ _INSTANCES_INTERVAL = 5.0  # s between remote /api/instances refreshes
 _STALE_AFTER = 90.0  # keep a device visible through this many s of failed probes
 _PROBE_TIMEOUT = 2.0
 _HTTP_TIMEOUT = 60.0
+#: Forwarded routes that legitimately run longer than ``_HTTP_TIMEOUT``. The
+#: session plan waits on a model turn the TARGET bounds at its own
+#: ``session_plan.TIMEOUT_PLAN`` (75s) before answering with a fallback; giving
+#: up at 60s turned every slow plan on another device into a bare
+#: "unreachable" 502 instead of that fallback.
+_SLOW_FWD_TIMEOUT = {("POST", "/api/session-plan"): 100.0}
 
 # device key (MagicDNS label) -> mutable state dict; single event loop, no lock.
 _DEVICES: Dict[str, dict] = {}
@@ -753,7 +759,16 @@ class RemoteProxyMiddleware:
         qs = (scope.get("query_string") or b"").decode("latin-1")
         url = dev["base_url"] + target_path + (("?" + qs) if qs else "")
         if scope["type"] == "http":
-            await self._proxy_http(scope, receive, send, dev, url)
+            await self._proxy_http(
+                scope,
+                receive,
+                send,
+                dev,
+                url,
+                timeout=_SLOW_FWD_TIMEOUT.get(
+                    (scope.get("method", "GET"), target_path), _HTTP_TIMEOUT
+                ),
+            )
         else:
             await self._proxy_ws(receive, send, dev, url)
 
@@ -780,7 +795,15 @@ class RemoteProxyMiddleware:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _proxy_http(self, scope, receive, send, dev: dict, url: str) -> None:
+    async def _proxy_http(
+        self,
+        scope,
+        receive,
+        send,
+        dev: dict,
+        url: str,
+        timeout: float = _HTTP_TIMEOUT,
+    ) -> None:
         body = b""
         while True:
             msg = await receive()
@@ -801,7 +824,7 @@ class RemoteProxyMiddleware:
                 url,
                 data=body or None,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=_HTTP_TIMEOUT),
+                timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 ctype = resp.headers.get("Content-Type", "application/json")
                 await send(
@@ -821,8 +844,15 @@ class RemoteProxyMiddleware:
                 )
         except Exception as err:  # noqa: BLE001
             if not started:
+                # A timeout's str() is empty, which used to read as the
+                # meaningless "device 'x' unreachable: ".
+                why = str(err) or (
+                    "no answer within %ds" % int(timeout)
+                    if isinstance(err, asyncio.TimeoutError)
+                    else type(err).__name__
+                )
                 await JSONResponse(
-                    {"error": "device '%s' unreachable: %s" % (dev["key"], err)},
+                    {"error": "device '%s' unreachable: %s" % (dev["key"], why)},
                     status_code=502,
                 )(scope, receive, send)
 
