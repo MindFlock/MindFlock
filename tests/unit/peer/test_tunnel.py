@@ -177,7 +177,14 @@ async def test_start_returns_the_issued_host(fake_cf, tmp_path, monkeypatch):
     assert os.listdir(env["HOME"]) == []
     for leaked in ("TUNNEL_TOKEN", "TUNNEL_URL", "SECRET_API_KEY"):
         assert leaked not in env
-    assert set(env) <= {"PATH", "HOME", "LANG", "LC_CTYPE"}
+    # macOS adds __CF_USER_TEXT_ENCODING to every process's environment
+    # itself; it isn't something we passed.
+    assert set(env) - {"__CF_USER_TEXT_ENCODING"} <= {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_CTYPE",
+    }
 
 
 async def test_stop_terminates_and_does_not_report_an_exit(fake_cf, tmp_path):
