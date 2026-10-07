@@ -1215,6 +1215,7 @@ class ExtensionsSettings:
 #: TLS listener — never the HTTP API's.
 PEER_DEFAULT_LISTEN_HOST = "0.0.0.0"
 PEER_DEFAULT_LISTEN_PORT = 8799
+PEER_RELAY_MODES = ("off", "cloudflare", "url")
 _PEER_NAME_RE = re.compile(r"[^A-Za-z0-9 ._-]")
 
 
@@ -1253,6 +1254,16 @@ class PeerSettings:
       your peer dials); blank = Tailscale IPv4, else the LAN address.
     * ``egress_allow`` — extra hosts the sandboxed agent may CONNECT to on
       443, on top of its CLI's own API hosts.
+    * ``relay`` — how joiners on OTHER networks reach your invites
+      (docs/peer-link.md, "Connecting across networks"): ``off`` (default:
+      direct TCP to ``listen_port``), ``cloudflare`` (a Cloudflare quick
+      tunnel via a locally installed ``cloudflared``; no account), or ``url``
+      (your own WebSocket-capable HTTPS reverse proxy at ``relay_url``). The
+      pinned-key TLS runs end to end inside the relay either way.
+    * ``relay_url`` — ``relay = "url"`` only: the public ``wss://host[:port]
+      [/prefix]`` that forwards (path unchanged) to the relay port.
+    * ``relay_port`` — the loopback port of the relay ingress (blank = any
+      free port; set it when your own proxy must find it).
     """
 
     enabled: Optional[bool] = None
@@ -1261,6 +1272,9 @@ class PeerSettings:
     display_name: str = ""
     advertise_host: str = ""
     egress_allow: List[str] = field(default_factory=list)
+    relay: str = ""
+    relay_url: str = ""
+    relay_port: Optional[int] = None
 
     def effective(self) -> dict:
         """Every field with its default applied."""
@@ -1277,6 +1291,9 @@ class PeerSettings:
             "display_name": name or "peer",
             "advertise_host": self.advertise_host,
             "egress_allow": list(self.egress_allow),
+            "relay": self.relay or "off",
+            "relay_url": self.relay_url,
+            "relay_port": self.relay_port or 0,
         }
 
     def to_dict(self) -> dict:
@@ -1293,6 +1310,12 @@ class PeerSettings:
             out["advertise_host"] = self.advertise_host
         if self.egress_allow:
             out["egress_allow"] = list(self.egress_allow)
+        if self.relay:
+            out["relay"] = self.relay
+        if self.relay_url:
+            out["relay_url"] = self.relay_url
+        if self.relay_port is not None:
+            out["relay_port"] = self.relay_port
         return out
 
     @classmethod
@@ -1306,6 +1329,17 @@ class PeerSettings:
         adv = str(d.get("advertise_host", "") or "").strip()
         if adv and not re.fullmatch(r"[A-Za-z0-9.:_-]{1,253}", adv):
             adv = ""
+        relay = str(d.get("relay", "") or "").strip().lower()
+        if relay not in PEER_RELAY_MODES:
+            relay = ""
+        relay_url = str(d.get("relay_url", "") or "").strip()
+        if relay_url and not re.fullmatch(
+            r"(?:wss|https)://[A-Za-z0-9.:\[\]_~/-]{1,300}", relay_url
+        ):
+            relay_url = ""
+        relay_port = _opt_int(d.get("relay_port"))
+        if relay_port is not None and not 0 < relay_port < 65536:
+            relay_port = None
         return cls(
             enabled=_opt_bool(d.get("enabled")),
             listen_host=host,
@@ -1313,6 +1347,9 @@ class PeerSettings:
             display_name=_peer_display_name(d.get("display_name")),
             advertise_host=adv,
             egress_allow=_egress_hosts(d.get("egress_allow")),
+            relay=relay,
+            relay_url=relay_url,
+            relay_port=relay_port,
         )
 
 

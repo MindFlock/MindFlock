@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass, field
 
 from backend.peer import paths
+from backend.peer.addr import parse_addr
 
 __all__ = ["Link", "LinkStore", "sanitize_name", "DEFAULT_PERMS", "PERM_KEYS"]
 
@@ -59,7 +60,8 @@ class Link:
     peer_name: str
     peer_pub: str  # 64 lowercase hex chars (raw Ed25519 key)
     role: str  # "listener" | "dialer"
-    peer_addr: str | None = None  # "host:port" ("[v6]:port"), dialer only
+    # dialer only: "host:port" ("[v6]:port"), or a relay "wss://host:port/path"
+    peer_addr: str | None = None
     created: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     sas: str = ""
@@ -81,12 +83,19 @@ class Link:
         if self.role not in ROLES:
             raise ValueError("bad role")
         if self.role == "dialer":
-            if not isinstance(self.peer_addr, str) or not _ADDR_RE.match(
-                self.peer_addr
-            ):
+            if not isinstance(self.peer_addr, str):
                 raise ValueError("bad peer_addr")
-            if not 1 <= int(self.peer_addr.rsplit(":", 1)[1]) <= 65535:
-                raise ValueError("bad peer_addr")
+            if self.peer_addr.startswith("wss://"):
+                try:
+                    if str(parse_addr(self.peer_addr)) != self.peer_addr:
+                        raise ValueError  # only the canonical form is stored
+                except ValueError:
+                    raise ValueError("bad peer_addr") from None
+            else:
+                if not _ADDR_RE.match(self.peer_addr):
+                    raise ValueError("bad peer_addr")
+                if not 1 <= int(self.peer_addr.rsplit(":", 1)[1]) <= 65535:
+                    raise ValueError("bad peer_addr")
         elif self.peer_addr is not None:
             raise ValueError("listener links have no peer_addr")
         if not _is_num(self.created) or not _is_num(self.last_seen):

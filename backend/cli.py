@@ -420,6 +420,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("link", metavar="LINK")
     p_export.add_argument("target_repo", metavar="TARGET_REPO")
     p_export.add_argument("branch", metavar="BRANCH", help="must start with peer/")
+    p_addr = peer_sub.add_parser(
+        "address",
+        parents=[server_opts_nested],
+        help="point a joined link at the inviter's new address (e.g. a new relay URL)",
+    )
+    p_addr.add_argument("link", metavar="LINK")
+    p_addr.add_argument(
+        "address", metavar="ADDRESS", help="host:port or wss://host/path"
+    )
 
     mcp = sub.add_parser(
         "mcp",
@@ -1467,6 +1476,14 @@ def _cmd_peer(args: argparse.Namespace) -> int:
                 "listening" if ls.get("listening") else "stopped",
             )
         )
+        rl = st.get("relay") or {}
+        if rl.get("mode") and rl.get("mode") != "off":
+            state = "up" if rl.get("running") else "down"
+            if rl.get("error"):
+                state += " — %s" % rl["error"]
+            print("relay:      %s (%s)" % (rl.get("mode"), state))
+            if rl.get("address"):
+                print("relay addr: %s" % rl["address"])
         for inv in st.get("invites") or []:
             print(
                 "invite:     %s (expires in %ss)"
@@ -1488,17 +1505,29 @@ def _cmd_peer(args: argparse.Namespace) -> int:
             body["ttl_s"] = args.ttl
         if args.advertise:
             body["advertise_host"] = args.advertise
-        inv = client.post(base, "/api/peer/invites", body) or {}
+        inv = client.post(base, "/api/peer/invites", body, timeout=90.0) or {}
         print(inv.get("code") or "")
-        print(
-            "Give this code to your peer (valid %ss, single use). They must reach "
-            "%s:%s — Tailscale recommended."
-            % (inv.get("expires_in"), inv.get("host"), inv.get("port")),
-            file=sys.stderr,
-        )
+        if inv.get("relay"):
+            print(
+                "Give this code to your peer (valid %ss, single use). They connect "
+                "through the relay at %s — nothing to set up on their side."
+                % (inv.get("expires_in"), inv.get("host")),
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Give this code to your peer (valid %ss, single use). They must "
+                "reach %s:%s — Tailscale recommended."
+                % (inv.get("expires_in"), inv.get("host"), inv.get("port")),
+                file=sys.stderr,
+            )
         return 0
     if cmd == "join":
-        link = client.post(base, "/api/peer/join", {"code": args.code}) or {}
+        # A relay code may wait up to ~75 s for a new tunnel's name to resolve.
+        link = (
+            client.post(base, "/api/peer/join", {"code": args.code}, timeout=120.0)
+            or {}
+        )
         print("paired with %s" % (link.get("peer_name") or "peer"))
         print(
             "SAS %s — compare it with your peer (voice/chat); if it differs, "
@@ -1551,6 +1580,10 @@ def _cmd_peer(args: argparse.Namespace) -> int:
         print("exported to %s in %s" % (args.branch, args.target_repo))
         if res.get("sha"):
             print("  %s" % res["sha"])
+        return 0
+    if cmd == "address":
+        res = client.post(base, path + "/address", {"address": args.address}) or {}
+        print("link %s now dials %s" % (link_id[:12], res.get("peer_addr") or "?"))
         return 0
     print("error: unknown peer command %r" % cmd, file=sys.stderr)
     return 2

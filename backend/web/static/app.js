@@ -65880,6 +65880,20 @@ function StepFix({ step, shared, qrSvg }) {
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx
+var RELAY_OPTIONS = [
+	{
+		value: "off",
+		label: "Off — peers dial me directly (Tailscale / LAN)"
+	},
+	{
+		value: "cloudflare",
+		label: "Cloudflare quick tunnel (needs cloudflared)"
+	},
+	{
+		value: "url",
+		label: "My own HTTPS relay (relay URL below)"
+	}
+];
 var PERM_LABELS = [
 	["messages", "send messages"],
 	["diff", "see my diff"],
@@ -66017,6 +66031,60 @@ function PeerLinks(_) {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
+					children: "Relay"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "relay",
+					options: RELAY_OPTIONS
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "For peers on another network. Your invites then go through a public relay, carrying the same end-to-end, key-pinned encryption: the relay can block the connection but never read or change it. Your peer needs nothing extra."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Relay URL"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "relay_url",
+					placeholder: "wss://peer.example.com/mindflock"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Relay \"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Relay port"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "relay_port",
+					placeholder: "auto"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Loopback port your relay forwards to (blank = any free port)."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
 					children: "Extra egress hosts"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
@@ -66058,7 +66126,24 @@ function PeerLinks(_) {
 						st.listen.host,
 						":",
 						st.listen.port,
-						")"
+						")",
+						st.relay && st.relay.mode !== "off" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							" · ",
+							"relay ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								id: "peer-relay-state",
+								children: st.relay.running ? "up" : "down"
+							}),
+							st.relay.public_host && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" at ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.relay.public_host })] }),
+							st.relay.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "error",
+								children: [" — ", st.relay.error]
+							}),
+							st.relay.mode === "cloudflare" && st.relay.cloudflared === false && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "error",
+								children: " — cloudflared is not installed"
+							})
+						] })
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
@@ -66093,12 +66178,9 @@ function PeerLinks(_) {
 							children: [
 								"Single use, expires in ",
 								Math.round(invite.expires_in / 60),
-								" min. Your peer dials",
+								" min.",
 								" ",
-								invite.host,
-								":",
-								invite.port,
-								"."
+								invite.relay ? `Your peer connects through the relay at ${invite.host}.` : `Your peer dials ${invite.host}:${invite.port}.`
 							]
 						})
 					]
@@ -66111,7 +66193,7 @@ function PeerLinks(_) {
 					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						id: "peer-join-code",
-						placeholder: "paste a mfp1:… code",
+						placeholder: "paste a mfp1:… or mfp2:… code",
 						value: code,
 						onChange: (e) => setCode(e.target.value)
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {

@@ -46,6 +46,7 @@ _DOCS = {
     "tmux": "https://github.com/tmux/tmux/wiki/Installing",
     "uv": "https://docs.astral.sh/uv/getting-started/installation/",
     "tailscale": "https://tailscale.com/download",
+    "cloudflared": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
     "claude": "https://docs.anthropic.com/en/docs/claude-code/setup",
 }
 
@@ -521,6 +522,38 @@ def check_tailscale() -> Check:
     return Check("tailscale", "tailscale", "ok", path)
 
 
+def check_cloudflared() -> Check:
+    """Peer links across networks (``peer.relay = "cloudflare"``) run a
+    locally installed ``cloudflared``. Never auto-installed (no ``cmd``):
+    MindFlock does not fetch binaries for you."""
+    import os
+
+    from backend.peer.tunnel import find_cloudflared
+
+    path = find_cloudflared(os.environ.get("MINDFLOCK_CLOUDFLARED", ""))
+    if path:
+        return Check("cloudflared", "cloudflared", "ok", path)
+    wanted = False
+    try:
+        from backend.config.settings import load_settings
+
+        wanted = load_settings().peer.effective().get("relay") == "cloudflare"
+    except Exception:  # noqa: BLE001 — settings are optional
+        wanted = False
+    return Check(
+        "cloudflared",
+        "cloudflared",
+        "warn" if wanted else "info",
+        (
+            "not found, but peer.relay is 'cloudflare' — invites will fail"
+            if wanted
+            else "not found (optional — only for peer links across networks)"
+        ),
+        "install cloudflared from Cloudflare's downloads page (or your package manager)",
+        docs=_DOCS["cloudflared"],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Runner
 # --------------------------------------------------------------------------- #
@@ -729,6 +762,7 @@ CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "uv": check_uv,
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,
+    "cloudflared": check_cloudflared,
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
 }

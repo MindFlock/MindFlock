@@ -11,7 +11,12 @@ session's mailbox as ``peer:<name>``; ``diff`` / ``read_file`` /
 ``list_files`` / ``status`` read OUR share, after OUR ``link.perms`` say yes.
 
 The TLS listener runs only while peer links are enabled AND an invite or a
-listener-role link exists (:meth:`sync_listener`).
+listener-role link exists (:meth:`sync_listener`). With ``peer.relay`` on
+(``cloudflare`` or ``url``) the same rule governs the relay instead: the
+loopback relay ingress (:mod:`backend.peer.relay`) plus, for ``cloudflare``,
+a ``cloudflared`` quick tunnel (:mod:`backend.peer.tunnel`); the direct TCP
+listener then stays closed. The relay only ever forwards to that ingress —
+never to the HTTP API.
 
 Nothing here returns a secret except :meth:`create_invite`, whose code is the
 one value the user has to pass on.
@@ -20,6 +25,7 @@ one value the user has to pass on.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import ipaddress
 import logging
@@ -56,6 +62,15 @@ _TITLE_SLUG_RE = re.compile(r"[^a-z0-9]+")
 INVITE_TTL_DEFAULT_S = 600
 INVITE_TTL_MIN_S = 60
 INVITE_TTL_MAX_S = 600  # InviteBook refuses longer
+
+RELAY_MODES = ("off", "cloudflare", "url")
+RELAY_RESTART_INITIAL_S = 2.0
+RELAY_RESTART_MAX_S = 120.0
+#: An absolute path to cloudflared, overriding PATH lookup. An environment
+#: variable rather than a setting: settings are editable from the web UI,
+#: and a binary path there would be a way to run arbitrary programs.
+CLOUDFLARED_ENV = "MINDFLOCK_CLOUDFLARED"
+_RELAY_TOKEN_RE = re.compile(r"^[a-z2-7]{26}\Z")
 
 #: Blocking work an inbound peer op triggers (git, file reads, the mailbox)
 #: runs on a dedicated pool, at most this many threads per link at a time.
@@ -150,6 +165,9 @@ class PeerService:
         invites_factory: Optional[Callable[[], Any]] = None,
         transport_factory: Optional[Callable[..., Any]] = None,
         settings_getter: Optional[Callable[[], dict]] = None,
+        ingress_factory: Optional[Callable[..., Any]] = None,
+        tunnel_factory: Optional[Callable[..., Any]] = None,
+        cloudflared_finder: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self._server_mod = server
         self._identity_factory = identity_factory
@@ -168,6 +186,18 @@ class PeerService:
         self._pool: Optional[ThreadPoolExecutor] = None
         self._jobs: Dict[str, int] = {}
         self._jobs_lock = threading.Lock()
+        # The relay (peer.relay != off): ingress + optional quick tunnel.
+        self._ingress_factory = ingress_factory
+        self._tunnel_factory = tunnel_factory
+        self._cloudflared_finder = cloudflared_finder
+        self._ingress = None
+        self._ingress_key = None
+        self._tunnel = None
+        self._relay_addr = None  # PeerAddr the current invites carry
+        self._relay_error = ""
+        self._relay_lock = asyncio.Lock()
+        self._relay_restart: Optional[asyncio.Task] = None
+        self._relay_backoff = RELAY_RESTART_INITIAL_S
 
     # ------------------------------------------------------------------ #
     # Collaborators (lazy)
@@ -278,6 +308,7 @@ class PeerService:
     async def stop(self) -> None:
         for share_id in list(self._runtimes):
             await self._stop_runtime(share_id)
+        await self._stop_relay()
         if self._transport is not None:
             try:
                 await _maybe_await(self._transport.close())
@@ -308,19 +339,259 @@ class PeerService:
         return any(_get(l, "role") == "listener" for l in self.store.list())
 
     async def sync_listener(self) -> None:
-        """Run the TLS listener exactly while it is needed."""
-        if self._transport is None and not self._listener_needed():
+        """Run the TLS listener — or, with ``peer.relay`` on, the relay —
+        exactly while it is needed."""
+        needed = self._listener_needed()
+        if self._transport is None and not needed:
+            await self._stop_relay()
             return
         t = self.transport
         listening = bool(getattr(t, "listening", False))
-        if self._listener_needed():
+        relay_on = self.relay_mode() != "off"
+        if needed and not relay_on:
+            await self._stop_relay()
             if not listening:
                 s = self.settings()
                 await _maybe_await(
                     t.start_listener(s["listen_host"], int(s["listen_port"]))
                 )
-        elif listening:
+            return
+        if listening:
             await _maybe_await(t.stop_listener())
+        if needed:
+            try:
+                await self._ensure_relay()
+            except PeerServiceError as err:
+                # Links/invites still exist; report, and retry on the next sync.
+                _log.warning("peer: relay not available: %s", err.message)
+        else:
+            await self._stop_relay()
+
+    # ------------------------------------------------------------------ #
+    # The relay (peer.relay = cloudflare | url)
+    # ------------------------------------------------------------------ #
+    def relay_mode(self) -> str:
+        mode = str(self.settings().get("relay") or "off").strip().lower()
+        return mode if mode in RELAY_MODES else "off"
+
+    @staticmethod
+    def _relay_token() -> str:
+        """The ingress token in every relay path (``/<token>``): 128 random
+        bits, persisted 0600 so relay addresses survive restarts. It only
+        keeps scanners away from the TLS handshake; it is not what protects
+        a link (the pinned keys and the one-time secret are)."""
+        import base64
+
+        d = paths.ensure_dir(os.path.join(paths.peer_root(), "relay"))
+        path = os.path.join(d, "token")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                tok = f.read(64).strip()
+            if _RELAY_TOKEN_RE.match(tok):
+                return tok
+        except OSError:
+            pass
+        tok = base64.b32encode(secrets.token_bytes(16)).decode().rstrip("=").lower()
+        tmp = path + ".tmp"
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(tok + "\n")
+        os.replace(tmp, path)
+        return tok
+
+    def _relay_base(self):
+        """``peer.relay_url`` → ``(host, port, prefix)``."""
+        from backend.peer.addr import parse_addr
+
+        url = str(self.settings().get("relay_url") or "").strip()
+        if url.startswith("https://"):
+            url = "wss://" + url[len("https://") :]
+        url = url.rstrip("/")
+        if not url.startswith("wss://"):
+            raise PeerServiceError(
+                "peer.relay is 'url' but peer.relay_url is not set "
+                "(wss://host[:port][/prefix])",
+                409,
+            )
+        rest = url[len("wss://") :]
+        hostport, slash, prefix = rest.partition("/")
+        prefix = slash + prefix if prefix else ""
+        try:
+            a = parse_addr("wss://" + hostport + (prefix or "") + "/x")
+        except ValueError:
+            raise PeerServiceError("peer.relay_url is not a valid wss:// URL", 409)
+        return a.host, a.port, a.path[: -len("/x")]
+
+    def _find_cloudflared(self) -> Optional[str]:
+        if self._cloudflared_finder is not None:
+            return self._cloudflared_finder()
+        from backend.peer.tunnel import find_cloudflared
+
+        return find_cloudflared(os.environ.get(CLOUDFLARED_ENV, ""))
+
+    async def _ensure_relay(self):
+        """Start (or reuse) the relay; returns the ``PeerAddr`` invite codes
+        carry. Raises :class:`PeerServiceError`."""
+        from backend.peer.addr import PeerAddr
+
+        async with self._relay_lock:
+            mode = self.relay_mode()
+            if mode == "off":
+                raise PeerServiceError("peer.relay is off", 409)
+            t = await self._ensure_transport()
+            token = self._relay_token()
+            if mode == "url":
+                host, port, prefix = self._relay_base()
+            else:
+                prefix = ""
+            path = "%s/%s" % (prefix, token)
+            relay_port = int(self.settings().get("relay_port") or 0)
+            key = (mode, path, relay_port)
+            if self._ingress is not None and self._ingress_key != key:
+                # The settings changed under a running relay: start over.
+                await self._teardown_relay_locked()
+            if self._ingress is None:
+                if self._ingress_factory is not None:
+                    factory = self._ingress_factory
+                else:
+                    from backend.peer.relay import RelayIngress
+
+                    factory = RelayIngress
+                ingress = factory(
+                    t.accept_relayed,
+                    path,
+                    port=relay_port,
+                    trust_cf_ip=(mode == "cloudflare"),
+                )
+                try:
+                    await _maybe_await(ingress.start())
+                except OSError as err:
+                    raise PeerServiceError(
+                        "could not open the relay port: %s" % err, 409
+                    ) from err
+                self._ingress = ingress
+                self._ingress_key = key
+            t.open_relay()
+            if mode == "url":
+                self._relay_addr = PeerAddr("wss", host, port, path)
+                self._relay_error = ""
+                return self._relay_addr
+            tun = self._tunnel
+            if tun is None or not tun.alive or not tun.hostname:
+                if tun is not None:
+                    await _maybe_await(tun.stop())
+                    self._tunnel = None
+                binary = self._find_cloudflared()
+                if not binary:
+                    self._relay_error = "cloudflared not found"
+                    raise PeerServiceError(
+                        "peer.relay is 'cloudflare' but cloudflared is not "
+                        "installed: install it from Cloudflare "
+                        "(https://developers.cloudflare.com/cloudflare-one/"
+                        "connections/connect-networks/downloads/) or set "
+                        "%s to its path; MindFlock never downloads it"
+                        % CLOUDFLARED_ENV,
+                        409,
+                    )
+                if self._tunnel_factory is not None:
+                    factory = self._tunnel_factory
+                else:
+                    from backend.peer.tunnel import QuickTunnel
+
+                    factory = QuickTunnel
+                tun = factory(binary, self._ingress.port, on_exit=self._on_tunnel_exit)
+                try:
+                    host = await tun.start()
+                except Exception as err:  # noqa: BLE001 — TunnelError and friends
+                    self._relay_error = str(err)[:200]
+                    raise PeerServiceError(
+                        "could not start the Cloudflare tunnel: %s" % err, 502
+                    ) from err
+                self._tunnel = tun
+                old = self._relay_addr
+                self._relay_addr = PeerAddr("wss", host, 443, path)
+                if old is not None and old.host != host:
+                    _log.warning(
+                        "peer: relay address changed; peers who joined through "
+                        "the old one must be given the new address"
+                    )
+            self._relay_error = ""
+            self._relay_backoff = RELAY_RESTART_INITIAL_S
+            return self._relay_addr
+
+    def _on_tunnel_exit(self) -> None:
+        """cloudflared died on its own: its hostname is gone for good. Bring
+        a new tunnel up (with backoff) while it is still needed."""
+        self._relay_error = "tunnel exited"
+        if self._relay_restart is not None and not self._relay_restart.done():
+            return
+        try:
+            self._relay_restart = asyncio.get_running_loop().create_task(
+                self._restart_relay()
+            )
+        except RuntimeError:
+            pass
+
+    async def _restart_relay(self) -> None:
+        delay = self._relay_backoff
+        self._relay_backoff = min(delay * 2, RELAY_RESTART_MAX_S)
+        await asyncio.sleep(delay)
+        if not self.enabled() or self.relay_mode() != "cloudflare":
+            return
+        try:
+            await self.sync_listener()
+        except Exception as err:  # noqa: BLE001
+            _log.warning("peer: relay restart failed: %s", err)
+
+    async def _stop_relay(self) -> None:
+        restart, self._relay_restart = self._relay_restart, None
+        if restart is not None and restart is not asyncio.current_task():
+            restart.cancel()
+        async with self._relay_lock:
+            await self._teardown_relay_locked()
+
+    async def _teardown_relay_locked(self) -> None:
+        if self._transport is not None:
+            close = getattr(self._transport, "close_relay", None)
+            if close is not None:
+                close()
+        tun, self._tunnel = self._tunnel, None
+        ingress, self._ingress = self._ingress, None
+        self._ingress_key = None
+        self._relay_addr = None
+        for obj in (tun, ingress):
+            if obj is None:
+                continue
+            try:
+                await _maybe_await(obj.stop())
+            except Exception as err:  # noqa: BLE001
+                _log.warning("peer: relay stop failed: %s", err)
+
+    def _relay_status(self) -> dict:
+        mode = self.relay_mode()
+        addr = self._relay_addr
+        tun = self._tunnel
+        running = self._ingress is not None and (
+            mode != "cloudflare" or (tun is not None and bool(tun.alive))
+        )
+        out = {
+            "mode": mode,
+            "running": bool(running and addr is not None),
+            "public_host": addr.host if addr is not None else None,
+            # The full address (with the ingress token) — what a peer who
+            # joined through an older address needs. Local API only.
+            "address": str(addr) if addr is not None else None,
+            "error": self._relay_error or None,
+        }
+        if mode == "cloudflare":
+            try:
+                out["cloudflared"] = bool(self._find_cloudflared())
+            except Exception:  # noqa: BLE001
+                out["cloudflared"] = False
+        return out
 
     # ------------------------------------------------------------------ #
     # Transport handler
@@ -604,6 +875,7 @@ class PeerService:
             "fingerprint": None,
             "links": [],
             "invites": [],
+            "relay": self._relay_status(),
         }
         if not s.get("enabled"):
             return out
@@ -686,6 +958,8 @@ class PeerService:
         except (TypeError, ValueError):
             raise PeerServiceError("ttl_s must be a number of seconds")
         ttl = max(INVITE_TTL_MIN_S, min(INVITE_TTL_MAX_S, ttl))
+        if self.relay_mode() != "off":
+            return await self._create_relay_invite(ttl)
         adv = self.advertise_host(host)
         port = int(self.settings()["listen_port"])
         await self._ensure_transport()
@@ -713,6 +987,31 @@ class PeerService:
             "port": port,
         }
 
+    async def _create_relay_invite(self, ttl: int) -> dict:
+        """An ``mfp2:`` invite whose code carries the relay address. The
+        relay comes up first (a quick tunnel needs a few seconds for its
+        hostname); if the invite can't be made, the relay goes back down."""
+        try:
+            addr = await self._ensure_relay()
+            inv = self.invites.create(addr.host, addr.port, ttl, relay_path=addr.path)
+        except ValueError as err:
+            await self.sync_listener()
+            raise PeerServiceError(
+                "could not create the invite: %s" % err, 409
+            ) from err
+        except PeerServiceError:
+            await self.sync_listener()
+            raise
+        await self.sync_listener()
+        return {
+            "invite_id": _get(inv, "invite_id"),
+            "code": _get(inv, "code"),
+            "expires_in": ttl,
+            "host": addr.host,
+            "port": addr.port,
+            "relay": self.relay_mode(),
+        }
+
     async def revoke_invite(self, invite_id: str) -> None:
         if not isinstance(invite_id, str) or not re.fullmatch(
             r"[0-9a-f]{1,64}", invite_id
@@ -738,6 +1037,29 @@ class PeerService:
                 "pairing failed: %s" % err, _transport_error_status(err)
             ) from err
         return self.link_view(link)
+
+    async def set_address(self, link_id: str, address) -> dict:
+        """Point a dialer link at a new address (``host:port`` or a relay
+        ``wss://…`` address): e.g. the inviter's quick tunnel restarted and
+        got a new hostname. Safe to accept from the user: the peer's key
+        stays pinned, so a wrong address can only fail to connect."""
+        from backend.peer.addr import parse_addr
+
+        link = self._link_or_404(link_id)
+        if _get(link, "role") != "dialer":
+            raise PeerServiceError(
+                "only the side that joined dials; this link listens", 409
+            )
+        try:
+            addr = parse_addr(str(address or "").strip())
+        except ValueError as err:
+            raise PeerServiceError("invalid address: %s" % err) from err
+        self.store.update(link_id, peer_addr=str(addr))
+        if self._transport is not None:
+            redial = getattr(self._transport, "redial", None)
+            if redial is not None:
+                await _maybe_await(redial(link_id))
+        return self.link_view(self.store.get(link_id))
 
     def set_perms(self, link_id: str, perms) -> dict:
         link = self._link_or_404(link_id)

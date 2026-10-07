@@ -682,10 +682,16 @@ control) can't change this group: `POST /api/settings` answers 403 for it.
 | `advertise_host` | `""` | The address written into invite codes. Blank = this machine's Tailscale IPv4, else its LAN address. |
 | `display_name` | hostname | The name your peer sees (`[A-Za-z0-9 ._-]`, ≤ 32). |
 | `egress_allow` | `[]` | Extra hosts the sandboxed agent may `CONNECT` to on 443, besides its CLI's own API hosts. A leading `.` allows subdomains; IPs, ports and schemes are dropped. |
+| `relay` | `off` | How joiners on **other networks** reach your invites ([Connecting across networks](peer-link.md#connecting-across-networks)): `off` (direct TCP to `listen_port`), `cloudflare` (a Cloudflare quick tunnel through a locally installed `cloudflared`; no account), or `url` (your own WebSocket-capable HTTPS reverse proxy). With a relay on, the direct listener stays closed. |
+| `relay_url` | `""` | `relay = "url"` only: the public `wss://host[:port][/prefix]` that forwards, path unchanged, to the relay port. |
+| `relay_port` | auto | Loopback port of the relay ingress (blank = any free port). Set it when your own proxy has to find it. |
 
 State lives under `~/.mindflock/peer/` (`MINDFLOCK_PEER_HOME` overrides):
-`identity/` (this instance's Ed25519 key), `links.json` (0600) and
-`shares/<id>/` (one shared folder each).
+`identity/` (this instance's Ed25519 key), `links.json` (0600),
+`shares/<id>/` (one shared folder each) and `relay/` (the relay's ingress
+token and cloudflared's private home/config). `cloudflared` is found on
+`PATH`, or at the absolute path in the `MINDFLOCK_CLOUDFLARED` environment
+variable (deliberately not a setting); MindFlock never downloads it.
 
 ## Web-exposed settings
 
