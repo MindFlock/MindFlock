@@ -173,7 +173,7 @@ def test_mobile_note_preamble_matches_the_server_that_writes_it():
 # --------------------------------------------------------------------------- #
 def test_mobile_new_session_asks_the_plan_route():
     js = _js()
-    assert 'fetch("/api/session-plan", {' in js
+    assert 'fetch(devicePath(dev, "/api/session-plan"), {' in js
     assert "body: JSON.stringify({ text: text.slice(0, PLAN_MAX_CHARS) })," in js
     # session_plan.MAX_SENTENCE, matched by the box's own maxlength.
     assert "PLAN_MAX_CHARS = 2000" in js
@@ -223,7 +223,7 @@ def test_mobile_plan_failure_reaches_the_folder_list():
     plan_fn = js.split("  function describeIt() {")[1].split("\n  function ")[0]
     assert "loadFolders(" in plan_fn
     assert '(err && err.message) || "couldn\'t read that"' in plan_fn
-    assert 'fetch("/api/repos/suggest")' in js
+    assert 'fetch(devicePath(newTarget, "/api/repos/suggest"))' in js
     # The typed sentence still becomes the prompt on the manual path.
     assert "prompt: (newPlan && newPlan.prompt) || newTextEl.value.trim()," in js
 
@@ -273,7 +273,8 @@ def test_mobile_start_is_guarded_by_the_confirm_tick():
     assert "if (blocked) { newError(blocked); return; }" in start_fn
     assert start_fn.index("startBlockReason(") < start_fn.index('"/api/instances"')
     # And there is exactly one place that creates a session.
-    assert js.count('fetch("/api/instances", {') == 1
+    assert js.count('fetch(devicePath(p.device, "/api/instances"), {') == 1
+    assert 'fetch("/api/instances", {' not in js
 
 
 def test_mobile_confirm_tick_defaults_off_and_names_the_folder():
@@ -530,7 +531,9 @@ def test_mobile_create_is_sequence_guarded_in_both_branches():
     # no longer close a REOPENED sheet and discard the sentence in it...
     assert ok.index("if (seq !== startSeq) return;") < ok.index("closeNewSheet();")
     # ...but the session was really created, so it is still tracked and selected.
-    assert ok.index("pendingNew = title;") < ok.index("if (seq !== startSeq) return;")
+    assert ok.index("pendingNew = deviceTitle(p.device, title);") < ok.index(
+        "if (seq !== startSeq) return;"
+    )
     # Failure branch: the mirror image — the PREVIOUS session's create failure
     # must not be written into the freshly reopened sheet.
     assert fail.index("if (seq !== startSeq) return;") < fail.index("newError(")
@@ -585,4 +588,93 @@ def test_mobile_redescribe_drops_the_previous_plan_and_its_tick():
     # read is a confirm-gate failure, not only a navigation one.
     assert "newPlan = null;" in plan_fn
     assert "newConfirmEl.checked = false;" in plan_fn
-    assert plan_fn.index("newPlan = null;") < plan_fn.index('fetch("/api/session-plan"')
+    assert plan_fn.index("newPlan = null;") < plan_fn.index(
+        'fetch(devicePath(dev, "/api/session-plan")'
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Which device the session runs on
+# --------------------------------------------------------------------------- #
+def test_mobile_device_picker_is_on_the_first_screen_and_hidden_by_default():
+    html = _html()
+    # On step 1, before Continue: the plan is read ON the target device (its
+    # folders, its agent CLI), so the device has to be chosen before it.
+    step1 = html.split('<div id="new-step1">')[1].split('<div id="new-step2"')[0]
+    assert '<div id="new-device-row" class="hidden">' in step1
+    assert '<select id="new-device"' in step1
+    assert step1.index('id="new-device"') < step1.index('id="new-go"')
+    # A native select at the 16px iOS zoom floor.
+    rule = _css().split("#new-device {")[1].split("}")[0]
+    assert "font-size: 16px" in rule
+
+
+def test_mobile_device_picker_lists_only_startable_devices():
+    js = _js()
+    assert 'fetch("/api/devices")' in js
+    load = js.split("  function loadDevices() {")[1].split("\n  function ")[0]
+    # Connected (paired, permitted, answering) — an unreachable device would
+    # only fail at Start.
+    assert "all[i].connected && all[i].device" in load
+    render = js.split("  function renderDevices() {")[1].split("\n  function ")[0]
+    # Only shown once there is a second device to pick.
+    assert 'newDeviceRow.classList.toggle("hidden", !newDevices.length);' in render
+    assert '" (this device)"' in render
+    # Hostnames come off the network: text, never markup.
+    assert "o.textContent = deviceLabel(" in render
+    # A pick that went offline falls back to this device.
+    picked = js.split("  function pickedDevice() {")[1].split("\n  function ")[0]
+    assert 'return "";' in picked
+    # Refreshed every time the sheet opens.
+    opener = js.split("  function openNewSheet() {")[1].split("\n  function ")[0]
+    assert "loadDevices();" in opener
+
+
+def test_mobile_every_new_session_call_goes_to_the_picked_device():
+    js = _js()
+    # Same shape as the server's /api/devices/<device>/fwd/ allow-list and the
+    # desktop's lib/devices.ts devicePath.
+    assert (
+        'return device ? "/api/devices/" + encodeURIComponent(device) + "/fwd" + path'
+        " : path;" in js
+    )
+    plan_fn = js.split("  function describeIt() {")[1].split("\n  function ")[0]
+    # The target is captured when Continue is pressed, so the folder list and
+    # review talk about the device the plan was read on.
+    assert "newTarget = pickedDevice();" in plan_fn
+    assert "device: dev," in plan_fn
+    pick = js.split("  function pickFolder(row) {")[1].split("\n  function ")[0]
+    assert "device: newTarget," in pick
+    # The select is frozen while a plan is being read on the device it named.
+    busy = js.split("  function setPlanBusy(on, label) {")[1].split("\n  }")[0]
+    assert "newDeviceEl.disabled = on;" in busy
+
+
+def test_mobile_device_forwarded_routes_are_on_the_server_allow_list():
+    """Every path the phone forwards must be one the gateway actually relays,
+    or picking another device turns the sheet into a 404."""
+    from backend.web.core import remote
+
+    for path in ("/api/session-plan", "/api/repos/suggest", "/api/instances"):
+        method = "GET" if path == "/api/repos/suggest" else "POST"
+        assert (method, path) in remote._FWD_ALLOWED, path
+
+
+def test_mobile_remote_session_is_claimed_by_its_namespaced_title():
+    js = _js()
+    # Another device's sessions are listed as <device>::<title>; the 202 names
+    # it the way THAT device knows it.
+    assert 'return device ? device + "::" + title : title;' in js
+    from backend.web.core import remote
+
+    assert remote.NS == "::"
+
+
+def test_mobile_review_screen_names_the_device():
+    js = _js()
+    show = js.split("  function showPlan(p) {")[1].split("\n  }\n")[0]
+    assert '"Folder on " + deviceLabel(p.device)' in show
+    # The confirm gate says WHICH machine the directory is left on.
+    assert "newConfirmWhere.textContent" in show
+    assert 'id="new-confirm-where"' in _html()
+    assert 'id="new-folder-label"' in _html()
