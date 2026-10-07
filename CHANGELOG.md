@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-07
+
 ### Added
 
 - **Mobile: choose which device a new session runs on.** When another
@@ -32,6 +34,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their tokens and the browser keeps one cookie per token. It needs a one-time
   Tailscale setup (tagged devices, the service defined, an auto-approve rule),
   and the screen walks through it.
+- **Peer links across networks.** Two MindFlock users with no shared network
+  or tailnet can now pair. With `peer.relay = "cloudflare"` (off by default),
+  the inviter runs a local `cloudflared` quick tunnel and the invite becomes
+  an `mfp2:` code. The joiner needs nothing extra. The same pinned-key TLS 1.3
+  handshake runs inside the WebSocket, so the relay can drop traffic but never
+  read or alter it. `peer.relay = "url"` uses any WebSocket-capable HTTPS
+  proxy instead. `mindflock peer address` changes a link's address. See
+  `docs/peer-link.md`, "Connecting across networks".
+- **Setup checklist for the shared phone link.** Settings → Mobile → One link
+  for all devices walks through the Tailscale setup as six steps, each with
+  its live state and a one-line reason. A **Re-check** button re-applies the
+  serve config and re-advertises an unapproved host. The access token is
+  masked, with Show and Copy buttons.
+
+### Fixed
+
+- **Workers stay nested under their orchestrator on a remote device's
+  sessions.** Viewing another machine's sessions through remote control, its
+  workers showed as separate top-level rows. A remote row's `parent` is now
+  namespaced like its title (`<device>::<title>`), and a new worker is
+  slotted under its parent in that device's section.
+- **The shared phone link's status is accurate.** It showed approved while
+  the advertisement was still pending, so the screen was green while the
+  phone timed out. A signal this device can't read now shows as unknown.
+  Applying the link is idempotent, and it re-serves every 60s when the live
+  config has drifted.
+- **Settings → Mobile layout.** The switch row's label no longer overlaps the
+  description above it, and the QR, token and snippets fit a narrow pane.
 
 ## [0.6.1] - 2026-10-06
 
@@ -2504,7 +2534,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.0
 [0.6.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.6.1
 [0.6.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.6.0
 [0.5.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.5.0
