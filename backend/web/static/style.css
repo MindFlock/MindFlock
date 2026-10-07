@@ -18493,24 +18493,265 @@ span.pr-open-ref.ob-ref {
   height: 200px;
 }
 
-/* Fixed label column + flexible URL column so every row aligns and long
-   URLs wrap inside their own cell instead of shoving the label around. */
-.mobile-url-row {
-  display: grid;
-  grid-template-columns: 104px 1fr;
-  align-items: baseline;
-  gap: 4px 14px;
-  margin: 6px 0;
+/* The screen body is ONE child of .set-screen, so it needs the screen's own
+   rhythm: without a flex gap its rows stacked flush, and the switch row's
+   label — nudged up 10px for the desktop font (.set-switch-row > .set-label)
+   — landed on top of the hint above it ("…still works when this one is off."
+   drawn over "Shared link"). Same 16px gap as .set-screen, and later section
+   titles get the same lead-in as at screen level. container-type lets the URL
+   grid below stack by the pane's width, not the window's. */
+.mobile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  container-type: inline-size;
 }
 
-.mobile-url-row .set-label {
+.mobile-body>.set-section-title {
+  margin-top: 16px;
+}
+
+.mobile-body>#mobile-qr {
+  margin: 0;
+}
+
+/* A narrow pane shrinks the QR card instead of clipping it. */
+.mobile-body #mobile-qr,
+.sl-qr {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.mobile-body #mobile-qr svg,
+.sl-qr svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Token + Show/Copy: the buttons drop under the field rather than squeeze it. */
+.mobile-body .token-reveal {
+  flex-wrap: wrap;
+}
+
+.mobile-body .token-reveal code {
+  flex: 1 1 12em;
+}
+
+.mobile-body .test-btn {
+  white-space: nowrap;
+}
+
+.mobile-body>.mobile-restart {
+  align-self: flex-start;
+}
+
+/* Label/URL pairs: one grid for the whole list, so every label shares a
+   column sized to the longest ("This device (IP)") and long URLs wrap inside
+   their own cell instead of shoving the label around. Rows are display:
+   contents so their dt/dd sit in the parent grid. */
+.mobile-urls {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.mobile-url-row {
+  display: contents;
+}
+
+.mobile-urls dt {
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.mobile-urls dd {
+  margin: 0;
   min-width: 0;
 }
 
-.mobile-url-row a {
+.mobile-urls a {
   color: var(--accent);
-  word-break: break-all;
-  justify-self: start;
+  overflow-wrap: anywhere;
+}
+
+/* Narrow pane: label over URL, pairs separated by more than the line gap. */
+@container (max-width: 420px) {
+  .mobile-urls {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .mobile-urls dd+dt {
+    margin-top: 10px;
+  }
+}
+
+/* Shared-link setup checklist: a mark column, then title / reason / fix. */
+.sl-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sl-setup-head .set-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sl-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sl-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.sl-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.sl-step+.sl-step {
+  border-top: 1px solid var(--border);
+}
+
+.sl-mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.sl-ok .sl-mark {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.sl-fail .sl-mark {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.sl-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sl-title {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sl-reason {
+  line-height: 1.5;
+}
+
+.sl-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.sl-fix:empty {
+  display: none;
+}
+
+details.sl-fix {
+  display: block;
+}
+
+details.sl-fix>summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+details.sl-fix[open]>*:not(summary) {
+  margin-top: 6px;
+}
+
+.sl-fix p.set-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.sl-fix code,
+.sl-reason code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sl-snippet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Wrapped, not scrolled: a snippet cut off at the pane edge reads as complete. */
+.sl-snippet pre {
+  flex: 1 1 14em;
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.sl-snippet .test-btn {
+  flex: none;
+}
+
+.sl-admin-link {
+  color: var(--accent);
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+.sl-note {
+  color: var(--text);
+}
+
+.sl-qr {
+  margin: 0;
+}
+
+.sl-qr svg {
+  width: 160px;
+  height: 160px;
 }
 
 /* Settings → System logs: toolbar + read-only monospace tail viewer */

@@ -2961,14 +2961,56 @@ A few screens got quieter:
   the startup banner and the ntfy push all hand out the shared URL instead of
   this device's own, which stays listed as **This device**. It works in local
   mode too, because `tailscale serve` fronts 127.0.0.1 and the auth
-  middleware accepts the service hostname as one of this server's names. The
-  screen checks what it can see: whether this device offers the link,
-  whether it is **tagged** (Tailscale only lets tagged devices host a
-  service), whether Tailscale has **approved** it (read from the node's
-  service-host capability), and which other devices report the same link in
-  their discovery hello. Until all of that is in place it shows the one-time
-  admin-console setup: define `svc:<name>` with `tcp:443`, tag the machines,
-  and add an `autoApprovers.services` rule. **Sign-in carries across:** each
+  middleware accepts the service hostname as one of this server's names.
+
+  **Setup checklist.** While the switch is on, the screen shows a numbered
+  checklist, one step per thing a host needs. Each step is marked ✓ (passes),
+  ✗ (needs fixing) or **?** (this device can't tell), with a one-line reason
+  and the exact fix. A step that passes folds its fix under *Show how*.
+  Everything is read from `tailscale status --json` and `tailscale serve
+  status --json`:
+
+  1. **Tailscale serve access**: whether `tailscale serve` accepted the
+     config. A refusal shows `sudo tailscale set --operator=$USER` with a
+     Copy button.
+  2. **Tag this device**: names the exact machine to tag in the admin
+     console's Machines page, by MagicDNS name and Tailscale IP. When
+     Tailscale de-duplicated the name (`box` → `box-1`, because another device
+     already has `box`), the step says so, since that is the entry people
+     look for and don't find.
+  3. **Define the service**: `svc:<name>` with port `tcp:443` on the
+     Services page. ✓ once this device can see it (its `services/<name>`
+     capability or the service's MagicDNS record). Otherwise **?**, because
+     a device that hasn't advertised isn't told.
+  4. **Approve hosts automatically**: the policy snippet, prefilled with
+     this device's own tag and the service name (`tagOwners` +
+     `autoApprovers.services`), with a Copy button. Under it is the `grants`
+     entry clients need to reach `svc:<name>` on `tcp:443` if you use a
+     custom policy. The policy itself can't be read from a node, so this
+     step is **?** until approval shows it worked.
+  5. **Approved as a host**: only the node's `service-host` capability
+     counts, together with the service's VIPs appearing in its `AllowedIPs`.
+     `services/<name>` is present while the advertisement is still
+     *pending*, so it is **not** approval. An older build read it as
+     approval and showed ✓ while the phone timed out. When the capability
+     map can't be read, the step says unknown and never shows ✓.
+  6. **Test from your phone**: the QR and the shared URL. Only the phone can
+     confirm this step.
+
+  **Re-check** (`POST /api/mobile/shared/recheck`) re-reads all of this and
+  re-applies what drifted. While the link is on, the server also re-checks
+  every 60 seconds, and the screen refreshes at the same pace. A re-apply
+  happens when the live serve config no longer carries the service (cleared
+  behind MindFlock's back), when the port changed, when this device's tags
+  changed since the last apply, or when the last attempt failed. Tags matter
+  because Tailscale's auto-approver only looks at an advertisement when it is
+  made: one made before the device was tagged stays pending until it is made
+  again. Re-check and re-saving the same name also re-advertise a tagged host
+  that still isn't approved. An approved, live host is left alone. The other
+  devices that report the same link in their discovery hello are listed
+  under the checklist. The **access token** on this screen is masked, with
+  **Show** and **Copy** buttons, because it is a bearer credential and
+  this screen gets screenshotted. **Sign-in carries across:****Sign-in carries across:** each
   device keeps its own token, so the shared QR carries this device's token
   plus every paired device's (`?token=a&token=b`). The browser keeps a
   cookie per token (`mf_auth_<hash>` beside `mf_auth`), and each server

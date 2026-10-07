@@ -35735,7 +35735,7 @@ async function runGithubTest() {
 		};
 	}
 }
-function SetupChecklist(_props) {
+function SetupChecklist$1(_props) {
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
 	const [gh, setGh] = (0, import_react.useState)(idleTest);
 	const [sc, setSc] = (0, import_react.useState)(idleTest);
@@ -35975,7 +35975,7 @@ function SetupDialog() {
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				id: "setup-dialog-body",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist, {})
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist$1, {})
 			})]
 		})
 	});
@@ -57313,7 +57313,7 @@ function TerminalGrid({ specialPanes }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "setup-body",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist, { standalone: true })
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist$1, { standalone: true })
 						})
 					]
 				})
@@ -65351,6 +65351,7 @@ function useServerRestart() {
 }
 //#endregion
 //#region src/components/settings/screens/Mobile.tsx
+var TOKEN_MASK = "••••••••••••••••";
 function Mobile(_) {
 	const { data: config } = useConfig();
 	const [data, setData] = (0, import_react.useState)(null);
@@ -65385,6 +65386,8 @@ function Mobile(_) {
 	};
 	const onRestart = () => restart({ onBack: load });
 	const pending = !!(data?.serve_mode && data.serve_mode === "tailscale" === !!data.local_only);
+	const shared = data?.shared || {};
+	const sharedQr = data?.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : void 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -65416,6 +65419,7 @@ function Mobile(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "mobile-body",
+			className: "mobile-body",
 			children: !tailscale ? null : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error",
 				children: error
@@ -65441,7 +65445,7 @@ function Mobile(_) {
 				}),
 				pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "test-btn",
+					className: "test-btn mobile-restart",
 					disabled: restarting,
 					onClick: onRestart,
 					children: restarting ? "Restarting…" : "Restart server to apply"
@@ -65454,39 +65458,97 @@ function Mobile(_) {
 					className: "set-hint",
 					children: data.note
 				}),
-				(data.urls || []).map((u) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mobile-url-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: u.label
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-						href: u.url,
-						target: "_blank",
-						rel: "noopener noreferrer",
-						children: u.url
-					})]
-				}, u.url)),
-				data.token && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Access token"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						readOnly: true,
-						value: data.token,
-						onClick: (e) => e.target.select()
-					})]
-				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
+				data.token && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TokenField, { token: data.token }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
-					shared: data.shared || {},
-					onChanged: load
+					shared,
+					qrSvg: sharedQr,
+					onChanged: load,
+					onData: setData
 				})
 			] })
 		})
 	] });
 }
+function UrlList({ urls }) {
+	if (!urls.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+		className: "mobile-urls",
+		children: urls.map((u) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mobile-url-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", {
+				className: "set-label",
+				children: u.label
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+				href: u.url,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				children: u.url
+			}) })]
+		}, u.url))
+	});
+}
+function TokenField({ token }) {
+	const [shown, setShown] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Access token"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "token-reveal",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: shown ? token : TOKEN_MASK }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => setShown(!shown),
+						children: shown ? "Hide" : "Show"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyButton, {
+						text: token,
+						what: "Access token"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Signs a browser in to this device — treat it like a password."
+			})
+		]
+	});
+}
+function CopyButton({ text, what }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		onClick: () => copyText(text).then((ok) => toast(ok ? what + " copied" : "Copy failed")),
+		children: "Copy"
+	});
+}
+function Snippet({ text, what }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-snippet",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyButton, {
+			text,
+			what
+		})]
+	});
+}
+function AdminLink({ href, children }) {
+	if (!href) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+		className: "sl-admin-link",
+		href,
+		target: "_blank",
+		rel: "noopener noreferrer",
+		children: [children, " ↗"]
+	});
+}
 var DEFAULT_SHARED_NAME = "mindflock";
-function SharedLink({ shared, onChanged }) {
+function SharedLink({ shared, qrSvg, onChanged, onData }) {
 	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
@@ -65504,8 +65566,22 @@ function SharedLink({ shared, onChanged }) {
 		setBusy(false);
 		onChanged();
 	};
+	const recheck = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			onData(await api("/api/mobile/shared/recheck", { method: "POST" }));
+		} catch (e) {
+			setError(e.message || "Could not re-check.");
+		}
+		setBusy(false);
+	};
 	const on = !!shared.enabled;
-	const svc = shared.service || "svc:" + (name || DEFAULT_SHARED_NAME);
+	(0, import_react.useEffect)(() => {
+		if (!on) return;
+		const t = window.setInterval(onChanged, 6e4);
+		return () => window.clearInterval(t);
+	}, [on, onChanged]);
 	const others = shared.devices || [];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -65540,6 +65616,7 @@ function SharedLink({ shared, onChanged }) {
 					children: "Name"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
 					value: name,
 					disabled: busy,
 					placeholder: DEFAULT_SHARED_NAME,
@@ -65558,71 +65635,248 @@ function SharedLink({ shared, onChanged }) {
 			children: error
 		}),
 		on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			shared.url && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mobile-url-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Shared URL"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-					href: shared.url,
-					target: "_blank",
-					rel: "noopener noreferrer",
-					children: shared.url
-				})]
+			shared.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: [{
+				label: "Shared URL",
+				url: shared.url
+			}] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist, {
+				shared,
+				qrSvg,
+				busy,
+				onRecheck: recheck
 			}),
-			shared.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				children: shared.error
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy,
-				onClick: () => save(name || DEFAULT_SHARED_NAME),
-				children: "Try again"
-			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: shared.advertised ? "✓ This device is offering the link." : "This device is not offering the link yet."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: shared.tagged ? "✓ This device is tagged." : "✗ This device has no tag. Tailscale only lets tagged devices host a service."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: shared.approved ? "✓ Tailscale has approved this device for " + svc + "." : "Waiting for Tailscale to approve this device for " + svc + "."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine."
-			}),
-			!(shared.tagged && shared.approved) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"One-time setup in the Tailscale admin console:",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-							"Under ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Services" }),
-							", define ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-							" with port",
-							" ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
-							"."
-						] }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-							"Tag each MindFlock machine, e.g. ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tag:mindflock" }),
-							" (Machines → ⋯ → Edit ACL tags)."
-						] }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: ["So hosts are approved without a click, add this to the access policy:", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: `"tagOwners": { "tag:mindflock": ["autogroup:admin"] },
-"autoApprovers": { "services": { "${svc}": ["tag:mindflock"] } }` })] })
-					] }),
-					"Sign-in carries across devices that are paired under Remote control: the QR above carries their access tokens too."
+					others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine.",
+					" ",
+					"Sign-in carries across devices paired under Remote control: the QR carries their access tokens too."
 				]
 			})
 		] })
 	] });
+}
+var MARK = {
+	ok: "✓",
+	fail: "✗",
+	unknown: "?"
+};
+var MARK_LABEL = {
+	ok: "done",
+	fail: "needs fixing",
+	unknown: "unknown"
+};
+function SetupChecklist({ shared, qrSvg, busy, onRecheck }) {
+	const steps = shared.steps || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-setup",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sl-setup-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Setup"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy,
+				onClick: onRecheck,
+				children: busy ? "Checking…" : "Re-check"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+			className: "sl-steps",
+			children: steps.map((s, i) => {
+				const fix = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepFix, {
+					step: s,
+					shared,
+					qrSvg
+				});
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sl-step sl-" + s.state,
+					"data-step": s.id,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sl-mark",
+						title: MARK_LABEL[s.state],
+						"aria-label": MARK_LABEL[s.state],
+						children: MARK[s.state] || "?"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sl-body",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "sl-title",
+								children: [
+									i + 1,
+									". ",
+									s.title
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "set-hint sl-reason",
+								children: s.reason
+							}),
+							s.state === "ok" && s.id !== "phone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+								className: "sl-fix",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Show how" }), fix]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sl-fix",
+								children: fix
+							})
+						]
+					})]
+				}, s.id);
+			})
+		})]
+	});
+}
+function StepFix({ step, shared, qrSvg }) {
+	const svc = shared.service || "svc:" + (shared.name || DEFAULT_SHARED_NAME);
+	const name = shared.name || DEFAULT_SHARED_NAME;
+	const tag = shared.tag || "tag:mindflock";
+	const m = shared.machine;
+	const admin = shared.admin;
+	switch (step.id) {
+		case "operator":
+			if (shared.error_kind === "missing") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Install it from",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						href: "https://tailscale.com/download",
+						target: "_blank",
+						rel: "noopener noreferrer",
+						children: "tailscale.com/download"
+					}),
+					", sign in, then press Re-check."
+				]
+			});
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Lets MindFlock run ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tailscale serve" }),
+					" as you. Run once in a terminal, then press Re-check:"
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
+				text: shared.operator_fix || "sudo tailscale set --operator=$USER",
+				what: "Command"
+			})] });
+		case "tag": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"In the admin console's Machines page, open",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m?.dns || m?.hostname || "this device" }),
+					m?.ip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" ",
+						"(",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.ip }),
+						")"
+					] }) : null,
+					" ",
+					"→ ⋯ → Edit ACL tags → add ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
+					"."
+				]
+			}),
+			m?.duplicate_of && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint sl-note",
+				children: [
+					"Tailscale named this device ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.dns.split(".")[0] }),
+					" because another device is already ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.duplicate_of }),
+					" — match it by its IP."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.machines,
+				children: "Open Machines"
+			})
+		] });
+		case "define": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"On the Services page, add a service named ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: name }),
+				" (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+				") with port ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
+				"."
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+			href: admin?.services,
+			children: "Open Services"
+		})] });
+		case "policy": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Add to your access policy so every ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
+					" device is approved as a host of",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+					" without a click:"
+				]
+			}),
+			shared.policy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
+				text: shared.policy,
+				what: "Policy"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Using a custom policy rather than the default allow-all? Phones must also be allowed to reach ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+					" on ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
+					":"
+				]
+			}),
+			shared.grants && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
+				text: shared.grants,
+				what: "Grant"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.policy,
+				children: "Open Access controls"
+			})
+		] });
+		case "approval":
+			if (step.state === "ok") return null;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Approve this device under Services → ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+					", or rely on the policy above. Re-check re-advertises this device, which is what the auto-approver reacts to."
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.services,
+				children: "Open Services"
+			})] });
+		case "phone": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [qrSvg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "qr-card sl-qr",
+			dangerouslySetInnerHTML: { __html: qrSvg }
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"With Tailscale on, open",
+				" ",
+				shared.url ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+					href: shared.url,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: shared.url
+				}) : "the shared URL",
+				" ",
+				"on your phone. If it times out, Re-check here first."
+			]
+		})] });
+		default: return null;
+	}
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx

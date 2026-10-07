@@ -521,6 +521,10 @@ async def lifespan(app: FastAPI):
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
     _register_task(_remote.instances_loop())
+    # Shared phone link: keep the Tailscale Service advertisement applied —
+    # re-serve when its serve config vanished or this device's tags changed
+    # (a no-op tick while general.shared_link is off).
+    _register_task(_shared_link.recheck_loop(_server_port))
     # Peer links: a no-op unless enabled in settings (no identity, no socket).
     try:
         await _peer_service().start()
@@ -6075,6 +6079,18 @@ def get_mobile() -> JSONResponse:
         return JSONResponse(
             {"urls": [], "qr_svg": None, "token": "", "note": "unavailable"}
         )
+
+
+@app.post("/api/mobile/shared/recheck")
+def recheck_shared_link() -> JSONResponse:
+    """Settings → Mobile's Re-check: re-read the shared link's setup from
+    Tailscale, re-apply what drifted (and re-advertise a tagged host that
+    still isn't approved), then return the refreshed ``/api/mobile`` payload."""
+    try:
+        _shared_link.reconcile(_server_port(), nudge=True)
+    except Exception:  # noqa: BLE001 — best-effort, like the module itself
+        pass
+    return get_mobile()
 
 
 @app.post("/api/server/restart")

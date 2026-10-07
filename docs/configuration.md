@@ -728,7 +728,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   Tailscale admin console, and host approval (an `autoApprovers.services`
   rule does it automatically). On Linux, `tailscale serve` also needs
   `sudo tailscale set --operator=$USER` once. Applied on save and at every
-  boot. See [web-ui.md](web-ui.md) (Settings → Mobile).
+  boot. While it is on, it is re-checked every 60 seconds, and re-applied
+  when the live serve config, the port or this device's tags have drifted.
+  Settings → Mobile shows a setup checklist with each step's live status
+  and its fix. See [web-ui.md](web-ui.md) (Settings → Mobile).
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

@@ -30,8 +30,33 @@ token (see :mod:`backend.web.core.auth`).
 What Tailscale requires, and this module cannot do for you: a service host
 must be a **tagged** device, the service must be **defined** in the admin
 console (or the policy file), and each host must be **approved** for it
-(``autoApprovers.services`` does that automatically). :func:`status` says
-which of those it can see is missing.
+(``autoApprovers.services`` does that automatically). :func:`status` turns
+what this device can see of those into a setup checklist (``steps``), each
+step ``ok`` / ``fail`` / ``unknown`` with a one-line reason.
+
+Reading approval honestly. Everything comes from ``tailscale status --json``
+(``Self``), and the signals are distinct:
+
+* ``CapMap["services/<name>"]`` (and the ``ExtraRecords`` DNS entry for
+  ``<name>.<tailnet>``) — the service **exists** and this device can see it.
+  It is there while the device advertises and is *not yet* approved, so it is
+  NOT approval;
+* ``CapMap["service-host"]`` = ``[{"svc:<name>": [VIPs]}]`` — the control
+  plane has made this device a **host**, and these are the VIPs to answer on;
+* ``AllowedIPs`` / ``PrimaryRoutes`` holding those VIPs — the service's
+  traffic is actually **routed** here.
+
+Only the last two together are "approved". When ``status`` can't be read (or
+predates ``CapMap``) the answer is ``None`` — unknown — never a guess.
+
+Keeping it applied. Tailscale's auto-approver only looks at an advertisement
+when it is made, so one made before the device was tagged stays pending; and
+``tailscale serve`` config can be cleared behind our back. :func:`reconcile`
+re-applies when the live ``tailscale serve status --json`` no longer carries
+our handler or this device's tags changed since the last apply (the server
+runs it every :data:`RECHECK_INTERVAL` seconds while the setting is on), and
+on demand from Settings → Mobile's Re-check, which also re-advertises a
+tagged-but-unapproved host to give the auto-approver another look.
 
 Everything here is best-effort and never raises: no ``tailscale`` binary, no
 permission to change serve config, or no tailnet just leave the link off with
@@ -40,12 +65,14 @@ the reason in ``error``.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
 import re
 import shutil
 import subprocess
 import threading
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from backend.web.core import auth as _auth
 
@@ -57,10 +84,26 @@ _NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 _TIMEOUT = 15
 
+#: Seconds between background :func:`reconcile` passes while the link is on.
+RECHECK_INTERVAL = 60.0
+
+#: Where the checklist points (the admin console pages each fix lives on).
+ADMIN_MACHINES = "https://login.tailscale.com/admin/machines"
+ADMIN_SERVICES = "https://login.tailscale.com/admin/services"
+ADMIN_POLICY = "https://login.tailscale.com/admin/acls/file"
+
+#: The tag the checklist suggests when this device has none yet.
+DEFAULT_TAG = "tag:mindflock"
+
+OPERATOR_FIX = "sudo tailscale set --operator=$USER"
+
 _LOCK = threading.RLock()  # apply() reports status() while holding it
 
 #: What this process last did: the service name it advertised (``""`` for
-#: none), the hostname that resolves to it, and why the last attempt failed.
+#: none), the hostname that resolves to it, why the last attempt failed (and
+#: what kind of failure: ``"operator"`` / ``"tag"`` / ``"missing"`` /
+#: ``"other"``), the port it pointed the service at, and this device's tags
+#: when it did (a change re-applies — see :func:`reconcile`).
 _STATE = {"name": "", "host": "", "error": ""}
 
 
@@ -103,22 +146,34 @@ def _run(args: list) -> Tuple[int, str]:
     return cp.returncode, cp.stdout.decode("utf-8", "replace").strip()
 
 
-def _tailscale_status() -> dict:
+def _json_cmd(args: list) -> Optional[dict]:
+    """A ``tailscale … --json`` command's object; None when it couldn't be run,
+    failed, or didn't print JSON (so callers can tell "unknown" from "empty")."""
     if shutil.which("tailscale") is None:
-        return {}
+        return None
     try:
         cp = subprocess.run(
-            ["tailscale", "status", "--json"],
+            args,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=5,
         )
         if cp.returncode != 0:
-            return {}
-        data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
+            return None
+        data = json.loads(cp.stdout.decode("utf-8", "replace").strip() or "{}")
     except (subprocess.TimeoutExpired, OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tailscale_status() -> dict:
+    """``tailscale status --json`` (``{}`` when unavailable)."""
+    return _json_cmd(["tailscale", "status", "--json"]) or {}
+
+
+def _serve_status() -> Optional[dict]:
+    """``tailscale serve status --json`` (None when it can't be read)."""
+    return _json_cmd(["tailscale", "serve", "status", "--json"])
 
 
 def _suffix(data: dict) -> str:
@@ -129,48 +184,224 @@ def _suffix(data: dict) -> str:
     return str(suffix or "").strip(".").lower()
 
 
-def _tagged(data: dict) -> bool:
-    return bool((data.get("Self") or {}).get("Tags"))
+def _self(data: dict) -> dict:
+    node = data.get("Self") if isinstance(data, dict) else None
+    return node if isinstance(node, dict) else {}
 
 
-def _approved(data: dict, name: str) -> bool:
+def _tags(data: dict) -> Optional[list]:
+    """This device's ACL tags; None when ``status`` couldn't be read."""
+    node = _self(data)
+    if not node:
+        return None
+    tags = node.get("Tags") or []
+    return [str(t) for t in tags] if isinstance(tags, list) else []
+
+
+def _tagged(data: dict) -> Optional[bool]:
+    tags = _tags(data)
+    return None if tags is None else bool(tags)
+
+
+def _capmap(data: dict) -> Optional[dict]:
+    """This node's capability map; None when ``status`` doesn't carry one
+    (unreadable, or a client that predates ``CapMap`` in ``status --json``)."""
+    node = _self(data)
+    if "CapMap" not in node:
+        return None
+    capmap = node.get("CapMap")
+    return capmap if isinstance(capmap, dict) else {}
+
+
+def _host_vips(data: dict, name: str) -> Optional[list]:
+    """The VIPs the control plane told this node to answer ``svc:<name>`` on.
+
+    That is the ``service-host`` capability — ``[{"svc:<name>": [ips]}]``
+    (``tailcfg.ServiceIPMappings``) — and it is what approval looks like from
+    this end. ``None`` when this node is not (or not yet) a host, or when the
+    capability map can't be read; :func:`_approved` tells those apart.
+    """
+    capmap = _capmap(data) or {}
+    entries = capmap.get("service-host")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and service_id(name) in entry:
+            vips = entry.get(service_id(name))
+            return [str(v) for v in vips] if isinstance(vips, list) else []
+    return None
+
+
+def _approved(data: dict, name: str) -> Optional[bool]:
     """Whether the control plane has made this node a host of ``svc:<name>``.
 
-    An approved host is told which VIPs to listen on through its node
-    capabilities (a ``{"svc:<name>": [ips]}`` map — ``tailcfg.ServiceIPMappings``),
-    so the service name showing up there is the approval, seen from this end.
-    Searched for as a key rather than under one capability name, so a renamed
-    capability reads as "not seen yet" instead of breaking.
+    Only the ``service-host`` capability counts. ``services/<name>`` — which a
+    node gets as soon as it advertises, approved or not — only says the
+    service exists (:func:`_defined`); reading it as approval is how this used
+    to report ✓ while the phone timed out. ``None`` = can't tell.
     """
-    capmap = (data.get("Self") or {}).get("CapMap") or {}
-    try:
-        blob = json.dumps(capmap)
-    except (TypeError, ValueError):
+    if _capmap(data) is None:
+        return None
+    return _host_vips(data, name) is not None
+
+
+def _routed(data: dict, name: str) -> Optional[bool]:
+    """Whether the service's VIPs are routed to this node (in its
+    ``AllowedIPs``) — the last step before traffic actually arrives here.
+    ``None`` when there are no VIPs to check or no route table to check them
+    against."""
+    vips = _host_vips(data, name)
+    if not vips:
+        return None
+    allowed = _self(data).get("AllowedIPs")
+    if not isinstance(allowed, list):
+        return None
+    nets = []
+    for a in allowed:
+        try:
+            nets.append(ipaddress.ip_network(str(a), strict=False))
+        except ValueError:
+            continue
+    for vip in vips:
+        try:
+            ip = ipaddress.ip_address(vip)
+        except ValueError:
+            return None
+        if not any(ip.version == n.version and ip in n for n in nets):
+            return False
+    return True
+
+
+def _defined(data: dict, name: str) -> Optional[bool]:
+    """True when this node can see ``svc:<name>``: its ``services/<name>``
+    capability, a host mapping, or the service's MagicDNS record. Never False
+    — a device that doesn't advertise a service isn't told about it, so not
+    seeing it here is no proof it's undefined."""
+    capmap = _capmap(data) or {}
+    if ("services/" + name) in capmap or _host_vips(data, name) is not None:
+        return True
+    suffix = _suffix(data)
+    if suffix:
+        want = "%s.%s" % (name, suffix)
+        for rec in data.get("ExtraRecords") or []:
+            if isinstance(rec, dict):
+                if str(rec.get("Name") or "").rstrip(".").lower() == want:
+                    return True
+    return None
+
+
+def _serve_live(serve: Optional[dict], name: str, port) -> Optional[bool]:
+    """Whether the live serve config still carries ``svc:<name>`` on
+    :data:`SERVICE_PORT` with HTTPS, proxying to ``port``. None = unreadable."""
+    if serve is None or not port:
+        return None
+    svc = (serve.get("Services") or {}).get(service_id(name))
+    if not isinstance(svc, dict):
         return False
-    return ('"%s"' % service_id(name)) in blob
+    tcp = (svc.get("TCP") or {}).get(str(SERVICE_PORT))
+    if not (isinstance(tcp, dict) and tcp.get("HTTPS")):
+        return False
+    targets = {
+        "%s:%d" % (h, int(port)) for h in ("http://127.0.0.1", "http://localhost")
+    }
+    for hostport, web in (svc.get("Web") or {}).items():
+        if not str(hostport).endswith(":%d" % SERVICE_PORT) or not isinstance(
+            web, dict
+        ):
+            continue
+        root = (web.get("Handlers") or {}).get("/")
+        if isinstance(root, dict) and str(root.get("Proxy") or "").rstrip("/") in (
+            targets
+        ):
+            return True
+    return False
 
 
-def _explain(output: str) -> str:
-    """Turn ``tailscale serve``'s refusal into the fix, where we know it."""
+def _machine(data: dict) -> dict:
+    """How to find this device in the admin console: its MagicDNS name, the
+    OS hostname, its Tailscale IPv4, and — when Tailscale de-duplicated the
+    name (``box`` → ``box-1``, because another device already has ``box``) —
+    the name it is NOT, which is the one people go looking for."""
+    node = _self(data)
+    dns = str(node.get("DNSName") or "").rstrip(".").lower()
+    ip = ""
+    for a in node.get("TailscaleIPs") or []:
+        if ":" not in str(a):
+            ip = str(a)
+            break
+    label = dns.split(".", 1)[0]
+    duplicate_of = ""
+    m = re.match(r"^(.+)-\d+$", label)
+    if m:
+        for peer in (data.get("Peer") or {}).values():
+            if not isinstance(peer, dict):
+                continue
+            if str(peer.get("DNSName") or "").split(".", 1)[0].lower() == m.group(1):
+                duplicate_of = m.group(1)
+                break
+    return {
+        "hostname": str(node.get("HostName") or ""),
+        "dns": dns,
+        "ip": ip,
+        "duplicate_of": duplicate_of,
+    }
+
+
+def _host_tag(tags: list) -> str:
+    """The tag the policy snippet should name: this device's own (preferring
+    :data:`DEFAULT_TAG`), else the default."""
+    if DEFAULT_TAG in tags:
+        return DEFAULT_TAG
+    return tags[0] if tags else DEFAULT_TAG
+
+
+def policy_snippet(name: str, tag: str) -> str:
+    """The policy-file lines that let ``tag`` host ``svc:<name>`` without a
+    click: who may apply the tag, and the services auto-approver."""
+    return (
+        '"tagOwners": {\n'
+        '  "%(tag)s": ["autogroup:admin"]\n'
+        "},\n"
+        '"autoApprovers": {\n'
+        '  "services": {\n'
+        '    "%(svc)s": ["%(tag)s"]\n'
+        "  }\n"
+        "}"
+    ) % {"tag": tag, "svc": service_id(name)}
+
+
+def grants_snippet(name: str) -> str:
+    """The grant clients need under a custom policy to reach the service (the
+    default allow-all policy already covers it)."""
+    return (
+        '"grants": [\n'
+        '  {"src": ["autogroup:member"], "dst": ["%s"], "ip": ["tcp:%d"]}\n'
+        "]"
+    ) % (service_id(name), SERVICE_PORT)
+
+
+def _explain(output: str) -> Tuple[str, str]:
+    """``(kind, message)`` for ``tailscale serve``'s refusal — the fix, where
+    we know it. ``kind`` is ``"operator"``, ``"tag"`` or ``"other"``."""
     low = output.lower()
     if "access denied" in low or "permission" in low or "operator" in low:
-        return (
+        return "operator", (
             "Tailscale refused to change serve config for this user. Run "
-            "`sudo tailscale set --operator=$USER` once, then save again."
+            "`%s` once, then press Re-check." % OPERATOR_FIX
         )
     if "tag" in low and ("service" in low or "host" in low):
-        return (
+        return "tag", (
             "Only tagged devices can host a Tailscale Service. Tag this device "
-            "in the Tailscale admin console, then save again."
+            "in the Tailscale admin console, then press Re-check."
         )
-    return output.splitlines()[-1] if output else "tailscale serve failed"
+    return "other", (output.splitlines()[-1] if output else "tailscale serve failed")
 
 
 def _withdraw_locked(name: str) -> None:
     _run(["tailscale", "serve", "clear", service_id(name)])
     if _STATE["host"]:
         _auth.forget_fronted_host(_STATE["host"])
-    _STATE.update(name="", host="", error="")
+    _STATE.update(name="", host="", error="", kind="", port=0, tags=None)
 
 
 def apply(port: int) -> dict:
@@ -179,18 +410,21 @@ def apply(port: int) -> dict:
     Clears a previously advertised name that is no longer wanted, then
     (re)configures the wanted one: ``clear`` first so a changed port or a
     drained service comes back as a fresh config, then ``serve`` (which
-    configures and advertises in one step). Blocking — call it off the event
-    loop. Returns :func:`status`.
+    configures and advertises in one step — and is what the auto-approver
+    reacts to). Unconditional: :func:`reconcile` is the "only if needed" form.
+    Blocking — call it off the event loop. Returns :func:`status`.
     """
     want = configured_name()
     with _LOCK:
         if _STATE["name"] and _STATE["name"] != want:
             _withdraw_locked(_STATE["name"])
         if not want:
-            _STATE["error"] = ""
+            _STATE.update(error="", kind="")
             return status()
         if shutil.which("tailscale") is None:
-            _STATE.update(name="", host="", error="Tailscale is not installed.")
+            _STATE.update(
+                name="", host="", error="Tailscale is not installed.", kind="missing"
+            )
             return status()
         svc = service_id(want)
         _run(["tailscale", "serve", "clear", svc])
@@ -206,14 +440,68 @@ def apply(port: int) -> dict:
             ]
         )
         if rc != 0:
-            _STATE.update(name="", host="", error=_explain(out))
+            kind, error = _explain(out)
+            _STATE.update(name="", host="", error=error, kind=kind)
             return status()
-        suffix = _suffix(_tailscale_status())
+        data = _tailscale_status()
+        suffix = _suffix(data)
         host = "%s.%s" % (want, suffix) if suffix else ""
         if host:
             _auth.allow_fronted_host(host)
-        _STATE.update(name=want, host=host, error="")
+        _STATE.update(
+            name=want, host=host, error="", kind="", port=port, tags=_tags(data)
+        )
     return status()
+
+
+def reconcile(port: int, *, nudge: bool = False) -> dict:
+    """:func:`apply`, but only when Tailscale has drifted from what we set up.
+
+    Re-applies when the setting and what this process advertises disagree
+    (a changed name, or a last attempt that failed — so fixing the cause and
+    waiting is enough), when the live ``tailscale serve status --json`` no
+    longer carries our handler (serve config cleared behind our back), or when
+    this device's tags changed since the last apply (the auto-approver only
+    looks at an advertisement when it is made, so one made before tagging
+    stays pending until it is made again). ``nudge`` (the Re-check button,
+    a re-save) also re-advertises a tagged host that still isn't approved.
+    Otherwise touches nothing. Blocking; returns :func:`status`.
+    """
+    want = configured_name()
+    with _LOCK:
+        if not want and not _STATE["name"]:
+            return status()
+        if _STATE["name"] != want or _STATE.get("port") != port:
+            return apply(port)
+        if _serve_live(_serve_status(), want, port) is False:
+            return apply(port)
+        data = _tailscale_status()
+        tags = _tags(data)
+        if tags is not None and tags != _STATE.get("tags"):
+            return apply(port)
+        if nudge and tags and _approved(data, want) is not True:
+            return apply(port)
+    return status()
+
+
+async def recheck_loop(port_fn: Callable[[], int]) -> None:
+    """Run :func:`reconcile` every :data:`RECHECK_INTERVAL` seconds while the
+    shared link is on (started by the server lifespan; startup itself already
+    applied, so the first pass waits one interval). Never dies."""
+    while True:
+        await asyncio.sleep(RECHECK_INTERVAL)
+        try:
+            if configured_name() or _STATE["name"]:
+                before = advertised_url()
+                await asyncio.to_thread(reconcile, port_fn())
+                if advertised_url() != before:
+                    # Notification taps point at the phone URL — it changed
+                    # (e.g. the link came up once a fixed cause let it).
+                    from backend.web.core import mobile_announce
+
+                    await asyncio.to_thread(mobile_announce.refresh_url)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
 
 
 def withdraw() -> None:
@@ -235,14 +523,174 @@ def advertised_url() -> Optional[str]:
     return "https://%s/m" % host if host else None
 
 
+def _step(sid: str, title: str, state: str, reason: str) -> dict:
+    return {"id": sid, "title": title, "state": state, "reason": reason}
+
+
+def _steps(st: dict) -> list:
+    """The setup checklist Settings → Mobile renders: one step per thing a
+    host needs, each ``ok`` / ``fail`` / ``unknown`` with a one-line reason.
+    Built from :func:`status`'s facts only; the UI adds each step's fix."""
+    svc = st["service"]
+    m = st["machine"]
+    who = m["dns"] or m["hostname"] or "This device"
+    kind, error = st["error_kind"], st["error"]
+    advertised, tagged = st["advertised"], st["tagged"]
+    approved, routed = st["approved"], st["routed"]
+
+    if kind == "missing":
+        op = _step("operator", "Tailscale serve access", "fail", error)
+    elif kind == "operator":
+        op = _step(
+            "operator",
+            "Tailscale serve access",
+            "fail",
+            "Tailscale won't let this user change serve config — run the "
+            "command below once.",
+        )
+    elif advertised:
+        op = _step(
+            "operator",
+            "Tailscale serve access",
+            "ok",
+            "Serve config is set: %s → 127.0.0.1:%s." % (svc, st.get("port") or "?"),
+        )
+    elif error:
+        op = _step("operator", "Tailscale serve access", "unknown", error)
+    else:
+        op = _step("operator", "Tailscale serve access", "unknown", "Not applied yet.")
+
+    if tagged:
+        tag = _step(
+            "tag",
+            "Tag this device",
+            "ok",
+            "%s is tagged %s." % (who, ", ".join(st["tags"])),
+        )
+    elif tagged is False:
+        tag = _step(
+            "tag",
+            "Tag this device",
+            "fail",
+            "%s has no tag — only tagged devices can host a service." % who,
+        )
+    else:
+        tag = _step(
+            "tag",
+            "Tag this device",
+            "unknown",
+            "Couldn't read this device's tags from `tailscale status`.",
+        )
+
+    if st["defined"]:
+        define = _step(
+            "define",
+            "Define the service",
+            "ok",
+            "%s exists — this device can see it." % svc,
+        )
+    else:
+        define = _step(
+            "define",
+            "Define the service",
+            "unknown",
+            "This device can't see %s yet; define it with port tcp:%d if you "
+            "haven't." % (svc, SERVICE_PORT),
+        )
+
+    if approved:
+        policy = _step(
+            "policy",
+            "Approve hosts automatically",
+            "ok",
+            "This device has been approved for %s." % svc,
+        )
+    else:
+        policy = _step(
+            "policy",
+            "Approve hosts automatically",
+            "unknown",
+            "The policy file can't be read from here; add these lines once per "
+            "tailnet (or approve each host on the Services page).",
+        )
+
+    if approved is None:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "unknown",
+            "Couldn't read this device's capabilities from `tailscale status` "
+            "(an older Tailscale?).",
+        )
+    elif approved and routed:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "ok",
+            "Tailscale made this device a host of %s and routes its address "
+            "here." % svc,
+        )
+    elif approved and routed is False:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "fail",
+            "Approved, but %s's address isn't routed to this device yet — "
+            "Re-check in a minute." % svc,
+        )
+    elif approved:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "unknown",
+            "Approved, but couldn't confirm %s's address routes here." % svc,
+        )
+    elif not advertised:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "fail",
+            "This device isn't advertising %s (see step 1)." % svc,
+        )
+    elif not tagged:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "fail",
+            "Advertised, but Tailscale won't approve an untagged host (step 2).",
+        )
+    else:
+        appr = _step(
+            "approval",
+            "Approved as a host",
+            "fail",
+            "Advertised, but Tailscale hasn't made this device a host yet — "
+            "approve it on the Services page, or add the auto-approver and "
+            "press Re-check.",
+        )
+
+    if advertised and approved and routed:
+        reason = (
+            "Everything this device can check passes — scan the QR on a phone "
+            "that is on Tailscale."
+        )
+    else:
+        reason = "The link won't answer from here until the steps above pass."
+    phone = _step("phone", "Test from your phone", "unknown", reason)
+    return [op, tag, define, policy, appr, phone]
+
+
 def status() -> dict:
     """The shared link as Settings → Mobile shows it.
 
-    ``{enabled, name, service, url, advertised, approved, tagged, error}`` —
-    ``enabled`` is the setting; ``advertised`` is whether this device's
-    ``tailscale serve`` for it is up; ``approved`` is whether Tailscale has
-    accepted this device as a host (only visible once it has); ``tagged``
-    whether this device has the tag-based identity a host needs.
+    ``enabled`` is the setting; ``advertised`` whether this device's
+    ``tailscale serve`` for it is up (checked against the live serve config);
+    ``tagged`` whether it has the tag a host needs; ``defined`` whether the
+    service is visible from here; ``approved`` whether Tailscale made this
+    device a host and ``routed`` whether the service's address reaches it.
+    The tri-state ones are ``None`` when this device can't tell — shown as
+    "unknown", never as ✓. ``steps`` is the setup checklist built from them;
+    ``machine``, ``tag``, ``policy`` and ``grants`` fill in its fixes.
     """
     name = configured_name()
     if not name:
@@ -250,15 +698,38 @@ def status() -> dict:
     data = _tailscale_status()
     suffix = _suffix(data)
     with _LOCK:
-        advertised = _STATE["name"] == name
+        mine = _STATE["name"] == name
         error = _STATE["error"]
-    return {
+        kind = _STATE.get("kind", "") if error else ""
+        port = _STATE.get("port") if mine else None
+    advertised = mine and _serve_live(_serve_status(), name, port) is not False
+    tags = _tags(data) or []
+    tag = _host_tag(tags)
+    approved = _approved(data, name)
+    st = {
         "enabled": True,
         "name": name,
         "service": service_id(name),
         "url": "https://%s.%s/m" % (name, suffix) if suffix else "",
         "advertised": advertised,
-        "approved": _approved(data, name),
+        "port": port,
         "tagged": _tagged(data),
+        "tags": tags,
+        "tag": tag,
+        "defined": _defined(data, name),
+        "approved": approved,
+        "routed": _routed(data, name) if approved else None,
+        "machine": _machine(data),
         "error": error,
+        "error_kind": kind,
+        "operator_fix": OPERATOR_FIX,
+        "policy": policy_snippet(name, tag),
+        "grants": grants_snippet(name),
+        "admin": {
+            "machines": ADMIN_MACHINES,
+            "services": ADMIN_SERVICES,
+            "policy": ADMIN_POLICY,
+        },
     }
+    st["steps"] = _steps(st)
+    return st
