@@ -540,3 +540,17 @@ html, body {
 }
 .key:active { background: var(--border); }
 .key.sticky.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* "Pick the folder myself" — the way out of a slow plan read. A plain link-ish
+   button under the box, so it never competes with Continue. */
+.new-skip {
+  display: block;
+  margin: 8px 0 0;
+  padding: 6px 0;
+  background: none;
+  border: none;
+  color: var(--accent, #6aa9ff);
+  font: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+}

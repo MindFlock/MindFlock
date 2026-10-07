@@ -678,3 +678,24 @@ def test_mobile_review_screen_names_the_device():
     assert "newConfirmWhere.textContent" in show
     assert 'id="new-confirm-where"' in _html()
     assert 'id="new-folder-label"' in _html()
+
+
+def test_a_slow_read_offers_a_way_out():
+    # "Still reading…" could last the target's whole model turn (and, on a Mac
+    # waiting on a privacy prompt, forever). After NEW_SLOW_MS the sheet offers
+    # the folder list directly; taking it abandons the read via planSeq so a
+    # late answer can't overwrite the folder the user is picking.
+    html = client.get("/m").text
+    js = _js()
+    assert 'id="new-skip"' in html
+    assert 'class="new-skip hidden"' in html  # hidden until the read is slow
+    assert 'newSkipBtn.classList.remove("hidden")' in js
+    assert 'newSkipBtn.addEventListener("click", skipPlan)' in js
+    skip = js[js.index("function skipPlan()") :]
+    skip = skip[: skip.index("\n  }\n")]
+    assert "++planSeq" in skip
+    assert 'loadFolders("", 1)' in skip
+    # And it goes away with the busy state, whichever way the read ends.
+    busy = js[js.index("function setPlanBusy(") :]
+    busy = busy[: busy.index("\n  }\n")]
+    assert 'if (!on) newSkipBtn.classList.add("hidden")' in busy

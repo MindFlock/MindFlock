@@ -1310,3 +1310,47 @@ def test_the_route_answers_each_caller_from_its_own_walk(route_home, monkeypatch
     # folder that was on a menu built for them.
     for body, folders in zip(results, menus):
         assert body.get("repo_path") in folders
+
+
+def test_a_folder_menu_stuck_in_the_kernel_does_not_hang_the_plan(monkeypatch):
+    # A stat blocked on a macOS privacy prompt (or a dead mount) can't be
+    # interrupted by any deadline check between calls — the phone sat on
+    # "Reading…" until the request died. The menu is abandoned after its
+    # budget and the plan still answers, flagged as cut short.
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def stuck(*a, **k):
+        release.wait(30)
+        return [], False
+
+    monkeypatch.setattr(sp, "candidates_for", stuck)
+    monkeypatch.setattr(sp, "CANDIDATES_BUDGET", 0.2)
+    seen = {}
+
+    def fake_resolve(answer, candidates, **kw):
+        seen.update(candidates=candidates, truncated=kw["truncated"])
+        return {"ok": True}
+
+    monkeypatch.setattr(sp, "resolve", fake_resolve)
+    monkeypatch.setattr(sp, "parse_answer", lambda out: {})
+    _stub_run(monkeypatch, _block())
+    started = time.monotonic()
+    try:
+        out = sp.plan("fix the readme", program="claude", home="/tmp")
+    finally:
+        release.set()
+    assert out == {"ok": True}
+    assert time.monotonic() - started < 5
+    assert seen == {"candidates": [], "truncated": True}
+
+
+def test_a_folder_menu_error_still_surfaces(monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("walk broke")
+
+    monkeypatch.setattr(sp, "candidates_for", broken)
+    with pytest.raises(RuntimeError, match="walk broke"):
+        sp._candidates_within("x", recent_paths=(), cwd=None, home="/tmp")
