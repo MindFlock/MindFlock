@@ -256,6 +256,21 @@ html, body {
   outline: none;
   border-color: var(--accent);
 }
+/* The "Run on" device picker in step 1. A native select (the phone's own
+   wheel/list does the picking), dressed like the text fields around it and at
+   the same 16px iOS zoom floor. */
+#new-device {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 16px;
+  font-family: inherit;
+}
+#new-device:focus { outline: none; border-color: var(--accent); }
+#new-device[disabled] { opacity: 0.6; }
 /* A row that is a button: the folder line in step 2, and every row of the
    folder list. Left-aligned because what matters is the start of the name, not
    its middle. */

@@ -3169,6 +3169,20 @@ create posts exactly five keys (`title`, `repo_path`, `prompt`, `in_place`,
 `init_repo`) and the session that comes up is the one the desktop would have
 made with nobody touching Advanced.
 
+**Which device.** When another MindFlock device on the tailnet is connected
+(paired, remote control on, answering — the same `connected` rows of
+`GET /api/devices` the desktop dialog's device select offers), screen 1 grows a
+**Run on** select: this device, then each connected device by hostname (the
+MagicDNS key when two share a hostname). With no second device it stays hidden.
+It sits on screen 1, before Continue, because the plan is read *on* the chosen
+device: the plan, the folder list and the create all go through
+`/api/devices/<device>/fwd/…`, so the folders on offer are that device's and the
+session is born there. The review screen then labels the folder *Folder on* the device's name, the
+new-folder tick names the device the folder is left on, and the session is
+selected under its namespaced `<device>::<title>` once it lands. The pick is
+kept across openings of the sheet, and falls back to this device if the picked
+one stops being connected.
+
 **Confirming a new folder.** When the plan proposes a folder that does not exist
 yet (`folder_exists: false`, which happens only for the plan route's
 `new:<name>` answer), the review screen shows a checkbox naming that folder,

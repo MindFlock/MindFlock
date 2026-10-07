@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Mobile: choose which device a new session runs on.** When another
+  MindFlock device on your tailnet is connected, the phone's New Session sheet
+  shows a **Run on** picker. The plan, the folder list and the create are all
+  answered by the chosen device, so the session starts there.
 - **Peer links: pair-code with another MindFlock user.** Pair two instances
   with a one-time code (verify the safety number), then each side shares ONE
   folder: an agent runs in a shallow clone of it inside a bubblewrap sandbox

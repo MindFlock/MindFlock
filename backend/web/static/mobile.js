@@ -864,6 +864,10 @@
   var newListEl = document.getElementById("new-folder-list");
   var newFoldersMsg = document.getElementById("new-folders-msg");
   var newErrEl = document.getElementById("new-error");
+  var newDeviceRow = document.getElementById("new-device-row");
+  var newDeviceEl = document.getElementById("new-device");
+  var newFolderLabel = document.getElementById("new-folder-label");
+  var newConfirmWhere = document.getElementById("new-confirm-where");
 
   var newPlan = null;          // the answer being reviewed (model's or hand-picked)
   var planSeq = 0;             // cancels an in-flight plan; see closeNewSheet
@@ -879,6 +883,21 @@
   var suggestHome = "";        // $HOME as /api/repos/suggest reported it
   var pendingNew = "";         // title we are waiting to see in the session list
   var pendingNewUntil = 0;
+  // WHERE the session runs. "" is this device; anything else is the MagicDNS
+  // key of a connected tailnet device, reached through the server's
+  // /api/devices/<device>/fwd/ allow-list (backend/web/core/remote.py) — the
+  // plan, the folder list and the create itself are all answered over THERE,
+  // so the folders on offer are that device's and the session is born on it.
+  // devicePick is the user's choice and survives the sheet closing (the same
+  // way the desktop dialog keeps it), so a phone that always starts work on
+  // the desktop tower does not have to say so every time.
+  var devicePick = "";
+  var newDevices = [];         // startable devices: connected, from GET /api/devices
+  var selfHost = "";           // this server's own hostname, for the "(this device)" row
+  // The device the CURRENT plan, folder list and create aim at. Captured when
+  // Continue is pressed, not read off the select later: the folder list and the
+  // review screen both have to talk about the device the plan was read on.
+  var newTarget = "";
 
   function newError(msg) {
     newErrEl.textContent = msg || "";
@@ -890,6 +909,80 @@
     newStep1.classList.toggle("hidden", which !== 1);
     newStep2.classList.toggle("hidden", which !== 2);
     newFolders.classList.toggle("hidden", which !== 3);
+  }
+
+  // The path that reaches `path` on `device` ("" = here, unchanged). Mirrors
+  // frontend/src/lib/devices.ts devicePath.
+  function devicePath(device, path) {
+    return device ? "/api/devices/" + encodeURIComponent(device) + "/fwd" + path : path;
+  }
+
+  // A session's title as THIS server lists it: another device's sessions are
+  // namespaced <device>::<title> in GET /api/instances.
+  function deviceTitle(device, title) {
+    return device ? device + "::" + title : title;
+  }
+
+  // What to call a device: its hostname, unless that is ambiguous (another
+  // device, or this one, shares it) — then the unique MagicDNS key. Mirrors
+  // the desktop's deviceLabel.
+  function deviceLabel(key) {
+    if (!key) return selfHost || "this device";
+    var d = null, clash = 0;
+    for (var i = 0; i < newDevices.length; i++) {
+      if (newDevices[i].device === key) d = newDevices[i];
+    }
+    if (!d || !d.host) return key;
+    for (var j = 0; j < newDevices.length; j++) {
+      if ((newDevices[j].host || "") === d.host) clash += 1;
+    }
+    return (clash > 1 || d.host === selfHost) ? key : d.host;
+  }
+
+  // The device the select is pointing at right now, "" whenever the pick is no
+  // longer startable (it went offline, or was disconnected): a session aimed at
+  // a device that can't answer would only fail at Start.
+  function pickedDevice() {
+    for (var i = 0; i < newDevices.length; i++) {
+      if (newDevices[i].device === devicePick) return devicePick;
+    }
+    return "";
+  }
+
+  function renderDevices() {
+    newDeviceEl.innerHTML = "";
+    var here = document.createElement("option");
+    here.value = "";
+    here.textContent = (selfHost || "This device") + " (this device)";
+    newDeviceEl.appendChild(here);
+    for (var i = 0; i < newDevices.length; i++) {
+      var o = document.createElement("option");
+      o.value = newDevices[i].device;
+      // textContent: hostnames come off the network.
+      o.textContent = deviceLabel(newDevices[i].device);
+      newDeviceEl.appendChild(o);
+    }
+    newDeviceEl.value = pickedDevice();
+    // Only once a second device is there to pick.
+    newDeviceRow.classList.toggle("hidden", !newDevices.length);
+  }
+
+  // Refreshed on every opening — devices come and go (a laptop lid closes) and
+  // the list is a cheap in-memory read on the server. Failure just leaves the
+  // picker hidden, which is the single-device sheet this page always had.
+  function loadDevices() {
+    fetch("/api/devices")
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        selfHost = (j && j.self && j.self.host) || "";
+        var all = (j && j.devices) || [];
+        newDevices = [];
+        for (var i = 0; i < all.length; i++) {
+          if (all[i] && all[i].connected && all[i].device) newDevices.push(all[i]);
+        }
+        renderDevices();
+      })
+      .catch(function () { newDevices = []; renderDevices(); });
   }
 
   function openNewSheet() {
@@ -904,6 +997,8 @@
     // "Starting…" disabled forever (startSession returns at
     // `if (startBusy) return;`) and no way out but reloading the page.
     resetStartBtn();
+    renderDevices();
+    loadDevices();
     newSheet.classList.remove("hidden");
     newStep(1);
     newTextEl.focus();
@@ -933,6 +1028,9 @@
   function setPlanBusy(on, label) {
     planBusy = on;
     newGoBtn.disabled = on;
+    // The plan in flight is being read on the device picked when Continue was
+    // pressed; a select that still moved would be pointing somewhere else.
+    newDeviceEl.disabled = on;
     newGoBtn.textContent = label;
   }
 
@@ -999,6 +1097,8 @@
 
   function showPlan(p) {
     newPlan = p;
+    newFolderLabel.textContent = p.device ? "Folder on " + deviceLabel(p.device) : "Folder";
+    newConfirmWhere.textContent = p.device ? deviceLabel(p.device) : "this machine";
     newTitleEl.value = p.title || "";
     newPromptEl.value = p.prompt || "";
     newFolderNameEl.textContent = p.folder_display || p.repo_path || "";
@@ -1033,13 +1133,15 @@
     // review is a confirm-gate failure, not merely a navigation one.
     newPlan = null;
     newConfirmEl.checked = false;
+    newTarget = pickedDevice();
+    var dev = newTarget;
     var seq = ++planSeq;
     newError("");
     setPlanBusy(true, "Reading…");
     planSlowTimer = setTimeout(function () {
       if (seq === planSeq) newGoBtn.textContent = "Still reading…";
     }, NEW_SLOW_MS);
-    fetch("/api/session-plan", {
+    fetch(devicePath(dev, "/api/session-plan"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: text.slice(0, PLAN_MAX_CHARS) }),
@@ -1054,6 +1156,7 @@
         if (seq !== planSeq) return;
         planDone(seq);
         showPlan({
+          device: dev,
           title: j.title || "",
           repo_path: j.repo_path || "",
           // The sentence is the session's first prompt when the model didn't
@@ -1130,7 +1233,8 @@
     newFoldersMsg.textContent = msg || "";
     newListEl.innerHTML = "";
     newListEl.appendChild(folderNote("loading…"));
-    fetch("/api/repos/suggest")
+    // The TARGET device's folders: a path off this disk names nothing there.
+    fetch(devicePath(newTarget, "/api/repos/suggest"))
       .then(function (r) { return r.json(); })
       .then(function (j) {
         suggestHome = (j && j.home) || "";
@@ -1138,7 +1242,8 @@
         newListEl.innerHTML = "";
         if (!rows.length) {
           newListEl.appendChild(folderNote(
-            "No folders found on this machine — make one on the desktop first."));
+            "No folders found on " + (newTarget ? deviceLabel(newTarget) : "this machine") +
+            " — make one on the desktop first."));
           return;
         }
         for (var i = 0; i < rows.length; i++)
@@ -1155,6 +1260,7 @@
   function pickFolder(row) {
     var git = !!row.is_git;
     showPlan({
+      device: newTarget,
       title: (newPlan && newPlan.title) || row.name || "",
       repo_path: row.path || "",
       prompt: (newPlan && newPlan.prompt) || newTextEl.value.trim(),
@@ -1211,7 +1317,7 @@
     newStartBtn.disabled = true;
     newStartBtn.textContent = "Starting…";
     newError("");
-    fetch("/api/instances", {
+    fetch(devicePath(p.device, "/api/instances"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // FIVE KEYS, and no more. `program`, `launch_args`, `profile_id`,
@@ -1242,10 +1348,13 @@
         // appears.
         var title = (j && j.title) || p.title;
         // The session exists whatever the sheet is doing now, so it is still
-        // tracked and selected when it lands.
-        pendingNew = title;
+        // tracked and selected when it lands. On another device the 202 names
+        // the session the way THAT device knows it; this server lists it
+        // namespaced, and that is the row to wait for.
+        pendingNew = deviceTitle(p.device, title);
         pendingNewUntil = Date.now() + PENDING_NEW_MS;
-        flashStatus("starting " + title + "…");
+        flashStatus("starting " + title +
+                    (p.device ? " on " + deviceLabel(p.device) : "") + "…");
         setTimeout(poll, 800);
         // But the SHEET belongs to whoever is using it. Tap Start, dismiss the
         // sheet while the POST is in flight, tap "+" and start typing: without
@@ -1315,6 +1424,9 @@
   document.getElementById("new-back").addEventListener("click", function () {
     harvestPlan();
     newStep(1);
+  });
+  newDeviceEl.addEventListener("change", function () {
+    devicePick = newDeviceEl.value || "";
   });
   newFolderBtn.addEventListener("click", function () {
     harvestPlan();

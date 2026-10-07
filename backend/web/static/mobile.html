@@ -136,6 +136,16 @@
                     autocomplete="off" autocapitalize="sentences" spellcheck="true"
                     placeholder="e.g. fix the token refresh bug in acme-api, in a worktree"
                     aria-label="What do you want to work on"></textarea>
+          <!-- WHERE the session runs. Hidden until a second MindFlock device
+               is connected on the tailnet (GET /api/devices) — with one device
+               there is nothing to choose. Picked HERE, before Continue, because
+               the plan is read on the device the session will live on: its
+               folders, its agent CLI. A native select, so the phone's own
+               picker does the work. -->
+          <div id="new-device-row" class="hidden">
+            <label class="new-label" for="new-device">Run on</label>
+            <select id="new-device" aria-label="Device the session runs on"></select>
+          </div>
           <div class="sheet-actions">
             <button type="button" id="new-cancel">Cancel</button>
             <button type="button" id="new-go">Continue</button>
@@ -151,7 +161,7 @@
           <input id="new-title" type="text" maxlength="60"
                  autocomplete="off" autocapitalize="none" spellcheck="false"
                  aria-label="Session name" />
-          <div class="new-label">Folder</div>
+          <div id="new-folder-label" class="new-label">Folder</div>
           <!-- A BUTTON, not a field. There is no free-text folder input on this
                page on purpose: _prepare_plain_repo realpaths whatever it is
                handed against the SERVER's cwd and then makedirs it, which is how
@@ -174,8 +184,8 @@
               <span id="new-confirm-label"></span>
               <span class="new-muted">Nothing is there yet. Ticking this makes
                 the directory itself — which is not the same thing as creating a
-                git repo in it — and the folder stays on this machine after the
-                session is closed.</span>
+                git repo in it — and the folder stays on <span id="new-confirm-where">this machine</span>
+                after the session is closed.</span>
             </span>
           </label>
           <label class="new-label" for="new-prompt">First prompt</label>
