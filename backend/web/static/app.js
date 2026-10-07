@@ -35589,6 +35589,239 @@ function OwnHeader() {
 	});
 }
 //#endregion
+//#region src/lib/wsTerm.ts
+var NOT_YET = 4404;
+var NOT_READY = 4409;
+var RETRY_MS = [
+	700,
+	1500,
+	3e3
+];
+var RETRY_MAX_MS = 3e3;
+var RETRY_LIMIT = 100;
+function retryAfter(code, attempts, reconnect) {
+	if (!reconnect || attempts >= RETRY_LIMIT) return null;
+	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+	return null;
+}
+function isStarting(code) {
+	return code === NOT_YET || code === NOT_READY;
+}
+function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
+	const [state, setState] = (0, import_react.useState)("connecting");
+	(0, import_react.useEffect)(() => {
+		const host = hostRef.current;
+		if (!host) return;
+		const term = new Dl({
+			cursorBlink: interactive,
+			fontSize: 12,
+			theme: termTheme(),
+			disableStdin: !interactive,
+			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
+			scrollback: 2e4,
+			macOptionClickForcesSelection: true
+		});
+		const fit = new o();
+		term.loadAddon(fit);
+		term.open(host);
+		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
+		if (interactive) host.title = "Drop or paste a file to hand over its path";
+		let ws = null;
+		let timer;
+		let dead = false;
+		let attempts = 0;
+		let said = false;
+		const doFit = (sendResize) => {
+			try {
+				fit.fit();
+			} catch {
+				return;
+			}
+			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+				type: "resize",
+				cols: term.cols,
+				rows: term.rows
+			}));
+		};
+		const connect = () => {
+			if (dead) return;
+			const proto = location.protocol === "https:" ? "wss" : "ws";
+			const sock = new WebSocket(proto + "://" + location.host + wsPath);
+			ws = sock;
+			sock.binaryType = "arraybuffer";
+			sock.onopen = () => {
+				if (dead) return;
+				attempts = 0;
+				setState("streaming");
+				doFit(true);
+			};
+			sock.onmessage = (ev) => {
+				if (typeof ev.data === "string") try {
+					const j = JSON.parse(ev.data);
+					if (j.type === "error") {
+						term.write("\r\n[error] " + j.message + "\r\n");
+						return;
+					}
+				} catch {
+					term.write(ev.data);
+				}
+				else term.write(new Uint8Array(ev.data));
+			};
+			sock.onclose = (ev) => {
+				if (dead) return;
+				const wait = retryAfter(ev.code, attempts, reconnect);
+				if (wait === null) {
+					setState("disconnected");
+					return;
+				}
+				const transient = isStarting(ev.code);
+				if (!said) {
+					said = true;
+					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
+				}
+				setState(transient ? "starting" : "reconnecting");
+				timer = setTimeout(connect, wait);
+				attempts++;
+			};
+			sock.onerror = () => {};
+		};
+		if (interactive) term.onData((d) => {
+			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
+		});
+		const obs = new ResizeObserver(() => doFit(true));
+		obs.observe(host);
+		const t = setTimeout(() => doFit(true), 50);
+		connect();
+		return () => {
+			dead = true;
+			clearTimeout(t);
+			if (timer) clearTimeout(timer);
+			obs.disconnect();
+			detachFiles?.();
+			try {
+				ws?.close();
+			} catch {}
+			term.dispose();
+		};
+	}, [
+		hostRef,
+		wsPath,
+		interactive,
+		reconnect
+	]);
+	return state;
+}
+//#endregion
+//#region src/components/dialogs/InstallTerminal.tsx
+function installSummary(steps) {
+	return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
+}
+function InstallWindow({ onClose, onDone }) {
+	const hostRef = (0, import_react.useRef)(null);
+	const state = useWsTerm(hostRef, "/api/doctor/install-terminal", true);
+	const [exit, setExit] = (0, import_react.useState)(null);
+	const doneRef = (0, import_react.useRef)(onDone);
+	doneRef.current = onDone;
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		let fired = false;
+		let sawRunning = false;
+		const poll = async () => {
+			try {
+				const s = await api("/api/doctor/install-state");
+				if (!live) return;
+				if (s.running) sawRunning = true;
+				if (!sawRunning || s.exit_code === null || s.exit_code === void 0) return;
+				setExit(s.exit_code);
+				if (!fired) {
+					fired = true;
+					doneRef.current();
+				}
+			} catch {}
+		};
+		const t = setInterval(poll, 1e3);
+		return () => {
+			live = false;
+			clearInterval(t);
+		};
+	}, []);
+	const close = async () => {
+		try {
+			if (!(await api("/api/doctor/install-close", { method: "POST" })).closed) toast("Still installing — it keeps going in the background");
+		} catch {}
+		onClose();
+	};
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "install-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) close();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "prov-login-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Install missing dependencies" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						id: "install-status",
+						children: exit === 0 ? "✓ everything installed" : exit !== null ? "✗ some steps failed — scroll up to see which" : state === "streaming" ? "installing — type your password if sudo asks" : state
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "install-close",
+						onClick: () => void close(),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prov-login-term",
+				ref: hostRef
+			})]
+		})
+	}), document.body);
+}
+function InstallMissing({ steps, onDone }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const window_ = open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallWindow, {
+		onClose: () => setOpen(false),
+		onDone
+	});
+	if (!steps || !steps.length) return window_ || null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "doctor-install",
+		id: "doctor-install",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "doctor-install-btn",
+				onClick: () => setOpen(true),
+				children: "Install everything missing"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [" ", installSummary(steps)]
+			}),
+			window_
+		]
+	});
+}
+//#endregion
 //#region src/components/dialogs/SetupDialog.tsx
 var DOCTOR_ICON = {
 	ok: "✓",
@@ -35651,10 +35884,11 @@ function useDoctorAutoShow() {
 function DoctorList({ reprobeKey }) {
 	const [doctor, setDoctor] = (0, import_react.useState)(lastDoctor);
 	const [error, setError] = (0, import_react.useState)("");
+	const [installed, setInstalled] = (0, import_react.useState)(0);
 	(0, import_react.useEffect)(() => {
 		let live = true;
 		(async () => {
-			const reprobe = (reprobeKey || 0) > 0;
+			const reprobe = (reprobeKey || 0) > 0 || installed > 0;
 			try {
 				const d = await api("/api/doctor" + (reprobe ? "?refresh=1" : ""));
 				if (!live) return;
@@ -35668,7 +35902,7 @@ function DoctorList({ reprobeKey }) {
 		return () => {
 			live = false;
 		};
-	}, [reprobeKey]);
+	}, [reprobeKey, installed]);
 	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 		className: "error",
 		children: ["doctor failed: ", error]
@@ -35681,7 +35915,10 @@ function DoctorList({ reprobeKey }) {
 		className: "muted",
 		children: "doctor unavailable"
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+		steps: doctor.install?.steps,
+		onDone: () => setInstalled((n) => n + 1)
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 		className: "doctor-list",
 		children: doctor.checks.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "doctor-check st-" + (c.status || "info"),
@@ -35703,7 +35940,7 @@ function DoctorList({ reprobeKey }) {
 				})
 			]
 		}, c.id || i))
-	});
+	})] });
 }
 function TestResult({ state }) {
 	if (state.testing) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -56705,130 +56942,6 @@ function BudgetLock({ title, budget }) {
 	});
 }
 //#endregion
-//#region src/lib/wsTerm.ts
-var NOT_YET = 4404;
-var NOT_READY = 4409;
-var RETRY_MS = [
-	700,
-	1500,
-	3e3
-];
-var RETRY_MAX_MS = 3e3;
-var RETRY_LIMIT = 100;
-function retryAfter(code, attempts, reconnect) {
-	if (!reconnect || attempts >= RETRY_LIMIT) return null;
-	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
-	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
-	return null;
-}
-function isStarting(code) {
-	return code === NOT_YET || code === NOT_READY;
-}
-function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
-	const [state, setState] = (0, import_react.useState)("connecting");
-	(0, import_react.useEffect)(() => {
-		const host = hostRef.current;
-		if (!host) return;
-		const term = new Dl({
-			cursorBlink: interactive,
-			fontSize: 12,
-			theme: termTheme(),
-			disableStdin: !interactive,
-			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
-			scrollback: 2e4,
-			macOptionClickForcesSelection: true
-		});
-		const fit = new o();
-		term.loadAddon(fit);
-		term.open(host);
-		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
-		if (interactive) host.title = "Drop or paste a file to hand over its path";
-		let ws = null;
-		let timer;
-		let dead = false;
-		let attempts = 0;
-		let said = false;
-		const doFit = (sendResize) => {
-			try {
-				fit.fit();
-			} catch {
-				return;
-			}
-			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
-				type: "resize",
-				cols: term.cols,
-				rows: term.rows
-			}));
-		};
-		const connect = () => {
-			if (dead) return;
-			const proto = location.protocol === "https:" ? "wss" : "ws";
-			const sock = new WebSocket(proto + "://" + location.host + wsPath);
-			ws = sock;
-			sock.binaryType = "arraybuffer";
-			sock.onopen = () => {
-				if (dead) return;
-				attempts = 0;
-				setState("streaming");
-				doFit(true);
-			};
-			sock.onmessage = (ev) => {
-				if (typeof ev.data === "string") try {
-					const j = JSON.parse(ev.data);
-					if (j.type === "error") {
-						term.write("\r\n[error] " + j.message + "\r\n");
-						return;
-					}
-				} catch {
-					term.write(ev.data);
-				}
-				else term.write(new Uint8Array(ev.data));
-			};
-			sock.onclose = (ev) => {
-				if (dead) return;
-				const wait = retryAfter(ev.code, attempts, reconnect);
-				if (wait === null) {
-					setState("disconnected");
-					return;
-				}
-				const transient = isStarting(ev.code);
-				if (!said) {
-					said = true;
-					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
-				}
-				setState(transient ? "starting" : "reconnecting");
-				timer = setTimeout(connect, wait);
-				attempts++;
-			};
-			sock.onerror = () => {};
-		};
-		if (interactive) term.onData((d) => {
-			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
-		});
-		const obs = new ResizeObserver(() => doFit(true));
-		obs.observe(host);
-		const t = setTimeout(() => doFit(true), 50);
-		connect();
-		return () => {
-			dead = true;
-			clearTimeout(t);
-			if (timer) clearTimeout(timer);
-			obs.disconnect();
-			detachFiles?.();
-			try {
-				ws?.close();
-			} catch {}
-			term.dispose();
-		};
-	}, [
-		hostRef,
-		wsPath,
-		interactive,
-		reconnect
-	]);
-	return state;
-}
-//#endregion
 //#region src/extensions/ExtPaneBody.tsx
 function ExtPaneBody({ extKey }) {
 	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
@@ -68881,7 +68994,7 @@ function Doctor(_) {
 				})
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
-				children: "Probes git, tmux, the agent CLI, uv and tailscale — plus gh, which is optional (pushing uses plain git over your own remote)."
+				children: "Probes git, tmux, your agent CLI, uv, tailscale, and the peer sandbox and cloudflared when peer links use them — plus gh, which is optional (pushing uses plain git over your own remote)."
 			})]
 		})
 	] });

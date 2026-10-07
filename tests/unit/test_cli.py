@@ -161,6 +161,101 @@ class TestDoctorFix:
         assert cli.main(["doctor", "--fix"]) == 1
         assert "interactive terminal" in capsys.readouterr().out
 
+    def test_everything_missing_installs_after_one_question(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        # Three missing tools, ONE prompt, ONE script run — the old loop asked
+        # (and ran sudo apt) once per tool.
+        missing = [
+            Check("tmux", "tmux", "fail", cmd="x", pkg="tmux", install=True),
+            Check("bwrap", "sandbox", "warn", cmd="x", pkg="bubblewrap", install=True),
+            Check(
+                "agent-cli",
+                "agent CLI (codex)",
+                "fail",
+                cmd="npm install -g @openai/codex",
+                install=True,
+            ),
+        ]
+        healthy = [
+            Check("tmux", "tmux", "ok", "tmux 3.4"),
+            Check("bwrap", "sandbox", "ok", "/usr/bin/bwrap"),
+            Check("agent-cli", "agent CLI (codex)", "ok", "/usr/bin/codex"),
+        ]
+        runs = iter([missing, healthy])
+        monkeypatch.setattr(doctor, "run_checks", lambda: next(runs))
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: "apt")
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "linux")
+        ran = []
+        monkeypatch.setattr(
+            cli.subprocess,
+            "run",
+            lambda cmd, shell: (ran.append(cmd), type("P", (), {"returncode": 0})())[1],
+        )
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": (prompts.append(prompt), "")[1]
+        )
+        assert cli.main(["doctor", "--fix"]) == 0
+        assert len(prompts) == 1 and "Install all 2?" in prompts[0]
+        assert len(ran) == 1
+        assert "sudo apt-get install -y tmux bubblewrap" in ran[0]
+        assert "npm install -g @openai/codex" in ran[0]
+        out = capsys.readouterr().out
+        assert "/usr/bin/codex" in out
+        assert "All required dependencies look good." in out
+
+    def test_declining_the_install_runs_nothing(self, monkeypatch, capsys, tty_stdin):
+        missing = [Check("tmux", "tmux", "fail", cmd="x", pkg="tmux", install=True)]
+        monkeypatch.setattr(doctor, "run_checks", lambda: missing)
+        monkeypatch.setattr(
+            cli.subprocess,
+            "run",
+            lambda *a, **k: pytest.fail("declined — must not run"),
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+        assert cli.main(["doctor", "--fix"]) == 1
+        assert "skipped" in capsys.readouterr().out
+
+    def test_logins_are_offered_after_the_install(self, monkeypatch, capsys, tty_stdin):
+        # Installing an agent CLI is what makes its login check appear — so
+        # the per-item login prompts read the RE-PROBED checks.
+        before = [
+            Check(
+                "agent-cli",
+                "agent CLI (codex)",
+                "fail",
+                cmd="npm i codex",
+                install=True,
+            ),
+        ]
+        after = [
+            Check("agent-cli", "agent CLI (codex)", "ok", "/usr/bin/codex"),
+            Check("agent-auth", "agent auth (codex)", "warn", cmd="codex login"),
+        ]
+        runs = iter([before, after])
+        monkeypatch.setattr(doctor, "run_checks", lambda: next(runs))
+        monkeypatch.setattr(
+            doctor,
+            "CHECKS_BY_ID",
+            {
+                "agent-auth": lambda: Check(
+                    "agent-auth", "agent auth (codex)", "ok", "ok"
+                )
+            },
+        )
+        ran = []
+        monkeypatch.setattr(
+            cli.subprocess,
+            "run",
+            lambda cmd, shell: (ran.append(cmd), type("P", (), {"returncode": 0})())[1],
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        assert cli.main(["doctor", "--fix"]) == 0
+        assert len(ran) == 2
+        assert "npm i codex" in ran[0]
+        assert ran[1] == "codex login"
+
     def test_checks_without_cmd_are_not_offered(self, monkeypatch, capsys, tty_stdin):
         monkeypatch.setattr(
             doctor,

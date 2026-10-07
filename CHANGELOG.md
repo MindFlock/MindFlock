@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Install every missing dependency in one go.** The setup checklist (Setup,
+  Settings → Doctor) has an **Install everything missing** button that runs one
+  script in a terminal — one package-manager run for git/tmux/bubblewrap/…, one
+  sudo prompt, then each tool's own installer — and re-checks when it finishes.
+  `mindflock doctor --fix` (and the installer) asks once instead of once per
+  tool, then offers the logins. Your own agent CLI gets installed, whichever it
+  is (codex, aider, opencode, …) — not just claude; a separate Assistant CLI is
+  checked too. The doctor now checks **bubblewrap** (the peer sandbox) and can
+  install **cloudflared**, each only when peer links / the Cloudflare relay are
+  on.
+
 ## [0.7.0] - 2026-10-07
 
 ### Added

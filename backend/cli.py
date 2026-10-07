@@ -131,7 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument(
         "--fix",
         action="store_true",
-        help="offer to run each fix command interactively (installs missing deps for you)",
+        help="install everything missing in one go (one confirmation), then offer the logins",
     )
 
     # Shared --host/--port for every command that talks to a running server.
@@ -585,26 +585,79 @@ def _cmd_doctor(fix: bool = False) -> int:
     return 0
 
 
-def _fix_checks(checks: list[Check]) -> list[Check]:
-    """Interactive `doctor --fix` loop: for each warn/fail check that carries a
-    runnable fix command, ask, run it with inherited stdio (so interactive
-    installers like `gh auth login` work), then re-probe just that check.
-    Returns the checks list with re-probed results swapped in."""
+def _install_all(checks: list[Check]) -> list[Check]:
+    """The one-shot half of `doctor --fix`: show everything missing that this
+    machine needs, ask ONCE, then run it as a single script (one package-manager
+    run, so one sudo prompt) and re-probe every check. Returns the checks list,
+    re-probed when the script ran."""
     from backend import doctor
 
-    fixable = [c for c in checks if c.status in ("warn", "fail") and c.cmd]
-    if not fixable:
+    plan = doctor.install_plan(checks)
+    steps = plan["steps"]
+    if not steps:
+        return checks
+    print()
+    print("Missing — I can install all of it in one go:")
+    for st in steps:
+        print(f"  • {st['label']}")
+        print(f"      {st['cmd']}")
+    try:
+        answer = input(f"\nInstall all {len(steps)}? [Y/n] ").strip().lower()
+    except EOFError:
+        return checks
+    if answer not in ("", "y", "yes"):
+        print("  skipped")
+        return checks
+    print()
+    # shell=True: the script is built from commands we authored (see
+    # doctor.install_plan); stdio is inherited so sudo can ask for a password.
+    proc = subprocess.run(plan["script"], shell=True)
+    if proc.returncode != 0:
+        print(f"  install script exited {proc.returncode}")
+    try:
+        fresh = doctor.run_checks()
+    except Exception:  # noqa: BLE001 — a broken re-probe keeps the old list
+        return checks
+    done = {st["id"] for st in steps}
+    changed = [c for c in fresh if c.id in done or c.pkg in plan["packages"]]
+    if changed:
+        print()
+        print_checks(changed)
+    return fresh
+
+
+def _fix_checks(checks: list[Check]) -> list[Check]:
+    """Interactive `doctor --fix`.
+
+    First everything installable at once (:func:`_install_all`), then — one at
+    a time, because each is interactive in its own way — the remaining fix
+    commands (logins like `codex login` / `gh auth login`): ask, run with
+    inherited stdio, re-probe just that check. Returns the checks list with
+    re-probed results swapped in."""
+    from backend import doctor
+
+    def _rest(cs: list[Check]) -> list[Check]:
+        return [
+            c for c in cs if c.status in ("warn", "fail") and c.cmd and not c.install
+        ]
+
+    if not doctor.install_plan(checks)["steps"] and not _rest(checks):
         return checks
     if not sys.stdin.isatty():
         print()
         print(
-            "--fix needs an interactive terminal to confirm each command; "
+            "--fix needs an interactive terminal to confirm; "
             "run `mindflock doctor --fix` yourself, or paste the fix lines above."
         )
         return checks
-    checks = list(checks)
+    checks = _install_all(list(checks))
+    fixable = _rest(checks)
+    if not fixable:
+        return checks
     print()
-    print(f"{len(fixable)} fixable — I can run each command for you (Enter = yes).")
+    print(
+        f"{len(fixable)} more fixable — I can run each command for you (Enter = yes)."
+    )
     for c in fixable:
         try:
             answer = input(f"\n  {c.label}: run `{c.cmd}`? [Y/n] ").strip().lower()
@@ -624,6 +677,8 @@ def _fix_checks(checks: list[Check]) -> list[Check]:
         try:
             fresh = recheck()
         except Exception:  # noqa: BLE001 — a broken re-probe shouldn't kill the loop
+            continue
+        if fresh is None:
             continue
         checks[checks.index(c)] = fresh
         glyph = _GLYPHS.get(fresh.status, "?")

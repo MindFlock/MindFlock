@@ -16,13 +16,14 @@
 #      suitable Python by itself, builds in an isolated venv, and links the
 #      `mindflock` command into ~/.local/bin. Re-running upgrades in place.
 #   4. Runs `mindflock doctor` so you immediately see which runtime
-#      dependencies (git, tmux, claude — plus the optional gh) still need
+#      dependencies (git, tmux, your agent CLI — plus the optional gh) still need
 #      installing — with the exact install command for your platform. gh is
 #      listed as optional on purpose: pushing is plain `git push` over the
 #      remote you already have (SSH or HTTPS), and only PR create/merge prefer
 #      gh. When a terminal is attached
-#      it runs `doctor --fix`, which offers to run each of those commands
-#      for you (y/n per item) so a fresh machine ends the install ready to go.
+#      it runs `doctor --fix`, which installs everything missing in one go
+#      (one confirmation, one sudo prompt) so a fresh machine ends the install
+#      ready to go.
 #
 # Overrides (env vars):
 #   MINDFLOCK_INSTALL_REPO   git URL to install from
@@ -179,6 +180,6 @@ fi
 
 say ""
 say "Done. Next steps:"
-say "  1. fix anything ✗ above (each line shows the exact command, or re-run: mindflock doctor --fix)"
+say "  1. fix anything ✗ above (re-run: mindflock doctor --fix — installs it all in one go)"
 say "  2. cd into a git repo you want to work on"
 say "  3. run: mindflock serve   →  open http://127.0.0.1:8765"
