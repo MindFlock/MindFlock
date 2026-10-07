@@ -51,6 +51,8 @@ interface PeerStatus {
   };
   links: PeerLink[];
   invites: Array<{ invite_id: string; expires_in: number | null }>;
+  /** Installed agent CLIs that can run a shared folder here, default first. */
+  agents?: string[];
 }
 
 interface Invite {
@@ -247,7 +249,7 @@ export function PeerLinks(_: ScreenProps) {
         <>
           <h4 className="set-subtitle">Connected peers</h4>
           {st.links.map((l) => (
-            <PeerLinkCard key={l.link_id} link={l} busy={busy} run={run} />
+            <PeerLinkCard key={l.link_id} link={l} busy={busy} run={run} agents={st.agents || []} />
           ))}
         </>
       )}
@@ -346,12 +348,15 @@ function PeerLinkCard(props: {
   link: PeerLink;
   busy: boolean;
   run(fn: () => Promise<unknown>, ok?: string): void;
+  agents: string[];
 }) {
-  const { link, busy, run } = props;
+  const { link, busy, run, agents } = props;
   const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("");
-  const [program, setProgram] = useState("claude");
+  const [program, setProgram] = useState("");
+  // The first offered agent is the default CLI (the server orders it so).
+  const chosen = program || agents[0] || "";
   const [target, setTarget] = useState("");
   const [exportBranch, setExportBranch] = useState("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
   const [confirm, setConfirm] = useState<"" | "unlink" | "unshare">("");
@@ -411,19 +416,26 @@ function PeerLinkCard(props: {
         <div className="set-row">
           <input placeholder="repo path to share" value={repo} onChange={(e) => setRepo(e.target.value)} />
           <input placeholder="branch (optional)" value={branch} onChange={(e) => setBranch(e.target.value)} />
-          <select value={program} onChange={(e) => setProgram(e.target.value)}>
-            <option value="claude">claude</option>
-            <option value="codex">codex</option>
+          <select value={chosen} onChange={(e) => setProgram(e.target.value)} disabled={!agents.length}>
+            {agents.length ? (
+              agents.map((a) => (
+                <option value={a} key={a}>
+                  {a}
+                </option>
+              ))
+            ) : (
+              <option value="">no agent CLI can run here</option>
+            )}
           </select>
           <button
             type="button"
             className="test-btn"
-            disabled={busy || !repo.trim()}
+            disabled={busy || !repo.trim() || !chosen}
             onClick={() =>
               run(
                 () =>
                   api(base + "/share", {
-                    json: { repo_path: repo.trim(), branch: branch.trim() || undefined, program },
+                    json: { repo_path: repo.trim(), branch: branch.trim() || undefined, program: chosen },
                   }),
                 "Shared — the sandboxed session is starting"
               )

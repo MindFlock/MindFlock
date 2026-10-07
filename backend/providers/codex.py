@@ -33,6 +33,21 @@ class CodexProvider(GenericProvider):
             % (mcp_attach.SERVER_NAME, mcp_attach.codex_server_table(spec)),
         )
 
+    def peer_mcp_args(self, spec) -> tuple:
+        """ONE ``-c mcp_servers.mindflock={...}`` table for peer mode: the peer
+        env only (no host env forwarded), every peer tool pre-approved — the
+        sandbox is the boundary."""
+        from . import mcp_attach
+
+        return (
+            "-c",
+            "mcp_servers.%s=%s"
+            % (
+                mcp_attach.SERVER_NAME,
+                mcp_attach.peer_codex_server_table(spec.share_id, spec.token),
+            ),
+        )
+
     # --- terminal classification ------------------------------------------ #
     def parse_dialog(self, screen_text: str) -> Optional[dict]:
         """The approval overlay (run a command / make edits / grant

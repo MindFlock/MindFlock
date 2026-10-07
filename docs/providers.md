@@ -443,6 +443,38 @@ hand. See [mcp.md](mcp.md#how-it-gets-attached).
 Each launch site also records whether that launch carried the tokens
 (`mcp_attach.note_launch`), which is the session row's `mcp_attached`.
 
+### Peer shared sessions (`sandbox_profile`, `peer_mcp_args`)
+
+A CLI can run a peer shared session ([peer-link.md](peer-link.md)) when its
+provider says what it needs inside the bubblewrap sandbox —
+`sandbox_profile()` → `SandboxProfile` (binary, API hosts, config dir, login
+files to copy, fixed env) — and how the peer-mode MCP attaches —
+`peer_mcp_args(spec)` / `peer_mcp_env(spec)` with a `mcp_attach.PeerMcpSpec`
+(command, args, the only env the server may get, a read-only run file
+writer). `claude` and `codex` implement these in Python; the rest are data. A
+TOML provider opts in with a `[peer]` table (the sandbox validates every value
+again):
+
+```toml
+[peer]
+egress = ["api.mycli.dev"]               # hosts it needs on 443
+config_dir = ".mycli"                    # its config dir under ~
+config_env = "MYCLI_HOME"                # …and the env var that moves it
+seed_files = ["auth.json"]               # login files under that dir
+env = { MYCLI_NO_UPDATE = "1" }          # fixed env inside
+# How the MCP attaches — any of these; templates take {command},
+# {command_json}, {args_json}, {argv_json}, {env_json}, {argv_shell},
+# {env_shell}, {argv_env_shell}, {server}, {tools_csv}, {config_file}:
+mcp_args = ["--mcp-config", "{config_file}"]
+mcp_env = { MYCLI_MCP = "{env_json}" }
+mcp_file = { name = "mycli-mcp.json", content = '{"servers":{"{server}":{"cmd":{argv_json},"env":{env_json}}}}' }
+mcp_home_file = { path = ".mycli/mcp.json", content = "…" }   # only if it reads nothing else
+```
+
+Without `egress` and some way to attach, the CLI can't run a shared session
+(refused before anything starts). Prefer an attach that keeps other MCP
+servers — the user's, or one planted in the shared folder — from loading.
+
 ### Reading a dialog (`parse_dialog`)
 
 `BaseProvider.parse_dialog(screen_text)` turns the visible screen of an agent

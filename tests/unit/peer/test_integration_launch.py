@@ -41,7 +41,10 @@ def _peer_instance(work: str, program: str = "claude"):
             peer_share=SHARE_ID,
         )
     )
-    inst.ExtraEnv = {"PORT": "4100", "ANTHROPIC_API_KEY": "host-secret"}
+    inst.ExtraEnv = {
+        "PORT": "4100",
+        "ANTHROPIC_API_KEY": "host-secret",  # pragma: allowlist secret
+    }
     inst._tmux_session = FakeTmux("mindflock_peer-bob-abab")
     return inst
 
@@ -89,7 +92,7 @@ def test_start_refused_without_agent_token(monkeypatch):
 def test_start_refused_for_provider_without_sandbox_profile(share, monkeypatch):
     fake_sandbox(monkeypatch, ok=True)
     inst = _peer_instance(share["work"], program="aider")
-    with pytest.raises(RuntimeError, match="claude and codex"):
+    with pytest.raises(RuntimeError, match="can.t run a shared-folder session"):
         inst.Start(True)
     assert inst._tmux_session.starts == []
 

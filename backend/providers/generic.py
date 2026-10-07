@@ -261,6 +261,98 @@ class GenericProvider(BaseProvider):
     def install_hint(self) -> str:
         return self.cfg.install_hint
 
+    # --- peer shared sessions ------------------------------------------- #
+    def sandbox_profile(self):
+        """From the config's ``sandbox_*`` fields; ``None`` unless it names the
+        hosts the CLI needs AND a way to attach the peer MCP (a CLI that can't
+        be given the peer tools can't run a shared session)."""
+        from .base import SandboxProfile
+
+        cfg = self.cfg
+        attaches = bool(
+            cfg.peer_mcp_args or cfg.peer_mcp_env or cfg.peer_mcp_home_file[0]
+        ) or (type(self).peer_mcp_args is not GenericProvider.peer_mcp_args)
+        if not cfg.sandbox_egress or not attaches:
+            return None
+        return SandboxProfile(
+            bin=(cfg.base_command().split() or [self.name])[0],
+            egress=tuple(cfg.sandbox_egress),
+            passthrough_env=tuple(cfg.auth_env),
+            config_env=cfg.sandbox_config_env,
+            config_dir=cfg.sandbox_config_dir,
+            seed_files=tuple(cfg.sandbox_seed_files),
+            env=tuple(cfg.sandbox_env),
+        )
+
+    def _peer_render(self, template: str, spec, config_file: str = "") -> str:
+        """Fill a ``peer_mcp_*`` template (plain substitution — the values are
+        JSON or shell-quoted, so braces in them can't be re-expanded)."""
+        import json
+        import shlex
+
+        argv = [spec.command, *spec.args]
+        env = spec.env
+        values = {
+            "{command}": spec.command,
+            "{command_json}": json.dumps(spec.command),
+            "{args_json}": json.dumps(list(spec.args)),
+            "{argv_json}": json.dumps(argv),
+            "{env_json}": json.dumps(env, sort_keys=True),
+            "{argv_shell}": " ".join(shlex.quote(a) for a in argv),
+            "{env_shell}": " ".join(
+                "%s=%s" % (k, shlex.quote(v)) for k, v in sorted(env.items())
+            ),
+            # ``env K=V … command args`` — the env travels on the command line
+            # itself, for CLIs that filter what env an extension may be given
+            # (goose drops PYTHONPATH, without which the server can't import).
+            "{argv_env_shell}": " ".join(
+                ["env"]
+                + ["%s=%s" % (k, shlex.quote(v)) for k, v in sorted(env.items())]
+                + [shlex.quote(a) for a in argv]
+            ),
+            "{server}": spec.server_name,
+            "{tools_csv}": ",".join(spec.tool_names),
+            "{config_file}": config_file,
+        }
+        out = []
+        i = 0
+        while i < len(template):
+            for key, val in values.items():
+                if template.startswith(key, i):
+                    out.append(val)
+                    i += len(key)
+                    break
+            else:
+                out.append(template[i])
+                i += 1
+        return "".join(out)
+
+    def _peer_config_file(self, spec) -> str:
+        name, content = self.cfg.peer_mcp_file
+        if not name:
+            return ""
+        return spec.write_run_file(name, self._peer_render(content, spec))
+
+    def peer_mcp_args(self, spec) -> tuple:
+        cfg = self.cfg
+        if not (cfg.peer_mcp_args or cfg.peer_mcp_env or cfg.peer_mcp_home_file[0]):
+            return super().peer_mcp_args(spec)
+        home_rel, home_content = cfg.peer_mcp_home_file
+        if home_rel:
+            spec.write_home_file(home_rel, self._peer_render(home_content, spec))
+        config_file = self._peer_config_file(spec)
+        return tuple(
+            self._peer_render(a, spec, config_file) for a in self.cfg.peer_mcp_args
+        )
+
+    def peer_mcp_env(self, spec) -> dict:
+        if not self.cfg.peer_mcp_env:
+            return {}
+        config_file = self._peer_config_file(spec)
+        return {
+            k: self._peer_render(v, spec, config_file) for k, v in self.cfg.peer_mcp_env
+        }
+
     def login_command(self) -> Optional[str]:
         # A configured login command wins; otherwise fall back to running the
         # CLI itself (base default) so there is always something to open.

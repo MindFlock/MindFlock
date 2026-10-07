@@ -14722,7 +14722,8 @@ async def peer_set_perms(link_id: str, request: Request) -> JSONResponse:
 @app.post("/api/peer/links/{link_id}/share")
 async def peer_share(link_id: str, request: Request) -> JSONResponse:
     """``{repo_path, branch?, program?, prompt?}`` → clone the repo into a fresh
-    shared folder and start its sandboxed session (claude / codex only; 409
+    shared folder and start its sandboxed session (any agent CLI with a
+    sandbox profile — see ``backend.peer.launch.allowed_providers``; 409
     without a working sandbox)."""
     body = await _peer_body(request)
     return await _peer_call(

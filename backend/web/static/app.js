@@ -66224,7 +66224,8 @@ function PeerLinks(_) {
 		}), st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
 			link: l,
 			busy,
-			run
+			run,
+			agents: st.agents || []
 		}, l.link_id))] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "peer-advanced",
@@ -66426,11 +66427,12 @@ function PeerLinks(_) {
 	] });
 }
 function PeerLinkCard(props) {
-	const { link, busy, run } = props;
+	const { link, busy, run, agents } = props;
 	const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
 	const [repo, setRepo] = (0, import_react.useState)("");
 	const [branch, setBranch] = (0, import_react.useState)("");
-	const [program, setProgram] = (0, import_react.useState)("claude");
+	const [program, setProgram] = (0, import_react.useState)("");
+	const chosen = program || agents[0] || "";
 	const [target, setTarget] = (0, import_react.useState)("");
 	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
 	const [confirm, setConfirm] = (0, import_react.useState)("");
@@ -66524,25 +66526,26 @@ function PeerLinkCard(props) {
 						value: branch,
 						onChange: (e) => setBranch(e.target.value)
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						value: program,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						value: chosen,
 						onChange: (e) => setProgram(e.target.value),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "claude",
-							children: "claude"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "codex",
-							children: "codex"
-						})]
+						disabled: !agents.length,
+						children: agents.length ? agents.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: a,
+							children: a
+						}, a)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "no agent CLI can run here"
+						})
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "test-btn",
-						disabled: busy || !repo.trim(),
+						disabled: busy || !repo.trim() || !chosen,
 						onClick: () => run(() => api(base + "/share", { json: {
 							repo_path: repo.trim(),
 							branch: branch.trim() || void 0,
-							program
+							program: chosen
 						} }), "Shared — the sandboxed session is starting"),
 						children: "Share a folder"
 					})

@@ -40,8 +40,9 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
 5. **Verify the SAS.** Both sides show a safety number like `482-019-337-5`
    (Settings → Peer links, `mindflock peer links`). Read it to each other by
    voice or chat. If it differs, someone is in the middle: **unlink now**.
-6. **Share a folder.** On the link: repo path, optional branch, `claude` or
-   `codex` → *Share a folder* (or `mindflock peer share <link> <repo> [--branch
+6. **Share a folder.** On the link: repo path, optional branch, the agent
+   CLI (any installed one that can run sandboxed — claude, codex, opencode,
+   cline, goose, antigravity; not aider, which has no MCP client) → *Share a folder* (or `mindflock peer share <link> <repo> [--branch
    B] [--program P]`). MindFlock makes a shallow clone into
    `~/.mindflock/peer/shares/<id>/work` and starts a session there,
    `peer-<name>-<id>`, inside the sandbox. Your repo itself is never touched.
@@ -372,21 +373,51 @@ The other functions:
 
   Nothing else is visible. There is no tmux socket, `/run/user`, D-Bus,
   `SSH_AUTH_SOCK` or settings file.
+- **What each CLI needs is the provider's to declare**, as data:
+  `BaseProvider.sandbox_profile()` → `SandboxProfile(bin, egress,
+  passthrough_env, config_env, config_dir, seed_files, env)` (TOML: a
+  `[peer]` section — `egress`, `config_env`, `config_dir`, `seed_files`,
+  `env`, and the attach templates `mcp_args` / `mcp_env` / `mcp_file` /
+  `mcp_home_file`). `sandbox.profile_for(provider)` validates every field
+  before use and refuses the profile otherwise: `bin` a bare name, every env
+  name through the deny lists (no `HOME`/`PATH`/proxy/`LD_*`/cloud creds),
+  config and seed paths relative with no `..`. A CLI with no valid profile is
+  refused (`SandboxError("provider X has no sandbox profile")`).
 - **Provider credentials.** `sandbox.prepare_home(share, provider)` copies only
-  what the CLI needs to log in, 0600:
-  - `claude`: `~/.claude/.credentials.json` to `<home>/.claude/`;
-    `CLAUDE_CONFIG_DIR=<home>/.claude`; a minimal `<home>/.claude.json` with
-    `hasCompletedOnboarding: true` and the user's `oauthAccount`/`userID`
-    keys only; `ANTHROPIC_API_KEY` passes through if it is set.
-  - `codex`: `~/.codex/auth.json` to `<home>/.codex/`; `CODEX_HOME`;
-    `OPENAI_API_KEY` passes through if it is set.
-  - Any other provider: refused (`SandboxError("provider X has no sandbox
-    profile")`).
-- **Egress allow-list:** `sandbox.egress_allow(provider)` returns the defaults
-  plus `settings peer.egress_allow`. The defaults are:
-  - claude: `api.anthropic.com`, `console.anthropic.com`, `platform.claude.com`,
-    `claude.ai`, `statsig.anthropic.com`
-  - codex: `api.openai.com`, `chatgpt.com`, `auth.openai.com`
+  the profile's `seed_files` from the CLI's host config dir (`$config_env`,
+  else `~/config_dir`) to the same place under `<home>` (0600, size-capped,
+  never following a symlink), sets `config_env=<home>/<config_dir>`, passes
+  `passthrough_env` (API keys) through when set, then writes the provider's
+  `sandbox_extra_seed` — claude's minimal `.claude.json`
+  (`hasCompletedOnboarding: true` and the user's `oauthAccount`/`userID` keys
+  only). Built in:
+  - `claude`: `.claude/.credentials.json`, `CLAUDE_CONFIG_DIR`,
+    `ANTHROPIC_API_KEY`; `--mcp-config … --strict-mcp-config`.
+  - `codex`: `.codex/auth.json`, `CODEX_HOME`, `OPENAI_API_KEY`; one `-c
+    mcp_servers.mindflock={…}` table.
+  - `opencode`: `.local/share/opencode/auth.json`; the MCP in
+    `OPENCODE_CONFIG_CONTENT`, with `OPENCODE_DISABLE_PROJECT_CONFIG=1` so a
+    planted `opencode.json` / `.opencode/` plugin doesn't load.
+  - `goose`: `.config/goose/{config,secrets}.yaml` with
+    `GOOSE_DISABLE_KEYRING=1`; `--no-profile --with-builtin developer
+    --with-extension 'env … python3 -m backend.mcp'` (goose filters
+    `PYTHONPATH` from an extension's env, so it rides `env(1)`).
+  - `cline`: `.cline/data/settings/providers.json`, `CLINE_DIR`;
+    `CLINE_MCP_SETTINGS_PATH` → a read-only file in `run/`.
+  - `antigravity` (agy): `.gemini/antigravity-cli/antigravity-oauth-token`;
+    `~/.gemini/config/mcp_config.json` written into `<home>` at launch (agy
+    has no flag or env var for it). Fresh homes show agy's one-time theme
+    picker.
+  - cline's and agy's folder-level plugins/hooks can't be switched off; for
+    them the sandbox is the only boundary (as it is for everything the agent
+    itself runs).
+- **Egress allow-list:** `sandbox.egress_allow(provider)` returns the
+  profile's `egress` plus `settings peer.egress_allow`, invalid entries (IP
+  literals, bare TLDs, wildcards) dropped. claude: `api.anthropic.com`,
+  `console.anthropic.com`, `platform.claude.com`, `claude.ai`,
+  `statsig.anthropic.com`; codex: `api.openai.com`, `chatgpt.com`,
+  `auth.openai.com`; the others list their service plus the common model
+  APIs their login may point at (`backend/providers/config.py`).
 - `egress.EgressProxy(socket_path, allow: list[str])`:
   - asyncio unix server at `run/egress.sock` (0600);
   - accepts only `CONNECT host:443`, and the host must match an entry exactly

@@ -785,31 +785,90 @@ def peer_codex_server_table(share_id: str, token: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class PeerMcpSpec:
+    """Everything a provider needs to attach the PEER-mode MCP to a shared
+    session (:meth:`~backend.providers.base.BaseProvider.peer_mcp_args`):
+    the command, its args, the only env it may get, the tool names, and a
+    place to write a config file the sandboxed agent can read but not change.
+    """
+
+    share_id: str
+    token: str
+
+    @property
+    def command(self) -> str:
+        return mcp_python()
+
+    @property
+    def args(self) -> tuple:
+        return tuple(_PYTHON_ARGS)
+
+    @property
+    def env(self) -> dict:
+        return peer_env(self.share_id, self.token)
+
+    @property
+    def tool_names(self) -> tuple:
+        return peer_tool_names()
+
+    @property
+    def server_name(self) -> str:
+        return SERVER_NAME
+
+    def write_run_file(self, name: str, data) -> str:
+        """(Re)write ``<share>/run/<name>`` (0600; a dict is written as JSON)
+        and return its path. The run dir is mounted read-only inside the
+        sandbox, so the agent cannot rewrite it."""
+        from backend.peer import paths as _peer_paths
+
+        if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}", name or ""):
+            raise ValueError("bad run file name")
+        run = _peer_paths.ensure_dir(_peer_paths.share_paths(self.share_id)["run"])
+        path = os.path.join(run, name)
+        if isinstance(data, dict):
+            _write_json_0600(path, data)
+        else:
+            body = data if isinstance(data, bytes) else str(data).encode()
+            fd = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+            )
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(body)
+        return path
+
+    def write_home_file(self, rel: str, data) -> str:
+        """Write ``rel`` under the share's sandbox HOME (0600) — for a CLI
+        that reads its MCP config only from its own home (agy). Home is
+        writable inside the sandbox, so this suits only CLIs that offer nothing
+        better: the agent rewriting it can only point at things inside the
+        sandbox. ``safe_write`` follows no symlink the agent planted."""
+        from backend.peer import paths as _peer_paths
+        from backend.peer import sandbox as _sandbox
+
+        home = _peer_paths.ensure_dir(_peer_paths.share_paths(self.share_id)["home"])
+        if isinstance(data, dict):
+            body = json.dumps(data, indent=2).encode()
+        else:
+            body = data if isinstance(data, bytes) else str(data).encode()
+        return _sandbox.safe_write(home, rel, body, 0o600)
+
+
 def peer_attach_args(provider, *, share_id: str, token: str) -> tuple:
-    """argv tokens attaching the PEER-mode MCP to a shared-folder session.
+    """argv tokens attaching the PEER-mode MCP to a shared-folder session,
+    asked of the provider (:meth:`peer_mcp_args`).
 
     Unlike :func:`attach_args` this is NOT best-effort: it raises on anything
     it cannot do (the caller refuses the launch). It ignores the
     ``general.agent_mcp`` toggle — the peer tools are how the shared session
-    works at all — and supports only Claude and Codex.
+    works at all."""
+    return tuple(
+        str(a) for a in provider.peer_mcp_args(PeerMcpSpec(share_id, token)) or ()
+    )
 
-    * Claude: ``--mcp-config=<run>/mcp.json --strict-mcp-config
-      --allowedTools=<peer tools>`` — strict so no other server (a project
-      ``.mcp.json`` the peer planted in the folder, the user's own) loads.
-    * Codex: one ``-c mcp_servers.mindflock={...}`` table.
-    """
-    name = getattr(provider, "name", "")
-    if name == "claude":
-        path = write_peer_claude_config(share_id, token)
-        return (
-            "--mcp-config=" + path,
-            "--strict-mcp-config",
-            "--allowedTools=" + ",".join(peer_claude_tool_names()),
-        )
-    if name == "codex":
-        return (
-            "-c",
-            "mcp_servers.%s=%s"
-            % (SERVER_NAME, peer_codex_server_table(share_id, token)),
-        )
-    raise ValueError("provider %s has no peer-mode MCP attach" % (name or "?"))
+
+def peer_attach_env(provider, *, share_id: str, token: str) -> dict:
+    """Env the launch needs for :func:`peer_attach_args` (CLIs that take their
+    MCP config from an env var), asked of the provider."""
+    env = provider.peer_mcp_env(PeerMcpSpec(share_id, token)) or {}
+    return {str(k): str(v) for k, v in env.items()}

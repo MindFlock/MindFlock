@@ -294,7 +294,9 @@ def test_share_refused_without_sandbox(share_fakes, monkeypatch, tmp_path):
 def test_share_refused_for_unsupported_cli(share_fakes, monkeypatch, tmp_path):
     fake_sandbox(monkeypatch, ok=True)
     svc = make_service()
-    with pytest.raises(svc_mod.PeerServiceError, match="claude and codex"):
+    with pytest.raises(
+        svc_mod.PeerServiceError, match="can.t run a shared-folder session"
+    ):
         run(svc.share(LID, str(tmp_path), program="aider"))
     assert share_fakes.created == []
 

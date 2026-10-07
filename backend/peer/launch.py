@@ -22,6 +22,7 @@ so the MCP config written at launch carries the token the socket expects.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import threading
 from typing import Optional, Sequence
@@ -29,7 +30,7 @@ from typing import Optional, Sequence
 from backend.peer import paths
 
 __all__ = [
-    "ALLOWED_PROVIDERS",
+    "allowed_providers",
     "PeerLaunchError",
     "register_token",
     "forget_token",
@@ -40,9 +41,15 @@ __all__ = [
     "build_command",
 ]
 
-#: The CLIs that have a sandbox profile (``sandbox.prepare_home``). Anything
-#: else is refused before a share session is even created.
-ALLOWED_PROVIDERS = ("claude", "codex")
+
+def allowed_providers() -> list:
+    """The CLIs that can run a shared session: a provider-declared sandbox
+    profile (:meth:`~backend.providers.base.BaseProvider.sandbox_profile`) the
+    sandbox accepts. Anything else is refused before a share session is even
+    created."""
+    from backend.peer import sandbox
+
+    return sandbox.sandboxable()
 
 
 class PeerLaunchError(RuntimeError):
@@ -83,10 +90,11 @@ def provider_name(program: str) -> str:
         name = providers.resolve(program or "").name
     except Exception as err:  # noqa: BLE001
         raise PeerLaunchError("unknown agent CLI: %s" % err) from err
-    if name not in ALLOWED_PROVIDERS:
+    allowed = allowed_providers()
+    if name not in allowed:
         raise PeerLaunchError(
-            "shared-folder sessions support only %s (got %s)"
-            % (" and ".join(ALLOWED_PROVIDERS), name or "?")
+            "%s can't run a shared-folder session yet (supported here: %s)"
+            % (name or "?", ", ".join(allowed) or "none")
         )
     return name
 
@@ -111,7 +119,7 @@ def sandbox_command(share_id: str, provider: str, inner_cmd: str) -> str:
         paths.share_root(share_id)
     except ValueError as err:
         raise PeerLaunchError("bad share id") from err
-    if provider not in ALLOWED_PROVIDERS:
+    if provider not in allowed_providers():
         raise PeerLaunchError("provider %s has no sandbox profile" % provider)
     if not inner_cmd or not str(inner_cmd).strip():
         raise PeerLaunchError("empty launch command")
@@ -166,10 +174,12 @@ def build_command(
     provider = providers.resolve(program or "")
     try:
         mcp_args = mcp_attach.peer_attach_args(provider, share_id=share_id, token=token)
+        mcp_env = mcp_attach.peer_attach_env(provider, share_id=share_id, token=token)
     except Exception as err:  # noqa: BLE001
         raise PeerLaunchError("peer MCP config: %s" % err) from err
-    if not mcp_args:
-        raise PeerLaunchError("peer MCP config: provider cannot attach")
+    for key in mcp_env:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", key):
+            raise PeerLaunchError("peer MCP config: bad env name %r" % key)
     ctx = providers.LaunchContext(
         program=program or "",
         workdir="",
@@ -186,4 +196,16 @@ def build_command(
         raise PeerLaunchError("launch command: %s" % err) from err
     if not cmd:
         raise PeerLaunchError("provider built no launch command")
+    if mcp_env:
+        # Inside the sandbox (its env is cleared and whitelisted, so these are
+        # set by the shell the sandbox runs). `export`, not a `K=V cmd`
+        # prefix: launch commands are compound (resume `|| …` fallbacks), and
+        # a prefix only reaches the first of them.
+        cmd = (
+            "".join(
+                "export %s=%s; " % (k, shlex.quote(v))
+                for k, v in sorted(mcp_env.items())
+            )
+            + cmd
+        )
     return sandbox_command(share_id, name, cmd)
