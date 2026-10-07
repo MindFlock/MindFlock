@@ -8,11 +8,35 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import sys
 from dataclasses import dataclass, field
 
 import pytest
 
 from backend.peer import identity, invite, store, transport, wire
+
+# The shared-folder runtime (bubblewrap sandbox, egress proxy + in-sandbox
+# bridge, the agent API and the share's file access) only ever runs on Linux:
+# elsewhere sharing a folder is refused before any of it starts. Its tests
+# lean on Linux facilities (/proc/self/fd, O_PATH, memfd, SO_PEERCRED).
+_LINUX_ONLY = {
+    "test_sandbox.py",
+    "test_egress.py",
+    "test_bridge.py",
+    "test_long_socket_paths.py",
+    "test_agent_api.py",
+    "test_share.py",
+    "test_share_attacks.py",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    if sys.platform.startswith("linux"):
+        return
+    skip = pytest.mark.skip(reason="peer shared-folder runtime is Linux-only")
+    for item in items:
+        if item.path.parent.name == "peer" and item.path.name in _LINUX_ONLY:
+            item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

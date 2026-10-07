@@ -110,6 +110,8 @@ def unix_addr(path: str):
     if len(os.fsencode(path)) <= _SUN_PATH_SAFE:
         yield path
         return
+    if not hasattr(os, "O_PATH") or not os.path.isdir("/proc/self/fd"):
+        raise OSError("unix socket path too long: %s" % path)
     fd = os.open(
         os.path.dirname(path) or ".", os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC
     )
