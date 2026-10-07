@@ -21,6 +21,14 @@ Security properties (see ``docs/peer-link.md``):
   invalid request closes the connection. Permissions are enforced here, per
   link, from the store (so a revoked link or changed perms apply at once).
 * Message text, codes, secrets and proofs are never logged.
+
+Two carriers bring the TLS stream (see :mod:`backend.peer.addr`): a direct
+TCP connection to :meth:`PeerTransport.start_listener`, or a WebSocket relay
+(:mod:`backend.peer.relay`): the dialer reaches ``wss://…`` addresses through
+:func:`relay.dial`, and the inviter's relay ingress hands each inbound stream
+to :meth:`PeerTransport.accept_relayed`. Everything above (TLS 1.3, key
+pinning, the handshake, limits) runs unchanged on both; the relay is just
+another untrusted network path.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ import inspect
 import ipaddress
 import logging
 import secrets
+import socket
 import ssl
 import time
 from collections import deque
@@ -42,7 +51,8 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from backend.peer import wire
+from backend.peer import relay, wire
+from backend.peer.addr import PeerAddr, parse_addr
 from backend.peer.identity import Identity, fingerprint_of, pub_from_cert_der
 from backend.peer.invite import InviteBook, parse_code
 from backend.peer.store import Link, LinkStore, sanitize_name
@@ -88,6 +98,13 @@ BACKOFF_INITIAL = 1.0
 BACKOFF_MAX = 60.0
 STABLE_CONN_S = 30.0
 LINK_IDLE_EXPIRY_S = 30 * 86400
+
+_EDGE_DEFAULT = object()  # relay_edge_ssl default: WebPKI-verified TLS
+# A brand-new quick-tunnel name can take a while to appear in DNS, and
+# trycloudflare.com caches NXDOMAIN for 60 s: before pairing through a relay,
+# wait (up to this long) for its name to resolve. The invite isn't touched.
+RELAY_DNS_WAIT = 75.0
+RELAY_DNS_RETRY_S = 5.0
 
 # Which link permission each inbound op needs (None: always allowed).
 _OP_PERM = {
@@ -163,11 +180,6 @@ def _fmt_addr(host: str, port: int) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
-def _split_addr(addr: str) -> tuple[str, int]:
-    host, _, port = addr.rpartition(":")
-    return host.strip("[]"), int(port)
-
-
 def _abort(writer: asyncio.StreamWriter | None) -> None:
     if writer is None:
         return
@@ -183,7 +195,10 @@ def _rate_key(ip: str) -> str:
     """The per-source rate-limit bucket: an IPv6 client owns a whole /64 (so
     it can't rotate addresses to dodge the limit); an IPv4-mapped address is
     its IPv4 address (else every v4 client of a dual-stack listener would
-    share one bucket)."""
+    share one bucket). Relayed sources (``relay:<ip>``) get their own
+    buckets, keyed the same way."""
+    if ip.startswith("relay:"):
+        return "relay:" + _rate_key(ip[6:])
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
@@ -499,6 +514,8 @@ class PeerTransport:
         backoff_initial: float = BACKOFF_INITIAL,
         backoff_max: float = BACKOFF_MAX,
         link_idle_expiry_s: float = LINK_IDLE_EXPIRY_S,
+        relay_edge_ssl=_EDGE_DEFAULT,
+        relay_dns_wait: float = RELAY_DNS_WAIT,
     ):
         self.identity = identity
         self.store = store
@@ -525,12 +542,22 @@ class PeerTransport:
 
         self._server_ctx = server_ssl_context(identity)
         self._client_ctx = client_ssl_context()
+        # TLS to a relay's edge (outer layer, defense in depth only; None =
+        # plain ws://, tests only). The pinned peer TLS runs inside either way.
+        self._relay_edge_ssl = (
+            relay.edge_ssl_context()
+            if relay_edge_ssl is _EDGE_DEFAULT
+            else relay_edge_ssl
+        )
+        self.relay_dns_wait = relay_dns_wait
+        self._relay_open = False
+        self._carriers: set[asyncio.Task] = set()
         self._server: asyncio.Server | None = None
         self._conns: dict[str, _Conn] = {}
         self._supervisors: dict[str, asyncio.Task] = {}
         self._limits: dict[str, _LinkLimits] = {}
         self._ip_windows: dict[str, _Window] = {}
-        self._handshakes: set[asyncio.Task] = set()
+        self._handshakes: dict[asyncio.Task, bool] = {}  # task -> relayed
         self._bg: set[asyncio.Task] = set()
         self._unauth = 0
         self._closed = False
@@ -564,8 +591,36 @@ class PeerTransport:
         server, self._server = self._server, None
         if server is not None:
             server.close()
-        for task in list(self._handshakes):
-            task.cancel()
+        for task, relayed in list(self._handshakes.items()):
+            if not relayed:
+                task.cancel()
+
+    @property
+    def relay_open(self) -> bool:
+        return self._relay_open and not self._closed
+
+    def open_relay(self) -> None:
+        """Accept streams from the relay ingress (:meth:`accept_relayed`)."""
+        if self._closed:
+            raise PeerError("transport is closed")
+        self._relay_open = True
+
+    def close_relay(self) -> None:
+        """Stop accepting relayed streams and drop their in-progress
+        handshakes; authenticated connections stay up."""
+        self._relay_open = False
+        for task, relayed in list(self._handshakes.items()):
+            if relayed:
+                task.cancel()
+
+    async def accept_relayed(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, source: str
+    ) -> None:
+        """One inbound stream from the relay ingress: exactly what a direct
+        TCP accept gets (TLS server handshake, pre-auth limits, pair/auth),
+        rate-limited per ``source`` (the client IP the relay reported, or a
+        shared bucket)."""
+        await self._accept(reader, writer, "relay:" + str(source)[:64], relayed=True)
 
     async def start(self) -> None:
         """Keep a connection up for every dialer link in the store."""
@@ -584,11 +639,13 @@ class PeerTransport:
         if self._closed:
             raise PeerError("transport is closed")
         info = parse_code(code)
+        addr = info.addr
+        await self._await_relay_dns(addr)
         writer = None
         try:
             async with asyncio.timeout(self.handshake_timeout):
                 reader, writer, server_pub = await self._dial(
-                    info.host, info.port, expect_fp=info.server_fp
+                    addr, expect_fp=info.server_fp
                 )
                 nonce = wire.validate_hello(
                     await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
@@ -623,7 +680,7 @@ class PeerTransport:
                         peer_name=reply["name"],
                         peer_pub=server_pub.hex(),
                         role="dialer",
-                        peer_addr=_fmt_addr(info.host, info.port),
+                        peer_addr=str(addr),
                         sas=sas,
                     )
                 )
@@ -638,9 +695,8 @@ class PeerTransport:
             raise PairingFailed("pairing failed: protocol error") from None
         except (OSError, ssl.SSLError) as e:
             _abort(writer)
-            raise PairingFailed(
-                f"cannot reach {_fmt_addr(info.host, info.port)}: {type(e).__name__}"
-            ) from None
+            detail = str(e) if isinstance(e, relay.RelayError) else type(e).__name__
+            raise PairingFailed(f"cannot reach {addr.public()}: {detail}") from None
         except ValueError:  # e.g. link id already in the store
             _abort(writer)
             raise PairingFailed("pairing failed: bad link") from None
@@ -656,6 +712,27 @@ class PeerTransport:
         self._ensure_supervisor(link.link_id)
         return link
 
+    async def _await_relay_dns(self, addr: PeerAddr) -> None:
+        """Best effort: wait until a relay's hostname resolves (see
+        :data:`RELAY_DNS_WAIT`). Never raises; the dial reports failures."""
+        if not addr.is_relay or self.relay_dns_wait <= 0:
+            return
+        try:
+            ipaddress.ip_address(addr.host)
+            return
+        except ValueError:
+            pass
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.relay_dns_wait
+        while not self._closed:
+            try:
+                await loop.getaddrinfo(addr.host, addr.port, type=socket.SOCK_STREAM)
+                return
+            except (OSError, UnicodeError):
+                if loop.time() + RELAY_DNS_RETRY_S > deadline:
+                    return
+                await asyncio.sleep(RELAY_DNS_RETRY_S)
+
     async def request(
         self, link_id: str, op: str, p: dict, timeout: float = REQUEST_TIMEOUT
     ) -> dict:
@@ -667,6 +744,16 @@ class PeerTransport:
         if conn is None or conn.dead:
             raise PeerUnavailable("peer not connected")
         return await conn.request(op, p, timeout)
+
+    async def redial(self, link_id: str) -> None:
+        """The link's address changed: if it is down, dial now (with the
+        new address) instead of waiting out the backoff."""
+        if self._closed or self.is_connected(link_id):
+            return
+        sup = self._supervisors.pop(link_id, None)
+        if sup is not None:
+            sup.cancel()
+        self._ensure_supervisor(link_id)
 
     async def unlink(self, link_id: str) -> bool:
         sup = self._supervisors.pop(link_id, None)
@@ -707,9 +794,10 @@ class PeerTransport:
         for sup in self._supervisors.values():
             sup.cancel()
         self._supervisors.clear()
+        self.close_relay()
         for conn in list(self._conns.values()):
             await conn.close("shutdown", send_bye=True)
-        for task in list(self._bg):
+        for task in list(self._bg) + list(self._carriers):
             task.cancel()
 
     # -- internals: bookkeeping ----------------------------------------------
@@ -801,16 +889,20 @@ class PeerTransport:
     ) -> None:
         peer = writer.get_extra_info("peername")
         ip = str(peer[0]) if peer else "?"
+        await self._accept(reader, writer, ip, relayed=False)
+
+    async def _accept(self, reader, writer, ip: str, *, relayed: bool) -> None:
+        accepting = self._relay_open if relayed else self._server is not None
         if (
             self._closed
-            or self._server is None
+            or not accepting
             or self._unauth >= self.max_unauth
             or not self._ip_allowed(ip)
         ):
             _abort(writer)  # before TLS: costs us nothing
             return
         task = asyncio.current_task()
-        self._handshakes.add(task)
+        self._handshakes[task] = relayed
         self._unauth += 1
         result = None
         try:
@@ -834,7 +926,7 @@ class PeerTransport:
             log.warning("peer: handshake error: %s", type(e).__name__)
         finally:
             self._unauth -= 1
-            self._handshakes.discard(task)
+            self._handshakes.pop(task, None)
         if result is None or self._closed or not self._link_exists(result[0].link_id):
             # (An unlink can land while the welcome drains: adopting then would
             # leave an authenticated connection for a link that is gone.)
@@ -928,15 +1020,22 @@ class PeerTransport:
 
     async def _dial(
         self,
-        host: str,
-        port: int,
+        addr: PeerAddr,
         *,
         expect_fp: bytes | None = None,
         expect_pub: bytes | None = None,
     ):
-        """TLS-connect and check the server's key before anything is sent.
-        Returns ``(reader, writer, server_pub)``."""
-        reader, writer = await asyncio.open_connection(host, port, ssl=self._client_ctx)
+        """TLS-connect (directly, or inside a relay's WebSocket) and check the
+        server's key before anything is sent. Returns
+        ``(reader, writer, server_pub)``."""
+        if addr.is_relay:
+            reader, writer = await relay.dial(
+                addr, self._client_ctx, self._relay_edge_ssl, self._carriers
+            )
+        else:
+            reader, writer = await asyncio.open_connection(
+                addr.host, addr.port, ssl=self._client_ctx
+            )
         try:
             sslobj = writer.get_extra_info("ssl_object")
             pub = (
@@ -964,12 +1063,12 @@ class PeerTransport:
         return reader, writer, pub
 
     async def _connect_link(self, link: Link) -> None:
-        host, port = _split_addr(link.peer_addr)
+        addr = parse_addr(link.peer_addr)
         writer = None
         try:
             async with asyncio.timeout(self.handshake_timeout):
                 reader, writer, server_pub = await self._dial(
-                    host, port, expect_pub=bytes.fromhex(link.peer_pub)
+                    addr, expect_pub=bytes.fromhex(link.peer_pub)
                 )
                 nonce = wire.validate_hello(
                     await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)

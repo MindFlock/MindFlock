@@ -145,6 +145,11 @@ ROUTES = [
     ("post", "/api/peer/join", {"code": CODE}),
     ("delete", "/api/peer/links/" + "ab" * 16, None),
     ("post", "/api/peer/links/" + "ab" * 16 + "/perms", {"diff": False}),
+    (
+        "post",
+        "/api/peer/links/" + "ab" * 16 + "/address",
+        {"address": "wss://x.trycloudflare.com/abc"},
+    ),
     ("post", "/api/peer/links/" + "ab" * 16 + "/share", {"repo_path": "/tmp"}),
     ("delete", "/api/peer/links/" + "ab" * 16 + "/share", None),
     (

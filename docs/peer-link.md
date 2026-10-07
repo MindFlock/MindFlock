@@ -23,8 +23,15 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    its LAN address. Tailscale is the recommended way: both machines on one
    tailnet, nothing exposed to the internet. On a LAN, open the port in your
    firewall; never port-forward it from the internet unless you mean to.
+   **Different networks, no shared tailnet?** Turn on a relay (Settings →
+   Peer links → *Relay*, or `peer.relay = "cloudflare"`) and install
+   [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
+   Invites then go through a Cloudflare quick tunnel; your peer needs nothing
+   extra. The encryption stays end to end: see
+   [Connecting across networks](#connecting-across-networks).
 3. **Invite.** Settings → Peer links → *Create invite code*, or
-   `mindflock peer invite`. Send the `mfp1:…` code over a channel you trust. It
+   `mindflock peer invite`. Send the `mfp1:…` (or, through a relay,
+   `mfp2:…`) code over a channel you trust. It
    is single use and expires after 10 minutes; the listener only runs while an
    invite or a link that you accepted exists.
 4. **Join.** The other person pastes it: Settings → Peer links → *Join*, or
@@ -87,6 +94,7 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Escaped agent driving MindFlock | The sandbox cannot reach `127.0.0.1:8765` (separate netns) or read the settings/auth token (hidden). Its MCP runs in **peer mode**: only peer tools, talking to a per-share unix socket that accepts only peer ops for that one share. |
 | Agent planting git config to run code on the host | The folder's `.git` is a gitfile pointing to `repo.git/`, which is **read-only inside the sandbox**. Both the gitfile and `repo.git` are bind-mounted read-only, so they can't be replaced. Host git on the share runs with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, hooks off, fsmonitor off, and submodules ignored. `repo.git/info/attributes` unsets filter/diff/merge drivers for every path, so a planted `.gitattributes` can't name one. The engine's own git calls on a share folder (status polling, diff stats) add `--ignore-submodules=all` and the same `-c` hardening, and refuse `add`. The trusted index never holds a gitlink: stripped at creation and at every checkpoint. |
 | Host features executing folder content | Shared sessions refuse: ship/push/PR/autopilot, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
+| An untrusted relay in the path (`peer.relay`) | The same pinned-key TLS 1.3 runs end to end *inside* the relay's WebSocket; the relay's own TLS is not trusted. A 128-bit ingress token in the relay path keeps scanners off the handshake, and everything else gets one constant `404`. See [Connecting across networks](#connecting-across-networks). |
 | Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and stops that link's shared session (the folder is kept). Links have an idle expiry (30 days). |
 
 ## Components
@@ -134,6 +142,16 @@ of `host_len(1) | host(utf8) | port(2, BE) | invite_id(8) | secret(20) |
 server_fp(16)`, then a `-` and a 4-character checksum (base32 of
 `sha256(payload)[:3]`, cut to 4) that catches typos. `invite.parse_code` rejects
 anything malformed with `ValueError` and never echoes the secret.
+
+**Version 2** (`mfp2:`, same encoding and checksum) adds a carrier:
+`carrier(1) | host_len(1) | host | port(2, BE) | path_len(1) | path(ascii) |
+invite_id(8) | secret(20) | server_fp(16)`. Carrier `1` is direct TCP
+(`path_len` must be 0); carrier `2` is a WebSocket relay, dialed as
+`wss://host:port<path>`, where the path is `/seg[/seg…]` of RFC 3986
+unreserved characters, no `.`/`..` segments, at most 200 characters. Unknown
+carriers, a path on TCP, no path on a relay, trailing or missing bytes are all
+malformed. Direct invites are still minted as `mfp1:` so older peers can
+join them; a relay invite needs a peer that understands `mfp2:`.
 
 `InviteBook` lives in memory only; restarting the server kills every invite:
 
@@ -241,7 +259,8 @@ empty and is backed up to `links.json.corrupt-<ts>`.
 `Link` dataclass:
 
 - `link_id`, `peer_name`, `peer_pub` (hex), `role` (`listener`|`dialer`),
-  `peer_addr` (`host:port`, dialer only), `created`, `last_seen`, `sas`
+  `peer_addr` (dialer only: `host:port`, or a relay `wss://host:port/path`
+  in canonical form), `created`, `last_seen`, `sas`
 - `perms` (default `{"messages":true,"diff":true,"read_file":true}`)
 - `share_id` (str|None), `session_title` (str|None)
 
@@ -473,6 +492,7 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `POST` | `/api/peer/links/{id}/share` | `{repo_path, branch?, program?}` → creates the share and the sandboxed session |
   | `DELETE` | `/api/peer/links/{id}/share` | `?delete_files=1` |
   | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` |
+  | `POST` | `/api/peer/links/{id}/address` | `{address}`: re-point a link we joined (`host:port` or `wss://…`) |
 - Settings (`peer` group):
   - `enabled` (false)
   - `listen_host` (`0.0.0.0`)
@@ -481,9 +501,11 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   - `advertise_host` ("" = Tailscale IPv4, else LAN address; the address
     invite codes carry — `POST /api/peer/invites {advertise_host}` overrides)
   - `egress_allow` ([])
+  - `relay` (`off` | `cloudflare` | `url`), `relay_url`, `relay_port` — see
+    [Connecting across networks](#connecting-across-networks)
 - CLI: `mindflock peer status | invite | join <code> | links | unlink <id> |
   share <link> <repo> [--branch] | unshare <link> | export <link> <repo>
-  <peer/branch>`.
+  <peer/branch> | address <link> <address>`.
 
 ## Residual risks
 
@@ -503,8 +525,291 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   listener port can use up the 16 handshake slots or the global pairing rate
   limit (10 attempts/min), delaying a legitimate reconnect or pairing. Expose
   the port only on a private network (Tailscale) and stop inviting when done:
-  the listener closes when no invites or listener links remain.
+  the listener closes when no invites or listener links remain. Through a
+  relay, the stranger first needs the ingress token from a code; the relay
+  operator itself can always deny service.
+- **The relay** (only with `peer.relay` on): see
+  [Relay residual risks](#relay-residual-risks).
 - **Platform.** The sandbox is Linux-only (bubblewrap + seccomp). Elsewhere
   sharing a folder is refused (fail closed), so there is no agent to talk to.
 - **The kernel.** bubblewrap relies on unprivileged user namespaces. A kernel
   LPE inside the sandbox breaks every boundary above.
+
+## Connecting across networks
+
+The base design assumes the joiner can open a TCP connection to the inviter
+(same LAN, or one tailnet). Two people on different networks are usually
+both behind NAT with no public IP and no shared tailnet. This section picks
+a way to connect them **without weakening anything above**.
+
+**The invariant.** Whatever carries the bytes is part of the untrusted path.
+The pinned-key TLS 1.3 session between the two MindFlock instances must run
+end to end *through* it. Any TLS the carrier adds is not trusted. A relay, a
+tunnel provider, or anyone who takes over its hostname may drop, delay or
+count traffic. It must never be able to read it, alter it, replay it, or
+impersonate either side. Anything newly reachable from the internet must give
+a stranger nothing beyond what the TLS listener already gives: invite-only,
+pre-auth limits, and no information leak.
+
+### Options
+
+**(a) Cloudflare Tunnel.** `cloudflared` on the inviter keeps an outbound
+connection to Cloudflare's edge (QUIC, falling back to HTTP/2). The edge
+serves a public HTTPS hostname and forwards requests down that connection to
+a local origin.
+
+- *Quick tunnels*: `cloudflared tunnel --url http://127.0.0.1:<port>`. No
+  account or domain is needed. You get a random
+  `https://<words>.trycloudflare.com`, which lives as long as the process,
+  has no uptime guarantee, and allows 200 in-flight requests. Cloudflare's
+  terms call it a tool for testing and experiments. *Named tunnels* need a
+  Cloudflare account and a domain on Cloudflare, but give a stable hostname
+  and can sit behind Cloudflare Access.
+- *Carrying our TCP stream.* Option one: `cloudflared` on both ends
+  (`cloudflared access tcp`). The joiner then has to install it too, and
+  with Access, log in through a browser or hold a service token. Option two:
+  carry the stream as **WebSocket binary frames over HTTPS**. Cloudflare
+  proxies WebSockets on every plan, quick tunnels included, so the joiner
+  needs nothing but outbound HTTPS on 443, which works through almost every
+  NAT and corporate firewall.
+- *Cloudflare Access / service tokens* (`CF-Access-Client-Id` /
+  `-Secret`) can gate a *named* tunnel at the edge before anything reaches
+  the inviter. They need a Zero Trust account and do not exist for quick
+  tunnels. They add an edge-side pre-filter, not confidentiality: the token
+  would have to travel in the code, and Cloudflare sees it.
+- *What Cloudflare sees and can do:* both parties' IP addresses (the
+  joiner's arrives as `Cf-Connecting-Ip`), timing, volume, the hostname and
+  the request path. It terminates the outer TLS (and `cloudflared`
+  re-originates the WebSocket upgrade toward the origin). With TLS-in-WebSocket it
+  sees only the **inner TLS records**: it can't read them, change them (AEAD),
+  replay them (fresh keys and a fresh server nonce), or impersonate either
+  side (keys are pinned, and pairing is pinned by the code's fingerprint). It
+  can deny service.
+- *Exposure:* a public hostname reaches whatever origin `cloudflared`
+  forwards to. That origin must be a minimal, separate endpoint, never the
+  MindFlock HTTP API.
+- *Burden, deps, licensing:* the inviter installs one static binary
+  (Apache-2.0; packaged for Homebrew, apt/yum repos, winget and Docker). No
+  account, no configuration. Neither MindFlock nor the joiner needs any new
+  Python dependency.
+- *Failure modes:* the tunnel dies → new hostname on restart (joiners must be
+  re-addressed); Cloudflare outage or rate limit (429 beyond 200 in-flight
+  requests); a new hostname takes seconds to a minute to resolve, and
+  trycloudflare.com caches NXDOMAIN for 60 s, so an early lookup makes it
+  worse; UDP blocked → `cloudflared` falls back to HTTP/2 by itself.
+
+**(b) Tailscale node sharing / Funnel.**
+
+- *Node sharing* shares one machine into another person's tailnet. Both
+  people need Tailscale accounts, and the recipient must be an admin of their
+  own tailnet to accept. The shared node is quarantined: it accepts
+  connections but can't open them into the recipient's tailnet. DERP relays
+  and the coordination server see only WireGuard ciphertext and metadata.
+  This is the best option when both people already use Tailscale, and it
+  needs no MindFlock change: the code carries the shared node's 100.x
+  address.
+- *Funnel* exposes a node's port to the public internet through Tailscale's
+  relays, on ports 443, 8443 or 10000 only. `tailscaled` on the node
+  terminates the outer TLS (the relays forward encrypted bytes). It needs an
+  account, MagicDNS + HTTPS certificates, and a `funnel` node attribute in
+  the tailnet policy. The node's `*.ts.net` name lands in Certificate
+  Transparency logs. Only the inviter needs Tailscale. Funnel's HTTPS proxy
+  can front the relay ingress with `peer.relay = "url"`,
+  `relay_url = "wss://<node>.<tailnet>.ts.net"` (not tested here).
+- *Burden:* real for a non-expert (account, admin console, policy file),
+  and the free plan's user and device limits apply.
+
+**(c) A self-hostable WebSocket relay, with end-to-end TLS inside.** It
+carries the same TLS-in-WebSocket as (a), so the relay operator has exactly
+Cloudflare's power: metadata and denial of service, nothing else. Two shapes:
+
+- A reverse proxy (Caddy, nginx) on a public host that forwards to the
+  inviter's ingress. Supported now as `peer.relay = "url"`, but the proxy
+  must reach the inviter (an SSH `-R` tunnel, WireGuard…).
+- A *rendezvous* relay that both sides dial out to, pairing the two
+  WebSockets by the ingress token. The carrier needs no change for this (the
+  relay just splices two WebSockets), but someone has to run a public server
+  (a VPS, TLS certificate, abuse handling, cost), or MindFlock would have to
+  run one as a service. Not built: no central service exists to operate it.
+
+**(d) NAT hole punching (STUN/ICE).** It is direct and peer to peer, but it
+still needs a rendezvous/signaling channel, plus a TURN relay for the
+symmetric NATs and UDP-hostile networks that defeat punching (commonly cited
+at 10-20% of pairs). It is UDP, so our TLS-over-TCP stream would need QUIC
+or DTLS plus ICE, which means heavy native dependencies (aiortc / aioquic)
+and a large new attack surface. Tailscale already does exactly this (with
+DERP as the TURN), so the sensible way to get it is option (b), not
+rebuilding it. Not worth it.
+
+| | Middle party sees / can do | Public exposure | Setup (non-expert) | New deps |
+|---|---|---|---|---|
+| (a) quick tunnel + TLS-in-WS | IPs, timing, volume, hostname/path; can drop. Never plaintext, alteration or impersonation. | a random `trycloudflare.com` name → one tokenized path, constant 404 | inviter: install `cloudflared`, flip a setting; joiner: nothing | `cloudflared` binary on the inviter (Apache-2.0) |
+| (a′) named tunnel (+ Access) | same | your hostname (optionally Access-gated) | account + domain + config | same, plus an account |
+| (b) node sharing | coordination/DERP metadata; WireGuard inside, pinned TLS inside that | none | both: Tailscale accounts, admin acceptance | Tailscale (BSD-3 client) |
+| (b′) Funnel | Tailscale relays: metadata; `tailscaled` sees the outer TLS | `*.ts.net` name, CT-logged | inviter: account, policy edit | Tailscale |
+| (c) own relay | its operator: metadata; can drop | the relay's hostname | run a public server | a server |
+| (d) STUN/ICE | STUN/TURN: metadata | signaling service | invisible if it works | QUIC/ICE stack |
+
+### Decision
+
+**Default relay: an inviter-side Cloudflare quick tunnel carrying the
+existing peer TLS stream as WebSocket binary frames, with the tunnel hostname
+and an ingress token in an `mfp2:` code.** It is opt-in
+(`peer.relay = "cloudflare"`; off by default). `peer.relay = "url"` covers
+everything else with the same carrier: named Cloudflare tunnels with Access,
+Tailscale Funnel, or your own reverse proxy.
+
+Why: it is the only option where the joiner installs and configures nothing,
+and the inviter installs one widely packaged binary and needs no account. It
+works across any two NATs because both sides only make outbound connections.
+Security rests entirely on the existing, unchanged pinned-key handshake, so
+the relay is just one more untrusted network path. We do not have to trust
+Cloudflare, only to tolerate it seeing metadata. The costs (a third party in
+the path, a hostname that changes when `cloudflared` restarts, a free tier
+with no SLA) are availability and privacy-of-metadata costs, not
+confidentiality or integrity costs, and are written down below. If both
+people use Tailscale, node sharing is still the better choice.
+
+### How it works — CONTRACT (`addr.py`, `relay.py`, `tunnel.py`)
+
+```
+ joiner (anywhere)                    Cloudflare edge                inviter (behind NAT)
+ PeerTransport ──TLS 1.3 (pinned)──────────────────────────────────────► PeerTransport
+   │ socketpair                                                            ▲ socketpair
+   └► WebSocket ═══ wss://<x>.trycloudflare.com/<token> ═══► cloudflared ═► RelayIngress
+      (outer TLS: WebPKI-checked,     (terminates outer TLS,   (outbound    (127.0.0.1 only,
+       but not trusted)                proxies the WebSocket)   QUIC/H2)     one path)
+```
+
+- **Carrier.** `relay.dial(addr, tls_ctx, edge_ssl)` opens
+  `wss://host:port/path`. The outer TLS is checked against the system CAs
+  (defense in depth only). It completes a strict RFC 6455 upgrade: checks
+  `Sec-WebSocket-Accept`, refuses extensions and subprotocols, and caps the
+  response head at 8 KiB. It then splices the WebSocket to one end of a
+  `socketpair` and runs the **unchanged** TLS client (pinning included) over
+  the other end. The inviter's `RelayIngress` does the mirror image and hands
+  each inner stream to `PeerTransport.accept_relayed(reader, writer,
+  source)`. That runs exactly the direct accept path: the 16-slot
+  unauthenticated cap, the per-source rate (keyed `relay:<ip>`), the 10 s
+  handshake deadline, the global pairing rate, and pair/auth.
+- **Framing.** Binary and continuation frames are data. Text, reserved
+  opcodes, RSV bits, wrong masking (client→server frames must be masked,
+  server→client must not), non-minimal lengths, fragmented or oversized
+  control frames, a bad fragmentation sequence or a 1-byte close all close
+  the connection. Frames carry at most 256 KiB, and we send 16 KiB. Ping is
+  answered. Pings, pongs and empty data frames are capped at 60 per minute.
+- **The public endpoint** (`RelayIngress`) binds **loopback only** (it
+  refuses anything else) and is its own tiny server; it never routes to the
+  HTTP API. It accepts exactly `GET <path> HTTP/1.1` with a valid WebSocket
+  upgrade and no body, where `<path>` is `[/<relay_url prefix>]/<token>`.
+  The token is 128 random bits (26 base32 chars), persisted 0600 in
+  `~/.mindflock/peer/relay/token`, compared in constant time. **Every other
+  request** (any method, any other path, a malformed or ambiguous head,
+  duplicate security headers, obs-fold, control characters, `Transfer-Encoding`
+  or a body) gets the same bytes, `HTTP/1.1 404 Not Found` with
+  `Content-Length: 0`, no `Server` header, then a close. Limits: 32
+  connections still sending their head, a 5 s head deadline, an 8 KiB head,
+  and 64 open WebSockets.
+- **Source address.** The ingress trusts `Cf-Connecting-Ip` only in
+  `cloudflare` mode. Cloudflare sets that header and rejects requests that
+  try to supply it (error 1000, verified). It is used only to pick a
+  rate-limit bucket. In `url` mode every relayed client shares one bucket.
+- **The tunnel** (`QuickTunnel`). `cloudflared` comes from `PATH`, or the
+  absolute path in `$MINDFLOCK_CLOUDFLARED` (an env var, deliberately not a
+  web-editable setting). **It is never downloaded.** It runs as
+  `cloudflared tunnel --no-autoupdate --config <ours> --metrics 127.0.0.1:0
+  --url http://127.0.0.1:<ingress port>` with a minimal environment (no
+  inherited `TUNNEL_*`), a private empty `HOME` and our own config file. A
+  user's `~/.cloudflared` or `/etc/cloudflared` config, ingress rules or
+  origin cert therefore can't widen what is exposed. Its output is untrusted
+  text: lines are capped at 4 KiB, and we take the first token that is
+  exactly `https://<one DNS label>.trycloudflare.com`, standing alone on the
+  line. The `api.` endpoint, URLs with a path or port, and look-alike
+  suffixes never match. The output is never logged. We wait (best effort) for
+  "Registered tunnel connection", then hand out the code. We deliberately do
+  **not** look the new name up first: trycloudflare.com caches NXDOMAIN for
+  60 s, so an early probe only poisons a resolver. Instead, the **joiner**
+  waits up to 75 s, retrying every 5 s, for the relay's name to resolve
+  before dialing. The invite is untouched by that, and a name that never
+  resolves gets a clear error.
+- **Lifecycle.** The relay follows the listener rule: up while an invite or
+  a listener-role link exists, down otherwise (`cloudflared` gets SIGTERM,
+  then SIGKILL). With a relay on, the direct TCP listener stays closed, so
+  links that joined directly can't reconnect until the relay is turned off
+  again or they re-pair. If `cloudflared` dies on its own, a new tunnel comes
+  up with backoff (2 s → 120 s). It has a **new hostname**, shown in
+  Settings and `mindflock peer status`. The joiner applies it with
+  `mindflock peer address <link> <wss://…>` (`POST
+  /api/peer/links/{id}/address`). That is safe: an address only says where
+  to dial; the peer's key stays pinned.
+- **Joining needs no setting.** Any instance can dial an `mfp2:` code;
+  `peer.relay` only controls whether *this* instance exposes a relay
+  endpoint.
+- **Failures are explicit.** No `cloudflared`: 409 with install
+  instructions. The tunnel won't start: 502. Either way the half-started
+  relay is torn down and no invite exists.
+
+### Threat-model deltas
+
+| Threat | Defense |
+|---|---|
+| The relay (Cloudflare, a Funnel relay, your proxy) reads, alters, replays or redirects traffic | Inner TLS 1.3 with pinned keys, unchanged. Tampering kills the connection with nothing delivered. A replayed stream fails the TLS handshake. Redirecting to another MindFlock fails the fingerprint/pin check **before the client sends any application byte** (tested with a recording, WebSocket-terminating middlebox). |
+| Internet scanners hitting the public hostname | One tokenized path. Without the token: a constant 404, no handshake slot used, no rate bucket touched, no banner. |
+| Someone with a code floods the relay endpoint | The same pre-auth limits as the direct listener, after the ingress's own caps. Per-IP buckets come from `Cf-Connecting-Ip`. |
+| A local user's cloudflared config exposes more | Private `HOME`, explicit `--config`, minimal env, `--url` = the ingress only. |
+| Hostile `cloudflared` output | A strict, bounded parser. The worst a bad hostname can do is make the joiner dial somewhere that fails the key pin. |
+| Downgrade between code versions | `mfp1`/`mfp2` share one checksum but differ in prefix and layout; a payload behind the wrong prefix is malformed. The secret and fingerprint are carried identically. |
+
+### Relay residual risks
+
+- **Metadata.** The relay operator learns both parties' IP addresses, when
+  they talk and how much, the tunnel hostname and the ingress token. Use
+  node sharing (both on Tailscale) if that matters.
+- **Availability.** Quick tunnels have no SLA and are meant for testing.
+  Cloudflare can rate-limit or end them, and a restart changes the hostname
+  (re-address with `peer address`, or use `url` mode with a named tunnel or
+  Funnel for a stable name).
+- **The token holder.** Anyone who saw a code (or the joiner's
+  `links.json`) can reach the TLS handshake and use up the pre-auth budgets
+  (DoS only). The one-time secret and the pinned keys still protect the
+  link. The token does not rotate on its own; delete
+  `~/.mindflock/peer/relay/token` and re-pair to rotate it.
+- **The `cloudflared` binary.** It runs with your user's privileges, and you
+  installed it, so it is trusted like any other tool on your machine.
+  MindFlock never fetches or updates it (`--no-autoupdate`).
+- **Joiner-side outbound requests.** A code makes the joiner open a TLS
+  connection and send one fixed WebSocket `GET` to the host, port and path
+  it names, the way an `mfp1` code already makes it dial a host and port.
+  Only pair with people you trust to send you a code.
+- **An orphaned tunnel.** If MindFlock is killed with SIGKILL, `cloudflared`
+  can outlive it. It then forwards to a closed loopback port (the edge
+  answers with an error), and nothing is exposed. (This happened once
+  during the trial below when the test script crashed.)
+
+### Field trial
+
+Run on 2026-10-07 with cloudflared 2026.10.0 (release checksum verified) and
+a real quick tunnel.
+
+- **Two in-process transports.** The tunnel was up and registered in 3.7 s.
+  Pairing took 0.53 s once the name resolved, and both sides showed the same
+  SAS. Ten request round trips took 0.22 s, and a 19 KB message went
+  through. After we killed the authenticated connection, the joiner
+  reconnected through the tunnel by itself.
+- **The full `PeerService`** (`peer.relay = "cloudflare"`, the inviter's
+  `cloudflared` found via `MINDFLOCK_CLOUDFLARED`). The `mfp2:` invite was
+  ready in 4.3 s. The direct listener stayed closed. The joiner waited out
+  DNS propagation automatically and paired 5.75 s later. Probes of the
+  public hostname (`/`, `/api/peer`, the token path without an upgrade,
+  `POST` with a body, a path variant) all returned the same empty 404 (only
+  Cloudflare's own `server` header was added). `cloudflared` was gone after
+  the service stopped.
+- **Fixes the trial forced.** An earlier version probed DNS from the
+  inviter: the probe cached NXDOMAIN and delayed the code by 34 s. It also
+  reset the connection after a 404 to a request with a body, so the edge got
+  no answer. Both are fixed: the joiner waits for DNS instead, and the
+  ingress does a lingering close.
+- **What the origin received.** Cloudflare's own `Cf-Connecting-Ip`, and a
+  rewritten `Sec-WebSocket-Key`: `cloudflared` re-originates the upgrade, and
+  the inner stream still passed through intact. A request that supplied its
+  own `Cf-Connecting-Ip` was refused at the edge (HTTP 403, error 1000).

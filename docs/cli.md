@@ -268,7 +268,7 @@ By default it lists unread messages (`pending` and `held`). `--all` also
 lists messages already typed in or read. `--json` prints the raw response.
 Prefix matching works like `attach`.
 
-### `mindflock peer [status|invite|join|links|unlink|share|unshare|export]`
+### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`
 
 [Peer links](peer-link.md) over `/api/peer` (needs a running server, and
 `peer.enabled` on):
@@ -276,13 +276,14 @@ Prefix matching works like `attach`.
 | Command | Does |
 |---|---|
 | `peer status` | sandbox availability, identity fingerprint, listener, invites, links |
-| `peer invite [--ttl S] [--advertise HOST]` | prints a one-time `mfp1:…` code (≤ 10 min, single use) |
+| `peer invite [--ttl S] [--advertise HOST]` | prints a one-time `mfp1:…` code (≤ 10 min, single use); with `peer.relay` on, an `mfp2:…` code that goes through the relay |
 | `peer join CODE` | pairs, prints the SAS to compare with your peer |
 | `peer links` | links with their SAS, state and what the peer may do |
 | `peer unlink LINK [--delete-files]` | stops the shared session, forgets the peer |
 | `peer share LINK REPO [--branch B] [--program claude\|codex]` | clones REPO into the link's shared folder and starts its sandboxed session |
 | `peer unshare LINK [--delete-files]` | stops the shared session (keeps the folder unless told) |
 | `peer export LINK TARGET_REPO peer/BRANCH` | checkpoints the shared folder and fetches it into your repo |
+| `peer address LINK ADDRESS` | points a link you joined at the inviter's new address (`host:port`, or `wss://host/path` after their quick tunnel restarted — they see it in `peer status`) |
 
 `LINK` is a link id or a unique prefix of one.
 

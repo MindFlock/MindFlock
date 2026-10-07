@@ -14695,6 +14695,21 @@ async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
     )
 
 
+@app.post("/api/peer/links/{link_id}/address")
+async def peer_set_address(link_id: str, request: Request) -> JSONResponse:
+    """``{address}`` — point a link WE joined at the inviter's new address
+    (``host:port`` or a relay ``wss://host/path``, e.g. after their quick
+    tunnel restarted). The peer's key stays pinned, so this can only change
+    where we dial, never whom we trust."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _peer_service().set_address,
+        link_id,
+        str(body.get("address") or ""),
+    )
+
+
 @app.post("/api/peer/links/{link_id}/perms")
 async def peer_set_perms(link_id: str, request: Request) -> JSONResponse:
     """``{"messages"?, "diff"?, "read_file"?: bool}`` — what the PEER may do to

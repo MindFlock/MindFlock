@@ -31,6 +31,14 @@ interface PeerStatus {
   fingerprint: string | null;
   sandbox: { available: boolean; reason: string };
   listen: { host: string; port: number; listening: boolean };
+  relay?: {
+    mode: string;
+    running: boolean;
+    public_host: string | null;
+    address: string | null;
+    error: string | null;
+    cloudflared?: boolean;
+  };
   links: PeerLink[];
   invites: Array<{ invite_id: string; expires_in: number | null }>;
 }
@@ -41,7 +49,14 @@ interface Invite {
   expires_in: number;
   host: string;
   port: number;
+  relay?: string;
 }
+
+const RELAY_OPTIONS = [
+  { value: "off", label: "Off — peers dial me directly (Tailscale / LAN)" },
+  { value: "cloudflare", label: "Cloudflare quick tunnel (needs cloudflared)" },
+  { value: "url", label: "My own HTTPS relay (relay URL below)" },
+];
 
 const PERM_LABELS: Array<[keyof PeerLink["perms"], string]> = [
   ["messages", "send messages"],
@@ -140,6 +155,25 @@ export function PeerLinks(_: ScreenProps) {
         <span className="set-hint">The address written into your invite codes — the one your peer dials.</span>
       </label>
       <label className="set-row">
+        <span className="set-label">Relay</span>
+        <SettingField group="peer" field="relay" options={RELAY_OPTIONS} />
+        <span className="set-hint">
+          For peers on another network. Your invites then go through a public relay, carrying
+          the same end-to-end, key-pinned encryption: the relay can block the connection but
+          never read or change it. Your peer needs nothing extra.
+        </span>
+      </label>
+      <label className="set-row">
+        <span className="set-label">Relay URL</span>
+        <SettingField group="peer" field="relay_url" placeholder="wss://peer.example.com/mindflock" />
+        <span className="set-hint">Relay "My own HTTPS relay" only: forwards (path unchanged) to the relay port.</span>
+      </label>
+      <label className="set-row">
+        <span className="set-label">Relay port</span>
+        <SettingField group="peer" field="relay_port" placeholder="auto" />
+        <span className="set-hint">Loopback port your relay forwards to (blank = any free port).</span>
+      </label>
+      <label className="set-row">
         <span className="set-label">Extra egress hosts</span>
         <SettingField group="peer" field="egress_allow" placeholder="e.g. pypi.org, .github.com" />
         <span className="set-hint">
@@ -164,6 +198,16 @@ export function PeerLinks(_: ScreenProps) {
               </>
             )}
             {" · "}listener {st.listen.listening ? "on" : "off"} ({st.listen.host}:{st.listen.port})
+            {st.relay && st.relay.mode !== "off" && (
+              <>
+                {" · "}relay <span id="peer-relay-state">{st.relay.running ? "up" : "down"}</span>
+                {st.relay.public_host && <> at <code>{st.relay.public_host}</code></>}
+                {st.relay.error && <span className="error"> — {st.relay.error}</span>}
+                {st.relay.mode === "cloudflare" && st.relay.cloudflared === false && (
+                  <span className="error"> — cloudflared is not installed</span>
+                )}
+              </>
+            )}
           </p>
 
           <h4 className="set-subtitle">Invite</h4>
@@ -181,8 +225,10 @@ export function PeerLinks(_: ScreenProps) {
                 Copy
               </button>
               <span className="set-hint">
-                Single use, expires in {Math.round(invite.expires_in / 60)} min. Your peer dials{" "}
-                {invite.host}:{invite.port}.
+                Single use, expires in {Math.round(invite.expires_in / 60)} min.{" "}
+                {invite.relay
+                  ? `Your peer connects through the relay at ${invite.host}.`
+                  : `Your peer dials ${invite.host}:${invite.port}.`}
               </span>
             </div>
           )}
@@ -191,7 +237,7 @@ export function PeerLinks(_: ScreenProps) {
           <div className="set-row">
             <input
               id="peer-join-code"
-              placeholder="paste a mfp1:… code"
+              placeholder="paste a mfp1:… or mfp2:… code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
             />
