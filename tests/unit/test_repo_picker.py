@@ -1058,3 +1058,43 @@ class TestOneLadderTwoConsumers:
         assert r.status_code == 502
         assert calls == [1]
         assert seen["recent_paths"] == [repo]
+
+
+class TestMacPrivacyFolders:
+    """macOS blocks the first look inside ~/Desktop, ~/Documents, ~/Downloads…
+    until someone answers a privacy dialog ON THAT MAC — and a Mac driven from a
+    phone has nobody there. Unasked walks must never go in."""
+
+    @pytest.fixture()
+    def home(self, tmp_path):
+        for rel in ("Desktop/hidden-app", "Documents/doc-app", "code/open-app"):
+            p = tmp_path / rel
+            p.mkdir(parents=True)
+            (p / ".git").mkdir()
+        return tmp_path
+
+    def test_mac_sweep_and_search_skip_privacy_folders(self, home, monkeypatch):
+        monkeypatch.setattr(repo_picker.sys, "platform", "darwin")
+        nearby = repo_picker._nearby_candidates(str(home))
+        assert str(home / "code" / "open-app") in nearby
+        assert not any("Desktop" in p or "Documents" in p for p in nearby)
+        for name in ("hidden-app", "doc-app"):
+            assert repo_picker.search_repos(name, str(home))["matches"] == []
+        found = repo_picker.search_repos("open-app", str(home))["matches"]
+        assert [m["path"] for m in found] == [str(home / "code" / "open-app")]
+
+    def test_other_platforms_still_walk_them(self, home, monkeypatch):
+        monkeypatch.setattr(repo_picker.sys, "platform", "linux")
+        nearby = repo_picker._nearby_candidates(str(home))
+        assert str(home / "Documents" / "doc-app") in nearby
+        found = repo_picker.search_repos("hidden-app", str(home))["matches"]
+        assert [m["path"] for m in found] == [str(home / "Desktop" / "hidden-app")]
+
+    def test_guard_matches_the_folder_and_everything_under_it(self, monkeypatch):
+        monkeypatch.setattr(repo_picker.sys, "platform", "darwin")
+        g = repo_picker._privacy_guarded
+        assert g("/Users/a/Desktop", "/Users/a")
+        assert g("/Users/a/Downloads/x/y", "/Users/a")
+        assert not g("/Users/a/DesktopApps", "/Users/a")
+        assert not g("/Users/a/code/Desktop", "/Users/a")
+        assert not g("/Users/a", "/Users/a")

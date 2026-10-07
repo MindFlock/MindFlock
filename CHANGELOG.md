@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install **cloudflared**, each only when peer links / the Cloudflare relay are
   on.
 
+### Fixed
+
+- **Starting a session on a Mac from the phone no longer hangs.** The plan's
+  folder search looked inside `~/Desktop`/`~/Documents`/`~/Downloads`, and on a
+  Mac that blocks until someone answers a privacy dialog on that Mac's screen —
+  so "Reading…" never finished when the Mac was across the room. Automatic
+  folder searches now skip macOS's privacy-protected folders (browsing to one
+  still works), the plan's folder search gives up after 8 seconds instead of
+  waiting forever, a plan forwarded to another device is no longer cut off
+  before that device's own fallback answers, and a slow read offers **Pick the
+  folder myself** on the phone.
+
 ## [0.7.0] - 2026-10-07
 
 ### Added

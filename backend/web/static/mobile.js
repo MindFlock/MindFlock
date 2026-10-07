@@ -868,6 +868,7 @@
   var newDeviceEl = document.getElementById("new-device");
   var newFolderLabel = document.getElementById("new-folder-label");
   var newConfirmWhere = document.getElementById("new-confirm-where");
+  var newSkipBtn = document.getElementById("new-skip");
 
   var newPlan = null;          // the answer being reviewed (model's or hand-picked)
   var planSeq = 0;             // cancels an in-flight plan; see closeNewSheet
@@ -1028,6 +1029,7 @@
   function setPlanBusy(on, label) {
     planBusy = on;
     newGoBtn.disabled = on;
+    if (!on) newSkipBtn.classList.add("hidden");
     // The plan in flight is being read on the device picked when Continue was
     // pressed; a select that still moved would be pointing somewhere else.
     newDeviceEl.disabled = on;
@@ -1139,7 +1141,11 @@
     newError("");
     setPlanBusy(true, "Reading…");
     planSlowTimer = setTimeout(function () {
-      if (seq === planSeq) newGoBtn.textContent = "Still reading…";
+      if (seq !== planSeq) return;
+      newGoBtn.textContent = "Still reading…";
+      // A read can take as long as the target's model turn — over a minute on
+      // a slow device. Never leave the phone with nothing to do but wait.
+      newSkipBtn.classList.remove("hidden");
     }, NEW_SLOW_MS);
     fetch(devicePath(dev, "/api/session-plan"), {
       method: "POST",
@@ -1192,6 +1198,16 @@
     if (seq !== planSeq) return;
     if (planSlowTimer) { clearTimeout(planSlowTimer); planSlowTimer = null; }
     setPlanBusy(false, "Continue");
+  }
+
+  // "Pick the folder myself": abandon the read in flight (its answer, if it
+  // ever comes, is dropped by the planSeq check) and go to the folder list on
+  // the device the read was aimed at.
+  function skipPlan() {
+    if (!planBusy) return;
+    var seq = ++planSeq;
+    planDone(seq);
+    loadFolders("", 1);
   }
 
   function folderNote(msg) {
@@ -1419,6 +1435,7 @@
   document.getElementById("new-btn").addEventListener("click", openNewSheet);
   emptyEl.addEventListener("click", openNewSheet);
   newGoBtn.addEventListener("click", describeIt);
+  newSkipBtn.addEventListener("click", skipPlan);
   document.getElementById("new-cancel").addEventListener("click", closeNewSheet);
   newStartBtn.addEventListener("click", startSession);
   document.getElementById("new-back").addEventListener("click", function () {
