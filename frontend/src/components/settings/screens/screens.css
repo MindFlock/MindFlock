@@ -831,3 +831,62 @@
 .set-confirm .set-confirm-yes:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
+
+/* Settings → Peer links: the two things people come here to do, side by side,
+   with every setting folded under Advanced. */
+.peer-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 4px 0 12px;
+}
+.peer-action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, transparent);
+}
+.peer-action .set-subtitle {
+  margin: 0;
+}
+.peer-action .set-row input {
+  flex: 1;
+  min-width: 0;
+}
+.peer-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-invite textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: 12px ui-monospace, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+.peer-action > .test-btn,
+.peer-invite #peer-invite-copy {
+  align-self: flex-start;
+}
+.peer-needs {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--warn, #d9a441);
+}
+.peer-link-card {
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.peer-advanced {
+  margin-top: 16px;
+}
+.peer-advanced > summary {
+  cursor: pointer;
+  color: var(--muted, inherit);
+  margin-bottom: 8px;
+}

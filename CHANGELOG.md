@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Peer links: send a code, they paste it, you're connected.** Settings →
+  Peer links now leads with **Invite someone** and **Join a peer**; every
+  setting moved under *Advanced*. Inviting or joining turns peer links on (no
+  toggle first). **Copy invite** copies a ready-to-send message, and Join
+  accepts that whole message or just the code. The relay defaults to the new
+  `auto`: invites go through the Cloudflare relay whenever `cloudflared` is
+  installed, so the other person can be on any network, and the screen offers
+  to install cloudflared/bubblewrap in one click when they're missing. Also in
+  the command palette as *Peer links…*.
+
 - **Install every missing dependency in one go.** The setup checklist (Setup,
   Settings → Doctor) has an **Install everything missing** button that runs one
   script in a terminal — one package-manager run for git/tmux/bubblewrap/…, one

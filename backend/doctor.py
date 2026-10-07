@@ -697,9 +697,10 @@ def _cloudflared_install() -> Tuple[str, str]:
 
 
 def check_cloudflared() -> Check:
-    """Peer links across networks (``peer.relay = "cloudflare"``) run a
-    locally installed ``cloudflared``. Wanted — and in the install plan — only
-    when that relay is selected."""
+    """Peer links across networks run a locally installed ``cloudflared``.
+    Wanted — and in the install plan — when ``peer.relay`` is ``cloudflare``,
+    or ``auto`` (the default) with peer links on: that is what lets an invite
+    reach someone on another network."""
     import os
 
     from backend.peer.tunnel import find_cloudflared
@@ -707,17 +708,24 @@ def check_cloudflared() -> Check:
     path = find_cloudflared(os.environ.get("MINDFLOCK_CLOUDFLARED", ""))
     if path:
         return Check("cloudflared", "cloudflared", "ok", path)
-    wanted = _peer_settings().get("relay") == "cloudflare"
+    peer = _peer_settings()
+    relay = peer.get("relay")
+    wanted = relay == "cloudflare" or (relay == "auto" and bool(peer.get("enabled")))
     cmd, pkg = _cloudflared_install()
+    if relay == "cloudflare":
+        detail = "not found, but peer.relay is 'cloudflare' — invites will fail"
+    elif wanted:
+        detail = (
+            "not found — your peer-link invites only reach people on your own "
+            "network or tailnet until it's installed"
+        )
+    else:
+        detail = "not found (optional — only for peer links across networks)"
     return Check(
         "cloudflared",
         "cloudflared",
         "warn" if wanted else "info",
-        (
-            "not found, but peer.relay is 'cloudflare' — invites will fail"
-            if wanted
-            else "not found (optional — only for peer links across networks)"
-        ),
+        detail,
         cmd or "install cloudflared from Cloudflare's downloads page",
         docs=_DOCS["cloudflared"],
         cmd=cmd,

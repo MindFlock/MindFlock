@@ -123,6 +123,9 @@ def svc(monkeypatch):
             "display_name": "alice",
             "advertise_host": "100.64.0.1",
             "egress_allow": [],
+            # Direct invites: "auto" would pick up a cloudflared that happens
+            # to be installed on the machine running the tests.
+            "relay": "off",
         },
     )
     monkeypatch.setattr(svc_mod, "_SERVICE", s)
@@ -204,13 +207,69 @@ def test_invite_code_only_in_create_response(svc, client):
     assert "peer_pub" not in status.json()["links"][0]
 
 
-def test_invite_refused_when_disabled(svc, client, monkeypatch):
+def _switched_off(svc, monkeypatch):
+    """Peer links off, with a settings store the service can flip on."""
+    state = {
+        "enabled": False,
+        "listen_host": "0.0.0.0",
+        "listen_port": 8799,
+        "advertise_host": "100.64.0.1",
+        "relay": "off",
+    }
+    saved = []
+    monkeypatch.setattr(svc, "_settings_getter", lambda: dict(state))
+    monkeypatch.setattr(
+        svc,
+        "_settings_setter",
+        lambda patch: (saved.append(patch), state.update(patch)),
+    )
+    return saved
+
+
+def test_inviting_turns_peer_links_on(svc, client, monkeypatch):
+    # Making an invite IS saying yes: no "turn them on first" detour.
+    saved = _switched_off(svc, monkeypatch)
+    r = client.post("/api/peer/invites", json={})
+    assert r.status_code == 201
+    assert saved == [{"enabled": True}]
+    assert r.json()["code"] == CODE
+
+
+def test_joining_turns_peer_links_on(svc, client, monkeypatch):
+    saved = _switched_off(svc, monkeypatch)
+    r = client.post("/api/peer/join", json={"code": CODE})
+    assert r.status_code == 201
+    assert saved == [{"enabled": True}]
+
+
+def test_invite_refused_when_off_and_nothing_can_turn_it_on(svc, client, monkeypatch):
     monkeypatch.setattr(
         svc, "_settings_getter", lambda: {"enabled": False, "listen_port": 8799}
     )
     r = client.post("/api/peer/invites", json={})
     assert r.status_code == 409
     assert "off" in r.json()["error"]
+
+
+def test_join_takes_the_whole_invite_message(svc, client):
+    # People paste what they were sent — the message, not just the code.
+    msg = svc_mod.invite_message(CODE, 600)
+    assert msg.count(CODE) == 1 and "mindflock peer join" in msg
+    r = client.post("/api/peer/join", json={"code": "hey!\n" + msg.upper()})
+    assert r.status_code == 201
+    assert ("pair", CODE) in svc.transport.calls
+
+
+def test_join_without_a_code_says_so(svc, client):
+    r = client.post("/api/peer/join", json={"code": "here you go: (forgot to paste)"})
+    assert r.status_code == 400
+    assert "mfp1:" in r.json()["error"]
+
+
+def test_invite_response_carries_a_ready_to_send_message(svc, client):
+    body = client.post("/api/peer/invites", json={"ttl_s": 600}).json()
+    assert body["message"] == svc_mod.invite_message(CODE, 600)
+    assert "10 min" in body["message"]
 
 
 def test_invite_refuses_unspecified_advertise_host(svc, client):

@@ -285,15 +285,18 @@ def test_relay_token_is_persisted_private_and_stable():
     assert c != a and len(c) == 26 and c.isalnum()
 
 
+_NOT_A_TOKEN = "abcdefghijklmnopqrstuvwxyz"  # pragma: allowlist secret
+
+
 def test_relay_token_refuses_a_symlink(tmp_path):
     d = paths.ensure_dir(os.path.join(paths.peer_root(), "relay"))
     target = tmp_path / "elsewhere"
-    target.write_text("abcdefghijklmnopqrstuvwxyz\n")
+    target.write_text(_NOT_A_TOKEN + "\n")
     os.symlink(target, os.path.join(d, "token"))
     tok = svc_mod.PeerService._relay_token()
-    assert tok != "abcdefghijklmnopqrstuvwxyz"
+    assert tok != _NOT_A_TOKEN
     assert not os.path.islink(os.path.join(d, "token"))
-    assert target.read_text() == "abcdefghijklmnopqrstuvwxyz\n"
+    assert target.read_text() == _NOT_A_TOKEN + "\n"
 
 
 async def test_relay_code_is_a_real_v2_code_with_the_real_book():
@@ -355,3 +358,40 @@ def test_address_route(monkeypatch):
     assert r.status_code == 400
     st = client.get("/api/peer").json()
     assert st["relay"]["mode"] == "cloudflare"
+
+
+async def test_auto_relays_through_cloudflare_when_cloudflared_is_installed():
+    # The default: "send someone a code" has to work without knowing their
+    # network, so an installed cloudflared means the invite goes through it.
+    svc = make_service(relay="auto")
+    assert svc.relay_setting() == "auto"
+    assert svc.relay_mode() == "cloudflare"
+    inv = await svc.create_invite(300)
+    assert inv["relay"] == "cloudflare"
+    assert FakeTunnel.made
+    assert svc.status()["relay"]["setting"] == "auto"
+
+
+async def test_auto_dials_direct_without_cloudflared():
+    svc = make_service(relay="auto", cloudflared=None, advertise_host="100.64.0.9")
+    assert svc.relay_mode() == "off"
+    inv = await svc.create_invite(300)
+    assert (inv["host"], inv["port"]) == ("100.64.0.9", 8799)
+    assert FakeTunnel.made == []
+    # …and the status says why, so the UI can offer to install it.
+    relay = svc.status()["relay"]
+    assert relay["setting"] == "auto" and relay["cloudflared"] is False
+
+
+async def test_unset_relay_is_auto():
+    svc = make_service()
+    del svc.conf["relay"]
+    assert svc.relay_setting() == "auto"
+
+
+def test_peer_settings_default_relay_is_auto_and_accepted():
+    from backend.config.settings import PeerSettings
+
+    assert PeerSettings().effective()["relay"] == "auto"
+    assert PeerSettings.from_dict({"relay": "auto"}).relay == "auto"
+    assert PeerSettings.from_dict({"relay": "off"}).effective()["relay"] == "off"

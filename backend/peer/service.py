@@ -63,7 +63,7 @@ INVITE_TTL_DEFAULT_S = 600
 INVITE_TTL_MIN_S = 60
 INVITE_TTL_MAX_S = 600  # InviteBook refuses longer
 
-RELAY_MODES = ("off", "cloudflare", "url")
+RELAY_MODES = ("off", "cloudflare", "url", "auto")
 RELAY_RESTART_INITIAL_S = 2.0
 RELAY_RESTART_MAX_S = 120.0
 #: An absolute path to cloudflared, overriding PATH lookup. An environment
@@ -71,6 +71,23 @@ RELAY_RESTART_MAX_S = 120.0
 #: and a binary path there would be a way to run arbitrary programs.
 CLOUDFLARED_ENV = "MINDFLOCK_CLOUDFLARED"
 _RELAY_TOKEN_RE = re.compile(r"^[a-z2-7]{26}\Z")
+#: A pairing code anywhere in pasted text (``invite.make_code``'s shape:
+#: prefix, base32 payload, 4-character checksum).
+_CODE_IN_TEXT_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.I)
+
+
+def invite_message(code: str, expires_in: int) -> str:
+    """The text "Copy invite" puts on the clipboard: the code plus the one
+    thing the other person has to do with it, so the code can go over any chat
+    with no explaining. :meth:`PeerService.join` accepts this whole message
+    back, so pasting all of it works."""
+    minutes = max(1, round(int(expires_in or 0) / 60))
+    return (
+        'Join me on MindFlock: in MindFlock choose "Join a peer" and paste '
+        "this whole message.\n\n%s\n\n(Works once, expires in %d min. From a "
+        "terminal: mindflock peer join <the code above>)" % (code, minutes)
+    )
+
 
 #: Blocking work an inbound peer op triggers (git, file reads, the mailbox)
 #: runs on a dedicated pool, at most this many threads per link at a time.
@@ -168,8 +185,10 @@ class PeerService:
         ingress_factory: Optional[Callable[..., Any]] = None,
         tunnel_factory: Optional[Callable[..., Any]] = None,
         cloudflared_finder: Optional[Callable[[], Optional[str]]] = None,
+        settings_setter: Optional[Callable[[dict], None]] = None,
     ) -> None:
         self._server_mod = server
+        self._settings_setter = settings_setter
         self._identity_factory = identity_factory
         self._store_factory = store_factory
         self._invites_factory = invites_factory
@@ -370,9 +389,26 @@ class PeerService:
     # ------------------------------------------------------------------ #
     # The relay (peer.relay = cloudflare | url)
     # ------------------------------------------------------------------ #
-    def relay_mode(self) -> str:
-        mode = str(self.settings().get("relay") or "off").strip().lower()
+    def relay_setting(self) -> str:
+        """``peer.relay`` as configured (``auto`` unless the user chose)."""
+        mode = str(self.settings().get("relay") or "auto").strip().lower()
         return mode if mode in RELAY_MODES else "off"
+
+    def relay_mode(self) -> str:
+        """The relay actually in use: ``off`` | ``cloudflare`` | ``url``.
+
+        ``auto`` — the default — is what makes "send someone a code" work
+        without knowing their network: invites go through a Cloudflare quick
+        tunnel whenever ``cloudflared`` is installed (the end-to-end pinned TLS
+        runs inside it either way), and fall back to dialing this machine
+        directly (Tailscale / LAN) when it isn't."""
+        mode = self.relay_setting()
+        if mode != "auto":
+            return mode
+        try:
+            return "cloudflare" if self._find_cloudflared() else "off"
+        except Exception:  # noqa: BLE001 — no cloudflared is "direct", not an error
+            return "off"
 
     @staticmethod
     def _relay_token() -> str:
@@ -579,6 +615,7 @@ class PeerService:
         )
         out = {
             "mode": mode,
+            "setting": self.relay_setting(),
             "running": bool(running and addr is not None),
             "public_host": addr.host if addr is not None else None,
             # The full address (with the ingress token) — what a peer who
@@ -586,7 +623,7 @@ class PeerService:
             "address": str(addr) if addr is not None else None,
             "error": self._relay_error or None,
         }
-        if mode == "cloudflare":
+        if mode == "cloudflare" or out["setting"] == "auto":
             try:
                 out["cloudflared"] = bool(self._find_cloudflared())
             except Exception:  # noqa: BLE001
@@ -902,6 +939,30 @@ class PeerService:
                 "peer links are off — turn them on in Settings → Peer links", 409
             )
 
+    def _turn_on(self) -> None:
+        """Creating an invite or joining one IS saying yes to peer links, so
+        either turns the master switch on instead of refusing with "turn them
+        on first" — the step that made a code alone not enough. Only those two
+        do: sharing a folder still needs a link, and turning links off again
+        (Settings → Peer links → Advanced) stays a deliberate choice."""
+        if self.enabled():
+            return
+        if self._settings_setter is not None:
+            self._settings_setter({"enabled": True})
+        elif self._settings_getter is None:
+            from backend.config import settings as _settings
+
+            _settings.update_settings(peer={"enabled": True})
+        self._require_enabled()
+
+    @staticmethod
+    def _extract_code(text: str) -> str:
+        """The pairing code inside whatever was pasted: the bare code, the
+        whole invite message (see :func:`invite_message`), or a
+        ``mindflock://join/<code>`` link. ``""`` when there is none."""
+        m = _CODE_IN_TEXT_RE.search(text or "")
+        return m.group(0).lower() if m else ""
+
     def _link_or_404(self, link_id: str):
         if not isinstance(link_id, str) or not re.fullmatch(r"[0-9a-f]{8,64}", link_id):
             raise PeerServiceError("unknown link", 404)
@@ -952,7 +1013,7 @@ class PeerService:
             return "127.0.0.1"
 
     async def create_invite(self, ttl_s=None, host: str = "") -> dict:
-        self._require_enabled()
+        self._turn_on()
         try:
             ttl = int(ttl_s) if ttl_s is not None else INVITE_TTL_DEFAULT_S
         except (TypeError, ValueError):
@@ -982,6 +1043,7 @@ class PeerService:
         return {
             "invite_id": _get(inv, "invite_id"),
             "code": _get(inv, "code"),
+            "message": invite_message(_get(inv, "code"), ttl),
             "expires_in": ttl,
             "host": adv,
             "port": port,
@@ -1006,6 +1068,7 @@ class PeerService:
         return {
             "invite_id": _get(inv, "invite_id"),
             "code": _get(inv, "code"),
+            "message": invite_message(_get(inv, "code"), ttl),
             "expires_in": ttl,
             "host": addr.host,
             "port": addr.port,
@@ -1024,12 +1087,17 @@ class PeerService:
         await self.sync_listener()
 
     async def join(self, code: str) -> dict:
-        self._require_enabled()
-        if not isinstance(code, str) or not code.strip() or len(code) > 1024:
+        if not isinstance(code, str) or not code.strip() or len(code) > 4096:
             raise PeerServiceError("paste the invite code")
+        found = self._extract_code(code)
+        if not found:
+            raise PeerServiceError(
+                "that doesn't contain an invite code (it starts with mfp1: or mfp2:)"
+            )
+        self._turn_on()
         t = await self._ensure_transport()
         try:
-            link = await _maybe_await(t.pair(code.strip()))
+            link = await _maybe_await(t.pair(found))
         except ValueError as err:
             raise PeerServiceError("invalid invite code: %s" % err) from err
         except Exception as err:  # noqa: BLE001
