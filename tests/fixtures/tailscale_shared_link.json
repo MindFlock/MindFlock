@@ -1,0 +1,235 @@
+{
+  "_comment": "Captured from `tailscale status --json` / `tailscale serve status --json` (Tailscale 1.102) on a service host, sanitized: tailnet, names and IPs replaced, keys and IDs dropped. status_pending is the same node advertising before approval: CapMap has services/<name> but no service-host, and the service VIPs are not in AllowedIPs.",
+  "status_approved": {
+    "BackendState": "Running",
+    "MagicDNSSuffix": "tail0000.ts.net",
+    "CurrentTailnet": {
+      "Name": "user@example.com",
+      "MagicDNSSuffix": "tail0000.ts.net",
+      "MagicDNSEnabled": true
+    },
+    "Self": {
+      "HostName": "Box",
+      "DNSName": "box-1.tail0000.ts.net.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.10",
+        "fd7a:115c:a1e0::a"
+      ],
+      "AllowedIPs": [
+        "100.64.0.10/32",
+        "fd7a:115c:a1e0::a/128",
+        "100.100.0.5/32",
+        "fd7a:115c:a1e0::5/128"
+      ],
+      "Tags": [
+        "tag:mindflock"
+      ],
+      "PrimaryRoutes": [
+        "100.100.0.5/32",
+        "fd7a:115c:a1e0::5/128"
+      ],
+      "Online": true,
+      "CapMap": {
+        "https": null,
+        "service-host": [
+          {
+            "svc:mindflock": [
+              "100.100.0.5",
+              "fd7a:115c:a1e0::5"
+            ]
+          }
+        ],
+        "services/mindflock": [
+          {
+            "Name": "svc:mindflock",
+            "Addrs": [
+              "100.100.0.5",
+              "fd7a:115c:a1e0::5"
+            ],
+            "Ports": [
+              "tcp:443"
+            ]
+          }
+        ]
+      }
+    },
+    "Peer": {
+      "nodekey:peer1": {
+        "HostName": "Box",
+        "DNSName": "box.tail0000.ts.net.",
+        "OS": "windows",
+        "TailscaleIPs": [
+          "100.64.0.11"
+        ],
+        "Online": true
+      },
+      "nodekey:peer2": {
+        "HostName": "mini",
+        "DNSName": "mini.tail0000.ts.net.",
+        "OS": "macOS",
+        "TailscaleIPs": [
+          "100.64.0.12"
+        ],
+        "Tags": [
+          "tag:mindflock"
+        ],
+        "Online": true
+      }
+    },
+    "ExtraRecords": [
+      {
+        "Name": "mindflock.tail0000.ts.net.",
+        "Value": "100.100.0.5"
+      },
+      {
+        "Name": "mindflock.tail0000.ts.net.",
+        "Value": "fd7a:115c:a1e0::5"
+      }
+    ]
+  },
+  "status_pending": {
+    "BackendState": "Running",
+    "MagicDNSSuffix": "tail0000.ts.net",
+    "CurrentTailnet": {
+      "Name": "user@example.com",
+      "MagicDNSSuffix": "tail0000.ts.net",
+      "MagicDNSEnabled": true
+    },
+    "Self": {
+      "HostName": "Box",
+      "DNSName": "box-1.tail0000.ts.net.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.10",
+        "fd7a:115c:a1e0::a"
+      ],
+      "AllowedIPs": [
+        "100.64.0.10/32",
+        "fd7a:115c:a1e0::a/128"
+      ],
+      "Tags": [
+        "tag:mindflock"
+      ],
+      "Online": true,
+      "CapMap": {
+        "https": null,
+        "services/mindflock": [
+          {
+            "Name": "svc:mindflock",
+            "Addrs": [
+              "100.100.0.5",
+              "fd7a:115c:a1e0::5"
+            ],
+            "Ports": [
+              "tcp:443"
+            ]
+          }
+        ]
+      }
+    },
+    "Peer": {
+      "nodekey:peer1": {
+        "HostName": "Box",
+        "DNSName": "box.tail0000.ts.net.",
+        "OS": "windows",
+        "TailscaleIPs": [
+          "100.64.0.11"
+        ],
+        "Online": true
+      },
+      "nodekey:peer2": {
+        "HostName": "mini",
+        "DNSName": "mini.tail0000.ts.net.",
+        "OS": "macOS",
+        "TailscaleIPs": [
+          "100.64.0.12"
+        ],
+        "Tags": [
+          "tag:mindflock"
+        ],
+        "Online": true
+      }
+    },
+    "ExtraRecords": [
+      {
+        "Name": "mindflock.tail0000.ts.net.",
+        "Value": "100.100.0.5"
+      },
+      {
+        "Name": "mindflock.tail0000.ts.net.",
+        "Value": "fd7a:115c:a1e0::5"
+      }
+    ]
+  },
+  "status_untagged": {
+    "BackendState": "Running",
+    "MagicDNSSuffix": "tail0000.ts.net",
+    "CurrentTailnet": {
+      "Name": "user@example.com",
+      "MagicDNSSuffix": "tail0000.ts.net",
+      "MagicDNSEnabled": true
+    },
+    "Self": {
+      "HostName": "Box",
+      "DNSName": "box-1.tail0000.ts.net.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.10",
+        "fd7a:115c:a1e0::a"
+      ],
+      "AllowedIPs": [
+        "100.64.0.10/32",
+        "fd7a:115c:a1e0::a/128"
+      ],
+      "Tags": null,
+      "Online": true,
+      "CapMap": {
+        "https": null
+      }
+    },
+    "Peer": {
+      "nodekey:peer1": {
+        "HostName": "Box",
+        "DNSName": "box.tail0000.ts.net.",
+        "OS": "windows",
+        "TailscaleIPs": [
+          "100.64.0.11"
+        ],
+        "Online": true
+      },
+      "nodekey:peer2": {
+        "HostName": "mini",
+        "DNSName": "mini.tail0000.ts.net.",
+        "OS": "macOS",
+        "TailscaleIPs": [
+          "100.64.0.12"
+        ],
+        "Tags": [
+          "tag:mindflock"
+        ],
+        "Online": true
+      }
+    }
+  },
+  "serve": {
+    "Services": {
+      "svc:mindflock": {
+        "TCP": {
+          "443": {
+            "HTTPS": true
+          }
+        },
+        "Web": {
+          "mindflock.tail0000.ts.net:443": {
+            "Handlers": {
+              "/": {
+                "Proxy": "http://127.0.0.1:8765"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

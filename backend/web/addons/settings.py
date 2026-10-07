@@ -658,21 +658,26 @@ class SettingsAddon(Addon):
                         pass
 
             view = {"settings": _masked_view()}
-            # A changed name, or the same one saved again while it isn't up
-            # (the retry after fixing what the last attempt reported).
-            if watch_shared and (
-                shared_link.configured_name() != shared_before
-                or (shared_before and shared_link.advertised_url() is None)
-            ):
+            # A changed name applies; the same one saved again reconciles —
+            # re-serving when the live serve config no longer matches (what
+            # this process remembers can be stale: the config may have been
+            # cleared behind its back) or the host still isn't approved.
+            if watch_shared and (shared_before or shared_link.configured_name()):
                 from backend.web.core import mobile_access
 
-                state = shared_link.apply(mobile_access._server()._server_port())
+                port = mobile_access._server()._server_port()
+                url_before = shared_link.advertised_url()
+                if shared_link.configured_name() != shared_before:
+                    state = shared_link.apply(port)
+                else:
+                    state = shared_link.reconcile(port, nudge=True)
                 view["shared_link"] = state
-                # Notification taps point at the phone URL — it just changed.
-                mobile_announce.refresh_url()
-                if state.get("advertised"):
-                    # A new phone URL exists — the moment to push it.
-                    mobile_announce.announce_soon(mobile_announce.REASON_SHARED)
+                if shared_link.advertised_url() != url_before:
+                    # Notification taps point at the phone URL — it changed.
+                    mobile_announce.refresh_url()
+                    if state.get("advertised"):
+                        # A new phone URL exists — the moment to push it.
+                        mobile_announce.announce_soon(mobile_announce.REASON_SHARED)
             if (
                 watch_serve
                 and serve_before != "tailscale"
