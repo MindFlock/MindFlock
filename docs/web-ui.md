@@ -1685,6 +1685,14 @@ persisted in `localStorage`):
   onboarded it only opens by itself when a check fails *and* sessions already
   exist (the card is gone then); with zero sessions the card is the one
   welcome.
+- **Install everything missing** — above the dependency checklist (the card,
+  the Setup modal and Settings → Doctor) whenever something this machine needs
+  is missing, with what it installs beside it. One click opens a terminal
+  running a single script: one package-manager run for every system package
+  (one sudo prompt), then each tool's own installer — including whichever agent
+  CLI you chose, not just claude. Closing the window mid-install doesn't stop
+  it (the next click reattaches); when it finishes the checklist re-checks
+  itself.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,

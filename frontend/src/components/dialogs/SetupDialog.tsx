@@ -13,6 +13,7 @@ import { api } from "../../api/client";
 import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { InstallMissing, type InstallStep } from "./InstallTerminal";
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -27,6 +28,9 @@ export interface DoctorCheckItem {
 export interface DoctorPayload {
   ok: boolean;
   checks?: DoctorCheckItem[];
+  /** Everything missing that this machine needs, as one install (see
+   * `backend.doctor.install_plan`). */
+  install?: { steps?: InstallStep[]; packages?: string[] };
 }
 
 const DOCTOR_ICON: Record<string, string> = { ok: "✓", info: "ℹ", warn: "!", fail: "✗" };
@@ -145,11 +149,13 @@ export function useDoctorAutoShow() {
 export function DoctorList({ reprobeKey }: { reprobeKey?: number }) {
   const [doctor, setDoctor] = useState<DoctorPayload | null>(lastDoctor);
   const [error, setError] = useState("");
+  // Bumped when the install window finishes, so the list re-probes itself.
+  const [installed, setInstalled] = useState(0);
 
   useEffect(() => {
     let live = true;
     (async () => {
-      const reprobe = (reprobeKey || 0) > 0;
+      const reprobe = (reprobeKey || 0) > 0 || installed > 0;
       try {
         const d = await api<DoctorPayload>("/api/doctor" + (reprobe ? "?refresh=1" : ""));
         if (!live) return;
@@ -163,24 +169,27 @@ export function DoctorList({ reprobeKey }: { reprobeKey?: number }) {
     return () => {
       live = false;
     };
-  }, [reprobeKey]);
+  }, [reprobeKey, installed]);
 
   if (error) return <p className="error">doctor failed: {error}</p>;
   if (!doctor) return <p className="muted">Checking dependencies…</p>;
   if (!doctor.checks || !doctor.checks.length) return <p className="muted">doctor unavailable</p>;
   return (
-    <ul className="doctor-list">
-      {doctor.checks.map((c, i) => (
-        <li key={c.id || i} className={"doctor-check st-" + (c.status || "info")}>
-          <span className="doctor-ico">{DOCTOR_ICON[c.status || ""] || "•"}</span>
-          <span className="doctor-label">{c.label || c.id || ""}</span>
-          <span className="doctor-detail">
-            {c.detail || ""}
-            {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <>
+      <InstallMissing steps={doctor.install?.steps} onDone={() => setInstalled((n) => n + 1)} />
+      <ul className="doctor-list">
+        {doctor.checks.map((c, i) => (
+          <li key={c.id || i} className={"doctor-check st-" + (c.status || "info")}>
+            <span className="doctor-ico">{DOCTOR_ICON[c.status || ""] || "•"}</span>
+            <span className="doctor-label">{c.label || c.id || ""}</span>
+            <span className="doctor-detail">
+              {c.detail || ""}
+              {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

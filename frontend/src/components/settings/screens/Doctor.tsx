@@ -24,8 +24,9 @@ export function Doctor(_: ScreenProps) {
           </button>
         </span>
         <span className="set-hint">
-          Probes git, tmux, the agent CLI, uv and tailscale — plus gh, which is
-          optional (pushing uses plain git over your own remote).
+          Probes git, tmux, your agent CLI, uv, tailscale, and the peer sandbox
+          and cloudflared when peer links use them — plus gh, which is optional
+          (pushing uses plain git over your own remote).
         </span>
       </div>
     </>

@@ -15,7 +15,7 @@ mindflock serve             # start the web UI (localhost only, port 8765)
 mindflock serve tailscale   # bind 0.0.0.0 for phone/tailnet access (URL + QR + token)
 mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
-mindflock doctor --fix      # offer to install/repair missing dependencies interactively
+mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex

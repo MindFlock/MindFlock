@@ -16,6 +16,12 @@ macOS).
 Statuses: ``ok`` (good) · ``info`` (optional dep absent) · ``warn`` (works but
 needs attention) · ``fail`` (a required dependency is missing). The overall
 ``ok`` flag is "no fails".
+
+Installing is one step, not one per tool: :func:`install_plan` folds every
+missing dependency this host actually needs (``Check.install``) into ONE script
+— a single package-manager run for everything that has a system package
+(``Check.pkg``), then each tool's own installer. ``doctor --fix`` runs it after
+one confirmation, and the web UI runs it in a terminal (one sudo prompt).
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ __all__ = [
     "to_payload",
     "check_agent_cli",
     "check_agent_auth",
+    "install_plan",
 ]
 
 #: Cap on every subprocess probe so /api/doctor stays snappy.
@@ -48,6 +55,7 @@ _DOCS = {
     "tailscale": "https://tailscale.com/download",
     "cloudflared": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
     "claude": "https://docs.anthropic.com/en/docs/claude-code/setup",
+    "bubblewrap": "https://github.com/containers/bubblewrap",
 }
 
 
@@ -62,6 +70,14 @@ class Check:
     fix: str = ""  # one-line, platform-appropriate remediation ("" when none)
     docs: str = ""  # optional docs URL hint ("" when none)
     cmd: str = ""  # shell command `doctor --fix` may offer to run ("" = not runnable)
+    #: The system package that provides this tool on THIS host's package
+    #: manager ("" = not a package install). Every missing package in the
+    #: install plan goes into one ``apt``/``dnf``/``brew`` run.
+    pkg: str = ""
+    #: Part of the one-shot install plan: a dependency this host needs (given
+    #: its settings) that is missing and that ``pkg``/``cmd`` installs. Login
+    #: commands and optional extras stay out — they are offered on their own.
+    install: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -113,6 +129,11 @@ def _pkg_fix(pkg: str) -> str:
     return "use WSL — native Windows is not a supported MindFlock host"
 
 
+def _pkg_supported() -> bool:
+    """Whether :func:`_pkg_fix` names a real package manager here."""
+    return osenv.os_kind() in ("macos", "linux", "wsl")
+
+
 def _parse_version(text: str) -> Tuple[int, ...]:
     """First ``X.Y[.Z]`` looking token in ``text`` as an int tuple; ``()`` when
     none found (never raises — a weird version string degrades to 'unknown')."""
@@ -139,11 +160,14 @@ def check_git() -> Check:
     if not path:
         fix = _pkg_fix("git")
         cmd = fix
+        pkg = "git" if _pkg_supported() else ""
         if osenv.os_kind() == "macos":
             fix = "xcode-select --install (or: brew install git)"
             cmd = "xcode-select --install"
+            pkg = ""
         # Optional: sessions run in-place in plain folders without git — only
-        # the worktree/diff/commit/PR features need it.
+        # the worktree/diff/commit/PR features need it. Still in the install
+        # plan: nearly everything people use MindFlock for wants it.
         return Check(
             "git",
             "git",
@@ -152,6 +176,8 @@ def check_git() -> Check:
             "diff/commit/PR and isolated worktrees need git)",
             fix,
             cmd=cmd,
+            pkg=pkg,
+            install=bool(cmd),
         )
     _, out = _run(["git", "--version"])
     line = _first_line(out) or path
@@ -165,6 +191,8 @@ def check_git() -> Check:
             f"{line} is too old — `git worktree remove` needs git ≥ {want}",
             _pkg_fix("git"),
             cmd=_pkg_fix("git"),
+            pkg="git" if _pkg_supported() else "",
+            install=_pkg_supported(),
         )
     return Check("git", "git", "ok", line)
 
@@ -180,6 +208,8 @@ def check_tmux() -> Check:
             _pkg_fix("tmux"),
             docs=_DOCS["tmux"],
             cmd=_pkg_fix("tmux"),
+            pkg="tmux" if _pkg_supported() else "",
+            install=_pkg_supported(),
         )
     _, out = _run(["tmux", "-V"])
     line = _first_line(out) or path
@@ -194,6 +224,8 @@ def check_tmux() -> Check:
             _pkg_fix("tmux"),
             docs=_DOCS["tmux"],
             cmd=_pkg_fix("tmux"),
+            pkg="tmux" if _pkg_supported() else "",
+            install=_pkg_supported(),
         )
     return Check("tmux", "tmux", "ok", line)
 
@@ -264,51 +296,86 @@ def _resolve_agent_binary(name: str) -> str:
         return name
 
 
-def check_agent_cli() -> Check:
-    """Check the default coding-agent CLI is available.
+def _agent_install_cmd(name: str, binary: str) -> str:
+    """The command that installs provider ``name``'s CLI, or ``""``.
+
+    Asked of the provider itself (``install_hint``: claude's installer, codex's
+    npm package, aider's pip package…), so whichever agent you picked gets a
+    runnable install — not just claude. A provider that names no installer gets
+    none: guessing a package name for an arbitrary custom CLI would install the
+    wrong thing.
+    """
+    provider = _agent_provider(name)
+    if provider is None:
+        return ""
+    try:
+        return provider.install_hint() or ""
+    except Exception:  # noqa: BLE001 — a provider quirk must not break the doctor
+        return ""
+
+
+def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
+    """One agent CLI's install check (``role`` names it in the label).
 
     An explicit binary-path override (a name containing ``os.sep``) is validated
     directly — it must be an executable file; otherwise the provider's binary
-    name is resolved on ``PATH``. A missing binary is a ``fail`` with a
-    platform-appropriate install fix (auto-runnable only for ``claude``, which
-    ships an installer)."""
-    name = _default_provider_name()
+    name is resolved on ``PATH``. ``missing`` is the status when it isn't
+    there."""
     binary = _resolve_agent_binary(name)
-    label = f"agent CLI ({name})"
+    label = f"{role} ({name})"
     if os.sep in binary:  # explicit path override — check it directly
         p = Path(binary).expanduser()
         if p.is_file() and os.access(p, os.X_OK):
-            return Check("agent-cli", label, "ok", str(p))
+            return Check(cid, label, "ok", str(p))
         return Check(
-            "agent-cli",
+            cid,
             label,
-            "fail",
+            missing,
             f"configured binary {binary} is missing or not executable",
             "fix the binary path in Settings → Coding CLI",
         )
     path = shutil.which(binary)
     if path:
-        return Check("agent-cli", label, "ok", path)
-    if binary == "claude":
-        # Native installer needs no Node; prefer npm only when it's already there.
-        fix = (
-            "npm install -g @anthropic-ai/claude-code"
-            if shutil.which("npm")
-            else "curl -fsSL https://claude.ai/install.sh | sh"
-        )
-        cmd = fix
-    else:
-        fix = f"install `{binary}` or set a binary path in Settings → Coding CLI"
-        cmd = ""
+        return Check(cid, label, "ok", path)
+    cmd = _agent_install_cmd(name, binary)
+    fix = cmd or f"install `{binary}` or set a binary path in Settings → Coding CLI"
     return Check(
-        "agent-cli",
+        cid,
         label,
-        "fail",
+        missing,
         f"`{binary}` not found on PATH",
         fix,
         docs=_DOCS["claude"] if binary == "claude" else "",
         cmd=cmd,
+        install=bool(cmd),
     )
+
+
+def check_agent_cli() -> Check:
+    """Check the default coding-agent CLI is available — whichever provider is
+    the default (Settings → Coding CLI), with that provider's own installer as
+    the fix. A missing binary is a ``fail``: sessions launch it."""
+    return _agent_cli_check("agent-cli", _default_provider_name(), "agent CLI", "fail")
+
+
+def _assistant_provider_name() -> str:
+    """Settings → Coding CLI's Assistant provider, or ``""`` when unset."""
+    try:
+        from backend.config.settings import load_settings
+
+        return load_settings().coding_cli.assistant_provider or ""
+    except Exception:  # noqa: BLE001 — settings are optional
+        return ""
+
+
+def check_assistant_cli() -> Optional[Check]:
+    """The Assistant's CLI, when it is set to a different provider than the
+    default (``None`` otherwise — the default's own check already covers it).
+    ``warn``, not ``fail``: only the Assistant needs it."""
+    name = _assistant_provider_name()
+    if not name or name == _default_provider_name():
+        return None
+    return _agent_cli_check("assistant-cli", name, "assistant CLI", "warn")
 
 
 def _agent_provider(name: str):
@@ -476,6 +543,7 @@ def check_uv() -> Check:
             "curl -LsSf https://astral.sh/uv/install.sh | sh",
             docs=_DOCS["uv"],
             cmd="curl -LsSf https://astral.sh/uv/install.sh | sh",
+            install=True,
         )
     _, out = _run(["uv", "--version"])
     return Check("uv", "uv", "ok", _first_line(out) or path)
@@ -522,10 +590,116 @@ def check_tailscale() -> Check:
     return Check("tailscale", "tailscale", "ok", path)
 
 
+def _peer_settings() -> dict:
+    """``peer.*`` as the engine reads it (``{}`` when settings can't load)."""
+    try:
+        from backend.config.settings import load_settings
+
+        return load_settings().peer.effective() or {}
+    except Exception:  # noqa: BLE001 — settings are optional
+        return {}
+
+
+def check_bwrap() -> Check:
+    """bubblewrap, which every peer shared session runs inside.
+
+    Wanted (``warn`` + in the install plan) only when peer links are on; on a
+    host that doesn't use them it is ``info`` and never installed. A ``bwrap``
+    that is present but fails the sandbox's own self-test (user namespaces
+    switched off, an AppArmor restriction) is reported with that reason —
+    reinstalling would not fix it, so there is no install command for it."""
+    label = "peer sandbox (bubblewrap)"
+    wanted = bool(_peer_settings().get("enabled"))
+    if osenv.os_kind() not in ("linux", "wsl"):
+        return Check(
+            "bwrap",
+            label,
+            "info",
+            "peer shared sessions need Linux (bubblewrap is Linux-only)",
+        )
+    try:
+        from backend.peer import sandbox
+    except Exception as err:  # noqa: BLE001
+        return Check("bwrap", label, "warn", f"sandbox module failed to load: {err}")
+    ok, why = sandbox.available()
+    if ok:
+        return Check("bwrap", label, "ok", why)
+    status = "warn" if wanted else "info"
+    if sandbox.find_bwrap():
+        return Check(
+            "bwrap",
+            label,
+            status,
+            why,
+            "bubblewrap is installed but can't create a sandbox here — "
+            "unprivileged user namespaces must be allowed",
+            docs=_DOCS["bubblewrap"],
+        )
+    fix = _pkg_fix("bubblewrap")
+    return Check(
+        "bwrap",
+        label,
+        status,
+        (
+            "not found, but peer links are on — shared sessions can't start"
+            if wanted
+            else "not found (optional — only for peer shared sessions)"
+        ),
+        fix,
+        docs=_DOCS["bubblewrap"],
+        cmd=fix,
+        pkg="bubblewrap",
+        install=wanted,
+    )
+
+
+#: ``platform.machine()`` → the arch suffix on cloudflared's release assets.
+_CLOUDFLARED_ARCH = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "armv7l": "arm",
+    "i686": "386",
+    "i386": "386",
+}
+
+
+def _cloudflared_install() -> Tuple[str, str]:
+    """``(command, package)`` that installs cloudflared on this host.
+
+    Through the package manager where it carries cloudflared (Homebrew, Arch),
+    otherwise Cloudflare's own signed ``.deb``/``.rpm`` from its GitHub
+    releases — the route Cloudflare's docs give for Debian/Ubuntu/Fedora, whose
+    distro repos don't have it. ``("", "")`` when there is no route here."""
+    import platform
+
+    kind = osenv.os_kind()
+    if kind == "macos":
+        return "brew install cloudflared", "cloudflared"
+    if kind not in ("linux", "wsl"):
+        return "", ""
+    mgr = _linux_pkg_manager()
+    if mgr == "pacman":
+        return "sudo pacman -S cloudflared", "cloudflared"
+    arch = _CLOUDFLARED_ARCH.get(platform.machine().lower())
+    if not arch:
+        return "", ""
+    base = "https://github.com/cloudflare/cloudflared/releases/latest/download/"
+    if mgr == "apt":
+        deb = "/tmp/cloudflared.deb"
+        return (
+            f"curl -fsSL -o {deb} {base}cloudflared-linux-{arch}.deb"
+            f" && sudo dpkg -i {deb} && rm -f {deb}"
+        ), ""
+    rpm_arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(arch, arch)
+    return f"sudo rpm -Uvh {base}cloudflared-linux-{rpm_arch}.rpm", ""
+
+
 def check_cloudflared() -> Check:
     """Peer links across networks (``peer.relay = "cloudflare"``) run a
-    locally installed ``cloudflared``. Never auto-installed (no ``cmd``):
-    MindFlock does not fetch binaries for you."""
+    locally installed ``cloudflared``. Wanted — and in the install plan — only
+    when that relay is selected."""
     import os
 
     from backend.peer.tunnel import find_cloudflared
@@ -533,13 +707,8 @@ def check_cloudflared() -> Check:
     path = find_cloudflared(os.environ.get("MINDFLOCK_CLOUDFLARED", ""))
     if path:
         return Check("cloudflared", "cloudflared", "ok", path)
-    wanted = False
-    try:
-        from backend.config.settings import load_settings
-
-        wanted = load_settings().peer.effective().get("relay") == "cloudflare"
-    except Exception:  # noqa: BLE001 — settings are optional
-        wanted = False
+    wanted = _peer_settings().get("relay") == "cloudflare"
+    cmd, pkg = _cloudflared_install()
     return Check(
         "cloudflared",
         "cloudflared",
@@ -549,8 +718,11 @@ def check_cloudflared() -> Check:
             if wanted
             else "not found (optional — only for peer links across networks)"
         ),
-        "install cloudflared from Cloudflare's downloads page (or your package manager)",
+        cmd or "install cloudflared from Cloudflare's downloads page",
         docs=_DOCS["cloudflared"],
+        cmd=cmd,
+        pkg=pkg,
+        install=wanted and bool(cmd),
     )
 
 
@@ -752,22 +924,27 @@ def check_cache_seeds() -> Check:
     return Check("cache-seeds", "warm cache seeds", "ok", ", ".join(healthy))
 
 
-CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
+#: A probe may answer ``None`` — "doesn't apply on this host" (the Assistant
+#: CLI check when the Assistant uses the default provider) — and is then left
+#: out of the report entirely.
+CHECKS_BY_ID: dict[str, Callable[[], Optional[Check]]] = {
     "git": check_git,
     "tmux": check_tmux,
     "gh": check_gh,
     "agent-cli": check_agent_cli,
+    "assistant-cli": check_assistant_cli,
     "agent-auth": check_agent_auth,
     "local-model": check_local_model,
     "uv": check_uv,
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,
+    "bwrap": check_bwrap,
     "cloudflared": check_cloudflared,
     "state-schema": check_state_schema,
     "cache-seeds": check_cache_seeds,
 }
 
-_ALL_CHECKS: List[Callable[[], Check]] = list(CHECKS_BY_ID.values())
+_ALL_CHECKS: List[Callable[[], Optional[Check]]] = list(CHECKS_BY_ID.values())
 
 
 def run_checks() -> List[Check]:
@@ -776,11 +953,98 @@ def run_checks() -> List[Check]:
     out: List[Check] = []
     for fn in _ALL_CHECKS:
         try:
-            out.append(fn())
+            check = fn()
         except Exception as err:  # noqa: BLE001 — degrade, never raise
             cid = fn.__name__.removeprefix("check_").replace("_", "-")
-            out.append(Check(cid, cid, "warn", f"check errored: {err}"))
+            check = Check(cid, cid, "warn", f"check errored: {err}")
+        if check is not None:
+            out.append(check)
     return out
+
+
+def _pkg_install_line(pkgs: List[str]) -> str:
+    """ONE command installing every package in ``pkgs`` with this host's package
+    manager (non-interactive: the user already said yes to the whole plan)."""
+    names = " ".join(pkgs)
+    if osenv.os_kind() == "macos":
+        return f"brew install {names}"
+    mgr = _linux_pkg_manager()
+    if mgr == "pacman":
+        return f"sudo pacman -S --needed --noconfirm {names}"
+    if mgr == "zypper":
+        return f"sudo zypper --non-interactive install {names}"
+    if mgr == "dnf":
+        return f"sudo dnf install -y {names}"
+    # `;` not `&&`: one broken third-party source makes `update` exit non-zero
+    # while the distro's own lists refreshed fine, and the install still works.
+    return f"sudo apt-get update; sudo apt-get install -y {names}"
+
+
+#: Prepended to every install script. Running as root (a container, a fresh
+#: VPS) there may be no sudo at all, so it becomes a pass-through.
+_SCRIPT_HEAD = """#!/bin/sh
+# MindFlock: install everything this machine is missing, in one go.
+if [ "$(id -u)" = 0 ] && ! command -v sudo >/dev/null 2>&1; then
+  sudo() { "$@"; }
+fi
+failed=""
+"""
+
+
+def install_plan(checks: List[Check]) -> dict:
+    """Everything missing that this host needs, as ONE runnable script.
+
+    Every ``install`` check that has a system package joins a single
+    package-manager run (one sudo prompt, one ``apt-get update``); the rest run
+    their own installers after it, each in turn, so one failure doesn't stop
+    the others. The script ends by saying what failed, and exits non-zero if
+    anything did.
+
+    Returns ``{"steps": [{"id", "label", "cmd"}], "packages": [...],
+    "script": str}`` — ``steps`` empty (and ``script`` ``""``) when there is
+    nothing to install.
+    """
+    wanted = [c for c in checks if c.install and c.status != "ok" and (c.pkg or c.cmd)]
+    pkgs: List[str] = []
+    steps: List[dict] = []
+    pkg_labels: List[str] = []
+    for c in wanted:
+        if c.pkg:
+            if c.pkg not in pkgs:
+                pkgs.append(c.pkg)
+            pkg_labels.append(c.label)
+    if pkgs:
+        steps.append(
+            {
+                "id": "packages",
+                "label": "system packages: " + ", ".join(pkgs),
+                "cmd": _pkg_install_line(pkgs),
+            }
+        )
+    for c in wanted:
+        if not c.pkg:
+            steps.append({"id": c.id, "label": c.label, "cmd": c.cmd})
+    if not steps:
+        return {"steps": [], "packages": [], "script": ""}
+    import shlex
+
+    body = [_SCRIPT_HEAD]
+    for st in steps:
+        label = shlex.quote(st["label"])
+        body.append(
+            f"echo; echo '==> '{label}\n"
+            f"( {st['cmd']} ) || failed=\"$failed\n  - \"{label}\n"
+        )
+    body.append(
+        "echo\n"
+        'if [ -n "$failed" ]; then\n'
+        '  printf "[mindflock] these did not install:%b\\n" "$failed"\n'
+        "  exit 1\n"
+        "fi\n"
+        "echo '[mindflock] everything installed. Open a new terminal if a tool "
+        "is still not found (PATH).'\n"
+    )
+    return {"steps": steps, "packages": pkgs, "script": "".join(body)}
 
 
 def to_payload(checks: List[Check]) -> dict:
@@ -803,9 +1067,14 @@ def to_payload(checks: List[Check]) -> dict:
     from backend import __version__
     from backend.config import state as state_mod
 
+    plan = install_plan(checks)
     return {
         "checks": [c.to_dict() for c in checks],
         "ok": all(c.status != "fail" for c in checks),
+        # What "Install everything missing" would run — the steps only; the
+        # script itself is rebuilt server-side when the terminal opens, so a
+        # client can never hand the server a command to run.
+        "install": {"steps": plan["steps"], "packages": plan["packages"]},
         "version": __version__,
         "state_notice": state_mod.downgrade_notice(),
     }

@@ -6,6 +6,10 @@ per-platform fixes) up front instead of the user discovering them as cryptic
 errors at session-create time. Optional tools (``gh``, ``uv``, ``tailscale``)
 are reported too, but as ``info``/``warn`` — never as a blocker.
 
+``/api/doctor/install-terminal`` runs everything missing in one go (see
+:mod:`backend.web.core.setup_install`): a browser terminal, so the one sudo
+prompt has somewhere to go.
+
 Results are cached for ~30s (the checks shell out to ``git``/``tmux``, plus the
 optional ``gh``/``tailscale`` probes); pass ``?refresh=1`` to force a re-probe
 after installing something.
@@ -18,7 +22,7 @@ import sys
 import time
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import doctor
@@ -76,6 +80,47 @@ class DoctorAddon(Addon):
             state_mod.clear_downgrade_notice()
             self._cached_payload = None
             return JSONResponse({"ok": True})
+
+        @router.websocket("/doctor/install-terminal")
+        async def install_terminal(ws: WebSocket) -> None:
+            """A browser terminal running the one-shot install script (rebuilt
+            server-side from a fresh doctor run — the client sends no command).
+            Reattaches to a run still in progress."""
+            import json
+
+            from backend.web.core import setup_install
+            from backend.web.core.terminal import pump_pty, spawn_tmux_attach
+
+            await ws.accept()
+            session, err = await asyncio.to_thread(setup_install.ensure_session)
+            if err is not None:
+                await ws.send_text(json.dumps({"type": "error", "message": err}))
+                await ws.close(code=4500)
+                return
+            self._cached_payload = None  # whatever it installs, re-probe after
+            try:
+                proc = spawn_tmux_attach(session)
+            except Exception as exc:  # noqa: BLE001
+                await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+                await ws.close(code=4500)
+                return
+            await pump_pty(ws, proc, allow_input=True)
+
+        @router.get("/doctor/install-state")
+        def install_state() -> JSONResponse:
+            """``{running, exit_code}`` of the install terminal's script."""
+            from backend.web.core import setup_install
+
+            return JSONResponse(setup_install.state())
+
+        @router.post("/doctor/install-close")
+        def install_close() -> JSONResponse:
+            """Close the install terminal — only once its script finished; a
+            run in progress keeps going (``closed: false``)."""
+            from backend.web.core import setup_install
+
+            self._cached_payload = None
+            return JSONResponse({"closed": setup_install.close()})
 
         return router
 

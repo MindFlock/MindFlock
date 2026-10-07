@@ -269,17 +269,66 @@ class TestAgentCli:
         assert c.status == "ok"
         assert c.detail == str(binary)
 
-    def test_missing_non_claude_binary_has_no_runnable_cmd(self, monkeypatch):
-        # A non-claude provider off PATH: we can name the fix but not auto-run it
-        # (no vendored installer), so cmd is empty and there is no docs link.
+    def test_missing_non_claude_binary_installs_with_its_own_installer(
+        self, monkeypatch
+    ):
+        # Any agent you pick is installable, not just claude: the command comes
+        # from the provider (aider's pip package), and it joins the one-shot
+        # install plan.
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "aider")
         monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "aider")
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_agent_cli()
         assert c.status == "fail"
-        assert "install `aider`" in c.fix
-        assert c.cmd == ""
+        assert c.cmd == "python -m pip install aider-chat"
+        assert c.fix == c.cmd
+        assert c.install is True
         assert c.docs == ""
+
+    def test_codex_default_installs_codex_not_claude(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "codex")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "codex")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        c = doctor.check_agent_cli()
+        assert c.label == "agent CLI (codex)"
+        assert c.cmd == "npm install -g @openai/codex"
+        assert "claude" not in c.cmd
+
+    def test_provider_without_installer_has_no_runnable_cmd(self, monkeypatch):
+        # A custom CLI that names no installer: we can say what's wrong, but
+        # guessing a package for it would install the wrong thing.
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "mycli")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "mycli")
+        monkeypatch.setattr(doctor, "_agent_install_cmd", lambda name, binary: "")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        c = doctor.check_agent_cli()
+        assert c.status == "fail"
+        assert "install `mycli`" in c.fix
+        assert c.cmd == "" and c.install is False
+
+
+class TestAssistantCli:
+    def test_unset_or_same_as_default_is_not_reported(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "codex")
+        monkeypatch.setattr(doctor, "_assistant_provider_name", lambda: "")
+        assert doctor.check_assistant_cli() is None
+        monkeypatch.setattr(doctor, "_assistant_provider_name", lambda: "codex")
+        assert doctor.check_assistant_cli() is None
+
+    def test_a_different_missing_assistant_cli_is_a_warn_install(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
+        monkeypatch.setattr(doctor, "_assistant_provider_name", lambda: "codex")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: name)
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        c = doctor.check_assistant_cli()
+        assert c.id == "assistant-cli" and c.status == "warn"
+        assert c.cmd == "npm install -g @openai/codex" and c.install
+
+    def test_a_none_check_is_left_out_of_the_report(self, monkeypatch):
+        monkeypatch.setattr(
+            doctor, "_ALL_CHECKS", [lambda: Check("a", "a", "ok"), lambda: None]
+        )
+        assert [c.id for c in doctor.run_checks()] == ["a"]
 
 
 class TestAgentAuth:
@@ -670,6 +719,8 @@ class TestDoctorApi:
             "fix",
             "docs",
             "cmd",
+            "pkg",
+            "install",
         }
 
         # Without ?refresh the cached payload is served (run_checks not re-run).
@@ -798,3 +849,165 @@ class TestDoctorAddonPayloadCache:
         assert len(runs) == 1  # second call served from cache
         addon._payload(refresh=True)
         assert len(runs) == 2  # refresh forces a re-probe
+
+
+class TestBwrap:
+    @pytest.fixture()
+    def sandbox(self, monkeypatch):
+        from backend.peer import sandbox as sb
+
+        state = {"available": (False, "nope"), "found": None}
+        monkeypatch.setattr(sb, "available", lambda: state["available"])
+        monkeypatch.setattr(sb, "find_bwrap", lambda: state["found"])
+        return state
+
+    def test_working_sandbox_is_ok(self, monkeypatch, sandbox):
+        sandbox["available"] = (True, "/usr/bin/bwrap")
+        c = doctor.check_bwrap()
+        assert c.status == "ok" and c.detail == "/usr/bin/bwrap"
+
+    def test_missing_with_peer_links_on_is_a_batched_install(
+        self, monkeypatch, sandbox
+    ):
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"enabled": True})
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: "apt")
+        c = doctor.check_bwrap()
+        assert c.status == "warn"
+        assert c.pkg == "bubblewrap" and c.install is True
+        assert c.cmd == "sudo apt install bubblewrap"
+
+    def test_missing_with_peer_links_off_is_info_and_not_installed(
+        self, monkeypatch, sandbox
+    ):
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {})
+        c = doctor.check_bwrap()
+        assert c.status == "info" and c.install is False
+        assert "optional" in c.detail
+
+    def test_present_but_broken_offers_no_reinstall(self, monkeypatch, sandbox):
+        # Installed, but the kernel/AppArmor refuses user namespaces:
+        # reinstalling can't fix that, so there's nothing to run.
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"enabled": True})
+        sandbox["available"] = (False, "bwrap self-test failed: no userns")
+        sandbox["found"] = "/usr/bin/bwrap"
+        c = doctor.check_bwrap()
+        assert c.status == "warn" and "self-test" in c.detail
+        assert c.cmd == "" and c.install is False
+
+    def test_macos_is_info_with_nothing_to_install(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        c = doctor.check_bwrap()
+        assert c.status == "info" and not c.cmd and not c.install
+
+    def test_registered(self):
+        assert doctor.CHECKS_BY_ID["bwrap"] is doctor.check_bwrap
+
+
+class TestCloudflared:
+    @pytest.fixture(autouse=True)
+    def _absent(self, monkeypatch):
+        from backend.peer import tunnel
+
+        monkeypatch.setattr(tunnel, "find_cloudflared", lambda configured="": None)
+
+    def test_apt_installs_cloudflares_own_deb(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: "apt")
+        monkeypatch.setattr("platform.machine", lambda: "x86_64")
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"relay": "cloudflare"})
+        c = doctor.check_cloudflared()
+        assert c.status == "warn" and c.install is True and c.pkg == ""
+        assert "cloudflared-linux-amd64.deb" in c.cmd
+        assert "dpkg -i" in c.cmd
+        # Its exit status is the install's: no trailing command can mask a
+        # failed download.
+        assert c.cmd.endswith("&& rm -f /tmp/cloudflared.deb")
+
+    def test_macos_uses_brew_package(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"relay": "cloudflare"})
+        c = doctor.check_cloudflared()
+        assert c.cmd == "brew install cloudflared" and c.pkg == "cloudflared"
+
+    def test_not_wanted_without_the_cloudflare_relay(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"relay": "off"})
+        c = doctor.check_cloudflared()
+        assert c.status == "info" and c.install is False
+
+
+class TestInstallPlan:
+    def test_packages_go_into_one_manager_run_before_the_installers(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: "apt")
+        checks = [
+            Check(
+                "tmux",
+                "tmux",
+                "fail",
+                cmd="sudo apt install tmux",
+                pkg="tmux",
+                install=True,
+            ),
+            Check("uv", "uv", "warn", cmd="curl uv | sh", install=True),
+            Check("bwrap", "sandbox", "warn", cmd="x", pkg="bubblewrap", install=True),
+        ]
+        plan = doctor.install_plan(checks)
+        assert [s["id"] for s in plan["steps"]] == ["packages", "uv"]
+        assert plan["steps"][0]["cmd"] == (
+            "sudo apt-get update; sudo apt-get install -y tmux bubblewrap"
+        )
+        assert plan["packages"] == ["tmux", "bubblewrap"]
+
+    def test_logins_optional_extras_and_healthy_checks_stay_out(self):
+        checks = [
+            Check("gh", "gh", "warn", cmd="gh auth login"),  # a login, not an install
+            Check("tailscale", "tailscale", "info", cmd="curl ts | sh"),  # optional
+            Check("git", "git", "ok", pkg="git", install=True),  # already fine
+        ]
+        plan = doctor.install_plan(checks)
+        assert plan == {"steps": [], "packages": [], "script": ""}
+
+    @pytest.mark.parametrize(
+        "mgr,line",
+        [
+            ("dnf", "sudo dnf install -y a b"),
+            ("pacman", "sudo pacman -S --needed --noconfirm a b"),
+            ("zypper", "sudo zypper --non-interactive install a b"),
+        ],
+    )
+    def test_each_package_manager_runs_non_interactively(self, monkeypatch, mgr, line):
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: mgr)
+        assert doctor._pkg_install_line(["a", "b"]) == line
+
+    def test_script_runs_every_step_and_reports_the_failures(self, tmp_path):
+        # A real run: a failing step must not stop the next one, and the script
+        # exits non-zero naming exactly what failed.
+        import subprocess
+
+        marker = tmp_path / "ran"
+        checks = [
+            Check("a", "first tool", "fail", cmd="false", install=True),
+            Check("b", "second tool", "fail", cmd=f"touch {marker}", install=True),
+        ]
+        script = doctor.install_plan(checks)["script"]
+        proc = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        assert proc.returncode == 1
+        assert marker.exists()
+        assert "- first tool" in proc.stdout
+        assert "- second tool" not in proc.stdout
+
+    def test_script_succeeds_when_every_step_does(self):
+        import subprocess
+
+        checks = [Check("a", "it's a tool", "fail", cmd="true", install=True)]
+        script = doctor.install_plan(checks)["script"]
+        proc = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        assert proc.returncode == 0
+        assert "everything installed" in proc.stdout
+
+    def test_payload_carries_the_steps_but_never_the_script(self):
+        payload = doctor.to_payload(
+            [Check("uv", "uv", "warn", cmd="curl uv | sh", install=True)]
+        )
+        assert payload["install"]["steps"] == [
+            {"id": "uv", "label": "uv", "cmd": "curl uv | sh"}
+        ]
+        assert "script" not in payload["install"]

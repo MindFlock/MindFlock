@@ -15271,6 +15271,29 @@ button.linklike {
 .test-result.bad {
   color: var(--red);
 }
+
+/* "Install everything missing": one button above the checklist, with what it
+   installs beside it. */
+.doctor-install {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+#install-dialog .ws-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#install-dialog .ws-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+#install-status {
+  flex: 1;
+  font-size: 12px;
+}
 }
 
 /* 210 */
