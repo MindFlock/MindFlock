@@ -81,7 +81,7 @@ def test_a_new_group_member_is_placed_after_its_group_by_merge():
     sidebar = squash(_fn(js, "Sidebar"))
     # Layered on the worker placement, which keeps its own pinned call.
     assert (
-        "placeNewRunMembers(placeNewWorkers(ui.order, listed.filter((i) => !i.device)), listed.filter((i) => !i.device))"
+        "placeNewRunMembers(placeNewWorkers(ui.order, listed), listed.filter((i) => !i.device))"
         in sidebar
     )
 

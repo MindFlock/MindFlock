@@ -191,6 +191,20 @@ export function sameNest(a: NestInfo, b: NestInfo): boolean {
   return true;
 }
 
+/** Rows with a remote row's `parent` in the namespace of its `title`.
+ *
+ * Another tailnet device's sessions arrive titled "<device>::<title>", and the
+ * rail matches a worker to its parent by title. The server namespaces
+ * `parent` the same way when it merges a device's rows; an older one passed
+ * the bare title through, which names no row here (or a LOCAL session of the
+ * same name), so that device's workers never nested. Rows that need nothing
+ * come back as the same objects. */
+export function deviceLineage<T extends { device?: string; parent?: string }>(rows: T[]): T[] {
+  return rows.map((r) =>
+    r.device && r.parent && !r.parent.includes("::") ? { ...r, parent: r.device + "::" + r.parent } : r
+  );
+}
+
 /** The saved order with every never-placed worker slotted beneath its family.
  *
  * An agent spawns its workers server-side, so to this rail they are simply

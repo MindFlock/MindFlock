@@ -208,6 +208,43 @@ def test_merged_instances_namespaces_titles():
     assert inst["status"] == "running"
 
 
+def test_merged_instances_namespaces_lineage_refs():
+    # Regression: the rail nests a worker under the row whose TITLE equals the
+    # worker's `parent`. A remote row's title is "dev::x", so a bare parent
+    # never matched — remote workers showed as top-level rows on the viewer.
+    remote._DEVICES["otherbox"] = _fake_device(
+        instances_ok=True,
+        instances=[
+            {"title": "lead", "parent": ""},
+            {
+                "title": "worker",
+                "parent": "lead",
+                "spawned": True,
+                "order": {"state": "held", "after": ["sib", ""], "fence": None},
+                "lane": {"target": "pr", "owner": "lead"},
+            },
+            {"title": "old-peer-row"},  # an older peer: no lineage fields at all
+        ],
+    )
+    by = {i["display_title"]: i for i in remote.merged_instances()}
+    assert by["lead"]["parent"] == ""
+    w = by["worker"]
+    assert w["parent"] == "otherbox::lead" == by["lead"]["title"]
+    assert w["order"]["after"] == ["otherbox::sib", ""]
+    assert w["order"]["state"] == "held"
+    assert w["lane"] == {"target": "pr", "owner": "otherbox::lead"}
+    assert "parent" not in by["old-peer-row"]
+
+
+def test_merged_instances_does_not_mutate_the_device_snapshot():
+    row = {"title": "w", "parent": "lead", "order": {"after": ["a"]}}
+    remote._DEVICES["otherbox"] = _fake_device(instances_ok=True, instances=[row])
+    remote.merged_instances()
+    remote.merged_instances()
+    assert row == {"title": "w", "parent": "lead", "order": {"after": ["a"]}}
+    assert remote.merged_instances()[0]["parent"] == "otherbox::lead"
+
+
 def test_merged_instances_skips_disconnected_devices():
     remote._DEVICES["otherbox"] = _fake_device(
         reachable=False,

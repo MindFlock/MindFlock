@@ -507,8 +507,30 @@ def merged_instances() -> List[dict]:
             entry["device_label"] = dev["host"] or dev["key"]
             entry["display_title"] = entry["title"]
             entry["title"] = join_title(dev["key"], entry["title"])
+            _namespace_refs(entry, dev["key"])
             out.append(entry)
     return out
+
+
+def _namespace_refs(entry: dict, device: str) -> None:
+    """Namespace the fields of a remote row that name ANOTHER session on the
+    same device, the way its own ``title`` is. A bare ``parent`` would point at
+    a local session (or at nothing), so the rail could never nest a remote
+    worker under its orchestrator nor name the right one in its ``↳`` line."""
+
+    def ref(t):
+        if isinstance(t, str) and t and not is_remote_title(t):
+            return join_title(device, t)
+        return t
+
+    if entry.get("parent"):
+        entry["parent"] = ref(entry["parent"])
+    order = entry.get("order")
+    if isinstance(order, dict) and isinstance(order.get("after"), list):
+        entry["order"] = dict(order, after=[ref(t) for t in order["after"]])
+    lane = entry.get("lane")
+    if isinstance(lane, dict) and lane.get("owner"):
+        entry["lane"] = dict(lane, owner=ref(lane["owner"]))
 
 
 def devices_json() -> dict:

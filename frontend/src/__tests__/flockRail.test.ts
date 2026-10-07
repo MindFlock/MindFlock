@@ -305,10 +305,10 @@ describe("childrenByParent / workerOf", () => {
 const inst = (title: string, extra: Partial<Instance> = {}) =>
   ({ title, status: "running", activity: "idle", stage: "agent", branch: "", ...extra }) as Instance;
 
-function renderRail(list: Instance[]) {
+function renderRail(list: Instance[], devices: unknown[] = []) {
   Object.assign(useUi.getInitialState(), useUi.getState());
   queryClient.setQueryData<Instance[]>(["instances"], list);
-  queryClient.setQueryData(["devices"], { devices: [], self: null });
+  queryClient.setQueryData(["devices"], { devices, self: devices.length ? { device: "me", host: "me", os: "" } : null });
   const html = renderToStaticMarkup(
     createElement(QueryClientProvider, { client: queryClient }, createElement(Sidebar, { onOpenChat() {}, onOpenTodo() {} }))
   );
@@ -393,6 +393,33 @@ describe("Sidebar: family nesting leaves rail order and numbering alone", () => 
     const by = (t: string) => r.find((x) => x.title === t)!.html;
     expect(by("orch")).toContain('tabindex="0"');
     expect(by("plain")).not.toContain("tabindex");
+  });
+
+  // Regression: the Mac showed the WSL box's workers as top-level rows. Its
+  // rail reads that box's sessions through remote control, titled
+  // "<device>::<title>", and a worker's parent arrived bare ("orch"), so no
+  // row matched it — and placement only ever ran over local rows.
+  it("nests another device's worker under its parent and names it", () => {
+    useUi.setState({ order: [] });
+    const dev = { device: "wsl", host: "wsl", os: "linux", reachable: true, remote_control: true, connected: true };
+    const remoteRow = (title: string, extra: Partial<Instance> = {}) =>
+      inst("wsl::" + title, { device: "wsl", device_label: "wsl", display_title: title, ...extra } as Partial<Instance>);
+    for (const parent of ["wsl::orch", "orch"]) {
+      // Namespaced by the server, or bare from an older one: same rail.
+      const list = [
+        inst("orch"), // a LOCAL session of the same name must not adopt it
+        remoteRow("orch"),
+        remoteRow("other"),
+        remoteRow("w1", { parent, spawned: true }),
+      ];
+      const r = renderRail(list, [dev]);
+      const remote = r.filter((x) => x.title.startsWith("wsl::"));
+      expect(remote.map((x) => x.title)).toEqual(["wsl::orch", "wsl::w1", "wsl::other"]);
+      const w1 = remote[1];
+      expect(w1.cls).toContain("nest-1");
+      expect(w1.html).toContain("↳ orch");
+      expect(r.find((x) => x.title === "orch")!.cls).not.toContain("nest-");
+    }
   });
 
   it("renders a never-seen worker under its parent on first paint", () => {
