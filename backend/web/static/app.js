@@ -57558,6 +57558,11 @@ function CommandPalette({ host }) {
 			run: () => host.openDoctor()
 		});
 		acts.push({
+			label: "Peer links…",
+			hint: "invite someone, or join with their code",
+			run: () => ui.openDialogFor("settings", "peer")
+		});
+		acts.push({
 			label: "Open Setup checklist",
 			run: () => ui.openDialogFor("setup")
 		});
@@ -66001,6 +66006,10 @@ function StepFix({ step, shared, qrSvg }) {
 //#region src/components/settings/screens/PeerLinks.tsx
 var RELAY_OPTIONS = [
 	{
+		value: "auto",
+		label: "Automatic — Cloudflare relay when cloudflared is installed"
+	},
+	{
 		value: "off",
 		label: "Off — peers dial me directly (Tailscale / LAN)"
 	},
@@ -66030,6 +66039,7 @@ function PeerLinks(_) {
 	const [invite, setInvite] = (0, import_react.useState)(null);
 	const [code, setCode] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [install, setInstall] = (0, import_react.useState)([]);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			setSt(await api("/api/peer"));
@@ -66041,6 +66051,18 @@ function PeerLinks(_) {
 	(0, import_react.useEffect)(() => {
 		load();
 	}, [load, on]);
+	const needsInstall = !!st && (!st.sandbox.available || st.relay?.setting === "auto" && st.relay.cloudflared === false);
+	(0, import_react.useEffect)(() => {
+		if (!needsInstall) {
+			setInstall([]);
+			return;
+		}
+		let live = true;
+		api("/api/doctor?refresh=1").then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
+		return () => {
+			live = false;
+		};
+	}, [needsInstall, on]);
 	const run = async (fn, ok) => {
 		setBusy(true);
 		try {
@@ -66052,14 +66074,19 @@ function PeerLinks(_) {
 		setBusy(false);
 		load();
 	};
+	const afterPair = () => void s.reload();
 	const createInvite = () => run(async () => {
 		setInvite(await api("/api/peer/invites", { json: {} }));
+		afterPair();
 	});
 	const join = () => run(async () => {
 		const link = await api("/api/peer/join", { json: { code: code.trim() } });
 		setCode("");
-		toast(`Paired with ${link.peer_name} — compare the SAS ${link.sas} with them`);
+		afterPair();
+		toast(`Connected to ${link.peer_name} — check the safety number ${link.sas} with them`);
 	});
+	const relayed = !!invite?.relay;
+	const cloudflaredMissing = st?.relay?.setting === "auto" && st.relay.cloudflared === false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -66068,170 +66095,299 @@ function PeerLinks(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
-				"Pair-code with another MindFlock user. You pair once with a one-time code, then each of you shares ",
+				"Work together with someone else's MindFlock. Send them an invite, they paste it, and you're connected. Then either of you can share ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "one folder" }),
-				": an agent works in it inside a sandbox and talks to the other person's agent. Only that folder is ever exposed — see",
-				" ",
+				": an agent works in it inside a sandbox and talks to the other person's agent. Nothing else on your machine is exposed — see ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/peer-link.md" }),
 				"."
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Peer links"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "peer-enabled",
-					checked: on,
-					onChange: (e) => s.saveField("peer", "enabled", e.target.checked)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			className: "peer-actions",
+			id: "peer-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-action",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+						className: "set-subtitle",
+						children: "Invite someone"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "peer-invite",
+						disabled: busy,
+						onClick: createInvite,
+						children: busy && !invite ? "Creating…" : "Create invite"
+					}),
+					invite && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "peer-invite-code",
+						className: "peer-invite",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+								readOnly: true,
+								rows: 5,
+								value: invite.message || invite.code,
+								onClick: (e) => e.target.select()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-invite-copy",
+								onClick: () => copyText(invite.message || invite.code).then((ok) => toast(ok ? "Invite copied — send it to them" : "Copy failed")),
+								children: "Copy invite"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [
+									"Send it over any chat. It works once and expires in",
+									" ",
+									Math.round(invite.expires_in / 60),
+									" min.",
+									" ",
+									relayed ? "They can be anywhere — it connects through a relay that can't read your traffic." : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`
+								]
+							})
+						]
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-action",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+						className: "set-subtitle",
+						children: "Join a peer"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "peer-join-code",
+							placeholder: "paste the invite you were sent",
+							value: code,
+							onChange: (e) => setCode(e.target.value),
+							onKeyDown: (e) => {
+								if (e.key === "Enter" && code.trim() && !busy) join();
+							}
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "peer-join",
+							disabled: busy || !code.trim(),
+							onClick: join,
+							children: "Join"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Paste the whole message or just the code — either works."
+					})
+				]
 			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Your name"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "display_name",
-					placeholder: "this computer's name"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "What your peer sees."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Listen port"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "listen_port",
-					placeholder: "8799"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "When you invite, your peer dials this port — it must be reachable from their machine (Tailscale recommended)."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Advertise address"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "advertise_host",
-					placeholder: "auto: Tailscale IP, else LAN IP"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "The address written into your invite codes — the one your peer dials."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Relay"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "relay",
-					options: RELAY_OPTIONS
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "For peers on another network. Your invites then go through a public relay, carrying the same end-to-end, key-pinned encryption: the relay can block the connection but never read or change it. Your peer needs nothing extra."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Relay URL"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "relay_url",
-					placeholder: "wss://peer.example.com/mindflock"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Relay \"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Relay port"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "relay_port",
-					placeholder: "auto"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Loopback port your relay forwards to (blank = any free port)."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Extra egress hosts"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "peer",
-					field: "egress_allow",
-					placeholder: "e.g. pypi.org, .github.com"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Hosts the sandboxed agent may reach on 443, besides its own API. A leading dot allows subdomains."
-				})
-			]
 		}),
 		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "error",
 			children: error
 		}),
-		on && st && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "peer-body",
+		st && (cloudflaredMissing || !st.sandbox.available) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "peer-needs",
+			id: "peer-needs",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				cloudflaredMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "set-hint",
+					children: [
+						"Your invites only reach people on your own network or tailnet until",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
+						" is installed."
+					]
+				}),
+				!st.sandbox.available && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"Sharing a folder needs the sandbox here: ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "error",
+							children: st.sandbox.reason
+						}),
+						". Joining and messaging work without it."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+					steps: install,
+					onDone: () => load()
+				})
+			]
+		}),
+		st && st.links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+			className: "set-subtitle",
+			children: "Connected peers"
+		}), st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
+			link: l,
+			busy,
+			run
+		}, l.link_id))] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "peer-advanced",
+			id: "peer-advanced",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row set-switch-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Peer links"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "ca-switch",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "peer-enabled",
+								checked: on,
+								onChange: (e) => s.saveField("peer", "enabled", e.target.checked)
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Turned on by your first invite or join. Off: no listener, no dialing."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Your name"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "display_name",
+							placeholder: "this computer's name"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "What your peer sees."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Relay"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "relay",
+							options: RELAY_OPTIONS
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "How people on other networks reach your invites. Through a relay the connection keeps its end-to-end, key-pinned encryption: the relay can block it but never read or change it. Your peer needs nothing extra."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Listen port"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "listen_port",
+							placeholder: "8799"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Direct invites only: your peer dials this port, so it must be reachable from their machine (Tailscale recommended)."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Advertise address"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "advertise_host",
+							placeholder: "auto: Tailscale IP, else LAN IP"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Direct invites only: the address written into the code."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Relay URL"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "relay_url",
+							placeholder: "wss://peer.example.com/mindflock"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Relay \"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Relay port"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "relay_port",
+							placeholder: "auto"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Loopback port your relay forwards to (blank = any free port)."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Extra egress hosts"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "peer",
+							field: "egress_allow",
+							placeholder: "e.g. pypi.org, .github.com"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Hosts the sandboxed agent may reach on 443, besides its own API. A leading dot allows subdomains."
+						})
+					]
+				}),
+				st && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "peer-status",
 					children: [
 						"Sandbox:",
 						" ",
-						st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "error",
-							children: ["unavailable — ", st.sandbox.reason]
+							children: "unavailable"
 						}),
 						st.fingerprint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 							" · ",
@@ -66253,89 +66409,18 @@ function PeerLinks(_) {
 								id: "peer-relay-state",
 								children: st.relay.running ? "up" : "down"
 							}),
-							st.relay.public_host && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" at ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.relay.public_host })] }),
+							st.relay.public_host && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								" ",
+								"at ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.relay.public_host })
+							] }),
 							st.relay.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "error",
 								children: [" — ", st.relay.error]
-							}),
-							st.relay.mode === "cloudflare" && st.relay.cloudflared === false && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "error",
-								children: " — cloudflared is not installed"
 							})
 						] })
 					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-					className: "set-subtitle",
-					children: "Invite"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					id: "peer-invite",
-					disabled: busy,
-					onClick: createInvite,
-					children: "Create invite code"
-				}),
-				invite && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					id: "peer-invite-code",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							readOnly: true,
-							value: invite.code,
-							onClick: (e) => e.target.select()
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => copyText(invite.code).then((ok) => toast(ok ? "Code copied" : "Copy failed")),
-							children: "Copy"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "set-hint",
-							children: [
-								"Single use, expires in ",
-								Math.round(invite.expires_in / 60),
-								" min.",
-								" ",
-								invite.relay ? `Your peer connects through the relay at ${invite.host}.` : `Your peer dials ${invite.host}:${invite.port}.`
-							]
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-					className: "set-subtitle",
-					children: "Join"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						id: "peer-join-code",
-						placeholder: "paste a mfp1:… or mfp2:… code",
-						value: code,
-						onChange: (e) => setCode(e.target.value)
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy || !code.trim(),
-						onClick: join,
-						children: "Join"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-					className: "set-subtitle",
-					children: "Links"
-				}),
-				st.links.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "set-hint",
-					children: "No peer links yet."
-				}),
-				st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
-					link: l,
-					busy,
-					run
-				}, l.link_id))
+				})
 			]
 		})
 	] });

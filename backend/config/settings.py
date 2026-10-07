@@ -1215,7 +1215,7 @@ class ExtensionsSettings:
 #: TLS listener — never the HTTP API's.
 PEER_DEFAULT_LISTEN_HOST = "0.0.0.0"
 PEER_DEFAULT_LISTEN_PORT = 8799
-PEER_RELAY_MODES = ("off", "cloudflare", "url")
+PEER_RELAY_MODES = ("off", "cloudflare", "url", "auto")
 _PEER_NAME_RE = re.compile(r"[^A-Za-z0-9 ._-]")
 
 
@@ -1255,10 +1255,11 @@ class PeerSettings:
     * ``egress_allow`` — extra hosts the sandboxed agent may CONNECT to on
       443, on top of its CLI's own API hosts.
     * ``relay`` — how joiners on OTHER networks reach your invites
-      (docs/peer-link.md, "Connecting across networks"): ``off`` (default:
-      direct TCP to ``listen_port``), ``cloudflare`` (a Cloudflare quick
-      tunnel via a locally installed ``cloudflared``; no account), or ``url``
-      (your own WebSocket-capable HTTPS reverse proxy at ``relay_url``). The
+      (docs/peer-link.md, "Connecting across networks"): ``auto`` (default:
+      the Cloudflare quick tunnel whenever ``cloudflared`` is installed, else
+      direct), ``off`` (direct TCP to ``listen_port`` — Tailscale / LAN only),
+      ``cloudflare`` (always the quick tunnel; no account), or ``url`` (your
+      own WebSocket-capable HTTPS reverse proxy at ``relay_url``). The
       pinned-key TLS runs end to end inside the relay either way.
     * ``relay_url`` — ``relay = "url"`` only: the public ``wss://host[:port]
       [/prefix]`` that forwards (path unchanged) to the relay port.
@@ -1291,7 +1292,7 @@ class PeerSettings:
             "display_name": name or "peer",
             "advertise_host": self.advertise_host,
             "egress_allow": list(self.egress_allow),
-            "relay": self.relay or "off",
+            "relay": self.relay or "auto",
             "relay_url": self.relay_url,
             "relay_port": self.relay_port or 0,
         }

@@ -11,31 +11,32 @@ two people's agents code together.
 You and a collaborator each run MindFlock. One of you **invites**, the other
 **joins**; then each of you may **share one folder** with that link.
 
-1. **Turn it on.** Settings → Peer links → *Peer links* on (or
-   `peer.enabled = true`). Shared sessions need Linux with
-   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) and run
-   `claude` or `codex` only; Settings → Peer links and `mindflock peer status`
-   say whether the sandbox works here.
-2. **Make sure the inviter is reachable.** The inviter listens on
-   `peer.listen_port` (default **8799**, TLS, not the web UI's port), and the
-   joiner dials the address written into the code. That address is
-   `peer.advertise_host` when set, else this machine's **Tailscale** IPv4, else
-   its LAN address. Tailscale is the recommended way: both machines on one
-   tailnet, nothing exposed to the internet. On a LAN, open the port in your
-   firewall; never port-forward it from the internet unless you mean to.
-   **Different networks, no shared tailnet?** Turn on a relay (Settings →
-   Peer links → *Relay*, or `peer.relay = "cloudflare"`) and install
-   [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
-   Invites then go through a Cloudflare quick tunnel; your peer needs nothing
-   extra. The encryption stays end to end: see
-   [Connecting across networks](#connecting-across-networks).
-3. **Invite.** Settings → Peer links → *Create invite code*, or
-   `mindflock peer invite`. Send the `mfp1:…` (or, through a relay,
-   `mfp2:…`) code over a channel you trust. It
-   is single use and expires after 10 minutes; the listener only runs while an
-   invite or a link that you accepted exists.
-4. **Join.** The other person pastes it: Settings → Peer links → *Join*, or
-   `mindflock peer join <code>`.
+1. **Invite.** Settings → Peer links (or the command palette's *Peer
+   links…*) → **Create invite**, or `mindflock peer invite`. There is nothing
+   to turn on or configure first: inviting turns peer links on. Press **Copy
+   invite** and send the message over any channel you trust — it carries the
+   code (`mfp1:…` or `mfp2:…`) and says what to do with it. A code is single
+   use and expires after 10 minutes; the listener only runs while an invite or
+   a link that you accepted exists.
+2. **Join.** The other person pastes the message — all of it, or just the
+   code — into Settings → Peer links → **Join a peer**, or runs
+   `mindflock peer join <code>`. Joining turns peer links on too, and needs
+   nothing installed.
+3. **How the joiner reaches you** is chosen for you (`peer.relay = "auto"`,
+   the default): with [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+   installed, invites go through a Cloudflare quick tunnel, so your peer can be
+   on any network; the encryption stays end to end (see
+   [Connecting across networks](#connecting-across-networks)). Without it, the
+   code names this machine — `peer.advertise_host` when set, else its
+   **Tailscale** IPv4, else its LAN address — on `peer.listen_port` (default
+   **8799**, TLS, not the web UI's port), which only works on a shared network
+   or tailnet. Peer links offers to install cloudflared (one click, with
+   everything else missing) when it's absent; `relay = "off"` pins direct
+   dialing, `relay = "url"` uses your own relay.
+4. **Shared sessions** need Linux with
+   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`); Peer links
+   and `mindflock doctor` say whether the sandbox works here and install it if
+   it's missing. Pairing and messaging work without it.
 5. **Verify the SAS.** Both sides show a safety number like `482-019-337-5`
    (Settings → Peer links, `mindflock peer links`). Read it to each other by
    voice or chat. If it differs, someone is in the middle: **unlink now**.
@@ -501,7 +502,7 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   - `advertise_host` ("" = Tailscale IPv4, else LAN address; the address
     invite codes carry — `POST /api/peer/invites {advertise_host}` overrides)
   - `egress_allow` ([])
-  - `relay` (`off` | `cloudflare` | `url`), `relay_url`, `relay_port` — see
+  - `relay` (`auto` (default) | `off` | `cloudflare` | `url`), `relay_url`, `relay_port` — see
     [Connecting across networks](#connecting-across-networks)
 - CLI: `mindflock peer status | invite | join <code> | links | unlink <id> |
   share <link> <repo> [--branch] | unshare <link> | export <link> <repo>
@@ -654,8 +655,10 @@ rebuilding it. Not worth it.
 
 **Default relay: an inviter-side Cloudflare quick tunnel carrying the
 existing peer TLS stream as WebSocket binary frames, with the tunnel hostname
-and an ingress token in an `mfp2:` code.** It is opt-in
-(`peer.relay = "cloudflare"`; off by default). `peer.relay = "url"` covers
+and an ingress token in an `mfp2:` code.** It is used automatically whenever
+`cloudflared` is installed (`peer.relay = "auto"`, the default; `"cloudflare"`
+forces it, `"off"` refuses it), because an invite should reach whoever it is
+sent to without either person knowing the other's network. `peer.relay = "url"` covers
 everything else with the same carrier: named Cloudflare tunnels with Access,
 Tailscale Funnel, or your own reverse proxy.
 

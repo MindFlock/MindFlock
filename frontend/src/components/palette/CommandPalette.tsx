@@ -124,6 +124,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+    acts.push({
+      label: "Peer links…",
+      hint: "invite someone, or join with their code",
+      run: () => ui.openDialogFor("settings", "peer"),
+    });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
