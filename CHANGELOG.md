@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Peer links: pair-code with another MindFlock user.** Pair two instances
+  with a one-time code (verify the safety number), then each side shares ONE
+  folder: an agent runs in a shallow clone of it inside a bubblewrap sandbox
+  and talks to the other person's agent through peer-only MCP tools
+  (`peer_send`, `peer_inbox`, `peer_get_diff`, `peer_read_file`, …). Settings →
+  Peer links, `mindflock peer …`, `/api/peer*`. Shared sessions refuse
+  ship / push / PR / autopilot, spawning, the shell pane, the IDE, setup and
+  check scripts, rename and team runs; no other session may run in the peer
+  folder; export brings the work into your own repo as a `peer/…` branch.
+  Linux + bubblewrap, `claude` or `codex`. See `docs/peer-link.md`.
+
 ## [0.6.1] - 2026-10-06
 
 ### Fixed

@@ -63,6 +63,9 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_PORTS_FILE", str(tmp_path / "mindflock" / "ports.json")
     )
+    # Peer links (``~/.mindflock/peer``): identity key, links, shared folders.
+    # The engine and the shell pane consult the peer root on every launch.
+    monkeypatch.setenv("MINDFLOCK_PEER_HOME", str(tmp_path / "mindflock" / "peer"))
     # Point the Verify test-plan store (``~/.mindflock/test_plans.json``) at a
     # per-test tmp file. This one is not merely hygiene: the lifespan registers
     # ``_test_plans_due_loop``, which does its first pass *immediately* (work

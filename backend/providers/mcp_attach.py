@@ -83,6 +83,10 @@ __all__ = [
     "claude_tool_names",
     "codex_server_table",
     "forget",
+    "peer_tool_names",
+    "peer_env",
+    "peer_attach_args",
+    "write_peer_claude_config",
 ]
 
 #: The server's name in every CLI's config. Claude Code names its tools
@@ -675,3 +679,137 @@ def codex_server_table(spec: McpSpec) -> str:
             tools,
         )
     )
+
+
+# --------------------------------------------------------------------------- #
+# Peer mode (shared-folder sessions, docs/peer-link.md)
+# --------------------------------------------------------------------------- #
+#: The peer-mode toolset (``backend.mcp.peer_tools.PEER_TOOL_NAMES``); the
+#: literal list is the spec's, used only if that module cannot be imported.
+_PEER_TOOLS_FALLBACK = (
+    "whoami",
+    "peer_send",
+    "peer_inbox",
+    "peer_get_diff",
+    "peer_read_file",
+    "peer_list_files",
+    "checkpoint",
+)
+
+#: The run-dir file name of a share's Claude MCP config.
+PEER_MCP_FILE = "mcp.json"
+
+
+def peer_tool_names() -> tuple:
+    """The peer-mode MCP tool names (bare)."""
+    try:
+        from backend.mcp.peer_tools import PEER_TOOL_NAMES
+
+        names = tuple(str(n) for n in PEER_TOOL_NAMES)
+        if names:
+            return names
+    except Exception:  # noqa: BLE001 — fall back to the spec's list
+        pass
+    return _PEER_TOOLS_FALLBACK
+
+
+def peer_claude_tool_names() -> tuple:
+    return tuple("mcp__%s__%s" % (SERVER_NAME, t) for t in peer_tool_names())
+
+
+def peer_env(share_id: str, token: str) -> dict:
+    """The ONLY env a sandboxed peer-mode MCP server gets: its mode, its share's
+    agent socket and token, and where ``backend`` lives. Deliberately no host,
+    port, auth token, session title or settings file — the sandboxed agent must
+    not be able to find (let alone drive) the MindFlock HTTP API."""
+    from backend.peer import paths as _peer_paths
+
+    run = _peer_paths.share_paths(share_id)["run"]
+    if not token:
+        raise ValueError("no agent-socket token")
+    return {
+        "MINDFLOCK_MCP_MODE": "peer",
+        "MINDFLOCK_PEER_SOCKET": os.path.join(run, "agent.sock"),
+        "MINDFLOCK_PEER_TOKEN": token,
+        "PYTHONPATH": mcp_pythonpath(),
+    }
+
+
+def peer_claude_config(share_id: str, token: str) -> dict:
+    return {
+        "mcpServers": {
+            SERVER_NAME: {
+                "type": "stdio",
+                "command": mcp_python(),
+                "args": list(_PYTHON_ARGS),
+                "env": peer_env(share_id, token),
+                "timeout": TOOL_TIMEOUT_S * 1000,
+            }
+        }
+    }
+
+
+def write_peer_claude_config(share_id: str, token: str) -> str:
+    """(Re)write ``<share>/run/mcp.json`` (0600) and return its path. The run
+    dir is read-only inside the sandbox, so the agent cannot rewrite it."""
+    from backend.peer import paths as _peer_paths
+
+    run = _peer_paths.ensure_dir(_peer_paths.share_paths(share_id)["run"])
+    path = os.path.join(run, PEER_MCP_FILE)
+    _write_json_0600(path, peer_claude_config(share_id, token))
+    return path
+
+
+def peer_codex_server_table(share_id: str, token: str) -> str:
+    """The Codex ``mcp_servers.mindflock`` inline table for peer mode: the peer
+    env only, NO ``env_vars`` forwarding (nothing of the host env reaches it),
+    every peer tool pre-approved — the sandbox is the boundary."""
+    env = ",".join(
+        "%s=%s" % (_toml_key(k), _toml_str(v))
+        for k, v in sorted(peer_env(share_id, token).items())
+    )
+    tools = ",".join(
+        '%s={approval_mode="approve"}' % _toml_key(t) for t in peer_tool_names()
+    )
+    return (
+        "{command=%s,args=%s,env={%s},"
+        "startup_timeout_sec=%d,tool_timeout_sec=%d,tools={%s}}"
+        % (
+            _toml_str(mcp_python()),
+            _toml_array(_PYTHON_ARGS),
+            env,
+            STARTUP_TIMEOUT_S,
+            TOOL_TIMEOUT_S,
+            tools,
+        )
+    )
+
+
+def peer_attach_args(provider, *, share_id: str, token: str) -> tuple:
+    """argv tokens attaching the PEER-mode MCP to a shared-folder session.
+
+    Unlike :func:`attach_args` this is NOT best-effort: it raises on anything
+    it cannot do (the caller refuses the launch). It ignores the
+    ``general.agent_mcp`` toggle — the peer tools are how the shared session
+    works at all — and supports only Claude and Codex.
+
+    * Claude: ``--mcp-config=<run>/mcp.json --strict-mcp-config
+      --allowedTools=<peer tools>`` — strict so no other server (a project
+      ``.mcp.json`` the peer planted in the folder, the user's own) loads.
+    * Codex: one ``-c mcp_servers.mindflock={...}`` table.
+    """
+    name = getattr(provider, "name", "")
+    if name == "claude":
+        path = write_peer_claude_config(share_id, token)
+        return (
+            "--mcp-config=" + path,
+            "--strict-mcp-config",
+            "--allowedTools=" + ",".join(peer_claude_tool_names()),
+        )
+    if name == "codex":
+        return (
+            "-c",
+            "mcp_servers.%s=%s"
+            % (SERVER_NAME, peer_codex_server_table(share_id, token)),
+        )
+    raise ValueError("provider %s has no peer-mode MCP attach" % (name or "?"))

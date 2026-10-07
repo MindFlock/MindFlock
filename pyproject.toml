@@ -31,6 +31,7 @@ engine = [
 ]
 web = [
     "mindflock[engine]",
+    "cryptography>=41",  # peer links: Ed25519 identity + self-signed TLS cert
     "fastapi",
     "uvicorn[standard]",
     "segno",
@@ -62,6 +63,7 @@ web = [
     "fastapi",
     "uvicorn[standard]",
     "segno",  # pure-python QR codes for the startup mobile-URL banner
+    "cryptography>=41",  # peer links: Ed25519 identity + self-signed TLS cert
 ]
 [build-system]
 requires = ["uv_build>=0.11.6,<0.13.0"]

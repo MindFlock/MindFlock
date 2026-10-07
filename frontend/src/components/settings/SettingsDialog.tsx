@@ -16,6 +16,7 @@ import { isDevShell } from "../../lib/shell";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
 import { Mobile } from "./screens/Mobile";
+import { PeerLinks } from "./screens/PeerLinks";
 import { Connections } from "./screens/Connections";
 import { Notifications } from "./screens/Notifications";
 import { CodingCli } from "./screens/CodingCli";
@@ -65,6 +66,7 @@ const SCREENS: Array<{
   { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
   { key: "mobile", label: "Mobile", group: "This device", el: (p) => <Mobile {...p} /> },
+  { key: "peer", label: "Peer links", group: "This device", el: (p) => <PeerLinks {...p} /> },
   { key: "doctor", label: "Doctor", group: "Troubleshooting", el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", group: "Troubleshooting", el: (p) => <SystemLogs {...p} /> },
   { key: "advanced", label: "Advanced", group: "Troubleshooting", el: (p) => <Advanced {...p} /> },

@@ -119,6 +119,50 @@ def search_branches(repo_path: str, filter: str) -> List[str]:
     return branches
 
 
+# A peer link's shared folder (backend/peer) is written by a sandboxed agent
+# that a remote peer can steer. Engine git calls on it keep to the trusted,
+# read-only repo.git: never enter submodules (a planted .gitmodules can't
+# re-enable them, --ignore-submodules beats every config layer), never run
+# fsmonitor or hooks, and never `add` — staging would let a nested repo into
+# the trusted index as a gitlink. The share's own code (backend.peer.share)
+# stages through its hardened runner and strips gitlinks.
+_PEER_SHARE_GIT = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "diff.ignoreSubmodules=all",
+    "-c",
+    "status.submoduleSummary=false",
+    "-c",
+    "protocol.allow=never",
+)
+_IGNORE_SUBMODULES_CMDS = frozenset({"status", "diff"})
+
+
+def _is_peer_share(path: str) -> bool:
+    try:
+        from backend.peer import paths as _peer_paths
+    except Exception:  # noqa: BLE001 — engine-only install without peer
+        return False
+    return _peer_paths.is_inside_peer_root(path)
+
+
+def _peer_share_args(args):
+    if not args:
+        return args
+    if args[0] == "add":
+        raise RuntimeError(
+            "git command failed: staging is not available in a peer shared folder"
+        )
+    if args[0] in _IGNORE_SUBMODULES_CMDS:
+        return (args[0], "--ignore-submodules=all", *args[1:])
+    return args
+
+
 class GitWorktreeGitMixin:
     """Git/gh-driven methods of ``GitWorktree`` (from Go's ``worktree_git.go``).
 
@@ -138,6 +182,9 @@ class GitWorktreeGitMixin:
         is killed and a ``RuntimeError`` in the same format is raised.
         """
         base_args = ["-C", path]
+        if _is_peer_share(path):
+            args = _peer_share_args(args)
+            base_args = [*_PEER_SHARE_GIT, "-C", path]
         try:
             cmd = subprocess.run(
                 ["git", *base_args, *args],

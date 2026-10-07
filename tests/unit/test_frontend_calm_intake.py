@@ -212,6 +212,7 @@ def test_settings_nav_order_and_groups():
         "security",
         "appearance",
         "mobile",
+        "peer",
         "doctor",
         "logs",
         "advanced",
@@ -224,7 +225,7 @@ def test_settings_nav_order_and_groups():
         assert groups[k] == "Agents", k
     for k in ("workspace", "ide"):
         assert groups[k] == "Code", k
-    for k in ("security", "appearance", "mobile"):
+    for k in ("security", "appearance", "mobile", "peer"):
         assert groups[k] == "This device", k
     for k in ("doctor", "logs", "advanced", "extensions", "traffic"):
         assert groups[k] == "Troubleshooting", k

@@ -23,6 +23,12 @@ Installed via ``[project.scripts]``::
     mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
     mindflock inbox TITLE [--all] # read a session's messages (doesn't mark them read)
 
+    mindflock peer status         # peer links: pair-code with another MindFlock user
+    mindflock peer invite         # …make a one-time invite code (you listen)
+    mindflock peer join CODE      # …pair using their code (you dial)
+    mindflock peer share LINK REPO [--branch B] [--program P]   # share ONE folder
+    mindflock peer export LINK TARGET_REPO peer/BRANCH          # bring work home
+
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
 
@@ -349,6 +355,71 @@ def _build_parser() -> argparse.ArgumentParser:
     inbox.add_argument(
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
     )
+
+    peer = sub.add_parser(
+        "peer",
+        parents=[server_opts],
+        help="peer links: pair-code with another MindFlock user in one sandboxed folder",
+        description=(
+            "Pair this MindFlock with another person's using a one-time code, "
+            "then bind ONE shared folder per link: an agent runs in it inside a "
+            "bubblewrap sandbox and talks to the peer's agent. See "
+            "docs/peer-link.md. Needs a running server."
+        ),
+    )
+    peer_sub = peer.add_subparsers(dest="peer_command")
+    peer_sub.add_parser(
+        "status", parents=[server_opts_nested], help="sandbox, listener, links"
+    )
+    p_inv = peer_sub.add_parser(
+        "invite",
+        parents=[server_opts_nested],
+        help="create a one-time invite code (valid 10 minutes, single use)",
+    )
+    p_inv.add_argument("--ttl", type=int, default=None, help="seconds (60-600)")
+    p_inv.add_argument(
+        "--advertise",
+        default=None,
+        help="host/IP the peer dials (default: Tailscale IP, else LAN IP)",
+    )
+    p_join = peer_sub.add_parser(
+        "join", parents=[server_opts_nested], help="pair using a peer's code"
+    )
+    p_join.add_argument("code", metavar="CODE")
+    peer_sub.add_parser(
+        "links", parents=[server_opts_nested], help="list links with their SAS"
+    )
+    p_unlink = peer_sub.add_parser(
+        "unlink", parents=[server_opts_nested], help="remove a link"
+    )
+    p_unlink.add_argument("link", metavar="LINK", help="link id (unique prefix ok)")
+    p_unlink.add_argument(
+        "--delete-files", action="store_true", help="also delete the shared folder"
+    )
+    p_share = peer_sub.add_parser(
+        "share",
+        parents=[server_opts_nested],
+        help="clone a repo into the link's shared folder and start its sandboxed session",
+    )
+    p_share.add_argument("link", metavar="LINK")
+    p_share.add_argument("repo", metavar="REPO")
+    p_share.add_argument("--branch", default=None)
+    p_share.add_argument("--program", default=None, help="claude or codex")
+    p_unshare = peer_sub.add_parser(
+        "unshare", parents=[server_opts_nested], help="stop the shared session"
+    )
+    p_unshare.add_argument("link", metavar="LINK")
+    p_unshare.add_argument(
+        "--delete-files", action="store_true", help="also delete the shared folder"
+    )
+    p_export = peer_sub.add_parser(
+        "export",
+        parents=[server_opts_nested],
+        help="checkpoint the shared folder and fetch it into your repo as a branch",
+    )
+    p_export.add_argument("link", metavar="LINK")
+    p_export.add_argument("target_repo", metavar="TARGET_REPO")
+    p_export.add_argument("branch", metavar="BRANCH", help="must start with peer/")
 
     mcp = sub.add_parser(
         "mcp",
@@ -1339,6 +1410,152 @@ def _cmd_accounts(args) -> int:
         return 1
 
 
+def _peer_link_id(base: str, needle: str) -> str:
+    """A link id from an exact id or a unique prefix."""
+    status = client.get(base, "/api/peer") or {}
+    ids = [str(l.get("link_id") or "") for l in status.get("links") or []]
+    if needle in ids:
+        return needle
+    hits = [i for i in ids if needle and i.startswith(needle)]
+    if len(hits) == 1:
+        return hits[0]
+    raise client.ClientError(
+        "no link matches %r" % needle if not hits else "%r is ambiguous" % needle
+    )
+
+
+def _format_link(link: dict) -> str:
+    state = "connected" if link.get("connected") else "offline"
+    perms = ",".join(k for k, v in (link.get("perms") or {}).items() if v) or "none"
+    line = "%s  %-20s  %-8s  %-9s  SAS %s  peer may: %s" % (
+        str(link.get("link_id") or "")[:12],
+        link.get("peer_name") or "peer",
+        link.get("role") or "",
+        state,
+        link.get("sas") or "?",
+        perms,
+    )
+    if link.get("session_title"):
+        line += "\n    shared session: %s" % link["session_title"]
+    return line
+
+
+def _cmd_peer(args: argparse.Namespace) -> int:
+    """``mindflock peer …`` — thin client over ``/api/peer``."""
+    base = client.discover(args.host, args.port)
+    cmd = args.peer_command or "status"
+    if cmd == "status":
+        st = client.get(base, "/api/peer") or {}
+        sb = st.get("sandbox") or {}
+        ls = st.get("listen") or {}
+        print(
+            "peer links: %s"
+            % ("on" if st.get("enabled") else "off (Settings → Peer links)")
+        )
+        print("name:       %s" % (st.get("display_name") or ""))
+        if st.get("fingerprint"):
+            print("identity:   %s" % st["fingerprint"])
+        print(
+            "sandbox:    %s"
+            % ("ok" if sb.get("available") else "unavailable — %s" % sb.get("reason"))
+        )
+        print(
+            "listener:   %s:%s (%s)"
+            % (
+                ls.get("host"),
+                ls.get("port"),
+                "listening" if ls.get("listening") else "stopped",
+            )
+        )
+        for inv in st.get("invites") or []:
+            print(
+                "invite:     %s (expires in %ss)"
+                % (inv.get("invite_id"), inv.get("expires_in"))
+            )
+        for link in st.get("links") or []:
+            print(_format_link(link))
+        return 0
+    if cmd == "links":
+        links = (client.get(base, "/api/peer") or {}).get("links") or []
+        if not links:
+            print("no peer links")
+        for link in links:
+            print(_format_link(link))
+        return 0
+    if cmd == "invite":
+        body: dict = {}
+        if args.ttl is not None:
+            body["ttl_s"] = args.ttl
+        if args.advertise:
+            body["advertise_host"] = args.advertise
+        inv = client.post(base, "/api/peer/invites", body) or {}
+        print(inv.get("code") or "")
+        print(
+            "Give this code to your peer (valid %ss, single use). They must reach "
+            "%s:%s — Tailscale recommended."
+            % (inv.get("expires_in"), inv.get("host"), inv.get("port")),
+            file=sys.stderr,
+        )
+        return 0
+    if cmd == "join":
+        link = client.post(base, "/api/peer/join", {"code": args.code}) or {}
+        print("paired with %s" % (link.get("peer_name") or "peer"))
+        print(
+            "SAS %s — compare it with your peer (voice/chat); if it differs, "
+            "unlink now." % (link.get("sas") or "?")
+        )
+        return 0
+    link_id = _peer_link_id(base, args.link)
+    path = "/api/peer/links/%s" % urllib.parse.quote(link_id, safe="")
+    if cmd == "unlink":
+        client.delete(base, path + ("?delete_files=1" if args.delete_files else ""))
+        print("unlinked %s" % link_id[:12])
+        return 0
+    if cmd == "share":
+        body = {"repo_path": os.path.abspath(os.path.expanduser(args.repo))}
+        if args.branch:
+            body["branch"] = args.branch
+        if args.program:
+            body["program"] = args.program
+        res = client.post(base, path + "/share", body, timeout=300.0) or {}
+        sess = res.get("session") or {}
+        print("sharing; sandboxed session: %s" % (sess.get("title") or "?"))
+        return 0
+    if cmd == "unshare":
+        res = (
+            client.delete(
+                base, path + "/share" + ("?delete_files=1" if args.delete_files else "")
+            )
+            or {}
+        )
+        if res.get("deleted"):
+            print("unshared; folder deleted")
+        else:
+            print("unshared; folder kept at %s" % (res.get("folder") or "?"))
+        return 0
+    if cmd == "export":
+        res = (
+            client.post(
+                base,
+                path + "/export",
+                {
+                    "target_repo": os.path.abspath(
+                        os.path.expanduser(args.target_repo)
+                    ),
+                    "branch_name": args.branch,
+                },
+                timeout=300.0,
+            )
+            or {}
+        )
+        print("exported to %s in %s" % (args.branch, args.target_repo))
+        if res.get("sha"):
+            print("  %s" % res["sha"])
+        return 0
+    print("error: unknown peer command %r" % cmd, file=sys.stderr)
+    return 2
+
+
 _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "new": _cmd_new,
     "ls": _cmd_ls,
@@ -1348,6 +1565,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "events": _cmd_events,
     "msg": _cmd_msg,
     "inbox": _cmd_inbox,
+    "peer": _cmd_peer,
 }
 
 

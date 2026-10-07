@@ -62,6 +62,29 @@ def _live_session_name(name: str):
     return None
 
 
+PEER_SHELL_REFUSED = (
+    "the shell pane is disabled for shared-folder (peer) sessions — its "
+    "folder holds a remote collaborator's changes and only runs sandboxed"
+)
+
+
+def _peer_shell_refused(title: str, wt: str) -> bool:
+    """True when ``title``/``wt`` is a shared-folder session's (or anything
+    under the peer root, or undecidable)."""
+    try:
+        from backend.peer import paths as _peer_paths
+
+        if wt and _peer_paths.is_inside_peer_root(wt):
+            return True
+    except Exception:  # noqa: BLE001 — undecidable: refuse
+        return True
+    try:
+        inst = _server().ENGINE.instances.get(title)
+    except Exception:  # noqa: BLE001
+        inst = None
+    return bool(getattr(inst, "PeerShare", "") if inst is not None else False)
+
+
 def _ensure_shell_session(title: str, wt: str):
     """Ensure the interactive shell tmux session exists in ``wt``.
 
@@ -69,6 +92,13 @@ def _ensure_shell_session(title: str, wt: str):
     """
     srv = _server()
     name = srv._shell_tmux_name(title)
+    # Shared-folder (peer) sessions get NO host shell: a shell in that folder
+    # runs whatever the peer's agent planted there, outside the sandbox. Keyed
+    # on the folder itself (fail closed — no instance lookup to get wrong) and
+    # on the instance flag. Checked before attaching too: a shell session left
+    # over under this name must not be handed out either.
+    if _peer_shell_refused(title, wt):
+        return name, PEER_SHELL_REFUSED
     live = srv._live_session_name(name)
     if live is not None:
         return live, None  # attach the existing session
@@ -142,6 +172,19 @@ def _ensure_agent_session(inst, title: str):
     # crash / no marker) -> resume the conversation. The provider owns the
     # exit-code policy (claude: 0/130 = clean).
     resume = not provider.is_natural_exit(_read_exit_marker(name))
+    peer_share = getattr(inst, "PeerShare", "") or ""
+    if not peer_share:
+        try:
+            from backend.peer import paths as _peer_paths
+
+            if _peer_paths.is_inside_peer_root(wt):
+                # An ordinary session on a shared folder: never launched.
+                return (
+                    name,
+                    "refusing to launch an unsandboxed agent in a shared folder",
+                )
+        except Exception:  # noqa: BLE001
+            return name, "refusing to launch: peer root check failed"
     # Auth-profile routing has to be re-derived HERE too, for the same reason
     # as the local-model overlay below: the engine put the profile env on the
     # first start's tmux session, but a relaunch builds a fresh command from
@@ -159,8 +202,31 @@ def _ensure_agent_session(inst, title: str):
     except Exception:  # noqa: BLE001 — never block a relaunch over settings
         pass
     launcher = os.path.join(wt, provisioning.LAUNCHER_BASENAME)
-    use_launcher = os.path.isfile(launcher) and not getattr(inst, "InPlace", False)
-    if use_launcher:
+    use_launcher = (
+        not peer_share
+        and os.path.isfile(launcher)
+        and not getattr(inst, "InPlace", False)
+    )
+    if peer_share:
+        # Shared-folder session: sandboxed with the peer-mode MCP, or not at
+        # all (fail closed — the error stops the caller retrying). Nothing of
+        # the host's env overlays rides along, and no hooks are installed
+        # into the shared folder on its behalf.
+        from backend.peer import launch as _peer_launch
+
+        try:
+            cmd = _peer_launch.build_command(
+                program=inst.Program or "",
+                share_id=peer_share,
+                session_name=name,
+                launch_args=tuple(getattr(inst, "LaunchArgs", ()) or ()),
+                resume=resume,
+            )
+        except Exception as err:  # noqa: BLE001
+            return name, "shared-folder session not started: %s" % err
+        mcp_attached = True
+        prof_env = {}
+    elif use_launcher:
         # The launcher handles --continue itself; just re-run it. The profile
         # env is exported in front (it is never baked into the script): the
         # exports survive the launcher's `exec bash -ilc` chain, so every link
@@ -235,10 +301,11 @@ def _ensure_agent_session(inst, title: str):
     # guard armed. The session name is resolved at fire time (not baked in), so
     # copies sharing a worktree each attribute their own events; Claude Code hot-
     # reloads its hook config, so the reconcile tick can also re-arm a live run.
-    try:
-        provider.install_activity_hooks(wt, name)
-    except Exception:  # noqa: BLE001 — activity hooks are best-effort
-        pass
+    if not peer_share:
+        try:
+            provider.install_activity_hooks(wt, name)
+        except Exception:  # noqa: BLE001 — activity hooks are best-effort
+            pass
     # Launch through the exit-recording wrapper and drop any stale marker so the
     # next death is judged fresh.
     _clear_exit_marker(name)

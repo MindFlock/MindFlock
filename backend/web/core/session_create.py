@@ -31,7 +31,7 @@ def _server():
     return server
 
 
-async def create(payload: dict) -> JSONResponse:
+async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
     Accepted ``payload`` keys:
@@ -118,6 +118,33 @@ async def create(payload: dict) -> JSONResponse:
     payload = payload or {}
     title = (payload.get("title", "") or "").strip()
     program = (payload.get("program", "") or "").strip() or srv.ENGINE.default_program()
+
+    # --- Peer links -------------------------------------------------------------
+    # ``peer_share`` is a keyword only the peer service passes (never a payload
+    # key): it creates THAT share's sandboxed session, in place, on exactly its
+    # folder. Every other create is refused a folder under the peer root —
+    # checked on the RESOLVED path (symlinks, "..") before anything touches it.
+    from backend.web.core import peer_guard as _peer_guard
+
+    if peer_share:
+        err = _peer_share_payload_error(payload, peer_share, program)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+    else:
+        import os as _os
+
+        raw_repo = str(payload.get("repo_path", "") or "")
+        refused = _peer_guard.path_refusal(_os.path.expanduser(raw_repo))
+        if refused is not None:
+            return refused
+        parent_title = str(payload.get("parent", "") or "").strip()
+        if parent_title and _peer_guard.is_peer_session(
+            srv.ENGINE.instances.get(parent_title)
+        ):
+            return JSONResponse(
+                {"error": "a shared-folder (peer) session can't spawn sessions"},
+                status_code=409,
+            )
 
     # --- Optional provisioned mode --------------------------------------------
     is_provisioned = bool(payload.get("provisioned", False))
@@ -338,6 +365,10 @@ async def create(payload: dict) -> JSONResponse:
             )
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
+        if not peer_share:
+            refused = _peer_guard.path_refusal(plain_path)
+            if refused is not None:
+                return refused
         # A non-git folder has no HEAD to fork a worktree from and can't be
         # provisioned — run it in-place, with git features simply disabled.
         if not git_enabled:
@@ -414,7 +445,7 @@ async def create(payload: dict) -> JSONResponse:
             )
         except srv._playbooks.PlaybookError as perr:
             return JSONResponse({"error": str(perr)}, status_code=400)
-    if prompt:
+    if prompt and not peer_share:
 
         def _decorate(p=prompt, local=bool(repo_path or not is_provisioned)):
             dirs = [plain_path] if local else srv._repo_url_workdirs("")
@@ -442,17 +473,19 @@ async def create(payload: dict) -> JSONResponse:
             parent=parent,
             spawned=spawned,
             playbook="split" if split else "",
+            peer_share=peer_share,
         )
     )
     # O4: every session gets a deterministic dev-server port block, injected
-    # into the agent's tmux env at launch (PORT / MINDFLOCK_PORT_BASE).
-    inst.ExtraEnv = srv._ports.env_for(title)
+    # into the agent's tmux env at launch (PORT / MINDFLOCK_PORT_BASE). Not a
+    # shared-folder one: nothing of the host env rides into its sandbox.
+    inst.ExtraEnv = {} if peer_share else srv._ports.env_for(title)
 
     # O2: per-worktree setup (repo-committed .mindflock.toml [workspace]).
     # Plain worktree sessions only — provisioned workspaces run their own
     # setup, and in-place sessions share the repo dir (deps already there).
     setup_cfg = None
-    if git_enabled and not is_provisioned and not in_place:
+    if git_enabled and not is_provisioned and not in_place and not peer_share:
         setup_cfg = srv._wt_setup.load_config(plain_path)
     # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
     # which can take minutes on the first worktree run (one-time base clone +
@@ -529,6 +562,9 @@ async def create(payload: dict) -> JSONResponse:
         and (
             (setup_cfg is not None and setup_cfg.has_setup)
             or (not is_provisioned and not srv._provider_seeds_prompt(program))
+            # A sandboxed launch can't read the seed file (it lives outside
+            # the sandbox): a shared session's prompt is always typed in.
+            or bool(peer_share)
         )
     )
     if hold_prompt:
@@ -572,7 +608,7 @@ async def create(payload: dict) -> JSONResponse:
     # should not be another walk down the folder tree. "." is the server's own
     # cwd (a provisioned session with no chosen repo), which the user never
     # picked, so it isn't worth remembering.
-    if plain_path and plain_path != ".":
+    if plain_path and plain_path != "." and not peer_share:
         try:
             from backend.config import settings as _settings
 
@@ -663,10 +699,49 @@ async def create(payload: dict) -> JSONResponse:
     return JSONResponse(body, status_code=202)
 
 
-async def create_result(payload: dict) -> Tuple[int, dict]:
+def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> str:
+    """Why a shared-folder session create is malformed ("" = fine): it runs
+    in place on exactly its share's folder, on a CLI with a sandbox profile,
+    with no lineage, fence, playbook, fork point or provisioning."""
+    import os
+
+    from backend.peer import launch as _peer_launch
+    from backend.peer import paths as _peer_paths
+
+    try:
+        work = _peer_paths.share_paths(peer_share)["work"]
+    except ValueError:
+        return "bad share id"
+    repo = str(payload.get("repo_path", "") or "")
+    if not repo or os.path.realpath(repo) != os.path.realpath(work):
+        return "a shared-folder session runs in its share's folder"
+    try:
+        _peer_launch.provider_name(program)
+    except _peer_launch.PeerLaunchError as err:
+        return str(err)
+    for key in (
+        "parent",
+        "spawned",
+        "after",
+        "fence",
+        "playbook",
+        "base_ref",
+        "base_branch",
+        "provisioned",
+        "init_repo",
+        "story_id",
+    ):
+        if payload.get(key):
+            return "%s is not allowed for a shared-folder session" % key
+    if not payload.get("in_place"):
+        return "a shared-folder session runs in place"
+    return ""
+
+
+async def create_result(payload: dict, *, peer_share: str = "") -> Tuple[int, dict]:
     """:func:`create` as ``(status_code, body)`` for in-process callers: 202
     with the new row (plus ``prompt_delivery``), or 4xx with ``{"error"}``."""
-    resp = await create(payload)
+    resp = await create(payload, peer_share=peer_share)
     try:
         body = json.loads(resp.body)
     except Exception:  # noqa: BLE001 — every branch above answers JSON

@@ -2695,6 +2695,8 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
     elif lead_title:
         raise RunError("lead is only for a split")
     lead_fit = None
+    if lead_title and getattr(srv.ENGINE.instances.get(lead_title), "PeerShare", ""):
+        raise RunError("a shared-folder (peer) session can't lead a team run", 409)
     if lead_title:
         lead_inst, lead_repo = await asyncio.to_thread(_lead_candidate, lead_title)
         lead_fit = await asyncio.to_thread(_lead_fit, lead_inst)
@@ -3433,6 +3435,8 @@ def adopt(run_id: str, title: str) -> dict:
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
         raise RunError("instance not found: %s" % title, 404)
+    if getattr(inst, "PeerShare", ""):
+        raise RunError("a shared-folder (peer) session can't join a team run", 409)
     rows = [r for r in _events.sessions_snapshot() if isinstance(r, dict)]
     row = next((r for r in rows if r.get("title") == title), None) or {
         "title": title,

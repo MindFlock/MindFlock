@@ -126,6 +126,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
+from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
@@ -341,6 +342,7 @@ from backend.web.core.uploads import (
     _paste_dirs,
     _prune_pastes,
     _safe_upload_name,
+    write_workspace_paste as _write_workspace_paste,
 )
 from backend.web.core.usage_api import (
     _PROVIDER_LABELS,
@@ -518,6 +520,12 @@ async def lifespan(app: FastAPI):
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
     _register_task(_remote.instances_loop())
+    # Peer links: a no-op unless enabled in settings (no identity, no socket).
+    try:
+        await _peer_service().start()
+    except Exception as err:  # noqa: BLE001 — never block startup
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("peer service start failed: %v", err)
 
     # Non-critical warmups run in the background so the server answers its
     # first request immediately instead of waiting on shell-outs (the
@@ -594,6 +602,11 @@ async def lifespan(app: FastAPI):
         # Close the remote-proxy HTTP session (owned by backend.web.core.remote).
         try:
             await _remote.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        # Peer links: close the transport, the share sockets and proxies.
+        try:
+            await _peer_service().stop()
         except Exception:  # noqa: BLE001
             pass
         # The /api/events state ticker (F6) normally ends itself when the last
@@ -2994,6 +3007,12 @@ async def _autopilot_step(title: str) -> None:
     if seen is None:
         return
     rec, inst, wt, snap = seen
+    if getattr(inst, "PeerShare", ""):
+        # Never ship a shared folder (the arming routes refuse it too).
+        await asyncio.to_thread(
+            _autopilot_halt, title, "autopilot is off for shared-folder sessions"
+        )
+        return
     now = snap["now"]
     action, detail = _autopilot.next_action(rec, snap)
 
@@ -6811,30 +6830,37 @@ async def paste_image(request: Request) -> JSONResponse:
     def _store() -> str:
         # Blocking work (git shell-out, up-to-20MB write, retention scan) —
         # runs in a thread so the event loop stays responsive.
-        base = None
+        stamp = _datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        # Keep the original (sanitized) name visible so the agent knows what it
+        # got; the paste-<stamp>-<hex> prefix keeps retention pruning working.
+        tail = "-" + orig if orig else ext
+        fname = "paste-%s-%s%s" % (stamp, os.urandom(3).hex(), tail)
         if inst is not None:
             try:
                 folder = inst.GetWorktreePath() if inst.Started() else (inst.Path or "")
             except Exception:  # noqa: BLE001
                 folder = inst.Path or ""
             if folder and os.path.isdir(folder):
-                base = os.path.join(folder, ".mindflock_pastes")
                 _exclude_artifacts(folder)  # keep pastes out of the agent's commits
-        if base is None:
-            base = os.path.join(os.path.expanduser("~"), ".mindflock", "pastes")
+                # Through O_NOFOLLOW dir fds: the workspace's agent (a shared
+                # folder's is untrusted) may have made the paste dir a symlink.
+                return _write_workspace_paste(folder, fname, data)
+        base = os.path.join(os.path.expanduser("~"), ".mindflock", "pastes")
         os.makedirs(base, exist_ok=True)
-        stamp = _datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        # Keep the original (sanitized) name visible so the agent knows what it
-        # got; the paste-<stamp>-<hex> prefix keeps retention pruning working.
-        tail = "-" + orig if orig else ext
-        path = os.path.join(base, "paste-%s-%s%s" % (stamp, os.urandom(3).hex(), tail))
+        path = os.path.join(base, fname)
         with open(path, "wb") as f:
             f.write(data)
         # Retention: keep only the newest _PASTE_KEEP pastes in this directory.
         _prune_pastes(base)
         return path
 
-    path = await asyncio.to_thread(_store)
+    try:
+        path = await asyncio.to_thread(_store)
+    except OSError as err:
+        return JSONResponse(
+            {"error": "could not store the paste: %s" % (err.strerror or err)},
+            status_code=409,
+        )
     return JSONResponse({"path": path})
 
 
@@ -7346,11 +7372,20 @@ def post_aliases(payload: dict) -> JSONResponse:
     """
     payload = payload or {}
     if isinstance(payload.get("aliases"), dict):
-        _aliases.merge(payload["aliases"])
+        _aliases.merge(
+            {
+                t: a
+                for t, a in payload["aliases"].items()
+                if not _peer_guard.is_peer_session(ENGINE.instances.get(t))
+            }
+        )
         return JSONResponse({"aliases": _aliases.all_aliases()})
     title = str(payload.get("title") or "").strip()
     if not title:
         return JSONResponse({"error": "title is required"}, status_code=400)
+    peer_err = _peer_guard.title_refusal(title, "renaming")
+    if peer_err is not None:
+        return peer_err
     _aliases.set_alias(title, str(payload.get("alias") or "").strip())
     return JSONResponse({"aliases": _aliases.all_aliases()})
 
@@ -7590,6 +7625,11 @@ async def instance_pause(title: str) -> JSONResponse:
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    # Pause commits a dirty tree with the user's own git identity / config
+    # (signing included) — the commit route refuses shared folders, so must this.
+    peer_err = _peer_guard.refusal(inst, "pause (it commits the folder)")
+    if peer_err is not None:
+        return peer_err
     try:
         await asyncio.to_thread(inst.Pause)
     except Exception as err:  # noqa: BLE001
@@ -7682,6 +7722,9 @@ async def instance_setup_rerun(title: str) -> JSONResponse:
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "worktree setup")
+    if peer_err is not None:
+        return peer_err
     cfg = _wt_setup.load_config(wt)  # .mindflock.toml is committed → in the worktree
     if not cfg.has_setup:
         return JSONResponse(
@@ -7724,6 +7767,9 @@ async def instance_check_run(title: str) -> JSONResponse:
     _inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(_inst, "the verification check")
+    if peer_err is not None:
+        return peer_err
     cfg = _wt_setup.load_config(wt)
     if not cfg.check_command:
         return JSONResponse(
@@ -8331,6 +8377,9 @@ async def instance_code_map_go(
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "the code-map go (it writes guard files)")
+    if peer_err is not None:
+        return peer_err
     p = payload or {}
     ids = [str(i) for i in (p.get("zone_ids") or []) if i]
     scope_to_plan = bool(p.get("scope_to_plan"))
@@ -9514,6 +9563,10 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
     sender = payload.get("from") or ""
     if not isinstance(sender, str):
         return bad("from must be a session title")
+    if _mailbox.is_peer_sender(sender):
+        # Only the peer service speaks for a remote collaborator; a client
+        # forging "peer:<name>" would borrow the peer framing.
+        return bad('"from" may not start with "peer:"')
     if sender == title:
         return bad("a session cannot message itself")
     if sender and sender not in ENGINE.instances:
@@ -10080,6 +10133,9 @@ async def instance_cursor(title: str) -> JSONResponse:
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "opening in an editor")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         if log.ErrorLog is not None:
@@ -10121,6 +10177,9 @@ async def instance_cleanup(title: str) -> JSONResponse:
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "cleanup (unshare the folder instead)")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     # In-place sessions run in the user's OWN repo — never delete it.
     in_place = getattr(inst, "InPlace", False)
@@ -10206,6 +10265,9 @@ async def copy_instance(title: str) -> JSONResponse:
     src, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(src, "copying")
+    if peer_err is not None:
+        return peer_err
     try:
         wt = src.GetWorktreePath()
     except Exception:  # noqa: BLE001
@@ -10265,6 +10327,9 @@ async def set_instance_parent(title: str, payload: dict = None) -> JSONResponse:
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "re-parenting")
+    if peer_err is not None:
+        return peer_err
     raw = (payload or {}).get("parent", "")
     if raw is None:
         raw = ""
@@ -10275,6 +10340,11 @@ async def set_instance_parent(title: str, payload: dict = None) -> JSONResponse:
         if ENGINE.instances.get(title) is not inst:
             return JSONResponse(
                 {"error": "instance not found: %s" % title}, status_code=404
+            )
+        if parent and _peer_guard.is_peer_session(ENGINE.instances.get(parent)):
+            return JSONResponse(
+                {"error": "a shared-folder (peer) session can't be a parent"},
+                status_code=409,
             )
         if parent:
             perr = _lineage.parent_error(ENGINE.instances, title, parent)
@@ -10697,6 +10767,9 @@ async def instance_commit(title: str, payload: dict) -> JSONResponse:
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "commit (use the peer checkpoint)")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -10784,6 +10857,9 @@ async def instance_suggest_commit_message(
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "commit-message suggestions")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -11069,6 +11145,9 @@ async def instance_push_branch(
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "push")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -11249,6 +11328,9 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "opening a PR")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -11394,6 +11476,9 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "merging a PR")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -11485,6 +11570,9 @@ async def instance_fast_track(
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "autopilot")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -11556,6 +11644,9 @@ async def instance_set_lane(title: str, payload: Optional[dict] = None) -> JSONR
     ``leave`` disarms (``lane`` comes back null). ``ask_first`` holds the run
     one rung short of its first outward step and parks it in the bell for
     your go (``POST /ship-now``)."""
+    peer_err = _peer_guard.title_refusal(title, "ship lanes")
+    if peer_err is not None:
+        return peer_err
     if not git_available():
         return _no_git_response()
     body = payload or {}
@@ -11677,6 +11768,9 @@ async def instance_ship_now(title: str, payload: Optional[dict] = None) -> JSONR
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    peer_err = _peer_guard.refusal(inst, "shipping")
+    if peer_err is not None:
+        return peer_err
     try:
         wt = inst.GetWorktreePath()
     except Exception:  # noqa: BLE001
@@ -13081,6 +13175,9 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
         # away, so refusing there made the button useless at the only moment
         # people reach for it. See `_closed_session_plan_inputs`.
         return await _write_test_plan_for_closed(title)
+    peer_err = _peer_guard.refusal(inst, "test plans")
+    if peer_err is not None:
+        return peer_err
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
@@ -14476,6 +14573,155 @@ def set_window_refresh(payload: dict) -> JSONResponse:
 _serve_pty = pump_pty
 
 
+# --------------------------------------------------------------------------- #
+# Peer links (docs/peer-link.md): pairing with another person's MindFlock, one
+# sandboxed shared folder per link. The work lives in backend.peer.service; these
+# routes only translate. Every one refuses a request proxied by another
+# MindFlock device (X-MindFlock-Remote): tailnet remote control must never
+# manage peer links. No response carries a key or secret, except the invite
+# code in POST /api/peer/invites — the one value the user must pass on.
+# --------------------------------------------------------------------------- #
+def _peer_service():
+    from backend.peer import service as _svc
+
+    return _svc.get_service()
+
+
+def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "peer links can only be managed on this device"},
+            status_code=403,
+        )
+    return None
+
+
+async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
+    refused = _peer_remote_refusal(request)
+    if refused is not None:
+        return refused
+    from backend.peer.service import PeerServiceError
+
+    try:
+        await _peer_service().reconcile()
+    except Exception as err:  # noqa: BLE001 — report, never 500 the status page
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("peer service reconcile failed: %v", err)
+    try:
+        out = fn(*args, **kwargs)
+        if asyncio.iscoroutine(out):
+            out = await out
+    except PeerServiceError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    return JSONResponse(out if out is not None else {"ok": True}, status_code=status)
+
+
+async def _peer_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty or non-JSON body = {}
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+@app.get("/api/peer")
+async def peer_status(request: Request) -> JSONResponse:
+    """Peer-link status: sandbox availability, this instance's identity
+    fingerprint, the listen address, links (no keys) and active invites (id and
+    expiry only — never the code)."""
+    return await _peer_call(request, lambda: _peer_service().status())
+
+
+@app.post("/api/peer/invites")
+async def peer_create_invite(request: Request) -> JSONResponse:
+    """``{ttl_s?, advertise_host?}`` → ``{invite_id, code, expires_in, host,
+    port}``. ``advertise_host`` overrides the address the code carries (setting
+    ``peer.advertise_host``, else Tailscale, else LAN). The only response that
+    ever contains an invite code; starts the listener."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _peer_service().create_invite,
+        body.get("ttl_s"),
+        str(body.get("advertise_host") or body.get("host") or ""),
+        status=201,
+    )
+
+
+@app.delete("/api/peer/invites/{invite_id}")
+async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
+    return await _peer_call(request, _peer_service().revoke_invite, invite_id)
+
+
+@app.post("/api/peer/join")
+async def peer_join(request: Request) -> JSONResponse:
+    """``{code}`` → the new link (with its SAS to compare out of band)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _peer_service().join, str(body.get("code") or ""), status=201
+    )
+
+
+@app.delete("/api/peer/links/{link_id}")
+async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
+    """Unlink: stop the shared session, forget the pinned key, close the
+    connection. ``?delete_files=1`` also deletes the shared folder."""
+    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
+    return await _peer_call(
+        request, _peer_service().unlink, link_id, delete_files=delete
+    )
+
+
+@app.post("/api/peer/links/{link_id}/perms")
+async def peer_set_perms(link_id: str, request: Request) -> JSONResponse:
+    """``{"messages"?, "diff"?, "read_file"?: bool}`` — what the PEER may do to
+    us (``list_files`` follows ``read_file``)."""
+    body = await _peer_body(request)
+    perms = body.get("perms") if isinstance(body.get("perms"), dict) else body
+    return await _peer_call(request, _peer_service().set_perms, link_id, perms)
+
+
+@app.post("/api/peer/links/{link_id}/share")
+async def peer_share(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path, branch?, program?, prompt?}`` → clone the repo into a fresh
+    shared folder and start its sandboxed session (claude / codex only; 409
+    without a working sandbox)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _peer_service().share,
+        link_id,
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+        str(body.get("prompt") or ""),
+        status=201,
+    )
+
+
+@app.delete("/api/peer/links/{link_id}/share")
+async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
+    """Stop the shared session; ``?delete_files=1`` also deletes the folder."""
+    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
+    return await _peer_call(
+        request, _peer_service().unshare, link_id, delete_files=delete
+    )
+
+
+@app.post("/api/peer/links/{link_id}/export")
+async def peer_export(link_id: str, request: Request) -> JSONResponse:
+    """``{target_repo, branch_name}`` — checkpoint the share, then fetch it into
+    your own repo as ``branch_name`` (must start with ``peer/``)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _peer_service().export,
+        link_id,
+        str(body.get("target_repo") or ""),
+        str(body.get("branch_name") or ""),
+    )
+
+
 @app.websocket("/api/instances/{title}/shell")
 async def shell_ws(ws: WebSocket, title: str) -> None:
     """Interactive shell in the session's workspace dir (a separate tmux session
@@ -14886,6 +15132,9 @@ async def instance_fence(title: str, payload: Optional[dict] = None) -> JSONResp
     ``clear: true`` removes it. A held worker gets it in front of its task;
     a running one is told. → ``{ok, fence, applied, held, told?,
     shared_folder?, problems?, note?}``; 404 unknown session, 400 bad paths."""
+    peer_err = _peer_guard.title_refusal(title, "fences")
+    if peer_err is not None:
+        return peer_err
     code, body = await asyncio.to_thread(
         _worker_order_driver.set_fence, title, payload or {}
     )
@@ -14914,6 +15163,9 @@ async def instance_order_set(
     {worker: [titles]}, "start_now": [titles]}`` — any subset. A cycle, an
     unknown worker or a started one in ``after`` refuses the whole change
     (400 with ``problems``). → ``{ok, order}``."""
+    peer_err = _peer_guard.title_refusal(title, "worker order")
+    if peer_err is not None:
+        return peer_err
     code, body = await asyncio.to_thread(
         _worker_order_driver.set_order, title, payload or {}
     )

@@ -289,6 +289,10 @@ class InstanceData:
     # has spawned anyone). Set once at create time. Only emitted when set, so
     # pre-feature entries serialize unchanged.
     playbook: str = ""
+    # Peer links: the share_id of the ONE shared folder this session runs in
+    # (sandboxed; see docs/peer-link.md). "" for every ordinary session. Only
+    # emitted when set, so ordinary entries serialize unchanged.
+    peer_share: str = ""
 
     def to_dict(self) -> dict:
         """Build the JSON-ready dict, preserving Go field order exactly."""
@@ -325,6 +329,8 @@ class InstanceData:
             d["spawned"] = True
         if self.playbook:
             d["playbook"] = self.playbook
+        if self.peer_share:
+            d["peer_share"] = self.peer_share
         return d
 
     @classmethod
@@ -360,6 +366,9 @@ class InstanceData:
             parent=d.get("parent", "") or "",
             spawned=bool(d.get("spawned", False)),
             playbook=(d.get("playbook") if isinstance(d.get("playbook"), str) else ""),
+            peer_share=(
+                d.get("peer_share") if isinstance(d.get("peer_share"), str) else ""
+            ),
         )
 
 

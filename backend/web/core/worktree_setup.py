@@ -95,13 +95,30 @@ class WorkspaceConfig:
         return bool(self.setup_commands) or bool(self.copy_untracked)
 
 
+def _in_peer_folder(path: str) -> bool:
+    """A shared (peer-link) folder, or undecidable: its ``.mindflock.toml`` was
+    written by a remote collaborator's agent, so its commands never run on
+    this host (setup, check, the auto check-run). Fail closed."""
+    if not path:
+        return False
+    try:
+        from backend.peer import paths as _peer_paths
+
+        return _peer_paths.is_inside_peer_root(path)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def load_config(repo_path: str) -> WorkspaceConfig:
     """Read ``<repo>/.mindflock.toml``. Missing/invalid file = empty config.
 
     A malformed file is reported (once per read, via the returned empty
     config's log line) rather than raised — session creation must never
-    fail because of a typo in an optional config file.
+    fail because of a typo in an optional config file. A shared (peer-link)
+    folder always reads as the empty config.
     """
+    if _in_peer_folder(repo_path):
+        return WorkspaceConfig()
     path = os.path.join(repo_path or "", CONFIG_NAME)
     try:
         with open(path, "rb") as f:
@@ -312,6 +329,8 @@ def start_setup(
     thread. Returns False when nothing is configured or a run is already
     live for this worktree.
     """
+    if _in_peer_folder(wt_path) or _in_peer_folder(repo_path):
+        return False
     cfg = cfg or load_config(repo_path)
     if not cfg.has_setup or not wt_path or not os.path.isdir(wt_path):
         return False
@@ -364,6 +383,8 @@ def start_setup(
 def start_check(title: str, wt_path: str, command: str) -> bool:
     """Kick off a check (verification) run in the worktree. See module doc."""
     if not command or not wt_path or not os.path.isdir(wt_path):
+        return False
+    if _in_peer_folder(wt_path):
         return False
     if is_running(wt_path, "check"):
         return False

@@ -667,6 +667,26 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 > Precedence being per field, exporting only `MINDFLOCK_NTFY_SERVER` pins the
 > server while topic and token still come from the UI. Pick one source per field.
 
+### Peer links (`peer`, settings store only)
+
+[Peer links](peer-link.md) — pair-coding with another MindFlock user in one
+sandboxed shared folder. Settings → Peer links, stored in
+`~/.mindflock/settings.json`. Another MindFlock device (tailnet remote
+control) can't change this group: `POST /api/settings` answers 403 for it.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Master switch. Off: no listener, no dialing, no shared sessions start. |
+| `listen_host` | `0.0.0.0` | Where the inviter's TLS listener binds. It runs only while an invite or a link you accepted exists. |
+| `listen_port` | `8799` | The listener's port — must be reachable by the joiner (Tailscale recommended). |
+| `advertise_host` | `""` | The address written into invite codes. Blank = this machine's Tailscale IPv4, else its LAN address. |
+| `display_name` | hostname | The name your peer sees (`[A-Za-z0-9 ._-]`, ≤ 32). |
+| `egress_allow` | `[]` | Extra hosts the sandboxed agent may `CONNECT` to on 443, besides its CLI's own API hosts. A leading `.` allows subdomains; IPs, ports and schemes are dropped. |
+
+State lives under `~/.mindflock/peer/` (`MINDFLOCK_PEER_HOME` overrides):
+`identity/` (this instance's Ed25519 key), `links.json` (0600) and
+`shares/<id>/` (one shared folder each).
+
 ## Web-exposed settings
 
 Settable from the UI settings dialog (⚙) and persisted server-side:

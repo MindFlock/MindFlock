@@ -65,6 +65,13 @@ def _copy_stats(stats: "DiffStats") -> "DiffStats":
     )
 
 
+def _is_peer_share(path: str) -> bool:
+    """True for a peer link's shared folder (lazy: worktree_git imports us)."""
+    from backend.session.git.worktree_git import _is_peer_share as check
+
+    return check(path)
+
+
 class DiffStats:
     """Statistics about the changes in a diff.
 
@@ -165,7 +172,10 @@ class GitWorktreeDiffMixin:
 
         # -N stages untracked files (intent to add), including them in the diff.
         try:
-            self.run_git_command(self.worktreePath, "add", "-N", ".")
+            # Never in a peer shared folder: staging could let an agent-made
+            # nested repo into the trusted index (see worktree_git).
+            if not _is_peer_share(self.worktreePath):
+                self.run_git_command(self.worktreePath, "add", "-N", ".")
         except Exception as err:  # noqa: BLE001 - propagate like Go's stats.Error
             stats.Error = err
             return stats
@@ -215,7 +225,10 @@ class GitWorktreeDiffMixin:
 
         # -N stages untracked files (intent to add), including them in the diff.
         try:
-            self.run_git_command(self.worktreePath, "add", "-N", ".")
+            # Never in a peer shared folder: staging could let an agent-made
+            # nested repo into the trusted index (see worktree_git).
+            if not _is_peer_share(self.worktreePath):
+                self.run_git_command(self.worktreePath, "add", "-N", ".")
         except Exception as err:  # noqa: BLE001
             stats.Error = err
             return stats
