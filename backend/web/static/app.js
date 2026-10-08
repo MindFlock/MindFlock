@@ -61940,7 +61940,7 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 		]
 	});
 }
-function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer, pick }) {
+function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhere, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer, pick }) {
 	const [state, setState] = (0, import_react.useState)("idle");
 	const [reopening, setReopening] = (0, import_react.useState)("idle");
 	const canReopen = !!workspace && !!onReopen && !hasSession;
@@ -62015,7 +62015,16 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 					}, reason);
 				})]
 			}),
-			hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			!hasSession && elsewhere ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn",
+					disabled: true,
+					title: "Already being worked on " + elsewhere + " — starting it here would duplicate it",
+					children: ["On ", elsewhere]
+				}), actionExtra]
+			}) : hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-item-start",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -63025,6 +63034,7 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		tooltip: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
 		meta: t.mine === false ? ageText(t.created_at) + " · " + (t.assignee || "someone else") : ageText(t.created_at),
 		hasSession: t.has_session,
+		elsewhere: t.elsewhere?.label,
 		eligible: t.eligible,
 		eligibleLabel: "queued for auto ingestion",
 		reasons: t.reasons,

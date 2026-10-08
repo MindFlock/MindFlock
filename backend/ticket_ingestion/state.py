@@ -218,6 +218,22 @@ def latest_story_entry(state_dir: Path | str, story_id: int | str) -> Optional[d
     return None
 
 
+def in_flight_stories(state_dir: Path | str) -> dict:
+    """``{story_id: entry}`` for every story whose LATEST ledger entry is
+    ``in_flight`` (a started session or a team run's reservation) — what this
+    machine currently holds, as other devices see it
+    (:mod:`backend.web.core.fleet_claims`)."""
+    data = _read_state(state_dir)
+    stories = data.get("processed_stories")
+    if not isinstance(stories, list):
+        return {}
+    latest: dict = {}
+    for entry in stories:
+        if isinstance(entry, dict) and isinstance(entry.get("story_id"), str):
+            latest[entry["story_id"]] = entry
+    return {sid: dict(e) for sid, e in latest.items() if e.get("status") == "in_flight"}
+
+
 def claim_reservation(state_dir: Path | str, story_id: int | str) -> bool:
     """Turn a reservation (the latest entry ``in_flight`` with a
     ``reserved_by``) into a started marker IN PLACE — the session exists now —

@@ -2486,6 +2486,7 @@ async def _build_tasks(
     tasks: List[dict] = []
     adopted: List[dict] = []
     warnings: List[str] = []
+    fleet_fresh = True  # the first fleet check asks the devices; the rest reuse it
     for it in items:
         if not isinstance(it, dict):
             raise RunError(
@@ -2591,6 +2592,18 @@ async def _build_tasks(
                         ref or tid,
                         "by another group" if holder else "by ticket ingestion",
                     )
+                )
+                continue
+            # …or another of the user's devices has it (fleet_claims).
+            try:
+                elsewhere = await srv._fleet_claims.holder(title, fresh=fleet_fresh)
+                fleet_fresh = False
+            except Exception:  # noqa: BLE001 — peers are best-effort
+                elsewhere = None
+            if elsewhere:
+                warnings.append(
+                    "%s is already %s — left out"
+                    % (ref or tid, srv._fleet_claims.describe(elsewhere))
                 )
                 continue
         taken.add(title)

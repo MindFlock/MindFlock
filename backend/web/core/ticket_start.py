@@ -639,6 +639,23 @@ async def launch(
                     "title": title,
                 },
             )
+    # Another of the user's devices may already be on it (fleet_claims) — the
+    # one guard the local checks above can't see.
+    from backend.web.core import fleet_claims as _fleet_claims
+
+    elsewhere = await _fleet_claims.holder(title, fresh=True)
+    if elsewhere:
+        srv._pending_drop(early)
+        srv._pending_drop(title)
+        raise LaunchError(
+            409,
+            {
+                "error": "%s is already %s"
+                % (title, _fleet_claims.describe(elsewhere)),
+                "title": title,
+                "elsewhere": elsewhere,
+            },
+        )
     branch = branch or branch_for(story)
     # The branch is known now, so the row can read as the ticket it is rather
     # than a bare slug (add() keeps the original `since`).

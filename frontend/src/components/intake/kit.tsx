@@ -397,6 +397,7 @@ export function WorkItemRow({
   meta,
   tooltip,
   hasSession,
+  elsewhere,
   eligible,
   eligibleLabel,
   reasons,
@@ -420,6 +421,9 @@ export function WorkItemRow({
   meta: React.ReactNode;
   tooltip: string;
   hasSession?: boolean;
+  /** Another of the user's devices already has this one (fleet claims): the
+   * device's name. The row reads as taken there — no start button here. */
+  elsewhere?: string;
   eligible?: boolean;
   /** e.g. "queued for auto review" */
   eligibleLabel: string;
@@ -584,7 +588,19 @@ export function WorkItemRow({
           })
         )}
       </div>
-      {hasSession ? (
+      {!hasSession && elsewhere ? (
+        <div className="ik-item-start">
+          <button
+            type="button"
+            className="btn-primary pr-review-btn"
+            disabled
+            title={"Already being worked on " + elsewhere + " — starting it here would duplicate it"}
+          >
+            On {elsewhere}
+          </button>
+          {actionExtra}
+        </div>
+      ) : hasSession ? (
         // Wrapped in the same action column the other branch uses, rather than
         // sitting bare in the grid cell: a row whose session is open still has
         // actions (a ticket can be merged away while its session keeps running),

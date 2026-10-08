@@ -527,6 +527,8 @@ interface AssignedTicket {
   session?: string;
   bucket?: string;
   has_session?: boolean;
+  /** Set when another of the user's devices already holds this ticket. */
+  elsewhere?: { device: string; label: string; kind: string };
   eligible?: boolean;
   reasons?: string[];
   /** False only on a source that ingests anyone's tickets. Absent = yours. */
@@ -1037,6 +1039,7 @@ function AssignedTicketRow({
           : ageText(t.created_at)
       }
       hasSession={t.has_session}
+      elsewhere={t.elsewhere?.label}
       eligible={t.eligible}
       eligibleLabel="queued for auto ingestion"
       reasons={t.reasons}

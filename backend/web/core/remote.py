@@ -421,6 +421,31 @@ def _connected(dev: dict) -> bool:
     )
 
 
+def connected_devices() -> List[dict]:
+    """Snapshots of the devices this server can drive right now."""
+    return [dict(d) for d in _DEVICES.values() if _connected(d)]
+
+
+async def get_json(dev: dict, path: str, timeout: float = 3.0) -> Tuple[int, object]:
+    """``(status, body)`` for ``GET <path>`` on a connected device, with this
+    device's pairing credentials; ``(0, None)`` when it can't be reached.
+    The fan-out primitive for features that ask every device something
+    (:mod:`backend.web.core.fleet_claims`, settings sync)."""
+    if aiohttp is None or not dev.get("base_url"):
+        return 0, None
+    session = await _http_session()
+    try:
+        async with session.get(
+            dev["base_url"] + path,
+            headers=_headers_for(dev["key"]),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            body = await resp.json(content_type=None) if resp.status == 200 else None
+            return resp.status, body
+    except Exception:  # noqa: BLE001 — unreachable / timeout / not JSON
+        return 0, None
+
+
 async def _fetch_instances(dev: dict) -> None:
     session = await _http_session()
     try:
