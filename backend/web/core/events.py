@@ -201,6 +201,23 @@ EVENT_NAMES = (
     # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
     # "detail"}).
     "run.finished",
+    # "Your devices" (core.fleet is their emitter; ``session`` is always "").
+    #
+    # A computer asked to join and waits for approval HERE (data: {"device",
+    # "host", "code", "id", "detail": "<host> · code 123 456"} — the same
+    # 6-digit code shows on the asking computer, which is how the user tells
+    # it's the right one).
+    "device.join_requested",
+    # A computer became one of the user's devices — by code, approval, or
+    # one-click add (data: {"device", "host", ...}).
+    "device.joined",
+    # A device left or was removed (data: {"device", ...}; ``device`` is this
+    # one's own key when it was this device that left).
+    "device.removed",
+    # Settings sync adopted another device's changes here (data: {"paths":
+    # [unit ids], "from": <device key>}). For UI refetch only; no rule
+    # notifies on it.
+    "settings.synced",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

@@ -5827,8 +5827,30 @@ async def connect_device(device: str, payload: Optional[dict] = None) -> JSONRes
 
 @app.post("/api/devices/{device}/disconnect")
 def disconnect_device(device: str) -> JSONResponse:
-    """Forget a device's stored token (its sessions drop off the sidebar)."""
+    """Forget a device's stored token (its sessions drop off the sidebar).
+
+    409 for one of "Your devices": the fleet key keeps it connected whatever
+    happens to a pasted token, so forgetting the token would say
+    "disconnected" and change nothing — it is removed in Settings → Devices."""
+    dev = _remote._DEVICES.get(device)
+    if dev is not None and _remote._member_device(dev):
+        host = dev.get("host") or device
+        return JSONResponse(
+            {
+                "error": "%s is one of your devices — remove it in Settings → Devices"
+                % host
+            },
+            status_code=409,
+        )
     _remote.forget_device(device)
+    return JSONResponse(_remote.devices_json())
+
+
+@app.post("/api/devices/refresh")
+async def refresh_devices() -> JSONResponse:
+    """Sweep the tailnet now instead of on the next discovery tick (Settings →
+    Devices' Refresh) and return the fresh ``GET /api/devices`` payload."""
+    await _remote.discover_now()
     return JSONResponse(_remote.devices_json())
 
 
@@ -14559,13 +14581,22 @@ def scroll_speed_set(payload: dict) -> JSONResponse:
 
     Tunes the tmux copy-mode wheel binding (server-wide), so the change takes
     effect immediately on already-open terminals — no restart needed. The value
-    is clamped to a sane range."""
+    is clamped to a sane range. Also written to settings ``ui.scroll_speed``
+    (and stamped) so settings sync carries it to the user's other devices —
+    the file stays the live value; the setting is what travels."""
     speed = save_scroll_speed((payload or {}).get("speed"))
     try:
         apply_scroll_speed(speed)
     except (
         Exception
     ):  # noqa: BLE001 — best-effort; persisted value still applies on next session
+        pass
+    try:
+        from backend.config import settings as _settings
+
+        _settings.update_settings(ui={"scroll_speed": speed})
+        _settings_sync.local_change()
+    except Exception:  # noqa: BLE001 — the live speed is set; sync is a bonus
         pass
     return JSONResponse({"speed": speed})
 

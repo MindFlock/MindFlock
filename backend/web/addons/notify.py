@@ -408,6 +408,23 @@ NOTIFY_RULES: List[dict] = [
         "priority": 4,
         "tags": ["rotating_light"],
     },
+    {
+        # A computer asks to join "Your devices" and waits for someone to
+        # approve it on THIS one. Default-on and loud: nothing happens until a
+        # human answers, and the request expires in 10 minutes. The body is the
+        # emitter's "<host> · code 123 456" — the code is how the user checks
+        # it's the computer in front of them (core.fleet.open_request).
+        "id": "device_join",
+        "label": "A device asks to join your devices",
+        "event": "device.join_requested",
+        "old": None,
+        "new": None,
+        "title": "Device wants to join",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["computer"],
+    },
 ]
 
 #: Rule fields the client never needs: opt-in/opt-out semantics (it gets the

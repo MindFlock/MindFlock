@@ -19,7 +19,14 @@ Tailscale network. The moving parts:
   - the *controller* must hold the target's bearer token (entered once in the
     UI, validated against the target, then persisted to
     ``remote_devices.json`` next to the other state files — deliberately NOT
-    in the settings document, so it never transits the settings GET).
+    in the settings document, so it never transits the settings GET) — or
+    the target must be a member of this device's fleet ("Your devices",
+    :mod:`backend.web.core.fleet`), whose shared key every member accepts.
+
+* **Fleet peers.** :func:`fleet_devices` is the narrower list anything that
+  ADOPTS another device's data uses: members that answer with this device's
+  fleet id, never merely "connected" (a gate-off node needs no credential to
+  be driven, and must not be able to push settings here).
 
 * **Proxying.** Remote sessions are merged into ``GET /api/instances`` with
   their title namespaced as ``<device>::<title>`` (device = the MagicDNS
@@ -52,6 +59,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -215,6 +223,9 @@ def _node_entry(node: dict) -> dict:
             ip4 = a
             break
     return {
+        # Every tailnet address (v4 + v6): what a public join request claiming
+        # to be this device must come from (backend.web.core.fleet).
+        "ips": [str(a) for a in node.get("TailscaleIPs") or [] if a],
         "key": _dns_label(node.get("DNSName") or "")
         or (node.get("HostName") or "").lower(),
         "host": node.get("HostName") or "",
@@ -225,14 +236,25 @@ def _node_entry(node: dict) -> dict:
     }
 
 
-def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:
-    """``(self_entry | None, [peer entries])`` from ``tailscale status --json``.
+#: Test/sandbox hook: when set, :func:`tailscale_nodes` reads this file (a
+#: ``tailscale status --json`` document) instead of running the CLI — how an
+#: end-to-end test stands up several servers on one machine and lets them
+#: discover each other as "devices" without a real tailnet.
+STATUS_FILE_ENV = "MINDFLOCK_TAILSCALE_STATUS_FILE"
 
-    Peers are filtered to *online, non-mobile* nodes — a phone on the tailnet
-    must never show up as a controllable device.
-    """
+
+def _tailscale_status() -> Optional[dict]:
+    """The parsed ``tailscale status --json`` document, or None."""
+    fake = (os.environ.get(STATUS_FILE_ENV) or "").strip()
+    if fake:
+        try:
+            with open(fake, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
     if shutil.which("tailscale") is None:
-        return None, []
+        return None
     try:
         cp = subprocess.run(
             ["tailscale", "status", "--json"],
@@ -241,9 +263,22 @@ def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:
             timeout=5,
         )
         if cp.returncode != 0:
-            return None, []
+            return None
         data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
     except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:
+    """``(self_entry | None, [peer entries])`` from ``tailscale status --json``
+    (or the :data:`STATUS_FILE_ENV` file).
+
+    Peers are filtered to *online, non-mobile* nodes — a phone on the tailnet
+    must never show up as a controllable device.
+    """
+    data = _tailscale_status()
+    if data is None:
         return None, []
     self_node = data.get("Self") or None
     self_entry = _node_entry(self_node) if self_node else None
@@ -288,7 +323,85 @@ def hello_json() -> dict:
         "remote_control": remote_control_enabled(),
         "auth": _auth_enabled(),
         "shared_link": _shared_link_name(),
+        # "Your devices": which group this device belongs to ("" = none) and
+        # the join protocol it speaks (0 = a MindFlock from before fleets — the
+        # UI says "update MindFlock there" instead of offering to join it). The
+        # id is not a secret: it names the group, the key is what admits.
+        "fleet": _fleet_id(),
+        "fleet_proto": FLEET_PROTO,
+        # Whether THIS device runs PR review + issue handling for the group.
+        "automation": _automation_here(),
     }
+
+
+def _automation_here() -> bool:
+    try:
+        from backend.web.core import settings_hooks as _hooks
+
+        fn = getattr(_hooks, "automation_here", None)
+        return bool(fn()) if fn is not None else True
+    except Exception:  # noqa: BLE001 — the hello must never fail
+        return False
+
+
+#: The "Your devices" join protocol this build speaks (``hello.fleet_proto``).
+FLEET_PROTO = 1
+
+
+def _fleet():
+    """:mod:`backend.web.core.fleet`, imported lazily — it calls back into this
+    module, and discovery must work even before (or without) a fleet store."""
+    from backend.web.core import fleet as _fleet_mod
+
+    return _fleet_mod
+
+
+def _fleet_id() -> str:
+    """This device's fleet id (``""`` when not in one, or the store is broken)."""
+    try:
+        return str(_fleet().fleet_id() or "")
+    except Exception:  # noqa: BLE001 — discovery must never break on the fleet store
+        return ""
+
+
+def _is_member(key: str) -> bool:
+    """Whether device ``key`` is a live member of this device's fleet."""
+    try:
+        return bool(key) and bool(_fleet().is_member(key))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _fleet_key() -> str:
+    try:
+        return str(_fleet().fleet_key() or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _member_device(dev: Optional[dict]) -> bool:
+    """Whether the discovered ``dev`` is a live member under the full MagicDNS
+    name the roster recorded for it (not merely the same first label)."""
+    try:
+        return bool(dev) and bool(_fleet().member_device(dev))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _fleet_key_for(device: str) -> str:
+    """The fleet key — when (and only when) it may go to ``device``: a live
+    member under its recorded MagicDNS name, whose hello names this fleet,
+    and that isn't known to be on another key epoch (then its pasted token,
+    if any, is what still works). ``""`` otherwise."""
+    dev = _DEVICES.get(device)
+    if not dev or not _member_device(dev) or not _same_fleet(dev):
+        return ""
+    try:
+        if _fleet().peer_on_other_epoch(device):
+            return ""
+    except Exception:  # noqa: BLE001
+        pass
+    return _fleet_key()
 
 
 def _shared_link_name() -> str:
@@ -316,9 +429,22 @@ async def _http_session() -> "aiohttp.ClientSession":
     return _HTTP
 
 
-def _headers_for(device: str) -> dict:
+def _headers_for(
+    device: str, *, auth: bool = True, bearer: Optional[str] = None
+) -> dict:
+    """Headers for a request to ``device``: always the remote marker, plus the
+    credential — an explicit ``bearer`` when given (the fleet's own routes
+    pass the key they mean: gossip, rekey under the OLD key, token rotation;
+    a join presenting the pasted token), else the fleet key when it may go
+    to ``device`` (:func:`_fleet_key_for`: a member under its recorded
+    MagicDNS name that says it is in this fleet), else the pasted token for
+    it. ``auth=False`` sends no credential at all (the public join routes: a
+    device that isn't a member yet must not spray its pasted token at an
+    endpoint that doesn't need it)."""
     headers = {REMOTE_HEADER: self_identity()["key"]}
-    tok = token_for(device)
+    tok = bearer
+    if tok is None and auth:
+        tok = _fleet_key_for(device) or token_for(device)
     if tok:
         headers["Authorization"] = "Bearer " + tok
     return headers
@@ -329,7 +455,7 @@ def _candidate_bases(peer: dict) -> List[str]:
     the port this server runs on (fleets usually share a config), the default
     web port, then HTTPS via MagicDNS (a peer fronted by ``tailscale serve``)."""
     bases = []
-    for port in dict.fromkeys((_SERVER_PORT, 8765)):
+    for port in dict.fromkeys((_SERVER_PORT, 8765)) if peer.get("ip") else ():
         bases.append("http://%s:%d" % (peer["ip"], port))
     if peer.get("dns"):
         bases.append("https://%s" % peer["dns"])
@@ -363,17 +489,53 @@ def _device_state(key: str) -> dict:
             "host": "",
             "os": "",
             "ip": "",
+            "dns": "",
             "base_url": "",
             "reachable": False,
             "remote_control": False,
             "auth": False,
             "version": "",
             "shared_link": "",
+            # Its hello's fleet id ("" = in none) and join protocol (0 = too
+            # old to join) — what "Your devices" lists it by.
+            "fleet": "",
+            "fleet_proto": 0,
+            "ips": [],
+            # Its hello says it runs PR review + issue handling (None: its
+            # MindFlock is too old to say).
+            "automation": None,
             "last_seen": 0.0,
             "instances": [],
             "instances_ok": False,
             "error": "",
         },
+    )
+
+
+def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None:
+    """Fold one :func:`_probe_peer` answer into ``dev`` (a miss only clears
+    ``reachable`` — the rest is kept for the stale grace period)."""
+    if not hit:
+        dev["reachable"] = False
+        return
+    base, hello = hit
+    try:
+        proto = int(hello.get("fleet_proto") or 0)
+    except (TypeError, ValueError):
+        proto = 0
+    dev.update(
+        base_url=base,
+        reachable=True,
+        last_seen=now,
+        remote_control=bool(hello.get("remote_control")),
+        auth=bool(hello.get("auth")),
+        version=str(hello.get("version") or ""),
+        shared_link=str(hello.get("shared_link") or ""),
+        fleet=str(hello.get("fleet") or ""),
+        fleet_proto=proto,
+        automation=(
+            hello["automation"] if isinstance(hello.get("automation"), bool) else None
+        ),
     )
 
 
@@ -391,20 +553,14 @@ async def _discover_once() -> None:
             continue  # never list ourselves as a remote device
         seen.add(key)
         dev = _device_state(key)
-        dev.update(host=peer["host"], os=peer["os"], ip=peer["ip"])
-        if hit:
-            base, hello = hit
-            dev.update(
-                base_url=base,
-                reachable=True,
-                last_seen=now,
-                remote_control=bool(hello.get("remote_control")),
-                auth=bool(hello.get("auth")),
-                version=str(hello.get("version") or ""),
-                shared_link=str(hello.get("shared_link") or ""),
-            )
-        else:
-            dev["reachable"] = False
+        dev.update(
+            host=peer["host"],
+            os=peer["os"],
+            ip=peer["ip"],
+            dns=peer.get("dns", ""),
+            ips=list(peer.get("ips") or []),
+        )
+        _apply_probe(dev, hit, now)
     # Drop devices that left the tailnet / stopped answering for a while.
     for key in list(_DEVICES):
         dev = _DEVICES[key]
@@ -413,11 +569,13 @@ async def _discover_once() -> None:
 
 
 def _connected(dev: dict) -> bool:
-    """Can we actually drive this device right now?"""
+    """Can we actually drive this device right now? Reachable, remote control
+    on there, and — when its gate is on — a credential for it: a pasted token,
+    or the fleet key (it opens every member, see :func:`_fleet_key_for`)."""
     return bool(
         dev.get("reachable")
         and dev.get("remote_control")
-        and (not dev.get("auth") or token_for(dev["key"]))
+        and (not dev.get("auth") or token_for(dev["key"]) or _fleet_key_for(dev["key"]))
     )
 
 
@@ -426,24 +584,118 @@ def connected_devices() -> List[dict]:
     return [dict(d) for d in _DEVICES.values() if _connected(d)]
 
 
-async def get_json(dev: dict, path: str, timeout: float = 3.0) -> Tuple[int, object]:
-    """``(status, body)`` for ``GET <path>`` on a connected device, with this
-    device's pairing credentials; ``(0, None)`` when it can't be reached.
+def _same_fleet(dev: dict) -> bool:
+    """Whether ``dev``'s hello names this device's fleet (both non-empty)."""
+    mine = _fleet_id()
+    return bool(mine) and str(dev.get("fleet") or "") == mine
+
+
+def fleet_devices() -> List[dict]:
+    """Snapshots of the reachable devices that are members of this device's
+    fleet AND say so themselves (their hello carries the same fleet id).
+
+    The ONLY peers anything that adopts data from another device may talk to
+    (settings sync, the fleet's roster gossip). Unlike :func:`connected_devices`
+    this is about identity, not drivability: a gate-off tailnet node counts as
+    "connected" with no credential at all, which is exactly who must never be
+    able to push settings here. Remote control is deliberately not required —
+    a member that turned it off answers 403, which surfaces as its error."""
+    if not _fleet_id():
+        return []
+    return [
+        dict(d)
+        for d in _DEVICES.values()
+        if d.get("reachable") and _member_device(d) and _same_fleet(d)
+    ]
+
+
+async def _read_json(resp) -> object:
+    """``resp``'s body as JSON, or None when it isn't any."""
+    try:
+        return await resp.json(content_type=None)
+    except Exception:  # noqa: BLE001 — empty / HTML error page / truncated
+        return None
+
+
+async def get_json(
+    dev: dict,
+    path: str,
+    timeout: float = 3.0,
+    *,
+    auth: bool = True,
+    bearer: Optional[str] = None,
+) -> Tuple[int, object]:
+    """``(status, body)`` for ``GET <path>`` on a device, with this device's
+    credential for it (see :func:`_headers_for` for ``auth``/``bearer``);
+    ``(0, None)`` when it can't be reached. The body is parsed for a 200 only.
     The fan-out primitive for features that ask every device something
-    (:mod:`backend.web.core.fleet_claims`, settings sync)."""
+    (:mod:`backend.web.core.fleet_claims`, settings sync, the fleet)."""
     if aiohttp is None or not dev.get("base_url"):
         return 0, None
     session = await _http_session()
     try:
         async with session.get(
             dev["base_url"] + path,
-            headers=_headers_for(dev["key"]),
+            headers=_headers_for(dev["key"], auth=auth, bearer=bearer),
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             body = await resp.json(content_type=None) if resp.status == 200 else None
             return resp.status, body
     except Exception:  # noqa: BLE001 — unreachable / timeout / not JSON
         return 0, None
+
+
+async def post_json(
+    dev: dict,
+    path: str,
+    body: object,
+    timeout: float = 10.0,
+    *,
+    auth: bool = True,
+    bearer: Optional[str] = None,
+) -> Tuple[int, object]:
+    """``(status, body)`` for ``POST <path>`` with a JSON ``body`` on a device
+    (credentials as :func:`get_json`); ``(0, None)`` when it can't be reached.
+
+    The response is parsed as JSON whatever the status, so a refusal carries
+    its ``{"error": …}`` back to the user ("that code is wrong or expired")
+    instead of a bare number."""
+    if aiohttp is None or not dev.get("base_url"):
+        return 0, None
+    session = await _http_session()
+    try:
+        async with session.post(
+            dev["base_url"] + path,
+            json=body,
+            headers=_headers_for(dev["key"], auth=auth, bearer=bearer),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            return resp.status, await _read_json(resp)
+    except Exception:  # noqa: BLE001 — unreachable / timeout
+        return 0, None
+
+
+async def refresh_device(key: str) -> Optional[dict]:
+    """Re-probe ``key``'s hello NOW (instead of on the next sweep) and return
+    its snapshot; None for a device discovery never found.
+
+    After a join the joined device's hello names the new fleet at once, and
+    :func:`fleet_devices` — which requires that — would otherwise not include
+    it for up to a discovery interval."""
+    dev = _DEVICES.get(key)
+    if dev is None:
+        return None
+    if aiohttp is not None and (dev.get("ip") or dev.get("dns")):
+        hit = await _probe_peer({"ip": dev.get("ip", ""), "dns": dev.get("dns", "")})
+        _apply_probe(dev, hit, time.time())
+    return dict(dev)
+
+
+async def discover_now() -> None:
+    """One tailnet sweep right now (Settings → Devices' Refresh button)."""
+    if aiohttp is None:
+        return
+    await _discover_once()
 
 
 async def _fetch_instances(dev: dict) -> None:
@@ -577,6 +829,7 @@ def devices_json() -> dict:
         # stays listed (as unreachable) through the 90s stale grace.
         if not dev["reachable"] and not dev.get("last_seen"):
             continue
+        member = _member_device(dev)
         devices.append(
             {
                 "device": dev["key"],
@@ -589,15 +842,23 @@ def devices_json() -> dict:
                 "remote_control": bool(dev["remote_control"]),
                 "auth": bool(dev["auth"]),
                 "has_token": bool(token_for(dev["key"])),
+                # A fleet member is opened by the fleet key — no token to paste.
                 "needs_token": bool(
                     dev["reachable"]
                     and dev["remote_control"]
                     and dev["auth"]
                     and not token_for(dev["key"])
+                    and not _fleet_key_for(dev["key"])
                 ),
                 "connected": _connected(dev) and bool(dev.get("instances_ok")),
                 "error": dev.get("error", ""),
                 "sessions": len(dev.get("instances") or []) if _connected(dev) else 0,
+                # "Your devices": on this device's roster; the join protocol it
+                # speaks; whether it is in ANY fleet; whether in this one.
+                "member": member,
+                "fleet_proto": int(dev.get("fleet_proto") or 0),
+                "in_fleet": bool(dev.get("fleet")),
+                "same_fleet": _same_fleet(dev),
             }
         )
     return {
@@ -662,6 +923,31 @@ def _split_proxy_path(path: str) -> Optional[Tuple[str, str]]:
     return device, _INSTANCES_PREFIX + quote(bare, safe="") + (
         slash + tail if slash else ""
     )
+
+
+_ENCODED_DOT_OR_SLASH = re.compile(r"%(2e|2f|5c)", re.IGNORECASE)
+
+
+def _unsafe_tail(tail: str) -> bool:
+    """Whether a forwarded path tail could climb out of the route it names:
+    a ``.``/``..`` segment (the HTTP client collapses them, so
+    ``<title>/../../fleet/rekey`` would land on ``/api/fleet/rekey``), a
+    backslash, or a dot/slash still percent-encoded after the server decoded
+    the path once (double encoding — never legitimate here)."""
+    if "\\" in tail or _ENCODED_DOT_OR_SLASH.search(tail):
+        return True
+    return any(seg in (".", "..") for seg in tail.split("/"))
+
+
+def _unsafe_proxy_path(path: str) -> bool:
+    """:func:`_unsafe_tail` for a namespaced-session or ``fwd/`` path (the
+    title itself may not be ``.``/``..`` either)."""
+    if path.startswith(_INSTANCES_PREFIX):
+        seg, _, tail = path[len(_INSTANCES_PREFIX) :].partition("/")
+        bare = seg.partition(NS)[2]
+        return bare in (".", "..") or _unsafe_tail(tail)
+    hit = _split_fwd_path(path)
+    return bool(hit) and _unsafe_tail(hit[1])
 
 
 _DEVICES_PREFIX = "/api/devices/"
@@ -759,6 +1045,12 @@ class RemoteProxyMiddleware:
             await self._reject(
                 scope, receive, send, "remote requests are not relayed", 400
             )
+            return
+        if _unsafe_proxy_path(path):
+            # The tail is forwarded verbatim: a dot segment would let a caller
+            # of this device reach ANY route on the target (fleet roster, key
+            # changes, settings sync) with this device's credential attached.
+            await self._reject(scope, receive, send, "bad path", 400)
             return
         if fwd is not None:
             method = scope.get("method", "GET") if scope["type"] == "http" else "WS"

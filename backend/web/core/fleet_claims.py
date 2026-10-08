@@ -12,8 +12,9 @@ remote control already has (:mod:`backend.web.core.remote`):
 * **Advertise.** ``GET /api/tickets/claims`` lists what THIS device holds
   (:func:`local_claims`): a live ticket session, a launch still starting, a
   fresh ``in_flight`` ledger marker, a team run's reservation.
-* **Ask.** :func:`holder` asks every connected device for its claims
-  (cached :data:`CACHE_TTL` s; ``fresh=True`` before a launch) and answers
+* **Ask.** :func:`holder` asks the user's own devices for their claims —
+  members of "Your devices" plus devices paired with a pasted token, never a
+  credential-less tailnet stranger (:func:`_claim_peers`) — (cached :data:`CACHE_TTL` s; ``fresh=True`` before a launch) and answers
   who, if anyone, already has the slug. A device that predates the claims
   route is read from the session list remote control already polls.
 * **Break ties.** Two devices can pass a check at the same moment, so the
@@ -141,12 +142,29 @@ async def _device_claims(dev: dict, fresh: bool) -> Dict[str, dict]:
     return claims
 
 
-async def fleet_claims(fresh: bool = False) -> Dict[str, List[dict]]:
-    """``{slug: [{"device", "label", "kind", "since"}, …]}`` across every
-    connected device (this one excluded)."""
+def _claim_peers() -> List[dict]:
+    """Who may hold a ticket against this device: members of "Your devices"
+    (:func:`backend.web.core.remote.fleet_devices`) plus connected devices
+    this one holds a pasted access token for. Never a token-less stranger —
+    a gate-off node on the tailnet counts as "connected" without any
+    credential, and must not be able to block a ticket here by claiming it."""
     from backend.web.core import remote as _remote
 
-    devs = _remote.connected_devices()
+    fn = getattr(_remote, "fleet_devices", None)
+    devs = list(fn() if fn else [])
+    seen = {d["key"] for d in devs}
+    for d in _remote.connected_devices():
+        if d["key"] not in seen and _remote.token_for(d["key"]):
+            devs.append(d)
+            seen.add(d["key"])
+    return devs
+
+
+async def fleet_claims(fresh: bool = False) -> Dict[str, List[dict]]:
+    """``{slug: [{"device", "label", "kind", "since"}, …]}`` across the
+    devices this one has a credential relationship with (this one excluded):
+    see :func:`_claim_peers`."""
+    devs = _claim_peers()
     if not devs:
         return {}
     answers = await asyncio.gather(*(_device_claims(d, fresh) for d in devs))

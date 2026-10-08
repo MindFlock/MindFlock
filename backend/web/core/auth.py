@@ -36,8 +36,19 @@ for the phone.
   carries every paired device's token (``?token=a&token=b``); whichever device
   answers the scan validates its own and stores all of them, so the next
   request is signed in no matter which device takes it. A server never accepts
-  a token that isn't its own: the fan-out widens what the browser remembers,
-  not what any server trusts.
+  another device's token: the fan-out widens what the browser remembers, not
+  what any server trusts.
+* **The fleet key.** The one exception is the key the owner's devices share
+  once they are joined ("Your devices", :mod:`backend.web.core.fleet`). Every
+  member accepts it beside its own token (:func:`token_valid`), so one QR
+  signs a phone in on all of them and members authenticate to each other with
+  it. Holding it IS being one of the owner's devices; it only ever leaves a
+  member inside an approved join. :func:`own_token_valid` is the check that
+  excludes it.
+* **Privileged actions.** Some routes (approving a device into the fleet,
+  showing a join code) must be done by the person AT this device, never
+  relayed by another MindFlock nor reached by an anonymous tailnet caller of a
+  gate-off server: :func:`privileged`.
 
 Comparisons use ``hmac.compare_digest`` (constant-time). The token is a
 capability, not a password — treat the URL+token like an SSH key. A
@@ -78,10 +89,29 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # any pairing has happened, see backend.web.core.remote).
 _PUBLIC_PATHS = frozenset({"/api/auth", "/favicon.ico", "/api/remote/hello"})
 
+# The device-to-device half of joining "Your devices" (backend.web.core.fleet):
+# a device that is not yet a member holds no credential here, so redeeming a
+# join code, asking to join, and polling for the answer must get past both the
+# token gate and the remote-control gate. Matched on (METHOD, exact path) — the
+# approve/deny routes beside them are privileged and must stay gated, so no
+# prefix match. Each route guards itself (single-use codes, a per-request
+# secret, a per-IP rate limit).
+_PUBLIC_FLEET_ROUTES = frozenset(
+    {("POST", "/api/fleet/redeem"), ("POST", "/api/fleet/requests")}
+)
+#: ``GET /api/fleet/requests/<id>`` — the joiner's poll; the id is
+#: ``token_hex(8)``, so exactly one segment of 16 lower-case hex.
+_PUBLIC_FLEET_POLL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}")
+#: ``POST /api/fleet/requests/<id>/cancel`` — the joiner withdraws its own
+#: request (it proves which with the request's secret).
+_PUBLIC_FLEET_CANCEL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}/cancel")
+
 # Requests proxied by ANOTHER MindFlock device carry this header (lower-case
 # for the ASGI header list). They're refused outright unless this device's
 # `general.remote_control` toggle is on — that toggle is the permission the
-# user grants, independent of (and checked before) the token gate.
+# user grants, independent of (and checked before) the token gate. It only
+# governs devices paired by pasted token that are NOT in this device's fleet:
+# a request bearing the current fleet key is a member's, and passes.
 _REMOTE_HEADER = b"x-mindflock-remote"
 
 #: Most ``mf_auth*`` cookies / ``?token=`` values one request is checked
@@ -240,14 +270,45 @@ def rotate_token() -> str:
     return new
 
 
-def token_valid(candidate: Optional[str]) -> bool:
-    """Constant-time compare ``candidate`` against the active token."""
+def own_token_valid(candidate: Optional[str]) -> bool:
+    """Constant-time compare ``candidate`` against THIS device's token only.
+
+    What a route asks when the fleet key must not do: ``POST /api/fleet/adopt``
+    hands this device to a fleet, so it takes the token the user pasted on the
+    other device (proof they control this one), never a fleet key a member
+    already holds."""
     if not candidate:
         return False
     tok = get_token()
     if not tok:
         return False
     return hmac.compare_digest(str(candidate), tok)
+
+
+def _fleet_key_valid(candidate: Optional[str]) -> bool:
+    """Whether ``candidate`` is the fleet key (see :mod:`backend.web.core.fleet`).
+
+    Imported lazily (the fleet store reads settings paths) and never raises —
+    a broken fleet store must degrade to "own token only", not to a 500 on
+    every request."""
+    if not candidate:
+        return False
+    try:
+        from backend.web.core import fleet as _fleet
+
+        return bool(_fleet.key_valid(str(candidate)))
+    except Exception:  # noqa: BLE001 — the request path must never break
+        return False
+
+
+def token_valid(candidate: Optional[str]) -> bool:
+    """Whether ``candidate`` is a credential this device accepts: its own token
+    or the fleet key every one of the owner's devices holds. Constant-time.
+
+    The fleet key is a full credential on every member (holding it == being
+    one of the owner's devices), so the bearer, the cookies, ``?token=`` and
+    the websocket path all accept it through here."""
+    return own_token_valid(candidate) or _fleet_key_valid(candidate)
 
 
 def any_token_valid(candidates: Iterable[Optional[str]]) -> bool:
@@ -298,13 +359,65 @@ def _bearer_from(headers: list) -> Optional[str]:
 
 
 def presented_token(scope) -> bool:
-    """Whether the request itself carries this device's token (a cookie or a
-    bearer header) — regardless of whether the gate is on. What a route that
-    hands out secrets (settings sync's export) asks: with the gate off any
-    tailnet caller gets through the middleware, but only a token holder may
-    read credentials."""
+    """Whether the request itself carries a credential this device accepts —
+    its token or the fleet key, as a cookie or a bearer header — regardless of
+    whether the gate is on. What a route that hands out secrets (settings
+    sync's export) asks: with the gate off any tailnet caller gets through the
+    middleware, but only a credential holder may read credentials."""
     headers = scope.get("headers") or []
     return any_token_valid(_cookies_from(headers)) or token_valid(_bearer_from(headers))
+
+
+def _from_this_machine(scope) -> bool:
+    """Whether the request's TRANSPORT peer is this machine, unproxied.
+
+    The peer is the one :class:`~backend.web.core.tailnet_trust.PeerCaptureMiddleware`
+    recorded before any proxy-headers rewrite (``scope["client"]`` as the
+    fallback when it isn't mounted). Loopback alone is not enough:
+    ``tailscale serve`` delivers tailnet traffic from 127.0.0.1 as well,
+    naming the real client in ``X-Forwarded-For`` — so any forwarding header
+    disqualifies (fails closed: a local process that adds one just loses the
+    shortcut and has to present the token)."""
+    from backend.web.core import tailnet_trust as _tailnet_trust
+
+    peer = scope.get("mf_peer") or scope.get("client")
+    if not peer:
+        return False
+    loopback = _tailnet_trust.is_loopback(peer[0])
+    return loopback and not _tailnet_trust.has_forward_headers(scope)
+
+
+async def privileged(scope) -> bool:
+    """Whether this request comes from the person AT this device — what the
+    fleet's join/approve/remove routes require (a 403 otherwise).
+
+    * Never when another MindFlock relays it (``X-MindFlock-Remote``): being
+      allowed to drive this device is not being here, and a relayed approve
+      would let anything that can drive this device enrol new computers into
+      the user's devices.
+    * Yes when it carries a credential (:func:`presented_token` — the token,
+      or the fleet key a signed-in phone holds),
+    * or comes straight from this machine (:func:`_from_this_machine` — the
+      desktop app, a local browser; the same trust the gate-off localhost run
+      already extends),
+    * or from one of the user's trusted Tailscale devices
+      (:func:`backend.web.core.tailnet_trust.request_trusted`).
+
+    With the gate ON every request that reached a route already passed one of
+    these, so this only narrows the gate-OFF case: an anonymous tailnet caller
+    of an exposed gate-off server can still use the app, but not hand out the
+    fleet key. Never raises."""
+    try:
+        headers = scope.get("headers") or []
+        if any(k == _REMOTE_HEADER for k, _ in headers):
+            return False
+        if presented_token(scope) or _from_this_machine(scope):
+            return True
+        from backend.web.core import tailnet_trust as _tailnet_trust
+
+        return bool(await _tailnet_trust.request_trusted(scope))
+    except Exception:  # noqa: BLE001 — refuse rather than 500
+        return False
 
 
 def _query_tokens(query_string: bytes) -> List[str]:
@@ -493,6 +606,20 @@ async def _deny(scope, receive, send, *, status, message, ws_code) -> None:
             pass
 
 
+def _public_fleet_route(scope) -> bool:
+    """Whether ``scope`` is one of the public join routes (see
+    :data:`_PUBLIC_FLEET_ROUTES`) — HTTP only, exact method and path."""
+    if scope.get("type") != "http":
+        return False
+    method = str(scope.get("method") or "").upper()
+    path = scope.get("path", "")
+    if (method, path) in _PUBLIC_FLEET_ROUTES:
+        return True
+    if method == "POST":
+        return _PUBLIC_FLEET_CANCEL.fullmatch(path) is not None
+    return method == "GET" and _PUBLIC_FLEET_POLL.fullmatch(path) is not None
+
+
 class AuthMiddleware:
     """Pure-ASGI gate covering HTTP and websocket scopes alike."""
 
@@ -506,6 +633,7 @@ class AuthMiddleware:
 
         path = scope.get("path", "")
         headers = scope.get("headers") or []
+        public = path in _PUBLIC_PATHS or _public_fleet_route(scope)
 
         # Browser-attack guards (see origin_ok/host_ok): cross-origin pages and
         # DNS-rebinding hosts are refused before ANY other handling — public
@@ -524,8 +652,17 @@ class AuthMiddleware:
 
         # Remote-control permission gate — enforced even when the token gate is
         # off (a localhost-auth-off server on a tailnet must still be able to
-        # refuse other MindFlock devices until the user opts in).
-        if path not in _PUBLIC_PATHS and any(k == _REMOTE_HEADER for k, _ in headers):
+        # refuse other MindFlock devices until the user opts in). It governs
+        # devices paired with a pasted token that are NOT members of this
+        # device's fleet: a member presenting the CURRENT fleet key passes —
+        # membership is the permission (joining turned remote control on, and
+        # roster gossip, key changes and settings sync must keep working even
+        # if the toggle is switched off later).
+        if (
+            not public
+            and any(k == _REMOTE_HEADER for k, _ in headers)
+            and not _fleet_key_valid(_bearer_from(headers))
+        ):
             from backend.web.core import remote as _remote
 
             if not _remote.remote_control_enabled():
@@ -542,7 +679,7 @@ class AuthMiddleware:
         if not auth_enabled():
             await self.app(scope, receive, send)
             return
-        if path in _PUBLIC_PATHS:
+        if public:
             await self.app(scope, receive, send)
             return
 

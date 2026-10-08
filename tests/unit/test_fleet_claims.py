@@ -37,6 +37,7 @@ def _env(monkeypatch, tmp_path):
         remote, "self_identity", lambda: {"key": SELF, "host": "Laptop"}
     )
     monkeypatch.setattr(remote, "connected_devices", lambda: [])
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [])
     fleet_claims.clear_cache()
     yield tmp_path
     fleet_claims.clear_cache()
@@ -53,7 +54,8 @@ def _peers(monkeypatch, answers: dict):
         }
         for k, v in answers.items()
     ]
-    monkeypatch.setattr(remote, "connected_devices", lambda: [dict(d) for d in devs])
+    # The user's own devices: members of "Your devices" (see _claim_peers).
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [dict(d) for d in devs])
 
     async def fake_get_json(dev, path, timeout=3.0):
         calls.append((dev["key"], path))
@@ -134,6 +136,36 @@ def test_claims_route_answers_device_and_claims():
 # --------------------------------------------------------------------------- #
 def test_no_devices_means_nobody_holds_it():
     assert asyncio.run(fleet_claims.holder("sc-1")) is None
+
+
+def test_a_tokenless_stranger_cannot_block_a_ticket(monkeypatch):
+    """Finding [39]: a gate-off tailnet node counts as "connected" with no
+    credential at all. Its claims are never asked; a member's still are, and
+    so are those of a device this one holds a pasted token for."""
+    calls = []
+    stranger = {"key": "stranger", "host": "Stranger", "instances": []}
+    paired = {"key": "paired", "host": "Paired", "instances": []}
+    member = {"key": "member", "host": "Member", "instances": []}
+    monkeypatch.setattr(
+        remote, "connected_devices", lambda: [dict(stranger), dict(paired)]
+    )
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [dict(member)])
+    monkeypatch.setattr(remote, "_TOKENS", {"paired": "pasted-token-0123456789"})
+    held = {
+        "stranger": _claims(**{"sc-1": {"kind": "session", "since": 1}}),
+        "paired": _claims(**{"sc-2": {"kind": "session", "since": 1}}),
+        "member": _claims(**{"sc-3": {"kind": "session", "since": 1}}),
+    }
+
+    async def fake_get_json(dev, path, timeout=3.0):
+        calls.append(dev["key"])
+        return held[dev["key"]]
+
+    monkeypatch.setattr(remote, "get_json", fake_get_json)
+    assert asyncio.run(fleet_claims.holder("sc-1")) is None
+    assert asyncio.run(fleet_claims.holder("sc-2", fresh=True))["device"] == "paired"
+    assert asyncio.run(fleet_claims.holder("sc-3", fresh=True))["device"] == "member"
+    assert "stranger" not in calls
 
 
 def test_a_peer_session_is_found_and_described(monkeypatch):

@@ -149,8 +149,10 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
 
 def _signin_tokens(shared: bool) -> list:
     """The tokens a phone QR carries: this server's own (when the auth gate is
-    on), plus — for the shared link — every paired device's, so whichever
-    device answers the scan finds its own among them. ``[]`` with the gate off.
+    on), then the fleet key when this device is one of "Your devices" (every
+    member accepts it, so one scan signs the phone in on all of them), plus —
+    for the shared link — every paired device's, so whichever device answers
+    the scan finds its own among them. ``[]`` with the gate off.
     """
     try:
         if not _auth.auth_enabled():
@@ -159,6 +161,14 @@ def _signin_tokens(shared: bool) -> list:
     except Exception:  # noqa: BLE001
         return []
     tokens = [own] if own else []
+    try:
+        from backend.web.core import fleet as _fleet
+
+        key = _fleet.fleet_key() if _fleet.in_fleet() else ""
+        if key and key not in tokens:
+            tokens.append(key)
+    except Exception:  # noqa: BLE001 — the own token still works here
+        pass
     if shared:
         try:
             from backend.web.core import remote as _remote
