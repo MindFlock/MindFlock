@@ -596,6 +596,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_PATH_PROBE` | — | **Internal** reentrancy sentinel set on the shell subprocess the `PATH` probe spawns, so the probed shell doesn't recursively re-enrich. Not meant to be set by hand |
 | `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 0.0.0.0 and auto-enables the auth-token gate |
 | `PORT` / `UVICORN_PORT` | `8765` | Web server port |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
@@ -738,6 +739,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   when the live serve config, the port or this device's tags have drifted.
   Settings → Mobile shows a setup checklist with each step's live status
   and its fix. See [web-ui.md](web-ui.md) (Settings → Mobile).
+- **Trusted Tailscale accounts** (`general.tailnet_trusted_logins`; Settings →
+  Security): a list of Tailscale login names whose **untagged** devices skip
+  the access token. Empty or absent means off. Stored lower-cased and
+  de-duplicated, with blanks and non-strings dropped, and left out of
+  `settings.json` when empty. Not a secret, so `GET /api/settings` returns it
+  unmasked. Read fresh on every gated request, so a save applies at once with
+  no restart. A ticked login's phone has full agent-terminal control, and
+  rotating the token does not revoke it: untick the login instead. See
+  [web-api.md](web-api.md#authentication).
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

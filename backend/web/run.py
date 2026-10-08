@@ -313,7 +313,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Never open a browser: the desktop app (Electron) is the client, and it
     # auto-starts/connects to this server itself. (The retired CS_WEB_OPEN
     # browser auto-open left with browser mode.)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    # proxy_headers=False: the app applies uvicorn's X-Forwarded-* rewrite
+    # itself (tailnet_trust.PeerCaptureMiddleware), AFTER recording the real
+    # transport peer — the Tailscale trust check needs to know a request came
+    # over loopback from tailscaled, which the rewrite would erase.
+    uvicorn.run(app, host=host, port=port, log_level="warning", proxy_headers=False)
 
 
 if __name__ == "__main__":

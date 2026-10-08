@@ -1,7 +1,7 @@
 /** Settings → Security (partial 114 + section 21's auth wiring): the
  * access-token gate, token reveal/copy/rotate, remote control. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
@@ -15,6 +15,84 @@ async function fetchAuthToken(): Promise<string> {
   if (authTokenCache === null)
     authTokenCache = ((await api<{ token?: string }>("/api/settings/auth-token")) || {}).token || "";
   return authTokenCache;
+}
+
+/** GET /api/settings/tailnet-trust (backend.web.core.tailnet_trust.status). */
+interface TailnetTrust {
+  available: boolean;
+  self_login: string;
+  self_tagged: boolean;
+  logins: string[];
+  shared_link_supported: boolean;
+}
+
+/** "Trusted Tailscale accounts": one checkbox per login that owns an untagged
+ * device on this tailnet — a checked login's own devices skip the token. */
+function TailnetTrustRows() {
+  const s = useSettings();
+  const [info, setInfo] = useState<TailnetTrust | null>(null);
+  const stored = s.get("general", "tailnet_trusted_logins");
+  const trusted = Array.isArray(stored) ? (stored as string[]) : [];
+
+  useEffect(() => {
+    let live = true;
+    api<TailnetTrust>("/api/settings/tailnet-trust")
+      .then((r) => live && setInfo(r || null))
+      .catch(() => live && setInfo(null));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // A trusted login that no longer owns a device here still shows, so it can
+  // be unticked.
+  const choices = [...new Set([...(info?.logins || []), ...trusted])].sort();
+  const toggle = (login: string, on: boolean) => {
+    const next = new Set(trusted);
+    if (on) next.add(login);
+    else next.delete(login);
+    s.saveField("general", "tailnet_trusted_logins", [...next]);
+  };
+
+  return (
+    <div
+      className="set-row"
+      id="tailnet-trust-row"
+      title="Requests from these Tailscale accounts' own (untagged) devices need no access token."
+    >
+      <span className="set-label">Trusted Tailscale accounts</span>
+      {info === null ? (
+        <span className="muted">Checking Tailscale…</span>
+      ) : !info.available && !choices.length ? (
+        <span className="muted" id="tailnet-trust-unavailable">
+          Tailscale isn't running on this device.
+        </span>
+      ) : (
+        <div className="tailnet-trust-logins">
+          {choices.map((login) => (
+            <label className="check" key={login}>
+              <input
+                type="checkbox"
+                data-login={login}
+                checked={trusted.includes(login)}
+                onChange={(e) => toggle(login, e.target.checked)}
+              />
+              {login}
+              {login === info.self_login ? <span className="muted"> (this device's owner)</span> : null}
+            </label>
+          ))}
+        </div>
+      )}
+      <span className="set-hint" id="tailnet-trust-hint">
+        Your own phone and laptops, signed in to Tailscale as a ticked account, open MindFlock here
+        without the access token. Tagged devices and devices shared in from other accounts still
+        need it.
+        {info && !info.shared_link_supported
+          ? " On this OS that only covers this device's own address — requests through the shared phone link still ask for the token."
+          : ""}
+      </span>
+    </div>
+  );
 }
 
 export function Security(_: ScreenProps) {
@@ -178,6 +256,7 @@ export function Security(_: ScreenProps) {
           QR code, and paired device must then re-authenticate with the new token.
         </span>
       </div>
+      <TailnetTrustRows />
       <h3 className="set-section-title">Remote control</h3>
       <label
         className="set-row"

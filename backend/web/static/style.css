@@ -1414,6 +1414,14 @@ p.set-hint {
 }
 
 /* Security → access-token reveal row */
+.tailnet-trust-logins {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .token-reveal {
   display: flex;
   align-items: center;

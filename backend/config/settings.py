@@ -981,6 +981,10 @@ class GeneralSettings:
     on only when the server is exposed beyond localhost). Overrides the
     exposed-mode heuristic; the ``MINDFLOCK_AUTH`` env var still wins over it.
 
+    ``tailnet_trusted_logins``: Tailscale login names whose UNTAGGED devices
+    skip the access token (:mod:`backend.web.core.tailnet_trust`). Empty (the
+    default) = off. Stored lower-cased and de-duplicated.
+
     ``onboarded``: set once the user has ever created a session (or finished the
     first-run checklist). Gates the first-run setup card so it only auto-shows
     for a brand-new install, not every time the grid happens to be empty.
@@ -1052,6 +1056,7 @@ class GeneralSettings:
     window_budget_usd: Optional[float] = None
     auth_token: str = ""  # SECRET
     auth_mode: str = ""  # "" / "auto" | "on" | "off"
+    tailnet_trusted_logins: List[str] = field(default_factory=list)
     onboarded: bool = False
     last_repo_path: str = ""
     remote_control: str = ""  # "" / "off" | "on"
@@ -1075,6 +1080,8 @@ class GeneralSettings:
             d["auth_token"] = self.auth_token
         if self.auth_mode:
             d["auth_mode"] = self.auth_mode
+        if self.tailnet_trusted_logins:
+            d["tailnet_trusted_logins"] = list(self.tailnet_trusted_logins)
         if self.onboarded:
             d["onboarded"] = True
         if self.last_repo_path:
@@ -1106,6 +1113,7 @@ class GeneralSettings:
             window_budget_usd=_opt_float(d.get("window_budget_usd")),
             auth_token=str(d.get("auth_token", "") or ""),
             auth_mode=str(d.get("auth_mode", "") or "").strip().lower(),
+            tailnet_trusted_logins=_login_list(d.get("tailnet_trusted_logins")),
             onboarded=bool(d.get("onboarded", False)),
             last_repo_path=str(d.get("last_repo_path", "") or ""),
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
@@ -1528,6 +1536,19 @@ def _agent_mcp_scope(v: Any) -> str:
     """A known ``agent_mcp_scope`` value, lower-cased, else ``""`` (default)."""
     s = str(v or "").strip().lower()
     return s if s in AGENT_MCP_SCOPES else ""
+
+
+def _login_list(v: Any) -> List[str]:
+    """Tailscale login names, lower-cased + de-duplicated (order kept); a
+    non-list or blank entries read as nothing."""
+    out: List[str] = []
+    if not isinstance(v, (list, tuple)):
+        return out
+    for item in v:
+        s = str(item or "").strip().lower() if isinstance(item, str) else ""
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 def _opt_bool(v: Any) -> Optional[bool]:

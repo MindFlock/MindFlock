@@ -439,7 +439,9 @@ terminal into the same tmux session.
 
 `mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
 into phone/tailnet access — an auth token + QR code are printed, and scanning
-the QR opens the phone UI at `/m`.
+the QR opens the phone UI at `/m`. To skip the token on your own devices, tick
+your Tailscale account under Settings → Security → **Trusted Tailscale
+accounts** (untagged devices only; rotating the token does not revoke them).
 
 ## Download
 
