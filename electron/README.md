@@ -98,6 +98,33 @@ Overrides:
 - `MINDFLOCK_UPDATE_REPO` — `owner/name` of the GitHub repo whose Releases the
   app polls for update notifications (default `MindFlock/MindFlock`). The check
   is best-effort: offline or a non-200 (e.g. a private repo's 404) is silent.
+- `MINDFLOCK_UPDATE_FEED` — point the in-app updater at a plain directory URL
+  holding a `latest*.yml` and the build it names (staging, or an end-to-end
+  test) instead of the GitHub release. `MINDFLOCK_UPDATE_AUTOINSTALL=1` installs
+  as soon as the download finishes (unattended tests only).
+  `MINDFLOCK_DISABLE_AUTOUPDATE=1` turns the in-app updater off.
+
+## Updating
+
+One click. When a release is out, the app downloads it in the background
+(electron-updater, from the GitHub release's `latest*.yml` + blockmaps) and the
+**Update** toast installs everything: it first updates the engine to the same
+release (the pinned `install.sh`, only for a release install — a developer
+checkout or an editable engine is left alone), stops the old server, then
+installs the app silently and relaunches it; the relaunch starts the new
+engine. With the app already current, the same button just updates and
+restarts the engine.
+
+- **Windows / Linux** (NSIS / AppImage) update in place.
+- **macOS** updates through Squirrel.Mac, which accepts an update only when it
+  is signed by the same identity as the running app. Every release is signed
+  with the same self-signed MindFlock certificate (`MAC_CSC_*` secrets; a
+  tagged build without them fails), so you approve "unverified developer" once
+  when you first install, and updates after that need nothing. The `.zip` on
+  the release is what it swaps in; the `.dmg` stays the download.
+- Wherever the app can't swap itself (a dev run, a copy run from the mounted
+  dmg, a failed signature check) the button still updates the engine and then
+  opens the download page.
 
 ## Run from source (developers)
 

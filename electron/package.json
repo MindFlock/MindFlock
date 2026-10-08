@@ -22,17 +22,41 @@
   "build": {
     "appId": "ai.mindflock.desktop",
     "productName": "MindFlock",
-    "files": ["main.js", "preload.js", "logger.js", "offline.html", "icon.ico"],
-    "extraResources": [{ "from": "../install.sh", "to": "install.sh" }],
+    "files": [
+      "main.js",
+      "preload.js",
+      "logger.js",
+      "offline.html",
+      "icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "../install.sh",
+        "to": "install.sh"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "icon.ico",
       "artifactName": "MindFlock-Setup.exe"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
       "category": "public.app-category.developer-tools",
-      "artifactName": "MindFlock.dmg",
+      "artifactName": "MindFlock.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
@@ -50,6 +74,17 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "MindFlock"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "MindFlock",
+        "repo": "MindFlock",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }
