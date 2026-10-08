@@ -83,6 +83,11 @@ contextBridge.exposeInMainWorld('mfupdate', {
   onAvailable: (cb) => ipcRenderer.on('update:available', (_e, info) => cb(info)),
   openDownload: (url) => ipcRenderer.send('update:open', url),
   skip: (version) => ipcRenderer.send('update:skip', version),
+  // One click: update the engine (if it's a release install and behind), then
+  // install the already-downloaded app update and relaunch. `state()` is polled
+  // for progress — { app: {state, version, percent, error}, run: {state, step, message} }.
+  install: () => ipcRenderer.invoke('update:install'),
+  state: () => ipcRenderer.invoke('update:state'),
 })
 
 // Engine-drift bridge: the shell pins the engine to its own version at install

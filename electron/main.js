@@ -1128,17 +1128,194 @@ async function checkForUpdates() {
 
 function startUpdateChecks() {
   skippedVersion = readUpdateStore().skippedVersion || ''
+  initAutoUpdater()
   const tick = () => {
-    checkForUpdates().catch(() => {})     // desktop-shell release (notify-only)
+    checkForUpdates().catch(() => {})     // a newer release? (drives the toast)
+    checkAppUpdate()                      // …and start downloading it
     checkEngineVersion().catch(() => {})  // engine release (offer to update)
   }
   setTimeout(tick, UPDATE_FIRST_DELAY_MS)
   setInterval(tick, UPDATE_INTERVAL_MS)
 }
 
+// ---------------------------------------------------------------------------
+// One-click update: the app AND its engine, from one button.
+//
+// The app half is electron-updater: a newer release is downloaded in the
+// background as soon as it is seen (the GitHub release carries latest*.yml +
+// blockmaps for it), so the click only has to install. The engine half reuses
+// the existing pinned installer (startInstall) — the engine is a separate
+// install inside WSL / the user's home that no app installer touches — and is
+// skipped for a developer checkout (the engine's own /api/update/check says
+// `kind`), so an editable engine is never replaced by a release copy.
+//
+// Order on click: engine install (small, uv-cached) → stop the old server →
+// install the app and relaunch; the relaunched app starts the NEW server. An
+// engine-only update (app already current) just restarts the server.
+//
+// Where the app can't update itself (an unpackaged/dev run, a build whose
+// update metadata is missing, or macOS refusing the swap) the button still
+// updates the engine and then falls back to the download page.
+let autoUpdater = null
+// state: off | idle | downloading | ready | error
+let appUpd = { state: 'off', version: '', percent: 0, error: '' }
+// The click's progress, polled by the toast. state: idle | running | failed
+let updateRun = { state: 'idle', step: '', message: '' }
+
+function initAutoUpdater() {
+  if (!app.isPackaged || DEV || process.env.MINDFLOCK_DISABLE_AUTOUPDATE === '1') return
+  try {
+    autoUpdater = require('electron-updater').autoUpdater
+  } catch (e) {
+    console.log('[mindflock] auto-update unavailable:', e && e.message)
+    return
+  }
+  autoUpdater.autoDownload = true
+  // Never swap the app on a plain quit: the engine has to move with it, which
+  // only the button does.
+  autoUpdater.autoInstallOnAppQuit = false
+  autoUpdater.logger = {
+    info: (m) => console.log('[updater]', m),
+    warn: (m) => console.log('[updater] warn:', m),
+    error: (m) => console.log('[updater] error:', m),
+    debug: () => {},
+  }
+  // MINDFLOCK_UPDATE_FEED points the updater at a plain directory holding a
+  // latest*.yml + the build it names (a staging feed, or a local end-to-end
+  // test); unset = the GitHub releases this build was published from.
+  if (process.env.MINDFLOCK_UPDATE_FEED) {
+    autoUpdater.setFeedURL({ provider: 'generic', url: process.env.MINDFLOCK_UPDATE_FEED })
+  }
+  appUpd = { state: 'idle', version: '', percent: 0, error: '' }
+  autoUpdater.on('update-available', (info) => {
+    appUpd = { state: 'downloading', version: String(info && info.version || ''), percent: 0, error: '' }
+    pushUpdateToRenderer()
+  })
+  autoUpdater.on('update-not-available', () => {
+    if (appUpd.state !== 'ready') appUpd = { state: 'idle', version: '', percent: 0, error: '' }
+  })
+  autoUpdater.on('download-progress', (p) => {
+    appUpd.state = 'downloading'
+    appUpd.percent = Math.max(0, Math.min(100, Math.round((p && p.percent) || 0)))
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    appUpd = { state: 'ready', version: String(info && info.version || appUpd.version), percent: 100, error: '' }
+    console.log('[mindflock] app update', appUpd.version, 'downloaded — ready to install')
+    pushUpdateToRenderer()
+    // Unattended end-to-end tests only: press the button for them.
+    if (process.env.MINDFLOCK_UPDATE_AUTOINSTALL === '1') updateEverything()
+  })
+  autoUpdater.on('error', (err) => {
+    appUpd = { state: 'error', version: appUpd.version, percent: 0, error: String(err && err.message || err).slice(0, 300) }
+    console.log('[mindflock] app auto-update failed — falling back to the download page:', appUpd.error)
+    pushUpdateToRenderer()
+  })
+}
+
+function checkAppUpdate() {
+  if (!autoUpdater || appUpd.state === 'downloading' || appUpd.state === 'ready') return
+  autoUpdater.checkForUpdates().catch(() => {})   // 'error' event carries the reason
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
+
+// Should the click update the engine, and to what? Only a RELEASE install
+// (uv tool) is touched: a developer's checkout (MINDFLOCK_REPO, or the engine
+// reporting `editable`) and anything we can't identify are left alone.
+async function enginePlan(target) {
+  if (WSL_REPO) return { needed: false, why: 'developer checkout (MINDFLOCK_REPO)' }
+  const current = await localEngineVersion()
+  if (!current || !target) return { needed: false, why: 'engine version unknown' }
+  if (cmpVersion(target, current) <= 0) return { needed: false, why: 'engine already ' + current }
+  const token = await readEngineToken().catch(() => '')
+  const chk = await fetchLocalJSON('/api/update/check', 8000, token)
+  const kind = chk && chk.kind
+  if (kind && kind !== 'uv-tool') {
+    return { needed: false, why: 'engine is a ' + kind + ' install — update it yourself' }
+  }
+  if (!kind) return { needed: false, why: "couldn't confirm the engine is a release install" }
+  return { needed: true, current, ref: 'v' + target }
+}
+
+async function updateEverything() {
+  if (updateRun.state === 'running') return updateRun
+  updateRun = { state: 'running', step: 'engine', message: 'Checking the engine…' }
+  try {
+    const target = (appUpd.version || (updateAvailable && updateAvailable.version)
+      || (engineNotice && engineNotice.latest) || '')
+    const plan = await enginePlan(target)
+    let engineUpdated = false
+    if (plan.needed) {
+      updateRun.message = 'Updating the engine to ' + target + '…'
+      startInstall(plan.ref)
+      while (install.state === 'running') await sleep(1000)
+      if (install.state !== 'done') {
+        updateRun = {
+          state: 'failed', step: 'engine',
+          message: 'The engine update failed (exit ' + install.code + ') — nothing was changed in the app.',
+        }
+        return updateRun
+      }
+      engineUpdated = true
+    } else {
+      console.log('[mindflock] engine step skipped:', plan.why)
+    }
+
+    const appNewer = (updateAvailable && cmpVersion(updateAvailable.version, app.getVersion()) > 0)
+      || (appUpd.version && cmpVersion(appUpd.version, app.getVersion()) > 0)
+    if (appNewer && autoUpdater && (appUpd.state === 'downloading' || appUpd.state === 'idle')) {
+      if (appUpd.state === 'idle') checkAppUpdate()
+      updateRun.step = 'download'
+      const deadline = Date.now() + 20 * 60 * 1000
+      while ((appUpd.state === 'downloading' || appUpd.state === 'idle') && Date.now() < deadline) {
+        updateRun.message = 'Downloading MindFlock ' + (appUpd.version || target)
+          + (appUpd.percent ? ' — ' + appUpd.percent + '%' : '') + '…'
+        await sleep(1000)
+      }
+    }
+    if (appNewer && appUpd.state === 'ready') {
+      updateRun = { state: 'running', step: 'restart', message: 'Restarting into MindFlock ' + appUpd.version + '…' }
+      // Stop the old engine server first: quitting the app leaves it running,
+      // and the relaunched app should bring up the engine just installed.
+      if (engineUpdated) spawnEngineShell(KILL_SERVER)
+      await sleep(engineUpdated ? 1500 : 300)
+      autoUpdater.quitAndInstall(true, true)   // silent install, relaunch after
+      return updateRun
+    }
+    if (appNewer) {
+      // The app can't swap itself here — finish the engine, then the page.
+      if (engineUpdated) restartServer()
+      shell.openExternal((updateAvailable && updateAvailable.url) || UPDATE_RELEASES_URL).catch(() => {})
+      updateRun = {
+        state: 'idle', step: 'manual',
+        message: (engineUpdated ? 'Engine updated. ' : '')
+          + 'This app can\u2019t update itself here — install the download that just opened.'
+          + (appUpd.error ? ' (' + appUpd.error + ')' : ''),
+      }
+      return updateRun
+    }
+    // Engine-only: the app is current.
+    if (engineUpdated) {
+      updateRun = { state: 'running', step: 'restart', message: 'Restarting the engine…' }
+      restartServer()
+    } else {
+      updateRun = { state: 'idle', step: 'done', message: 'Already up to date (' + plan.why + ').' }
+    }
+    return updateRun
+  } catch (e) {
+    updateRun = { state: 'failed', step: updateRun.step, message: 'Update failed: ' + (e && e.message) }
+    return updateRun
+  }
+}
+
 // Renderer bridge (see preload's `mfupdate`). `get` lets a freshly-loaded page
 // pull the current state even if the push fired before its listener existed.
-ipcMain.handle('update:get', () => pendingUpdate())
+ipcMain.handle('update:get', () => {
+  const p = pendingUpdate()
+  return p ? Object.assign({}, p, { auto: appUpd.state }) : null
+})
+ipcMain.handle('update:install', () => updateEverything())
+ipcMain.handle('update:state', () => ({ app: appUpd, run: updateRun }))
 ipcMain.on('update:open', (_e, url) => {
   const dest = typeof url === 'string' && url ? url : UPDATE_RELEASES_URL
   shell.openExternal(dest).catch(() => {})
@@ -1175,14 +1352,17 @@ let engineCheck = { checked: false, current: '' }
 
 // GET a JSON document from the local server, or null on ANY failure. Never
 // throws: an engine check must never be able to break app startup.
-function fetchLocalJSON(pathname, timeoutMs) {
+function fetchLocalJSON(pathname, timeoutMs, token) {
   return new Promise((resolve) => {
     let done = false
     const finish = (v) => { if (!done) { done = true; resolve(v) } }
     let req
     try {
       req = http.get(
-        { host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000 },
+        {
+          host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
+          headers: token ? { Authorization: 'Bearer ' + token } : {},
+        },
         (res) => {
           if (res.statusCode !== 200) { res.resume(); return finish(null) }
           let body = ''
@@ -1236,12 +1416,15 @@ async function checkEngineVersion() {
 }
 
 function pushEngineNotice() {
+  // With an app update pending, its one "Update" button updates the engine too
+  // (see updateEverything) — a second toast would be two buttons for one job.
+  if (pendingUpdate()) return
   if (engineNotice && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
     win.webContents.send('engine:notice', engineNotice)
   }
 }
 
-ipcMain.handle('engine:get', () => engineNotice)
+ipcMain.handle('engine:get', () => (pendingUpdate() ? null : engineNotice))
 // What Settings → Advanced polls to show/hide its engine-update control.
 // `checked` is false when the last check couldn't read the engine's version
 // or the latest release (offline, server booting) -- not "up to date".
@@ -1300,6 +1483,7 @@ const UPDATE_CSS = `
 #mf-toast-stack .mf-up-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; padding-right: 20px; }
 #mf-toast-stack .mf-up-body { color: #b6bccb; margin-bottom: 12px; line-height: 1.4; }
 #mf-toast-stack .mf-up-row { display: flex; gap: 8px; }
+#mf-toast-stack .mf-up-status { color: #97a0b5; font-size: 12px; margin: -4px 0 10px; line-height: 1.4; }
 #mf-toast-stack .mf-up-btn {
   flex: 1; padding: 7px 10px; border-radius: 8px; cursor: pointer;
   border: 1px solid #333c4d; background: #232a37; color: #d7dae3;
@@ -1356,13 +1540,40 @@ const UPDATE_JS = `
     var c = card('mf-update-toast');
     var row = el('div', 'mf-up-row');
     var upd = el('button', 'mf-up-btn mf-up-primary', 'Update');
-    upd.addEventListener('click', function () { window.mfupdate.openDownload(info.url); });
+    var status = el('div', 'mf-up-status');
+    status.hidden = true;
+    var polling = null;
+    function stopPolling() { if (polling) { clearInterval(polling); polling = null; } }
+    // One click does everything (engine, then the app) — see updateEverything
+    // in main.js. The toast only reports progress; the work lives in the main
+    // process so a reload mid-update can't lose it.
+    upd.addEventListener('click', function () {
+      if (upd.disabled) return;
+      if (!window.mfupdate.install) { window.mfupdate.openDownload(info.url); return; }
+      upd.disabled = true; later.disabled = true;
+      upd.textContent = 'Updating\u2026';
+      status.hidden = false; status.textContent = 'Starting\u2026';
+      window.mfupdate.install().catch(function () {});
+      polling = setInterval(function () {
+        window.mfupdate.state().then(function (st) {
+          var run = (st && st.run) || {};
+          if (run.message) status.textContent = run.message;
+          if (run.state === 'failed') {
+            stopPolling();
+            upd.disabled = false; later.disabled = false; upd.textContent = 'Retry';
+          } else if (run.state === 'idle' && run.step) {
+            stopPolling();
+            later.disabled = false; upd.textContent = 'Done';
+          }
+        }).catch(function () {});
+      }, 1000);
+    });
     var later = el('button', 'mf-up-btn', 'Later');
-    later.addEventListener('click', function () { drop(c); });
+    later.addEventListener('click', function () { stopPolling(); drop(c); });
     row.appendChild(upd); row.appendChild(later);
     var skip = el('button', 'mf-up-skip', 'Skip this version');
     skip.addEventListener('click', function () { window.mfupdate.skip(info.version); drop(c); });
-    c.appendChild(closeBtn(c));
+    c.appendChild(closeBtn(c, stopPolling));
     c.appendChild(el('div', 'mf-up-title', 'Update available'));
     // Show what they’re on: the wordmark carries the ENGINE version (which
     // updates on its own), so without this a user whose engine already reads
@@ -1371,9 +1582,9 @@ const UPDATE_JS = `
     c.appendChild(el('div', 'mf-up-body',
       'MindFlock ' + info.version + ' is available'
       + (info.current && info.current !== info.version
-          ? ' \\u2014 the desktop app you\\u2019re running is ' + info.current : '')
-      + '.'));
-    c.appendChild(row); c.appendChild(skip);
+          ? ' \\u2014 you\\u2019re on ' + info.current : '')
+      + '. Update installs it and restarts — the engine too.'));
+    c.appendChild(status); c.appendChild(row); c.appendChild(skip);
   }
 
   // --- engine update available -------------------------------------------

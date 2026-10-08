@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One-click update of the desktop app and its engine.** The app now downloads
+  a new release in the background, and the **Update** toast installs it and
+  restarts — updating the engine to the same release first (release installs
+  only; a developer checkout is left alone). No more opening GitHub and
+  re-running the installer. On macOS you approve the unverified developer once
+  at first install; updates after that just work (same self-signed identity).
+  Releases now carry `latest*.yml`, blockmaps and a macOS `.zip` for it.
+
 ## [0.7.1] - 2026-10-07
 
 ### Changed

@@ -96,8 +96,8 @@ jobs:
             artifacts: dist/*.AppImage
           - os: windows-latest     # nsis installer
             artifacts: dist/*.exe
-          - os: macos-latest       # dmg
-            artifacts: dist/*.dmg
+          - os: macos-latest       # dmg (downloads) + zip (what auto-update swaps in)
+            artifacts: dist/*.dmg dist/*.zip
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -163,6 +163,16 @@ jobs:
           echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           echo "CSC_NAME=MindFlock Self-Signed" >> "$GITHUB_ENV"
 
+      # Auto-update on macOS (Squirrel.Mac) installs an update only when it is
+      # signed by the SAME identity as the running app. One unsigned release
+      # would strand every installed copy on "update failed", so a tagged
+      # build without the signing secret stops here instead of shipping.
+      - name: Refuse an unsigned macOS release
+        if: matrix.os == 'macos-latest' && github.ref_type == 'tag' && env.CSC_NAME == ''
+        run: |
+          echo "::error::MAC_CSC_LINK is not set — a tagged macOS build must be signed (auto-update needs a stable signature)."
+          exit 1
+
       - name: Build
         env:
           # Sign on macOS only when the step above found the identity (CSC_NAME
@@ -195,8 +205,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release upload "$GITHUB_REF_NAME" \
-            ${{ matrix.artifacts }} ${{ matrix.artifacts }}.sha256 --clobber
+          shopt -s nullglob
+          files=()
+          for f in ${{ matrix.artifacts }}; do files+=("$f" "$f.sha256"); done
+          # latest*.yml (+ the .blockmap files the dmg/zip/exe builds write;
+          # an AppImage embeds its own) are what electron-updater reads to
+          # update an installed app in place.
+          meta=(dist/latest*.yml dist/*.blockmap)
+          if [ ${#meta[@]} -eq 0 ]; then
+            echo "::error::no latest*.yml — auto-update metadata missing"; exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" "${meta[@]}" --clobber
 
       # Dry run: keep the installers on the run so they can be downloaded and
       # actually opened, instead of only proving the build didn't error.
@@ -206,6 +225,11 @@ jobs:
         with:
           name: MindFlock-${{ matrix.os }}
           path: |
-            electron/${{ matrix.artifacts }}
-            electron/${{ matrix.artifacts }}.sha256
+            electron/dist/*.dmg
+            electron/dist/*.zip
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.sha256
+            electron/dist/latest*.yml
+            electron/dist/*.blockmap
           if-no-files-found: error
