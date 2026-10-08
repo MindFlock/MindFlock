@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   devices reach the same ticket at the same moment, the one that marked it
   first keeps it. A device that's off or unreachable never blocks the queue.
 
+- **Settings sync across your devices.** Settings → Security → **Settings
+  sync** keeps ticket sources, GitHub repos and options, notifications, agent
+  limits, budgets, trusted Tailscale accounts and the accent the same on every
+  paired device that turns it on — change one anywhere and the others follow
+  within ~30 s; the latest change wins. Turn it on first on the machine whose
+  settings should lead, then on the others starting from it. Paths, ports, the
+  access token, the IDE and signed-in accounts stay per device. Tokens (GitHub,
+  ticket sources, ntfy) are shared only with devices paired using that
+  device's access token.
+
 ## [0.7.3] - 2026-10-08
 
 ### Added

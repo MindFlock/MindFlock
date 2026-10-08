@@ -95,6 +95,138 @@ function TailnetTrustRows() {
   );
 }
 
+/** GET /api/settings/sync (backend.web.core.settings_sync.status). */
+interface SyncStatus {
+  enabled: boolean;
+  device: string;
+  joined_from: string;
+  devices: {
+    key: string;
+    label: string;
+    syncing: boolean;
+    last_sync: number | null;
+    withheld: string[];
+    error: string;
+  }[];
+}
+
+/** "Settings sync": share the shareable settings with the other devices
+ * (two-way, last edit wins). Turning it on picks where to start from — the
+ * device whose settings everyone takes first. */
+function SettingsSyncRows() {
+  const [st, setSt] = useState<SyncStatus | null>(null);
+  const [from, setFrom] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    api<SyncStatus>("/api/settings/sync")
+      .then((r) => setSt(r || null))
+      .catch(() => setSt(null));
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const set = async (body: { enabled: boolean; from?: string }) => {
+    setBusy(true);
+    try {
+      const r = await api<SyncStatus & { adopted?: string[]; withheld?: string[] }>(
+        "/api/settings/sync",
+        { json: body },
+      );
+      setSt(r || null);
+      if (body.enabled && body.from)
+        toast(
+          "Settings sync on — took " +
+            (r?.adopted?.length || 0) +
+            " settings from " +
+            (st?.devices.find((d) => d.key === body.from)?.label || body.from) +
+            (r?.withheld?.length ? " (tokens withheld — pair with its access token to share them)" : ""),
+        );
+      else toast(body.enabled ? "Settings sync on" : "Settings sync off");
+    } catch (e) {
+      toast("Settings sync: " + (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!st) return null;
+  return (
+    <>
+      <h3 className="set-section-title">Settings sync</h3>
+      <div className="set-row" id="settings-sync-row">
+        <span className="set-label">Share settings with my other devices</span>
+        {st.enabled ? (
+          <div className="settings-sync-on">
+            <ul className="settings-sync-devices">
+              {st.devices.length ? (
+                st.devices.map((d) => (
+                  <li key={d.key}>
+                    <strong>{d.label}</strong>{" "}
+                    <span className="muted">
+                      {d.error
+                        ? d.error
+                        : !d.syncing
+                          ? "sync is off there"
+                          : d.withheld.length
+                            ? "in sync, except tokens (it was paired without this device's access token)"
+                            : "in sync"}
+                    </span>
+                  </li>
+                ))
+              ) : (
+                <li className="muted">No other devices connected right now.</li>
+              )}
+            </ul>
+            <button
+              type="button"
+              className="test-btn"
+              id="settings-sync-off"
+              disabled={busy}
+              onClick={() => void set({ enabled: false })}
+            >
+              Turn off
+            </button>
+          </div>
+        ) : (
+          <div className="settings-sync-off">
+            <select
+              id="settings-sync-from"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              title="Whose settings everyone starts with — pick your longest-used machine"
+            >
+              <option value="">Start from this device's settings</option>
+              {st.devices.map((d) => (
+                <option key={d.key} value={d.key}>
+                  Start from {d.label}'s settings{d.syncing ? " (already syncing)" : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="test-btn"
+              id="settings-sync-on"
+              disabled={busy}
+              onClick={() => void set({ enabled: true, from })}
+            >
+              Turn on
+            </button>
+          </div>
+        )}
+        <span className="set-hint">
+          Ticket sources, GitHub repos, notifications, agent limits, accent and trusted Tailscale
+          accounts stay the same on every device that turns this on — change one anywhere and the
+          others follow within ~30 s (the latest change wins). Paths, ports, the access token, the
+          IDE and signed-in accounts stay per device. Tokens are shared only with devices paired
+          using this device's access token. Turn it on first on the machine whose settings should
+          lead, then on the others starting from it.
+        </span>
+      </div>
+    </>
+  );
+}
+
 export function Security(_: ScreenProps) {
   const s = useSettings();
   const [shown, setShown] = useState(false);
@@ -278,6 +410,7 @@ export function Security(_: ScreenProps) {
           needs this device's access token.
         </span>
       </label>
+      <SettingsSyncRows />
     </>
   );
 }

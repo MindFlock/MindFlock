@@ -297,6 +297,16 @@ def _bearer_from(headers: list) -> Optional[str]:
     return None
 
 
+def presented_token(scope) -> bool:
+    """Whether the request itself carries this device's token (a cookie or a
+    bearer header) — regardless of whether the gate is on. What a route that
+    hands out secrets (settings sync's export) asks: with the gate off any
+    tailnet caller gets through the middleware, but only a token holder may
+    read credentials."""
+    headers = scope.get("headers") or []
+    return any_token_valid(_cookies_from(headers)) or token_valid(_bearer_from(headers))
+
+
 def _query_tokens(query_string: bytes) -> List[str]:
     """Every ``?token=`` value — the shared-link QR carries one per device."""
     if not query_string:

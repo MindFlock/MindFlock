@@ -68937,6 +68937,100 @@ function TailnetTrustRows() {
 		]
 	});
 }
+function SettingsSyncRows() {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [from, setFrom] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = () => api("/api/settings/sync").then((r) => setSt(r || null)).catch(() => setSt(null));
+	(0, import_react.useEffect)(() => {
+		load();
+	}, []);
+	const set = async (body) => {
+		setBusy(true);
+		try {
+			const r = await api("/api/settings/sync", { json: body });
+			setSt(r || null);
+			if (body.enabled && body.from) toast("Settings sync on — took " + (r?.adopted?.length || 0) + " settings from " + (st?.devices.find((d) => d.key === body.from)?.label || body.from) + (r?.withheld?.length ? " (tokens withheld — pair with its access token to share them)" : ""));
+			else toast(body.enabled ? "Settings sync on" : "Settings sync off");
+		} catch (e) {
+			toast("Settings sync: " + e.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!st) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+		className: "set-section-title",
+		children: "Settings sync"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "settings-sync-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Share settings with my other devices"
+			}),
+			st.enabled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "settings-sync-on",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "settings-sync-devices",
+					children: st.devices.length ? st.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: d.label }),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: d.error ? d.error : !d.syncing ? "sync is off there" : d.withheld.length ? "in sync, except tokens (it was paired without this device's access token)" : "in sync"
+						})
+					] }, d.key)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "muted",
+						children: "No other devices connected right now."
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "settings-sync-off",
+					disabled: busy,
+					onClick: () => void set({ enabled: false }),
+					children: "Turn off"
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "settings-sync-off",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "settings-sync-from",
+					value: from,
+					onChange: (e) => setFrom(e.target.value),
+					title: "Whose settings everyone starts with — pick your longest-used machine",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "Start from this device's settings"
+					}), st.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+						value: d.key,
+						children: [
+							"Start from ",
+							d.label,
+							"'s settings",
+							d.syncing ? " (already syncing)" : ""
+						]
+					}, d.key))]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "settings-sync-on",
+					disabled: busy,
+					onClick: () => void set({
+						enabled: true,
+						from
+					}),
+					children: "Turn on"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Ticket sources, GitHub repos, notifications, agent limits, accent and trusted Tailscale accounts stay the same on every device that turns this on — change one anywhere and the others follow within ~30 s (the latest change wins). Paths, ports, the access token, the IDE and signed-in accounts stay per device. Tokens are shared only with devices paired using this device's access token. Turn it on first on the machine whose settings should lead, then on the others starting from it."
+			})
+		]
+	})] });
+}
 function Security(_) {
 	const s = useSettings();
 	const [shown, setShown] = (0, import_react.useState)(false);
@@ -69126,7 +69220,8 @@ function Security(_) {
 					children: "Lets another MindFlock on your Tailscale network show this device's sessions in its sidebar and drive them (terminal, prompts, commits). The controlling device still needs this device's access token."
 				})
 			]
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsSyncRows, {})
 	] });
 }
 //#endregion

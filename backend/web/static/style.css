@@ -1414,7 +1414,26 @@ p.set-hint {
 }
 
 /* Security → access-token reveal row */
+.settings-sync-on,
+.settings-sync-off {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-sync-devices {
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+}
+
 .tailnet-trust-logins {
+  font-size: 13px;
   display: flex;
   flex-direction: column;
   gap: 4px;

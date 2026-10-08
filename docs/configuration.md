@@ -748,6 +748,19 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   no restart. A ticked login's phone has full agent-terminal control, and
   rotating the token does not revoke it: untick the login instead. See
   [web-api.md](web-api.md#authentication).
+- **Settings sync** (Settings → Security → **Settings sync**; state in
+  `settings_sync.json` beside `settings.json`, not a setting itself): keeps the
+  shareable settings identical on every paired device that turns it on —
+  two-way, last edit wins per field, pulled every 30 s. Shared: ticket sources,
+  GitHub options/repos/token, repository branches and Verify options, default
+  agents and launch args, budgets, agent limits, trusted Tailscale accounts,
+  notification rules and ntfy, accent and scroll speed, disabled extensions.
+  Never shared: paths, binary paths, workspace dir, bind/serve mode, the access
+  token and gate mode, remote control, shared link, ingestion autostart, the
+  engine mode/session cap, the local model, platform/IDE commands, signed-in
+  accounts, peer links. Tokens travel only to devices paired with this
+  device's access token. Turning it on "from" another device adopts that
+  device's shareable values first, so the longest-used machine leads.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether
