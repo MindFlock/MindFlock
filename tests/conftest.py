@@ -227,6 +227,23 @@ def _no_tailnet_side_effects(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_pending_pipeline_reconcile():
+    """A synced ``github.*``/``ticketing.*`` change reconciles the ticket
+    pipeline :data:`~backend.web.core.settings_hooks.PIPELINE_DEBOUNCE` (5 s)
+    later, on a timer thread — long enough to outlive the test that scheduled
+    it and land its event inside a later test's bus. Cancel it on the way out.
+    Never imports the module (a test that didn't load it can't have a timer)."""
+    yield
+    hooks = sys.modules.get("backend.web.core.settings_hooks")
+    if hooks is None:
+        return
+    with hooks._TIMER_LOCK:
+        if hooks._pipeline_timer is not None:
+            hooks._pipeline_timer.cancel()
+            hooks._pipeline_timer = None
+
+
+@pytest.fixture(autouse=True)
 def _no_boot_quiet(monkeypatch):
     """Tests run within seconds of importing the server module, which is
     exactly the post-launch quiet window that swallows *_changed events and the

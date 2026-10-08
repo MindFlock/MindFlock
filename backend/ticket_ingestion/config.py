@@ -791,6 +791,12 @@ def _merge_layers(raw: dict) -> dict:
         github["issue_repo_settings"] = {
             k: dict(v) for k, v in _gh.issue_repo_settings.items()
         }
+    if github and not _github_automation_here():
+        # Another of the user's devices runs PR review / issue handling (the
+        # settings above follow the person to every device): a pipeline here
+        # for tickets alone must not review the same PRs again.
+        github["enabled"] = False
+        github["issues_enabled"] = False
 
     # --- engine block (settings override the [mindflock] section) --------------
     eng_enabled = _s.resolve_bool(
@@ -1135,6 +1141,18 @@ def _parse_generic_config(
         engine=engine_cfg,
         ticketing_sources=sources,
     )
+
+
+def _github_automation_here() -> bool:
+    """Whether THIS device runs PR review / issue handling
+    (``settings_hooks.automation_here``: ``github.run_here``, or "only when
+    it's the user's lone device"). A lone device on any error."""
+    try:
+        from backend.web.core import settings_hooks
+
+        return settings_hooks.automation_here()
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:

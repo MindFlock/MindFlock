@@ -109,14 +109,28 @@ def _record_desired_running(on: bool) -> None:
         pass
 
 
+def _automation_here() -> bool:
+    """Whether THIS device runs the GitHub halves (PR review, issue handling).
+    Their settings follow the person to every one of their devices; this
+    device-local answer keeps them from all reviewing the same PRs. A lone
+    device always does (``settings_hooks.automation_here``)."""
+    try:
+        from backend.web.core import settings_hooks
+
+        return settings_hooks.automation_here()
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _pr_review_enabled() -> bool:
     """Whether the automated-PR-review half is switched on: ``github.enabled``
-    (unset counts as on, matching the UI) AND at least one repo to watch."""
+    (unset counts as on, matching the UI) AND at least one repo to watch AND
+    this device is the one that runs it (:func:`_automation_here`)."""
     try:
         from backend.config import settings as _s
 
         gh = _s.load_settings().github
-        return (gh.enabled is not False) and bool(gh.repos)
+        return (gh.enabled is not False) and bool(gh.repos) and _automation_here()
     except Exception:  # noqa: BLE001 — never let a settings read break the gate
         return False
 
@@ -124,12 +138,17 @@ def _pr_review_enabled() -> bool:
 def _issue_handling_enabled() -> bool:
     """Whether the automated issue-handling half is switched on:
     ``github.issues_enabled`` (opt-in — unset counts as OFF, unlike PR review)
-    AND at least one repo in its own ``issue_repos`` list."""
+    AND at least one repo in its own ``issue_repos`` list AND this device is
+    the one that runs it (:func:`_automation_here`)."""
     try:
         from backend.config import settings as _s
 
         gh = _s.load_settings().github
-        return (gh.issues_enabled is True) and bool(gh.issue_repo_list())
+        return (
+            (gh.issues_enabled is True)
+            and bool(gh.issue_repo_list())
+            and _automation_here()
+        )
     except Exception:  # noqa: BLE001 — never let a settings read break the gate
         return False
 
@@ -528,6 +547,23 @@ class TicketIngestionAddon(Addon):
             ).start()
 
         self._unsub_toggle = ctx.subscribe("addon.settings.github_toggled", _on_toggle)
+
+        # Joining or leaving a group of devices can flip whether THIS device
+        # runs the GitHub halves (github.run_here unset = on only when alone)
+        # without any settings save — reconcile when that answer moved.
+        self._automation = _automation_here()
+
+        def _on_devices(_envelope: dict) -> None:
+            now = _automation_here()
+            if now == self._automation:
+                return
+            self._automation = now
+            _on_toggle(_envelope)
+
+        self._unsub_devices = [
+            ctx.subscribe(name, _on_devices)
+            for name in ("device.joined", "device.removed")
+        ]
 
     # --- toggle → process reconciliation ----------------------------------- #
     @staticmethod

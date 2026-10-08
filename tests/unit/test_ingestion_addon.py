@@ -96,6 +96,100 @@ class TestIssueHandlingEnabled:
         assert ti._issue_handling_enabled() is False
 
 
+class TestAutomationHere:
+    """PR review / issue handling settings follow the person to every one of
+    their devices; ``github.run_here`` (device-local) — or, unset, "only when
+    this is a lone device" — keeps them all from reviewing the same PRs."""
+
+    @staticmethod
+    def _fleet(monkeypatch, n):
+        from backend.web.core import fleet
+
+        monkeypatch.setattr(fleet, "in_fleet", lambda: n > 0)
+        monkeypatch.setattr(
+            fleet, "live_members", lambda: {"d%d" % i: {} for i in range(n)}
+        )
+
+    def test_a_lone_device_behaves_as_before(self):
+        S.update_settings(
+            github={"repos": ["o/r"], "issues_enabled": True, "issue_repos": ["o/r"]}
+        )
+        assert ti._pr_review_enabled() is True
+        assert ti._issue_handling_enabled() is True
+
+    def test_one_of_several_devices_does_not_unless_chosen(self, monkeypatch):
+        self._fleet(monkeypatch, 2)
+        S.update_settings(
+            github={"repos": ["o/r"], "issues_enabled": True, "issue_repos": ["o/r"]}
+        )
+        assert ti._pr_review_enabled() is False
+        assert ti._issue_handling_enabled() is False
+        S.update_settings(github={"run_here": True})
+        assert ti._pr_review_enabled() is True
+        assert ti._issue_handling_enabled() is True
+
+    def test_switched_off_here(self):
+        S.update_settings(github={"repos": ["o/r"], "run_here": False})
+        assert ti._pr_review_enabled() is False
+
+    def test_synced_settings_never_start_a_pipeline_on_another_device(
+        self, monkeypatch
+    ):
+        """The regression: the rig adopts github.repos + a ticket source from
+        the laptop and the hook reconciles — nothing may start there."""
+        self._fleet(monkeypatch, 2)
+        S.update_settings(github={"repos": ["o/r"]})
+        S.set_ticketing_sources([{"id": "j", "provider": "jira"}])
+        addon = ti.TicketIngestionAddon()
+        calls = []
+        monkeypatch.setattr(addon.ctrl, "_own_running", lambda: False)
+        monkeypatch.setattr(addon.ctrl, "is_running", lambda: False)
+        monkeypatch.setattr(addon.ctrl, "start", lambda: calls.append("start"))
+        addon._reconcile_process()
+        assert calls == []
+
+    def test_the_pipeline_itself_leaves_the_github_halves_off(self, monkeypatch):
+        """A pipeline started here for tickets alone must not run the PR or
+        issue loops either (they are wired from the same synced settings)."""
+        from backend.ticket_ingestion.config import _merge_layers
+
+        S.update_settings(
+            github={"repos": ["o/r"], "issues_enabled": True, "issue_repos": ["o/r"]}
+        )
+        gh = _merge_layers({}).get("github", {})
+        assert gh.get("enabled", True) is not False and gh["issues_enabled"] is True
+        self._fleet(monkeypatch, 2)
+        gh = _merge_layers({}).get("github", {})
+        assert gh["enabled"] is False and gh["issues_enabled"] is False
+
+    def test_joining_devices_reconciles_when_the_answer_moved(self, monkeypatch):
+        import asyncio
+
+        subs = {}
+
+        class Ctx:
+            def subscribe(self, name, cb):
+                subs[name] = cb
+                return lambda: None
+
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: False)
+        )
+        addon = ti.TicketIngestionAddon()
+        reconciled = []
+        monkeypatch.setattr(addon, "_reconcile_process", lambda: reconciled.append(1))
+        asyncio.run(addon.on_startup(Ctx()))
+        assert {"device.joined", "device.removed"} <= set(subs)
+        subs["device.joined"]({"event": "device.joined"})  # still alone
+        self._fleet(monkeypatch, 2)
+        subs["device.joined"]({"event": "device.joined"})
+        subs["device.joined"]({"event": "device.joined"})  # no change again
+        import time
+
+        time.sleep(0.1)
+        assert reconciled == [1]
+
+
 class TestTicketingConfigured:
     def test_false_when_no_source(self):
         assert ti._ticketing_configured() is False

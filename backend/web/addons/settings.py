@@ -18,7 +18,7 @@ import json
 import os
 import re
 import shlex
-import shutil
+import shutil  # noqa: F401 — tests patch settings_addon.shutil.which (shared module)
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -29,6 +29,7 @@ from backend import doctor, providers
 from backend.config import settings as settings_store
 from backend.providers import config as provider_config
 from backend.web.core import mobile_announce, restart, shared_link
+from backend.web.core import settings_hooks as _settings_hooks
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -111,29 +112,11 @@ def _masked_view() -> dict:
     return d
 
 
-def _installed_path(binary: str) -> str:
-    """Resolve a CLI ``binary`` to the executable path in effect, or ``""``.
-
-    An explicit path override (contains ``os.sep``) is used directly when it is
-    an executable file; otherwise the name is looked up on ``$PATH``. An empty
-    ``binary`` (or an unresolved one) yields ``""`` — i.e. "not installed"."""
-    if not binary:
-        return ""
-    if os.sep in binary:  # explicit path override — check the file directly
-        return binary if (os.path.isfile(binary) and os.access(binary, os.X_OK)) else ""
-    return shutil.which(binary) or ""
-
-
-def _provider_installed(name: str) -> bool:
-    """Whether provider ``name``'s CLI binary is present (same check as the
-    Settings → Agent providers status list). Never raises."""
-    try:
-        p = providers.resolve(name)
-        cfg = getattr(p, "cfg", None)
-        binary = provider_config.resolve_provider_binary(getattr(p, "name", name), cfg)
-        return bool(_installed_path(binary))
-    except Exception:  # noqa: BLE001 — a probe failure is "not installed", not a crash
-        return False
+# The "is this CLI installed" probes live in settings_hooks now (settings sync
+# asks too, before adopting a default agent); these names stay because the
+# routes below — and their tests — patch them here.
+_installed_path = _settings_hooks.installed_path
+_provider_installed = _settings_hooks.provider_installed
 
 
 def _apply_post(payload: dict) -> None:
@@ -202,13 +185,59 @@ def _apply_post(payload: dict) -> None:
 
 def _stamp_for_sync() -> None:
     """Stamp a just-saved shared field now, rather than at the next sync pass,
-    so "last edit wins" orders by when the user actually changed it."""
+    so "last edit wins" orders by when the user actually changed it — and
+    nudge the user's other devices to pull it now."""
     try:
         from backend.web.core import settings_sync
 
-        settings_sync.scan_local()
+        settings_sync.local_change()
     except Exception:  # noqa: BLE001 — a settings save must never fail on this
         pass
+
+
+def _fleet_key_presented(request: Request) -> bool:
+    """Whether the request's bearer is this fleet's key (member-to-member
+    routes). Not the device token: those routes are for devices, and a
+    browser never calls them. Never raises."""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return False
+    try:
+        from backend.web.core import fleet as _fleet
+
+        return bool(_fleet.key_valid(auth[7:].strip()))
+    except Exception:  # noqa: BLE001 — no fleet = no member
+        return False
+
+
+def _fleet_401(error: str) -> dict:
+    """A member route's 401 body: the error plus this device's fleet id and
+    epoch (non-secret), so a calling device can tell "I am behind" from "it is
+    behind" (backend.web.core.fleet.unauthorized_body). Never raises."""
+    try:
+        from backend.web.core import fleet as _fleet
+
+        return {**_fleet.unauthorized_body(), "error": error}
+    except Exception:  # noqa: BLE001 — no fleet store: just the error
+        return {"error": error}
+
+
+def _prefs_fields() -> Tuple[str, ...]:
+    import dataclasses
+
+    return tuple(f.name for f in dataclasses.fields(settings_store.PrefsSettings))
+
+
+def _prefs_view() -> dict:
+    """The ``prefs`` group with EVERY field present (defaults filled)."""
+    import dataclasses
+
+    settings_store.invalidate()
+    prefs = settings_store.load_settings().prefs
+    return {
+        f.name: json.loads(json.dumps(getattr(prefs, f.name)))
+        for f in dataclasses.fields(prefs)
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -556,18 +585,48 @@ class SettingsAddon(Addon):
             return JSONResponse({"settings": _masked_view()})
 
         @router.get("/settings/auth-token")
-        def get_auth_token() -> JSONResponse:
+        def get_auth_token(request: Request) -> JSONResponse:
             """This device's access token in the clear — what another MindFlock
             device enters to remote-control this one, and what the browser
-            sign-in page asks for. Serving it behind the auth gate is safe: any
-            caller that reached this route either already presented the token
-            (the cookie IS the token) or the gate is off, in which case the
-            whole server is open anyway. Generates + persists a token on first
-            use so the Security screen always has one to show."""
+            sign-in page asks for. Generates + persists a token on first use so
+            the Security screen always has one to show.
+
+            Only to a caller that already holds it (this device's OWN token as
+            cookie or bearer), to this machine itself (unproxied, not relayed),
+            or — gate off — to any caller that isn't another MindFlock relaying
+            (the whole server is open then anyway). NOT to a caller that got
+            past the gate with the fleet key: a member (or a phone signed in
+            with the devices' key) must not be able to harvest every device's
+            own token, which would outlive its removal from the group."""
             from backend.web.core import auth as web_auth
 
+            scope = request.scope
+            headers = scope.get("headers") or []
+            relayed = any(k == web_auth._REMOTE_HEADER for k, _ in headers)
+            try:
+                own = any(
+                    web_auth.own_token_valid(c)
+                    for c in list(web_auth._cookies_from(headers))[
+                        : web_auth._MAX_CANDIDATES
+                    ]
+                ) or web_auth.own_token_valid(web_auth._bearer_from(headers))
+                local = not relayed and web_auth._from_this_machine(scope)
+                open_gate = not relayed and not web_auth.auth_enabled()
+            except Exception:  # noqa: BLE001 — fail closed
+                own = local = open_gate = False
+            if own or local or open_gate:
+                return JSONResponse(
+                    {
+                        "token": web_auth.get_token(),
+                        "auth_enabled": web_auth.auth_enabled(),
+                    }
+                )
             return JSONResponse(
-                {"token": web_auth.get_token(), "auth_enabled": web_auth.auth_enabled()}
+                {
+                    "token": None,
+                    "auth_enabled": web_auth.auth_enabled(),
+                    "reason": "signed in with your devices' key",
+                }
             )
 
         @router.get("/settings/tailnet-trust")
@@ -582,8 +641,10 @@ class SettingsAddon(Addon):
 
         @router.get("/settings/sync")
         def get_settings_sync() -> JSONResponse:
-            """Settings → Security → Settings sync: on/off, where this device
-            started from, and each connected device's last pass."""
+            """Settings → Devices → Settings sync: on/off, where this device
+            started from, each fleet device's last pass, what's pinned here,
+            what's held back (an agent CLI not installed) and the pinnable
+            choices."""
             from backend.web.core import settings_sync
 
             return JSONResponse(settings_sync.status())
@@ -591,10 +652,10 @@ class SettingsAddon(Addon):
         @router.post("/settings/sync")
         async def post_settings_sync(payload: dict, request: Request) -> JSONResponse:
             """``{enabled: true, from?: <device key>}`` turns sync on — from
-            THIS device (``from`` empty) or by first adopting a connected
-            device's shareable settings; ``{enabled: false}`` turns it off.
+            THIS device (``from`` empty) or by first adopting one of your
+            devices' shareable settings; ``{enabled: false}`` turns it off.
             This device's own choice: refused for a request relayed by
-            another MindFlock."""
+            another MindFlock. 409 when this device isn't in a fleet yet."""
             from backend.web.core import remote as _remote
             from backend.web.core import settings_sync
 
@@ -605,27 +666,125 @@ class SettingsAddon(Addon):
                 )
             payload = payload or {}
             if not payload.get("enabled"):
-                settings_sync.disable()
-                return JSONResponse(settings_sync.status())
+                await asyncio.to_thread(settings_sync.disable)
+                return JSONResponse(await asyncio.to_thread(settings_sync.status))
             try:
                 result = await settings_sync.enable(str(payload.get("from") or ""))
             except LookupError as err:
                 return JSONResponse({"error": str(err)}, status_code=409)
-            return JSONResponse({**settings_sync.status(), **result})
+            status = await asyncio.to_thread(settings_sync.status)
+            return JSONResponse({**status, **result})
+
+        @router.post("/settings/sync/now")
+        async def post_settings_sync_now(request: Request) -> JSONResponse:
+            """Run one sync pass now (the "Sync now" button) and return the
+            status plus what was adopted. This device's own button: refused
+            for a relayed request."""
+            from backend.web.core import remote as _remote
+            from backend.web.core import settings_sync
+
+            if _remote.from_remote(request):
+                return JSONResponse(
+                    {"error": "settings sync can only be run on this device"},
+                    status_code=403,
+                )
+            adopted = await settings_sync.sync_once()
+            status = await asyncio.to_thread(settings_sync.status)
+            return JSONResponse({**status, "adopted": adopted})
+
+        @router.post("/settings/sync/pin")
+        def post_settings_sync_pin(payload: dict, request: Request) -> JSONResponse:
+            """``{path, pinned}`` — keep ``path`` (``group.field`` or
+            ``store:<name>``) different on this device, or stop. Un-pinning
+            lets the fleet's value win on the next pass."""
+            from backend.web.core import remote as _remote
+            from backend.web.core import settings_sync
+
+            if _remote.from_remote(request):
+                return JSONResponse(
+                    {"error": "settings sync can only be changed on this device"},
+                    status_code=403,
+                )
+            payload = payload or {}
+            try:
+                settings_sync.set_pinned(
+                    str(payload.get("path") or ""), bool(payload.get("pinned"))
+                )
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            return JSONResponse(settings_sync.status())
+
+        @router.post("/settings/sync/nudge")
+        async def post_settings_sync_nudge(request: Request) -> JSONResponse:
+            """Another of your devices changed a shared setting: pull from it
+            (and the rest) in a second rather than at the next pass. Only a
+            fleet member may ask — the bearer must be the fleet key."""
+            from backend.web.core import settings_sync
+
+            if not _fleet_key_presented(request):
+                return JSONResponse(
+                    _fleet_401("only one of your devices can ask this"),
+                    status_code=401,
+                )
+            return JSONResponse({"ok": True, "scheduled": settings_sync.nudged()})
 
         @router.get("/settings/sync/export")
         def get_settings_sync_export(request: Request) -> JSONResponse:
             """This device's shareable settings + their stamps, for the user's
-            other devices. Credential-bearing fields only when the request
-            itself carries this device's access token (a bearer header or
-            the sign-in cookie) — reaching the route with the gate off is
-            not enough (backend.web.core.settings_sync)."""
+            other devices. 401 unless the request itself carries a credential
+            (the fleet key, or this device's token — a bearer header or the
+            sign-in cookie): with the gate off any tailnet caller reaches the
+            route, and the export holds secrets (backend.web.core.settings_sync)."""
             from backend.web.core import auth as web_auth
             from backend.web.core import settings_sync
 
-            return JSONResponse(
-                settings_sync.export(web_auth.presented_token(request.scope))
-            )
+            if not web_auth.presented_token(request.scope):
+                return JSONResponse(
+                    _fleet_401("present this device's token or your devices' key"),
+                    status_code=401,
+                )
+            try:
+                return JSONResponse(settings_sync.export())
+            except settings_store.SettingsUnreadable:
+                # Never an empty export: the other devices would read it as
+                # "everything was deleted here".
+                return JSONResponse(
+                    {"error": settings_sync.UNREADABLE}, status_code=503
+                )
+
+        # --- UI preferences that follow the person ------------------------ #
+        @router.get("/prefs")
+        def get_prefs() -> JSONResponse:
+            """Every ``prefs`` field (unset ones at their defaults) — the
+            browser's localStorage is a cache of this, so a keymap or prompt
+            preset set on one device shows up on the others."""
+            return JSONResponse(_prefs_view())
+
+        @router.post("/prefs")
+        def post_prefs(payload: dict) -> JSONResponse:
+            """``{field: value, …}`` (a partial update; ``null`` clears a
+            field). Unknown fields are ignored. Stamped for sync at once."""
+            known = _prefs_fields()
+            clean = {k: v for k, v in (payload or {}).items() if k in known}
+            if clean:
+                try:
+                    settings_store.update_settings(prefs=clean)
+                except Exception as err:  # noqa: BLE001
+                    return JSONResponse({"error": str(err)}, status_code=400)
+                _stamp_for_sync()
+                # Every other browser on this server (the desktop app beside a
+                # tab) keeps its own localStorage copy: tell them to re-pull,
+                # or the next whole-list save from a stale one drops this
+                # write (and sync spreads the drop as a delete).
+                try:
+                    from backend.web.core import settings_hooks
+
+                    settings_hooks.after_settings_change(
+                        ["prefs.%s" % k for k in clean], source=""
+                    )
+                except Exception:  # noqa: BLE001 — a save never fails on this
+                    pass
+            return JSONResponse(_prefs_view())
 
         @router.post("/settings/auth-token/rotate")
         def rotate_auth_token() -> JSONResponse:
@@ -674,13 +833,21 @@ class SettingsAddon(Addon):
             # enabled is Optional[bool]; the UI treats unset/None as "on" for
             # PR review but as "off" for issue handling (opt-in), so compare
             # the normalized on/off states (not raw values).
-            def _toggle_states() -> tuple[bool, bool]:
+            # github.run_here (device-local: does THIS device run them) gates
+            # both halves the same way, so its flip reconciles too.
+            def _toggle_states() -> tuple[bool, bool, bool]:
+                from backend.web.core import settings_hooks
+
                 gh = settings_store.load_settings().github
-                return (gh.enabled is not False, gh.issues_enabled is True)
+                return (
+                    gh.enabled is not False,
+                    gh.issues_enabled is True,
+                    settings_hooks.automation_here(),
+                )
 
             gh_in = payload.get("github")
             watch_toggle = isinstance(gh_in, dict) and (
-                "enabled" in gh_in or "issues_enabled" in gh_in
+                "enabled" in gh_in or "issues_enabled" in gh_in or "run_here" in gh_in
             )
             before = _toggle_states() if watch_toggle else None
 
@@ -1428,6 +1595,7 @@ class SettingsAddon(Addon):
             body["name"] = name
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
+            _stamp_for_sync()  # custom providers sync across your devices
             p = providers.get(name)
             return JSONResponse(
                 {
@@ -1456,6 +1624,7 @@ class SettingsAddon(Addon):
                 return JSONResponse({"error": err}, status_code=400)
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
+            _stamp_for_sync()
             p = providers.get(name)
             return JSONResponse(
                 {
@@ -1480,6 +1649,7 @@ class SettingsAddon(Addon):
                 except OSError as err:
                     return JSONResponse({"error": str(err)}, status_code=500)
             providers.rebuild_registry()
+            _stamp_for_sync()
             return JSONResponse({"deleted": existed})
 
         return router
