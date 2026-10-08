@@ -140,8 +140,10 @@ D_TICKET = (
 D_TICKETS = (
     "List tickets from the Intake → Tickets sources (cached, so cheap): "
     "{source, id, slug, name, url, state, session, has_session, eligible, "
-    "reasons, assignee}. query matches slug, id or name; source narrows to "
-    "one source; startable_only drops tickets that already have a session. "
+    "reasons, assignee, elsewhere}; elsewhere names another of the user's "
+    "devices already working it. query matches slug, id or name; source "
+    "narrows to one source; startable_only drops tickets that already have a "
+    "session, here or on another device. "
     "Start one with spawn_ticket_session."
 )
 
@@ -825,13 +827,21 @@ class ShipTools:
                 or query in str(t.get("name") or "").lower()
             ]
         if args.get("startable_only"):
-            rows = [t for t in rows if not t.get("has_session")]
+            # Started here, or already held by another of the user's devices.
+            rows = [
+                t for t in rows if not t.get("has_session") and not t.get("elsewhere")
+            ]
         limit = int(args.get("limit") or 30)
         out: Dict[str, Any] = {
             "tickets": [
                 dict(
                     {k: t.get(k) for k in _TICKET_KEYS},
                     state=t.get("bucket"),
+                    **(
+                        {"elsewhere": (t.get("elsewhere") or {}).get("label")}
+                        if t.get("elsewhere")
+                        else {}
+                    ),
                 )
                 for t in rows[:limit]
             ],

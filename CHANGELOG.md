@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **One ticket, one device.** With several machines paired for remote
+  control, a ticket another of your devices is already working (or starting,
+  or holding in a team run) is no longer started again: Intake shows it as
+  *running on <device>*, **Begin work** refuses, ticket ingestion backs off,
+  team runs leave it out and the agents' `list_tickets` skips it. When two
+  devices reach the same ticket at the same moment, the one that marked it
+  first keeps it. A device that's off or unreachable never blocks the queue.
+
 ## [0.7.3] - 2026-10-08
 
 ### Added

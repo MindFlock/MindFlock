@@ -62,6 +62,7 @@ from backend.ticket_ingestion.state import (
     record_processed_issue,
     record_processed_pr,
     record_processed_story,
+    remove_in_flight_story,
     remove_pending_story,
     update_processed_story,
 )
@@ -72,6 +73,33 @@ from backend.ticket_ingestion.workspace_cleanup import prune_stale_workspaces
 _logger = logging.getLogger(__name__)
 
 _STATE_DIR = Path(".")
+
+
+def _fleet_holder(slug: str, since: float) -> str:
+    """Why another of the user's devices holds ``slug`` (``""`` when none),
+    asked of this machine's own MindFlock server, which knows the paired
+    devices (``GET /api/tickets/fleet-holder``). Fails open: no server, an
+    old one, or an error means "nobody" — the local guards still apply."""
+    port = (os.environ.get("MINDFLOCK_SERVER_PORT") or "").strip()
+    if not port.isdigit():
+        return ""
+    from urllib.parse import urlencode
+
+    from backend import client
+
+    try:
+        body = client.get(
+            client.base_url("127.0.0.1", int(port)),
+            "/api/tickets/fleet-holder?" + urlencode({"slug": slug, "since": since}),
+            timeout=15.0,
+        )
+    except Exception:  # noqa: BLE001 — fail open
+        return ""
+    if isinstance(body, dict) and body.get("holder"):
+        return str(body.get("reason") or "held by another device")
+    return ""
+
+
 # Activity beacon for the web UI's sidebar bars: distinguishes "running but
 # idle" (waiting for work) from "actively handling a ticket/PR". Lives next to
 # the singleton lock in the repo root; read by the backend.web ingestion addon.
@@ -790,15 +818,28 @@ class PipelineOrchestrator:
 
         # In-flight marker (guard 2): from here on, concurrent scans and
         # duplicate dequeues treat this story as processed.
+        marked_at = datetime.now(timezone.utc)
         record_processed_story(
             _STATE_DIR,
             ProcessingRecord(
                 story_id=story.slug,
                 branch=story.slug,
                 status="in_flight",
-                processed_at=datetime.now(timezone.utc),
+                processed_at=marked_at,
             ),
         )
+
+        # Guard 3: another of the user's devices may hold it (fleet_claims).
+        # Asked AFTER our own marker is down, with its time, so of two devices
+        # racing for one ticket exactly one backs off. Nothing is recorded on a
+        # back-off: the ticket is the other device's, not done here.
+        elsewhere = await asyncio.to_thread(
+            _fleet_holder, story.slug, marked_at.timestamp()
+        )
+        if elsewhere:
+            remove_in_flight_story(_STATE_DIR, story.slug)
+            _logger.info("Not launching %s: %s.", story.slug, elsewhere)
+            return
 
         try:
             validation = self._validator.validate(story)

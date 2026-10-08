@@ -129,6 +129,7 @@ from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
 from backend.web.core import tailnet_trust as _tailnet_trust
+from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
@@ -12497,8 +12498,60 @@ async def assigned_tickets(fresh: bool = False) -> JSONResponse:
         t["has_session"] = t.get("session") in ENGINE.instances or _pending_has(
             t.get("session")
         )
+    await _annotate_fleet_holders(data.get("tickets", []))
     await _annotate_workspaces(data.get("tickets", []), _ticket_workspace_args)
     return JSONResponse(data)
+
+
+async def _annotate_fleet_holders(tickets: list) -> None:
+    """Mark rows another of the user's devices already holds (fleet_claims):
+    ``elsewhere`` names the device, the reason chip says so, and the row is no
+    longer eligible — the queue view and the agent tools skip it."""
+    try:
+        fleet = await _fleet_claims.fleet_claims()
+    except Exception:  # noqa: BLE001 — the listing never fails on a peer
+        return
+    if not fleet:
+        return
+    for t in tickets:
+        if t.get("has_session"):
+            continue
+        claims = fleet.get(str(t.get("session") or ""))
+        if not claims:
+            continue
+        claim = sorted(claims, key=lambda c: c["kind"] != "session")[0]
+        t["elsewhere"] = {
+            "device": claim["device"],
+            "label": claim["label"],
+            "kind": claim["kind"],
+        }
+        reason = _fleet_claims.describe(claim)
+        t["reasons"] = [reason, *[r for r in (t.get("reasons") or []) if r != reason]]
+        t["eligible"] = False
+
+
+@app.get("/api/tickets/claims")
+def ticket_claims() -> JSONResponse:
+    """The tickets THIS device holds — what another of the user's devices asks
+    before starting one (backend.web.core.fleet_claims)."""
+    return JSONResponse(_fleet_claims.claims_json())
+
+
+@app.get("/api/tickets/fleet-holder")
+async def ticket_fleet_holder(
+    request: Request, slug: str, since: float = 0.0
+) -> JSONResponse:
+    """Which other device holds ``slug`` (``{"holder": null}`` when none) —
+    the ingestion pipeline's pre-launch check, asked of its own server. With
+    ``since`` (this device's own in_flight marker time) only an older peer
+    marker counts, which is what breaks a simultaneous start. Local callers
+    only: a device relaying another's question would make it two hops."""
+    if _remote.from_remote(request):
+        return JSONResponse({"error": "local callers only"}, status_code=403)
+    claim = await _fleet_claims.holder(slug, own_since=since or None, fresh=True)
+    return JSONResponse(
+        {"holder": claim, "reason": _fleet_claims.describe(claim) if claim else ""}
+    )
 
 
 @app.post("/api/tickets/start")
