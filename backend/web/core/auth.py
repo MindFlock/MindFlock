@@ -26,7 +26,8 @@ for the phone.
   valid ``?token=`` triggers a redirect that sets the cookie and strips the
   token from the URL so it doesn't linger in history. A browser navigation with
   no valid token gets a tiny inline login page; an API/websocket call gets a
-  401 / close.
+  401 / close. Untagged devices owned by a trusted Tailscale login skip the
+  token entirely (opt-in, :mod:`backend.web.core.tailnet_trust`).
 * **One origin, several servers.** The shared phone link
   (:mod:`backend.web.core.shared_link`) is one hostname answered by whichever
   of the user's devices is up, each with its OWN token. So the browser keeps a
@@ -540,6 +541,14 @@ class AuthMiddleware:
         bearer = _bearer_from(headers)
 
         if any_token_valid(cookies) or token_valid(bearer):
+            await self.app(scope, receive, send)
+            return
+
+        # The user's own Tailscale devices (Settings → Security → Trusted
+        # Tailscale accounts) need no token — see backend.web.core.tailnet_trust.
+        from backend.web.core import tailnet_trust as _tailnet_trust
+
+        if await _tailnet_trust.request_trusted(scope):
             await self.app(scope, receive, send)
             return
 

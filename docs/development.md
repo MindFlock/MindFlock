@@ -300,6 +300,12 @@ refresher re-runs suites automatically.
 | Integration | `test_claude_runner` (async ClaudeCodeRunner) |
 | Frontend (vitest) | `frontend/src/__tests__/*.test.ts` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel, sessionLabel, shell) |
 
+`test_tailnet_trust` stubs `tailnet_trust._whois_uncached` and
+`_proc_socket_uid` (no real `tailscale` or `/proc` lookups), and clears the
+module-level whois cache between tests with `tailnet_trust.clear_cache()`. A
+new test that exercises the auth gate with trusted logins set must do the
+same, or a cached answer from an earlier test leaks in.
+
 The launch-parity golden files pin the workspace launcher byte-for-byte
 (backend rolling, markers, resume loop) — update them deliberately when changing
 launch behavior.

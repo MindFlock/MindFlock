@@ -3034,6 +3034,18 @@ A few screens got quieter:
   device at once. The browser you regenerate from stays signed in (its cookie
   is re-issued). Unavailable (409) when `MINDFLOCK_AUTH_TOKEN` pins the token —
   change the env var instead.
+  **Trusted Tailscale accounts** lists one checkbox per Tailscale login
+  that owns an untagged device on the tailnet
+  (`GET /api/settings/tailnet-trust`). A ticked login's own phones and
+  laptops open this device with no token (`general.tailnet_trusted_logins`,
+  empty = off). Tagged devices and devices shared in from other accounts
+  still sign in. Off Linux the hint notes that shared-link requests (through
+  `tailscale serve`) still ask for the token. A ticked login that no longer
+  owns a device stays listed so it can be unticked. **(this device's
+  owner)** marks this node's own login (shown only when this node is
+  untagged). With Tailscale stopped and nothing trusted, the row reads
+  *Tailscale isn't running on this device.* Regenerating the token does not
+  sign out trusted accounts: untick the login to revoke them.
 - **Remote devices** — when `general.remote_control` is on, other MindFlock
   servers on your tailnet appear as sidebar device groups
   (sessions namespaced `<device>::<title>`); pair/unpair via

@@ -559,6 +559,16 @@ class SettingsAddon(Addon):
                 {"token": web_auth.get_token(), "auth_enabled": web_auth.auth_enabled()}
             )
 
+        @router.get("/settings/tailnet-trust")
+        def get_tailnet_trust() -> JSONResponse:
+            """Settings → Security's "Trusted Tailscale accounts": the logins
+            that own untagged devices on this tailnet (the choices), this
+            node's own, and whether shared-link requests can be vouched for
+            here (:func:`backend.web.core.tailnet_trust.status`)."""
+            from backend.web.core import tailnet_trust
+
+            return JSONResponse(tailnet_trust.status())
+
         @router.post("/settings/auth-token/rotate")
         def rotate_auth_token() -> JSONResponse:
             """Invalidate the current access token and mint a fresh one

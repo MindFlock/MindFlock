@@ -68865,6 +68865,68 @@ async function fetchAuthToken() {
 	if (authTokenCache === null) authTokenCache = (await api("/api/settings/auth-token") || {}).token || "";
 	return authTokenCache;
 }
+function TailnetTrustRows() {
+	const s = useSettings();
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const stored = s.get("general", "tailnet_trusted_logins");
+	const trusted = Array.isArray(stored) ? stored : [];
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/settings/tailnet-trust").then((r) => live && setInfo(r || null)).catch(() => live && setInfo(null));
+		return () => {
+			live = false;
+		};
+	}, []);
+	const choices = [.../* @__PURE__ */ new Set([...info?.logins || [], ...trusted])].sort();
+	const toggle = (login, on) => {
+		const next = new Set(trusted);
+		if (on) next.add(login);
+		else next.delete(login);
+		s.saveField("general", "tailnet_trusted_logins", [...next]);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "tailnet-trust-row",
+		title: "Requests from these Tailscale accounts' own (untagged) devices need no access token.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Trusted Tailscale accounts"
+			}),
+			info === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: "Checking Tailscale…"
+			}) : !info.available && !choices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				id: "tailnet-trust-unavailable",
+				children: "Tailscale isn't running on this device."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "tailnet-trust-logins",
+				children: choices.map((login) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							"data-login": login,
+							checked: trusted.includes(login),
+							onChange: (e) => toggle(login, e.target.checked)
+						}),
+						login,
+						login === info.self_login ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: " (this device's owner)"
+						}) : null
+					]
+				}, login))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				id: "tailnet-trust-hint",
+				children: ["Your own phone and laptops, signed in to Tailscale as a ticked account, open MindFlock here without the access token. Tagged devices and devices shared in from other accounts still need it.", info && !info.shared_link_supported ? " On this OS that only covers this device's own address — requests through the shared phone link still ask for the token." : ""]
+			})
+		]
+	});
+}
 function Security(_) {
 	const s = useSettings();
 	const [shown, setShown] = (0, import_react.useState)(false);
@@ -69023,6 +69085,7 @@ function Security(_) {
 				})
 			]
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailnetTrustRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Remote control"

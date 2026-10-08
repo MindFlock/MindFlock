@@ -1874,6 +1874,22 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   URL). A browser navigation without a token gets a tiny inline login page; an
   API call gets `401`; a websocket is closed with code **4401** (the SPA/mobile
   head reload to the login page on 401/4401).
+- **Trusted Tailscale accounts (opt-in).** When
+  `general.tailnet_trusted_logins` is non-empty, a request whose tailnet peer
+  `tailscale whois` reports as an **untagged** node owned by a listed login
+  skips the token — HTTP and websockets alike (`web/core/tailnet_trust.py`).
+  Tagged nodes, nodes shared in from another account, other accounts' nodes,
+  non-tailnet addresses and `X-MindFlock-Remote` relays never qualify. A
+  direct tailnet peer that carries `X-Forwarded-For`, `Forwarded` or
+  `X-Real-IP` is refused. Requests through `tailscale serve` (the shared phone
+  link) arrive on loopback with `X-Forwarded-For`. Only the last hop is
+  believed, and only on Linux, when `/proc/net/tcp{,6}` shows the client-side
+  loopback socket ESTABLISHED and owned by root (tailscaled) or the server's
+  own uid. Elsewhere those requests still need the token. Whois answers,
+  misses included, are cached 60 s per IP. The Origin and Host checks below
+  still run first. **Rotating the token does not sign these devices out.**
+  Revoke by unticking the login, or by removing or tagging the device in
+  Tailscale (up to 60 s to apply).
 - **Several devices, one origin.** The shared phone link is one hostname
   answered by any of your devices, each with its own token. So every sign-in
   sets `mf_auth_<12 hex of sha256(token)>` beside the plain `mf_auth`, and the
@@ -1905,7 +1921,8 @@ run **before everything else**, public paths included: a cross-site
 |---|---|---|
 | POST | `/api/auth` | Body `{token}` — validate + set the `mf_auth` cookie (login-page target; always allowed through the gate). `200 {ok}` or `401`; never echoes the token |
 | GET | `/api/settings/auth-token` | This device's token in the clear (behind the gate) for Settings → Security |
-| POST | `/api/settings/auth-token/rotate` | Mint + persist a NEW token (compromise recovery): every issued cookie/QR/paired device is invalidated; the response re-issues the caller's cookie. `409` when `MINDFLOCK_AUTH_TOKEN` pins the token; `500` when persisting the new token fails (the old token stays valid) |
+| GET | `/api/settings/tailnet-trust` | Settings → Security's **Trusted Tailscale accounts**: `{available, self_login, self_tagged, logins, shared_link_supported, trusted}` — `logins` are the Tailscale logins owning at least one UNTAGGED node on the tailnet (the choices); `trusted` mirrors `general.tailnet_trusted_logins`; `self_login` is `""` when this node is tagged; `available:false` = no `tailscale` binary or the daemon is stopped. Runs `tailscale status --json` on every call (no cache). The list is saved through `POST /api/settings` (`{"general": {"tailnet_trusted_logins": [...]}}`), lower-cased and de-duplicated on load. What trust grants: see the Trusted Tailscale accounts bullet above |
+| POST | `/api/settings/auth-token/rotate` | Mint + persist a NEW token (compromise recovery): every issued cookie/QR/paired device is invalidated (trusted Tailscale accounts are not — untick them); the response re-issues the caller's cookie. `409` when `MINDFLOCK_AUTH_TOKEN` pins the token; `500` when persisting the new token fails (the old token stays valid) |
 
 ## Server lifecycle
 

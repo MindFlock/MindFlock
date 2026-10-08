@@ -128,6 +128,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
+from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
@@ -766,6 +767,11 @@ app.add_middleware(_remote.RemoteProxyMiddleware)
 # middleware so it sits OUTERMOST — auth is checked before anything else runs.
 # No-op unless enabled (tailnet exposure / configured token / MINDFLOCK_AUTH=1).
 app.add_middleware(_auth.AuthMiddleware)
+
+# Outermost of all: record the transport peer, then apply the proxy-headers
+# rewrite uvicorn would have (run.py turns uvicorn's own off). The Tailscale
+# trust check reads the recorded peer — see backend.web.core.tailnet_trust.
+app.add_middleware(_tailnet_trust.PeerCaptureMiddleware)
 
 
 @app.post("/api/auth")

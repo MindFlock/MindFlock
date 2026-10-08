@@ -13,7 +13,7 @@ from a browser.
 │     CLI, so agents list/message/spawn/steer each other over the API     │
 └──────────────┬────────────────────────────────────────┬─────────────────┘
                │ REST (poll /api/instances every 4s)    │ WebSockets (PTY bytes,
-               │ + bearer-token auth (core/auth.py)     │  /api/events bus)
+               │ + token/tailnet auth (core/auth.py)    │  /api/events bus)
 ┌──────────────▼────────────────────────────────────────▼─────────────────┐
 │ Web server (backend.web.server — FastAPI)                             │
 │   routes · stage detection (git_ops) · terminal bridge (pump_pty)       │
@@ -113,7 +113,19 @@ FastAPI app `backend.web.server:app`. Key pieces:
   [web-ui.md](web-ui.md#notifications-).
 - **`core/auth.py`** — shared bearer-token ASGI middleware gating HTTP + websockets
   whenever the server is exposed beyond localhost (cookie / header / `?token=`,
-  QR deep-link for the mobile page).
+  QR deep-link for the mobile page). Untagged devices owned by a trusted
+  Tailscale login skip the token (opt-in, `general.tailnet_trusted_logins`).
+- **`core/tailnet_trust.py`** — that Tailscale-login trust: `tailscale whois`
+  per peer IP (cached 60 s), the Linux `/proc/net/tcp` loopback-owner check
+  for `tailscale serve` traffic, and `PeerCaptureMiddleware`. Middleware order,
+  outermost first: `PeerCaptureMiddleware` → `AuthMiddleware` →
+  `RemoteProxyMiddleware` → GZip → routes. `PeerCaptureMiddleware` saves the
+  raw transport peer in `scope["mf_peer"]`, then applies uvicorn's
+  `ProxyHeadersMiddleware` itself (`FORWARDED_ALLOW_IPS`, default
+  `127.0.0.1`), which is why `run.py` starts uvicorn with
+  `proxy_headers=False`. A launch path that keeps uvicorn's default (bare
+  `uvicorn backend.web.server:app`) rewrites the peer first, so tailnet trust
+  fails closed there: every request falls back to the token.
 - **`core/remote.py`** — tailnet multi-device control: discovers other MindFlock
   servers via `tailscale status`, namespaces their sessions `<device>::<title>`,
   and proxies every per-session route to the owning device (gated by the
