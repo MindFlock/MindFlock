@@ -200,6 +200,17 @@ def _apply_post(payload: dict) -> None:
             pass
 
 
+def _stamp_for_sync() -> None:
+    """Stamp a just-saved shared field now, rather than at the next sync pass,
+    so "last edit wins" orders by when the user actually changed it."""
+    try:
+        from backend.web.core import settings_sync
+
+        settings_sync.scan_local()
+    except Exception:  # noqa: BLE001 — a settings save must never fail on this
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Provider management
 # --------------------------------------------------------------------------- #
@@ -569,6 +580,53 @@ class SettingsAddon(Addon):
 
             return JSONResponse(tailnet_trust.status())
 
+        @router.get("/settings/sync")
+        def get_settings_sync() -> JSONResponse:
+            """Settings → Security → Settings sync: on/off, where this device
+            started from, and each connected device's last pass."""
+            from backend.web.core import settings_sync
+
+            return JSONResponse(settings_sync.status())
+
+        @router.post("/settings/sync")
+        async def post_settings_sync(payload: dict, request: Request) -> JSONResponse:
+            """``{enabled: true, from?: <device key>}`` turns sync on — from
+            THIS device (``from`` empty) or by first adopting a connected
+            device's shareable settings; ``{enabled: false}`` turns it off.
+            This device's own choice: refused for a request relayed by
+            another MindFlock."""
+            from backend.web.core import remote as _remote
+            from backend.web.core import settings_sync
+
+            if _remote.from_remote(request):
+                return JSONResponse(
+                    {"error": "settings sync can only be changed on this device"},
+                    status_code=403,
+                )
+            payload = payload or {}
+            if not payload.get("enabled"):
+                settings_sync.disable()
+                return JSONResponse(settings_sync.status())
+            try:
+                result = await settings_sync.enable(str(payload.get("from") or ""))
+            except LookupError as err:
+                return JSONResponse({"error": str(err)}, status_code=409)
+            return JSONResponse({**settings_sync.status(), **result})
+
+        @router.get("/settings/sync/export")
+        def get_settings_sync_export(request: Request) -> JSONResponse:
+            """This device's shareable settings + their stamps, for the user's
+            other devices. Credential-bearing fields only when the request
+            itself carries this device's access token (a bearer header or
+            the sign-in cookie) — reaching the route with the gate off is
+            not enough (backend.web.core.settings_sync)."""
+            from backend.web.core import auth as web_auth
+            from backend.web.core import settings_sync
+
+            return JSONResponse(
+                settings_sync.export(web_auth.presented_token(request.scope))
+            )
+
         @router.post("/settings/auth-token/rotate")
         def rotate_auth_token() -> JSONResponse:
             """Invalidate the current access token and mint a fresh one
@@ -660,6 +718,7 @@ class SettingsAddon(Addon):
                 _apply_post(payload)
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
+            _stamp_for_sync()
             if watch_toggle and self.ctx is not None:
                 if _toggle_states() != before:
                     try:
@@ -903,6 +962,7 @@ class SettingsAddon(Addon):
                 settings_store.set_ticketing_sources(clean)
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
+            _stamp_for_sync()
             return JSONResponse({"sources": _masked_sources()})
 
         # --- auth profiles CRUD (multiple identities per CLI) ---------------

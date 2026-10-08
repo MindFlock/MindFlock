@@ -130,6 +130,7 @@ from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
+from backend.web.core import settings_sync as _settings_sync
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
@@ -523,6 +524,8 @@ async def lifespan(app: FastAPI):
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
     _register_task(_remote.instances_loop())
+    # Settings sync across the paired devices (a no-op tick while it's off).
+    _register_task(_settings_sync.sync_loop())
     # Shared phone link: keep the Tailscale Service advertisement applied —
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
