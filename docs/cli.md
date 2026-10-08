@@ -287,6 +287,34 @@ Prefix matching works like `attach`.
 
 `LINK` is a link id or a unique prefix of one.
 
+### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave]`
+
+"Your devices" (Settings → Devices in the app) over `/api/fleet`: group the
+computers **you** own, found over Tailscale, so settings follow you between
+them. The CLI only talks to its own server; that server does the
+device-to-device part. Run these on the computer itself. A request sent from
+another device with the access token is fine, but one relayed by another
+MindFlock is refused.
+
+| Command | Does |
+|---|---|
+| `devices` / `devices list [--json]` | your devices (`✓` this device / reachable, `-` offline, `!` reachable but in another group; `runs PR review & issues` marks the one that does — a `!` line warns when none or several do), computers asking to join and their codes, live invite codes, an outgoing request still waiting, and the other computers on your tailnet with the command that adds each |
+| `devices add` | prints a one-time code (`XXXX-XXXX`, 10 min, single use) on stdout, and on stderr the command to run on the new computer: `mindflock devices join <this device> <code>` |
+| `devices add DEVICE` | adds a device this one already holds an access token for (pasted under Remote control). No code needed. A `! settings sync:` line on stderr means the device was added but settings sync didn't start here |
+| `devices join DEVICE CODE [--yes]` | joins DEVICE's group with a code made there. It first asks you to confirm, because this computer takes DEVICE's shared settings wherever DEVICE has them (your own stay where it has none); `--yes` skips the question |
+| `devices join DEVICE [--yes]` | asks DEVICE (after the same confirmation), prints `Approve on <host>; check it shows code 123 456`, then waits up to 10 min for an answer (it polls every 2 s). Ctrl-C withdraws the request, on DEVICE too. Run it again while the request is still out and it picks the wait back up |
+| `devices cancel` | stops asking to join, and withdraws the request on the other device. Once that device has approved and the join is under way it's too late; the command says so and exits 1 |
+| `devices approve DEVICE\|ID [--yes]` | lets a computer that asked join. First it shows the 6-digit code and asks you to confirm that the other screen shows the same one. A `! settings sync:` line on stderr means it joined but settings sync didn't start here |
+| `devices deny DEVICE\|ID` | refuses it |
+| `devices remove DEVICE [--yes] [--keep-tokens]` | takes a device out. The rest get a new key, and any that were offline have to join again (listed on stderr). By default every device's own access token is replaced too, so tokens the removed device collected stop working (phones and other places that hold one need the new token; any device it couldn't reach is listed on stderr). `--keep-tokens` only re-keys the group |
+| `devices leave [--yes]` | takes **this** computer out. Settings sync stops here |
+
+`DEVICE` is the device name (its MagicDNS label) or the host name shown in the
+list (case-insensitive). For `approve`/`deny`, a request id or a unique prefix
+of one also works. Joining turns on remote control and settings sync on the
+new computer. The device you joined leads the first sync: this computer takes
+its shared settings wherever it has them, and keeps its own where it has none.
+
 ### `mindflock events [--follow]`
 
 Print the server's session-event stream (`WS /api/events`), one line per
