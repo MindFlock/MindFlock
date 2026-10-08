@@ -60,17 +60,17 @@ def test_lifespan_starts_and_cancels_background_tasks():
     assert server._BG_TASKS == []
     with TestClient(server.app) as c:
         c.get("/api/config")
-        # Eleven long-lived loops always stay registered (they never return):
+        # Twelve long-lived loops always stay registered (they never return):
         # reload loop + instances tick + cursor auto-adopt + prompt-queue drain
         # + autopilot + window-refresh + test-plans due + device discovery +
-        # remote instances + shared-link re-check + the fleet addon's roster
-        # gossip ("Your devices").
-        # A twelfth task (startup warmups: scroll speed / paste GC / mobile
+        # remote instances + settings sync + shared-link re-check + the fleet
+        # addon's roster gossip ("Your devices").
+        # A thirteenth task (startup warmups: scroll speed / paste GC / mobile
         # banner) is also registered, but it is short-lived and removes itself
         # via its done-callback the moment it finishes. On a host where the
         # Tailscale banner probe returns instantly (e.g. CI without tailscale)
-        # it can complete before this assertion runs, so tolerate 11 or 12.
-        assert 11 <= len(server._BG_TASKS) <= 12
+        # it can complete before this assertion runs, so tolerate 12 or 13.
+        assert 12 <= len(server._BG_TASKS) <= 13
     assert server._BG_TASKS == []  # cancelled + cleared on shutdown
 
 
