@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Trusted Tailscale accounts: your own devices skip the access token.**
+  Settings → Security lists the Tailscale accounts that own untagged devices on
+  your tailnet; tick yours and your phone and laptops open MindFlock with no
+  sign-in, checked per request with `tailscale whois`. Tagged devices, devices
+  shared in from other accounts and requests relayed by another MindFlock never
+  qualify. Through the shared phone link (`tailscale serve`) it works on Linux
+  hosts, where the server confirms the connection really came from tailscaled;
+  elsewhere those requests still ask for the token. Off until you tick an
+  account. Regenerating the token does not sign trusted devices out — untick
+  the account instead.
+
 ## [0.7.2] - 2026-10-08
 
 ### Changed
