@@ -1,6 +1,10 @@
 /** J4 prompt-preset store (port of app.js section 23's store): built-ins +
  * user-saved presets in localStorage "mindflock.prompt_presets". Shared by
- * the New-session preset picker and the Prompts library dialog. */
+ * the New-session preset picker and the Prompts library dialog. The saved
+ * list follows the person: each save is mirrored to prefs.prompt_presets
+ * (lib/prefs.ts) and arrives on your other devices through settings sync. */
+
+import { normalizePresets, notePrefWrite, presetKey } from "./prefs";
 
 export interface Preset {
   name: string;
@@ -54,13 +58,56 @@ export function loadUserPresets(): Preset[] {
  * prompts (the sidebar Prompts bar) repaints when another one edits them. */
 export const PRESETS_CHANGED = "mf-presets-changed";
 
-export function saveUserPresets(list: Preset[]) {
+/** Write the saved list. Names are trimmed and a name repeated ignoring case
+ * keeps only its newest (later) entry — the server's rule is "a preset IS its
+ * name", and a list it would shorten silently comes back shortened on the
+ * next pull. Returns the names that were dropped, so the caller can say so. */
+export function saveUserPresets(list: Preset[]): string[] {
+  const { list: clean, dropped } = normalizePresets(list);
   try {
-    localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(list));
+    localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(clean));
   } catch {
     /* storage unavailable */
   }
+  notePrefWrite(PRESET_STORE_KEY);
   if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
+  return dropped;
+}
+
+/** Save one prompt under `name`, replacing any saved prompt with the same
+ * name ignoring case ("deploy" replaces "Deploy"). `replaced` is the old
+ * entry's name when its spelling differed — worth telling the person, since
+ * the other one is gone. */
+export function upsertUserPreset(
+  name: string,
+  prompt: string
+): { list: Preset[]; replaced: string | null } {
+  const n = name.trim();
+  const k = presetKey(n);
+  const old = loadUserPresets();
+  const hit = old.find((p) => presetKey(p.name) === k);
+  const list = old.filter((p) => presetKey(p.name) !== k);
+  list.push({ name: n, prompt });
+  saveUserPresets(list);
+  return { list, replaced: hit && hit.name.trim() !== n ? hit.name : null };
+}
+
+/** A list saved before names were compared ignoring case may hold "Deploy"
+ * and "deploy" both; the server keeps only one. Fold it here first (keeping
+ * the newer) and report what went, instead of letting the next pull drop one
+ * silently. Returns [] and writes nothing when the list is already clean. */
+export function tidyUserPresets(): string[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  const { list, dropped } = normalizePresets(raw as Preset[]);
+  if (!dropped.length) return [];
+  saveUserPresets(list);
+  return dropped;
 }
 
 /** Option values are "b:<name>" / "u:<name>" so the two namespaces can share

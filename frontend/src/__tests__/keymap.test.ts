@@ -163,6 +163,44 @@ describe("Alt+O is gone with the Outbox", () => {
   });
 });
 
+describe("reloadKeymap (a keymap adopted from another device)", () => {
+  it("re-reads mf_keymap and repaints subscribers, without writing it back", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const prev = g.localStorage;
+    let saved: string | null = null;
+    let writes = 0;
+    g.localStorage = {
+      getItem: (k: string) => (k === "mf_keymap" ? saved : null),
+      setItem: (k: string, v: string) => {
+        if (k === "mf_keymap") {
+          saved = v;
+          writes++;
+        }
+      },
+      removeItem: () => {},
+    };
+    try {
+      vi.resetModules();
+      const km = await import("../lib/keymap");
+      expect(km.getKeyOverride("palette")).toBeUndefined();
+      let seen = 0;
+      const off = km.subscribeKeymap(() => seen++);
+      // Settings sync wrote the other device's keymap into the cache.
+      saved = JSON.stringify({ keys: { palette: [{ key: "j", mod: true }] }, chords: { n: "m" } });
+      km.reloadKeymap();
+      expect(km.getKeyOverride("palette")).toEqual([{ key: "j", mod: true }]);
+      expect(km.chordKeyFor("n")).toBe("m");
+      expect(seen).toBe(1);
+      expect(writes).toBe(0);
+      off();
+    } finally {
+      if (prev === undefined) delete g.localStorage;
+      else g.localStorage = prev;
+      vi.resetModules();
+    }
+  });
+});
+
 describe("modalOpen", () => {
   afterEach(() => useUi.getState().closeDialog());
 

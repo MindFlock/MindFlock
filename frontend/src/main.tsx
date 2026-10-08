@@ -9,6 +9,7 @@ import { publishToast } from "./lib/toast";
 import { publishWindowName } from "./lib/windowName";
 import { installGlobalDropGuards } from "./lib/clipboard";
 import { applyStoredAppearance } from "./components/settings/screens/Appearance";
+import { installPrefsSync } from "./lib/prefsSync";
 import App from "./App";
 import "./styles/index.css";
 
@@ -43,3 +44,9 @@ requestAnimationFrame(() => {
   s.src = "/core/slots.js";
   document.body.appendChild(s);
 });
+
+// Prefs that follow the person (lib/prefs.ts): reconcile this browser's
+// cached keymap / prompts / theme / bars with the server's copy, and re-pull
+// whenever settings sync brings one in from another device. After first paint:
+// localStorage already painted the page, this only corrects it.
+requestAnimationFrame(() => installPrefsSync());

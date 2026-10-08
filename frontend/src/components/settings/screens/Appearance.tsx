@@ -94,6 +94,32 @@ export function applyStoredAppearance() {
   }
 }
 
+/** The accent this browser has cached ("" = default). */
+export function storedAccent(): string {
+  try {
+    return localStorage.getItem(DIMS.accent.lsKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+/** Take an accent chosen elsewhere — `ui.accent` synced from another of your
+ * devices (lib/prefsSync.ts). Same paint as picking a swatch here, minus the
+ * POST: the server already holds it, and writing it back would re-stamp it as
+ * this device's own edit. */
+export function adoptAccent(name: string) {
+  const dim = DIMS.accent;
+  if (name) document.documentElement.setAttribute(dim.attr, name);
+  else document.documentElement.removeAttribute(dim.attr);
+  try {
+    if (name) localStorage.setItem(dim.lsKey, name);
+    else localStorage.removeItem(dim.lsKey);
+  } catch {
+    /* storage unavailable */
+  }
+  rethemeAll();
+}
+
 function current(dim: Dim): string {
   return document.documentElement.getAttribute(dim.attr) || "";
 }

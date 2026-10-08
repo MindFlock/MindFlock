@@ -15,7 +15,13 @@ import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
 import { ALL_RUNNING, promptTargets, resolveTarget, runningTitles } from "../../lib/promptTargets";
 import { pastePrompt as pasteInto } from "../../lib/promptPaste";
-import { BUILTIN_PRESETS, loadUserPresets, saveUserPresets, type Preset } from "../../lib/presets";
+import {
+  BUILTIN_PRESETS,
+  loadUserPresets,
+  saveUserPresets,
+  upsertUserPreset,
+  type Preset,
+} from "../../lib/presets";
 
 export function PromptsPanel() {
   const closeDialog = useUi((s) => s.closeDialog);
@@ -91,13 +97,17 @@ export function PromptsPanel() {
       toast("Enter the prompt text");
       return;
     }
-    const list = loadUserPresets().filter((p) => p.name !== n);
-    list.push({ name: n, prompt: t });
-    saveUserPresets(list);
-    setSaved(list);
+    // A name is the same prompt ignoring case (the server's rule): replace
+    // it, and say so when the old one was spelled differently.
+    const { replaced } = upsertUserPreset(n, t);
+    setSaved(loadUserPresets());
     setName("");
     setText("");
-    toast(`Added prompt “${n}”`);
+    toast(
+      replaced
+        ? `Saved prompt “${n}” — it replaced “${replaced}” (names ignore case)`
+        : `Added prompt “${n}”`
+    );
   };
 
   const section = (label: string, items: Preset[], deletable: boolean, kind: string) =>

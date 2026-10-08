@@ -4,6 +4,8 @@
  * "mf_diffbase"). Parsers return typed structures; the React components do
  * the rendering that renderSplitDiff/diffFileSection did with innerHTML. */
 
+import { notePrefWrite } from "./prefs";
+
 export type UnifiedLineKind = "add" | "del" | "ctx" | "hunk" | "meta";
 
 export interface UnifiedLine {
@@ -142,7 +144,8 @@ export function splitDiffByFile(content: string): DiffFileSegment[] {
 }
 
 /** Diff view mode for the Diff tab: "split" (side-by-side, IDE-style) or
- * "unified". Persisted per browser; split is the default. */
+ * "unified". Cached per browser and mirrored to prefs.diff_mode, so it
+ * follows you to your other devices; split is the default. */
 export type DiffMode = "split" | "unified";
 /** Diff-tab baseline: "fork" = everything vs the base branch's fork point
  * (matches the header badge), "head" = uncommitted only. */
@@ -164,6 +167,7 @@ export function setDiffMode(m: DiffMode): void {
   } catch {
     /* storage unavailable */
   }
+  notePrefWrite("cs_diffmode");
 }
 
 export function getDiffBase(): DiffBase {
@@ -182,4 +186,5 @@ export function setDiffBase(b: DiffBase): void {
   } catch {
     /* storage unavailable */
   }
+  notePrefWrite("mf_diffbase");
 }

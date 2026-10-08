@@ -143,7 +143,8 @@ p.set-hint {
   white-space: nowrap;
 }
 
-/* Security → access-token reveal row */
+/* Devices → Settings sync: the device list on its own line, the buttons
+   (or the start-from picker) wrapping under it. */
 .settings-sync-on,
 .settings-sync-off {
   display: flex;
@@ -171,6 +172,7 @@ p.set-hint {
   overflow-wrap: anywhere;
 }
 
+/* Security → access-token reveal row */
 .token-reveal {
   display: flex;
   align-items: center;

@@ -14,6 +14,7 @@ import {
   IDLE_DEFAULT_MINUTES,
 } from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
+import { notePrefWrite } from "../lib/prefs";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -58,12 +59,16 @@ function firstRun(key: string): boolean {
   }
 }
 
+/** Persist one key. A key that is also a person-wide pref (bars, break and
+ * idle reminders, hints — see lib/prefs.ts PREF_MAP) is mirrored to the
+ * server too, so it follows you to your other devices. */
 function save(key: string, value: unknown, stringify = true) {
   try {
     localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
   } catch {
     /* storage unavailable */
   }
+  notePrefWrite(key);
 }
 
 /** The three fixed special windows (one instance each; verify and extension

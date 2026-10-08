@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Device } from "../api/types";
-import { deviceLabel, devicePath, deviceTitle, startableDevices } from "../lib/devices";
+import { canDisconnect, deviceLabel, devicePath, deviceTitle, startableDevices } from "../lib/devices";
 import { FOLDER_INIT, folderReducer } from "../components/dialogs/NewSessionDialog";
 
 const dev = (over: Partial<Device>): Device => ({
@@ -53,5 +53,15 @@ describe("starting a session on another device", () => {
     expect(folderReducer(switched, { t: "suggested", path: "/Users/me/api" }).path).toBe(
       "/Users/me/api"
     );
+  });
+});
+
+describe("the sidebar's Disconnect ✕", () => {
+  it("is offered for a token-paired device, never for one of Your devices", () => {
+    expect(canDisconnect(dev({ has_token: true }))).toBe(true);
+    // A member is reached with the shared device key: forgetting its pasted
+    // token disconnects nothing (the server answers 409).
+    expect(canDisconnect(dev({ has_token: true, member: true }))).toBe(false);
+    expect(canDisconnect(dev({ has_token: false }))).toBe(false);
   });
 });

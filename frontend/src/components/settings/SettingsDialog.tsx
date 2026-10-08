@@ -27,6 +27,7 @@ import { Workspace } from "./screens/Workspace";
 import { Ide } from "./screens/Ide";
 import { Providers } from "./screens/Providers";
 import { Security } from "./screens/Security";
+import { Devices } from "./screens/Devices";
 import { Doctor } from "./screens/Doctor";
 import { SystemLogs } from "./screens/SystemLogs";
 import { Advanced } from "./screens/Advanced";
@@ -63,6 +64,7 @@ const SCREENS: Array<{
   { key: "orchestration", label: "Agent orchestration", group: "Agents", el: (p) => <AgentOrchestration {...p} /> },
   { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
   { key: "ide", label: "IDE", group: "Code", el: (p) => <Ide {...p} /> },
+  { key: "devices", label: "Devices", group: "This device", el: (p) => <Devices {...p} /> },
   { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
   { key: "mobile", label: "Mobile", group: "This device", el: (p) => <Mobile {...p} /> },

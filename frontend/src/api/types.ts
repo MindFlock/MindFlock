@@ -719,6 +719,9 @@ export interface Device {
   auth?: boolean;
   has_token?: boolean;
   needs_token?: boolean;
+  /** One of "Your devices": it stays connected through the shared device
+   * key, so Disconnect doesn't apply — remove it in Settings → Devices. */
+  member?: boolean;
   /** Paired, permitted and answering: sessions can be driven AND started there. */
   connected: boolean;
   error?: string;
@@ -730,6 +733,109 @@ export interface DevicesResponse {
   self: { device: string; host: string; os?: string } | null;
   remote_control?: boolean;
   devices: Device[];
+}
+
+/** "Your devices" (GET /api/fleet): the computers one person owns, sharing a
+ * fleet key — settings sync, sign-in and ticket claims only talk to these. */
+export interface FleetMember {
+  /** The device key (MagicDNS label), as in /api/devices. */
+  key: string;
+  host: string;
+  added_at: number;
+  self: boolean;
+  reachable: boolean;
+  version: string;
+  /** Its hello names the same fleet — false while it hasn't heard yet, or
+   * after it left/was removed while offline. */
+  same_fleet: boolean;
+  error: string;
+  /** It runs PR review and issue handling (`github.run_here`, or the
+   * default: on unless it shares a group of 2+ devices). Missing from an
+   * older MindFlock (null: its hello doesn't say). */
+  automation?: boolean | null;
+}
+
+/** A live "add a device" code (only shown on this device). */
+export interface FleetInvite {
+  code: string;
+  expires_at: number;
+  /** `mindflock devices join <this device> <code>` — runs on the new one. */
+  command: string;
+}
+
+/** Another device asking to join; both screens show `code`. */
+export interface FleetRequest {
+  id: string;
+  device: string;
+  host: string;
+  code: string;
+  created_at: number;
+  expires_at: number;
+}
+
+/** This device's own outgoing join attempt (one at a time). */
+export interface FleetJoin {
+  state: "idle" | "waiting" | "joining" | "joined" | "denied" | "expired" | "error";
+  device: string;
+  host: string;
+  code: string;
+  error: string;
+  id: string;
+}
+
+/** A MindFlock on the tailnet that is not one of your devices (yet). */
+export interface FleetCandidate {
+  device: string;
+  host: string;
+  version: string;
+  /** 0 = a MindFlock too old to join. */
+  fleet_proto: number;
+  reachable: boolean;
+  member: boolean;
+  /** It belongs to some group of devices already. */
+  in_fleet: boolean;
+  same_fleet: boolean;
+  /** This device holds its pasted access token: one-click add works. */
+  has_token: boolean;
+}
+
+export interface FleetStatus {
+  in_fleet: boolean;
+  id: string;
+  epoch: number;
+  self: { key: string; host: string };
+  members: FleetMember[];
+  invites: FleetInvite[];
+  requests: FleetRequest[];
+  join: FleetJoin;
+  /** Every reachable member refuses this device's key: it was removed (or
+   * the key changed) while it was offline. */
+  stale_key: boolean;
+  /** The access gate is off on a tailnet-reachable device. */
+  gate_warning: boolean;
+  candidates: FleetCandidate[];
+}
+
+/** GET /api/settings/sync (backend.web.core.settings_sync.status). */
+export interface SyncStatus {
+  enabled: boolean;
+  device: string;
+  joined_from: string;
+  in_fleet: boolean;
+  devices: {
+    key: string;
+    label: string;
+    syncing: boolean;
+    last_sync: number | null;
+    error: string;
+  }[];
+  /** Base paths ("group.field" or "store:<name>") kept different here. */
+  pinned: string[];
+  /** Incoming values not applied here yet (an agent CLI not installed). */
+  deferred: { path: string; value?: unknown; reason: string }[];
+  warnings: string[];
+  /** Everything that can be pinned, with a human label. */
+  syncable: { path: string; label: string; group: string }[];
 }
 
 /** /api/usage — per-provider usage descriptors. Rendering is data-driven, so

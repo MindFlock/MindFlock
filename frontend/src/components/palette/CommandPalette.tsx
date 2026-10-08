@@ -125,6 +125,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({
+      label: "Your devices",
+      hint: "add a computer you own, or join one; settings sync",
+      run: () => ui.openDialogFor("settings", "devices"),
+    });
+    acts.push({
       label: "Peer links…",
       hint: "invite someone, or join with their code",
       run: () => ui.openDialogFor("settings", "peer"),
