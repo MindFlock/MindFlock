@@ -327,7 +327,10 @@ class TicketIngestionController:
         lock recorded its build at all), so it must be restarted: the server
         re-execs onto an update, but the child is its own process group and
         keeps the previous code until someone stops it. A standalone run
-        (started outside the server) is never touched."""
+        (started outside the server) is never touched. A lock with no
+        metadata (a pipeline from before the lock recorded its build) is
+        owner-unknown: stale here, but :meth:`IngestionAddon._boot_reconcile`
+        restarts it only when the pipeline is wanted anyway."""
         pid, meta = self._lock_holder()
         if pid is None:
             return False
@@ -713,9 +716,16 @@ class TicketIngestionAddon(Addon):
         """At server start: a pipeline still running on an older engine build
         (this server just re-execed onto an update) is restarted onto the new
         one; otherwise the persisted toggle is restored (``start()`` no-ops
-        when a pipeline already runs)."""
+        when a pipeline already runs).
+
+        Only while the pipeline is wanted (:meth:`_process_wanted`): a restart
+        is a stop AND a start, and with every toggle off that start would turn
+        on what the user left off. That is also what keeps an owner-unknown
+        pipeline (a lock with no metadata — perhaps a standalone run) alone
+        unless the toggle is on."""
+        wanted = self._process_wanted()
         try:
-            if _may_restart_found_pipeline() and self.ctrl.stale_build():
+            if wanted and _may_restart_found_pipeline() and self.ctrl.stale_build():
                 if log.ErrorLog is not None:
                     log.ErrorLog.Printf(
                         "ingestion: the running pipeline is an older build — restarting it"
@@ -725,7 +735,7 @@ class TicketIngestionAddon(Addon):
         except Exception as err:  # noqa: BLE001 — never block the autostart
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("ingestion stale-build check failed: %v", err)
-        if self._process_wanted():
+        if wanted:
             self.ctrl.start()
 
     # --- toggle → process reconciliation ----------------------------------- #
