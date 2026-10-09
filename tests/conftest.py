@@ -225,7 +225,13 @@ def _no_tailnet_side_effects(monkeypatch):
     from backend.web import server
     from backend.web.core import mobile_announce
 
+    from backend.web.core import tailnet_bind
+
     monkeypatch.setattr(server, "_tailscale_info", lambda: (None, None))
+    # run.main's tailscale-mode bind plan: no tailnet (the 0.0.0.0 fallback),
+    # and the fallback flag it exports never outlives the test.
+    monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: [])
+    monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
     monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
     monkeypatch.setattr(mobile_announce, "announce_soon", lambda reason: None)
     monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)

@@ -128,6 +128,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
+from backend.web.core import tailnet_bind as _tailnet_bind
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import settings_sync as _settings_sync
@@ -530,6 +531,11 @@ async def lifespan(app: FastAPI):
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
     _register_task(_shared_link.recheck_loop(_server_port))
+    # Tailscale mode came up bound to every interface because tailscaled
+    # wasn't running yet (run.py's fallback): narrow the bind once it is
+    # (core.tailnet_bind). Never registered otherwise — nor in tests.
+    if _tailnet_bind.fell_back():
+        _register_task(_tailnet_bind.rebind_loop())
     # Peer links: a no-op unless enabled in settings (no identity, no socket).
     try:
         await _peer_service().start()

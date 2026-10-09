@@ -279,7 +279,8 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         qr_url = "https://%s/m" % name
         lines.append("  │  Tailscale:  %s   (via `tailscale serve`)" % qr_url)
     elif name or ip:
-        # Direct access — requires uvicorn bound to 0.0.0.0 (not 127.0.0.1).
+        # Direct access — requires tailscale mode (uvicorn bound to this
+        # node's Tailscale addresses too, not just 127.0.0.1).
         if name:
             qr_url = "http://%s:%d/m" % (name, port)
             lines.append("  │  Tailscale:  %s" % qr_url)

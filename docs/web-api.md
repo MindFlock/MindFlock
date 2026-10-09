@@ -2140,8 +2140,11 @@ manual launching is a headless/dev concern. `run.py` accepts mode/port CLI
 tokens in either order and honors `CS_WEB_MODE`,
 `PORT`/`UVICORN_PORT`. The default (local) mode binds `127.0.0.1` — nothing
 off the machine can reach the server. Tailscale mode is an explicit opt-in
-that binds all interfaces (`0.0.0.0`), so the port is reachable from your LAN
-as well as your tailnet — every non-local bind is protected by the auth token
+that binds `127.0.0.1` plus this node's Tailscale addresses, so the port is on
+your tailnet but not your LAN (`web/core/tailnet_bind.py`; it falls back to
+`0.0.0.0` with a warning while Tailscale is down — restarting onto the narrow
+bind once it is up — or when those addresses can't be bound here, and
+`MINDFLOCK_BIND_ALL=1` asks for `0.0.0.0` on purpose) — every non-local bind is protected by the auth token
 printed at startup (unauthenticated clients get 401). Nothing is exposed to
 the public internet unless you forward the port yourself. For HTTPS run
 `tailscale serve --bg 8765` once and use `./run.sh local`.

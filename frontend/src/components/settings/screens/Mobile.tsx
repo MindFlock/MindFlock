@@ -144,7 +144,7 @@ export function Mobile(_: ScreenProps) {
           <>
             <div
               className="set-row set-switch-row"
-              title="Bind the server to all interfaces so phones on your tailnet can reach it"
+              title="Listen on this device's Tailscale addresses too, so phones on your tailnet can reach it (your LAN still can't)"
             >
               <span className="set-label">Tailscale mode</span>
               {/* label wraps only the switch, so clicking the row text no longer flips it */}

@@ -111,7 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         choices=("local", "tailscale"),
-        help="local = bind 127.0.0.1 (default); tailscale = bind 0.0.0.0 (phone/tailnet access, auth gate on)",
+        help="local = bind 127.0.0.1 (default); tailscale = also bind this node's Tailscale IPs (phone/tailnet access, auth gate on; MINDFLOCK_BIND_ALL=1 for every interface)",
     )
     serve.add_argument("--port", type=int, default=None, help="port (default 8765)")
     serve.add_argument(

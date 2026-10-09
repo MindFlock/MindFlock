@@ -57,6 +57,11 @@ def mark_serving() -> None:
     _SERVING = True
 
 
+def is_serving() -> bool:
+    """Whether :func:`mark_serving` declared this process the real server."""
+    return _SERVING
+
+
 def _under_pytest() -> bool:
     """True inside a test run. ``execv`` there would replace the test runner
     with a server — a guard worth having in front of every call, because the
@@ -64,17 +69,24 @@ def _under_pytest() -> bool:
     return "pytest" in sys.modules
 
 
-def reexec_soon(delay: float = 0.5) -> None:
+def reexec_soon(delay: float = 0.5, keep_mode: bool = False) -> None:
     """Re-exec this process after ``delay`` seconds (never returns to caller).
 
     The delay lets the HTTP response that asked for the restart flush to the
     client first — without it the caller sees a dropped connection instead of
     the ``{"ok": true}`` that tells it to start polling for the server's return.
+
+    ``keep_mode``: come back in the mode this process runs in (the mode word
+    and ``CS_WEB_MODE`` kept) — a restart that only re-picks the bind
+    addresses (:mod:`backend.web.core.tailnet_bind`), not the mode.
     """
     if _under_pytest():
         return
-    os.environ.pop("CS_WEB_MODE", None)
-    argv = [a for a in sys.argv if a.strip().lower() not in _MODE_TOKENS]
+    if keep_mode:
+        argv = list(sys.argv)
+    else:
+        os.environ.pop("CS_WEB_MODE", None)
+        argv = [a for a in sys.argv if a.strip().lower() not in _MODE_TOKENS]
 
     def _reexec() -> None:
         time.sleep(delay)
