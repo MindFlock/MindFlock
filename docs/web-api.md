@@ -2025,6 +2025,27 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   URL, `token: null`) and the rotate answer withhold it. `GET /api/mobile` and
   the rotate answer hand it only to a caller presenting that own token or to
   this machine itself (unrelayed).
+- **Changing what runs on your devices (gate on or off).** Routes that write
+  what agents run with — `POST /api/settings` (every field except
+  `general.onboarded`, `general.last_repo_path` and `ui.surface`), `PUT
+  /api/settings/ticketing/sources`, `PUT /api/settings/auth-profiles`,
+  `POST/PUT/DELETE /api/providers*`, `POST/DELETE /api/templates*`, `POST
+  /api/prefs` with `keymap` or `prompt_presets`, `POST /api/notify/ntfy`,
+  `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
+  (add, delete, companions, plan-first), `POST /api/cursor/autoadopt` and
+  `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
+  "this changes how your devices run agents, so it needs this device's
+  sign-in…"}` unless the caller presents this device's token or the fleet key,
+  is this machine itself (loopback, unproxied), or is a trusted Tailscale
+  account — and never when another MindFlock relays it
+  (`auth.may_configure`). The one exception is a server nothing beyond this
+  machine can reach (`CS_WEB_MODE` local or unset, no forwarding header). Why:
+  on a gate-off device reachable on the tailnet any node gets past the gate,
+  and a synced field it wrote (`coding_cli.default_launch_args`, a template's
+  program, a custom agent) would be stamped as this device's edit and spread
+  by settings sync to every device holding the fleet key. With the gate on
+  this refuses only relayed requests. None of these routes is on the
+  remote-control forward allow-list.
 
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests and DNS-rebinding hosts. These checks

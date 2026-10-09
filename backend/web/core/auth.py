@@ -49,7 +49,10 @@ for the phone.
 * **Privileged actions.** Some routes (approving a device into the fleet,
   showing a join code) must be done by the person AT this device, never
   relayed by another MindFlock nor reached by an anonymous tailnet caller of a
-  gate-off server: :func:`privileged`.
+  gate-off server: :func:`privileged`. Changing what runs on the owner's
+  devices (launch flags, accounts, templates, custom agents, the gate itself
+  — anything settings sync would spread) needs the same, unless the server
+  can't be reached from beyond this machine at all: :func:`may_configure`.
 
 Comparisons use ``hmac.compare_digest`` (constant-time). The token is a
 capability, not a password — treat the URL+token like an SSH key. A
@@ -73,6 +76,7 @@ import secrets
 from typing import Iterable, List, Optional
 from urllib.parse import parse_qs
 
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "mf_auth"
@@ -467,6 +471,61 @@ async def privileged(scope) -> bool:
         return bool(await _tailnet_trust.request_trusted(scope))
     except Exception:  # noqa: BLE001 — refuse rather than 500
         return False
+
+
+#: What a refused :func:`may_configure` caller is told (the routes' 403).
+CONFIGURE_REFUSED = (
+    "this changes how your devices run agents, so it needs this device's "
+    "sign-in: change it on the device itself, or sign in with its access "
+    "token (Settings → Security there)"
+)
+
+
+async def may_configure(scope) -> bool:
+    """Whether this request may change what runs on the owner's devices —
+    agent launch flags and binaries, accounts, ticket sources, templates,
+    custom agents, red zones, the access gate and bind, notification
+    channels. A synced one of those spreads to every device that holds the
+    fleet key, stamped as THIS device's edit, so an anonymous tailnet caller
+    of a gate-off device would otherwise launder it into the gated ones.
+
+    * Yes when :func:`privileged` (a credential, this machine, a trusted
+      Tailscale account — never relayed by another MindFlock).
+    * Otherwise only while nothing beyond this machine can be the caller:
+      not relayed, no proxy forwarding header (``tailscale serve`` fronting a
+      local-mode server), and the server not started beyond localhost. That
+      is the gate-off localhost run (and the test suite), where every direct
+      caller already is this machine.
+
+    With the gate ON every caller that reached a route passed it with one of
+    :func:`privileged`'s credentials, so this refuses only relayed requests
+    then. Never raises (fails closed)."""
+    try:
+        if await privileged(scope):
+            return True
+        headers = scope.get("headers") or []
+        if any(k == _REMOTE_HEADER for k, _ in headers):
+            return False
+        from backend.web.core import tailnet_trust as _tailnet_trust
+
+        if _tailnet_trust.has_forward_headers(scope):
+            return False
+        if not (scope.get("mf_peer") or scope.get("client")):
+            return False
+        return not _exposed_mode()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def configure_allowed(request: Request) -> bool:
+    """:func:`may_configure` as a FastAPI dependency, so a plain ``def``
+    route can ask it (``allowed: bool = Depends(auth.configure_allowed)``)."""
+    return await may_configure(request.scope)
+
+
+def configure_refused() -> JSONResponse:
+    """The 403 a :func:`may_configure` refusal answers with."""
+    return JSONResponse({"error": CONFIGURE_REFUSED}, status_code=403)
 
 
 def _query_tokens(query_string: bytes) -> List[str]:

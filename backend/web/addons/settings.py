@@ -22,12 +22,13 @@ import shutil  # noqa: F401 — tests patch settings_addon.shutil.which (shared 
 from pathlib import Path
 from typing import Optional, Tuple
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, Depends, Request, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import doctor, providers
 from backend.config import settings as settings_store
 from backend.providers import config as provider_config
+from backend.web.core import auth as _web_auth
 from backend.web.core import mobile_announce, restart, shared_link
 from backend.web.core import settings_hooks as _settings_hooks
 
@@ -110,6 +111,38 @@ def _masked_view() -> dict:
     _mask_ticketing(d)
     _mask_auth_profiles(d)
     return d
+
+
+#: The only ``group.field``s ``POST /api/settings`` takes from a caller that
+#: :func:`backend.web.core.auth.may_configure` refuses (an anonymous tailnet
+#: caller of a gate-off, reachable device): bookkeeping about this machine
+#: that runs nothing. Everything else — every synced field (settings sync
+#: would spread it to the owner's other devices as this one's edit), the
+#: gate/bind/remote-control switches, agent binaries and accounts, the IDE
+#: and terminal commands, peer links — needs the owner. An allow-list, so a
+#: new field is guarded until someone decides otherwise.
+_OPEN_FIELDS = frozenset({"general.onboarded", "general.last_repo_path", "ui.surface"})
+
+
+#: ``prefs`` fields ``POST /api/prefs`` takes only from a caller
+#: ``auth.may_configure`` allows: what a key or a click sends to an agent.
+_GUARDED_PREFS = frozenset({"keymap", "prompt_presets"})
+
+
+def _guarded_paths(payload: dict) -> list:
+    """The ``group.field``s ``payload`` would write that aren't in
+    :data:`_OPEN_FIELDS` (a group that isn't a dict counts as itself)."""
+    out = []
+    for group, fields in (payload or {}).items():
+        if not isinstance(fields, dict):
+            out.append(str(group))
+            continue
+        out.extend(
+            "%s.%s" % (group, f)
+            for f in fields
+            if "%s.%s" % (group, f) not in _OPEN_FIELDS
+        )
+    return out
 
 
 # The "is this CLI installed" probes live in settings_hooks now (settings sync
@@ -659,11 +692,13 @@ class SettingsAddon(Addon):
             THIS device (``from`` empty) or by first adopting one of your
             devices' shareable settings; ``{enabled: false}`` turns it off.
             This device's own choice: refused for a request relayed by
-            another MindFlock. 409 when this device isn't in a fleet yet."""
-            from backend.web.core import remote as _remote
+            another MindFlock, or from an anonymous caller of a gate-off,
+            reachable device (``auth.may_configure``). 409 when this device
+            isn't in a fleet yet."""
+            from backend.web.core import auth as web_auth
             from backend.web.core import settings_sync
 
-            if _remote.from_remote(request):
+            if not await web_auth.may_configure(request.scope):
                 return JSONResponse(
                     {"error": "settings sync can only be changed on this device"},
                     status_code=403,
@@ -683,11 +718,11 @@ class SettingsAddon(Addon):
         async def post_settings_sync_now(request: Request) -> JSONResponse:
             """Run one sync pass now (the "Sync now" button) and return the
             status plus what was adopted. This device's own button: refused
-            for a relayed request."""
-            from backend.web.core import remote as _remote
+            for a relayed or anonymous request (``auth.may_configure``)."""
+            from backend.web.core import auth as web_auth
             from backend.web.core import settings_sync
 
-            if _remote.from_remote(request):
+            if not await web_auth.may_configure(request.scope):
                 return JSONResponse(
                     {"error": "settings sync can only be run on this device"},
                     status_code=403,
@@ -703,11 +738,12 @@ class SettingsAddon(Addon):
             """``{keep: "theirs"|"mine"}`` — sync paused because this device's
             settings look reset: take the other devices' values back, or
             spread this device's. Returns the status plus what was adopted.
-            This device's own choice: refused for a relayed request."""
-            from backend.web.core import remote as _remote
+            This device's own choice: refused for a relayed or anonymous
+            request (``auth.may_configure``)."""
+            from backend.web.core import auth as web_auth
             from backend.web.core import settings_sync
 
-            if _remote.from_remote(request):
+            if not await web_auth.may_configure(request.scope):
                 return JSONResponse(
                     {"error": "settings sync can only be changed on this device"},
                     status_code=403,
@@ -724,26 +760,31 @@ class SettingsAddon(Addon):
             return JSONResponse({**status, **result})
 
         @router.post("/settings/sync/pin")
-        def post_settings_sync_pin(payload: dict, request: Request) -> JSONResponse:
+        async def post_settings_sync_pin(
+            payload: dict, request: Request
+        ) -> JSONResponse:
             """``{path, pinned}`` — keep ``path`` (``group.field`` or
             ``store:<name>``) different on this device, or stop. Un-pinning
-            lets the fleet's value win on the next pass."""
-            from backend.web.core import remote as _remote
+            lets the fleet's value win on the next pass. Refused for a relayed
+            or anonymous request (``auth.may_configure``)."""
+            from backend.web.core import auth as web_auth
             from backend.web.core import settings_sync
 
-            if _remote.from_remote(request):
+            if not await web_auth.may_configure(request.scope):
                 return JSONResponse(
                     {"error": "settings sync can only be changed on this device"},
                     status_code=403,
                 )
             payload = payload or {}
             try:
-                settings_sync.set_pinned(
-                    str(payload.get("path") or ""), bool(payload.get("pinned"))
+                await asyncio.to_thread(
+                    settings_sync.set_pinned,
+                    str(payload.get("path") or ""),
+                    bool(payload.get("pinned")),
                 )
             except ValueError as err:
                 return JSONResponse({"error": str(err)}, status_code=400)
-            return JSONResponse(settings_sync.status())
+            return JSONResponse(await asyncio.to_thread(settings_sync.status))
 
         @router.post("/settings/sync/nudge")
         async def post_settings_sync_nudge(request: Request) -> JSONResponse:
@@ -800,12 +841,19 @@ class SettingsAddon(Addon):
                 return _unreadable_response()
 
         @router.post("/prefs")
-        def post_prefs(payload: dict) -> JSONResponse:
+        def post_prefs(
+            payload: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
             """``{field: value, …}`` (a partial update; ``null`` clears a
             field). Unknown fields are ignored. Stamped for sync at once.
-            409 while settings.json can't be read — nothing is saved over it."""
+            409 while settings.json can't be read — nothing is saved over it.
+            403 for :data:`_GUARDED_PREFS` from a caller
+            ``auth.may_configure`` refuses: a preset is text sent to an agent
+            in one click, on every device sync reaches."""
             known = _prefs_fields()
             clean = {k: v for k, v in (payload or {}).items() if k in known}
+            if not allowed and _GUARDED_PREFS.intersection(clean):
+                return _web_auth.configure_refused()
             if clean:
                 try:
                     settings_store.update_settings(prefs=clean)
@@ -909,21 +957,30 @@ class SettingsAddon(Addon):
             return web_auth.set_auth_cookies(resp) if mine else resp
 
         @router.post("/settings")
-        def post_settings(payload: dict, request: Request) -> JSONResponse:
+        async def post_settings(payload: dict, request: Request) -> JSONResponse:
+            """A partial ``{group: {field: value}}`` save (:func:`_apply_post`).
+
+            Who may: anything but :data:`_OPEN_FIELDS` needs
+            :func:`backend.web.core.auth.may_configure` — never another
+            MindFlock relaying (peer links, the gate, launch flags are this
+            device's own business), and never an anonymous tailnet caller of
+            a gate-off device: a synced field it wrote would be stamped as
+            this device's edit and spread to every device holding the fleet
+            key (``coding_cli.default_launch_args`` prefixes every new
+            session there). The rest runs in a worker thread (it may call
+            ``tailscale serve``)."""
+            from starlette.concurrency import run_in_threadpool
+
+            from backend.web.core import auth as web_auth
+
             payload = payload or {}
-            # Peer links are managed from THIS machine only: another MindFlock
-            # device (tailnet remote control) may not widen the shared
-            # session's egress or turn the listener on (the /api/peer routes
-            # refuse it the same way).
-            if "peer" in payload:
-                from backend.web.core import remote as _remote
+            if _guarded_paths(payload) and not await web_auth.may_configure(
+                request.scope
+            ):
+                return web_auth.configure_refused()
+            return await run_in_threadpool(_save_settings, payload)
 
-                if _remote.from_remote(request):
-                    return JSONResponse(
-                        {"error": "peer settings can only be changed on this device"},
-                        status_code=403,
-                    )
-
+        def _save_settings(payload: dict) -> JSONResponse:
             # The automated-PR-review / issue-handling toggles (github.enabled,
             # github.issues_enabled) are only read when the pipeline process
             # boots, so snapshot them before applying and, on a real flip, emit
@@ -1204,11 +1261,17 @@ class SettingsAddon(Addon):
             return JSONResponse({"sources": _masked_sources()})
 
         @router.put("/settings/ticketing/sources")
-        def put_ticketing_sources(body: dict) -> JSONResponse:
+        def put_ticketing_sources(
+            body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
             """Replace the whole sources list. A source whose ``api_token`` is
             empty or the mask sentinel keeps its previously-stored token (matched
             by ``id``), so re-saving the form never wipes a secret the UI never
-            received. Blank ``provider`` entries are dropped."""
+            received. Blank ``provider`` entries are dropped. Owner only
+            (``auth.may_configure``): a source decides which tickets start
+            agent sessions, and settings sync spreads it."""
+            if not allowed:
+                return _web_auth.configure_refused()
             incoming = (body or {}).get("sources")
             if not isinstance(incoming, list):
                 return JSONResponse(
@@ -1290,13 +1353,19 @@ class SettingsAddon(Addon):
             return JSONResponse(_auth_profiles_view())
 
         @router.put("/settings/auth-profiles")
-        def put_auth_profiles(body: dict) -> JSONResponse:
+        def put_auth_profiles(
+            body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
             """Replace the whole profiles list (same contract as the ticketing
             sources CRUD: an ``api_key`` that is empty or the mask sentinel
             keeps the previously-stored key, matched by ``id``). A
             ``default_profile`` key in the body updates the app-wide default in
             the same save; account-kind profiles get their isolated config dir
-            created here so a login can land in it."""
+            created here so a login can land in it. Owner only
+            (``auth.may_configure``): a profile's env and config dir reach
+            every agent launched with it."""
+            if not allowed:
+                return _web_auth.configure_refused()
             body = body or {}
             incoming = body.get("profiles")
             if not isinstance(incoming, list):
@@ -1675,7 +1744,14 @@ class SettingsAddon(Addon):
             return JSONResponse({"ok": True})
 
         @router.post("/providers")
-        def create_provider(body: dict) -> JSONResponse:
+        def create_provider(
+            body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            # A custom agent is a command line MindFlock runs, and settings
+            # sync spreads it: owner only (auth.may_configure). So are its
+            # edit and delete below.
+            if not allowed:
+                return _web_auth.configure_refused()
             body = body or {}
             name = str(body.get("name", "")).strip().lower()
             if not _NAME_RE.match(name):
@@ -1713,7 +1789,11 @@ class SettingsAddon(Addon):
             )
 
         @router.put("/providers/{name}")
-        def update_provider(name: str, body: dict) -> JSONResponse:
+        def update_provider(
+            name: str, body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            if not allowed:
+                return _web_auth.configure_refused()
             name = (name or "").strip().lower()
             if name in providers.BUILTIN_NAMES:
                 return JSONResponse(
@@ -1740,7 +1820,11 @@ class SettingsAddon(Addon):
             )
 
         @router.delete("/providers/{name}")
-        def delete_provider(name: str) -> JSONResponse:
+        def delete_provider(
+            name: str, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            if not allowed:
+                return _web_auth.configure_refused()
             name = (name or "").strip().lower()
             if name in providers.BUILTIN_NAMES:
                 return JSONResponse(
