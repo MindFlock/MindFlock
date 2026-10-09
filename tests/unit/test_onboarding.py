@@ -835,7 +835,9 @@ def test_setup_choice_saves_from_this_machine_on_the_real_app(tmp_path, monkeypa
         remote = TestClient(app, client=("100.64.0.5", 41000))
         r = remote.post("/api/onboarding/choice", json={"choice": "join"})
         assert r.status_code == 403
-        local = TestClient(app, client=("127.0.0.1", 41000))
+        local = TestClient(
+            app, client=("127.0.0.1", 41000), headers={"host": "127.0.0.1"}
+        )
         r = local.post("/api/onboarding/choice", json={"choice": "join"})
         assert r.status_code == 200, r.text
     S.invalidate()

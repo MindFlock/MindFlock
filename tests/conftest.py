@@ -238,6 +238,23 @@ def _no_tailnet_side_effects(monkeypatch):
     monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
     monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
     monkeypatch.setattr(mobile_access, "_tailscale_login", lambda: "")
+    # auth.host_ok's own names in an exposed mode: never read from the real
+    # tailscale. The test node answers as TestClient's default Host
+    # (``testserver``) and a tailnet IP of its own; tests that pin the
+    # rebinding guard re-patch this.
+    from backend.web.core import auth as _auth
+
+    monkeypatch.setattr(
+        _auth,
+        "_NODE",
+        {
+            "hosts": frozenset({"testserver", "100.64.0.1"}),
+            "lan": frozenset(),
+            "unbindable": False,
+            "at": float("inf"),
+            "pending": False,
+        },
+    )
     monkeypatch.setattr(mobile_announce, "announce_soon", lambda reason: None)
     monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)
     monkeypatch.setattr(mobile_announce, "_CACHED_URL", None)

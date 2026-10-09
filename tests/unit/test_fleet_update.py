@@ -333,7 +333,9 @@ def test_the_receiver_answers_only_the_fleet_key(http, monkeypatch):
         return {"ok": True}, 200
 
     monkeypatch.setattr(fleet_update, "apply", _apply)
-    c = http(client=("127.0.0.1", 50000))  # even from this machine
+    c = http(
+        client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )  # even from this machine
     assert c.post("/api/fleet/update/apply", json={}).status_code == 401
     assert (
         c.post(
@@ -359,7 +361,7 @@ def test_the_origin_route_requires_privileged(http, monkeypatch):
     r = http(client=("100.64.0.9", 4321)).post("/api/fleet/update", json={})
     assert r.status_code == 403
     # … and another MindFlock relaying, even with the fleet key.
-    r = http(client=("127.0.0.1", 50000)).post(
+    r = http(client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}).post(
         "/api/fleet/update",
         json={},
         headers={"X-MindFlock-Remote": "rig", "Authorization": "Bearer " + KEY},
@@ -375,7 +377,7 @@ def test_the_origin_route_starts_a_rollout_from_this_machine(http, monkeypatch):
         return {"state": "running", "members": []}, 200
 
     monkeypatch.setattr(fleet_update, "start", _start)
-    r = http(client=("127.0.0.1", 50000)).post(
+    r = http(client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}).post(
         "/api/fleet/update", json={"tag": "v9.9.9"}
     )
     assert r.status_code == 200 and seen == ["v9.9.9"]

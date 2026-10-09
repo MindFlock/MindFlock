@@ -155,7 +155,9 @@ def client():
 
     # From this machine: the login terminal is privileged() (a loopback peer
     # with no forwarding headers counts as the person at this device).
-    with TestClient(app, client=("127.0.0.1", 50000)) as c:
+    with TestClient(
+        app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    ) as c:
         yield c
 
 

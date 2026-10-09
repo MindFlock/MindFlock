@@ -222,8 +222,10 @@ def test_wrong_key_websocket_still_refused(authed):
 # --------------------------------------------------------------------------- #
 # privileged()
 # --------------------------------------------------------------------------- #
-def _scope(peer=("127.0.0.1", 50123), headers=(), client=None) -> dict:
-    s = {"type": "http", "headers": list(headers), "mf_peer": peer}
+def _scope(
+    peer=("127.0.0.1", 50123), headers=(), client=None, host=b"127.0.0.1:8765"
+) -> dict:
+    s = {"type": "http", "headers": [(b"host", host)] + list(headers), "mf_peer": peer}
     if client is not None:
         s["client"] = client
     return s
@@ -246,6 +248,23 @@ def test_privileged_loopback_without_forwarding(untrusted_tailnet):
     assert _run(auth.privileged(_scope(("127.0.0.1", 1)))) is True
     assert _run(auth.privileged(_scope(("::1", 1)))) is True
     assert _run(auth.privileged(_scope(("::ffff:127.0.0.1", 1)))) is True
+
+
+@pytest.mark.parametrize(
+    "host", [b"evil.example", b"evil.example:8765", b"box.tail0000.ts.net", b"", None]
+)
+def test_privileged_loopback_needs_a_loopback_host(untrusted_tailnet, host):
+    """DNS rebinding: a page whose name re-resolves to 127.0.0.1 arrives from
+    a loopback peer with ITS name as the Host. It isn't the person here —
+    and in tailscale mode host_ok can't refuse every such name."""
+    scope = _scope(("127.0.0.1", 1))
+    scope["headers"] = [(b"host", host)] if host is not None else []
+    assert auth._from_this_machine(scope) is False
+    assert _run(auth.privileged(scope)) is False
+    assert auth.may_see_own_token(scope) is False
+    for ok in (b"localhost:8765", b"127.0.0.1", b"[::1]:8765", b"127.0.1.1:8765"):
+        scope["headers"] = [(b"host", ok)]
+        assert auth._from_this_machine(scope) is True, ok
 
 
 @pytest.mark.parametrize("header", [b"x-forwarded-for", b"forwarded", b"x-real-ip"])
@@ -305,7 +324,13 @@ def test_privileged_reads_the_transport_peer_not_the_rewritten_client(
     assert _run(auth.privileged(scope)) is False
     # …with scope["client"] as the fallback when the capture isn't mounted.
     assert _run(
-        auth.privileged({"type": "http", "headers": [], "client": ("127.0.0.1", 9)})
+        auth.privileged(
+            {
+                "type": "http",
+                "headers": [(b"host", b"localhost")],
+                "client": ("127.0.0.1", 9),
+            }
+        )
     )
     assert _run(auth.privileged({"type": "http", "headers": []})) is False
     # The TestClient's default peer is not loopback.

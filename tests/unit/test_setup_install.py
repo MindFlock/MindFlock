@@ -104,7 +104,9 @@ def test_the_script_is_private_to_the_user(fake):
 def test_routes(fake):
     from backend.web import server
 
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     assert c.get("/api/doctor/install-state").json() == {
         "running": False,
         "exit_code": None,
@@ -123,7 +125,9 @@ def test_terminal_reports_why_it_cannot_open(fake, monkeypatch):
     from backend.web import server
 
     monkeypatch.setattr(doctor, "run_checks", lambda: [])
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     with c.websocket_connect("/api/doctor/install-terminal") as ws:
         msg = ws.receive_json()
     assert msg["type"] == "error" and "nothing to install" in msg["message"]
@@ -214,7 +218,9 @@ def test_without_tmux_the_browser_terminal_streams_the_run(fake, monkeypatch):
     from backend.web.core import pty_run
 
     monkeypatch.setattr(setup_install, "_have_tmux", lambda: False)
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     try:
         seen = b""
         with c.websocket_connect("/api/doctor/install-terminal") as ws:

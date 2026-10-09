@@ -534,7 +534,9 @@ _PENDING = {
 
 def test_health_route_for_this_machine_has_the_sign_in_url(monkeypatch):
     monkeypatch.setattr(ts, "health", lambda fresh=False: dict(_PENDING))
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     body = c.get("/api/tailscale/health").json()
     assert body["auth_url"] == "https://login.tailscale.com/a/xyz"
     assert body["user"] == "me@example.com"
@@ -556,7 +558,9 @@ def test_login_route_is_refused_off_this_machine(monkeypatch):
     )
     c = TestClient(server.app, client=("100.64.0.99", 50000))
     assert c.post("/api/tailscale/login").status_code == 403
-    relayed = TestClient(server.app, client=("127.0.0.1", 50000))
+    relayed = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     r = relayed.post("/api/tailscale/login", headers={"X-MindFlock-Remote": "laptop"})
     assert r.status_code == 403
 
@@ -573,7 +577,9 @@ def test_login_route_from_this_machine(monkeypatch):
             "fix": "",
         },
     )
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     r = c.post("/api/tailscale/login")
     assert r.status_code == 200
     assert r.json()["auth_url"] == "https://login.tailscale.com/a/q"
@@ -583,7 +589,13 @@ def test_mobile_payload_leads_with_tailscale_on_the_phone(monkeypatch):
     from backend.web.core import mobile_access
 
     monkeypatch.setattr(mobile_access, "_tailscale_login", lambda: "me@example.com")
-    here = TestClient(server.app, client=("127.0.0.1", 50000)).get("/api/mobile").json()
+    here = (
+        TestClient(
+            server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+        )
+        .get("/api/mobile")
+        .json()
+    )
     assert here["phone_app"]["url"] == "https://tailscale.com/download"
     assert here["phone_app"]["login"] == "me@example.com"
     away = (

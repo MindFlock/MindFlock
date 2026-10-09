@@ -57,8 +57,12 @@ exploitable.
   so without this a malicious webpage could connect to
   `ws://127.0.0.1:8765/...` and drive your agent terminals. Requests carrying
   a foreign `Origin` header are rejected (HTTP 403 / WS close 4403).
-- **DNS rebinding is refused in local mode.** A server bound to `127.0.0.1`
-  only answers loopback `Host` headers.
+- **DNS rebinding is refused.** A server bound to `127.0.0.1` only answers
+  loopback `Host` headers; a tailnet-exposed one only its own names
+  (loopback, its tailnet addresses and MagicDNS names, the shared phone
+  link, and its LAN addresses when bound to every interface). The
+  "this request comes from this machine" shortcut also needs a loopback
+  `Host`, so a page rebound onto 127.0.0.1 never counts as you.
 
 ### Agent-session sockets
 

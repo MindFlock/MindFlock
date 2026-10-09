@@ -2161,6 +2161,21 @@ run **before everything else**, public paths included: a cross-site
   (`<name>.<tailnet>.ts.net`), once this server advertises it. `tailscale
   serve` keeps the original `Host` on the request it forwards to 127.0.0.1,
   and only the tailnet resolves that name.
+- **Host check (tailscale mode).** A tailnet-exposed server answers only
+  its own names: loopback, this node's tailnet addresses and MagicDNS names
+  (full and short — from the shared `tailscale status` snapshot, re-read in
+  the background every 30 s; a failed read keeps the last names), the
+  shared link's service hostname, and — only while bound to every interface
+  (`MINDFLOCK_BIND_ALL`, or the fallback when tailscaled wasn't up or its
+  addresses can't be bound here) — this machine's LAN addresses and
+  hostname. Anything else is a 403, so a page rebound onto the tailnet IP
+  (or 127.0.0.1) gets nowhere even with the gate off. The phone over
+  MagicDNS, `tailscale serve`, the shared link, and another member calling
+  by IP or by name all pass.
+- **"From this machine" names this machine.** The loopback shortcut
+  (`privileged`, the token reveal, `may_configure`) needs the `Host` header
+  to be a loopback name too (`localhost`, `127.x`, `::1`): a rebound page
+  reaches 127.0.0.1 from a loopback peer with its own name as the `Host`.
 
 | Method | Path | Behavior |
 |---|---|---|

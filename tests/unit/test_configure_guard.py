@@ -62,7 +62,10 @@ def app(tmp_path, monkeypatch, untrusted):
 
 
 def _client(app, peer, **kw) -> TestClient:
-    # Not entered: the lifespan already ran once in the fixture.
+    # Not entered: the lifespan already ran once in the fixture. This
+    # machine's own browser names it as a loopback host.
+    if peer == LOOPBACK and "base_url" not in kw:
+        kw["base_url"] = "http://127.0.0.1:8765"
     return TestClient(app, client=peer, **kw)
 
 
@@ -258,7 +261,11 @@ def test_cosmetic_prefs_stay_writable_by_anyone(app):
 # may_configure itself
 # --------------------------------------------------------------------------- #
 def _scope(peer, headers=()):
-    return {"type": "http", "headers": list(headers), "mf_peer": peer}
+    return {
+        "type": "http",
+        "headers": [(b"host", b"127.0.0.1:8765")] + list(headers),
+        "mf_peer": peer,
+    }
 
 
 def test_may_configure_scopes(monkeypatch, untrusted):
