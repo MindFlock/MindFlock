@@ -77,7 +77,7 @@ export function memberStatus(m: FleetMember, selfVersion: string): string {
 /** What blocks a candidate from joining (shown instead of its buttons), or
  * "" when it can. */
 export function candidateBlocker(c: FleetCandidate): string {
-  if (!c.reachable) return "offline";
+  if (!c.reachable) return c.reason || "offline";
   if (!c.fleet_proto) return "update MindFlock on " + (c.host || c.device) + " to add it";
   return "";
 }

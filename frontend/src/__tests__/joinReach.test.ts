@@ -262,3 +262,22 @@ describe("desktop notifications", () => {
     expect(show).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a candidate that stopped answering", () => {
+  it("says why instead of 'offline'", async () => {
+    const { candidateBlocker } = await import("../lib/fleet");
+    const c = {
+      device: "box",
+      host: "Box",
+      version: "",
+      fleet_proto: 1,
+      reachable: false,
+      member: false,
+      in_fleet: false,
+      same_fleet: false,
+      has_token: false,
+    };
+    expect(candidateBlocker({ ...c, reason: "connection refused on :8765" })).toBe("connection refused on :8765");
+    expect(candidateBlocker(c)).toBe("offline");
+  });
+});

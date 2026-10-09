@@ -3095,6 +3095,12 @@ def status(privileged: bool) -> dict:
                 "in_fleet": bool(their),
                 "same_fleet": same,
                 "has_token": bool(_remote.token_for(key)),
+                # Answered once, not now: why (what the last probe found).
+                "reason": (
+                    ""
+                    if dev.get("reachable")
+                    else _probe_line(probes.get(key), dev.get("host") or key, port)
+                ),
             }
         )
     removed = []
@@ -3197,7 +3203,9 @@ def _tailnet_peers(
     out = []
     for key, p in probes.items():
         dev = known.get(key) or {}
-        if key == me or _live(doc, key) or dev.get("reachable"):
+        # Members and candidates (it answered as a MindFlock at some point)
+        # carry their own reason on their own rows.
+        if key == me or _live(doc, key) or dev.get("reachable") or dev.get("last_seen"):
             continue
         out.append(
             {

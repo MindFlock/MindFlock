@@ -611,3 +611,18 @@ def test_the_desktop_app_raises_os_notifications():
     assert "notifiedUpdate = latest" in main
     assert "exposeInMainWorld('mfnotify'" in pre
     assert "ipcRenderer.invoke('notify:show'" in pre
+
+
+def test_a_candidate_that_stopped_answering_says_why_on_its_own_row():
+    remote._DEVICES["box"] = {
+        "key": "box", "host": "Box", "reachable": False, "last_seen": 5.0,
+        "fleet_proto": 1, "fleet": "", "version": "",
+    }  # fmt: skip
+    remote._PROBES["box"] = {
+        "device": "box", "host": "Box", "outcome": "refused", "tags": [],
+        "ts_last_seen": 0.0, "online": True,
+    }  # fmt: skip
+    st = fleet.status(True)
+    [cand] = st["candidates"]
+    assert "connection refused" in cand["reason"]
+    assert st["tailnet_peers"] == []  # not listed twice

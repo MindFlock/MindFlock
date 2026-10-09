@@ -854,6 +854,8 @@ export interface FleetCandidate {
   same_fleet: boolean;
   /** This device holds its pasted access token: one-click add works. */
   has_token: boolean;
+  /** Answered once but not now: why ("connection refused on :8765 — …"). */
+  reason?: string;
 }
 
 /** A tailnet device that isn't (reachably) a MindFlock, and why. */

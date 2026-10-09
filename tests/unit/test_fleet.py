@@ -1476,6 +1476,7 @@ async def test_status_payload(world, monkeypatch):
         "in_fleet": True,
         "same_fleet": False,
         "has_token": True,
+        "reason": "",
     }
     assert st["invites"] == []  # the join used the only one
     with world.on("laptop"):
