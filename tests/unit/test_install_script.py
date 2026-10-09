@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,6 +25,11 @@ _SCRIPT = (Path(__file__).resolve().parents[2] / "install.sh").read_text(
 
 def test_install_script_parses():
     assert subprocess.run(["/bin/sh", "-n", "-c", _SCRIPT]).returncode == 0
+
+
+@pytest.mark.skipif(not shutil.which("dash"), reason="dash not installed")
+def test_install_script_parses_as_posix_sh():
+    assert subprocess.run(["dash", "-n", "-c", _SCRIPT]).returncode == 0
 
 
 def test_the_default_ref_is_the_newest_release_not_main():
@@ -86,3 +92,48 @@ def test_the_resolver_answers_nothing_rather_than_a_non_release(tmp_path):
     assert (
         _resolver(tmp_path, curl="exit 6", git=git, repo="https://example.com/x") == ""
     )
+
+
+def test_the_resolver_skips_pre_releases_and_stray_v_tags(tmp_path):
+    git = (
+        'printf "a\\trefs/tags/vnext\\nb\\trefs/tags/v1.0.0-rc1\\n'
+        'c\\trefs/tags/v0.9.0\\n"'
+    )
+    assert (
+        _resolver(tmp_path, curl="exit 6", git=git, repo="https://example.com/x.git")
+        == "v0.9.0"
+    )
+
+
+def _restart_step(tmp_path: Path, *, restart_exit: int) -> subprocess.CompletedProcess:
+    """Step 5 alone, with a server answering its hello and a `mindflock
+    restart` that exits ``restart_exit``."""
+    step = _SCRIPT[_SCRIPT.index("# --- 5.") : _SCRIPT.index("# --- 6.")]
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    mf = bindir / "mindflock"
+    mf.write_text("#!/bin/sh\nexit %d\n" % restart_exit, encoding="utf-8")
+    for exe in bindir.iterdir():
+        exe.chmod(0o755)
+    script = (
+        'set -eu\nsay() { printf \'%%s\\n\' "$*"; }\nJOIN=""\nMF=%s\n%s\n'
+        "say AFTER-STEP-5\n" % (mf, step)
+    )
+    env = dict(os.environ, PATH="%s:/usr/bin:/bin" % bindir)
+    env.pop("MINDFLOCK_INSTALL_NO_RESTART", None)
+    return subprocess.run(
+        ["/bin/sh", "-c", script], env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+def test_a_restarted_server_is_reported_as_running_the_new_version(tmp_path):
+    cp = _restart_step(tmp_path, restart_exit=0)
+    assert cp.returncode == 0 and "runs the new version" in cp.stdout
+
+
+def test_a_failed_restart_never_claims_the_new_version_runs(tmp_path):
+    cp = _restart_step(tmp_path, restart_exit=1)
+    assert "runs the new version" not in cp.stdout
+    assert "still runs the previous version" in cp.stdout
+    assert cp.returncode == 1

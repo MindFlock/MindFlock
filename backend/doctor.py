@@ -1243,6 +1243,11 @@ def run_checks() -> List[Check]:
     return out
 
 
+def _is_brew_cmd(cmd: str) -> bool:
+    """Whether an install step's command is a Homebrew one (``brew …``)."""
+    return (cmd or "").lstrip().split(" ", 1)[0] == "brew"
+
+
 def _pkg_install_line(pkgs: List[str]) -> str:
     """ONE command installing every package in ``pkgs`` with this host's package
     manager (non-interactive: the user already said yes to the whole plan)."""
@@ -1284,7 +1289,8 @@ def install_plan(checks: List[Check]) -> dict:
     their own installers after it, each in turn, so one failure doesn't stop
     the others. The script ends by saying what failed, and exits non-zero if
     anything did. On a Mac without Homebrew, installing Homebrew is the first
-    step whenever there is a package to install.
+    step whenever there is a package — or a ``brew …`` step of its own, such
+    as a cask — to install.
 
     Returns ``{"steps": [{"id", "label", "cmd"}], "packages": [...],
     "script": str}`` — ``steps`` empty (and ``script`` ``""``) when there is
@@ -1299,7 +1305,11 @@ def install_plan(checks: List[Check]) -> dict:
             if c.pkg not in pkgs:
                 pkgs.append(c.pkg)
             pkg_labels.append(c.label)
-    if pkgs and osenv.os_kind() == "macos" and not _brew_installed():
+    # Installers of their own that are brew too (`brew install --cask
+    # tailscale-app`): they need Homebrew exactly like the package run does.
+    brew_cmds = any(not c.pkg and _is_brew_cmd(c.cmd) for c in wanted)
+    macos = osenv.os_kind() == "macos"
+    if (pkgs or brew_cmds) and macos and not _brew_installed():
         # A fresh Mac has no Homebrew, and every package below is a `brew
         # install` — so Homebrew itself goes first (it asks for the password
         # once, in the install terminal).
@@ -1320,7 +1330,11 @@ def install_plan(checks: List[Check]) -> dict:
         )
     for c in wanted:
         if not c.pkg:
-            steps.append({"id": c.id, "label": c.label, "cmd": c.cmd})
+            cmd = c.cmd
+            if macos and _is_brew_cmd(cmd) and not shutil.which("brew"):
+                # Just installed above, or present but off this PATH.
+                cmd = f"{_BREW_SHELLENV}; {cmd}"
+            steps.append({"id": c.id, "label": c.label, "cmd": cmd})
     if not steps:
         return {"steps": [], "packages": [], "script": ""}
     import shlex

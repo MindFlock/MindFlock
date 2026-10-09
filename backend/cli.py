@@ -2285,13 +2285,19 @@ _BOOT_SERVER_WAIT_S = 60.0
 _BOOT_TAILSCALE_WAIT_S = 600.0
 
 
-def _start_server_detached() -> str:
-    """Start ``mindflock serve`` in the background (its own session, output in
-    ~/.mindflock/logs/serve.log); return the log path."""
+def _start_server_detached(port: Optional[int] = None) -> str:
+    """Start ``mindflock serve`` in the background (its own session) on
+    ``port`` (default its own 8765); return the log path.
+
+    Only stderr goes to ~/.mindflock/logs/serve.log: stdout is where the
+    startup banner prints the access token and its sign-in QR, which must
+    never land in a log file (the server logs a redacted banner itself)."""
     from backend.config.config import GetConfigDir
 
     exe = shutil.which("mindflock")
     argv = [exe, "serve"] if exe else [sys.executable, "-m", "backend.cli", "serve"]
+    if port:
+        argv += ["--port", str(int(port))]
     log_dir = os.path.join(GetConfigDir(), "logs")
     os.makedirs(log_dir, exist_ok=True)
     path = os.path.join(log_dir, "serve.log")
@@ -2299,12 +2305,22 @@ def _start_server_detached() -> str:
         subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
-            stdout=fh,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=fh,
             start_new_session=True,
             cwd=os.path.expanduser("~"),
         )
     return path
+
+
+def _bootstrap_port(args: argparse.Namespace) -> Optional[int]:
+    """The port the CLI looks for a server on (``--port``, then
+    ``MINDFLOCK_PORT``) — the one a server it starts must listen on, or it
+    would wait for a server on a port nobody opens. None = the default."""
+    if getattr(args, "port", None):
+        return int(args.port)
+    raw = (os.environ.get("MINDFLOCK_PORT") or "").strip()
+    return int(raw) if raw.isdigit() else None
 
 
 def _ensure_server(args: argparse.Namespace) -> str:
@@ -2314,7 +2330,7 @@ def _ensure_server(args: argparse.Namespace) -> str:
         raise
     except client.ServerNotFound:
         pass
-    log_path = _start_server_detached()
+    log_path = _start_server_detached(_bootstrap_port(args))
     print("Starting MindFlock in the background (log: %s)…" % log_path)
     deadline = time.monotonic() + _BOOT_SERVER_WAIT_S
     while time.monotonic() < deadline:

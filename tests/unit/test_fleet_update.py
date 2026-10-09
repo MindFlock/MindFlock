@@ -26,6 +26,8 @@ KEY = "fleet-key-XYZ_0123456789"
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet_update, "_path", lambda: tmp_path / "fleet_update.json")
+    # THIS device's own update.json (its row follows it): never the real one.
+    monkeypatch.setattr(self_update, "_state_dir", lambda: tmp_path)
     monkeypatch.setattr(fleet_update, "_TASK", {"task": None})
     monkeypatch.setattr(fleet_update, "POLL_S", 0.0)
     monkeypatch.setattr(fleet, "in_fleet", lambda: True)
@@ -216,13 +218,143 @@ async def test_this_device_updates_itself_last(monkeypatch):
         return await real_post(dev, path, body, **kw)
 
     monkeypatch.setattr(remote, "post_json", _post)
-    monkeypatch.setattr(
-        self_update, "start_update", lambda tag: order.append("self") or {"ok": True}
-    )
-    doc = await _rollout()
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "0" * 40)
+
+    def _start(tag):
+        order.append("self")
+        self_update.write_state(state="started", ref=tag, commit="a" * 40)
+        return {"ok": True, "commit": "a" * 40}
+
+    monkeypatch.setattr(self_update, "start_update", _start)
+    out, status = await fleet_update.start("v9.9.9")
+    assert status == 200
+    task = fleet_update._TASK["task"]
+
+    def me():
+        return [r for r in fleet_update.status()["members"] if r["self"]][0]
+
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if order == ["mini", "self"]:
+            break
     assert order == ["mini", "self"]
-    me = [r for r in doc["members"] if r["self"]][0]
-    assert me["step"] == "updating"
+    # Installing: the rollout is NOT done yet — it is this device's turn.
+    await asyncio.sleep(0.01)
+    assert fleet_update.status()["state"] == "running"
+    assert me()["step"] == "updating"
+    # Installed: restarting onto it.
+    self_update.write_state(
+        state="done",
+        ref="v9.9.9",
+        commit="a" * 40,
+        finished_at=__import__("time").time(),
+    )
+    for _ in range(200):
+        await asyncio.sleep(0.001)
+        if me()["step"] == "restarting":
+            break
+    assert me()["step"] == "restarting"
+    assert fleet_update.status()["state"] == "running"
+    # The watcher re-execs this process: the task dies with it …
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # … and the new process, running the installed build, finishes the rollout.
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "a" * 40)
+    doc = fleet_update.status()
+    assert doc["state"] == "done" and me()["step"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_this_device_failing_its_own_install_halts_the_rollout(monkeypatch):
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    _Fleet(monkeypatch, {})
+
+    def _start(tag):
+        self_update.write_state(state="failed", ref=tag, error="uv exploded", code=2)
+        return {"ok": True, "commit": "a" * 40}
+
+    monkeypatch.setattr(self_update, "start_update", _start)
+    doc = await _rollout()
+    assert doc["state"] == "halted" and doc["error"] == "this device: uv exploded"
+    assert _steps(doc)["laptop"] == "failed"
+
+
+def test_a_rollback_here_after_the_restart_reads_as_failed(monkeypatch):
+    """The new build didn't boot; the installer put the old one back and
+    relaunched it. The relaunched server says so on this device's row."""
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "b" * 40)
+    fleet_update._write(
+        {
+            "state": "running",
+            "tag": "v9.9.9",
+            "version": "9.9.9",
+            "error": "",
+            "members": [
+                {"key": "mini", "host": "Mini", "step": "done"},
+                {"key": "laptop", "host": "Laptop", "self": True, "step": "restarting"},
+            ],
+        }
+    )
+    self_update.write_state(state="rolled_back", ref="v9.9.9", commit="a" * 40)
+    doc = fleet_update.status()
+    assert doc["state"] == "halted"
+    assert _steps(doc) == {"mini": "done", "laptop": "failed"}
+    assert "rolled back" in doc["error"]
+
+
+def test_this_devices_install_still_running_after_a_restart_stays_running(
+    monkeypatch,
+):
+    import time
+
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "0" * 40)
+    fleet_update._write(
+        {
+            "state": "running",
+            "tag": "v9.9.9",
+            "version": "9.9.9",
+            "error": "",
+            "members": [
+                {"key": "laptop", "host": "Laptop", "self": True, "step": "restarting"},
+            ],
+        }
+    )
+    # Installed moments ago, the restart onto it not landed yet.
+    self_update.write_state(
+        state="done", ref="v9.9.9", commit="a" * 40, finished_at=time.time()
+    )
+    assert fleet_update.status()["state"] == "running"
+    # Long past the grace with no restart: it didn't come back.
+    self_update.write_state(
+        state="done",
+        ref="v9.9.9",
+        commit="a" * 40,
+        finished_at=time.time() - fleet_update.RESTART_GRACE_S - 1,
+    )
+    doc = fleet_update.status()
+    assert doc["state"] == "halted" and _steps(doc) == {"laptop": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_the_fleet_key_is_re_checked_before_every_state_request(monkeypatch):
+    """A member that stops matching its recorded name mid-update (another
+    node answering for it while it restarts) never gets the key."""
+    monkeypatch.setattr(fleet_update, "MEMBER_TIMEOUT_S", 0.05)
+    f = _Fleet(monkeypatch, {"mini": {}})
+    checks = {"n": 0}
+
+    def _member(dev):
+        checks["n"] += 1
+        return checks["n"] == 1  # the pre-apply check only
+
+    monkeypatch.setattr(fleet, "member_device", _member)
+    doc = await _rollout()
+    assert ("apply", "mini") in f.log
+    assert ("state", "mini") not in f.log
+    assert checks["n"] > 1 and _steps(doc)["mini"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -233,6 +365,27 @@ async def test_a_desktop_shell_behind_says_it_updates_on_next_launch(monkeypatch
     row = doc["members"][0]
     assert row["step"] == "done"
     assert row["detail"] == "desktop app on Mac (v0.7.4) updates on its next launch"
+
+
+@pytest.mark.asyncio
+async def test_a_hello_without_the_shell_version_keeps_the_last_one(monkeypatch):
+    """Right after its restart a member's hello may not know its desktop app
+    yet ("") — the row keeps what it said before."""
+    f = _Fleet(monkeypatch, {"mac": {"shell_version": "0.7.4"}})
+    f.boots = {"mac": {"after": 1, "commit": "a" * 40}}
+    real = fleet_update._probe
+
+    async def _probe(key):
+        dev = await real(key)
+        if dev.get("version") == "9.9.9":
+            dev["shell_version"] = ""
+        return dev
+
+    monkeypatch.setattr(fleet_update, "_probe", _probe)
+    doc = await _rollout()
+    row = doc["members"][0]
+    assert row["step"] == "done" and row["shell_version"] == "0.7.4"
+    assert "updates on its next launch" in row["detail"]
 
 
 @pytest.mark.asyncio

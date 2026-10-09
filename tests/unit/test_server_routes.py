@@ -2493,9 +2493,14 @@ def test_update_state_restarts_the_server_once_the_install_is_done(monkeypatch):
     monkeypatch.setattr(
         server._restart, "reset_tailscale_attempts", lambda: calls.append("reset")
     )
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart,
+        "reexec_soon",
+        lambda **kw: calls.append("reexec" if kw == {"keep_mode": True} else kw),
+    )
     body = client.get("/api/update/state").json()
     assert body["restarting"] is True
+    # keep_mode: an update never drops a tailscale-mode rig back to loopback.
     assert calls == ["reset", "reexec"]
 
 
@@ -2506,7 +2511,9 @@ def test_update_state_does_not_restart_while_the_install_is_running(monkeypatch)
         "finish_state",
         lambda: ({"state": "started", "log": []}, False),
     )
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart, "reexec_soon", lambda **kw: calls.append("reexec")
+    )
     body = client.get("/api/update/state").json()
     assert body["restarting"] is False and calls == []
 
@@ -2524,10 +2531,14 @@ def test_update_state_re_execs_exactly_once_across_repeated_polls(
     that the route forwards a boolean.
     """
     monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(server._self_update, "_RESTARTING", {"key": ""})
+    monkeypatch.setattr(server._self_update, "_install_terminal_busy", lambda: False)
     server._self_update.write_state(state="done", ref="v9.9.9", code=0)
     calls = []
     monkeypatch.setattr(server._restart, "reset_tailscale_attempts", lambda: None)
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart, "reexec_soon", lambda **kw: calls.append("reexec")
+    )
 
     first = client.get("/api/update/state").json()
     second = client.get("/api/update/state").json()
@@ -2547,7 +2558,7 @@ def test_update_state_carries_the_installer_log_tail(monkeypatch, tmp_path):
     monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
     server._self_update.write_state(state="failed", ref="v9.9.9", code=7)
     server._self_update.log_path().write_text("line one\nline two\n", encoding="utf-8")
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: None)
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda **kw: None)
 
     body = client.get("/api/update/state").json()
     assert body["state"] == "failed" and body["restarting"] is False

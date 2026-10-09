@@ -83,9 +83,11 @@ def wait_for_build(
 # restart
 # --------------------------------------------------------------------------- #
 def cmd_restart(args: argparse.Namespace) -> int:
-    """Re-exec the running server (picks up an engine installed under it)."""
+    """Re-exec the running server (picks up an engine installed under it),
+    in the mode it runs in — a server started with ``mindflock serve
+    tailscale`` stays on the tailnet."""
     base = client.discover(args.host, args.port)
-    client.post(base, "/api/server/restart", timeout=10.0)
+    client.post(base, "/api/server/restart", {"keep_mode": True}, timeout=10.0)
     time.sleep(1.5)  # it answers once more before the re-exec lands
     hello = wait_for_build(base, timeout=60.0)
     if not hello:
@@ -300,12 +302,25 @@ def cmd_devices_update(args: argparse.Namespace) -> int:
     )
     print("updating to %s…" % ((doc or {}).get("tag") or tag or "the newest release"))
     shown: dict = {}
+    down_since: Optional[float] = None
     while True:
         try:
             doc = client.get(base, "/api/fleet/update", timeout=10.0) or {}
         except client.ClientError:
-            time.sleep(POLL_S)  # this computer restarting at the very end
+            # This computer restarting at the very end — but not for ever.
+            now = time.monotonic()
+            if down_since is None:
+                down_since = now
+            elif now - down_since > RESTART_WAIT_S:
+                _err(
+                    "the server here stopped answering for %ds — see how the "
+                    "update went in Settings → Devices once it's back, or check "
+                    "its log" % int(RESTART_WAIT_S)
+                )
+                return 1
+            time.sleep(POLL_S)
             continue
+        down_since = None
         for row in doc.get("members") or []:
             line = _row_line(row)
             if shown.get(row.get("key")) != line:

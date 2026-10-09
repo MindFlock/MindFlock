@@ -768,6 +768,68 @@ def test_cli_bootstrap_join_stops_without_tailscale(monkeypatch, capsys):
     assert "run the same line again" in capsys.readouterr().out
 
 
+def test_a_server_the_bootstrap_starts_listens_where_the_cli_looks(
+    monkeypatch, tmp_path
+):
+    """`--port`/MINDFLOCK_PORT reach `mindflock serve`, and its stdout — the
+    access token and QR banner — never reaches serve.log."""
+    import argparse
+    import subprocess
+
+    from backend import cli
+    from backend.config import config as _config
+
+    monkeypatch.setattr(_config, "GetConfigDir", lambda: str(tmp_path))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/x/mindflock")
+    spawned = []
+    monkeypatch.setattr(
+        cli.subprocess, "Popen", lambda argv, **kw: spawned.append((argv, kw))
+    )
+    monkeypatch.delenv("MINDFLOCK_PORT", raising=False)
+    assert cli._bootstrap_port(argparse.Namespace(port=None)) is None
+    monkeypatch.setenv("MINDFLOCK_PORT", "9100")
+    assert cli._bootstrap_port(argparse.Namespace(port=None)) == 9100
+    assert cli._bootstrap_port(argparse.Namespace(port=9200)) == 9200
+
+    path = cli._start_server_detached(9100)
+    argv, kw = spawned[0]
+    assert argv == ["/x/mindflock", "serve", "--port", "9100"]
+    assert kw["stdout"] is subprocess.DEVNULL
+    assert kw["stderr"] is not subprocess.STDOUT and kw["stderr"].name == path
+    cli._start_server_detached()
+    assert spawned[1][0] == ["/x/mindflock", "serve"]
+
+
+def test_the_git_credential_helper_survives_an_awkward_install_path(
+    monkeypatch, tmp_path
+):
+    """The helper line is run by a shell: a path with a space or a quote
+    must still name the right program."""
+    import subprocess
+
+    exe_dir = tmp_path / "My Apps" / "it's"
+    exe_dir.mkdir(parents=True)
+    exe = exe_dir / "mindflock"
+    exe.write_text('#!/bin/sh\necho "ran $1 $2"\n', encoding="utf-8")
+    exe.chmod(0o755)
+    saved = []
+    monkeypatch.setattr(github_auth, "gh_path", lambda: "")
+    monkeypatch.setattr(github_auth, "credential_helper", lambda: "")
+    monkeypatch.setattr(github_auth, "resolve_token", lambda: ("settings", "t"))
+    monkeypatch.setattr(github_auth, "_mindflock_bin", lambda: str(exe))
+    monkeypatch.setattr(
+        github_auth, "_git", lambda *a, **k: saved.append(a) or (0, "", "")
+    )
+    assert github_auth.setup_git_credential()["ok"] is True
+    helper = saved[0][-1]
+    assert helper.startswith("!")
+    # What git does with a `!` helper: hand the rest to the shell, plus "get".
+    out = subprocess.run(
+        ["/bin/sh", "-c", helper[1:] + " get"], capture_output=True, text=True
+    ).stdout
+    assert out.strip() == "ran git-credential get"
+
+
 def test_bootstrap_join_makes_the_new_computer_reachable_first(monkeypatch, capsys):
     """A fresh install listens on 127.0.0.1: before joining it saves what Make
     reachable saves (tailnet bind AND the gate, together)."""

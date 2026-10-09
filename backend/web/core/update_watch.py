@@ -9,11 +9,12 @@ Two jobs, one lifespan task (:func:`watch_loop`):
   from another device then left the server running old Python on a replaced
   venv, lazily importing NEW modules into the OLD process — the stale-copy
   trap. So the server watches the file itself (every :data:`TICK_S`) and
-  re-execs once the install is ``done``, through the same once-only
-  :func:`~backend.web.core.self_update.finish_state` the route uses. It holds
-  off while Setup's install terminal is running (a re-exec mid-install would
-  take a PTY-backed one down with it), and never restarts a process that
-  already runs the installed build (:func:`~backend.web.core.self_update.applied`).
+  re-execs once the install is ``done`` (in the mode it runs in), through the
+  same once-only :func:`~backend.web.core.self_update.finish_state` the route
+  uses — which holds off while Setup's install terminal is running (a re-exec
+  mid-install would take a PTY-backed one down with it), and never restarts a
+  process that already runs the installed build
+  (:func:`~backend.web.core.self_update.applied`).
 
 * **Say a newer release exists** (``update.available``), once per release and
   per set of devices behind it: browsers, the bell and /m learn it without
@@ -26,7 +27,10 @@ Two jobs, one lifespan task (:func:`watch_loop`):
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from backend import log
@@ -42,8 +46,41 @@ ANNOUNCE_FIRST_S = 120.0
 ANNOUNCE_EVERY_S = 30 * 60.0
 
 #: What was last announced (``"<version>|<here>|<behind keys>"``) — one event
-#: per distinct answer, not one per check.
-_LAST = {"sig": ""}
+#: per distinct answer, not one per check. Kept on disk too (:func:`_last_path`,
+#: read once per process) so a restart — every update ends in one — doesn't
+#: announce the same answer again.
+_LAST = {"sig": "", "loaded": False}
+
+
+def _last_path() -> Path:
+    from backend.config import config as _config
+
+    return Path(_config.GetConfigDir()) / "update_announced.json"
+
+
+def _last_sig() -> str:
+    if not _LAST["loaded"]:
+        _LAST["loaded"] = True
+        try:
+            doc = json.loads(_last_path().read_text(encoding="utf-8"))
+            _LAST["sig"] = str((doc or {}).get("sig") or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return str(_LAST["sig"] or "")
+
+
+def _remember(sig: str) -> None:
+    if _last_sig() == sig:
+        return
+    _LAST["sig"] = sig
+    try:
+        path = _last_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"sig": sig}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as err:
+        _log("update announce: could not save the marker (%v)", err)
 
 
 def _log(fmt: str, *args) -> None:
@@ -52,16 +89,6 @@ def _log(fmt: str, *args) -> None:
             log.ErrorLog.Printf(fmt, *args)
         except Exception:  # noqa: BLE001
             pass
-
-
-def _install_terminal_busy() -> bool:
-    """Whether Setup's dependency install terminal is mid-run."""
-    try:
-        from backend.web.core import setup_install
-
-        return bool((setup_install.state() or {}).get("running"))
-    except Exception:  # noqa: BLE001 — unknown means "not in the way"
-        return False
 
 
 def tick() -> bool:
@@ -78,8 +105,7 @@ def tick() -> bool:
             return False
         if state != "done" or st.get("restarted"):
             return False
-        if not _self_update.applied(st) and _install_terminal_busy():
-            return False  # held: "restart pending" until it finishes
+        # Held there while Setup's install terminal runs ("restart pending").
         _, restart_now = _self_update.finish_state()
         if restart_now:
             _log(
@@ -87,7 +113,9 @@ def tick() -> bool:
                 str(st.get("ref") or st.get("version") or "?"),
             )
             _restart.reset_tailscale_attempts()
-            _restart.reexec_soon()
+            # Same mode as now: an update is no reason to drop a rig started
+            # with `mindflock serve tailscale` back to loopback.
+            _restart.reexec_soon(keep_mode=True)
         return restart_now
     except Exception as err:  # noqa: BLE001 — the loop must not die
         _log("update watch failed: %v", err)
@@ -157,16 +185,16 @@ async def announce() -> Optional[dict]:
     try:
         data = notice(await _self_update.latest_release())
         if data is None:
-            _LAST["sig"] = ""
+            _remember("")
             return None
         sig = "%s|%s|%s" % (
             data["latest"],
             int(data["here"]),
             ",".join(b["key"] for b in data["behind"]),
         )
-        if sig == _LAST["sig"]:
+        if sig == _last_sig():
             return None
-        _LAST["sig"] = sig
+        _remember(sig)
         from backend.web.core import events as _events
 
         _events.BUS.emit("update.available", data=data)

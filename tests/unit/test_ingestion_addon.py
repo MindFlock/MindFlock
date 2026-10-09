@@ -634,11 +634,33 @@ class TestStaleBuild:
         addon = ti.TicketIngestionAddon()
         calls = []
         monkeypatch.setattr(ti, "_may_restart_found_pipeline", lambda: True)
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: True)
+        )
         monkeypatch.setattr(addon.ctrl, "stale_build", lambda: True)
         monkeypatch.setattr(addon.ctrl, "restart", lambda: calls.append("restart"))
         monkeypatch.setattr(addon.ctrl, "start", lambda: calls.append("start"))
         addon._boot_reconcile()
         assert calls == ["restart"]
+
+    def test_boot_leaves_a_stale_pipeline_alone_with_every_toggle_off(
+        self, monkeypatch
+    ):
+        """A restart is a stop AND a start: with the toggles off it would turn
+        on what the user left off — and an owner-unknown lock (no metadata,
+        maybe a standalone run) is only touched while the pipeline is wanted."""
+        addon = ti.TicketIngestionAddon()
+        calls = []
+        monkeypatch.setattr(ti, "_may_restart_found_pipeline", lambda: True)
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: False)
+        )
+        monkeypatch.setattr(addon.ctrl, "stale_build", lambda: True)
+        monkeypatch.setattr(addon.ctrl, "restart", lambda: calls.append("restart"))
+        monkeypatch.setattr(addon.ctrl, "start", lambda: calls.append("start"))
+        monkeypatch.setattr(addon.ctrl, "stop", lambda: calls.append("stop"))
+        addon._boot_reconcile()
+        assert calls == []
 
     def test_boot_never_restarts_a_found_pipeline_under_pytest(self, monkeypatch):
         addon = ti.TicketIngestionAddon()

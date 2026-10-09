@@ -28,7 +28,7 @@ import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
-import { deviceEventNote, updateNote } from "../lib/fleet";
+import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
 
@@ -491,19 +491,19 @@ export function EventToasts() {
         })
       );
     }
-    // A newer release: one toast per answer, never in the desktop app (its
-    // own update toast says the same, with its own button) and never for a
-    // replayed backlog — the bell keeps the record. In the desktop app the
-    // one extra is an OS notification while the window isn't focused, and
-    // the shell shows it at most once per release — not again when its own
-    // update toast already announced that version (electron/main.js).
+    // A newer release: one toast per answer, never for a replayed backlog —
+    // the bell keeps the record. In the desktop app only when OTHER devices
+    // are behind: its own update toast covers this device (with its own
+    // button), not the rest of "Your devices". The desktop app also gets an
+    // OS notification while the window isn't focused, which the shell shows
+    // at most once per release — not again when its own update toast
+    // already announced that version (electron/main.js).
     unsubs.push(
       ev.subscribe("update.available", (env) => {
         if (isReplay(env)) return;
-        if ((window as unknown as { mfengine?: unknown }).mfengine) {
-          desktopNotify(env.event, env.data);
-          return;
-        }
+        const desktop = !!(window as unknown as { mfengine?: unknown }).mfengine;
+        if (desktop) desktopNotify(env.event, env.data);
+        if (!updateToastWanted(env.data, desktop)) return;
         const n = updateNote(env.data);
         if (!n) return;
         notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {

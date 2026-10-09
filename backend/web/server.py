@@ -6151,7 +6151,7 @@ def recheck_shared_link(request: Request) -> JSONResponse:
 
 
 @app.post("/api/server/restart")
-def post_server_restart() -> JSONResponse:
+def post_server_restart(payload: Optional[dict] = None) -> JSONResponse:
     """Re-exec the server process so a changed serve mode (Settings → Mobile
     toggle) takes effect without the user finding the right terminal.
 
@@ -6159,15 +6159,22 @@ def post_server_restart() -> JSONResponse:
     are tmux sessions, ingestion is its own process, and state is on disk.
     Clients (desktop app, /m) already retry until the server answers again.
 
-    The re-exec deliberately drops the mode from both places it could linger —
-    ``CS_WEB_MODE`` (exported by run.py at boot) and any mode token in argv —
-    so the fresh process falls through to the *persisted* general.serve_mode
-    instead of resurrecting the mode this process happened to boot with.
+    By default the re-exec deliberately drops the mode from both places it
+    could linger — ``CS_WEB_MODE`` (exported by run.py at boot) and any mode
+    token in argv — so the fresh process falls through to the *persisted*
+    general.serve_mode instead of resurrecting the mode this process happened
+    to boot with. ``{"keep_mode": true}`` (``mindflock restart``, install.sh)
+    comes back in the mode it runs in instead: that restart is about picking
+    up a new engine, not about a changed setting.
     """
+    keep_mode = bool((payload or {}).get("keep_mode"))
     # An explicit restart is a fresh intent: whatever the automatic
     # tailscale-mode retries (core.restart) already spent, this one starts over.
     _restart.reset_tailscale_attempts()
-    _restart.reexec_soon()
+    if keep_mode:
+        _restart.reexec_soon(keep_mode=True)
+    else:
+        _restart.reexec_soon()
     return JSONResponse({"ok": True, "restarting": True})
 
 
@@ -6296,7 +6303,8 @@ def get_update_state() -> JSONResponse:
     state, restart_now = _self_update.finish_state()
     if restart_now:
         _restart.reset_tailscale_attempts()
-        _restart.reexec_soon()
+        # Same mode as now (see core.update_watch).
+        _restart.reexec_soon(keep_mode=True)
     return JSONResponse({**state, "restarting": restart_now})
 
 

@@ -138,7 +138,8 @@ def test_already_current_does_nothing(srv, capsys):
 def test_restart_waits_for_the_server_to_come_back(srv, capsys):
     srv.gets["/api/remote/hello"] = [None, {"version": "9.9.9", "commit": ""}]
     assert cli.main(["restart"]) == 0
-    assert ("POST", "/api/server/restart", None) in srv.calls
+    # keep_mode: a server started in tailscale mode stays in it.
+    assert ("POST", "/api/server/restart", {"keep_mode": True}) in srv.calls
     assert "restarted — MindFlock v9.9.9" in capsys.readouterr().out
 
 
@@ -181,6 +182,18 @@ def test_devices_update_prints_progress_and_reports_a_halt(srv, monkeypatch, cap
     assert "Rig: updating" in out and "Rig: FAILED" in out
     assert "stopped: Rig:" in err
     assert ("POST", "/api/fleet/update", {"tag": "v9.9.9"}) in srv.calls
+
+
+def test_devices_update_gives_up_on_a_server_that_never_comes_back(
+    srv, monkeypatch, capsys
+):
+    _yes(monkeypatch)
+    monkeypatch.setattr(cli_update, "RESTART_WAIT_S", 0.05)
+    srv.gets["/api/fleet"] = {"in_fleet": True, "members": []}
+    srv.posts["/api/fleet/update"] = {"state": "running", "tag": "v9.9.9"}
+    srv.gets["/api/fleet/update"] = client.ClientError("connection refused")
+    assert cli.main(["devices", "update", "--yes"]) == 1
+    assert "stopped answering" in capsys.readouterr().err
 
 
 def test_update_all_devices_is_the_fleet_rollout(srv, monkeypatch):

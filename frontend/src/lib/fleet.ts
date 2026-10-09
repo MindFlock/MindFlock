@@ -174,6 +174,18 @@ export function rolloutLine(u: FleetRollout | null | undefined): string {
 /** `update.available` (server core.update_watch) as the bell row / toast:
  * which Settings screen its click opens (Devices when other devices are
  * behind, else Advanced), and the toast's wording. */
+/** Whether `update.available` earns an in-app toast. Always in a browser;
+ * in the desktop app only when OTHER devices are behind (`behind` non-empty):
+ * the shell's own update toast covers this device alone. */
+export function updateToastWanted(
+  data: Record<string, unknown> | null | undefined,
+  desktop: boolean
+): boolean {
+  if (!desktop) return true;
+  const behind = (data || {}).behind;
+  return Array.isArray(behind) && behind.length > 0;
+}
+
 export function updateNote(data: Record<string, unknown> | null | undefined): {
   text: string;
   screen: "devices" | "advanced";
