@@ -18,8 +18,13 @@ Security properties (see ``docs/peer-link.md``):
   before TLS; the whole handshake has a deadline; pairing attempts are rate
   limited globally (in :class:`InviteBook`).
 * Every inbound frame is validated by :mod:`wire` before it is acted on; an
-  invalid request closes the connection. Permissions are enforced here, per
-  link, from the store (so a revoked link or changed perms apply at once).
+  invalid request closes the connection, a well-formed request for an op this
+  version doesn't know is answered ``err:"unsupported"`` and the connection
+  stays up (a newer peer). Permissions are enforced here, per link, from the
+  store (so a revoked link or changed perms apply at once).
+* Pairing again with someone already linked (the same pinned key, same role)
+  reuses that link — its id, permissions and shared folder — and draws a new
+  safety number, instead of minting a duplicate that would hold nothing.
 * Message text, codes, secrets and proofs are never logged.
 
 Two carriers bring the TLS stream (see :mod:`backend.peer.addr`): a direct
@@ -368,7 +373,14 @@ class _Conn:
                     return
                 if not self._frames.hit():
                     raise wire.ProtocolError("frame flood")
-                t = wire.validate_message(obj)
+                try:
+                    t = wire.validate_message(obj)
+                except wire.UnsupportedOp as e:
+                    # A newer peer asked for something we don't have: say so
+                    # and keep the link (still counted against its rates).
+                    self.owner._limits_for(self.link_id).req.hit()
+                    await self._reply_err(e.rid, "unsupported")
+                    continue
                 if t == "ping":
                     await self.send({"t": "pong"})
                 elif t == "bye":
@@ -471,11 +483,11 @@ class _Conn:
             return
         if obj["ok"]:
             try:
-                wire.validate_response(op, obj["p"], req)
+                p = wire.validate_response(op, obj["p"], req, strict=False)
             except wire.ProtocolError:
                 fut.set_exception(PeerOpError("invalid response from peer"))
                 raise
-            fut.set_result(obj["p"])
+            fut.set_result(p)
         else:
             fut.set_exception(PeerOpError(obj["err"]))
 
@@ -486,8 +498,10 @@ class _Conn:
 class PeerTransport:
     """See the module docstring. ``handler`` provides
     ``async handle_request(link, op, p) -> dict`` and optionally
-    ``on_link_added(link)``, ``on_link_removed(link)`` (the peer unlinked) and
-    ``on_state(link_id, connected)`` (sync or async)."""
+    ``on_link_added(link)``, ``on_link_repaired(link)`` (the same person
+    paired again: same link, new safety number), ``on_link_removed(link)``
+    (the peer unlinked) and ``on_state(link_id, connected)`` (sync or
+    async)."""
 
     def __init__(
         self,
@@ -558,6 +572,9 @@ class PeerTransport:
         self._limits: dict[str, _LinkLimits] = {}
         self._ip_windows: dict[str, _Window] = {}
         self._handshakes: dict[asyncio.Task, bool] = {}  # task -> relayed
+        # What each linked peer said about itself in its handshake ({"app",
+        # "caps"}; empty from peers of this release), for display only.
+        self._peer_info: dict[str, dict] = {}
         self._bg: set[asyncio.Task] = set()
         self._unauth = 0
         self._closed = False
@@ -632,24 +649,52 @@ class PeerTransport:
         conn = self._conns.get(link_id)
         return conn is not None and not conn.dead
 
-    async def pair(self, code: str) -> Link:
+    def peer_info(self, link_id: str) -> dict:
+        """``{"app", "caps"}`` the peer advertised on its last handshake
+        (``{}`` when it advertised nothing or never connected here)."""
+        return dict(self._peer_info.get(link_id) or {})
+
+    def _note_peer_info(self, link_id: str, frame: dict) -> None:
+        info = wire.peer_info(frame)
+        if info["app"] or info["caps"]:
+            self._peer_info[link_id] = info
+        else:
+            self._peer_info.pop(link_id, None)
+
+    async def pair(self, code: str, progress=None) -> Link:
         """Join an invite. Raises ValueError for a malformed code,
         :class:`IdentityMismatch` if the listener's key doesn't match the
-        code, and :class:`PairingFailed` for everything else."""
+        code, and :class:`PairingFailed` for everything else.
+
+        ``progress(stage)`` (optional, sync) hears ``waiting_relay`` (a relay
+        code: waiting for its name to resolve), ``connecting`` and
+        ``verifying``. When the listener hands back a link we already hold
+        for the same key (it re-paired us), that link is updated in place and
+        the handler hears ``on_link_repaired``."""
         if self._closed:
             raise PeerError("transport is closed")
         info = parse_code(code)
         addr = info.addr
+
+        def stage(name: str) -> None:
+            if progress is not None:
+                with contextlib.suppress(Exception):
+                    progress(name)
+
+        if addr.is_relay:
+            stage("waiting_relay")
         await self._await_relay_dns(addr)
+        stage("connecting")
         writer = None
+        repaired = False
         try:
             async with asyncio.timeout(self.handshake_timeout):
                 reader, writer, server_pub = await self._dial(
                     addr, expect_fp=info.server_fp
                 )
-                nonce = wire.validate_hello(
-                    await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
-                )
+                stage("verifying")
+                hello = await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
+                nonce = wire.validate_hello(hello)
                 transcript = pair_transcript(server_pub, nonce, self.identity.pub)
                 await _send_raw(
                     writer,
@@ -674,16 +719,39 @@ class PeerTransport:
                 sas = compute_sas(server_pub, self.identity.pub, nonce)
                 if not hmac.compare_digest(reply["sas"], sas):
                     raise PairingFailed("safety number mismatch")
-                link = self.store.add(
-                    Link(
-                        link_id=reply["link_id"],
+                carrier = "relay" if addr.is_relay else "tcp"
+                old = self.store.get(reply["link_id"])
+                if old is not None:
+                    # The listener kept our link (we paired again): the same
+                    # pinned key may update it; anything else is refused.
+                    if old.role != "dialer" or not hmac.compare_digest(
+                        old.peer_pub, server_pub.hex()
+                    ):
+                        raise ValueError("link id clash")
+                    link = self.store.update(
+                        old.link_id,
                         peer_name=reply["name"],
-                        peer_pub=server_pub.hex(),
-                        role="dialer",
                         peer_addr=str(addr),
                         sas=sas,
+                        sas_verified=False,
+                        carrier=carrier,
+                        last_seen=time.time(),
                     )
-                )
+                    if link is None:  # unlinked here mid-handshake
+                        raise ValueError("link gone")
+                    repaired = True
+                else:
+                    link = self.store.add(
+                        Link(
+                            link_id=reply["link_id"],
+                            peer_name=reply["name"],
+                            peer_pub=server_pub.hex(),
+                            role="dialer",
+                            peer_addr=str(addr),
+                            sas=sas,
+                            carrier=carrier,
+                        )
+                    )
         except PairingFailed:
             _abort(writer)
             raise
@@ -706,8 +774,13 @@ class PeerTransport:
             if isinstance(e, Exception):
                 raise PairingFailed("pairing failed") from None
             raise
-        log.info("peer: paired as dialer, link %s", _short(link.link_id))
-        self._hook("on_link_added", link)
+        log.info(
+            "peer: %s as dialer, link %s",
+            "re-paired" if repaired else "paired",
+            _short(link.link_id),
+        )
+        self._note_peer_info(link.link_id, hello)
+        self._hook("on_link_repaired" if repaired else "on_link_added", link)
         self._adopt(link.link_id, reader, writer)
         self._ensure_supervisor(link.link_id)
         return link
@@ -764,6 +837,7 @@ class PeerTransport:
         if conn is not None:
             await conn.close(UNLINK_REASON, send_bye=True)
         self._limits.pop(link_id, None)
+        self._peer_info.pop(link_id, None)
         return removed
 
     def _peer_unlinked(self, link_id: str) -> None:
@@ -910,7 +984,7 @@ class PeerTransport:
                 await writer.start_tls(self._server_ctx)
                 if writer.get_extra_info("ssl_object").version() != "TLSv1.3":
                     raise wire.ProtocolError("not TLS 1.3")
-                result = await self._server_handshake(reader, writer)
+                result = await self._server_handshake(reader, writer, relayed)
         except asyncio.CancelledError:
             _abort(writer)
             raise
@@ -932,12 +1006,19 @@ class PeerTransport:
             # leave an authenticated connection for a link that is gone.)
             _abort(writer)
             return
-        link, is_new = result
-        if is_new:
+        link, kind = result
+        if kind == "new":
             self._hook("on_link_added", link)
+        elif kind == "repaired":
+            self._hook("on_link_repaired", link)
         self._adopt(link.link_id, reader, writer)
 
-    async def _server_handshake(self, reader, writer) -> tuple[Link, bool] | None:
+    async def _server_handshake(
+        self, reader, writer, relayed: bool = False
+    ) -> tuple[Link, str] | None:
+        """Hello, then pair or auth. Returns ``(link, kind)`` — ``kind`` is
+        ``"new"``, ``"repaired"`` (paired again: same link) or ``"auth"`` —
+        or None after sending the one generic ``denied``."""
         nonce = secrets.token_bytes(32)
         await _send_raw(
             writer,
@@ -949,14 +1030,15 @@ class PeerTransport:
             },
         )
         msg = await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
-        link, is_new = None, False
+        link, kind = None, "auth"
+        carrier = "relay" if relayed else "tcp"
         try:
             if msg.get("t") == "pair":
                 wire.validate_pair(msg)
-                link, is_new = self._accept_pair(msg, nonce), True
+                link, kind = self._accept_pair(msg, nonce, carrier) or (None, "")
             elif msg.get("t") == "auth":
                 wire.validate_auth(msg)
-                link = self._accept_auth(msg, nonce)
+                link = self._accept_auth(msg, nonce, carrier)
         except wire.ProtocolError:
             link = None
         if link is None:
@@ -973,9 +1055,12 @@ class PeerTransport:
                 "sas": link.sas,
             },
         )
-        return link, is_new
+        self._note_peer_info(link.link_id, msg)
+        return link, kind
 
-    def _accept_pair(self, msg: dict, nonce: bytes) -> Link | None:
+    def _accept_pair(
+        self, msg: dict, nonce: bytes, carrier: str = ""
+    ) -> tuple[Link, str] | None:
         if self.invites is None:
             return None
         client_pub = bytes.fromhex(msg["pub"])
@@ -991,19 +1076,38 @@ class PeerTransport:
             return None
         if hmac.compare_digest(client_pub, self.identity.pub):
             return None  # pairing with ourselves
+        sas = compute_sas(self.identity.pub, client_pub, nonce)
+        # The same person again (a fresh invite after our relay address
+        # changed, a reinstall that kept their identity): keep their link —
+        # id, permissions, shared folder — with the new safety number. The
+        # invite and their signature were checked exactly as for a new link.
+        existing = self.store.find_by_pub(msg["pub"], "listener")
+        if existing:
+            link = self.store.update(
+                existing[0].link_id,
+                peer_name=msg["name"],
+                sas=sas,
+                sas_verified=False,
+                carrier=carrier,
+                last_seen=time.time(),
+            )
+            if link is not None:
+                log.info("peer: re-paired as listener, link %s", _short(link.link_id))
+                return link, "repaired"
         link = self.store.add(
             Link(
                 link_id=secrets.token_hex(16),
                 peer_name=msg["name"],
                 peer_pub=msg["pub"],
                 role="listener",
-                sas=compute_sas(self.identity.pub, client_pub, nonce),
+                sas=sas,
+                carrier=carrier,
             )
         )
         log.info("peer: paired as listener, link %s", _short(link.link_id))
-        return link
+        return link, "new"
 
-    def _accept_auth(self, msg: dict, nonce: bytes) -> Link | None:
+    def _accept_auth(self, msg: dict, nonce: bytes, carrier: str = "") -> Link | None:
         link = self.store.get(msg["link_id"])
         usable = (
             link is not None and link.role == "listener" and not self._expired(link)
@@ -1014,6 +1118,11 @@ class PeerTransport:
         if not (ok and usable):
             log.info("peer: authentication refused")
             return None
+        if carrier and link.carrier != carrier:
+            # Remember how they reach us now: a direct link keeps the direct
+            # listener up even while a relay serves new invites.
+            with contextlib.suppress(OSError, ValueError):
+                link = self.store.update(link.link_id, carrier=carrier) or link
         return link
 
     # -- internals: dialer side ------------------------------------------------
@@ -1070,9 +1179,8 @@ class PeerTransport:
                 reader, writer, server_pub = await self._dial(
                     addr, expect_pub=bytes.fromhex(link.peer_pub)
                 )
-                nonce = wire.validate_hello(
-                    await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
-                )
+                hello = await wire.read_frame(reader, wire.HANDSHAKE_MAX_FRAME)
+                nonce = wire.validate_hello(hello)
                 transcript = auth_transcript(server_pub, nonce, link.link_id)
                 await _send_raw(
                     writer,
@@ -1096,6 +1204,7 @@ class PeerTransport:
         if name != link.peer_name:
             with contextlib.suppress(OSError, ValueError):
                 self.store.update(link.link_id, peer_name=name)
+        self._note_peer_info(link.link_id, hello)
         self._adopt(link.link_id, reader, writer)
 
     def _ensure_supervisor(self, link_id: str) -> None:

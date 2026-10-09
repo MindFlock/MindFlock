@@ -26,6 +26,7 @@ Installed via ``[project.scripts]``::
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite code (you listen)
     mindflock peer join CODE      # …pair using their code (you dial)
+    mindflock peer revoke ID      # …cancel an unused invite
     mindflock peer share LINK REPO [--branch B] [--program P]   # share ONE folder
     mindflock peer export LINK TARGET_REPO peer/BRANCH          # bring work home
 
@@ -389,6 +390,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="host/IP the peer dials (default: Tailscale IP, else LAN IP)",
     )
+    p_inv.add_argument(
+        "--reach",
+        choices=("auto", "tunnel", "direct"),
+        default="auto",
+        help="auto: the relay when cloudflared is installed (falling back to "
+        "direct if the tunnel won't start); tunnel: the relay or nothing; "
+        "direct: your tailnet/LAN address",
+    )
+    p_rev = peer_sub.add_parser(
+        "revoke", parents=[server_opts_nested], help="cancel an unused invite"
+    )
+    p_rev.add_argument("invite", metavar="INVITE", help="invite id (from status)")
     p_join = peer_sub.add_parser(
         "join", parents=[server_opts_nested], help="pair using a peer's code"
     )
@@ -1675,8 +1688,12 @@ def _cmd_peer(args: argparse.Namespace) -> int:
             body["ttl_s"] = args.ttl
         if args.advertise:
             body["advertise_host"] = args.advertise
+        if args.reach != "auto":
+            body["reach"] = args.reach
         inv = client.post(base, "/api/peer/invites", body, timeout=90.0) or {}
         print(inv.get("code") or "")
+        if (inv.get("fallback") or {}).get("text"):
+            print(inv["fallback"]["text"], file=sys.stderr)
         if inv.get("relay"):
             print(
                 "Give this code to your peer (valid %ss, single use). They connect "
@@ -1698,11 +1715,22 @@ def _cmd_peer(args: argparse.Namespace) -> int:
             client.post(base, "/api/peer/join", {"code": args.code}, timeout=120.0)
             or {}
         )
-        print("paired with %s" % (link.get("peer_name") or "peer"))
         print(
-            "SAS %s — compare it with your peer (voice/chat); if it differs, "
-            "unlink now." % (link.get("sas") or "?")
+            "%s %s"
+            % (
+                "reconnected to" if link.get("reconnected") else "paired with",
+                link.get("peer_name") or "peer",
+            )
         )
+        print(
+            "safety number %s — compare it with your peer (voice/chat); if it "
+            "differs, unlink now." % (link.get("sas") or "?")
+        )
+        return 0
+    if cmd == "revoke":
+        iid = str(args.invite or "").strip().lower()
+        client.delete(base, "/api/peer/invites/%s" % urllib.parse.quote(iid, safe=""))
+        print("invite %s cancelled" % iid[:16])
         return 0
     link_id = _peer_link_id(base, args.link)
     path = "/api/peer/links/%s" % urllib.parse.quote(link_id, safe="")

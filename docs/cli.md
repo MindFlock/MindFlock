@@ -272,20 +272,21 @@ Prefix matching works like `attach`.
 
 ### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`
 
-[Peer links](peer-link.md) over `/api/peer` (needs a running server, and
-`peer.enabled` on):
+[Peer links](peer-link.md) over `/api/peer` (needs a running server; `invite`
+and `join` turn peer links on):
 
 | Command | Does |
 |---|---|
 | `peer status` | sandbox availability, identity fingerprint, listener, invites, links |
-| `peer invite [--ttl S] [--advertise HOST]` | prints a one-time `mfp1:…` code (≤ 10 min, single use); with `peer.relay` on, an `mfp2:…` code that goes through the relay |
-| `peer join CODE` | pairs, prints the SAS to compare with your peer |
+| `peer invite [--ttl S] [--advertise HOST] [--reach auto\|tunnel\|direct]` | prints a one-time `mfp1:…` code (≤ 10 min, single use); with a relay on, an `mfp2:…` code that goes through it. `--reach direct` names this machine (same network or tailnet only) whatever the relay; `tunnel` refuses without one. In `auto`, a tunnel that won't start gives a direct code and says so on stderr |
+| `peer revoke INVITE` | cancels an unused invite (its id is in `peer status`) |
+| `peer join CODE` | pairs, prints the safety number to compare with your peer. A fresh invite from someone you're already linked to reconnects that link (prints `reconnected to …`; the shared folder is kept) |
 | `peer links` | links with their SAS, state and what the peer may do |
 | `peer unlink LINK [--delete-files]` | stops the shared session, forgets the peer |
 | `peer share LINK REPO [--branch B] [--program CLI]` | clones REPO into the link's shared folder and starts its sandboxed session |
 | `peer unshare LINK [--delete-files]` | stops the shared session (keeps the folder unless told) |
 | `peer export LINK TARGET_REPO peer/BRANCH` | checkpoints the shared folder and fetches it into your repo |
-| `peer address LINK ADDRESS` | points a link you joined at the inviter's new address (`host:port`, or `wss://host/path` after their quick tunnel restarted — they see it in `peer status`) |
+| `peer address LINK ADDRESS` | points a link you joined at the inviter's new address (`host:port`, or `wss://host/path` after their quick tunnel restarted — they see it in `peer status`). Simpler: have them send a fresh invite and `peer join` it |
 
 `LINK` is a link id or a unique prefix of one.
 

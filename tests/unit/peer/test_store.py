@@ -78,9 +78,6 @@ def test_loose_mode_is_tightened(tmp_path):
         b"\xff\xfe",
         json.dumps({"version": 1, "links": {"0" * 32: {"link_id": "1" * 32}}}).encode(),
         json.dumps(
-            {"version": 1, "links": {"0" * 32: {**_link(0).to_dict(), "evil": 1}}}
-        ).encode(),
-        json.dumps(
             {
                 "version": 1,
                 "links": {"0" * 32: {**_link(0).to_dict(), "peer_pub": "zz"}},
@@ -241,3 +238,37 @@ def test_returned_links_are_copies(tmp_path):
     got = s.get(_link().link_id)
     got.perms["diff"] = False
     assert s.get(_link().link_id).perms["diff"] is True
+
+
+def test_a_newer_versions_link_fields_are_dropped_not_fatal(tmp_path):
+    """A downgrade must not cost every link: unknown fields go, the link stays."""
+    path = tmp_path / "links.json"
+    path.write_text(
+        json.dumps(
+            {"version": 1, "links": {"0" * 32: {**_link(0).to_dict(), "room": "x"}}}
+        )
+    )
+    s = LinkStore(str(path))
+    assert [l.link_id for l in s.list()] == ["0" * 32]
+    assert not glob.glob(str(path) + ".corrupt-*")
+
+
+def test_carrier_and_verified_are_validated(tmp_path):
+    s = LinkStore(str(tmp_path / "links.json"))
+    s.add(_link())
+    lid = _link().link_id
+    assert s.update(lid, carrier="relay", sas_verified=True).carrier == "relay"
+    for bad in ({"carrier": "carrier-pigeon"}, {"sas_verified": "yes"}):
+        with pytest.raises(ValueError):
+            s.update(lid, **bad)
+
+
+def test_find_by_pub(tmp_path):
+    s = LinkStore(str(tmp_path / "links.json"))
+    s.add(_link())
+    pub = _link().peer_pub
+    assert [l.link_id for l in s.find_by_pub(pub, _link().role)] == [_link().link_id]
+    assert (
+        s.find_by_pub(pub, "listener" if _link().role == "dialer" else "dialer") == []
+    )
+    assert s.find_by_pub("zz", "dialer") == []

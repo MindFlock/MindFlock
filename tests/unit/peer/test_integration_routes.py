@@ -160,6 +160,12 @@ ROUTES = [
         "/api/peer/links/" + "ab" * 16 + "/export",
         {"target_repo": "/tmp", "branch_name": "peer/x"},
     ),
+    ("post", "/api/peer/enable", {}),
+    ("post", "/api/peer/links/" + "ab" * 16 + "/verified", {"verified": True}),
+    ("get", "/api/peer/links/" + "ab" * 16 + "/messages", None),
+    ("post", "/api/peer/links/" + "ab" * 16 + "/messages/read", {}),
+    ("post", "/api/peer/links/" + "ab" * 16 + "/message", {"text": "hi"}),
+    ("get", "/api/peer/links/" + "ab" * 16 + "/diff", None),
 ]
 
 
@@ -201,7 +207,7 @@ def test_invite_code_only_in_create_response(svc, client):
     assert SECRET.hex() not in text
     assert "ee" * 32 not in text  # the peer's pinned key
     assert status.json()["invites"][0]["invite_id"] == body["invite_id"]
-    assert set(status.json()["invites"][0]) == {"invite_id", "expires_in"}
+    assert set(status.json()["invites"][0]) == {"invite_id", "expires_in", "direct"}
     assert status.json()["fingerprint"] == "07" * 16
     assert status.json()["links"][0]["sas"] == "482-019-337-5"
     assert "peer_pub" not in status.json()["links"][0]

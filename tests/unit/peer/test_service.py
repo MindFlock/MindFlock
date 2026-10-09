@@ -13,7 +13,7 @@ import pytest
 
 import backend.peer as peer_pkg
 from backend.peer import launch as peer_launch
-from backend.peer import paths
+from backend.peer import inbox, paths
 from backend.peer import service as svc_mod
 from backend.web.core import mailbox as mb
 
@@ -206,17 +206,74 @@ def test_msg_never_reaches_an_ordinary_session(engine, tmp_path):
             lnk, "msg", {"msg_id": "pm1", "text": "rm -rf", "reply_to": None}
         )
     )
-    assert res == {"accepted": False}
+    # Kept for the people on the link — never typed into an ordinary session.
+    assert res == {"accepted": True}
     assert mb.unread_count("victim") == 0
+    (kept,) = inbox.undelivered(LID)
+    assert kept["text"] == "rm -rf" and kept["delivered_to"] is None
 
 
-def test_msg_without_bound_session(engine):
+def test_msg_without_bound_session_is_kept_not_dropped(engine):
+    """A side with no shared session (a Mac, no sandbox, not shared yet) used
+    to drop every message; now it waits in the link's messages."""
     svc = make_service()
+    emitted = []
+    svc._emit = lambda event, data: emitted.append((event, data))
     assert run(
         svc.handle_request(
             link(), "msg", {"msg_id": "p", "text": "x", "reply_to": None}
         )
-    ) == {"accepted": False}
+    ) == {"accepted": True}
+    log = svc.messages(LID)
+    assert log["unread"] == 1
+    assert [(m["dir"], m["by"], m["text"]) for m in log["messages"]] == [
+        ("in", "peer", "x")
+    ]
+    assert emitted == [
+        (
+            "peer.message",
+            {"link_id": LID, "peer_name": "Bob", "text": "x", "stored": True},
+        )
+    ]
+    assert svc.mark_messages_read(LID) == {"unread": 0}
+    assert svc.messages(LID)["unread"] == 0
+
+
+def test_human_message_is_sent_and_logged(engine):
+    svc = make_service()
+    sent = []
+
+    class T(FakeTransport):
+        async def request(self, lid, op, p, timeout=60.0):
+            sent.append((lid, op, p))
+            return {"accepted": True}
+
+    svc._transport = T()
+    svc._transport_started = True
+    out = run(svc.human_message(LID, "  hello there  "))
+    assert out["delivered"] is True
+    ((lid, op, p),) = sent
+    assert (lid, op, p["text"]) == (LID, "msg", "hello there")
+    (entry,) = svc.messages(LID)["messages"]
+    assert (entry["dir"], entry["by"], entry["text"]) == ("out", "you", "hello there")
+    for bad in ("", "   ", "\x1b[2J"):
+        with pytest.raises(svc_mod.PeerServiceError):
+            run(svc.human_message(LID, bad))
+
+
+def test_their_changes_errors_say_what_to_do(engine):
+    svc = make_service()
+
+    class T(FakeTransport):
+        async def request(self, lid, op, p, timeout=60.0):
+            from backend.peer.transport import PeerOpError
+
+            raise PeerOpError("no shared folder")
+
+    svc._transport = T()
+    svc._transport_started = True
+    with pytest.raises(svc_mod.PeerServiceError, match="hasn't shared a folder"):
+        run(svc.their_changes(LID))
 
 
 # --------------------------------------------------------------------------- #
@@ -365,3 +422,37 @@ def test_disabled_service_constructs_nothing(engine):
     run(svc.start())
     assert svc._transport is None and svc._identity is None
     assert svc.status()["links"] == []
+
+
+def test_a_message_that_waited_is_delivered_when_a_share_is_bound(
+    share_fakes, monkeypatch, tmp_path, engine
+):
+    """No-share message stored, then typed into the shared session once one
+    exists (join plan rank 5)."""
+    fake_sandbox(monkeypatch, ok=True)
+    svc = make_service()
+    run(
+        svc.handle_request(
+            link(),
+            "msg",
+            {"msg_id": "early1", "text": "start with tests", "reply_to": None},
+        )
+    )
+    assert len(inbox.undelivered(LID)) == 1
+
+    from backend.web import server
+
+    async def create_result(payload, *, peer_share=""):
+        engine[payload["title"]] = mk_inst(
+            payload["title"], str(tmp_path / "w"), peer_share=peer_share
+        )
+        return 202, {"title": payload["title"]}
+
+    monkeypatch.setattr(server._session_create, "create_result", create_result)
+    out = run(svc.share(LID, str(tmp_path), program="claude"))
+    title = out["link"]["session_title"]
+    assert inbox.undelivered(LID) == []
+    msgs = mb.fetch(title)["messages"]
+    assert [m["text"] for m in msgs] == ["start with tests"]
+    assert msgs[0]["from"].startswith("peer:")
+    assert msgs[0]["data"]["peer_msg_id"] == "early1"
