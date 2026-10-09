@@ -13,6 +13,7 @@ import {
   rolloutRowText,
   updateAllLine,
   updateNote,
+  updateToastWanted,
 } from "../lib/fleet";
 import { notifFromEvent } from "../components/NotificationsBell";
 import type { FleetMember, FleetRollout } from "../api/types";
@@ -158,6 +159,14 @@ describe("update.available", () => {
     const n = updateNote({ latest: "0.8.0", here: true, count: 1, behind: [] });
     expect(n?.screen).toBe("advanced");
     expect(n?.text).toBe("MindFlock v0.8.0 is out");
+  });
+  it("toasts in the desktop app only when other devices are behind", () => {
+    const mine = { latest: "0.8.0", here: true, count: 1, behind: [] };
+    const others = { ...mine, count: 2, behind: [{ key: "rig", host: "Rig", version: "0.7.4" }] };
+    expect(updateToastWanted(mine, false)).toBe(true);
+    expect(updateToastWanted(mine, true)).toBe(false); // the shell's own toast
+    expect(updateToastWanted(others, true)).toBe(true);
+    expect(updateToastWanted(null, true)).toBe(false);
   });
   it("ignores a payload without a version", () => {
     expect(updateNote({})).toBeNull();

@@ -27,7 +27,10 @@ Two jobs, one lifespan task (:func:`watch_loop`):
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from backend import log
@@ -43,8 +46,41 @@ ANNOUNCE_FIRST_S = 120.0
 ANNOUNCE_EVERY_S = 30 * 60.0
 
 #: What was last announced (``"<version>|<here>|<behind keys>"``) — one event
-#: per distinct answer, not one per check.
-_LAST = {"sig": ""}
+#: per distinct answer, not one per check. Kept on disk too (:func:`_last_path`,
+#: read once per process) so a restart — every update ends in one — doesn't
+#: announce the same answer again.
+_LAST = {"sig": "", "loaded": False}
+
+
+def _last_path() -> Path:
+    from backend.config import config as _config
+
+    return Path(_config.GetConfigDir()) / "update_announced.json"
+
+
+def _last_sig() -> str:
+    if not _LAST["loaded"]:
+        _LAST["loaded"] = True
+        try:
+            doc = json.loads(_last_path().read_text(encoding="utf-8"))
+            _LAST["sig"] = str((doc or {}).get("sig") or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+    return str(_LAST["sig"] or "")
+
+
+def _remember(sig: str) -> None:
+    if _last_sig() == sig:
+        return
+    _LAST["sig"] = sig
+    try:
+        path = _last_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"sig": sig}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as err:
+        _log("update announce: could not save the marker (%v)", err)
 
 
 def _log(fmt: str, *args) -> None:
@@ -149,16 +185,16 @@ async def announce() -> Optional[dict]:
     try:
         data = notice(await _self_update.latest_release())
         if data is None:
-            _LAST["sig"] = ""
+            _remember("")
             return None
         sig = "%s|%s|%s" % (
             data["latest"],
             int(data["here"]),
             ",".join(b["key"] for b in data["behind"]),
         )
-        if sig == _LAST["sig"]:
+        if sig == _last_sig():
             return None
-        _LAST["sig"] = sig
+        _remember(sig)
         from backend.web.core import events as _events
 
         _events.BUS.emit("update.available", data=data)

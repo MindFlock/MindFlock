@@ -116,12 +116,13 @@ _RELEASE = {"tag": "v9.9.9", "version": "9.9.9"}
 
 
 @pytest.fixture()
-def emitted(monkeypatch):
+def emitted(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(
         events.BUS, "emit", lambda name, **kw: seen.append((name, kw.get("data")))
     )
-    update_watch._LAST["sig"] = ""
+    monkeypatch.setattr(update_watch, "_LAST", {"sig": "", "loaded": False})
+    monkeypatch.setattr(update_watch, "_last_path", lambda: tmp_path / "ann.json")
     return seen
 
 
@@ -143,6 +144,19 @@ async def test_a_newer_release_is_announced_once(monkeypatch, emitted):
     assert "v9.9.9 is out" in data["detail"]
     assert await update_watch.announce() is None  # same answer: no second event
     assert [name for name, _ in emitted] == ["update.available"]
+
+
+@pytest.mark.asyncio
+async def test_a_restart_does_not_announce_the_same_answer_again(monkeypatch, emitted):
+    """Every update ends in a restart; the marker is on disk, not in memory."""
+    monkeypatch.setattr(self_update, "latest_release", _latest(_RELEASE))
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(update_watch, "members_behind", lambda v: [])
+    assert await update_watch.announce() is not None
+    monkeypatch.setattr(update_watch, "_LAST", {"sig": "", "loaded": False})
+    assert await update_watch.announce() is None
+    assert len(emitted) == 1
 
 
 @pytest.mark.asyncio
