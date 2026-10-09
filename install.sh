@@ -10,11 +10,14 @@
 #   2. Installs `uv` (Astral's Python manager) via its official installer if
 #      it isn't already present — into ~/.local/bin, no root. The installer is
 #      version-pinned and sha256-verified before it runs (no blind curl|sh).
-#   3. `uv tool install "mindflock[web]"` straight from GitHub — the requested
-#      branch/tag is first resolved to a full commit SHA (printed, and pinned
-#      for the install so what you audited is what you get). uv fetches a
-#      suitable Python by itself, builds in an isolated venv, and links the
-#      `mindflock` command into ~/.local/bin. Re-running upgrades in place.
+#   3. `uv tool install "mindflock[web]"` straight from GitHub — the newest
+#      RELEASE by default (MINDFLOCK_INSTALL_REF picks another tag or a
+#      branch, e.g. main for unreleased code), first resolved to a full commit
+#      SHA (printed, and pinned for the install so what you audited is what
+#      you get). uv fetches a suitable Python by itself, builds in an isolated
+#      venv, and links the `mindflock` command into ~/.local/bin. Re-running
+#      upgrades in place — and restarts a MindFlock server already running on
+#      this machine so it serves the new version (step 5).
 #   4. Runs `mindflock doctor` so you immediately see which runtime
 #      dependencies (git, tmux, your agent CLI — plus the optional gh) still need
 #      installing — with the exact install command for your platform. gh is
@@ -28,12 +31,15 @@
 # Overrides (env vars):
 #   MINDFLOCK_INSTALL_REPO   git URL to install from
 #                            (default https://github.com/MindFlock/MindFlock)
-#   MINDFLOCK_INSTALL_REF    branch / tag / commit to install (default main)
+#   MINDFLOCK_INSTALL_REF    branch / tag / commit to install (default: the
+#                            newest release; `main` for unreleased code)
 #   MINDFLOCK_INSTALL_LOCAL  path to a local checkout — install from disk
 #                            instead of git (used by CI's cold-install job)
 #   MINDFLOCK_UV_VERSION     uv version to install (default pinned below).
 #                            Overriding skips the checksum (no known hash) —
 #                            a warning is printed.
+#   MINDFLOCK_PORT           port of a running server to restart afterwards
+#                            (default 8765)
 #   MINDFLOCK_NONINTERACTIVE set to 1 to force the read-only `mindflock doctor`
 #                            report instead of the guided `--fix` prompts. The
 #                            desktop app sets this when it runs this script
@@ -50,7 +56,7 @@ say()  { printf '\033[1;36m[mindflock]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[mindflock] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 REPO="${MINDFLOCK_INSTALL_REPO:-https://github.com/MindFlock/MindFlock}"
-REF="${MINDFLOCK_INSTALL_REF:-main}"
+REF="${MINDFLOCK_INSTALL_REF:-}"
 
 # --- 1. platform check ------------------------------------------------------
 OS="$(uname -s 2>/dev/null || echo unknown)"
@@ -127,6 +133,31 @@ inspect https://astral.sh/uv/$UV_VERSION/install.sh yourself."
 fi
 
 # --- 3. mindflock ------------------------------------------------------------
+# The newest published release tag ("" when none can be found): the GitHub API,
+# then the releases/latest redirect, then the highest v* tag on the remote.
+latest_release_tag() {
+  slug=""
+  case "$REPO" in
+    https://github.com/*) slug="${REPO#https://github.com/}"; slug="${slug%/}"; slug="${slug%.git}" ;;
+  esac
+  tag=""
+  if [ -n "$slug" ]; then
+    tag="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/$slug/releases/latest" 2>/dev/null \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    if [ -z "$tag" ]; then
+      url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$slug/releases/latest" 2>/dev/null || true)"
+      case "$url" in */releases/tag/*) tag="${url##*/releases/tag/}" ;; esac
+    fi
+  fi
+  if [ -z "$tag" ]; then
+    tag="$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v*' 2>/dev/null \
+      | head -n1 | sed 's|.*refs/tags/||')"
+  fi
+  case "$tag" in v[0-9]*) printf %s "$tag" ;; esac
+}
+
 if [ -n "${MINDFLOCK_INSTALL_LOCAL:-}" ]; then
   SPEC="mindflock[web] @ file://$MINDFLOCK_INSTALL_LOCAL"
   say "installing MindFlock from local checkout $MINDFLOCK_INSTALL_LOCAL…"
@@ -135,6 +166,15 @@ else
   # can't move between "you read the code" and "it runs on your machine" —
   # and the printed SHA is an audit trail. A 40-hex REF is already a SHA.
   command -v git >/dev/null 2>&1 || fail "git is required to install from $REPO — install it with your package manager (e.g. apt/dnf/pacman/zypper) and re-run."
+  if [ -z "$REF" ]; then
+    REF="$(latest_release_tag)"
+    if [ -n "$REF" ]; then
+      say "newest release: $REF (set MINDFLOCK_INSTALL_REF=main for unreleased code)"
+    else
+      REF="main"
+      say "WARNING: couldn't find the newest release — installing main instead"
+    fi
+  fi
   PINNED=""
   if [ "${#REF}" -eq 40 ] && [ -z "$(printf %s "$REF" | tr -d '0-9a-f')" ]; then
     PINNED="$REF"
@@ -158,7 +198,8 @@ uv tool install --force --python 3.12 "$SPEC"
 
 command -v mindflock >/dev/null 2>&1 || fail "install finished but \`mindflock\` is not on PATH.
 Add ~/.local/bin to PATH (uv prints the exact line), then re-run: mindflock doctor"
-say "installed: $(command -v mindflock)"
+MF="$(command -v mindflock)"
+say "installed: $MF ($("$MF" --version 2>/dev/null || echo mindflock))"
 
 # Make sure FUTURE shells find it too: `uv tool update-shell` appends the
 # ~/.local/bin PATH line to the shell rc if (and only if) it's missing.
@@ -178,8 +219,21 @@ else
   mindflock doctor || true
 fi
 
+# --- 5. a server already running here -----------------------------------------
+# Re-running this script is how people update, and `uv tool install --force`
+# just replaced the venv under any server that is running: restart it so it
+# serves the version that was installed instead of the one it booted with.
+PORT_="${MINDFLOCK_PORT:-8765}"
+if curl -fsS --max-time 2 "http://127.0.0.1:$PORT_/api/remote/hello" >/dev/null 2>&1; then
+  say "restarting the MindFlock server on port $PORT_ onto the new version…"
+  MINDFLOCK_PORT="$PORT_" "$MF" restart || say "couldn't restart it — run: $MF restart"
+  say ""
+  say "Done — the server on http://127.0.0.1:$PORT_ runs the new version."
+  exit 0
+fi
+
 say ""
 say "Done. Next steps:"
-say "  1. fix anything ✗ above (re-run: mindflock doctor --fix — installs it all in one go)"
+say "  1. fix anything ✗ above (re-run: $MF doctor --fix — installs it all in one go)"
 say "  2. cd into a git repo you want to work on"
-say "  3. run: mindflock serve   →  open http://127.0.0.1:8765"
+say "  3. run: $MF serve   →  open http://127.0.0.1:$PORT_"

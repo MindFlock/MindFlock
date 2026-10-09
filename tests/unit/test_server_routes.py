@@ -2691,6 +2691,25 @@ def test_update_check_says_a_finished_install_is_waiting_for_its_restart(
     assert body["last"]["version"] == "9.9.9"
 
 
+def test_hello_reports_the_desktop_shell_version_only_from_this_machine(
+    monkeypatch,
+):
+    """The desktop app's engine check sends its version; the hello reports it
+    (shell_version) so another device can say "updates on next launch". Only
+    this machine may set it — a tailnet caller can't make a device claim a
+    shell it doesn't have."""
+    monkeypatch.setattr(server._remote, "_SHELL", {"version": ""})
+    client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "6.6.6"})
+    assert client.get("/api/remote/hello").json()["shell_version"] == ""
+    local_client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "0.7.4"})
+    body = local_client.get("/api/remote/hello").json()
+    assert body["shell_version"] == "0.7.4"
+    # The build it runs and how it is installed ride along.
+    assert "commit" in body and body["install"] in {"uv-tool", "editable", "other"}
+    local_client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "<script>"})
+    assert local_client.get("/api/remote/hello").json()["shell_version"] == "0.7.4"
+
+
 def test_pane_find_prepare_is_a_noop_in_tmux_mode(registered, monkeypatch):
     registered("pf-5", wt="/tmp/x")
     monkeypatch.setattr(server, "_live_session_name", lambda base: base)

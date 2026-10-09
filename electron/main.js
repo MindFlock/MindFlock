@@ -1361,7 +1361,13 @@ function fetchLocalJSON(pathname, timeoutMs, token) {
       req = http.get(
         {
           host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
-          headers: token ? { Authorization: 'Bearer ' + token } : {},
+          // X-MindFlock-Shell: this desktop app's version. The engine reports
+          // it in its hello (shell_version), so "Update all my devices" on
+          // another machine can say this app updates on its next launch.
+          headers: Object.assign(
+            { 'X-MindFlock-Shell': app.getVersion() },
+            token ? { Authorization: 'Bearer ' + token } : {}
+          ),
         },
         (res) => {
           if (res.statusCode !== 200) { res.resume(); return finish(null) }
