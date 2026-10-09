@@ -1290,6 +1290,35 @@ class TestHomebrewBootstrap:
         plan = doctor.install_plan([Check("uv", "uv", "warn", cmd="x", install=True)])
         assert [s["id"] for s in plan["steps"]] == ["uv"]
 
+    def test_a_brew_step_of_its_own_bootstraps_homebrew_too(self, monkeypatch):
+        """`brew install --cask tailscale-app` is no system package, but it
+        needs Homebrew just the same — first, and on PATH."""
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(doctor.os.path, "isfile", lambda p: False)
+        cask = Check(
+            "tailscale",
+            "Tailscale",
+            "warn",
+            cmd="brew install --cask tailscale-app",
+            install=True,
+        )
+        plan = doctor.install_plan([cask])
+        assert [s["id"] for s in plan["steps"]] == ["homebrew", "tailscale"]
+        cmd = plan["steps"][1]["cmd"]
+        assert cmd.startswith(doctor._BREW_SHELLENV + "; ")
+        assert cmd.endswith("brew install --cask tailscale-app")
+
+    def test_a_brew_step_with_brew_on_path_runs_plainly(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"brew": "/opt/homebrew/bin/brew"})
+        )
+        cask = Check("ts", "ts", "warn", cmd="brew install --cask x", install=True)
+        assert doctor.install_plan([cask])["steps"] == [
+            {"id": "ts", "label": "ts", "cmd": "brew install --cask x"}
+        ]
+
     def test_linux_never_bootstraps_homebrew(self, monkeypatch):
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         plan = doctor.install_plan([self._tmux_missing()])
