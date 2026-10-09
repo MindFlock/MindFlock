@@ -519,10 +519,15 @@ async def privileged(scope) -> bool:
 
 
 #: What a refused :func:`may_configure` caller is told (the routes' 403).
+#: The caller is usually a browser that reached a gate-off device from
+#: elsewhere, where there is no sign-in prompt to answer — so it names what
+#: works: that computer itself, one of the owner's devices (they hold the
+#: devices' key), or the token from that computer's Settings → Security.
 CONFIGURE_REFUSED = (
-    "this changes how your devices run agents, so it needs this device's "
-    "sign-in: change it on the device itself, or sign in with its access "
-    "token (Settings → Security there)"
+    "this changes how your devices run agents, so that device only takes it "
+    "from you: make the change on that computer itself or from one of your "
+    "devices, or sign in with the access token shown there (Settings → "
+    "Security)"
 )
 
 

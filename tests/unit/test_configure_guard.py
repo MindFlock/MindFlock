@@ -83,7 +83,12 @@ LAUNCH = {"coding_cli": {"default_launch_args": {"claude": "--evil"}}}
 def test_anonymous_tailnet_caller_cannot_write_launch_args(app):
     r = _client(app, TAILNET).post("/api/settings", json=LAUNCH)
     assert r.status_code == 403
-    assert "sign-in" in r.json()["error"]
+    # Says what actually works from here: that computer, one of your devices,
+    # or the token shown there — not a sign-in prompt a gate-off device
+    # never shows.
+    err = r.json()["error"]
+    assert "that computer" in err and "one of your devices" in err
+    assert "access token shown there" in err
     assert _launch_args() != "--evil"
 
 

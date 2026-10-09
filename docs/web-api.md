@@ -2141,9 +2141,13 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
   (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
   `/api/peer` writes (invites, join, unlink, address, perms, share, export)
-  and `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
-  "this changes how your devices run agents, so it needs this device's
-  sign-in…"}` unless the caller presents this device's token or the fleet key,
+  and `POST /api/settings/sync{,/now,/resume,/pin}`, plus `POST
+  /api/settings/auth-token/rotate`, `POST /api/providers/{name}/login-close`,
+  the stored-secret Test routes and a session's repo-scope red-zone writes —
+  answer **403** `{error: "this changes how your devices run agents, so that
+  device only takes it from you: make the change on that computer itself or
+  from one of your devices, or sign in with the access token shown there…"}`
+  unless the caller presents this device's token or the fleet key,
   is this machine itself (loopback, unproxied), or is a trusted Tailscale
   account — and never when another MindFlock relays it
   (`auth.may_configure`). The one exception is a server nothing beyond this
