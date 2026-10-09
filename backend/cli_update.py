@@ -302,12 +302,25 @@ def cmd_devices_update(args: argparse.Namespace) -> int:
     )
     print("updating to %s…" % ((doc or {}).get("tag") or tag or "the newest release"))
     shown: dict = {}
+    down_since: Optional[float] = None
     while True:
         try:
             doc = client.get(base, "/api/fleet/update", timeout=10.0) or {}
         except client.ClientError:
-            time.sleep(POLL_S)  # this computer restarting at the very end
+            # This computer restarting at the very end — but not for ever.
+            now = time.monotonic()
+            if down_since is None:
+                down_since = now
+            elif now - down_since > RESTART_WAIT_S:
+                _err(
+                    "the server here stopped answering for %ds — see how the "
+                    "update went in Settings → Devices once it's back, or check "
+                    "its log" % int(RESTART_WAIT_S)
+                )
+                return 1
+            time.sleep(POLL_S)
             continue
+        down_since = None
         for row in doc.get("members") or []:
             line = _row_line(row)
             if shown.get(row.get("key")) != line:

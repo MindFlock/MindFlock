@@ -184,6 +184,18 @@ def test_devices_update_prints_progress_and_reports_a_halt(srv, monkeypatch, cap
     assert ("POST", "/api/fleet/update", {"tag": "v9.9.9"}) in srv.calls
 
 
+def test_devices_update_gives_up_on_a_server_that_never_comes_back(
+    srv, monkeypatch, capsys
+):
+    _yes(monkeypatch)
+    monkeypatch.setattr(cli_update, "RESTART_WAIT_S", 0.05)
+    srv.gets["/api/fleet"] = {"in_fleet": True, "members": []}
+    srv.posts["/api/fleet/update"] = {"state": "running", "tag": "v9.9.9"}
+    srv.gets["/api/fleet/update"] = client.ClientError("connection refused")
+    assert cli.main(["devices", "update", "--yes"]) == 1
+    assert "stopped answering" in capsys.readouterr().err
+
+
 def test_update_all_devices_is_the_fleet_rollout(srv, monkeypatch):
     seen = []
     monkeypatch.setattr(
