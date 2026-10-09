@@ -2933,8 +2933,23 @@ A few screens got quieter:
   **launch flags** (`[launch] args`). The per-provider **default launch flags**
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
   also edited here.
+- **Devices** opens with **Tailscale on this device** (`GET
+  /api/tailscale/health`; the same list the doctor's tailscale row reads):
+  signed in as whom (a tagged device shows its tag), the tailnet, this
+  device's name and IP, then each problem with its fix, worst first. Signed
+  out or turned off, **Sign in to Tailscale** / **Turn on Tailscale** (`POST
+  /api/tailscale/login`) shows Tailscale's sign-in link and a QR and keeps
+  checking until the device is connected. A key expiring within 30 days gets
+  a warning with the admin-console link and "Disable key expiry" (tagging in
+  the console after sign-in keeps the expiry). On a Mac the Tailscale app's
+  built-in CLI counts as installed; on WSL with Tailscale only on Windows the
+  card explains why that isn't reachable and gives the tested path (a second
+  Tailscale inside WSL) and the alternative (mirrored networking). Mobile
+  shows the same card when Tailscale is missing.
 - **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`), plus the
-  **tailscale mode** toggle. Which interface uvicorn binds is fixed at process
+  **tailscale mode** toggle. Setup reads in order: first Tailscale on the
+  phone, signed in as this computer's account (with a QR to the app
+  download), then the MindFlock QR. Which interface uvicorn binds is fixed at process
   start, so that toggle only means something after a restart — and turning it
   **on** now takes that restart itself: `POST /api/settings` answers
   `{"restarting": true}`, the screen waits for the server to come back and
@@ -2982,7 +2997,10 @@ A few screens got quieter:
      config. A refusal shows `sudo tailscale set --operator=$USER` with a
      Copy button.
   2. **Tag this device**: names the exact machine to tag in the admin
-     console's Machines page, by MagicDNS name and Tailscale IP. When
+     console's Machines page, by MagicDNS name and Tailscale IP, then says
+     to **Disable key expiry** there too: tagging a device after it signed
+     in keeps its key expiry, and when it expires the device silently drops
+     off the link. When
      Tailscale de-duplicated the name (`box` → `box-1`, because another device
      already has `box`), the step says so, since that is the entry people
      look for and don't find.
@@ -2990,12 +3008,17 @@ A few screens got quieter:
      Services page. ✓ once this device can see it (its `services/<name>`
      capability or the service's MagicDNS record). Otherwise **?**, because
      a device that hasn't advertised isn't told.
-  4. **Approve hosts automatically**: the policy snippet, prefilled with
-     this device's own tag and the service name (`tagOwners` +
-     `autoApprovers.services`), with a Copy button. Under it is the `grants`
-     entry clients need to reach `svc:<name>` on `tcp:443` if you use a
-     custom policy. The policy itself can't be read from a node, so this
-     step is **?** until approval shows it worked.
+  4. **Approve hosts automatically**: one policy block with one Copy
+     button, prefilled with this device's own tag, the service name and this
+     server's port: `tagOwners`, `autoApprovers.services`, `grants` (tagged
+     devices to each other and your own devices to them on the port and
+     443, everyone to `svc:<name>` on 443 — what a custom policy such as
+     `autogroup:self` otherwise blocks silently) and a `tests` stanza. A
+     policy file can't hold a key twice, so the block says, in comments,
+     to paste it whole only when none of those keys exist yet and otherwise
+     move the lines inside each into the existing key. The policy itself
+     can't be read from a node, so this step is **?** until approval shows
+     it worked.
   5. **Approved as a host**: only the node's `service-host` capability
      counts, together with the service's VIPs appearing in its `AllowedIPs`.
      `services/<name>` is present while the advertisement is still

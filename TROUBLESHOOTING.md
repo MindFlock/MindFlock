@@ -345,7 +345,49 @@ the token. Force the gate: `MINDFLOCK_AUTH=1` (on) / `MINDFLOCK_AUTH=0` (off).
 
 `tailscale` isn't installed or isn't up — phone access needs the machine on a
 tailnet (`curl -fsSL https://tailscale.com/install.sh | sh`, then
-`sudo tailscale up`). The desktop app works without it.
+`sudo tailscale up`). The desktop app works without it. Settings → Devices'
+**Tailscale on this device** card (and `mindflock doctor`) says which: not
+installed, signed out (**Sign in** there shows the sign-in link and a QR),
+turned off, or a key about to expire.
+
+On a Mac the Tailscale app counts — MindFlock uses its built-in CLI
+(`/Applications/Tailscale.app/Contents/MacOS/Tailscale`) when nothing called
+`tailscale` is on `PATH`. To install, get the app (`brew install --cask
+tailscale-app`, or the Standalone download from tailscale.com/download/mac);
+the `tailscale` formula is the headless daemon. Any other location:
+`MINDFLOCK_TAILSCALE_BIN=/path/to/tailscale`.
+
+### Windows/WSL: Tailscale is installed on Windows but MindFlock says it isn't
+
+MindFlock on Windows runs inside WSL, and Windows Tailscale is a different
+device: its address is on the Windows side of WSL's network, where nothing
+answers for MindFlock, and joining Your devices checks the caller's own
+tailnet address. MindFlock reports `tailscale.exe` but won't use it.
+
+What works (and what MindFlock is tested with): run Tailscale **inside WSL
+too**, as a second device named after the computer:
+
+1. Turn systemd on in WSL: `/etc/wsl.conf` → `[boot]` `systemd=true`, then
+   `wsl --shutdown` from Windows and reopen.
+2. `curl -fsSL https://tailscale.com/install.sh | sh`
+3. `sudo tailscale up --hostname=<computer>-wsl --operator=$USER` and open
+   the sign-in link with the same account as Windows.
+
+Both devices then show in the admin console; that's expected. The
+alternative is WSL's mirrored networking (`networkingMode=mirrored` in
+`%UserProfile%\.wslconfig`), which can make the Windows device's address
+reach MindFlock with one device instead of two. Tailscale's own guide
+(tailscale.com/kb/1295) recommends Windows-only and calls in-WSL Tailscale
+an advanced setup (MTU, interplay with the Windows client), but MindFlock
+hasn't been tested on mirrored networking.
+
+### A device dropped off Tailscale after a few months
+
+Its node key expired. Settings → Devices warns 30 days ahead. In the admin
+console's Machines page, open the device → ⋯ → **Disable key expiry**. A tag
+added in the console after the device signed in does **not** turn expiry
+off (only a tag applied at sign-in does), so tagged MindFlock hosts need
+this too.
 
 ---
 
