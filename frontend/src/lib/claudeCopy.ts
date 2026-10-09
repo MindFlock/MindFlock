@@ -1,11 +1,11 @@
 /** Copying out of a Claude Code pane without its layout.
  *
  * Claude Code draws its own screen: a message starts with "⏺ " ("●" off macOS,
- * "❯" for what you typed), tool output
- * with "⎿ ", every row after the first is indented to line up, and it wraps
- * long text ITSELF — each wrapped row is a separate terminal row with a real
- * line break (tmux `capture-pane -J` can't rejoin them), not a soft wrap
- * xterm could join. So a drag-copy of one sentence came out as
+ * "❯" for what you typed), tool output with "⎿ ", every row after the first
+ * is indented to line up, and it wraps long text ITSELF — each wrapped row is
+ * a separate terminal row with a real line break (tmux `capture-pane -J`
+ * can't rejoin them), not a soft wrap xterm could join. So a drag-copy of one
+ * sentence came out as
  *
  *     ⏺ The file list came back empty, so pytest ran … that the 3 are the
  *       known sandbox ones:
@@ -13,15 +13,28 @@
  * with the bullet, a line break in the middle of the sentence, and the
  * two-space gutter in front of every following row.
  *
- * {@link cleanClaudeSelection} undoes that: markers become indentation, a row
+ * {@link cleanClaudeSelection} undoes that. Markers become indentation; a row
  * is rejoined with the next one only when the next one's first word could not
- * have fit on it (exactly when Claude Code would have wrapped), and the common
- * indentation is removed. Real line breaks — short lines, list items, blank
- * lines, code — stay. */
+ * have fit on it — exactly when Claude Code would have wrapped — and nothing
+ * suggests a real line break (a new list item, a marker, a table or rule row,
+ * a code-looking line end, a row cut short with "…"); the common indentation
+ * is removed. Plain text can't always tell a wrapped sentence from two lines
+ * that happen to fill the row, so every rule errs toward KEEPING a break. */
 
 const BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
 /** The row that starts a message (Claude's reply, or what you typed). */
-const MESSAGE = /^\s*[⏺●❯]\s/;
+const MESSAGE = /^\s*[⏺●❯](?:\s|$)/;
+/** Any of Claude Code's row markers. */
+const MARKER = /^\s*[⏺●❯⎿](?:\s|$)/;
+/** Table borders and cells, rules, the input box and its footer (box
+ * drawing, block elements, the ⏵ arrows): never part of a wrapped sentence. */
+const CHROME = /^\s*[─-▟⏵]/;
+/** A numbered diff line in tool output ("  71 -   foo"). */
+const DIFF_LINE = /^\s*\d+\s+[-+ ]\s/;
+/** Line ends / starts that mark code rather than a sentence wrapped between
+ * two words. */
+const CODE_END = /(?:[;{}[(\\]|=>)$/;
+const CODE_START = /^(?:[)}\]]|\/\/|#|\.\w)/;
 
 /** Terminal column width of one code point: 2 for East Asian wide/fullwidth
  * characters and emoji, else 1 — close enough to xterm's own table for
@@ -64,20 +77,14 @@ function textIndent(row: string): number {
  * occupy ("⏺ " / "⎿ " are two columns each), so every row of one block
  * lines up the same way. */
 function unmark(row: string): string {
-  return row.replace(/^(\s*)[⏺●❯⎿]\s/, (_m, lead: string) => lead + "  ");
-}
-
-/** Whether the selection looks like Claude Code's layout at all (the
- * markers); the caller also knows the pane's provider. */
-export function hasClaudeMarkers(text: string): boolean {
-  return /^\s*[⏺●❯⎿]\s/m.test(text);
+  return row.replace(/^(\s*)[⏺●❯⎿](?:\s|$)/, (_m, lead: string) => lead + "  ");
 }
 
 /**
  * Rejoin Claude Code's wrapped rows and drop its gutter.
  *
  * @param text      the terminal selection (rows separated by "\n")
- * @param cols      the terminal's width in columns
+ * @param cols      the width Claude Code drew at (the terminal's columns)
  * @param startCol  the column the selection starts at on its first row (a
  *                  selection that starts mid-row is that much fuller than
  *                  its text)
@@ -86,48 +93,79 @@ export function cleanClaudeSelection(text: string, cols: number, startCol = 0): 
   if (!text || cols <= 0) return text;
   const raw = text.replace(/\r/g, "").split("\n").map((r) => r.replace(/\s+$/, ""));
   const rows = raw.map(unmark);
+  const widths = rows.map((r, i) => displayWidth(r) + (i === 0 ? startCol : 0));
+  // A row wider than the terminal proves it was drawn at a wider size: wrap
+  // at the wider of the two. Claude Code's text stops one column short of
+  // the edge, so that last column is never usable.
+  const usable = Math.max(cols, ...widths) - 1;
+
   const lines: string[] = [];
-  const flush = new Set<number>(); // lines that start a message: always flush left
+  const flush = new Set<number>(); // lines that start a message: flush left
   let cur = "";
-  let curRowWidth = 0; // the full on-screen width of the LAST row joined into cur
+  let curRow = 0; // index of the last row joined into cur
   let contIndent = 0; // where wrapped rows of the current line start
+
+  /** Whether row ``i`` continues the line being built (Claude Code wrapped
+   * it) rather than starting a new one. */
+  const joins = (i: number): boolean => {
+    const prev = rows[curRow];
+    const row = rows[i];
+    if (!cur.trim() || !row.trim()) return false;
+    // Rows that always start their own line, or never belong to a sentence.
+    if (MARKER.test(raw[i]) || BULLET.test(row) || DIFF_LINE.test(row)) return false;
+    if (CHROME.test(row) || CHROME.test(prev)) return false;
+    if (cur.endsWith("…")) return false; // cut short, not wrapped
+    // Wrapped rows line up under the text — except Claude Code's status
+    // notices, which wrap back to column 0.
+    const ind = indentOf(row);
+    if (ind !== contIndent && ind !== 0) return false;
+    const next = row.trim();
+    const fw = displayWidth(next.split(/\s+/, 1)[0]);
+    // A token wider than a whole row is no evidence of a wrap.
+    if (fw >= usable - contIndent) return false;
+    // Code lines end and start in ways a sentence wrapped between words
+    // doesn't.
+    if (CODE_END.test(prev) || CODE_START.test(next)) return false;
+    // A lone token (a URL, a path) that doesn't reach the edge was placed on
+    // its own row: it says nothing about whether the next word would fit. (A
+    // row ending in a wide character is full one column early: the next one
+    // didn't fit.)
+    const last = [...prev].pop() || "";
+    const full =
+      widths[curRow] >= usable ||
+      (widths[curRow] === usable - 1 && displayWidth(last) === 2);
+    if (!prev.trim().includes(" ") && !full) return false;
+    return widths[curRow] + 1 + fw > usable;
+  };
+
   rows.forEach((row, i) => {
-    const width = displayWidth(row) + (i === 0 ? startCol : 0);
-    if (i > 0 && cur.trim() && row.trim()) {
+    if (i > 0 && joins(i)) {
       const next = row.trim();
       const firstWord = next.split(/\s+/, 1)[0];
-      // Wrapped rows line up under the text — except Claude Code's status
-      // notices, which wrap back to column 0. Either way, only a row whose
-      // first word could not have fit on the row above is a wrap.
-      const lined = indentOf(row) === contIndent || indentOf(row) === 0;
-      // A row Claude Code cut short ("…") was truncated, not wrapped: what
-      // follows is the next line, however full the row looks.
-      const truncated = cur.endsWith("…");
-      const wrapped = lined && !truncated && curRowWidth + 1 + displayWidth(firstWord) > cols;
-      if (wrapped) {
-        // A row filled to the last column that ends inside a long token (a
-        // path, a URL) was broken mid-token: no space between the halves.
-        const lastToken = cur.slice(cur.lastIndexOf(" ") + 1);
-        const midToken = curRowWidth >= cols && lastToken.length >= 12;
-        cur += (midToken ? "" : " ") + next;
-        curRowWidth = width;
-        return;
-      }
+      const lastToken = cur.slice(cur.lastIndexOf(" ") + 1).trimStart();
+      // Ink/wrap-ansi splits a word only when it is longer than a whole row:
+      // two halves that together couldn't fit on one row were one token.
+      const midToken = displayWidth(lastToken) + displayWidth(firstWord) > usable - contIndent;
+      cur += (midToken ? "" : " ") + next;
+      curRow = i;
+      return;
     }
     if (i > 0) lines.push(cur);
     if (MESSAGE.test(raw[i])) flush.add(lines.length);
     cur = row;
-    curRowWidth = width;
+    curRow = i;
     // A selection that starts mid-row has no gutter on its first row: its
     // wrapped rows line up wherever the second row does.
     contIndent =
       i === 0 && startCol > 0 && rows.length > 1 ? indentOf(rows[1]) : textIndent(row);
   });
   lines.push(cur);
+
   // Drop the indentation every line shares (the gutter), keep the rest. A
   // first line that starts mid-row has no gutter to share.
+  // Table borders, rules and the input box sit at column 0 and don't share it.
   const counted = startCol > 0 ? lines.slice(1) : lines;
-  const indents = counted.filter((l) => l.trim()).map(indentOf);
+  const indents = counted.filter((l) => l.trim() && !CHROME.test(l)).map(indentOf);
   const common = indents.length ? Math.min(...indents) : 0;
   return lines
     .map((l, i) => {

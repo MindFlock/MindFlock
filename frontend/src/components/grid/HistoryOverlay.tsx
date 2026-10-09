@@ -23,7 +23,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { copyText } from "../../lib/clipboard";
-import type { DragScreenCtx } from "../../lib/terminals";
+import { agentCopyText } from "../../lib/agentCopy";
+import { peekTerm, type DragScreenCtx } from "../../lib/terminals";
 import { FIND_MAX, findAll, pickStart, stepMatch } from "../../lib/textFind";
 import { toast } from "../../lib/toast";
 
@@ -307,6 +308,10 @@ export function HistoryOverlay({
   initialFind?: string;
   onClose: () => void;
 }) {
+  // The transcript keeps Claude Code's own layout (markers, gutter, its hard
+  // wraps): an agent pane running it copies the text instead (agentCopy).
+  const forClipboard = (text: string) =>
+    pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -491,7 +496,7 @@ export function HistoryOverlay({
       stop();
       suppressElementCopy.current = true;
       setTimeout(() => {
-        const s = window.getSelection()?.toString() || "";
+        const s = forClipboard(window.getSelection()?.toString() || "");
         if (s.trim())
           copyText(s).then((ok) => {
             if (ok) toast("Copied " + s.length + " chars");
@@ -669,7 +674,7 @@ export function HistoryOverlay({
   const copyOnRelease = () => {
     if (suppressElementCopy.current) return; // continuation already copied
     setTimeout(() => {
-      const sel = window.getSelection?.()?.toString() || "";
+      const sel = forClipboard(window.getSelection?.()?.toString() || "");
       if (!sel.trim()) return;
       copyText(sel).then((ok) => {
         if (ok) toast("Copied " + sel.length + " chars");
@@ -703,7 +708,7 @@ export function HistoryOverlay({
           toast("No history to copy");
           return;
         }
-        copyText(all).then((ok) =>
+        copyText(forClipboard(all)).then((ok) =>
           toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed")
         );
       })

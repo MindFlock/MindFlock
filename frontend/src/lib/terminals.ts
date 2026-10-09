@@ -17,9 +17,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
-import { cleanClaudeSelection } from "./claudeCopy";
-import { queryClient } from "../state/queries";
-import type { Instance } from "../api/types";
+import { agentCopyText } from "./agentCopy";
 
 export type TermKind = "agent" | "shell";
 
@@ -137,20 +135,6 @@ function disableAppMouseReporting(term: Terminal) {
   }
 }
 
-/** Whether ``session``'s agent is Claude Code (or a custom provider built on
- * it): its agent pane gets {@link cleanClaudeSelection} on copy. */
-function runsClaudeCode(session?: string): boolean {
-  if (!session) return false;
-  try {
-    const inst = (queryClient.getQueryData<Instance[]>(["instances"]) || []).find(
-      (i) => i.title === session
-    );
-    return (inst?.provider || inst?.program || "").toLowerCase().includes("claude");
-  } catch {
-    return false;
-  }
-}
-
 function attachCopyOnSelect(
   host: HTMLElement,
   term: Terminal,
@@ -184,15 +168,27 @@ function attachCopyOnSelect(
       capturedCol = startCol();
     }
   });
+  // Claude Code draws its own gutter and wraps its own rows: an agent pane
+  // copies the text, not the layout (see claudeCopy / agentCopy).
+  const forClipboard = (text: string, col: number) =>
+    opts.agent ? agentCopyText(text, session, term.cols, col) : text;
+  // Cmd+C / Ctrl+C / the Edit menu's Copy go through the browser's copy
+  // event, which xterm answers with its raw selection: answer it first.
+  host.addEventListener(
+    "copy",
+    (ev) => {
+      const live = term.getSelection();
+      if (!opts.agent || !live || !live.trim() || !ev.clipboardData) return;
+      ev.clipboardData.setData("text/plain", forClipboard(live, startCol()));
+      ev.preventDefault();
+      ev.stopPropagation();
+    },
+    true
+  );
   function doCopy(): boolean {
     const live = term.getSelection();
     const isLive = !!(live && live.trim());
-    let sel = isLive ? live : captured;
-    // Claude Code draws its own gutter and wraps its own rows: copy the text,
-    // not the layout (see claudeCopy).
-    if (sel && opts.agent && runsClaudeCode(session)) {
-      sel = cleanClaudeSelection(sel, term.cols, isLive ? startCol() : capturedCol);
-    }
+    const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
         if (ok) toast("Copied " + sel.length + " chars");
