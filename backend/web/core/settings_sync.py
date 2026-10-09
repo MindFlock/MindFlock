@@ -34,7 +34,9 @@ back. A change is noticed by the hash — a Settings save calls
 :func:`scan_local` at once (and nudges the other devices to pull now), the
 loop rescans every :data:`INTERVAL` s. Stamps are hybrid-logical: a change
 gets ``max(now, previous stamp + 1 ms)``, so a value adopted from a device
-whose clock runs fast can still be overwritten by a later edit here.
+whose clock runs fast can still be overwritten by a later edit here. A stamp
+more than :data:`_MAX_SKEW` s ahead of this clock isn't adopted at all — its
+unit waits, with a warning naming that device, until its clock is fixed.
 
 **Canonical, then local.** A value that names a local checkout (``repository
 .url``, a ticket source's ``repo_url``, a template's ``repo_path``) travels as
@@ -45,7 +47,8 @@ the same repo on adoption (:func:`canonical` / :func:`localize`).
 adopted (and its stamp not taken) until it is — :data:`DEFER_PATHS`.
 
 **Pinning.** "Keep different on this device": a pinned base is neither
-exported, adopted nor stamped (:func:`set_pinned`).
+exported, adopted nor stamped (:func:`set_pinned`); so is a pinned unit (a
+ticket source kept separate at join).
 
 **Joining.** :func:`enable` either starts from THIS device (its values are
 stamped now and spread from it — or, ``seed=True``, stamped older than any
@@ -53,14 +56,21 @@ real edit, so they only spread where nobody has a value) or from another
 fleet device: that device's shareable values are adopted first, under its
 stamps (or, if it isn't syncing yet, stamps older than any real edit, so its
 first sync wins over nothing). A plain field the device joined doesn't have
-set never clears one set here: this device's value is kept and spreads.
+set — and never really edited — never clears one set here: this device's
+value is kept and spreads. Ids are never rewritten (a source's id is its
+ticket slug prefix): a ticket source the device joined has, or deleted,
+under the same id as a different one here is kept separate on this device.
 
 **Never from a broken file.** A ``settings.json`` that exists but doesn't
 parse pauses sync (nothing scanned, exported or adopted — read as empty it
 would delete every source and clear every token on every device), and a
 checkout whose origin git can't tell right now is left out of the pass rather
 than shipped as this machine's path (the last origin seen is remembered in
-``settings_sync.json``).
+``settings_sync.json``). Writers outside sync refuse too
+(``settings.update_settings`` raises instead of saving defaults over it). A
+scan that would clear most of what this device has set at once — a reset or
+replaced file — pauses sync until the person says whose values to keep
+(:func:`resume`).
 """
 
 from __future__ import annotations
@@ -237,13 +247,29 @@ _SEED_TS = 1.0
 #: Seconds a checkout's origin URL is remembered (canonical form).
 _ORIGIN_TTL = 60.0
 
-#: Seconds a stamp from another device may lie ahead of this clock: a later
-#: one is clamped (a stamp in the far future would freeze its unit forever —
-#: no later edit could ever be newer).
+#: Seconds a stamp from another device may lie ahead of this clock. A later
+#: one is NOT adopted (nor clamped — a clamp moves with the clock, so the fast
+#: device would keep winning): its unit waits, with a warning, until that
+#: device's clock is fixed. Stored stamps that far ahead (an older version
+#: took them) are clamped on load.
 _MAX_SKEW = 300.0
 
 #: What the UI shows while settings.json can't be read.
 UNREADABLE = "settings.json couldn't be read — sync paused"
+
+#: What the UI shows while a scan that would clear most of this device's
+#: settings at once is held back (:func:`scan_local`, :func:`resume`).
+PAUSED = "This device's settings look reset — sync paused"
+#: :func:`resume`'s choices: take the other devices' values back, or spread
+#: this device's (reset) ones.
+RESUME_CHOICES = ("theirs", "mine")
+#: A scan that would delete/clear at least this many units, and at least
+#: half of what this device has set, pauses instead of stamping.
+_MASS_MIN = 3
+
+#: How many checkout -> origin answers are remembered (least recently used
+#: go first), in memory and in settings_sync.json.
+_CANON_MAX = 200
 
 #: Human names for the pin picker ("Keep different on this device").
 GROUP_LABELS: Dict[str, str] = {
@@ -339,9 +365,12 @@ _warnings: Dict[str, str] = {}
 _unlanded: Dict[str, Tuple[float, str]] = {}
 #: Units left out of the last scan: their checkout's origin is unknown now.
 _unresolved: Set[str] = set()
-_ORIGINS: Dict[str, Tuple[float, str]] = {}  # checkout path -> (read at, origin)
+#: checkout path -> (read at, origin; None = git couldn't answer — also
+#: cached, so a git that times out isn't asked again every call).
+_ORIGINS: Dict[str, Tuple[float, Optional[str]]] = {}
 #: checkout path -> last origin git gave for it (persisted as "canon"): what
 #: the path stands for while git can't answer, or after the checkout moved.
+#: Least recently used first; at most :data:`_CANON_MAX`.
 _CANON: Dict[str, str] = {}
 _unreadable_logged = ""
 
@@ -494,15 +523,22 @@ def _clean_ts(raw: object, cap: float) -> Optional[float]:
     return min(ts, cap)
 
 
-def _remote_ts(rs: object) -> Optional[float]:
-    """The time of another device's stamp ``rs``, clamped to now +
-    :data:`_MAX_SKEW` (``None``: unusable — skip the unit)."""
+def _remote_ts(rs: object, ahead: Optional[Dict[str, float]] = None) -> Optional[float]:
+    """The time of another device's stamp ``rs``; ``None`` — skip the unit —
+    when it isn't a finite, non-negative number or lies more than
+    :data:`_MAX_SKEW` s ahead of this clock (``ahead`` then records by how
+    much, per device that made it)."""
     if not isinstance(rs, dict):
         return None
-    cap = time.time() + _MAX_SKEW
-    ts = _clean_ts(rs.get("ts") or 0, cap)
-    if ts is not None and ts == cap:
-        _log_error("settings sync: clamped a future stamp from %v", rs.get("by"))
+    ts = _clean_ts(rs.get("ts") or 0, math.inf)
+    if ts is None:
+        return None
+    lead = ts - time.time()
+    if lead > _MAX_SKEW:
+        if ahead is not None:
+            by = str(rs.get("by") or "")
+            ahead[by] = max(ahead.get(by, 0.0), lead)
+        return None
     return ts
 
 
@@ -534,10 +570,7 @@ def _load() -> dict:
         data = {}
     data["stamps"] = _clean_stamps(data.get("stamps"))
     data["enabled"] = bool(data.get("enabled"))
-    canon = data.get("canon")
-    for path, url in (canon.items() if isinstance(canon, dict) else []):
-        if isinstance(path, str) and isinstance(url, str) and path and url:
-            _CANON.setdefault(path, url)
+    _seed_canon(data.get("canon"))
     data["joined_from"] = str(data.get("joined_from") or "")
     pinned = data.get("pinned")
     data["pinned"] = (
@@ -545,10 +578,44 @@ def _load() -> dict:
         if isinstance(pinned, list)
         else []
     )
+    separate = data.get("separate")
+    data["separate"] = {
+        u: str(v or "")
+        for u, v in (separate.items() if isinstance(separate, dict) else [])
+        if isinstance(u, str) and u in data["pinned"]
+    }
+    paused = data.get("paused")
+    data["paused"] = paused if isinstance(paused, dict) else None
     return data
 
 
+def _seed_canon(canon: object) -> None:
+    """Take the persisted origins this process doesn't know as the LEAST
+    recently used ones (what this process looked up since is fresher), then
+    cap — so the file never grows past :data:`_CANON_MAX`."""
+    if not isinstance(canon, dict):
+        return
+    older = {
+        p: u
+        for p, u in canon.items()
+        if isinstance(p, str) and isinstance(u, str) and p and u and p not in _CANON
+    }
+    if not older:
+        return
+    fresher = dict(_CANON)
+    _CANON.clear()
+    _CANON.update(older)
+    _CANON.update(fresher)
+    _trim_canon()
+
+
+def _trim_canon() -> None:
+    while len(_CANON) > _CANON_MAX:
+        _CANON.pop(next(iter(_CANON)), None)
+
+
 def _save(data: dict) -> None:
+    _trim_canon()
     data["canon"] = dict(_CANON)
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -644,30 +711,39 @@ class _Unresolved(Exception):
     path would point every other device at a folder only this one has."""
 
 
+def _canon_get(path: str) -> Optional[str]:
+    """The remembered origin of ``path`` (marked as just used)."""
+    url = _CANON.pop(path, None)
+    if url is not None:
+        _CANON[path] = url
+    return url
+
+
 def _remember_origin(path: str, url: str) -> None:
-    if _CANON.get(path) == url:
-        return
-    if len(_CANON) > 512:
-        _CANON.clear()
+    _CANON.pop(path, None)
     _CANON[path] = url
+    _trim_canon()
 
 
-def _origin_of(path: str) -> Optional[str]:
+def _origin_of(path: str, *, remember: bool = True) -> Optional[str]:
     """``path``'s ``origin`` URL; ``""`` when it definitely has none (not a
     git checkout, no ``origin`` remote, a folder that isn't there and never
     had one); ``None`` when git couldn't be asked (timeout, crash) and no
-    origin is remembered for it. Answers are cached :data:`_ORIGIN_TTL` s —
-    the export and every scan canonicalise, and git is a process spawn — and
-    a real origin is remembered in :data:`_CANON` (persisted), which also
-    answers for a checkout that has since moved away."""
+    origin is remembered for it. Answers — "git couldn't answer" included,
+    or a git that times out would cost 3 s per call while sync holds its
+    lock — are cached :data:`_ORIGIN_TTL` s (the export and every scan
+    canonicalise, and git is a process spawn); a real origin is remembered in
+    :data:`_CANON` (persisted; ``remember=False`` for a mere probe), which
+    also answers for a checkout that has since moved away."""
     if not path:
         return ""
     now = time.time()
     hit = _ORIGINS.get(path)
     if hit is not None and now - hit[0] < _ORIGIN_TTL:
-        return hit[1]
+        return hit[1] if hit[1] is not None else _canon_get(path)
+    url: Optional[str]
     if not os.path.isdir(path):
-        url = _CANON.get(path, "")
+        url = _canon_get(path) or ""
     else:
         try:
             cp = subprocess.run(
@@ -678,18 +754,21 @@ def _origin_of(path: str) -> Optional[str]:
                 timeout=3,
             )
         except Exception:  # noqa: BLE001 — no git / timeout: don't know
-            return _CANON.get(path)  # not cached: ask again next time
-        if cp.returncode == 0 and cp.stdout.strip():
+            cp = None
+        if cp is None:
+            url = None
+        elif cp.returncode == 0 and cp.stdout.strip():
             url = cp.stdout.strip()
-            _remember_origin(path, url)
+            if remember:
+                _remember_origin(path, url)
         elif cp.returncode == 2 or not os.path.exists(os.path.join(path, ".git")):
             url = ""  # "no such remote" / not a checkout at all
         else:
-            return _CANON.get(path)  # a checkout git choked on: don't know
+            url = None  # a checkout git choked on: don't know
     if len(_ORIGINS) > 512:
         _ORIGINS.clear()
     _ORIGINS[path] = (now, url)
-    return url
+    return url if url is not None else _canon_get(path)
 
 
 def canonical_url(value: object) -> object:
@@ -772,7 +851,9 @@ def localize_url(incoming: object, current: object = "") -> object:
             ):
                 return current
         for path in known_checkouts():
-            origin = _origin_of(path)
+            # A probe: a session worktree is never a synced value, so its
+            # origin isn't worth remembering after it's gone.
+            origin = _origin_of(path, remember=False)
             if origin and remote_url.same_repo(origin, incoming):
                 return path
     except Exception:  # noqa: BLE001 — a URL is always a valid answer
@@ -858,43 +939,11 @@ def _note_unreadable(err: Exception) -> None:
         _log_error("settings sync paused: %v", err)
 
 
-def _source_id(item: dict, taken: Set[str]) -> str:
-    """A stable id for a ticket source saved without one (hand-edited):
-    ``<provider>-<6 hex of what identifies it>``, ``-2``… when taken."""
-    ident = "|".join(
-        str(item.get(f) or "").strip()
-        for f in ("provider", "base_url", "project", "label")
-    )
-    stem = "%s-%s" % (
-        str(item.get("provider") or "source").strip().lower() or "source",
-        hashlib.sha1(ident.encode("utf-8")).hexdigest()[:6],
-    )
-    sid, n = stem, 2
-    while sid in taken:
-        sid, n = "%s-%d" % (stem, n), n + 1
-    return sid
-
-
-def _ensure_source_ids(doc: dict) -> bool:
-    """Give every ticket source without an id a stable one (in ``doc``), so
-    it syncs as an entry like any other instead of staying on this device.
-    Returns whether anything changed (the caller writes it back once)."""
-    items = (doc.get("ticketing") or {}).get("sources")
-    if not isinstance(items, list):
-        return False
-    taken = {
-        str(i.get("id") or "").strip()
-        for i in items
-        if isinstance(i, dict) and str(i.get("id") or "").strip()
-    }
-    changed = False
-    for i, item in enumerate(items):
-        if isinstance(item, dict) and not str(item.get("id") or "").strip():
-            sid = _source_id(item, taken)
-            taken.add(sid)
-            items[i] = {**item, "id": sid}
-            changed = True
-    return changed
+def _is_pinned(unit: str, pinned: Set[str]) -> bool:
+    """Whether ``unit`` stays different here: its base is pinned ("Keep
+    different on this device"), or the unit itself is — a ticket source kept
+    separate at join (:func:`_separate_sources`)."""
+    return unit in pinned or _split(unit)[0] in pinned
 
 
 def _snapshot() -> Tuple[Dict[str, object], Set[str]]:
@@ -903,13 +952,11 @@ def _snapshot() -> Tuple[Dict[str, object], Set[str]]:
     A plain field is always present (``None`` = unset); a keyed or store
     entry only while it exists. An unreadable store is reported, not read as
     empty — that would tombstone its every entry fleet-wide; an unreadable
-    settings.json raises ``SettingsUnreadable`` for the same reason."""
-    from backend.config import settings as _settings
-
+    settings.json raises ``SettingsUnreadable`` for the same reason. A
+    keyed entry without a key (a ticket source saved with no id) isn't a
+    unit: it stays on this device (its id is its ticket slug prefix — making
+    one up would re-ingest every ticket it already brought in)."""
     doc = _settings_doc()
-    if _ensure_source_ids(doc):
-        _settings.save_settings(_settings.Settings.from_dict(doc))
-        doc = _settings_doc()
     raw: Dict[str, object] = {}
     for group, fields in SYNCED.items():
         g = doc.get(group) if isinstance(doc.get(group), dict) else {}
@@ -1066,17 +1113,46 @@ def _unit_label(unit: str) -> str:
     return label if key is None else "%s “%s”" % (label, key)
 
 
-def scan_local(now: Optional[float] = None) -> List[str]:
+def _unset_hashes(unit: str) -> Set[str]:
+    """The hashes a plain field's stamp has while it isn't set."""
+    out = {_hash(None)}
+    try:
+        out.add(_hash(_field_default(unit)))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _set_here(unit: str, st: object) -> bool:
+    """Whether stamp ``st`` says ``unit`` holds a value here (a live keyed or
+    store entry, a plain field that isn't at its default)."""
+    if not isinstance(st, dict) or st.get("deleted"):
+        return False
+    return _split(unit)[1] is not None or st.get("h") not in _unset_hashes(unit)
+
+
+def paused() -> bool:
+    """Whether sync is held back because this device's settings look reset
+    (:func:`scan_local`); :func:`resume` says what to do."""
+    return bool(_load()["paused"])
+
+
+def scan_local(now: Optional[float] = None, *, force: bool = False) -> List[str]:
     """Stamp every unit whose value changed since its stamp (a save here, a
     hand edit, another process) and tombstone keyed/store entries that are
     gone. Returns the changed units. Nothing at all while settings.json
     can't be read; a unit whose checkout origin git can't tell right now is
-    skipped (:class:`_Unresolved`)."""
+    skipped (:class:`_Unresolved`).
+
+    A scan that would delete or clear :data:`_MASS_MIN`+ units AND at least
+    half of what this device has set looks like a reset file (replaced,
+    restored from an old backup), not edits: nothing is stamped, sync pauses
+    (:data:`PAUSED`) until :func:`resume` — ``force`` is its "keep mine"."""
     from backend.config import settings as _settings
 
     with _LOCK:
         data = _load()
-        if not data["enabled"]:
+        if not data["enabled"] or (data["paused"] and not force):
             return []
         now = time.time() if now is None else now
         me = _self_key()
@@ -1086,11 +1162,24 @@ def scan_local(now: Optional[float] = None) -> List[str]:
         except _settings.SettingsUnreadable as err:
             _note_unreadable(err)
             return []
-        stamps = data["stamps"]
+        # A unit kept separate whose entry is gone here (renamed, deleted)
+        # has nothing left to keep apart: the fleet's entry may come in.
+        dropped = [
+            u
+            for u in pinned
+            if _split(u)[1] is not None and u not in raw and _split(u)[0] not in failed
+        ]
+        for u in dropped:
+            pinned.discard(u)
+            data["separate"].pop(u, None)
+            data["stamps"].pop(u, None)
+        data["pinned"] = sorted(pinned)
+        stamps = dict(data["stamps"])
         changed = []
+        cleared = []
         unresolved: Set[str] = set()
         for unit, value in raw.items():
-            if _split(unit)[0] in pinned:
+            if _is_pinned(unit, pinned):
                 continue
             try:
                 h = _hash(canonical(unit, value))
@@ -1100,11 +1189,19 @@ def scan_local(now: Optional[float] = None) -> List[str]:
             st = stamps.get(unit)
             if isinstance(st, dict) and not st.get("deleted") and st.get("h") == h:
                 continue
+            if (
+                _split(unit)[1] is None
+                and _set_here(unit, st)
+                and h in _unset_hashes(unit)
+            ):
+                cleared.append(unit)
             stamps[unit] = {"ts": _tick(now, st), "by": me, "h": h}
             changed.append(unit)
         for unit, st in list(stamps.items()):
             base, key = _split(unit)
-            if key is None or unit in raw or base in pinned or base in failed:
+            if key is None or unit in raw or _is_pinned(unit, pinned):
+                continue
+            if base in failed:
                 continue
             if unit in _unlanded:
                 continue  # never landed here: that isn't a delete
@@ -1112,9 +1209,29 @@ def scan_local(now: Optional[float] = None) -> List[str]:
                 continue
             stamps[unit] = {"ts": _tick(now, st), "by": me, "h": "-", "deleted": True}
             changed.append(unit)
+            cleared.append(unit)
         _unresolved.clear()
         _unresolved.update(unresolved)
-        if changed:
+        held = sum(
+            1
+            for u, st in data["stamps"].items()
+            if not _is_pinned(u, pinned)
+            and _split(u)[0] not in failed
+            and _set_here(u, st)
+        )
+        if not force and len(cleared) >= _MASS_MIN and 2 * len(cleared) >= held:
+            data["paused"] = {"at": now, "units": sorted(cleared)}
+            _save(data)  # the pause (and dropped pins) only — no stamps
+            _log_error(
+                "settings sync paused: one scan would clear %v of %v settings here",
+                len(cleared),
+                held,
+            )
+            return []
+        if force:
+            data["paused"] = None
+        data["stamps"] = stamps
+        if changed or dropped or force:
             _save(data)
         return sorted(changed)
 
@@ -1125,15 +1242,21 @@ def export() -> dict:
     in it — the route only answers a caller holding the fleet key or this
     device's token. Raises ``SettingsUnreadable`` while settings.json can't
     be read (the route answers 503: an empty export would read as "all
-    deleted"). A unit whose checkout origin is unknown right now is left out."""
+    deleted") — and, the same way, while sync is paused here (:data:`PAUSED`:
+    what's here looks reset, so nobody may start from it). A unit whose
+    checkout origin is unknown right now is left out."""
+    from backend.config import settings as _settings
+
     scan_local()
     with _LOCK:
         data = _load()
+        if data["paused"]:
+            raise _settings.SettingsUnreadable(PAUSED)
         pinned = set(data["pinned"])
         raw, _failed = _snapshot()
         values = {}
         for u, v in raw.items():
-            if _split(u)[0] in pinned:
+            if _is_pinned(u, pinned):
                 continue
             try:
                 values[u] = canonical(u, v)
@@ -1144,7 +1267,7 @@ def export() -> dict:
             for u, st in data["stamps"].items()
             if isinstance(st, dict)
             and _valid_unit(u)
-            and _split(u)[0] not in pinned
+            and not _is_pinned(u, pinned)
             and (u in values or st.get("deleted"))
         }
     return {
@@ -1195,6 +1318,28 @@ def _note_failed(unit: str, why: str) -> None:
     _warnings[unit] = "%s couldn't be applied here: %s" % (_unit_label(unit), why)
 
 
+def _device_label(key: str) -> str:
+    """A fleet device's name for a person (its host), else its key."""
+    for dev in _fleet_devices():
+        if dev.get("key") == key:
+            return str(dev.get("host") or key)
+    return key or "another device"
+
+
+def _note_clocks(rstamps: Dict[str, object], ahead: Dict[str, float]) -> None:
+    """Warn about each device whose stamps were skipped for lying in the
+    future (:func:`_remote_ts`); clear the warning for every device in
+    ``rstamps`` that no longer does."""
+    seen = {str(rs.get("by") or "") for rs in rstamps.values() if isinstance(rs, dict)}
+    for by in seen - set(ahead):
+        _warnings.pop("clock:" + by, None)
+    for by, lead in ahead.items():
+        _warnings["clock:" + by] = (
+            "%s's clock is ahead by %d min — its changes wait until it's fixed"
+            % (_device_label(by), max(1, math.ceil(lead / 60.0)))
+        )
+
+
 def merge(remote: dict) -> List[str]:
     """Adopt every unit ``remote`` (an :func:`export` of a device in this
     fleet) has a newer stamp for. Returns the adopted units. Nothing while
@@ -1209,7 +1354,7 @@ def merge(remote: dict) -> List[str]:
     with _LOCK:
         scan_local()  # a local edit not yet stamped must not lose to an older remote
         data = _load()
-        if not data["enabled"]:
+        if not data["enabled"] or data["paused"]:
             return []
         pinned = set(data["pinned"])
         try:
@@ -1221,19 +1366,26 @@ def merge(remote: dict) -> List[str]:
         take: Dict[str, object] = {}
         drop: Set[str] = set()
         stamps: Dict[str, dict] = {}
+        ahead: Dict[str, float] = {}
         for unit, rs in rstamps.items():
             if not _valid_unit(unit) or not isinstance(rs, dict):
                 continue
             base, key = _split(unit)
-            if base in pinned or base in failed:
+            if _is_pinned(unit, pinned) or base in failed:
                 continue
-            ts = _remote_ts(rs)
+            ts = _remote_ts(rs, ahead)
             if ts is None:
-                continue
+                continue  # unusable, or from a clock running ahead: waits
             by = str(rs.get("by") or "")
             if not _newer({"ts": ts, "by": by}, data["stamps"].get(unit)):
                 _deferred.pop(unit, None)
-                _unlanded.pop(unit, None)
+                skipped = _unlanded.get(unit)
+                if skipped is not None and not _newer(
+                    {"ts": skipped[0], "by": skipped[1]}, data["stamps"].get(unit)
+                ):
+                    # What's here is now at least that version: moot. (An
+                    # older stamp from another device says nothing about it.)
+                    _unlanded.pop(unit, None)
                 continue
             if _unlanded.get(unit) == (ts, by):
                 continue  # this version already failed to land here
@@ -1258,6 +1410,7 @@ def merge(remote: dict) -> List[str]:
             stamps[unit] = st
             if _hash(value) != here:
                 take[unit] = localize(unit, value, raw.get(unit))
+        _note_clocks(rstamps, ahead)
         if not stamps:
             return []
         order = {u: i for i, u in enumerate(rvalues)}
@@ -1287,15 +1440,28 @@ def merge(remote: dict) -> List[str]:
                 except _Unresolved:
                     continue
                 # The hash of what was STORED (normalisation, a local path
-                # for a URL), so the next scan doesn't read the adoption as a
-                # local edit — and, when the write failed, so it isn't
-                # retried every pass nor spread from here as an edit.
-                data["stamps"][unit] = {**st, "h": h}
-                _unlanded.pop(unit, None)
+                # for a URL), so the next scan doesn't read the adoption — or
+                # a write that only partly landed — as a local edit.
                 if unit in errors:
+                    # Didn't land: keep this device's OWN stamp time. Under
+                    # the remote's stamp, the old (or partial) value here
+                    # would be served as that version, and a device pulling
+                    # here first would never take the real one.
+                    prev = data["stamps"].get(unit)
+                    if isinstance(prev, dict) and not prev.get("deleted"):
+                        data["stamps"][unit] = {**prev, "h": h}
+                    else:
+                        data["stamps"][unit] = {
+                            "ts": _SEED_TS,
+                            "by": _self_key(),
+                            "h": h,
+                        }
+                    _unlanded[unit] = (st["ts"], st["by"])  # not retried
                     _note_failed(unit, errors[unit])
                     missed.add(unit)
                 else:
+                    data["stamps"][unit] = {**st, "h": h}
+                    _unlanded.pop(unit, None)
                     _warnings.pop(unit, None)
             elif unit in take:
                 # It didn't land (a write that failed, or one this device's
@@ -1324,63 +1490,59 @@ def _after_change(
         _log_error("settings sync: after-change hooks failed: %v", err)
 
 
-def _source_identity(item: object) -> Tuple[str, str, str]:
-    """What makes two ticket sources the same source (an id is just a slug
-    each device seeds on its own: every device's first Shortcut source is
-    ``sc``)."""
+def _source_identity(item: object) -> Tuple[str, str, str, str]:
+    """What makes two ticket sources the same source — an id is just a slug
+    each device seeds on its own (every device's first Shortcut source is
+    ``sc``): provider, base URL, project, and (the workspace, for Shortcut)
+    a short hash of the API token, or ``""`` when there's none."""
     if not isinstance(item, dict):
-        return ("", "", "")
+        return ("", "", "", "")
+    tok = str(item.get("api_token") or "").strip()
     return (
         str(item.get("provider") or "").strip().lower(),
-        str(item.get("project") or "").strip().lower(),
         str(item.get("base_url") or "").strip().rstrip("/").lower(),
+        str(item.get("project") or "").strip().lower(),
+        hashlib.sha256(tok.encode("utf-8")).hexdigest()[:8] if tok else "",
     )
 
 
-def _rename_clashing_sources(
-    rvalues: Dict[str, object], raw: Dict[str, object], me: str
-) -> Dict[str, str]:
-    """Before a join's union: a ticket source here whose id the device
-    joined also uses for a DIFFERENT source (provider/project/workspace) is
-    renamed ``<id>-<this device>`` so both survive. Returns ``{old: new}``."""
-    base = "ticketing.sources"
-    clash: Set[str] = set()
-    for unit, value in rvalues.items():
-        b, key = _split(unit)
-        if b != base or key is None or unit not in raw:
+def _same_source(a: object, b: object) -> bool:
+    """Whether two ticket-source entries are the same source (a token only
+    counts when both have one)."""
+    ia, ib = _source_identity(a), _source_identity(b)
+    return ia[:3] == ib[:3] and (not (ia[3] and ib[3]) or ia[3] == ib[3])
+
+
+def _separate_sources(
+    rvalues: Dict[str, object], rstamps: Dict[str, object], raw: Dict[str, object]
+) -> List[str]:
+    """At join: this device's ticket sources the device joined has under the
+    same id as a DIFFERENT source, or has deleted. Taking its entry (or its
+    delete) would lose this one and its token; renaming either would change
+    its ticket slugs and re-ingest every ticket it brought in. So they stay
+    here, kept separate (a unit pin) until someone gives one another id."""
+    out = []
+    for unit, value in raw.items():
+        base, key = _split(unit)
+        if base != "ticketing.sources" or key is None:
             continue
-        if _source_identity(raw[unit]) != _source_identity(value):
-            clash.add(key)
-    if not clash:
-        return {}
-    taken = {_split(u)[1] for u in list(raw) + list(rvalues) if _split(u)[0] == base}
-    items = (_settings_doc().get("ticketing") or {}).get("sources")
-    renames: Dict[str, str] = {}
-    out: List[object] = []
-    for item in items if isinstance(items, list) else []:
-        key = _entry_key(base, item)
-        if key in clash and key not in renames and isinstance(item, dict):
-            new, n = "%s-%s" % (key, me), 2
-            while new in taken:
-                new, n = "%s-%s-%d" % (key, me, n), n + 1
-            taken.add(new)
-            renames[key] = new
-            item = {**item, "id": new}
-        out.append(item)
-    if renames:
-        _apply({base: out})
-        _log_error(
-            "settings sync: renamed ticket sources %v so both devices' survive",
-            renames,
-        )
-    return renames
+        rs = rstamps.get(unit)
+        if isinstance(rs, dict) and rs.get("deleted"):
+            out.append(unit)
+        elif unit in rvalues and not _same_source(value, rvalues[unit]):
+            out.append(unit)
+    return sorted(out)
 
 
 def _adopt_all(body: dict, start_from: str) -> Tuple[List[str], Optional[tuple]]:
     """Join from ``start_from``: take every unit it has (it leads), keep
     entries only this device has (they spread from here), and stamp so the
     leader's values hold — except a plain field the leader has unset and
-    this device has set: that stays, as a fresh edit here, so it spreads.
+    never really edited (no stamp, or one older than any edit) while this
+    device has it set: that stays, as a fresh edit here, so it spreads. A
+    value the leader set back to its default on purpose wins like any other.
+    A ticket source the leader has (or deleted) under the same id as a
+    different one here is kept separate (:func:`_separate_sources`).
     Returns ``(adopted, pipeline signature before)``. Raises
     ``SettingsUnreadable`` while settings.json can't be read."""
     rvalues = body.get("values") if isinstance(body.get("values"), dict) else {}
@@ -1393,26 +1555,46 @@ def _adopt_all(body: dict, start_from: str) -> Tuple[List[str], Optional[tuple]]
     me = _self_key()
     with _LOCK:
         data = _load()
-        pinned = set(data["pinned"])
         raw, failed = _snapshot()
         sig_before = _pipeline_signature()
-        if _rename_clashing_sources(rvalues, raw, me):
-            raw, failed = _snapshot()
+        separate = _separate_sources(rvalues, rstamps, raw)
+        if separate:
+            label = _device_label(start_from)
+            data["pinned"] = sorted(set(data["pinned"]) | set(separate))
+            for unit in separate:
+                data["separate"][unit] = label
+            _log_error(
+                "settings sync: kept ticket sources %v separate from %v's",
+                separate,
+                label,
+            )
+        pinned = set(data["pinned"])
 
         def _skip(unit: str) -> bool:
-            return not _valid_unit(unit) or _split(unit)[0] in pinned | failed
+            return (
+                not _valid_unit(unit)
+                or _is_pinned(unit, pinned)
+                or _split(unit)[0] in failed
+            )
 
         take: Dict[str, object] = {}
         drop: Set[str] = set()
         held: Set[str] = set()
         kept: Set[str] = set()
+        ahead: Dict[str, float] = {}
         for unit, value in rvalues.items():
             if _skip(unit):
+                continue
+            rs = rstamps.get(unit)
+            rts = _remote_ts(rs, ahead) if rs is not None else None
+            if rs is not None and rts is None:
+                held.add(unit)  # a clock running ahead (or junk): waits
                 continue
             if (
                 _split(unit)[1] is None
                 and _is_unset(unit, value)
                 and not _is_unset(unit, raw.get(unit))
+                and (rts is None or rts <= _SEED_TS)
             ):
                 kept.add(unit)  # the leader has nothing there: keep ours
                 continue
@@ -1434,18 +1616,24 @@ def _adopt_all(body: dict, start_from: str) -> Tuple[List[str], Optional[tuple]]
             and rs.get("deleted")
             and not _skip(u)
             and _split(u)[1] is not None
+            and _remote_ts(rs, ahead) is not None
         }
+        _note_clocks(rstamps, ahead)
         drop = {u for u in tombs if u in raw}
         order = {u: i for i, u in enumerate(rvalues)}
         errors = _write(take, drop, order) if (take or drop) else {}
         bad = set(errors)
         for unit, why in errors.items():
             _note_failed(unit, why)
+            rts = _remote_ts(rstamps.get(unit))
+            if rts is not None:
+                # Not retried by the next merge until the leader has newer.
+                _unlanded[unit] = (rts, str(rstamps[unit].get("by") or ""))
         after, _failed = _snapshot()
         now = time.time()
         stamps: Dict[str, dict] = {}
         for unit, value in after.items():
-            if _split(unit)[0] in pinned:
+            if _is_pinned(unit, pinned):
                 continue
             try:
                 h = _hash(canonical(unit, value))
@@ -1485,7 +1673,7 @@ def _adopt_all(body: dict, start_from: str) -> Tuple[List[str], Optional[tuple]]
                     "h": "-",
                     "deleted": True,
                 }
-        data.update(enabled=True, joined_from=start_from)
+        data.update(enabled=True, joined_from=start_from, paused=None)
         data["stamps"] = stamps
         _save(data)
     return sorted((set(take) | drop) - bad), sig_before
@@ -1507,7 +1695,7 @@ def _lead_from_here(me: str, seed: bool) -> None:
         raw, _failed = _snapshot()
         stamps: Dict[str, dict] = {}
         for u, v in raw.items():
-            if _split(u)[0] in pinned:
+            if _is_pinned(u, pinned):
                 continue
             try:
                 h = _hash(canonical(u, v))
@@ -1516,7 +1704,7 @@ def _lead_from_here(me: str, seed: bool) -> None:
             plain_unset = _split(u)[1] is None and _is_unset(u, v)
             ts = _SEED_TS if (seed or plain_unset) else now
             stamps[u] = {"ts": ts, "by": me, "h": h}
-        data.update(enabled=True, joined_from=me)
+        data.update(enabled=True, joined_from=me, paused=None)
         data["stamps"] = stamps
         _save(data)
 
@@ -1577,7 +1765,7 @@ def disable() -> None:
     """Turn sync off (what's pinned stays pinned for next time)."""
     with _LOCK:
         data = _load()
-        data.update(enabled=False, joined_from="", stamps={})
+        data.update(enabled=False, joined_from="", stamps={}, paused=None)
         _save(data)
     _peers.clear()
     _deferred.clear()
@@ -1587,15 +1775,21 @@ def disable() -> None:
 
 
 def set_pinned(base: str, pinned: bool) -> List[str]:
-    """Keep ``base`` (``group.field`` or ``store:<name>``) different on this
-    device, or stop. Un-pinning restamps its current units as older than any
-    real edit, so the fleet's value wins on the next pass. Returns the pinned
-    list. ValueError for something that doesn't sync (or, un-pinning, while
-    settings.json can't be read)."""
+    """Keep ``base`` (``group.field`` or ``store:<name>``, or one unit — a
+    ticket source kept separate at join, ``ticketing.sources#<id>``)
+    different on this device, or stop. Un-pinning restamps its current units
+    as older than any real edit, so the fleet's value wins on the next pass.
+    Returns the pinned list. ValueError for something that doesn't sync (or,
+    un-pinning, while settings.json can't be read)."""
     from backend.config import settings as _settings
 
-    if base not in bases():
+    unit_pin = _split(base)[1] is not None and _valid_unit(base)
+    if base not in bases() and not unit_pin:
         raise ValueError("%s isn't something settings sync shares" % base)
+
+    def _covered(unit: str) -> bool:
+        return unit == base if unit_pin else _split(unit)[0] == base
+
     with _LOCK:
         data = _load()
         current = set(data["pinned"])
@@ -1607,12 +1801,13 @@ def set_pinned(base: str, pinned: bool) -> List[str]:
             except _settings.SettingsUnreadable as err:
                 raise ValueError(UNREADABLE) from err
             current.discard(base)
+            data["separate"].pop(base, None)
             me = _self_key()
             stamps = data["stamps"]
-            for unit in [u for u in stamps if _split(u)[0] == base]:
+            for unit in [u for u in stamps if _covered(u)]:
                 stamps.pop(unit)
             for unit, value in raw.items():
-                if _split(unit)[0] != base:
+                if not _covered(unit) or _is_pinned(unit, current):
                     continue
                 try:
                     h = _hash(canonical(unit, value))
@@ -1621,9 +1816,56 @@ def set_pinned(base: str, pinned: bool) -> List[str]:
                 stamps[unit] = {"ts": _SEED_TS, "by": me, "h": h}
         data["pinned"] = sorted(current)
         _save(data)
-        for unit in [u for u in _deferred if _split(u)[0] == base]:
+        for unit in [u for u in _deferred if _covered(u)]:
             _deferred.pop(unit, None)
         return list(data["pinned"])
+
+
+def _reseed() -> None:
+    """:func:`resume`'s "theirs": restamp what's here as older than any real
+    edit and forget the rest (a tombstone here would delete it everywhere),
+    so the next pass takes the fleet's values back."""
+    with _LOCK:
+        data = _load()
+        pinned = set(data["pinned"])
+        raw, _failed = _snapshot()
+        me = _self_key()
+        stamps: Dict[str, dict] = {}
+        for unit, value in raw.items():
+            if _is_pinned(unit, pinned):
+                continue
+            try:
+                h = _hash(canonical(unit, value))
+            except _Unresolved:
+                continue
+            stamps[unit] = {"ts": _SEED_TS, "by": me, "h": h}
+        data.update(stamps=stamps, paused=None)
+        _save(data)
+
+
+async def resume(keep: str) -> dict:
+    """Sync was paused because this device's settings look reset
+    (:data:`PAUSED`). ``keep="theirs"``: take the other devices' values back
+    (what's here is stamped older than any edit, then a pass runs);
+    ``"mine"``: what's here is the change — stamp it (it spreads) and go on.
+    Returns ``{"adopted": [...]}``. ValueError for another choice;
+    LookupError while settings.json can't be read."""
+    from backend.config import settings as _settings
+
+    if keep not in RESUME_CHOICES:
+        raise ValueError("keep must be one of: %s" % ", ".join(RESUME_CHOICES))
+    _remember_loop()
+    try:
+        if keep == "theirs":
+            await asyncio.to_thread(_reseed)
+        else:
+            changed = await asyncio.to_thread(lambda: scan_local(force=True))
+            if changed:
+                _spawn(nudge_peers())
+    except _settings.SettingsUnreadable as err:
+        _note_unreadable(err)
+        raise LookupError(UNREADABLE) from err
+    return {"adopted": await sync_once()}
 
 
 # --------------------------------------------------------------------------- #
@@ -1757,6 +1999,8 @@ async def sync_once() -> List[str]:
         return []
     if not await asyncio.to_thread(readable):
         return []  # paused: status() says why
+    if await asyncio.to_thread(paused):
+        return []  # settings look reset here: resume() decides
     await asyncio.to_thread(scan_local)
     adopted: List[str] = []
     for dev in _fleet_devices():
@@ -1811,6 +2055,20 @@ async def sync_loop() -> None:
         await asyncio.sleep(INTERVAL)
 
 
+def _idless_sources() -> int:
+    """How many ticket sources here have no id (never synced). Never raises."""
+    try:
+        from backend.config import settings as _settings
+
+        return sum(
+            1
+            for src in _settings.load_settings().ticketing.sources
+            if not str(src.id or "").strip()
+        )
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def status() -> dict:
     """Settings → Devices' sync section."""
     data = _load()
@@ -1847,10 +2105,27 @@ def status() -> dict:
             "is): %s — retried every pass."
             % ", ".join(_unit_label(u) for u in sorted(_unresolved))
         )
+    if data["enabled"] and in_fleet:
+        for unit in data["pinned"]:
+            base, key = _split(unit)
+            if base == "ticketing.sources" and key is not None:
+                warnings.append(
+                    "“%s” differs between %s and this device — kept separate; "
+                    "give one a different id to sync it"
+                    % (key, data["separate"].get(unit) or "your other device")
+                )
+        if _idless_sources():
+            warnings.append(
+                "A ticket source without an id isn't synced — give it an id "
+                "(Settings → Tickets) to share it."
+            )
     warnings.extend(v for _k, v in sorted(_warnings.items()))
+    is_paused = bool(data["paused"]) and data["enabled"]
     return {
         "enabled": data["enabled"] and in_fleet,
         "error": "" if ok else UNREADABLE,
+        "paused": PAUSED if is_paused else "",
+        "choices": list(RESUME_CHOICES) if is_paused else [],
         "device": _self_key(),
         "joined_from": data["joined_from"],
         "in_fleet": in_fleet,

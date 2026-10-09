@@ -23,6 +23,7 @@ import { adoptAccent, storedAccent } from "../components/settings/screens/Appear
 import { PRESETS_CHANGED, tidyUserPresets } from "./presets";
 import { toast } from "./toast";
 import {
+  PREF_MAP,
   SEEDED_KEY,
   THEME_CHANGED,
   dirtyFields,
@@ -102,12 +103,20 @@ function applyLive(fields: Partial<Prefs>) {
 }
 
 /** Adopt server values: localStorage first (the cache every reader uses),
- * then the live UI. Fields with a local write still in flight are skipped —
- * that write is newer than what the server just said. */
-function adopt(fields: Partial<Prefs>) {
+ * then the live UI. Skipped: fields with a local write still in flight (that
+ * write is newer than what the server just said), and — given the write
+ * generations from when the pull started — fields written here since then,
+ * even if that write already reached the server: the pull's snapshot was
+ * read before it, so it would put the old value back. */
+function adopt(fields: Partial<Prefs>, since: Map<PrefField, number> | null = null) {
   const inFlight = pendingFields();
+  const now = since ? writeGens(since.keys()) : null;
   const take: Partial<Record<PrefField, unknown>> = {};
-  for (const f of Object.keys(fields) as PrefField[]) if (!inFlight.has(f)) take[f] = fields[f];
+  for (const f of Object.keys(fields) as PrefField[]) {
+    if (inFlight.has(f)) continue;
+    if (since && now && (now.get(f) || 0) !== (since.get(f) || 0)) continue;
+    take[f] = fields[f];
+  }
   withoutEcho(() => {
     for (const f of Object.keys(take) as PrefField[]) writeLocal(f, take[f]);
   });
@@ -137,13 +146,31 @@ function reconcileAccent(settings: Json | undefined, mayUpload: boolean) {
 }
 
 let pulling: Promise<void> | null = null;
+/** The one pull queued behind the running one (see pullPrefs). */
+let queued: Promise<void> | null = null;
+
+const ALL_FIELDS = PREF_MAP.map((p) => p.field);
 
 /** GET /api/prefs and reconcile (see planBoot). Until this browser has
  * reconciled once it may upload what it holds; after that it only adopts —
  * except fields written here the server never confirmed ("dirty"), which
- * are uploaded first, every time, and never overwritten. */
+ * are uploaded first, every time, and never overwritten.
+ *
+ * Asked while a pull runs (a sync event, a reconnect, the echo of this
+ * page's own POST), it queues exactly ONE more pull after it rather than
+ * joining it: the running pull may have read the server before the change
+ * that asked. Any number of asks during one pull share that one follow-up. */
 export function pullPrefs(): Promise<void> {
-  if (pulling) return pulling;
+  if (pulling) {
+    if (!queued)
+      queued = pulling
+        .catch(() => {})
+        .then(() => {
+          queued = null;
+          return pullPrefs();
+        });
+    return queued;
+  }
   pulling = (async () => {
     try {
       // A list saved before names ignored case: fold it (keeping the newer
@@ -157,6 +184,9 @@ export function pullPrefs(): Promise<void> {
       let server: Partial<Prefs>;
       const unsent = pendingFields();
       const gens = writeGens(unsent);
+      // Every field's write generation as the pull starts: a write made
+      // after this is newer than anything the GET below can return.
+      const started = writeGens(ALL_FIELDS);
       try {
         server = (await api<Partial<Prefs>>("/api/prefs")) || {};
       } catch {
@@ -171,7 +201,7 @@ export function pullPrefs(): Promise<void> {
           // Not seeded: next load tries the upload again rather than reading
           // the still-unset server fields as "cleared". Dirty fields stay
           // dirty, and the write-back retries them.
-          if (Object.keys(plan.apply).length) adopt(plan.apply);
+          if (Object.keys(plan.apply).length) adopt(plan.apply, started);
           if (dirtyFields().size) void flushPrefWrites();
           return;
         }
@@ -179,7 +209,7 @@ export function pullPrefs(): Promise<void> {
       // Every unsent field is now on the server: uploaded just now, or it
       // already held the same value.
       settleFields(unsent, gens);
-      if (Object.keys(plan.apply).length) adopt(plan.apply);
+      if (Object.keys(plan.apply).length) adopt(plan.apply, started);
       markSeeded();
       try {
         reconcileAccent(
@@ -233,7 +263,11 @@ export function installPrefsSync(): void {
   });
   // A server restart resets the event cursor and loses its backlog: whatever
   // synced in before this page reconnected is only visible by asking.
-  let connectedOnce = false;
+  // events.js connects at load, usually before this runs, and onStatus
+  // doesn't replay the current state — so a socket already up counts as the
+  // first connection (the pull above covers it), and the next "connected"
+  // is a REconnect that re-pulls.
+  let connectedOnce = ev.connected === true;
   if (typeof ev.onStatus === "function")
     ev.onStatus((status) => {
       if (status !== "connected") return;

@@ -482,6 +482,29 @@ class TestEndpoints:
         assert r.status_code == 200
         assert r.json()["running"] is False
 
+    def test_status_says_where_pr_review_runs(self, endpoint_client, monkeypatch):
+        """On a device that doesn't run them, Intake must say "runs on
+        <device>" — not "switch Automated PR review on" while it is on (and
+        synced: flipping it would pause it on the device that does run it)."""
+        from backend.web.core import remote, settings_hooks
+
+        client, addon = endpoint_client
+        monkeypatch.setattr(ti, "_ingestion_repo_available", lambda: False)
+        monkeypatch.setattr(addon.ctrl, "_external_lock_pid", lambda: None)
+        S.update_settings(github={"repos": ["o/r"], "run_here": False})
+        monkeypatch.setattr(
+            remote,
+            "fleet_devices",
+            lambda: [{"key": "laptop", "host": "Laptop", "automation": True}],
+        )
+        body = client.get("/api/mindflock/status").json()
+        assert body["automation_here"] is False
+        assert body["automation_device"] == "Laptop"
+        S.update_settings(github={"run_here": True})
+        body = client.get("/api/mindflock/status").json()
+        assert body["automation_here"] is True and body["automation_device"] == ""
+        assert settings_hooks.automation_here() is True
+
     def test_start_blocked_without_repo(self, endpoint_client, monkeypatch):
         client, _ = endpoint_client
         monkeypatch.setattr(ti, "_ingestion_repo_available", lambda: False)

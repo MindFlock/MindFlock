@@ -182,10 +182,15 @@ export function collectQueued(payloads: QueuePayloads): QueuedItem[] {
  *   github.enabled alone would report "auto review is on" with the engine
  *   stopped — an item sitting there that nothing is coming for.
  * - `off-switch` — the engine runs, this kind's own switch is off.
+ * - `elsewhere` — PR review and issue handling run on another of your devices
+ *   (Settings → Devices), so this one never starts them on its own. Not a
+ *   switch problem: the switch is shared by your devices, and flipping it here
+ *   would flip it on the one that does run them.
  * - `on` — it will be picked up on the next sweep.
  *
- * For tickets, `off-switch` never occurs: the engine IS their switch. */
-export type QueueRunState = "on" | "off-switch" | "off-engine" | "unset";
+ * For tickets, `off-switch` and `elsewhere` never occur: the engine IS their
+ * switch, and tickets are claimed per ticket across your devices. */
+export type QueueRunState = "on" | "off-switch" | "off-engine" | "elsewhere" | "unset";
 
 export function runState(opts: {
   /** Sources (tickets) or repos (PRs, issues) are configured. */
@@ -197,11 +202,20 @@ export function runState(opts: {
   /** This kind's own switch, folded server-side with its repo list.
    * Tickets pass `true` — they have no switch beyond the engine. */
   switchOn: boolean;
+  /** Another of your devices runs this kind (`automation_here` false). */
+  runsElsewhere?: boolean;
 }): QueueRunState {
   if (!opts.engineAvailable || !opts.configured) return "unset";
+  if (opts.runsElsewhere) return "elsewhere";
   if (!opts.switchOn) return "off-switch";
   if (!opts.engineOn) return "off-engine";
   return "on";
+}
+
+/** The `elsewhere` section's chip/sentence head: "Runs on laptop" — or, when
+ * the server can't name the device, "Runs on another of your devices". */
+export function runsOnText(device: string | undefined): string {
+  return "Runs on " + (device || "another of your devices");
 }
 
 /** Group a kind's rows by source/repo, preserving the queue order within each

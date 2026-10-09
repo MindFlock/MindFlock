@@ -20,16 +20,24 @@ belongs.
 
     {"id": "<16 hex>", "key": "<token_urlsafe(32)>", "epoch": 3,
      "members": {"<key>": {"host", "added_at", "added_by", "dns"}},
-     "removed": {"<key>": <ts>},
-     "prev_keys": {"<epoch>": {"key", "at"}}}
+     "removed": {"<key>": {"at": <ts>, "by": "<device that removed it>"}},
+     "prev_keys": {"<epoch>": {"key", "at"}},
+     "admits": {"<key>": <ts>}}
 
-Members and removals are both grow-only maps merged by max timestamp, so any
-two rosters converge whatever order they gossip in: a device is a member while
-its ``added_at`` is newer than its tombstone. Re-adding a removed device gives
-it a fresh ``added_at``, which outranks the old tombstone everywhere. Rosters
-are only merged between devices on the SAME key epoch: whatever a device
-learned while it held an older key could have been written by anyone else who
-held that key — including the device the newer key was made to lock out.
+Members and removals are both grow-only maps merged by max timestamp: a device
+is a member while its ``added_at`` is newer than its tombstone. Tombstones
+never shrink, and gossip alone never brings a device back that this device
+knows was removed — every member holds the same key, so a roster entry can't
+prove who wrote it, and the removed device still holds the old one. Re-adding
+a removed device takes a fresh join through a device that knows of the
+removal (``admits``: the joiner's entry it handed out, see :func:`bundle_for`).
+Rosters are only merged between devices on the SAME key epoch: whatever a
+device learned while it held an older key could have been written by anyone
+else who held that key — including the device the newer key was made to lock
+out. A key change is taken only one epoch at a time (:func:`apply_rekey`) and
+REPLACES the roster rather than merging into it. ``by`` on a tombstone is
+what the device that removed it said about itself: "rig removed laptop" is how
+a forged removal shows.
 
 **Joining** — three ways in, one outcome (the joiner receives the bundle: id,
 key, epoch, roster with a live entry for the joiner):
@@ -51,8 +59,15 @@ remaining member's own access token too (pasted tokens the removed device
 held, or read while it was a member, stop working). Members that can be
 reached get the new key under the old one; a member that was offline keeps
 the old key until it is seen again — the gossip loop then hands it the new
-key under its old one (``prev_keys``). The removed device is left holding a
-key that 401s everywhere.
+key under its old one (``prev_keys``), one epoch at a time. The removed device
+is left holding a key that 401s on every member that has heard.
+
+What one shared key can't do is tell a removed device from a member that
+never heard of the removal: until a member that was offline is handed the new
+key, the removed device can still talk to it with the old one. So a lost or
+stolen device must ALSO be removed from the tailnet (the Tailscale admin
+console) — that cuts it off everywhere at once, offline members included
+(:data:`TAILNET_ADVICE`).
 
 Invites, incoming requests and the outgoing join are memory only: a restart
 cancels them, which is the safe direction.
@@ -87,14 +102,27 @@ FLEET_PROTO = 1
 INVITE_TTL = 600.0
 MAX_INVITES = 3
 #: Brute-force guard on redeem: this many wrong codes from ONE caller inside
-#: the window lock that caller out for the lockout (its misses never cost
-#: anyone else their code) …
+#: the window lock that caller out for the lockout, doubled on each repeat
+#: lockout up to the cap (its misses never cost anyone else their code) …
 _FAIL_LIMIT = 5
 _FAIL_WINDOW = 600.0
 _LOCKOUT = 60.0
-#: … and this many from everyone together (guessing from many addresses)
-#: burn every live invite.
+_MAX_LOCKOUT = 3600.0
+#: … and this many from everyone together, from at least this many different
+#: addresses (guessing from many machines), burn every live invite.
 _GLOBAL_FAIL_LIMIT = 20
+_GLOBAL_FAIL_IPS = 3
+
+#: What removal can't do by itself (see the module docstring) — shown with
+#: every removal.
+TAILNET_ADVICE = (
+    "If it was lost or stolen, also remove it from your tailnet in the "
+    "Tailscale admin console — that cuts it off everywhere at once, even from "
+    "devices that are offline now"
+)
+#: A re-admission of a removed device (:func:`bundle_for`) is honoured this
+#: long — the joiner announces itself at once, gossip catches a lost announce.
+ADMIT_TTL = 86400.0
 
 #: Clock skew tolerated on a timestamp another device sends (roster entries,
 #: tombstones): anything later than now + this is pulled back to it, so a
@@ -168,6 +196,7 @@ def _empty() -> dict:
         "members": {},
         "removed": {},
         "prev_keys": {},
+        "admits": {},
     }
 
 
@@ -216,15 +245,33 @@ def _clean_members(raw, clamp: bool = False) -> Dict[str, dict]:
     return out
 
 
-def _clean_removed(raw, clamp: bool = False) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def _clean_removed(raw, clamp: bool = False) -> Dict[str, dict]:
+    """Tombstones as ``{key: {"at", "by"}}`` — the bare-timestamp form an
+    earlier build wrote is read as one with no ``by``."""
+    out: Dict[str, dict] = {}
     if not isinstance(raw, dict):
         return out
     for k, v in raw.items():
         if not isinstance(k, str) or not DEVICE_RE.match(k):
             continue
+        by = ""
+        if isinstance(v, dict):
+            by = v.get("by")
+            by = by if isinstance(by, str) and DEVICE_RE.match(by) else ""
+            v = v.get("at")
         ts = _ts(v, clamp)
         if ts is not None:
+            out[k] = {"at": ts, "by": by}
+    return out
+
+
+def _clean_admits(raw) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        ts = _ts(v, False)
+        if isinstance(k, str) and DEVICE_RE.match(k) and ts is not None:
             out[k] = ts
     return out
 
@@ -256,9 +303,10 @@ def _normalize(data) -> dict:
         "members": _clean_members(data.get("members")),
         "removed": _clean_removed(data.get("removed")),
         "prev_keys": _clean_prev_keys(data.get("prev_keys")),
+        "admits": _clean_admits(data.get("admits")),
     }
     if not doc["id"] or not doc["key"]:
-        doc["id"], doc["key"], doc["prev_keys"] = "", "", {}
+        doc["id"], doc["key"], doc["prev_keys"], doc["admits"] = "", "", {}, {}
     return doc
 
 
@@ -328,12 +376,44 @@ def _emit(event: str, **data) -> None:
         pass
 
 
+def _gone_at(doc: dict, key: str) -> Optional[float]:
+    """When ``key`` was removed (its tombstone), or None."""
+    t = doc["removed"].get(key)
+    return None if t is None else t["at"]
+
+
 def _live(doc: dict, key: str) -> bool:
     m = doc["members"].get(key)
     if m is None:
         return False
-    gone = doc["removed"].get(key)
+    gone = _gone_at(doc, key)
     return gone is None or gone < m["added_at"]
+
+
+def _dead_here(doc: dict) -> Set[str]:
+    """Devices this device knows were removed (tombstoned and not re-added
+    here since): no roster from elsewhere brings them back."""
+    return {k for k in doc["removed"] if not _live(doc, k)}
+
+
+def _tombstone(doc: dict, key: str, by: str) -> None:
+    """Remove ``key`` now — never earlier than the add it cancels (a clock
+    behind the adder's)."""
+    m = doc["members"].get(key)
+    at = max(_now(), m["added_at"] if m else 0.0)
+    doc["removed"][key] = {"at": at, "by": str(by or "")}
+
+
+def _union_removed(doc: dict, other: Dict[str, dict]) -> bool:
+    """Fold ``other``'s tombstones into ``doc``'s: the later one per device
+    wins, and none is ever dropped."""
+    changed = False
+    for k, t in other.items():
+        mine = doc["removed"].get(k)
+        if mine is None or t["at"] > mine["at"]:
+            doc["removed"][k] = dict(t)
+            changed = True
+    return changed
 
 
 # --------------------------------------------------------------------------- #
@@ -431,7 +511,23 @@ def bundle_for(device: str, host: str, dns: str = "") -> dict:
     out = bundle()
     tmp = {"members": out["members"], "removed": out["removed"]}
     _put_member(tmp, device, host, _self_key(), dns)
+    _note_admit(device, out["members"][device]["added_at"])
     return out
+
+
+def _note_admit(device: str, added_at: float) -> None:
+    """This device is letting ``device`` in. When it is one this device knows
+    was removed, remember the admission: the joiner's announce (and gossip)
+    then brings it back HERE — the one way past a tombstone (see
+    :func:`_union`)."""
+    with _LOCK:
+        doc = _load()
+        if not doc["id"] or device not in _dead_here(doc):
+            return
+        cut = _now() - ADMIT_TTL
+        doc["admits"] = {k: t for k, t in doc["admits"].items() if t > cut}
+        doc["admits"][device] = added_at
+        _save(doc)
 
 
 def roster() -> dict:
@@ -444,7 +540,7 @@ def _put_member(doc: dict, key: str, host: str, by: str, dns: str = "") -> None:
     # added_at must outrank any tombstone, even one stamped this same instant
     # (or by a device whose clock runs ahead), or the re-add would not take.
     now = _now()
-    gone = doc["removed"].get(key)
+    gone = _gone_at(doc, key)
     if gone is not None and gone >= now:
         now = gone + 0.001
     doc["members"][key] = {
@@ -507,10 +603,12 @@ def adopt_bundle(b: dict) -> None:
       other live members (else ValueError — leaving it would orphan them;
       the person leaves it first).
     * The SAME fleet (a rejoin): a bundle on a NEWER key epoch replaces the
-      local roster outright — whatever this device merged while it held the
+      local members outright — whatever this device merged while it held the
       old key could have been written by anyone holding that key, the device
-      the new key was made to lock out included. The same epoch unions; an
-      OLDER one is refused (:class:`OlderBundle`) and nothing changes.
+      the new key was made to lock out included. The same epoch (an explicit
+      rejoin: the admitter's key is taken) unions; an OLDER one is refused
+      (:class:`OlderBundle`) and nothing changes. Either way this device's
+      own tombstones are kept: a device it knows was removed stays removed.
     * A bundle that removes this device and has no live entry for it is
       refused: that is a removal, not an invitation."""
     new = _validate_bundle(b)
@@ -531,16 +629,19 @@ def adopt_bundle(b: dict) -> None:
                 raise OlderBundle(
                     "that device has an older key for your devices than this one"
                 )
+            dead = _dead_here(doc) - {me}
             if new["epoch"] > doc["epoch"]:
-                prev = dict(doc.get("prev_keys") or {})
-                old_epoch, old_key = doc["epoch"], doc["key"]
+                old = doc
                 doc = new
-                doc["prev_keys"] = prev
-                _keep_prev_key(doc, old_epoch, old_key)
+                doc["prev_keys"] = dict(old.get("prev_keys") or {})
+                doc["admits"] = dict(old.get("admits") or {})
+                _keep_prev_key(doc, old["epoch"], old["key"])
                 _prune_prev_keys(doc)
+                _union_removed(doc, old["removed"])
+                _keep_dead(doc, dead, old["members"])
             else:
                 doc["key"] = new["key"]
-                _union(doc, new)
+                _union(doc, new, dead)
         else:
             doc = new
         if not _live(doc, me):
@@ -561,18 +662,40 @@ def add_member(key: str, host: str, by: str, dns: str = "") -> None:
 
 
 def remove_member(key: str) -> None:
+    """Tombstone ``key``, recording this device as the one that removed it."""
     with _LOCK:
         doc = _load()
-        m = doc["members"].get(key)
-        # Never earlier than the add it cancels (a clock behind the adder's).
-        doc["removed"][key] = max(_now(), m["added_at"] if m else 0.0)
+        _tombstone(doc, key, _self_key())
         _save(doc)
 
 
-def _union(doc: dict, other: dict) -> bool:
+def _keep_dead(doc: dict, dead: Set[str], old_members: Dict[str, dict]) -> None:
+    """After ``doc``'s members were replaced: every device in ``dead`` (known
+    removed here before) keeps the entry it had here — its tombstone, kept
+    too, outranks that — whatever newer ``added_at`` the new roster claims."""
+    for k in dead:
+        if k in old_members:
+            doc["members"][k] = dict(old_members[k])
+        else:
+            doc["members"].pop(k, None)
+
+
+def _union(doc: dict, other: dict, dead: Set[str] = frozenset()) -> bool:
+    """Fold ``other``'s roster into ``doc``'s (max timestamp per entry). A
+    device in ``dead`` (known removed here) is never brought back by it —
+    unless this device admitted it again itself (``admits``)."""
     changed = False
+    cut = _now() - ADMIT_TTL
+    admits = doc.setdefault("admits", {})
     for k, m in other["members"].items():
         mine = doc["members"].get(k)
+        if k in dead:
+            at = admits.get(k)
+            if at is None or at <= cut:
+                continue
+            if m["added_at"] > (_gone_at(doc, k) or 0.0):
+                del admits[k]  # used: the device is back
+                changed = True
         if mine is None or m["added_at"] > mine["added_at"]:
             doc["members"][k] = dict(m)
             changed = True
@@ -581,10 +704,8 @@ def _union(doc: dict, other: dict) -> bool:
             # own in after joining): take it without a new added_at.
             mine["dns"] = m["dns"]
             changed = True
-    for k, ts in other["removed"].items():
-        if ts > doc["removed"].get(k, float("-inf")):
-            doc["removed"][k] = ts
-            changed = True
+    if _union_removed(doc, other["removed"]):
+        changed = True
     return changed
 
 
@@ -602,7 +723,8 @@ def merge_roster(remote: dict) -> bool:
     :func:`adopt_bundle`). A member that wasn't live before is announced
     (``device.joined``: the joiner itself confirms, so the admitting screen
     updates when the join really happened). A roster that removes THIS
-    device makes it leave."""
+    device makes it leave. A device this one knows was removed stays removed
+    whatever ``added_at`` the roster claims (see :func:`_union`)."""
     if not isinstance(remote, dict):
         return False
     other = {
@@ -617,7 +739,7 @@ def merge_roster(remote: dict) -> bool:
             return False
         me = _self_key()
         before = {k for k in doc["members"] if _live(doc, k)}
-        changed = _union(doc, other)
+        changed = _union(doc, other, _dead_here(doc) - {me})
         if changed:
             _save(doc)
         joined = [
@@ -627,7 +749,7 @@ def merge_roster(remote: dict) -> bool:
         ]
         gone_here = me in doc["removed"] and not _live(doc, me)
     if gone_here:
-        _removed_here()
+        _removed_here(_removed_by(doc, me))
         return changed
     for key, host in joined:
         _emit(
@@ -655,7 +777,15 @@ def rekey() -> str:
 
 
 def apply_rekey(body: dict) -> bool:
-    """Take a newer key a member sent (under the old one)."""
+    """Take the next key a member sent (under the current one): the group's
+    next epoch ONLY — never a jump, so a removed device that still holds an
+    old key can't push a member onto a key "newer" than the real one.
+
+    The body's roster REPLACES ours (one learned under the old key could have
+    been written by anyone holding it), except that tombstones only ever grow
+    (ours ∪ the body's), a device this one knows was removed stays removed,
+    and this device keeps its own entry — unless the body removes it, which
+    makes it leave."""
     if not isinstance(body, dict):
         return False
     key = body.get("key")
@@ -664,15 +794,57 @@ def apply_rekey(body: dict) -> bool:
         return False
     if not isinstance(key, str) or not _KEY_RE.match(key):
         return False
+    members = _clean_members(body.get("members"), clamp=True)
+    removed = _clean_removed(body.get("removed"), clamp=True)
     with _LOCK:
         doc = _load()
-        if not doc["id"] or body.get("id") != doc["id"] or epoch <= doc["epoch"]:
+        if not doc["id"] or body.get("id") != doc["id"]:
             return False
-        _keep_prev_key(doc, doc["epoch"], doc["key"])
-        doc["key"], doc["epoch"] = key, epoch
-        _prune_prev_keys(doc)
-        _save(doc)
-    merge_roster(body)
+        if epoch != doc["epoch"] + 1:
+            return False
+        me = _self_key()
+        dead = _dead_here(doc) - {me}
+        before = {k for k in doc["members"] if _live(doc, k)}
+        old_epoch = doc["epoch"]
+        new = {
+            "id": doc["id"],
+            "key": key,
+            "epoch": epoch,
+            "members": members,
+            "removed": dict(doc["removed"]),
+            "prev_keys": dict(doc.get("prev_keys") or {}),
+            "admits": dict(doc.get("admits") or {}),
+        }
+        _union_removed(new, removed)
+        _keep_dead(new, dead, doc["members"])
+        mine = doc["members"].get(me)
+        if mine and mine["added_at"] > (new["members"].get(me) or {}).get(
+            "added_at", float("-inf")
+        ):
+            new["members"][me] = dict(mine)
+        gone_here = me in new["removed"] and not _live(new, me)
+        if not gone_here and not _live(new, me):
+            _put_member(new, me, _self_host(), me, _self_dns())
+        _keep_prev_key(new, old_epoch, doc["key"])
+        _prune_prev_keys(new)
+        _save(new)
+        joined = [
+            (k, new["members"][k].get("host") or k)
+            for k in sorted(new["members"])
+            if k != me and k not in before and _live(new, k)
+        ]
+    # Whoever was on our old key is on this one now as far as we know (the
+    # sender is): keep sending them the key until gossip says otherwise.
+    for p in _PEERS.values():
+        if p.get("epoch") == old_epoch:
+            p.update(epoch=None, conflict=False)
+    if gone_here:
+        _removed_here(_removed_by(new, me))
+        return True
+    for k, host in joined:
+        _emit(
+            "device.joined", device=k, host=host, detail="%s joined your devices" % host
+        )
     return True
 
 
@@ -703,14 +875,27 @@ def rekey_body() -> dict:
     )
 
 
+def key_fp(key: str) -> str:
+    """A non-secret fingerprint of a fleet key (the same on every device):
+    two members on the same epoch whose fingerprints differ hold different
+    keys — a conflict, not one of them being behind."""
+    if not key:
+        return ""
+    return hashlib.sha256(("mindflock-fleet-fp:" + key).encode("utf-8")).hexdigest()[
+        :16
+    ]
+
+
 def unauthorized_body() -> dict:
     """The 401 a member route answers with: no secret, but enough for the
-    caller to tell "I am behind" (my epoch is higher) from "it is behind"."""
+    caller to tell "I am behind" (my epoch is higher) from "it is behind",
+    and — same epoch, different ``kfp`` — "we hold different keys"."""
     doc = _load()
     return {
         "error": "not one of this device's devices",
         "id": doc["id"],
         "epoch": doc["epoch"],
+        "kfp": key_fp(doc["key"]),
     }
 
 
@@ -723,7 +908,27 @@ def leave() -> None:
         _PEERS.clear()
 
 
-def _removed_here() -> None:
+def _removed_by(doc: dict, key: str) -> str:
+    return (doc["removed"].get(key) or {}).get("by") or ""
+
+
+def _reset_run_here() -> None:
+    """Back to "decide for me" (``github.run_here`` unset): a device that
+    leaves the group (or is removed from it) runs PR review and issue
+    handling again on its own, and one joining a new group gets the default
+    there rather than whatever its old group set. Never raises."""
+    try:
+        from backend.config import settings as _settings
+
+        gh = getattr(_settings.load_settings(), "github", None)
+        if gh is not None and getattr(gh, "run_here", None) is not None:
+            _settings.update_settings(github={"run_here": None})
+    except Exception as err:  # noqa: BLE001 — an unreadable settings.json too
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("fleet: couldn't reset github.run_here: %v", err)
+
+
+def _removed_here(by: str = "") -> None:
     """Another member's roster says this device was removed: leave locally
     and stop syncing settings with devices that no longer trust us."""
     me = _self_key()
@@ -734,13 +939,21 @@ def _removed_here() -> None:
         settings_sync.disable()
     except Exception:  # noqa: BLE001
         pass
+    _reset_run_here()
     if log.InfoLog is not None:
-        log.InfoLog.Printf("fleet: this device was removed from your devices")
+        log.InfoLog.Printf(
+            "fleet: this device was removed from your devices (by %s)", by or "?"
+        )
     _emit(
         "device.removed",
         device=me,
         host=_self_host(),
-        detail="this device was removed from your devices",
+        by=by,
+        detail=(
+            "this device was removed from your devices by %s" % by
+            if by and by != me
+            else "this device was removed from your devices"
+        ),
     )
 
 
@@ -780,8 +993,9 @@ def parse_join_string(s: str) -> Tuple[str, str]:
 # --------------------------------------------------------------------------- #
 _INVITES: List[dict] = []  # {"code": normalized, "created_at", "expires_at"}
 _FAILS: Dict[str, List[float]] = {}  # caller IP -> its wrong-redeem timestamps
-_ALL_FAILS: List[float] = []  # every caller's wrong redeems (the backstop)
+_ALL_FAILS: List[Tuple[float, str]] = []  # (when, caller IP) — the backstop
 _LOCKED_UNTIL: Dict[str, float] = {}  # caller IP -> locked out until
+_LOCKOUTS: Dict[str, Tuple[int, float]] = {}  # caller IP -> (lockouts, last until)
 
 
 def _prune_invites(now: float) -> None:
@@ -852,25 +1066,39 @@ def _joiner_dns(device: str, claimed: str) -> str:
 
 def _note_failure(ip: str, now: float) -> None:
     """A wrong code from ``ip``: lock that caller out after
-    :data:`_FAIL_LIMIT` misses (its guesses never burn anyone's code), and
-    burn every live invite once :data:`_GLOBAL_FAIL_LIMIT` misses pile up
-    from everyone together."""
+    :data:`_FAIL_LIMIT` misses — :data:`_LOCKOUT`, doubled on every repeat
+    lockout up to :data:`_MAX_LOCKOUT` (one caller's guesses never burn
+    anyone's code, however long it keeps at it) — and burn every live invite
+    only once :data:`_GLOBAL_FAIL_LIMIT` misses pile up from at least
+    :data:`_GLOBAL_FAIL_IPS` different addresses."""
     if len(_FAILS) > 1024:  # a bound, not a policy
         for k in [k for k, v in _FAILS.items() if not v or v[-1] <= now - _FAIL_WINDOW]:
             del _FAILS[k]
+    if len(_LOCKOUTS) > 1024:
+        for k in [k for k, v in _LOCKOUTS.items() if v[1] <= now - _MAX_LOCKOUT]:
+            del _LOCKOUTS[k]
     mine = [t for t in _FAILS.get(ip, []) if t > now - _FAIL_WINDOW] + [now]
     _FAILS[ip] = mine
     if len(mine) >= _FAIL_LIMIT:
         _FAILS.pop(ip, None)
-        _LOCKED_UNTIL[ip] = now + _LOCKOUT
+        n, last = _LOCKOUTS.get(ip, (0, 0.0))
+        if last <= now - _MAX_LOCKOUT:
+            n = 0  # quiet for an hour: start over
+        span = min(_LOCKOUT * (2**n), _MAX_LOCKOUT)
+        _LOCKED_UNTIL[ip] = now + span
+        _LOCKOUTS[ip] = (n + 1, now + span)
         if log.InfoLog is not None:
             log.InfoLog.Printf(
-                "fleet: %d wrong device codes from %s — locked out for a minute",
+                "fleet: %d wrong device codes from %s — locked out for %d s",
                 _FAIL_LIMIT,
                 ip or "?",
+                int(span),
             )
-    _ALL_FAILS[:] = [t for t in _ALL_FAILS if t > now - _FAIL_WINDOW] + [now]
-    if len(_ALL_FAILS) >= _GLOBAL_FAIL_LIMIT:
+    _ALL_FAILS[:] = [f for f in _ALL_FAILS if f[0] > now - _FAIL_WINDOW] + [(now, ip)]
+    if (
+        len(_ALL_FAILS) >= _GLOBAL_FAIL_LIMIT
+        and len({a for _, a in _ALL_FAILS}) >= _GLOBAL_FAIL_IPS
+    ):
         # Guessing from many addresses: no code made before this moment works.
         _INVITES.clear()
         _ALL_FAILS.clear()
@@ -893,8 +1121,13 @@ def redeem(code: str, device: str, host: str, ip: str = "", dns: str = "") -> di
     want = normalize_code(code)[:_MAX_CODE]
     with _LOCK:
         now = _now()
-        if now < _LOCKED_UNTIL.get(ip, 0.0):
-            raise TooManyAttempts("too many wrong codes — wait a minute")
+        until = _LOCKED_UNTIL.get(ip, 0.0)
+        if now < until:
+            mins = int((until - now + 59) // 60)
+            raise TooManyAttempts(
+                "too many wrong codes — wait %s"
+                % ("a minute" if mins <= 1 else "%d minutes" % mins)
+            )
         _LOCKED_UNTIL.pop(ip, None)
         if not _claim_matches_peer(device, ip):
             raise PermissionError("that request didn't come from %s" % device)
@@ -937,7 +1170,12 @@ def _prune_requests(now: float) -> None:
 
 
 def open_request(
-    device: str, host: str, secret_hash: str, ip: str = "", dns: str = ""
+    device: str,
+    host: str,
+    secret_hash: str,
+    ip: str = "",
+    dns: str = "",
+    runs_automation: bool = False,
 ) -> dict:
     """Record a join request; returns ``{id, code}`` (code shown on both
     screens). One per device — asking again (from the same address) replaces
@@ -978,6 +1216,8 @@ def open_request(
             "created_at": now,
             "expires_at": now + REQUEST_TTL,
             "state": "pending",
+            # It runs PR review / issue handling now (see runs_automation).
+            "runs_automation": bool(runs_automation),
         }
         _REQUESTS[rid] = req
     _emit(
@@ -1009,7 +1249,7 @@ def request_state(rid: str, secret: str) -> dict:
         _check_secret(req, secret)
         if req["state"] == "approved":
             del _REQUESTS[rid]
-            gone = _load()["removed"].get(req["device"])
+            gone = _gone_at(_load(), req["device"])
             if not in_fleet() or (
                 gone is not None and gone >= req.get("approved_at", 0.0)
             ):
@@ -1056,7 +1296,8 @@ def approve(rid: str) -> dict:
         req["state"] = "approved"
         req["approved_at"] = _now()
         device, host = req["device"], req["host"]
-    return {"ok": True, "device": device, "host": host}
+        runs = bool(req.get("runs_automation"))
+    return {"ok": True, "device": device, "host": host, "runs_automation": runs}
 
 
 def deny(rid: str) -> dict:
@@ -1216,21 +1457,54 @@ async def _announce(targets: List[dict], body: dict, bearer: str) -> None:
         await asyncio.gather(*(one(d) for d in targets))
 
 
-async def deliver_rekey(dev: dict, bearer: str) -> bool:
-    """Hand ``dev`` the CURRENT key and roster under the (older) key it still
-    holds — what :func:`remove` does for every member it can reach, and what
-    gossip does later for one that was away."""
+def _key_at(doc: dict, epoch: int) -> str:
+    """The key this device held (or holds) at ``epoch``, "" when unknown."""
+    if epoch == doc["epoch"]:
+        return doc["key"]
+    return ((doc.get("prev_keys") or {}).get(str(epoch)) or {}).get("key", "")
+
+
+async def deliver_rekey(dev: dict, their: int, bearer: Optional[str] = None) -> bool:
+    """Bring ``dev``, on key epoch ``their``, up to the CURRENT key and
+    roster — what :func:`remove` does for every member it can reach, and what
+    gossip does later for one that was away. A member takes a key change only
+    one epoch at a time (:func:`apply_rekey`), so one that missed several gets
+    each in turn, each sent under the key before it (``prev_keys``).
+    ``bearer`` overrides the key the FIRST step is sent under (the one ``dev``
+    itself handed over, when it is the device being joined through)."""
     from backend.web.core import remote as _remote
 
-    if not bearer:
-        return False
+    doc = _load()
     try:
-        status, resp = await _remote.post_json(
-            dev, "/api/fleet/rekey", rekey_body(), bearer=bearer
-        )
-    except Exception:  # noqa: BLE001
+        their = int(their)
+    except (TypeError, ValueError):
         return False
-    return status == 200 and isinstance(resp, dict) and bool(resp.get("ok"))
+    if not doc["id"] or their < 1 or their >= doc["epoch"]:
+        return False
+    base = rekey_body()
+    for ep in range(their + 1, doc["epoch"] + 1):
+        under = (bearer if ep == their + 1 and bearer else "") or _key_at(doc, ep - 1)
+        key = _key_at(doc, ep)
+        if not under or not key:
+            return False
+        try:
+            status, resp = await _remote.post_json(
+                dev, "/api/fleet/rekey", dict(base, epoch=ep, key=key), bearer=under
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        if not (status == 200 and isinstance(resp, dict) and resp.get("ok")):
+            return False
+    return True
+
+
+def _on_epoch(key: str, epoch: int) -> None:
+    """Record that member ``key`` just took key ``epoch`` from us — so the
+    fleet key keeps going to it (:func:`peer_on_other_epoch`) before the
+    next gossip pass confirms it."""
+    _PEERS.setdefault(key, {"at": _now(), "status": 200}).update(
+        epoch=epoch, error="", ahead=False, conflict=False, loser=False
+    )
 
 
 def _enable_remote_control() -> None:
@@ -1240,11 +1514,35 @@ def _enable_remote_control() -> None:
     _settings.update_settings(general={"remote_control": "on"})
 
 
+def runs_automation() -> bool:
+    """Whether THIS device is actually running PR review or issue handling
+    right now: it runs them here (:func:`_automation_here`) AND one of them is
+    set up (PR review not switched off with repos chosen, or issue handling on
+    with issue repos). What a joiner tells the device it joins through, so
+    the automation stays where its history (the processed-PR / issue ledgers)
+    is. Never raises."""
+    try:
+        from backend.config import settings as _settings
+
+        gh = _settings.load_settings().github
+        prs = gh.enabled is not False and bool(gh.repos)
+        issues = bool(gh.issues_enabled) and bool(gh.issue_repos)
+    except Exception:  # noqa: BLE001
+        return False
+    return (prs or issues) and _automation_here()
+
+
+def _joiner_runs(body) -> bool:
+    return isinstance(body, dict) and body.get("runs_automation") is True
+
+
 def _default_run_here(value: bool) -> None:
     """Pick where PR review and issue handling run, unless the person already
-    chose (``github.run_here`` is None): the device that admits others keeps
-    them (True), a device that joins hands them over (False) — so one device
-    of the group runs them, not every one at once."""
+    chose (``github.run_here`` is None) — by who RUNS them, not by who joins
+    whom: the side the joining device says it runs them on keeps them (see
+    :func:`runs_automation`; the admitter passes ``not joiner_runs``, the
+    joiner ``joiner_runs``) — so one device of the group runs them, not every
+    one at once, and it is the one that has done so far."""
     try:
         from backend.config import settings as _settings
 
@@ -1256,7 +1554,7 @@ def _default_run_here(value: bool) -> None:
             log.ErrorLog.Printf("fleet: couldn't set github.run_here: %v", err)
 
 
-async def after_admit() -> str:
+async def after_admit(joiner_runs: Optional[bool] = False) -> str:
     """This device just let another one in (a redeemed code, an approved
     request, a one-click add): make the membership real on THIS side too.
 
@@ -1270,8 +1568,9 @@ async def after_admit() -> str:
     else has one, and any real edit elsewhere in the group (a rotated token,
     a deleted source) still wins over them. Turning sync on stamped "now"
     is reserved for the person choosing "this device leads". Also keeps PR
-    review / issue handling here unless someone chose (see
-    :func:`_default_run_here`). Returns the sync error ("" when fine);
+    review / issue handling here unless the joiner says it runs them, or
+    someone chose (see :func:`_default_run_here`; ``joiner_runs`` None: the
+    caller decides that later). Returns the sync error ("" when fine);
     never raises — the admission stands either way."""
     from backend.web.core import remote as _remote
 
@@ -1281,7 +1580,8 @@ async def after_admit() -> str:
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("fleet: couldn't turn remote control on: %v", err)
-    _default_run_here(True)
+    if joiner_runs is not None:
+        _default_run_here(not joiner_runs)
     try:
         from backend.web.core import settings_sync
 
@@ -1373,6 +1673,7 @@ async def join_with_code(device: str, code: str) -> dict:
         _start_join(dev, state="joined")
         return join_status()
     _start_join(dev, state="joining")
+    runs = runs_automation()
     try:
         status, body = await _remote.post_json(
             dev,
@@ -1383,13 +1684,14 @@ async def join_with_code(device: str, code: str) -> dict:
                 "host": _self_host(),
                 "dns": _self_dns(),
                 "fleet_proto": FLEET_PROTO,
+                "runs_automation": runs,
             },
             auth=False,
         )
     except Exception as err:  # noqa: BLE001
         status, body = 0, {"error": str(err) or ""}
     if status == 200 and isinstance(body, dict):
-        await _finish_join(dev, body)
+        await _finish_join(dev, body, runs)
     else:
         _set_join(state="error", error=_err_text(status, body, dev))
     return join_status()
@@ -1406,6 +1708,7 @@ async def request_join(device: str) -> dict:
         return join_status()
     _start_join(dev, state="joining")
     secret = secrets.token_urlsafe(24)
+    runs = runs_automation()
     try:
         status, body = await _remote.post_json(
             dev,
@@ -1416,6 +1719,7 @@ async def request_join(device: str) -> dict:
                 "dns": _self_dns(),
                 "secret_hash": hashlib.sha256(secret.encode("utf-8")).hexdigest(),
                 "fleet_proto": FLEET_PROTO,
+                "runs_automation": runs,
             },
             auth=False,
         )
@@ -1430,11 +1734,11 @@ async def request_join(device: str) -> dict:
         return join_status()
     _set_join(state="waiting", id=body["id"], code=str(body.get("code") or ""))
     _JOIN_SECRET[0] = (dev, body["id"], secret)
-    _JOIN_TASK[0] = _spawn(_poll_request(dev, body["id"], secret))
+    _JOIN_TASK[0] = _spawn(_poll_request(dev, body["id"], secret, runs))
     return join_status()
 
 
-async def _poll_request(dev: dict, rid: str, secret: str) -> None:
+async def _poll_request(dev: dict, rid: str, secret: str, runs: bool = False) -> None:
     from backend.web.core import remote as _remote
 
     deadline = _now() + REQUEST_TTL
@@ -1458,7 +1762,7 @@ async def _poll_request(dev: dict, rid: str, secret: str) -> None:
                     _JOIN_SECRET[0] = None
                     # Once the bundle is in hand the join is committed: a
                     # cancel (or shutdown) must not cut it off half-way.
-                    await asyncio.shield(_finish_join(dev, body["bundle"]))
+                    await asyncio.shield(_finish_join(dev, body["bundle"], runs))
                     return
                 if st == "denied":
                     _set_join(state="denied", error="%s said no" % _label(dev))
@@ -1521,17 +1825,21 @@ def cancel_join() -> dict:
     return join_status()
 
 
-async def _finish_join(dev: dict, b: dict) -> None:
+async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     """Adopt the bundle ``dev`` handed over, then make the membership real:
     remote control on, ``dev`` re-probed (its hello now names our fleet), the
     other members told (this is what puts us on THEIR rosters), and settings
-    sync started with ``dev`` leading where it has values."""
+    sync started with ``dev`` leading where it has values. ``runs``: whether
+    this device ran PR review / issue handling when it asked (what it told
+    ``dev``); None looks now."""
+    if runs is None:
+        runs = runs_automation()
     try:
         adopt_bundle(b)
     except OlderBundle as err:
         # Same group, but ``dev`` missed a key change: hand it the current
         # key under the one it just gave us, rather than taking its old one.
-        if await deliver_rekey(dev, str(b.get("key") or "")):
+        if await deliver_rekey(dev, _epoch_of(b) or 0, str(b.get("key") or "")):
             _set_join(state="joined", error="")
         else:
             _set_join(
@@ -1547,7 +1855,7 @@ async def _finish_join(dev: dict, b: dict) -> None:
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("fleet: couldn't turn remote control on: %v", err)
-    _default_run_here(False)
+    _default_run_here(runs)
     await _refresh(dev["key"])
     await _announce(_visible_members(), roster(), fleet_key())
     sync_error = ""
@@ -1569,7 +1877,11 @@ async def _finish_join(dev: dict, b: dict) -> None:
 
 async def add_paired(device: str) -> dict:
     """Add a device this one holds a pasted access token for — the token
-    already proves the owner controls it, so no code is needed."""
+    already proves the owner controls it, so no code is needed. ``device``
+    joins THIS device's group, so it takes this device's shared settings
+    where this one has them (``direction``: ``theirs_take_mine``); PR review
+    and issue handling stay wherever they run now (the adopt's answer says
+    whether ``device`` runs them)."""
     from backend.web.core import remote as _remote
 
     tok = _remote.token_for(device)
@@ -1580,7 +1892,7 @@ async def add_paired(device: str) -> dict:
     me = _self_key()
     # BEFORE the adopt: the adopted device's first act is a relayed settings
     # pull from here (see after_admit) — it must not race our remote control.
-    sync_error = await after_admit()
+    sync_error = await after_admit(None)
     with _LOCK:
         prev = _load()["members"].get(device)
         add_member(device, _label(dev), by=me, dns=_joiner_dns(device, ""))
@@ -1605,6 +1917,7 @@ async def add_paired(device: str) -> dict:
                 doc["members"][device] = prev
             _save(doc)
         raise RuntimeError(_err_text(status, body, dev))
+    _default_run_here(not _joiner_runs(body))
     await _refresh(device)
     _emit(
         "device.joined",
@@ -1612,7 +1925,13 @@ async def add_paired(device: str) -> dict:
         host=_label(dev),
         detail="%s joined your devices" % _label(dev),
     )
-    return {"ok": True, "device": device, "host": _label(dev), "sync_error": sync_error}
+    return {
+        "ok": True,
+        "device": device,
+        "host": _label(dev),
+        "sync_error": sync_error,
+        "direction": "theirs_take_mine",
+    }
 
 
 #: adopt_from_peer's settings pull: tries, and the pause between them.
@@ -1631,13 +1950,14 @@ async def adopt_from_peer(body: dict, presented_own_token: bool) -> dict:
     src = str(frm.get("key") or "")
     if not DEVICE_RE.match(src):
         raise ValueError("bad 'from' device")
+    runs = runs_automation()  # before the group (and its settings) arrive
     adopt_bundle(body.get("bundle"))
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("fleet: couldn't turn remote control on: %v", err)
-    _default_run_here(False)
+    _default_run_here(runs)
 
     async def follow_up():
         await _refresh(src)
@@ -1665,50 +1985,82 @@ async def adopt_from_peer(body: dict, presented_own_token: bool) -> dict:
         via=src,
         detail="added to your devices by %s" % host,
     )
-    return {"ok": True}
+    return {"ok": True, "runs_automation": runs}
 
 
 # --------------------------------------------------------------------------- #
 # removal / leave
 # --------------------------------------------------------------------------- #
+async def _rotate_key(
+    exclude: Tuple[str, ...] = (),
+) -> Tuple[List[dict], List[str], List[str]]:
+    """Replace the fleet key and hand the new one to every member that can be
+    reached now. Returns ``(targets, rekeyed, missed)``: the members tried,
+    the keys of those that took it, and the live members that didn't (they
+    get it from gossip when next seen — ``prev_keys``)."""
+    old_epoch = _load()["epoch"]
+    rekey()
+    targets = _visible_members(exclude=exclude)
+    results = (
+        await asyncio.gather(*(deliver_rekey(d, old_epoch) for d in targets))
+        if targets
+        else []
+    )
+    rekeyed = sorted(d["key"] for d, ok in zip(targets, results) if ok)
+    new_epoch = _load()["epoch"]
+    for k in rekeyed:
+        _on_epoch(k, new_epoch)
+    me = _self_key()
+    missed = sorted(
+        k for k in live_members() if k != me and k not in rekeyed and k not in exclude
+    )
+    return targets, rekeyed, missed
+
+
+async def rotate_key() -> dict:
+    """Replace the devices' shared key (Security → Rotate token, in a group):
+    every phone and browser signed in with the old one is signed out on all
+    of them. Members reached now take it at once; ``missed`` ones get it when
+    they are next seen. Returns ``{"rekeyed", "missed"}`` (empty outside a
+    group)."""
+    if not in_fleet():
+        return {"rekeyed": [], "missed": []}
+    _, rekeyed, missed = await _rotate_key()
+    return {"rekeyed": rekeyed, "missed": missed}
+
+
 async def remove(device: str, rotate_tokens: bool = True) -> dict:
     """Remove a member and cut it off:
 
     * the fleet key rotates — every member that can be reached gets the new
-      one under the old one now; one that is away gets it from gossip when
-      it is next seen (``prev_keys``, :func:`gossip_once`);
+      one under the old one now; one that is away gets it automatically from
+      gossip the next time it is seen (``prev_keys``, :func:`gossip_once`);
     * with ``rotate_tokens`` (the default) every member that took the new key
       also replaces its OWN access token, and so does this device — tokens
       pasted on the removed device (or read through the fleet key while it
       was a member) stop working. A phone signed in with an old token needs
       to scan the QR again.
 
-    What it can't take back: the removed device's Tailscale access, and
-    anything it already copied. Returns ``{"rekeyed", "missed", "rotated",
-    "rotate_failed"}``."""
+    What it can't take back: the removed device's Tailscale access, anything
+    it already copied, and — until they hear — its old key on members that
+    are offline now (``advice``: remove it from the tailnet too). Removing
+    THIS device is leaving (``{"ok", "left": true}``). Returns ``{"rekeyed",
+    "missed", "rotated", "rotate_failed", "advice"}``."""
     from backend.web.core import remote as _remote
 
     if device == _self_key():
-        return await leave_fleet()
+        return {**(await leave_fleet()), "left": True}
     if not in_fleet() or not is_member(device):
         raise KeyError(device)
     host = (live_members().get(device) or {}).get("host") or device
-    old = fleet_key()
     remove_member(device)
-    new = rekey()
+    targets, rekeyed, missed = await _rotate_key(exclude=(device,))
+    new = fleet_key()
     with _LOCK:
         for rid, req in list(_REQUESTS.items()):
             if req["device"] == device:
                 del _REQUESTS[rid]
-    targets = _visible_members(exclude=(device,))
-    results = (
-        await asyncio.gather(*(deliver_rekey(d, old) for d in targets))
-        if targets
-        else []
-    )
-    rekeyed = sorted(d["key"] for d, ok in zip(targets, results) if ok)
     me = _self_key()
-    missed = sorted(k for k in live_members() if k != me and k not in rekeyed)
     rotated: List[str] = []
     rotate_failed: List[str] = []
     if rotate_tokens:
@@ -1740,7 +2092,8 @@ async def remove(device: str, rotate_tokens: bool = True) -> dict:
         "device.removed",
         device=device,
         host=host,
-        detail="%s was removed from your devices" % host,
+        by=me,
+        detail="%s was removed from your devices. %s." % (host, TAILNET_ADVICE),
     )
     return {
         "ok": True,
@@ -1748,19 +2101,20 @@ async def remove(device: str, rotate_tokens: bool = True) -> dict:
         "missed": missed,
         "rotated": sorted(rotated),
         "rotate_failed": sorted(rotate_failed),
+        "advice": TAILNET_ADVICE,
     }
 
 
 async def leave_fleet() -> dict:
     """Leave the group: tell the members (a tombstone for us), then forget
-    it here and stop syncing settings."""
+    it here, stop syncing settings and go back to deciding for ourselves
+    where PR review runs (alone: here)."""
     if not in_fleet():
         return {"ok": True}
     me = _self_key()
     with _LOCK:
         doc = _load()
-        m = doc["members"].get(me)
-        doc["removed"][me] = max(_now(), m["added_at"] if m else 0.0)
+        _tombstone(doc, me, me)
         _save(doc)
     await _announce(_visible_members(), roster(), fleet_key())
     leave()
@@ -1770,10 +2124,12 @@ async def leave_fleet() -> dict:
         settings_sync.disable()
     except Exception:  # noqa: BLE001
         pass
+    _reset_run_here()
     _emit(
         "device.removed",
         device=me,
         host=_self_host(),
+        by=me,
         detail="%s left your devices" % _self_host(),
     )
     return {"ok": True}
@@ -1789,6 +2145,18 @@ _STALE: Dict[str, bool] = {}
 _PEERS: Dict[str, dict] = {}
 
 
+async def _deliver_any(dev: dict) -> bool:
+    """``dev`` refused our key without saying which epoch it is on (its own
+    gate answered before the fleet route could — an older build, or a
+    middleware in the way): try handing it the current key under each old
+    one this device kept, newest first."""
+    doc = _load()
+    for ep in sorted((int(e) for e in (doc.get("prev_keys") or {})), reverse=True):
+        if await deliver_rekey(dev, ep):
+            return True
+    return False
+
+
 async def gossip_once() -> bool:
     """Push-pull with every reachable same-fleet member: POST our roster,
     merge the roster it answers with. Returns whether ours changed.
@@ -1796,7 +2164,11 @@ async def gossip_once() -> bool:
     A member that refuses our key says which epoch it is on: a NEWER one
     means this device missed a key change (``stale_key``); an OLDER one means
     IT did — it is handed the current key under the old one it holds
-    (:func:`deliver_rekey`), never mistaken for "this device was removed"."""
+    (:func:`deliver_rekey`), never mistaken for "this device was removed".
+    The SAME epoch with a different key fingerprint is a conflict (two
+    halves of the group each changed the key apart): the side with the lower
+    fingerprint is the one asked to rejoin, and neither sends the key to the
+    other meanwhile."""
     from backend.web.core import remote as _remote
 
     if not in_fleet():
@@ -1821,27 +2193,45 @@ async def gossip_once() -> bool:
             break  # a roster removed us
         k = dev["key"]
         polled.add(k)
-        my_epoch = _load()["epoch"]
-        err, their, ahead = "", None, False
+        doc = _load()
+        my_epoch, my_fp = doc["epoch"], key_fp(doc["key"])
+        err, their, ahead, conflict, loser = "", None, False, False, False
         if status == 200 and isinstance(body, dict):
             _STALE[k] = False
             their = _epoch_of(body)
             if merge_roster(body):
                 changed = True
         elif status == 401:
-            their = _epoch_of(body) if isinstance(body, dict) else None
-            same_id = isinstance(body, dict) and body.get("id") == _load()["id"]
-            if their is not None and same_id and their > my_epoch:
+            info = body if isinstance(body, dict) else {}
+            their = _epoch_of(info)
+            same_id = bool(info.get("id")) and info.get("id") == doc["id"]
+            their_fp = str(info.get("kfp") or "")
+            if their is None:
+                if await _deliver_any(dev):
+                    _STALE.pop(k, None)
+                    their = my_epoch
+                else:
+                    _STALE[k] = True
+                    err = "doesn't accept this device's key"
+            elif same_id and their > my_epoch:
                 _STALE[k] = True
                 ahead = True
                 err = "has a newer key — this device missed a change"
-            elif their is not None and same_id and their < my_epoch:
+            elif same_id and their < my_epoch:
                 _STALE.pop(k, None)
-                if await deliver_rekey(dev, prev_key(their)):
+                if await deliver_rekey(dev, their):
                     their = my_epoch
                 else:
                     err = "missed a key change — ask it to rejoin"
-            elif their is not None and isinstance(body, dict) and body.get("id"):
+            elif same_id and their_fp and their_fp != my_fp:
+                conflict = True
+                loser = my_fp < their_fp
+                if loser:
+                    _STALE[k] = True
+                else:
+                    _STALE.pop(k, None)
+                err = "has a different key for your devices — rejoin one from the other"
+            elif info.get("id"):
                 _STALE.pop(k, None)
                 err = "is in another group now"
             else:
@@ -1856,6 +2246,8 @@ async def gossip_once() -> bool:
             "error": err,
             "epoch": their,
             "ahead": ahead,
+            "conflict": conflict,
+            "loser": loser,
         }
     for k in list(_STALE):
         if k not in polled:
@@ -1865,28 +2257,47 @@ async def gossip_once() -> bool:
 
 
 def _maybe_forget_prev_keys() -> None:
-    """Once every live member has been seen on the current epoch, nobody
-    needs an old key any more."""
+    """Once every live member has been seen on the current epoch (with the
+    same key — not one in conflict), nobody needs an old key any more."""
     doc = _load()
     if not doc.get("prev_keys"):
         return
     me = _self_key()
     others = [k for k in doc["members"] if k != me and _live(doc, k)]
-    if all((_PEERS.get(k) or {}).get("epoch") == doc["epoch"] for k in others):
+    if all(
+        (_PEERS.get(k) or {}).get("epoch") == doc["epoch"]
+        and not (_PEERS.get(k) or {}).get("conflict")
+        for k in others
+    ):
         _forget_prev_keys()
 
 
 def peer_on_other_epoch(key: str) -> bool:
     """The last gossip pass found member ``key`` on another key epoch (one of
-    us missed a change): the fleet key can't open it until that heals."""
+    us missed a change), or on ours with a different key (a conflict): the
+    fleet key can't open it until that heals."""
     peer = _PEERS.get(key) or {}
+    if peer.get("conflict"):
+        return True
     return peer.get("epoch") is not None and peer["epoch"] != _load()["epoch"]
+
+
+def peer_conflict(key: str) -> bool:
+    """Member ``key`` holds a different key on our epoch (see gossip_once)."""
+    return bool((_PEERS.get(key) or {}).get("conflict"))
 
 
 def stale_key() -> bool:
     """This device's key is out of date: a member answered with a NEWER
     epoch, or (members too old to say) every reachable one rejects it — it
-    was removed, or the key rotated while it was away."""
+    was removed, or the key rotated while it was away. Never while a member
+    accepted our key in the last pass — except that in a key conflict (same
+    epoch, different keys) the side with the lower fingerprint is the one
+    asked to rejoin."""
+    if any((_PEERS.get(k) or {}).get("loser") for k, v in _STALE.items() if v):
+        return True
+    if any(v is False for v in _STALE.values()):
+        return False
     if any((_PEERS.get(k) or {}).get("ahead") for k, v in _STALE.items() if v):
         return True
     return bool(_STALE) and all(_STALE.values())
@@ -1991,6 +2402,9 @@ def status(privileged: bool) -> dict:
                     True if mine else bool(my_id and dev.get("fleet") == my_id)
                 ),
                 "error": "" if mine else (_PEERS.get(key) or {}).get("error", ""),
+                # Same group and epoch, a different key: one of the two has
+                # to rejoin the other (see gossip_once).
+                "key_conflict": False if mine else peer_conflict(key),
                 # Runs PR review + issue handling (one device of the group);
                 # None when its MindFlock is too old to say.
                 "automation": (
@@ -2026,6 +2440,26 @@ def status(privileged: bool) -> dict:
                 "has_token": bool(_remote.token_for(key)),
             }
         )
+    removed = []
+    for key, t in sorted(doc["removed"].items(), key=lambda kv: -kv[1]["at"]):
+        if _live(doc, key):
+            continue
+        by = t.get("by") or ""
+        m = doc["members"].get(key) or {}
+        removed.append(
+            {
+                "key": key,
+                "host": (known.get(key) or {}).get("host") or m.get("host") or key,
+                "removed_at": t["at"],
+                "removed_by": by,
+                "removed_by_host": (
+                    (_self_host() if by == me else "")
+                    or (known.get(by) or {}).get("host")
+                    or (doc["members"].get(by) or {}).get("host")
+                    or by
+                ),
+            }
+        )
     join = join_status()
     if not privileged:
         join["code"] = ""
@@ -2041,4 +2475,7 @@ def status(privileged: bool) -> dict:
         "stale_key": stale_key(),
         "gate_warning": _gate_warning(),
         "candidates": candidates,
+        # Tombstones, newest first, with who removed each: "rig removed
+        # laptop at 10:32" is how a forged removal shows.
+        "removed": removed,
     }

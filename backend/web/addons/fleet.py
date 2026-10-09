@@ -12,17 +12,23 @@ routes and who may call them. Three audiences, three rules:
 
 * **A device that wants in** (``redeem``, ``requests``, polling one request).
   Public — it holds no credential yet; that is the point. The auth middleware
-  exempts exactly these three (method, path) shapes; each is validated hard
-  and rate-limited per client IP.
+  exempts exactly these three (method, path) shapes; each is validated hard,
+  rate-limited per client IP, and answered only to a caller on the tailnet
+  (a direct tailnet address, or one ``tailscale serve`` forwarded and this
+  machine vouches for) or this machine itself — never to a LAN neighbour or
+  an unvouched proxy hop, whose address can't say which device it is.
 
   Withdrawing a request (``requests/<id>/cancel``) is public the same way:
   it needs that request's secret.
 
 * **Another member** (``roster``, ``rekey``, ``rotate-token``) —
   authenticated with the fleet key, checked HERE against the key (not the
-  device token), so a paired non-member can't read the roster. A refusal
-  (401) names this device's fleet id and key epoch — not secret — so the
-  caller can tell "I missed a key change" from "it did". ``adopt`` is the odd
+  device token), so a paired non-member can't read the roster. The auth
+  middleware lets these through to the route whatever the bearer (see
+  ``backend.web.core.auth._MEMBER_FLEET_ROUTES``), so a refusal is always
+  this 401, naming this device's fleet id, key epoch and key fingerprint —
+  not secret — so the caller can tell "I missed a key change" from "it did"
+  from "we hold different keys". ``adopt`` is the odd
   one: the bearer must be this device's OWN access token, the proof a paired
   device presents when it adds us in one click.
 """
@@ -71,6 +77,24 @@ def _client_ip(request: Request) -> str:
         return str(ip)
     peer = request.scope.get("mf_peer") or request.scope.get("client") or ("", 0)
     return str(peer[0] or "")
+
+
+_NOT_TAILNET = {"error": "join from one of your devices on the tailnet"}
+
+
+def _join_caller_ok(request: Request) -> bool:
+    """Whether a public join route may answer this caller: a tailnet address
+    that can be believed (:func:`backend.web.core.tailnet_trust.peer_ip`), or
+    this machine itself, unproxied. Never raises (fails closed)."""
+    try:
+        from backend.web.core import tailnet_trust as _tt
+
+        ip = _tt.peer_ip(request.scope)
+        if ip and _tt.is_tailnet_ip(ip):
+            return True
+        return bool(web_auth._from_this_machine(request.scope))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _not_member() -> JSONResponse:
@@ -202,9 +226,10 @@ class FleetAddon(Addon):
                 out = fleet.approve(rid)
             except KeyError:
                 return _bad("that request is gone (expired or answered)", 404)
+            runs = bool(out.pop("runs_automation", False))
             # Before the asker's next poll collects the bundle: it pulls
             # settings from here at once (see fleet.after_admit).
-            return JSONResponse({**out, "sync_error": await fleet.after_admit()})
+            return JSONResponse({**out, "sync_error": await fleet.after_admit(runs)})
 
         @router.post("/fleet/requests/{rid}/deny")
         async def deny_request(rid: str, request: Request) -> JSONResponse:
@@ -259,6 +284,8 @@ class FleetAddon(Addon):
         # ---------------------------------------------------------------- #
         @router.post("/fleet/redeem")
         async def post_redeem(request: Request) -> JSONResponse:
+            if not _join_caller_ok(request):
+                return JSONResponse(_NOT_TAILNET, status_code=403)
             if not fleet.allow_public(_client_ip(request)):
                 return _bad("too many attempts — wait a minute", 429)
             body = await _json(request) or {}
@@ -287,11 +314,13 @@ class FleetAddon(Addon):
                 return _bad(str(err))
             # Before answering: the joiner's very next call is a settings pull
             # from here, relayed (see fleet.after_admit).
-            await fleet.after_admit()
+            await fleet.after_admit(body.get("runs_automation") is True)
             return JSONResponse(out)
 
         @router.post("/fleet/requests")
         async def post_requests(request: Request) -> JSONResponse:
+            if not _join_caller_ok(request):
+                return JSONResponse(_NOT_TAILNET, status_code=403)
             if not fleet.allow_public(_client_ip(request)):
                 return _bad("too many attempts — wait a minute", 429)
             body = await _json(request) or {}
@@ -314,6 +343,7 @@ class FleetAddon(Addon):
                         secret_hash,
                         ip=_client_ip(request),
                         dns=_dns_arg(body),
+                        runs_automation=body.get("runs_automation") is True,
                     )
                 )
             except PermissionError as err:
@@ -323,6 +353,8 @@ class FleetAddon(Addon):
 
         @router.get("/fleet/requests/{rid}")
         async def get_requests(rid: str, request: Request) -> JSONResponse:
+            if not _join_caller_ok(request):
+                return JSONResponse(_NOT_TAILNET, status_code=403)
             if not fleet.allow_public(_client_ip(request), "poll"):
                 return _bad("too many attempts — wait a minute", 429)
             if not _REQ_ID.match(rid):
@@ -340,6 +372,8 @@ class FleetAddon(Addon):
         async def cancel_requests(rid: str, request: Request) -> JSONResponse:
             """The asker withdraws its own pending request (Cancel, Ctrl-C):
             nobody can approve it afterwards. Needs the request's secret."""
+            if not _join_caller_ok(request):
+                return JSONResponse(_NOT_TAILNET, status_code=403)
             if not fleet.allow_public(_client_ip(request), "poll"):
                 return _bad("too many attempts — wait a minute", 429)
             if not _REQ_ID.match(rid):

@@ -60,6 +60,7 @@ __all__ = [
     "load_settings",
     "load_settings_strict",
     "SettingsUnreadable",
+    "UNREADABLE_HINT",
     "save_settings",
     "update_settings",
     "set_ticketing_sources",
@@ -1932,6 +1933,11 @@ class SettingsUnreadable(Exception):
     """``settings.json`` exists but can't be read or parsed."""
 
 
+#: What a route answers (409) when a save is refused because settings.json
+#: exists but can't be read — saving would replace it with defaults.
+UNREADABLE_HINT = "settings.json couldn't be read — fix or delete it"
+
+
 def load_settings_strict() -> Settings:
     """The settings store, read from disk — but RAISES
     :class:`SettingsUnreadable` when the file exists and can't be read or
@@ -2003,8 +2009,13 @@ def update_settings(**group_patches: dict) -> Settings:
     Example::
 
         update_settings(github={"token": "ghp_…"}, repository={"url": "…"})
+
+    Raises :class:`SettingsUnreadable` (and saves nothing) when the file
+    exists but doesn't parse: read as empty, the save would replace every
+    token and source with defaults — and settings sync would then spread
+    "all deleted" to every device. A missing file is empty settings.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     for group, patch in group_patches.items():
         if not isinstance(patch, dict):
@@ -2030,8 +2041,9 @@ def set_ticketing_sources(sources: list) -> Settings:
     ``sources`` is a list of dicts (each a :class:`TicketingSource` shape). The
     field-merge :func:`update_settings` can't express a list replacement, so the
     ticketing CRUD endpoints go through here. Returns the new state.
+    Raises :class:`SettingsUnreadable` like :func:`update_settings`.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     clean = [s for s in (sources or []) if isinstance(s, dict) and s.get("provider")]
     if clean:
@@ -2051,9 +2063,10 @@ def set_auth_profiles(profiles: list) -> Settings:
     :func:`update_settings` can't express a list replacement. The group's
     ``default_profile`` scalar is preserved — unless it names a profile that no
     longer exists, in which case it is cleared so new sessions can't resolve to
-    a deleted identity. Returns the new state.
+    a deleted identity. Returns the new state. Raises
+    :class:`SettingsUnreadable` like :func:`update_settings`.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     clean = [p for p in (profiles or []) if isinstance(p, dict) and p.get("id")]
     group = dict(merged.get("auth_profiles", {}))

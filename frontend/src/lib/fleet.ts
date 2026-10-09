@@ -110,7 +110,19 @@ export function syncDeviceLine(d: SyncStatus["devices"][number]): string {
 /** Human label for a pinnable base path ("ui.accent" → "Accent colour"),
  * falling back to the path itself. */
 export function syncLabel(path: string, sync: SyncStatus | null | undefined): string {
-  return sync?.syncable?.find((s) => s.path === path)?.label || path;
+  const hit = sync?.syncable?.find((s) => s.path === path)?.label;
+  if (hit) return hit;
+  // A unit-level pin ("ticketing.sources#jira-main"): one entry of a keyed
+  // list kept on this device, e.g. a ticket source whose id means something
+  // else on another of your devices.
+  const hash = path.indexOf("#");
+  if (hash > 0) {
+    const base = path.slice(0, hash);
+    const id = path.slice(hash + 1);
+    const baseLabel = sync?.syncable?.find((s) => s.path === base)?.label || base;
+    return baseLabel + ": " + id;
+  }
+  return path;
 }
 
 /** The pin picker's options: everything syncable that isn't pinned yet,
@@ -183,6 +195,24 @@ export function joinSettingsNote(host: string): string {
   return "This computer takes " + host + "'s shared settings where " + host + " has them; your own stay where it has none.";
 }
 
+/** The note beside "Add to my devices" — the other way round from joining:
+ * the computer being added runs the join (it adopts THIS computer's bundle
+ * and starts its settings from here), so it is the one that takes the
+ * settings. */
+export function addPairedNote(host: string): string {
+  const h = host || "The other computer";
+  return h + " takes this computer's shared settings where this one has them; its own stay where this one has none.";
+}
+
+/** The rows "Join another computer" offers buttons on: never a device that is
+ * already one of yours. A member whose hello hasn't caught up with the group
+ * yet still comes back as a candidate (`member: true`) for a discovery
+ * interval — asking it to join, or re-adding it, would act on your own
+ * device. */
+export function joinableCandidates(candidates: FleetCandidate[]): FleetCandidate[] {
+  return (candidates || []).filter((c) => !c.member);
+}
+
 /** The free-text box ("paste the code or command"): what to POST to
  * /api/fleet/join. A whole command names its device; a bare code doesn't,
  * so it goes to the one computer it can be for — the one whose Enter-code
@@ -198,7 +228,7 @@ export function pasteJoinBody(
   if (!t) return { body: null, error: "" };
   // A command or "<device> <code>": the server reads the device from it.
   if (!plausibleCode(t)) return { body: { text: t }, error: "" };
-  const joinable = candidates.filter((c) => !candidateBlocker(c));
+  const joinable = joinableCandidates(candidates).filter((c) => !candidateBlocker(c));
   const device =
     (openFor && joinable.some((c) => c.device === openFor) ? openFor : "") ||
     (joinable.length === 1 ? joinable[0].device : "");
@@ -218,13 +248,28 @@ export function admitToast(name: string, ok: string, syncError: unknown): string
   return err ? name + " is one of your devices, but settings sync didn't start here: " + err : ok;
 }
 
+/** The one thing removal can't do: a single shared key can't tell a removed
+ * device from a member that never heard of the removal, so a lost or stolen
+ * one is only cut off everywhere — including from devices that are offline
+ * now — by taking it off the tailnet. Said in the confirm, the toast and the
+ * CLI. */
+export function tailnetAdvice(host: string): string {
+  return (
+    "If " +
+    (host || "it") +
+    " was lost or stolen, also remove it from your tailnet in the Tailscale admin console — " +
+    "that cuts it off everywhere at once, even from devices that are offline now."
+  );
+}
+
 /** What Remove does, said exactly (the confirm's body). */
 export function removeConfirmText(host: string): string {
   return (
     host +
     " stops getting settings sync, sign-in and ticket claims from your other devices: every " +
-    "device still with you gets a new device key, and any that's offline right now will have " +
-    "to rejoin. Its own sessions and settings stay on it."
+    "device still with you gets a new device key (one that's offline right now gets it when " +
+    "it's back). Its own sessions and settings stay on it. " +
+    tailnetAdvice(host)
   );
 }
 
@@ -233,7 +278,9 @@ export function removeConfirmText(host: string): string {
 export const ROTATE_TOKENS_LABEL =
   "Also replace every device's access token (do this if it was lost or stolen — your phone will need to scan the QR again)";
 
-/** The toast after a removal, from POST …/remove's answer. */
+/** The toast after a removal, from POST …/remove's answer. A member that was
+ * offline isn't lost: it is handed the new key (under the old one, which the
+ * others keep for a while) the next time one of them reaches it. */
 export function removedToast(
   host: string,
   r: { missed?: string[]; rotated?: string[]; rotate_failed?: string[] } | null | undefined,
@@ -241,15 +288,119 @@ export function removedToast(
 ): string {
   const bits = ["Removed " + host];
   const missed = r?.missed || [];
-  if (missed.length) bits.push(missed.join(", ") + (missed.length > 1 ? " were" : " was") + " offline and will have to rejoin");
+  if (missed.length) {
+    const many = missed.length > 1;
+    bits.push(
+      missed.join(", ") +
+        (many ? " were offline — they get" : " was offline — it gets") +
+        " the new key when " +
+        (many ? "they're" : "it's") +
+        " back"
+    );
+  }
   if (rotateAsked) {
     const failed = r?.rotate_failed || [];
     if (failed.length)
       bits.push("couldn't replace the access token on " + failed.join(", ") + " — do it there in Security");
     else bits.push("access tokens replaced");
   } else bits.push("access tokens it already has still work");
-  return bits.join(" — ");
+  return bits.join(" — ") + ". " + tailnetAdvice(host);
 }
+
+/** "10:32" today, "Oct 3, 10:32" on another day (local time). */
+export function clockTime(ts: number, nowSec = Date.now() / 1000): string {
+  const d = new Date(ts * 1000);
+  const n = new Date(nowSec * 1000);
+  const hm = d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+  const sameDay =
+    d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  if (sameDay) return hm;
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return MONTHS[d.getMonth()] + " " + d.getDate() + ", " + hm;
+}
+
+/** How long a removal stays on the screen: long enough to notice one you
+ * didn't make, short enough that old tombstones don't pile up. */
+const REMOVED_SHOWN_S = 14 * 86400;
+
+/** Removals another device made, newest first, as one line each: "rig removed
+ * laptop at 10:32 — if that wasn't you, remove rig from your tailnet". Every
+ * member holds the same key, so a removal from a device you don't recognise
+ * is the one sign of a forged one — the remover is who has to go. This
+ * device's own removals are left out (it knows it made them). */
+export function removalLines(
+  st: Pick<FleetStatus, "removed" | "members" | "self"> | null | undefined,
+  nowSec = Date.now() / 1000
+): Array<{ key: string; text: string }> {
+  const me = st?.self?.key || "";
+  const hostOf = (key: string, fallback?: string) =>
+    key === me
+      ? "this device"
+      : st?.members?.find((m) => m.key === key)?.host ||
+        st?.removed?.find((r) => r.key === key)?.host ||
+        fallback ||
+        key;
+  return (st?.removed || [])
+    .filter((r) => r && r.key && r.removed_by && r.removed_by !== me)
+    .map((r) => ({ r, at: Number(r.removed_at ?? r.at ?? 0) }))
+    .filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S)
+    .sort((a, b) => b.at - a.at)
+    .map(({ r, at }) => {
+      const by = hostOf(r.removed_by as string, r.removed_by_host);
+      const what = r.key === me ? "this device" : r.host || r.key;
+      const when = clockTime(at, nowSec);
+      return {
+        key: r.key,
+        text:
+          by +
+          " removed " +
+          what +
+          (when.includes(",") ? " on " : " at ") +
+          when +
+          " — if that wasn't you, remove " +
+          by +
+          " from your tailnet",
+      };
+    });
+}
+
+/** Members that hold a different key under the same group id and epoch —
+ * two halves of one group that were set up apart. Marked by the server
+ * (`key_conflict`), or by the error it gives the member row. */
+export function keyConflicts(members: FleetMember[] | null | undefined): FleetMember[] {
+  return (members || []).filter(
+    (m) => !m.self && (m.key_conflict === true || /different key for your devices/i.test(m.error || ""))
+  );
+}
+
+/** The toast after Security → Regenerate: the phone's QR carried the old
+ * token, and — in a group — the devices' shared key was replaced with it. */
+export function rotatedToast(
+  r:
+    | {
+        rekeyed?: string[];
+        missed?: string[];
+        fleet_error?: string;
+        fleet?: { rekeyed?: string[]; missed?: string[] };
+      }
+    | null
+    | undefined
+): string {
+  const rekeyed = r?.rekeyed || r?.fleet?.rekeyed || [];
+  const missed = r?.missed || r?.fleet?.missed || [];
+  const bits = ["Access token regenerated — scan the QR again on your phone; other browsers sign in again"];
+  if (rekeyed.length) bits.push("new device key sent to " + rekeyed.join(", "));
+  if (missed.length)
+    bits.push(missed.join(", ") + (missed.length > 1 ? " get" : " gets") + " the new device key when back online");
+  if (r?.fleet_error) bits.push(r.fleet_error);
+  return bits.join(" · ");
+}
+
+/** The pause banner's two ways out, as POST /api/settings/sync/resume bodies. */
+export const SYNC_RESUME = {
+  theirs: { keep: "theirs", label: "Use my other devices' settings" },
+  mine: { keep: "mine", label: "Keep this device's" },
+} as const;
 
 /** The hint under "Run PR review and issue handling here": exactly one of
  * your devices should, or the same PRs get reviewed once per device (and

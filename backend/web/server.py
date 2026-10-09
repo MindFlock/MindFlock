@@ -6103,10 +6103,17 @@ async def _red_zone_loop() -> None:
 
 
 @app.get("/api/mobile")
-def get_mobile() -> JSONResponse:
-    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Mobile)."""
+def get_mobile(request: Request) -> JSONResponse:
+    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Mobile).
+
+    The QR's sign-in tokens (this device's own, the devices' key, every
+    paired device's) and ``token`` go only to a caller that may see this
+    device's own token (:func:`backend.web.core.auth.may_see_own_token`):
+    anyone else — a member relaying, a phone signed in with the devices' key —
+    gets the bare URLs, ``token: null``."""
     try:
-        return JSONResponse(_mobile_info())
+        mine = _auth.may_see_own_token(request.scope)
+        return JSONResponse(_mobile_info(include_tokens=mine))
     except Exception:  # noqa: BLE001 — never 500 the settings screen
         return JSONResponse(
             {"urls": [], "qr_svg": None, "token": "", "note": "unavailable"}
@@ -6114,7 +6121,7 @@ def get_mobile() -> JSONResponse:
 
 
 @app.post("/api/mobile/shared/recheck")
-def recheck_shared_link() -> JSONResponse:
+def recheck_shared_link(request: Request) -> JSONResponse:
     """Settings → Mobile's Re-check: re-read the shared link's setup from
     Tailscale, re-apply what drifted (and re-advertise a tagged host that
     still isn't approved), then return the refreshed ``/api/mobile`` payload."""
@@ -6122,7 +6129,7 @@ def recheck_shared_link() -> JSONResponse:
         _shared_link.reconcile(_server_port(), nudge=True)
     except Exception:  # noqa: BLE001 — best-effort, like the module itself
         pass
-    return get_mobile()
+    return get_mobile(request)
 
 
 @app.post("/api/server/restart")

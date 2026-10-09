@@ -106,6 +106,26 @@ _PUBLIC_FLEET_POLL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}")
 #: request (it proves which with the request's secret).
 _PUBLIC_FLEET_CANCEL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}/cancel")
 
+# Member-to-member routes: each handler checks the fleet key itself and
+# refuses with the fleet-aware 401 (fleet.unauthorized_body: id, key epoch,
+# key fingerprint — nothing secret). A member that missed a key change holds
+# an OLD key, so if the gates here answered first (a generic 401, or the
+# remote-control 403 for a key that isn't the current one) the caller could
+# never learn that, and never hand it the new key. So these exact (METHOD,
+# path) pairs get past both gates — except a relayed request bearing this
+# device's OWN token while remote control is off: that is a paired
+# non-member, which the toggle governs (the export route would accept it).
+_MEMBER_FLEET_ROUTES = frozenset(
+    {
+        ("GET", "/api/fleet/roster"),
+        ("POST", "/api/fleet/roster"),
+        ("POST", "/api/fleet/rekey"),
+        ("POST", "/api/fleet/rotate-token"),
+        ("POST", "/api/settings/sync/nudge"),
+        ("GET", "/api/settings/sync/export"),
+    }
+)
+
 # Requests proxied by ANOTHER MindFlock device carry this header (lower-case
 # for the ASGI header list). They're refused outright unless this device's
 # `general.remote_control` toggle is on — that toggle is the permission the
@@ -387,6 +407,34 @@ def _from_this_machine(scope) -> bool:
     return loopback and not _tailnet_trust.has_forward_headers(scope)
 
 
+def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
+    """Whether a route may hand this request THIS device's own access token
+    (Settings → Security's reveal, Settings → Mobile's QR, the answer to a
+    rotate): the request presents that own token (cookie or bearer), or it
+    comes straight from this machine and isn't relayed by another MindFlock.
+    ``open_gate``: also yes while the gate is off and the request isn't
+    relayed (the whole server is open then anyway).
+
+    NOT a caller that got past the gate with the fleet key — a member, or a
+    phone signed in with the devices' key, must not be able to collect every
+    device's own token, which would outlive its removal from the group.
+    Never raises (fails closed)."""
+    try:
+        headers = scope.get("headers") or []
+        relayed = any(k == _REMOTE_HEADER for k, _ in headers)
+        if any(own_token_valid(c) for c in _cookies_from(headers)):
+            return True
+        if own_token_valid(_bearer_from(headers)):
+            return True
+        if relayed:
+            return False
+        if _from_this_machine(scope):
+            return True
+        return bool(open_gate) and not auth_enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def privileged(scope) -> bool:
     """Whether this request comes from the person AT this device — what the
     fleet's join/approve/remove routes require (a 403 otherwise).
@@ -606,6 +654,15 @@ async def _deny(scope, receive, send, *, status, message, ws_code) -> None:
             pass
 
 
+def _member_fleet_route(scope) -> bool:
+    """Whether ``scope`` is one of the member-to-member routes (see
+    :data:`_MEMBER_FLEET_ROUTES`) — HTTP only, exact method and path."""
+    if scope.get("type") != "http":
+        return False
+    method = str(scope.get("method") or "").upper()
+    return (method, scope.get("path", "")) in _MEMBER_FLEET_ROUTES
+
+
 def _public_fleet_route(scope) -> bool:
     """Whether ``scope`` is one of the public join routes (see
     :data:`_PUBLIC_FLEET_ROUTES`) — HTTP only, exact method and path."""
@@ -634,6 +691,7 @@ class AuthMiddleware:
         path = scope.get("path", "")
         headers = scope.get("headers") or []
         public = path in _PUBLIC_PATHS or _public_fleet_route(scope)
+        member_route = _member_fleet_route(scope)
 
         # Browser-attack guards (see origin_ok/host_ok): cross-origin pages and
         # DNS-rebinding hosts are refused before ANY other handling — public
@@ -658,10 +716,13 @@ class AuthMiddleware:
         # membership is the permission (joining turned remote control on, and
         # roster gossip, key changes and settings sync must keep working even
         # if the toggle is switched off later).
+        # A member route checks the key itself (see _MEMBER_FLEET_ROUTES) —
+        # but this device's own token, relayed, is a paired non-member's.
         if (
             not public
             and any(k == _REMOTE_HEADER for k, _ in headers)
             and not _fleet_key_valid(_bearer_from(headers))
+            and not (member_route and not own_token_valid(_bearer_from(headers)))
         ):
             from backend.web.core import remote as _remote
 
@@ -679,7 +740,7 @@ class AuthMiddleware:
         if not auth_enabled():
             await self.app(scope, receive, send)
             return
-        if public:
+        if public or member_route:
             await self.app(scope, receive, send)
             return
 

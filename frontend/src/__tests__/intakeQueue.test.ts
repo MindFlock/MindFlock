@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byGroup, collectQueued, isQueued, queuedOf, runState } from "../components/intake/queue";
+import { byGroup, collectQueued, isQueued, queuedOf, runState, runsOnText } from "../components/intake/queue";
 
 /** A tickets payload shaped like /api/tickets/assigned: every assigned ticket,
  * annotated with the server's own eligibility verdict. */
@@ -194,6 +194,19 @@ describe("runState", () => {
     // sources behind it.
     expect(runState({ ...base, configured: false })).toBe("unset");
     expect(runState({ ...base, engineAvailable: false })).toBe("unset");
+  });
+
+  it("says it runs on another device — not 'switch it on' — where this one doesn't run automation", () => {
+    // The server folds "not here" into pr_enabled, so switchOn reads false on
+    // the mac while the (shared) switch is on; blaming the switch invited a
+    // flip that reached the laptop that does run PR review.
+    expect(runState({ ...base, switchOn: false, runsElsewhere: true })).toBe("elsewhere");
+    expect(runState({ ...base, engineOn: false, runsElsewhere: true })).toBe("elsewhere");
+    expect(runState({ ...base, runsElsewhere: false })).toBe("on");
+    // Nothing configured is still "not set up", wherever it would run.
+    expect(runState({ ...base, configured: false, runsElsewhere: true })).toBe("unset");
+    expect(runsOnText("laptop")).toBe("Runs on laptop");
+    expect(runsOnText("")).toBe("Runs on another of your devices");
   });
 });
 

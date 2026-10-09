@@ -386,12 +386,15 @@ def qr_svg(data: str):
 _mobile_svg = qr_svg
 
 
-def _mobile_info() -> dict:
+def _mobile_info(include_tokens: bool = True) -> dict:
     """Mobile (/m) URLs + a scannable QR + access token for Settings → Mobile.
 
     Mirrors the startup banner (:func:`_mobile_banner`): the QR encodes the best
     tailnet URL a phone can actually reach (with ``?token=`` baked in when the
     auth gate is on), and is omitted in local-only mode where no phone URL works.
+    Without ``include_tokens`` (a caller that may not see this device's own
+    token — see :func:`backend.web.core.auth.may_see_own_token`) no token goes
+    anywhere: ``token`` is None and the QR is the bare URL.
     """
     srv = _server()
     port = srv._server_port()
@@ -437,8 +440,8 @@ def _mobile_info() -> dict:
     if shared_url:
         note = None  # the shared link works whatever this server is bound to
 
-    tokens = _signin_tokens(bool(shared_url))
-    token = tokens[0] if tokens else ""
+    tokens = _signin_tokens(bool(shared_url)) if include_tokens else []
+    token = (tokens[0] if tokens else "") if include_tokens else None
 
     qr_target = qr_url  # only tailnet URLs are reachable from a phone
     if qr_target and tokens:

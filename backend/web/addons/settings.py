@@ -228,12 +228,22 @@ def _prefs_fields() -> Tuple[str, ...]:
     return tuple(f.name for f in dataclasses.fields(settings_store.PrefsSettings))
 
 
+def _unreadable_response() -> JSONResponse:
+    """409 for a read or save refused because settings.json exists but can't
+    be read: a save would replace it with defaults (and settings sync would
+    spread "everything deleted"), and defaults served as the stored prefs
+    would overwrite what a browser still has."""
+    return JSONResponse({"error": settings_store.UNREADABLE_HINT}, status_code=409)
+
+
 def _prefs_view() -> dict:
-    """The ``prefs`` group with EVERY field present (defaults filled)."""
+    """The ``prefs`` group with EVERY field present (defaults filled). Raises
+    ``SettingsUnreadable`` while settings.json can't be read — never defaults
+    in place of a file that's only broken."""
     import dataclasses
 
     settings_store.invalidate()
-    prefs = settings_store.load_settings().prefs
+    prefs = settings_store.load_settings_strict().prefs
     return {
         f.name: json.loads(json.dumps(getattr(prefs, f.name)))
         for f in dataclasses.fields(prefs)
@@ -600,21 +610,7 @@ class SettingsAddon(Addon):
             own token, which would outlive its removal from the group."""
             from backend.web.core import auth as web_auth
 
-            scope = request.scope
-            headers = scope.get("headers") or []
-            relayed = any(k == web_auth._REMOTE_HEADER for k, _ in headers)
-            try:
-                own = any(
-                    web_auth.own_token_valid(c)
-                    for c in list(web_auth._cookies_from(headers))[
-                        : web_auth._MAX_CANDIDATES
-                    ]
-                ) or web_auth.own_token_valid(web_auth._bearer_from(headers))
-                local = not relayed and web_auth._from_this_machine(scope)
-                open_gate = not relayed and not web_auth.auth_enabled()
-            except Exception:  # noqa: BLE001 — fail closed
-                own = local = open_gate = False
-            if own or local or open_gate:
+            if web_auth.may_see_own_token(request.scope, open_gate=True):
                 return JSONResponse(
                     {
                         "token": web_auth.get_token(),
@@ -692,6 +688,33 @@ class SettingsAddon(Addon):
             status = await asyncio.to_thread(settings_sync.status)
             return JSONResponse({**status, "adopted": adopted})
 
+        @router.post("/settings/sync/resume")
+        async def post_settings_sync_resume(
+            payload: dict, request: Request
+        ) -> JSONResponse:
+            """``{keep: "theirs"|"mine"}`` — sync paused because this device's
+            settings look reset: take the other devices' values back, or
+            spread this device's. Returns the status plus what was adopted.
+            This device's own choice: refused for a relayed request."""
+            from backend.web.core import remote as _remote
+            from backend.web.core import settings_sync
+
+            if _remote.from_remote(request):
+                return JSONResponse(
+                    {"error": "settings sync can only be changed on this device"},
+                    status_code=403,
+                )
+            try:
+                result = await settings_sync.resume(
+                    str((payload or {}).get("keep") or "")
+                )
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            except LookupError as err:
+                return JSONResponse({"error": str(err)}, status_code=409)
+            status = await asyncio.to_thread(settings_sync.status)
+            return JSONResponse({**status, **result})
+
         @router.post("/settings/sync/pin")
         def post_settings_sync_pin(payload: dict, request: Request) -> JSONResponse:
             """``{path, pinned}`` — keep ``path`` (``group.field`` or
@@ -745,30 +768,41 @@ class SettingsAddon(Addon):
                 )
             try:
                 return JSONResponse(settings_sync.export())
-            except settings_store.SettingsUnreadable:
+            except settings_store.SettingsUnreadable as err:
                 # Never an empty export: the other devices would read it as
-                # "everything was deleted here".
-                return JSONResponse(
-                    {"error": settings_sync.UNREADABLE}, status_code=503
+                # "everything was deleted here" (or, paused, start from a
+                # reset file).
+                why = (
+                    settings_sync.PAUSED
+                    if str(err) == settings_sync.PAUSED
+                    else settings_sync.UNREADABLE
                 )
+                return JSONResponse({"error": why}, status_code=503)
 
         # --- UI preferences that follow the person ------------------------ #
         @router.get("/prefs")
         def get_prefs() -> JSONResponse:
             """Every ``prefs`` field (unset ones at their defaults) — the
             browser's localStorage is a cache of this, so a keymap or prompt
-            preset set on one device shows up on the others."""
-            return JSONResponse(_prefs_view())
+            preset set on one device shows up on the others. 409 while
+            settings.json can't be read (the browser keeps its own copy)."""
+            try:
+                return JSONResponse(_prefs_view())
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
 
         @router.post("/prefs")
         def post_prefs(payload: dict) -> JSONResponse:
             """``{field: value, …}`` (a partial update; ``null`` clears a
-            field). Unknown fields are ignored. Stamped for sync at once."""
+            field). Unknown fields are ignored. Stamped for sync at once.
+            409 while settings.json can't be read — nothing is saved over it."""
             known = _prefs_fields()
             clean = {k: v for k, v in (payload or {}).items() if k in known}
             if clean:
                 try:
                     settings_store.update_settings(prefs=clean)
+                except settings_store.SettingsUnreadable:
+                    return _unreadable_response()
                 except Exception as err:  # noqa: BLE001
                     return JSONResponse({"error": str(err)}, status_code=400)
                 _stamp_for_sync()
@@ -784,19 +818,32 @@ class SettingsAddon(Addon):
                     )
                 except Exception:  # noqa: BLE001 — a save never fails on this
                     pass
-            return JSONResponse(_prefs_view())
+            try:
+                return JSONResponse(_prefs_view())
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
 
         @router.post("/settings/auth-token/rotate")
-        def rotate_auth_token() -> JSONResponse:
+        async def rotate_auth_token(request: Request) -> JSONResponse:
             """Invalidate the current access token and mint a fresh one
             (compromise recovery). Every signed-in browser cookie, ``/m`` QR
-            code, and paired device's stored token stops working immediately;
-            the response re-issues THIS caller's cookie so the device that
-            rotated stays signed in. 409 when the token is pinned by
-            ``MINDFLOCK_AUTH_TOKEN`` (the env var always wins, so rotating the
-            setting would be a lie)."""
-            from backend.web.core import auth as web_auth
+            code, and paired device's stored token stops working immediately.
+            In a group of your devices the devices' shared key is replaced
+            too (:func:`backend.web.core.fleet.rotate_key`) — it is in the
+            phone QR, so a lost phone is signed out of every one of them;
+            ``rekeyed`` / ``missed`` say which members took the new key now
+            and which get it when they're back. Phones scan the QR again.
 
+            The new token goes back (and THIS caller's cookie is re-issued so
+            it stays signed in) only to a caller that may see it
+            (:func:`backend.web.core.auth.may_see_own_token`): a caller signed
+            in with the devices' key gets ``token: null``. 409 when the token
+            is pinned by ``MINDFLOCK_AUTH_TOKEN`` (the env var always wins, so
+            rotating the setting would be a lie)."""
+            from backend.web.core import auth as web_auth
+            from backend.web.core import fleet as _fleet
+
+            mine = web_auth.may_see_own_token(request.scope)
             try:
                 token = web_auth.rotate_token()
             except RuntimeError as err:
@@ -806,9 +853,28 @@ class SettingsAddon(Addon):
                     {"error": "could not persist the new token: %s" % err},
                     status_code=500,
                 )
-            return web_auth.set_auth_cookies(
-                JSONResponse({"token": token, "auth_enabled": web_auth.auth_enabled()})
-            )
+            out = {
+                "token": token if mine else None,
+                "auth_enabled": web_auth.auth_enabled(),
+                "rekeyed": [],
+                "missed": [],
+                "in_fleet": False,
+                "note": "Phones signed in before need to scan the QR again.",
+            }
+            try:
+                if _fleet.in_fleet():
+                    out.update(await _fleet.rotate_key(), in_fleet=True)
+                    out["note"] = (
+                        "Phones signed in before need to scan the QR again — "
+                        "on every one of your devices: their shared key was "
+                        "replaced too."
+                    )
+            except Exception as err:  # noqa: BLE001 — the token rotated anyway
+                out["fleet_error"] = "couldn't replace your devices' key: %s" % (
+                    err or "error"
+                )
+            resp = JSONResponse(out)
+            return web_auth.set_auth_cookies(resp) if mine else resp
 
         @router.post("/settings")
         def post_settings(payload: dict, request: Request) -> JSONResponse:
@@ -883,6 +949,8 @@ class SettingsAddon(Addon):
             shared_before = shared_link.configured_name() if watch_shared else None
             try:
                 _apply_post(payload)
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync()
@@ -1127,6 +1195,8 @@ class SettingsAddon(Addon):
                 clean.append(s)
             try:
                 settings_store.set_ticketing_sources(clean)
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync()
@@ -1355,6 +1425,8 @@ class SettingsAddon(Addon):
                     settings_store.update_settings(
                         auth_profiles={"default_profile": default}
                     )
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             # Create each account profile's isolated dir now (0700, like the

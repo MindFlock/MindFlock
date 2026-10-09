@@ -49,6 +49,7 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setattr(fleet, "_FAILS", {})
     monkeypatch.setattr(fleet, "_ALL_FAILS", [])
     monkeypatch.setattr(fleet, "_LOCKED_UNTIL", {})
+    monkeypatch.setattr(fleet, "_LOCKOUTS", {})
     monkeypatch.setattr(fleet, "_JOIN_SECRET", [None])
     monkeypatch.setattr(fleet, "_SERVE", {"at": 0.0, "exposed": 0.0})
     monkeypatch.setattr(fleet, "_check_serve", lambda: False)  # no `tailscale`
@@ -191,7 +192,11 @@ def test_tombstone_and_readd(monkeypatch):
     # A re-add in the SAME instant as the removal still takes.
     fleet.add_member("rig", "Rig", by="laptop")
     assert fleet.is_member("rig")
-    assert fleet.state()["members"]["rig"]["added_at"] > fleet.state()["removed"]["rig"]
+    assert (
+        fleet.state()["members"]["rig"]["added_at"]
+        > fleet.state()["removed"]["rig"]["at"]
+    )
+    assert fleet.state()["removed"]["rig"]["by"] == "laptop"  # who removed it
 
 
 def test_remove_with_a_clock_behind_the_add_still_removes(monkeypatch):
@@ -242,7 +247,8 @@ def test_merge_roster_unions_by_max_timestamp():
     s = fleet.state()
     assert s["members"]["rig"]["host"] == "Rig"  # ours was newer
     assert s["members"]["mini"]["host"] == "Mini"
-    assert s["removed"] == {"ghost": 7.0}
+    # An older build's bare-timestamp tombstone reads as one with no "by".
+    assert s["removed"] == {"ghost": {"at": 7.0, "by": ""}}
     assert fleet.merge_roster(remote_roster) is False  # nothing new
     # A newer tombstone wins over an older add.
     remote_roster["removed"] = {"mini": 60.0}
@@ -457,7 +463,7 @@ def test_clean_drops_infinite_and_clamps_future_timestamps(monkeypatch):
     s = fleet.state()
     assert "rig" not in s["members"]
     assert s["members"]["mini"]["added_at"] == 1000.0 + fleet._MAX_SKEW
-    assert s["removed"] == {"old": 1000.0 + fleet._MAX_SKEW}
+    assert s["removed"] == {"old": {"at": 1000.0 + fleet._MAX_SKEW, "by": ""}}
     assert fleet.is_member("laptop")
 
 
@@ -676,7 +682,7 @@ def test_request_state_checks_the_secret_and_serves_the_bundle_once(events):
         fleet.request_state(out["id"], "")
     assert fleet.request_state(out["id"], "s3cret") == {"state": "pending"}
     res = fleet.approve(out["id"])
-    assert res == {"ok": True, "device": "rig", "host": "Rig"}
+    assert res == {"ok": True, "device": "rig", "host": "Rig", "runs_automation": False}
     assert fleet.in_fleet()  # approve started the fleet …
     assert not fleet.is_member("rig")  # … but rig adds itself, once it has the key
     assert fleet.pending_requests() == []
@@ -1259,7 +1265,9 @@ async def test_remove_self_leaves(world):
     world.rediscover()
     with world.on("rig"):
         status, out = await world.ui("POST", "/api/fleet/members/rig/remove")
-        assert status == 200 and out == {"ok": True}
+        # A leave, said so (the CLI words it as one): no key change, no
+        # token replaced.
+        assert status == 200 and out == {"ok": True, "left": True}
         assert not fleet.in_fleet()
 
 
@@ -1416,6 +1424,7 @@ async def test_status_payload(world, monkeypatch):
         "stale_key",
         "gate_warning",
         "candidates",
+        "removed",
     }
     assert st["in_fleet"] is True and st["self"] == {"key": "laptop", "host": "Laptop"}
     members = {m["key"]: m for m in st["members"]}
@@ -1431,6 +1440,7 @@ async def test_status_payload(world, monkeypatch):
         "same_fleet": True,
         "error": "",
         "automation": False,
+        "key_conflict": False,
     }
     [cand] = st["candidates"]
     assert cand == {
@@ -1589,6 +1599,7 @@ def test_addon_is_registered():
         "error": "not one of this device's devices",
         "id": "",
         "epoch": 0,
+        "kfp": "",
     }
     assert "fleet" in [a.id for a in server.ADDONS]
 
@@ -1606,7 +1617,7 @@ def gated(monkeypatch):
 
 @needs_a2
 def test_public_fleet_paths_are_exact(gated):
-    c = gated()
+    c = gated(client=("100.64.0.9", 4321))  # a tailnet caller
     r = c.post("/api/fleet/requests", json={"device": "rig", "secret_hash": _hash("s")})
     assert r.status_code == 200
     rid = r.json()["id"]

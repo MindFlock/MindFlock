@@ -241,3 +241,19 @@ def test_only_a_change_the_pipeline_cares_about_reconciles_it(bus, monkeypatch):
 
 def test_the_pipeline_debounce_is_five_seconds():
     assert settings_hooks.PIPELINE_DEBOUNCE == 5.0
+
+
+def test_automation_device_names_the_member_that_runs_it(monkeypatch):
+    from backend.web.core import remote
+
+    monkeypatch.setattr(
+        remote,
+        "fleet_devices",
+        lambda: [
+            {"key": "mac", "host": "Mac", "automation": False},
+            {"key": "laptop", "host": "Laptop", "automation": True},
+        ],
+    )
+    assert settings_hooks.automation_device() == "Laptop"
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [{"key": "m", "host": "M"}])
+    assert settings_hooks.automation_device() == ""

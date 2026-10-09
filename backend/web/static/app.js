@@ -30018,10 +30018,15 @@ function applyLive(fields) {
 	}
 	if (Object.keys(st).length) useUi.setState(st);
 }
-function adopt(fields) {
+function adopt(fields, since = null) {
 	const inFlight = pendingFields();
+	const now = since ? writeGens(since.keys()) : null;
 	const take = {};
-	for (const f of Object.keys(fields)) if (!inFlight.has(f)) take[f] = fields[f];
+	for (const f of Object.keys(fields)) {
+		if (inFlight.has(f)) continue;
+		if (since && now && (now.get(f) || 0) !== (since.get(f) || 0)) continue;
+		take[f] = fields[f];
+	}
 	withoutEcho(() => {
 		for (const f of Object.keys(take)) writeLocal(f, take[f]);
 	});
@@ -30040,8 +30045,16 @@ function reconcileAccent(settings, mayUpload) {
 	adoptAccent(server);
 }
 var pulling = null;
+var queued = null;
+var ALL_FIELDS = PREF_MAP.map((p) => p.field);
 function pullPrefs() {
-	if (pulling) return pulling;
+	if (pulling) {
+		if (!queued) queued = pulling.catch(() => {}).then(() => {
+			queued = null;
+			return pullPrefs();
+		});
+		return queued;
+	}
 	pulling = (async () => {
 		try {
 			const dropped = tidyUserPresets();
@@ -30049,6 +30062,7 @@ function pullPrefs() {
 			let server;
 			const unsent = pendingFields();
 			const gens = writeGens(unsent);
+			const started = writeGens(ALL_FIELDS);
 			try {
 				server = await api("/api/prefs") || {};
 			} catch {
@@ -30059,12 +30073,12 @@ function pullPrefs() {
 			if (Object.keys(plan.upload).length) try {
 				await api("/api/prefs", { json: plan.upload });
 			} catch {
-				if (Object.keys(plan.apply).length) adopt(plan.apply);
+				if (Object.keys(plan.apply).length) adopt(plan.apply, started);
 				if (dirtyFields().size) flushPrefWrites();
 				return;
 			}
 			settleFields(unsent, gens);
-			if (Object.keys(plan.apply).length) adopt(plan.apply);
+			if (Object.keys(plan.apply).length) adopt(plan.apply, started);
 			markSeeded();
 			try {
 				reconcileAccent((await api("/api/settings"))?.settings, !wasSeeded);
@@ -30098,7 +30112,7 @@ function installPrefsSync() {
 		refreshConfig();
 		repull();
 	});
-	let connectedOnce = false;
+	let connectedOnce = ev.connected === true;
 	if (typeof ev.onStatus === "function") ev.onStatus((status) => {
 		if (status !== "connected") return;
 		if (connectedOnce) repull();
@@ -32454,7 +32468,15 @@ function syncDeviceLine(d) {
 	return "in sync · " + relTime(d.last_sync);
 }
 function syncLabel(path, sync) {
-	return sync?.syncable?.find((s) => s.path === path)?.label || path;
+	const hit = sync?.syncable?.find((s) => s.path === path)?.label;
+	if (hit) return hit;
+	const hash = path.indexOf("#");
+	if (hash > 0) {
+		const base = path.slice(0, hash);
+		const id = path.slice(hash + 1);
+		return (sync?.syncable?.find((s) => s.path === base)?.label || base) + ": " + id;
+	}
+	return path;
 }
 function pinChoices(sync) {
 	const pinned = new Set(sync?.pinned || []);
@@ -32514,6 +32536,12 @@ function joinSettingsNote(host) {
 	if (!host) return "This computer takes the other computer's shared settings where it has them; your own stay where it has none.";
 	return "This computer takes " + host + "'s shared settings where " + host + " has them; your own stay where it has none.";
 }
+function addPairedNote(host) {
+	return (host || "The other computer") + " takes this computer's shared settings where this one has them; its own stay where this one has none.";
+}
+function joinableCandidates(candidates) {
+	return (candidates || []).filter((c) => !c.member);
+}
 function pasteJoinBody(text, candidates, openFor) {
 	const t = (text || "").trim();
 	if (!t) return {
@@ -32524,7 +32552,7 @@ function pasteJoinBody(text, candidates, openFor) {
 		body: { text: t },
 		error: ""
 	};
-	const joinable = candidates.filter((c) => !candidateBlocker(c));
+	const joinable = joinableCandidates(candidates).filter((c) => !candidateBlocker(c));
 	const device = (openFor && joinable.some((c) => c.device === openFor) ? openFor : "") || (joinable.length === 1 ? joinable[0].device : "");
 	if (device) return {
 		body: {
@@ -32542,21 +32570,86 @@ function admitToast(name, ok, syncError) {
 	const err = typeof syncError === "string" ? syncError.trim() : "";
 	return err ? name + " is one of your devices, but settings sync didn't start here: " + err : ok;
 }
+function tailnetAdvice(host) {
+	return "If " + (host || "it") + " was lost or stolen, also remove it from your tailnet in the Tailscale admin console — that cuts it off everywhere at once, even from devices that are offline now.";
+}
 function removeConfirmText(host) {
-	return host + " stops getting settings sync, sign-in and ticket claims from your other devices: every device still with you gets a new device key, and any that's offline right now will have to rejoin. Its own sessions and settings stay on it.";
+	return host + " stops getting settings sync, sign-in and ticket claims from your other devices: every device still with you gets a new device key (one that's offline right now gets it when it's back). Its own sessions and settings stay on it. " + tailnetAdvice(host);
 }
 var ROTATE_TOKENS_LABEL = "Also replace every device's access token (do this if it was lost or stolen — your phone will need to scan the QR again)";
 function removedToast(host, r, rotateAsked) {
 	const bits = ["Removed " + host];
 	const missed = r?.missed || [];
-	if (missed.length) bits.push(missed.join(", ") + (missed.length > 1 ? " were" : " was") + " offline and will have to rejoin");
+	if (missed.length) {
+		const many = missed.length > 1;
+		bits.push(missed.join(", ") + (many ? " were offline — they get" : " was offline — it gets") + " the new key when " + (many ? "they're" : "it's") + " back");
+	}
 	if (rotateAsked) {
 		const failed = r?.rotate_failed || [];
 		if (failed.length) bits.push("couldn't replace the access token on " + failed.join(", ") + " — do it there in Security");
 		else bits.push("access tokens replaced");
 	} else bits.push("access tokens it already has still work");
-	return bits.join(" — ");
+	return bits.join(" — ") + ". " + tailnetAdvice(host);
 }
+function clockTime$1(ts, nowSec = Date.now() / 1e3) {
+	const d = /* @__PURE__ */ new Date(ts * 1e3);
+	const n = /* @__PURE__ */ new Date(nowSec * 1e3);
+	const hm = d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+	if (d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()) return hm;
+	return [
+		"Jan",
+		"Feb",
+		"Mar",
+		"Apr",
+		"May",
+		"Jun",
+		"Jul",
+		"Aug",
+		"Sep",
+		"Oct",
+		"Nov",
+		"Dec"
+	][d.getMonth()] + " " + d.getDate() + ", " + hm;
+}
+var REMOVED_SHOWN_S = 1209600;
+function removalLines(st, nowSec = Date.now() / 1e3) {
+	const me = st?.self?.key || "";
+	const hostOf = (key, fallback) => key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || st?.removed?.find((r) => r.key === key)?.host || fallback || key;
+	return (st?.removed || []).filter((r) => r && r.key && r.removed_by && r.removed_by !== me).map((r) => ({
+		r,
+		at: Number(r.removed_at ?? r.at ?? 0)
+	})).filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S).sort((a, b) => b.at - a.at).map(({ r, at }) => {
+		const by = hostOf(r.removed_by, r.removed_by_host);
+		const what = r.key === me ? "this device" : r.host || r.key;
+		const when = clockTime$1(at, nowSec);
+		return {
+			key: r.key,
+			text: by + " removed " + what + (when.includes(",") ? " on " : " at ") + when + " — if that wasn't you, remove " + by + " from your tailnet"
+		};
+	});
+}
+function keyConflicts(members) {
+	return (members || []).filter((m) => !m.self && (m.key_conflict === true || /different key for your devices/i.test(m.error || "")));
+}
+function rotatedToast(r) {
+	const rekeyed = r?.rekeyed || r?.fleet?.rekeyed || [];
+	const missed = r?.missed || r?.fleet?.missed || [];
+	const bits = ["Access token regenerated — scan the QR again on your phone; other browsers sign in again"];
+	if (rekeyed.length) bits.push("new device key sent to " + rekeyed.join(", "));
+	if (missed.length) bits.push(missed.join(", ") + (missed.length > 1 ? " get" : " gets") + " the new device key when back online");
+	if (r?.fleet_error) bits.push(r.fleet_error);
+	return bits.join(" · ");
+}
+var SYNC_RESUME = {
+	theirs: {
+		keep: "theirs",
+		label: "Use my other devices' settings"
+	},
+	mine: {
+		keep: "mine",
+		label: "Keep this device's"
+	}
+};
 function automationHint(members) {
 	const known = members.filter((m) => typeof m.automation === "boolean");
 	if (known.length < 2) return "";
@@ -65414,9 +65507,13 @@ function collectQueued(payloads) {
 }
 function runState(opts) {
 	if (!opts.engineAvailable || !opts.configured) return "unset";
+	if (opts.runsElsewhere) return "elsewhere";
 	if (!opts.switchOn) return "off-switch";
 	if (!opts.engineOn) return "off-engine";
 	return "on";
+}
+function runsOnText(device) {
+	return "Runs on " + (device || "another of your devices");
 }
 function byGroup(items) {
 	const out = [];
@@ -65440,10 +65537,15 @@ function useIngestionStatus() {
 		retry: false
 	});
 }
-function StateChip({ state }) {
+function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip",
 		children: "not set up"
+	});
+	if (state === "elsewhere") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "pr-open-chip",
+		"data-runs-on": device || "",
+		children: runsOnText(device).toLowerCase()
 	});
 	if (state === "on") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip ok",
@@ -65456,6 +65558,26 @@ function StateChip({ state }) {
 }
 function StalledNote({ s }) {
 	const many = s.items.length !== 1;
+	if (s.state === "elsewhere") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-queue-stalled",
+		"data-runs-on": s.runsOn || "",
+		children: [
+			runsOnText(s.runsOn),
+			" — ",
+			s.runsOn || "that device",
+			" starts",
+			" ",
+			many ? "these" : "this one",
+			" on its own; this computer doesn't (Settings → Devices →",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review and issue handling here" }),
+			" picks which one does). You can still start ",
+			many ? "any of them" : "it",
+			" here, with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start now" }),
+			"."
+		]
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-queue-stalled",
 		children: [
@@ -65491,7 +65613,10 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						className: "ik-tab-count",
 						children: s.items.length
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, { state: s.state }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, {
+						state: s.state,
+						device: s.runsOn
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "test-btn ik-queue-goto",
@@ -65551,6 +65676,8 @@ function QueueTab({ gotoTab }) {
 	const status = useIngestionStatus().data;
 	const engineAvailable = !!status?.available;
 	const engineOn = !!(status?.desired ?? status?.running);
+	const runsElsewhere = status?.automation_here === false;
+	const runsOn = runsElsewhere ? status?.automation_device || "" : "";
 	const agentChoices = useAgentChoices();
 	const s = useSettings();
 	const gh = s.settings.github || {};
@@ -65634,10 +65761,12 @@ function QueueTab({ gotoTab }) {
 				configured: (prsQ.data?.repos || []).length > 0,
 				engineAvailable,
 				engineOn,
-				switchOn: status?.pr_enabled !== false
+				switchOn: status?.pr_enabled !== false,
+				runsElsewhere: runsElsewhere && gh.enabled !== false
 			}),
 			blockedOn: status?.pr_enabled === false ? "Automated PR review" : "Automated ingestion",
 			blockedElsewhere: status?.pr_enabled !== false,
+			runsOn,
 			items: queuedOf("prs", payloads),
 			note: noteFor(prsQ, "PRs")
 		},
@@ -65649,10 +65778,12 @@ function QueueTab({ gotoTab }) {
 				configured: (issuesQ.data?.repos || []).length > 0,
 				engineAvailable,
 				engineOn,
-				switchOn: status?.issues_enabled === true
+				switchOn: status?.issues_enabled === true,
+				runsElsewhere: runsElsewhere && gh.issues_enabled === true
 			}),
 			blockedOn: status?.issues_enabled !== true ? "Automated issue handling" : "Automated ingestion",
 			blockedElsewhere: status?.issues_enabled === true,
+			runsOn,
 			items: queuedOf("issues", payloads),
 			note: noteFor(issuesQ, "issues")
 		}
@@ -69672,8 +69803,13 @@ function Providers(_) {
 //#region src/components/settings/screens/Security.tsx
 var AUTH_TOKEN_MASK = "••••••••••••••••";
 var authTokenCache = null;
+var authTokenWithheld = "";
 async function fetchAuthToken() {
-	if (authTokenCache === null) authTokenCache = (await api("/api/settings/auth-token") || {}).token || "";
+	if (authTokenCache === null) {
+		const r = await api("/api/settings/auth-token") || {};
+		authTokenCache = r.token || "";
+		authTokenWithheld = r.token == null && r.reason ? r.reason : "";
+	}
 	return authTokenCache;
 }
 function TailnetTrustRows() {
@@ -69758,9 +69894,10 @@ function Security(_) {
 	const rotate = async () => {
 		setRotating(true);
 		try {
-			authTokenCache = (await api("/api/settings/auth-token/rotate", { method: "POST" }))?.token || null;
-			if (shown) setTokenText(authTokenCache || "(none set)");
-			toast("Access token regenerated — other devices must sign in again");
+			const r = await api("/api/settings/auth-token/rotate", { method: "POST" });
+			authTokenCache = r?.token || null;
+			if (shown) setTokenText(authTokenCache || "(regenerated — open Security on this computer to see it)");
+			toast(rotatedToast(r), { duration: 1e4 });
 		} catch (e) {
 			toast("Couldn't regenerate the token: " + e.message);
 		} finally {
@@ -69845,7 +69982,8 @@ function Security(_) {
 									return;
 								}
 								try {
-									setTokenText(await fetchAuthToken() || "(none set)");
+									const t = await fetchAuthToken();
+									setTokenText(t || (authTokenWithheld ? "(hidden: " + authTokenWithheld + ")" : "(none set)"));
 									setShown(true);
 								} catch (e) {
 									toast("Couldn't load the access token: " + e.message);
@@ -69861,7 +69999,7 @@ function Security(_) {
 								try {
 									const t = await fetchAuthToken();
 									if (!t) {
-										toast("No access token is set");
+										toast(authTokenWithheld ? "The token isn't shown here (" + authTokenWithheld + ") — copy it on this computer" : "No access token is set");
 										return;
 									}
 									toast(await copyText(t) ? "Access token copied" : "Copy failed — use Show and copy manually");
@@ -69884,7 +70022,7 @@ function Security(_) {
 				confirmRotate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					id: "auth-token-rotate-confirm",
 					title: "Regenerate the access token?",
-					body: "Every other signed-in browser, phone QR code, and paired MindFlock device stops working until it re-authenticates with the new token. This browser stays signed in.",
+					body: "Every other signed-in browser and token-paired MindFlock stops working until it signs in with the new token, and your phone must scan the QR again. If this computer is one of your devices, their shared device key is replaced too — they get the new one on their own (one that's offline, when it's back). This browser stays signed in.",
 					confirmLabel: rotating ? "Regenerating…" : "Regenerate",
 					busy: rotating,
 					onConfirm: () => void rotate(),
@@ -69892,7 +70030,7 @@ function Security(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Enter this on another MindFlock device (its sidebar's \"Connect…\" button next to this device's name) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in device, QR code, and paired device must then re-authenticate with the new token."
+					children: "Enter this on another MindFlock device (its sidebar's \"Connect…\" button next to this device's name) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices (Settings → Devices) move to a new shared key."
 				})
 			]
 		}),
@@ -69903,7 +70041,7 @@ function Security(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
-			title: "Whether other MindFlock devices on your tailnet may list and drive this device's sessions.",
+			title: "Whether MindFlock devices you paired by access token may list and drive this device's sessions. Your devices (Settings → Devices) always can.",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
@@ -69916,15 +70054,16 @@ function Security(_) {
 					onChange: (e) => s.saveField("general", "remote_control", e.target.value),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "",
-						children: "Off (default) — other devices cannot control this one"
+						children: "Off (default) — only your devices can control this one"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "on",
-						children: "On — devices with this device's access token can control it"
+						children: "On — devices paired by token can control it too"
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Lets another MindFlock on your Tailscale network show this device's sessions in its sidebar and drive them (terminal, prompts, commits). The controlling device still needs this device's access token."
+					id: "remote-control-hint",
+					children: "Other MindFlock devices you paired by token. Your devices (Settings → Devices) can always reach each other. With this on, a MindFlock that holds this device's access token shows its sessions in its sidebar and drives them (terminal, prompts, commits). To cut off one of your own devices, remove it in Settings → Devices."
 				})
 			]
 		})
@@ -69944,6 +70083,7 @@ function Devices(p) {
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [confirm, setConfirm] = (0, import_react.useState)(null);
 	const [codeFor, setCodeFor] = (0, import_react.useState)(null);
+	const [addFor, setAddFor] = (0, import_react.useState)(null);
 	const [code, setCode] = (0, import_react.useState)("");
 	const [pasted, setPasted] = (0, import_react.useState)("");
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
@@ -70052,6 +70192,9 @@ function Devices(p) {
 	const selfHost = st.self.host || st.self.key;
 	const selfVersion = self?.version || "";
 	const others = st.members.filter((m) => !m.self);
+	const candidates = joinableCandidates(st.candidates);
+	const conflicts = keyConflicts(st.members);
+	const removals = removalLines(st);
 	const join = st.join;
 	const joinBusy = join && (join.state === "waiting" || join.state === "joining");
 	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
@@ -70065,7 +70208,7 @@ function Devices(p) {
 		setCodeFor(null);
 	});
 	const joinWithText = () => {
-		const { body, error } = pasteJoinBody(pasted, st.candidates, codeFor);
+		const { body, error } = pasteJoinBody(pasted, candidates, codeFor);
 		if (!body) {
 			if (error) toast(error);
 			return;
@@ -70093,9 +70236,9 @@ function Devices(p) {
 			className: "devices-warn",
 			id: "devices-stale-key",
 			role: "alert",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device was removed or its device key changed while it was offline. Ask to rejoin." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: conflicts.length ? "This device and " + conflicts.map((m) => m.host || m.key).join(" and ") + " hold different keys for your devices — they were set up apart. Rejoin this one from " + (conflicts.length > 1 ? "one of them" : "it") + " to make them one group again." : "This device was removed or its device key changed while it was offline. Ask to rejoin." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "devices-actions",
-				children: others.filter((m) => m.reachable).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				children: (conflicts.length ? conflicts : others).filter((m) => m.reachable).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "test-btn",
 					"data-rejoin": m.key,
@@ -70107,6 +70250,34 @@ function Devices(p) {
 						" to rejoin"
 					]
 				}, m.key))
+			})]
+		}),
+		!st.stale_key && conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "devices-key-conflict",
+			role: "alert",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				conflicts.map((m) => m.host || m.key).join(" and "),
+				" ",
+				conflicts.length > 1 ? "have" : "has",
+				" a different key for your devices — the two halves were set up apart. Rejoin one from the other: on",
+				" ",
+				conflicts.length > 1 ? "each of them" : conflicts[0].host || conflicts[0].key,
+				", use \"Ask ",
+				selfHost,
+				" to rejoin\" in Settings → Devices."
+			] })
+		}),
+		removals.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "devices-removals",
+			role: "alert",
+			children: [removals.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				"data-removed": r.key,
+				children: r.text
+			}, r.key)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "devices-note",
+				children: "Your devices all hold the same key, so any of them can remove another. If you didn't make this removal, someone else may be using that device — taking it off your tailnet (Tailscale admin console) cuts it off everywhere at once."
 			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
@@ -70198,7 +70369,7 @@ function Devices(p) {
 							run("remove:" + m.key, async () => {
 								const r = await api("/api/fleet/members/" + encodeURIComponent(m.key) + "/remove", { json: { rotate_tokens: rotate } });
 								setConfirm(null);
-								toast(removedToast(m.host || m.key, r, rotate), { duration: 8e3 });
+								toast(removedToast(m.host || m.key, r, rotate), { duration: 12e3 });
 							});
 						},
 						onCancel: () => setConfirm(null)
@@ -70377,10 +70548,10 @@ function Devices(p) {
 				children: "Cancel"
 			})]
 		}),
-		st.candidates.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		candidates.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 			className: "devices-list",
 			id: "devices-candidates",
-			children: st.candidates.map((c) => {
+			children: candidates.map((c) => {
 				const blocker = candidateBlocker(c);
 				const name = c.host || c.device;
 				const note = blocker || candidateNote(c);
@@ -70427,11 +70598,8 @@ function Devices(p) {
 											type: "button",
 											className: "test-btn",
 											"data-add-paired": c.device,
-											disabled: !!busy,
-											onClick: () => void run("add:" + c.device, async () => {
-												const res = await api("/api/fleet/add-paired", { json: { device: c.device } });
-												toast(admitToast(name, name + " is one of your devices now", res?.sync_error), res?.sync_error ? { duration: 8e3 } : void 0);
-											}),
+											disabled: !!busy || addFor === c.device,
+											onClick: () => setAddFor(c.device),
 											children: "Add to my devices"
 										})
 									]
@@ -70441,7 +70609,23 @@ function Devices(p) {
 						!blocker && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint devices-join-note",
 							"data-join-note": c.device,
-							children: joinSettingsNote(name)
+							children: (c.has_token ? "Ask to join or Enter code: " : "") + joinSettingsNote(name)
+						}),
+						!blocker && addFor === c.device && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "devices-add-confirm",
+							title: "Add " + name + " to your devices?",
+							body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								"data-add-note": c.device,
+								children: addPairedNote(name)
+							}),
+							confirmLabel: busy === "add:" + c.device ? "Adding…" : "Add",
+							busy: busy === "add:" + c.device,
+							onConfirm: () => void run("add:" + c.device, async () => {
+								const res = await api("/api/fleet/add-paired", { json: { device: c.device } });
+								setAddFor(null);
+								toast(admitToast(name, name + " is one of your devices now", res?.sync_error), res?.sync_error ? { duration: 8e3 } : void 0);
+							}),
+							onCancel: () => setAddFor(null)
 						}),
 						codeFor === c.device && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "set-row devices-code-row",
@@ -70562,6 +70746,35 @@ function SettingsSyncRows(props) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Settings sync"
+		}),
+		sync.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "settings-sync-error",
+			role: "alert",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [sync.error, ". Fix or delete it, and the next sync picks up again."] })
+		}),
+		sync.paused && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "settings-sync-paused",
+			role: "alert",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [sync.paused, ". Most of this device's settings went back to their defaults at once — a reset or replaced settings.json, usually — so nothing was sent to your other devices."] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "devices-actions",
+				children: (sync.choices?.length ? sync.choices : ["theirs", "mine"]).filter((k) => k in SYNC_RESUME).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn" + (k === "theirs" ? " devices-primary" : ""),
+					"data-sync-resume": k,
+					disabled: !!busy,
+					onClick: () => void act("resume:" + k, async () => {
+						const r = await api("/api/settings/sync/resume", { json: { keep: SYNC_RESUME[k].keep } });
+						if (k === "theirs") {
+							fetchSettingsDoc().catch(() => {});
+							refreshConfig();
+						}
+						return r;
+					}, k === "theirs" ? "Settings sync resumed — this device took your other devices' settings" : "Settings sync resumed — this device's settings now go to the others"),
+					children: SYNC_RESUME[k].label
+				}, k))
+			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",

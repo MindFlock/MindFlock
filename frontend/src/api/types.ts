@@ -753,6 +753,22 @@ export interface FleetMember {
    * default: on unless it shares a group of 2+ devices). Missing from an
    * older MindFlock (null: its hello doesn't say). */
   automation?: boolean | null;
+  /** Same group id and epoch but a different key (two halves set up apart);
+   * also said in `error`. Missing from an older MindFlock. */
+  key_conflict?: boolean;
+}
+
+/** A tombstone: a device taken out of the group, and who took it out —
+ * "rig removed laptop at 10:32" is how a forged removal shows. */
+export interface FleetRemoved {
+  key: string;
+  host?: string;
+  /** When (epoch seconds); older payloads call it `at`. */
+  removed_at?: number;
+  at?: number;
+  /** The device key that removed it ("" / missing on old tombstones). */
+  removed_by?: string;
+  removed_by_host?: string;
 }
 
 /** A live "add a device" code (only shown on this device). */
@@ -814,6 +830,8 @@ export interface FleetStatus {
   /** The access gate is off on a tailnet-reachable device. */
   gate_warning: boolean;
   candidates: FleetCandidate[];
+  /** Devices taken out of the group (tombstones), with who removed them. */
+  removed?: FleetRemoved[];
 }
 
 /** GET /api/settings/sync (backend.web.core.settings_sync.status). */
@@ -829,11 +847,21 @@ export interface SyncStatus {
     last_sync: number | null;
     error: string;
   }[];
-  /** Base paths ("group.field" or "store:<name>") kept different here. */
+  /** Base paths ("group.field" or "store:<name>") kept different here, and
+   * single entries of a keyed list ("ticketing.sources#<id>"). */
   pinned: string[];
   /** Incoming values not applied here yet (an agent CLI not installed). */
   deferred: { path: string; value?: unknown; reason: string }[];
   warnings: string[];
+  /** settings.json exists but doesn't parse: sync is paused until it's fixed
+   * or deleted ("" when fine). */
+  error?: string;
+  /** Set when one scan would have cleared most of this device's settings at
+   * once (a reset settings.json): sync stopped instead of spreading that.
+   * The sentence to show; `choices` are POST /api/settings/sync/resume's
+   * `keep` values. */
+  paused?: string;
+  choices?: string[];
   /** Everything that can be pinned, with a human label. */
   syncable: { path: string; label: string; group: string }[];
 }

@@ -6,6 +6,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   ROTATE_TOKENS_LABEL,
+  addPairedNote,
   admitToast,
   automationHint,
   candidateBlocker,
@@ -15,14 +16,18 @@ import {
   formatCode,
   joinLine,
   joinSettingsNote,
+  joinableCandidates,
+  keyConflicts,
   liveInvite,
   memberStatus,
   normalizeCode,
   pasteJoinBody,
   pinChoices,
   plausibleCode,
+  removalLines,
   removeConfirmText,
   removedToast,
+  rotatedToast,
   syncDeviceLine,
   syncLabel,
 } from "../lib/fleet";
@@ -118,6 +123,16 @@ const cand = (c: Partial<FleetCandidate>): FleetCandidate => ({
 });
 
 describe("candidates", () => {
+  it("a member whose hello lags is never offered as a computer to join", () => {
+    const lagging = cand({ device: "mini", host: "mac-mini", member: true, has_token: true });
+    const other = cand({});
+    expect(joinableCandidates([lagging, other])).toEqual([other]);
+    // …and a bare pasted code doesn't count it as the one joinable device.
+    expect(pasteJoinBody("K7M2P9QX", [lagging, other], null).body).toEqual({ text: "K7M2P9QX", device: "rig" });
+    expect(pasteJoinBody("K7M2P9QX", [lagging], null).body).toBeNull();
+    expect(pasteJoinBody("K7M2P9QX", [lagging], "mini").body).toBeNull();
+  });
+
   it("an offline or too-old MindFlock can't join, and says why", () => {
     expect(candidateBlocker(cand({}))).toBe("");
     expect(candidateBlocker(cand({ reachable: false }))).toBe("offline");
@@ -186,6 +201,9 @@ describe("settings sync rows", () => {
   it("labels a pinned path, falling back to the path", () => {
     expect(syncLabel("prefs.keymap", sync)).toBe("Keyboard shortcuts");
     expect(syncLabel("x.unknown", sync)).toBe("x.unknown");
+    // A unit-level pin: one entry of a keyed list, named by its base.
+    expect(syncLabel("prefs.keymap#jira-main", sync)).toBe("Keyboard shortcuts: jira-main");
+    expect(syncLabel("ticketing.sources#jira-main", sync)).toBe("ticketing.sources: jira-main");
   });
 
   it("offers everything not pinned yet, grouped in first-seen order", () => {
@@ -301,19 +319,34 @@ describe("what the admitting and removing actions say", () => {
     const body = removeConfirmText("laptop");
     expect(body).toMatch(/^laptop stops getting settings sync, sign-in and ticket claims/);
     expect(body).toMatch(/new device key/);
+    // An offline member is healed by the next contact, not sent to rejoin.
+    expect(body).toMatch(/offline right now gets it when it's back/);
+    expect(body).not.toMatch(/rejoin/);
+    // What the shared key can't do, the tailnet can.
+    expect(body).toMatch(
+      /If laptop was lost or stolen, also remove it from your tailnet in the Tailscale admin console — that cuts it off everywhere at once, even from devices that are offline now\.$/
+    );
     expect(ROTATE_TOKENS_LABEL).toBe(
       "Also replace every device's access token (do this if it was lost or stolen — your phone will need to scan the QR again)"
     );
   });
 
   it("the toast after removal reports offline devices and the token replacement", () => {
+    const advice =
+      ". If laptop was lost or stolen, also remove it from your tailnet in the Tailscale admin console — that cuts it off everywhere at once, even from devices that are offline now.";
     expect(removedToast("laptop", { missed: [], rotated: ["mini"], rotate_failed: [] }, true)).toBe(
-      "Removed laptop — access tokens replaced"
+      "Removed laptop — access tokens replaced" + advice
     );
+    // The offline member gets the new key on its next contact (under the
+    // old key, which the others keep) — no rejoin.
     expect(removedToast("laptop", { missed: ["rig"], rotate_failed: ["rig"] }, true)).toBe(
-      "Removed laptop — rig was offline and will have to rejoin — couldn't replace the access token on rig — do it there in Security"
+      "Removed laptop — rig was offline — it gets the new key when it's back — couldn't replace the access token on rig — do it there in Security" +
+        advice
     );
-    expect(removedToast("laptop", {}, false)).toBe("Removed laptop — access tokens it already has still work");
+    expect(removedToast("laptop", { missed: ["rig", "mini"] }, false)).toMatch(
+      /^Removed laptop — rig, mini were offline — they get the new key when they're back — /
+    );
+    expect(removedToast("laptop", {}, false)).toBe("Removed laptop — access tokens it already has still work" + advice);
   });
 
   it("every join action carries the settings note", () => {
@@ -321,6 +354,15 @@ describe("what the admitting and removing actions say", () => {
       "This computer takes mac-mini's shared settings where mac-mini has them; your own stay where it has none."
     );
     expect(joinSettingsNote("")).toMatch(/^This computer takes the other computer's shared settings/);
+  });
+
+  it("Add to my devices says the OTHER way round: the added computer takes this one's settings", () => {
+    // add_paired makes the target adopt this device's bundle and start its
+    // settings from here — the reverse of joining.
+    expect(addPairedNote("laptop")).toBe(
+      "laptop takes this computer's shared settings where this one has them; its own stay where this one has none."
+    );
+    expect(addPairedNote("laptop")).not.toMatch(/^This computer takes/);
   });
 });
 
@@ -352,5 +394,78 @@ describe("who runs PR review and issue handling", () => {
     // The server reports a member too old to say as null, not false.
     const old = { ...m("mini"), automation: null };
     expect(automationHint([m("laptop", false), old, { ...old, key: "rig" }])).toBe("");
+  });
+});
+
+describe("removals, key conflicts and the token rotation", () => {
+  const member = (key: string, over: Partial<FleetMember> = {}): FleetMember => ({
+    key,
+    host: key,
+    added_at: 0,
+    self: key === "laptop",
+    reachable: true,
+    version: "",
+    same_fleet: true,
+    error: "",
+    ...over,
+  });
+  const at = (h: number, m: number, day = 8) => new Date(2026, 9, day, h, m).getTime() / 1000;
+  const now = at(12, 0);
+
+  it("a removal another device made names who did it — the tell-tale of a forged one", () => {
+    const st = {
+      self: { key: "laptop", host: "laptop" },
+      members: [member("laptop"), member("ml-rig", { host: "rig" })],
+      removed: [
+        { key: "mini", host: "mac-mini", removed_at: at(10, 32), removed_by: "ml-rig" },
+        // This device's own removal: it knows, nothing to flag.
+        { key: "old", host: "old-box", removed_at: at(11, 0), removed_by: "laptop" },
+      ],
+    };
+    expect(removalLines(st, now)).toEqual([
+      { key: "mini", text: "rig removed mac-mini at 10:32 — if that wasn't you, remove rig from your tailnet" },
+    ]);
+  });
+
+  it("this device removed by another, an older day, the `at` spelling, and old tombstones", () => {
+    const st = {
+      self: { key: "laptop", host: "laptop" },
+      members: [member("laptop")],
+      removed: [
+        { key: "laptop", at: at(9, 5, 3), removed_by: "ml-rig", removed_by_host: "rig" },
+        // No remover recorded (an older tombstone): nothing to say.
+        { key: "x", at: at(9, 0) },
+        // Weeks old: off the screen.
+        { key: "y", at: now - 30 * 86400, removed_by: "ml-rig" },
+      ],
+    };
+    expect(removalLines(st, now)).toEqual([
+      { key: "laptop", text: "rig removed this device on Oct 3, 9:05 — if that wasn't you, remove rig from your tailnet" },
+    ]);
+    expect(removalLines(null, now)).toEqual([]);
+  });
+
+  it("a member holding a different key is a conflict, flagged or said in its error", () => {
+    const ms = [
+      member("laptop"),
+      member("mini", { key_conflict: true }),
+      member("rig", { error: "has a different key for your devices — rejoin one from the other" }),
+      member("nas", { error: "offline" }),
+    ];
+    expect(keyConflicts(ms).map((m) => m.key)).toEqual(["mini", "rig"]);
+  });
+
+  it("the rotate toast says the phone must scan again and where the new device key went", () => {
+    expect(rotatedToast({})).toBe(
+      "Access token regenerated — scan the QR again on your phone; other browsers sign in again"
+    );
+    expect(rotatedToast({ rekeyed: ["mini"], missed: ["rig"] })).toBe(
+      "Access token regenerated — scan the QR again on your phone; other browsers sign in again · new device key sent to mini · rig gets the new device key when back online"
+    );
+    expect(rotatedToast({ fleet: { rekeyed: ["mini"], missed: [] } })).toMatch(/new device key sent to mini$/);
+    // The token changed but the devices' key didn't: say so.
+    expect(rotatedToast({ fleet_error: "couldn't replace your devices' key: boom" })).toMatch(
+      / · couldn't replace your devices' key: boom$/
+    );
   });
 });

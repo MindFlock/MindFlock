@@ -399,10 +399,19 @@ def test_join_keeps_entries_only_the_joiner_has(devices, clock):
         assert _sources() == [("a", "p"), ("z", "")]
 
 
-def test_join_keeps_both_of_two_different_sources_that_share_an_id(devices, clock):
+def _id_project_token():
+    store.invalidate()
+    return sorted(
+        (s.id, s.project, s.api_token) for s in store.load_settings().ticketing.sources
+    )
+
+
+def test_join_keeps_a_different_source_under_the_same_id_separate(devices, clock):
     """Ids are slugs each device seeds on its own (every device's first
-    Shortcut source is ``sc``): a different source under the same id is
-    renamed on the joining device, never overwritten (it holds a token)."""
+    Shortcut source is ``sc``), and an id is its ticket slug prefix — so a
+    different source under the same id is neither overwritten (it holds a
+    token) nor renamed (its tickets would all be ingested again): it stays
+    on the joining device, kept separate, and says so."""
     with devices.on("rig"):
         store.set_ticketing_sources(
             [{"id": "sc", "provider": "shortcut", "project": "work", "api_token": "w"}]
@@ -412,20 +421,80 @@ def test_join_keeps_both_of_two_different_sources_that_share_an_id(devices, cloc
         [{"id": "sc", "provider": "shortcut", "project": "home", "api_token": "h"}]
     )
     run(settings_sync.enable("rig"))
-    store.invalidate()
-    got = sorted(
-        (s.id, s.project, s.api_token) for s in store.load_settings().ticketing.sources
+    assert _id_project_token() == [("sc", "home", "h")]
+    st = settings_sync.status()
+    assert "ticketing.sources#sc" in st["pinned"]
+    assert any(
+        "“sc” differs between Rig and this device — kept separate" in w
+        for w in st["warnings"]
     )
-    assert got == [("sc", "work", "w"), ("sc-laptop", "home", "h")]
+    assert "ticketing.sources#sc" not in settings_sync.export()["values"]
     clock.tick()
-    devices.sync("rig")
+    devices.sync("rig", "laptop")
+    assert _id_project_token() == [("sc", "home", "h")]
     with devices.on("rig"):
-        store.invalidate()
-        got = sorted(
-            (s.id, s.project, s.api_token)
-            for s in store.load_settings().ticketing.sources
+        assert _id_project_token() == [("sc", "work", "w")]
+    # Given another id here, it syncs — and the rig's "sc" comes in too.
+    clock.tick()
+    store.set_ticketing_sources(
+        [{"id": "home", "provider": "shortcut", "project": "home", "api_token": "h"}]
+    )
+    settings_sync.local_change()
+    assert "ticketing.sources#sc" not in settings_sync.status()["pinned"]
+    clock.tick()
+    devices.sync("laptop", "rig")
+    assert _id_project_token() == [("home", "home", "h"), ("sc", "work", "w")]
+    with devices.on("rig"):
+        assert _id_project_token() == [("home", "home", "h"), ("sc", "work", "w")]
+
+
+def test_join_tells_two_shortcut_workspaces_apart_by_token(devices, clock):
+    """Shortcut has no project or base URL — the workspace is the token."""
+    with devices.on("rig"):
+        store.set_ticketing_sources(
+            [{"id": "sc", "provider": "shortcut", "api_token": "WORK"}]
         )
-        assert got == [("sc", "work", "w"), ("sc-laptop", "home", "h")]
+        run(settings_sync.enable(""))
+    store.set_ticketing_sources(
+        [{"id": "sc", "provider": "shortcut", "api_token": "HOME"}]
+    )
+    run(settings_sync.enable("rig"))
+    assert _id_project_token() == [("sc", "", "HOME")]
+    assert "ticketing.sources#sc" in settings_sync.status()["pinned"]
+
+
+def test_join_treats_a_tokenless_copy_of_the_same_source_as_the_same(devices, clock):
+    with devices.on("rig"):
+        store.set_ticketing_sources(
+            [{"id": "sc", "provider": "shortcut", "api_token": "T", "label": "rig"}]
+        )
+        run(settings_sync.enable(""))
+    store.set_ticketing_sources([{"id": "sc", "provider": "shortcut", "label": "me"}])
+    run(settings_sync.enable("rig"))
+    assert _id_project_token() == [("sc", "", "T")]
+    assert settings_sync.status()["pinned"] == []
+
+
+def test_a_leaders_delete_never_takes_the_joiners_source_under_that_id(devices, clock):
+    with devices.on("rig"):
+        store.set_ticketing_sources(
+            [{"id": "sc", "provider": "shortcut", "project": "old", "api_token": "o"}]
+        )
+        run(settings_sync.enable(""))
+        clock.tick()
+        store.set_ticketing_sources(
+            [{"id": "jira", "provider": "jira", "project": "OPS", "api_token": "j"}]
+        )
+        settings_sync.scan_local()  # a tombstone for ticketing.sources#sc
+    store.set_ticketing_sources(
+        [{"id": "sc", "provider": "shortcut", "project": "mine", "api_token": "MINE"}]
+    )
+    clock.tick()
+    run(settings_sync.enable("rig"))
+    assert _id_project_token() == [("jira", "OPS", "j"), ("sc", "mine", "MINE")]
+    clock.tick()
+    devices.sync("laptop")
+    assert ("sc", "mine", "MINE") in _id_project_token()
 
 
 # --------------------------------------------------------------------------- #
@@ -1234,7 +1303,9 @@ def test_an_incoming_path_that_doesnt_exist_here_never_replaces_ours(tmp_path):
 # --------------------------------------------------------------------------- #
 # stamps from the far future
 # --------------------------------------------------------------------------- #
-def test_a_far_future_stamp_is_clamped_so_a_later_edit_still_wins(devices, clock):
+def test_a_far_future_stamp_is_never_adopted(devices, clock):
+    """A stamp beyond the skew allowance (or not a number at all) isn't
+    taken — clamped, it would still outrank every later edit here."""
     devices.all_on()
     rogue = {
         "protocol": settings_sync.PROTOCOL,
@@ -1253,22 +1324,56 @@ def test_a_far_future_stamp_is_clamped_so_a_later_edit_still_wins(devices, clock
         },
         "withheld": [],
     }
-    assert settings_sync.merge(rogue) == ["ui.accent"]
-    stamp = settings_sync._load()["stamps"]["ui.accent"]["ts"]
-    assert stamp <= 1000 + settings_sync._MAX_SKEW
-    # The bad device goes away; what it left behind is an ordinary stamp
-    # that a later edit beats (unclamped, 1e18 + 1 ms == 1e18: frozen for good).
-    clock.tick(settings_sync._MAX_SKEW + 10)
+    assert settings_sync.merge(rogue) == []
+    assert devices.get("ui", "accent") == ""
+    assert any("Rig's clock is ahead" in w for w in settings_sync.status()["warnings"])
+
+
+def test_a_fast_clock_waits_instead_of_reverting_a_later_edit(devices, clock):
+    """The rig's clock runs an hour fast. Clamped to now + 5 min, its stamp
+    moved forward every pass and kept beating an edit made here after it —
+    the edit was reverted within a pass. Now its change waits, said so, and
+    lands once its clock is right."""
+    devices.all_on()
+    clock.skew["rig"] = 3600.0
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(ui={"accent": "teal"})
+        settings_sync.scan_local()
+    clock.tick()
+    devices.sync("laptop")
+    assert devices.get("ui", "accent") == ""
+    assert any(
+        "Rig's clock is ahead by 60 min — its changes wait until it's fixed" in w
+        for w in settings_sync.status()["warnings"]
+    )
+    clock.tick(5)
     store.update_settings(ui={"accent": "red"})
-    settings_sync.scan_local()
-    assert settings_sync._load()["stamps"]["ui.accent"]["ts"] > stamp
-    echo = {
-        **rogue,
-        "stamps": {"ui.accent": {"ts": stamp, "by": "rig", "h": "x"}},
-        "values": {"ui.accent": "teal"},
-    }
-    assert settings_sync.merge(echo) == []  # a copy of it can't win back
+    settings_sync.local_change()
+    clock.tick(5)
+    devices.sync("laptop")
+    assert devices.get("ui", "accent") == "red"  # never reverted
+    # The rig's clock is fixed; its next edit lands and the warning goes.
+    clock.skew["rig"] = 0.0
+    clock.tick(4000)
+    with devices.on("rig"):
+        store.update_settings(ui={"accent": "gold"})
+        settings_sync.scan_local()
+    clock.tick()
+    devices.sync("laptop")
+    assert devices.get("ui", "accent") == "gold"
+    assert not any("clock" in w for w in settings_sync.status()["warnings"])
+
+
+def test_a_join_never_takes_a_stamp_from_a_fast_clock(devices, clock):
+    clock.skew["rig"] = 3600.0
+    with devices.on("rig"):
+        store.update_settings(ui={"accent": "teal"})
+        run(settings_sync.enable(""))
+    store.update_settings(ui={"accent": "red"})
+    run(settings_sync.enable("rig"))
     assert devices.get("ui", "accent") == "red"
+    assert settings_sync._load()["stamps"]["ui.accent"]["ts"] < 1000 + 300
 
 
 def test_stored_stamps_are_clamped_on_load(devices, clock, tmp_path):
@@ -1288,26 +1393,39 @@ def test_stored_stamps_are_clamped_on_load(devices, clock, tmp_path):
 # --------------------------------------------------------------------------- #
 # ticket sources without an id
 # --------------------------------------------------------------------------- #
-def test_a_source_without_an_id_gets_a_stable_one_and_syncs(devices, clock):
-    """A hand-edited source with no id used to stay on its device for good."""
+def test_a_source_without_an_id_stays_here_and_is_never_renamed(devices, clock):
+    """Its id is its ticket slug prefix (the pipeline falls back to ``sc``
+    for Shortcut): making one up for sync changed every slug, so every
+    ticket it had brought in was ingested again. It stays unsynced, said."""
     import json
+
+    from backend.ticket_ingestion.config import TicketProviderConfig, _assign_source_ids
 
     path = store.settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"ticketing": {"sources": [{"provider": "jira", "project": "OPS"}]}}
+    doc = {"ticketing": {"sources": [{"provider": "shortcut", "api_token": "t"}]}}
     path.write_text(json.dumps(doc))
     store.invalidate()
     devices.all_on()
-    store.invalidate()
-    (src,) = store.load_settings().ticketing.sources
-    assert src.id.startswith("jira-") and len(src.id) == len("jira-") + 6
-    with devices.on("rig"):
-        store.invalidate()
-        assert [(s.id, s.project) for s in store.load_settings().ticketing.sources] == [
-            (src.id, "OPS")
-        ]
     clock.tick()
-    assert settings_sync.scan_local() == []  # written back once, stable
+    assert settings_sync.scan_local() == []
+    assert json.loads(path.read_text()) == doc  # never written back
+    store.invalidate()
+    cfgs = [
+        TicketProviderConfig(provider=s.provider, api_token=s.api_token, id=s.id)
+        for s in store.load_settings().ticketing.sources
+    ]
+    _assign_source_ids(cfgs)
+    assert [c.id for c in cfgs] == ["sc"]  # the pipeline's slug prefix holds
+    assert not any(
+        u.startswith("ticketing.sources") for u in settings_sync.export()["values"]
+    )
+    assert any(
+        "A ticket source without an id isn't synced" in w
+        for w in settings_sync.status()["warnings"]
+    )
+    with devices.on("rig"):
+        assert _sources() == []
 
 
 # --------------------------------------------------------------------------- #
@@ -1418,3 +1536,327 @@ def test_a_v1_state_file_loads_cleanly(devices, tmp_path):
         store.set_ticketing_sources([_src("r")])
         run(settings_sync.enable("laptop"))
         assert [s for s, _ in _sources()] == ["r", "a", "b"]
+
+
+# --------------------------------------------------------------------------- #
+# round 2: no writer saves over a broken file
+# --------------------------------------------------------------------------- #
+def _corrupt(path):
+    broken = path.read_text()[:-5]
+    path.write_text(broken)
+    store.invalidate()
+    return broken
+
+
+def test_no_writer_saves_defaults_over_a_broken_file(devices, tmp_path):
+    store.update_settings(github={"token": "ghp_x"})
+    broken = _corrupt(tmp_path / "laptop" / "settings.json")
+    with pytest.raises(store.SettingsUnreadable):
+        store.update_settings(prefs={"hidden_bars": ["x"]})
+    with pytest.raises(store.SettingsUnreadable):
+        store.set_ticketing_sources([_src("a")])
+    with pytest.raises(store.SettingsUnreadable):
+        store.set_auth_profiles([{"id": "p", "kind": "api_key"}])
+    assert (tmp_path / "laptop" / "settings.json").read_text() == broken
+
+
+def test_a_side_write_on_a_paused_broken_file_never_spreads_deletes(
+    devices, clock, tmp_path
+):
+    """The pause held, then anything else wrote (admitting a device sets
+    github.run_here; a browser flushes a pref): the lenient read saved
+    defaults over the file, and the next pass spread "every source deleted,
+    the token cleared" to every device."""
+    from backend.web.core import fleet
+
+    store.update_settings(github={"token": "ghp_real", "repos": ["o/r"]})
+    store.set_ticketing_sources(
+        [{"id": "sc", "provider": "shortcut", "api_token": "T"}]
+    )
+    devices.all_on()
+    clock.tick()
+    broken = _corrupt(tmp_path / "laptop" / "settings.json")
+    fleet._default_run_here(True)  # logs, saves nothing
+    assert settings_sync.local_change() == []
+    clock.tick()
+    devices.sync("laptop", "rig")
+    assert (tmp_path / "laptop" / "settings.json").read_text() == broken
+    with devices.on("rig"):
+        assert devices.get("github", "token") == "ghp_real"
+        assert [s for s, _ in _sources()] == ["sc"]
+
+
+def test_prefs_routes_refuse_a_broken_file(devices, client, clock, tmp_path):
+    store.update_settings(
+        github={"token": "ghp_x"}, prefs={"theme": "light", "hidden_bars": ["a"]}
+    )
+    store.set_ticketing_sources([_src("a"), _src("b")])
+    devices.all_on()
+    clock.tick()
+    p = tmp_path / "laptop" / "settings.json"
+    broken = _corrupt(p)
+    r = client.post("/api/prefs", json={"hidden_bars": ["x"]})
+    assert r.status_code == 409
+    assert r.json()["error"] == store.UNREADABLE_HINT
+    # GET never serves defaults for it: a seeded browser would apply them
+    # over its own (maybe only intact) copy.
+    assert client.get("/api/prefs").status_code == 409
+    assert client.post("/api/settings", json={"ui": {"accent": "x"}}).status_code == (
+        409
+    )
+    r = client.put("/api/settings/ticketing/sources", json={"sources": [_src("z")]})
+    assert r.status_code == 409
+    assert p.read_text() == broken
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert [s for s, _ in _sources()] == ["a", "b"]
+        assert devices.get("github", "token") == "ghp_x"
+
+
+# --------------------------------------------------------------------------- #
+# round 2: a scan that reads like a reset file pauses
+# --------------------------------------------------------------------------- #
+def _reset_laptop(tmp_path):
+    (tmp_path / "laptop" / "settings.json").write_text("{}")
+    store.invalidate()
+
+
+def _configured(devices):
+    store.update_settings(
+        github={"token": "ghp_x", "repos": ["o/r"]},
+        ui={"accent": "red"},
+    )
+    store.set_ticketing_sources([_src("a"), _src("b")])
+    devices.all_on()
+
+
+def test_a_scan_that_clears_most_of_this_device_pauses(devices, clock, tmp_path):
+    _configured(devices)
+    clock.tick()
+    _reset_laptop(tmp_path)  # valid JSON, but everything is gone
+    assert settings_sync.scan_local() == []
+    st = settings_sync.status()
+    assert st["paused"] == settings_sync.PAUSED
+    assert st["choices"] == ["theirs", "mine"]
+    with pytest.raises(store.SettingsUnreadable):
+        settings_sync.export()  # nobody pulls (or joins from) a reset device
+    clock.tick()
+    devices.sync("rig", "laptop")
+    with devices.on("rig"):
+        assert devices.get("github", "token") == "ghp_x"
+        assert [s for s, _ in _sources()] == ["a", "b"]
+        assert "sync is paused there" in settings_sync.status()["devices"][0]["error"]
+    assert devices.get("github", "token") == ""  # nothing adopted while paused
+
+
+def test_resume_theirs_takes_the_fleets_settings_back(devices, clock, tmp_path):
+    _configured(devices)
+    clock.tick()
+    _reset_laptop(tmp_path)
+    settings_sync.scan_local()
+    out = run(settings_sync.resume("theirs"))
+    assert "github.token" in out["adopted"]
+    assert devices.get("github", "token") == "ghp_x"
+    assert devices.get("ui", "accent") == "red"
+    assert [s for s, _ in _sources()] == ["a", "b"]
+    assert settings_sync.status()["paused"] == ""
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert [s for s, _ in _sources()] == ["a", "b"]
+
+
+def test_resume_mine_spreads_the_reset(devices, clock, tmp_path):
+    _configured(devices)
+    clock.tick()
+    _reset_laptop(tmp_path)
+    settings_sync.scan_local()
+    run(settings_sync.resume("mine"))
+    assert settings_sync.status()["paused"] == ""
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("github", "token") == ""
+        assert _sources() == []
+    with pytest.raises(ValueError):
+        run(settings_sync.resume("both"))
+
+
+def test_a_small_delete_is_just_an_edit(devices, clock):
+    _configured(devices)
+    clock.tick()
+    store.set_ticketing_sources([_src("a")])
+    assert settings_sync.scan_local() == ["ticketing.sources#b"]
+    assert settings_sync.status()["paused"] == ""
+
+
+def test_resume_route(devices, client, clock, tmp_path, monkeypatch):
+    monkeypatch.setattr(remote, "remote_control_enabled", lambda: True)
+    _configured(devices)
+    clock.tick()
+    _reset_laptop(tmp_path)
+    settings_sync.scan_local()
+    r = client.post(
+        "/api/settings/sync/resume",
+        json={"keep": "theirs"},
+        headers={"x-mindflock-remote": "rig"},
+    )
+    assert r.status_code == 403
+    assert client.post("/api/settings/sync/resume", json={}).status_code == 400
+    r = client.post("/api/settings/sync/resume", json={"keep": "theirs"})
+    assert r.status_code == 200 and r.json()["paused"] == ""
+    assert devices.get("github", "token") == "ghp_x"
+
+
+# --------------------------------------------------------------------------- #
+# round 2: joining honours a deliberate clear on the leader
+# --------------------------------------------------------------------------- #
+def test_joining_takes_a_value_the_leader_set_back_on_purpose(devices, clock):
+    """The fleet cleared a revoked token and turned phone notifications off
+    (that's the default): a device joining with the old values must not
+    bring them back to every device."""
+    with devices.on("rig"):
+        store.update_settings(
+            notifications={"ntfy_enabled": True}, github={"token": "ghp_revoked"}
+        )
+        run(settings_sync.enable(""))
+        clock.tick()
+        store.update_settings(
+            github={"token": ""}, notifications={"ntfy_enabled": False}
+        )
+        settings_sync.scan_local()
+    clock.tick()
+    store.update_settings(
+        github={"token": "ghp_revoked"}, notifications={"ntfy_enabled": True}
+    )
+    run(settings_sync.enable("rig"))
+    assert devices.get("github", "token") == ""
+    assert devices.get("notifications", "ntfy_enabled") is False
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("github", "token") == ""
+        assert devices.get("notifications", "ntfy_enabled") is False
+
+
+# --------------------------------------------------------------------------- #
+# round 2: a write that didn't land keeps this device's own stamp
+# --------------------------------------------------------------------------- #
+def test_a_failed_write_never_serves_the_old_value_as_the_new_version(
+    trio, monkeypatch
+):
+    """The rig couldn't write the laptop's v2 (a red-zone conflict). Under
+    the laptop's stamp its old v1 read as that version: the mini, pulling
+    the rig first, took v1 and never took the laptop's v2."""
+    clock = _clock(monkeypatch, trio)
+    data = {"laptop": {}, "rig": {}, "mini": {}}
+    tries = []
+
+    def write(key, value):
+        if trio.me == "rig" and value == "v2":
+            tries.append(key)
+            raise ValueError("conflicts with a zone here")
+        data[trio.me][key] = value
+
+    settings_sync.register_store(
+        "toy",
+        lambda: dict(data[trio.me]),
+        write,
+        lambda key: data[trio.me].pop(key, None),
+        label="Toy",
+    )
+    try:
+        for k in data:
+            data[k]["x"] = "v1"
+        trio.all_on()
+        clock.tick()
+        data["laptop"]["x"] = "v2"
+        with trio.on("laptop"):
+            settings_sync.scan_local()
+            laptop_stamp = settings_sync._load()["stamps"]["store:toy#x"]
+        clock.tick()
+        trio.sync("rig")
+        with trio.on("rig"):
+            st = settings_sync._load()["stamps"]["store:toy#x"]
+            assert st["ts"] < laptop_stamp["ts"]  # its own, older stamp
+            assert settings_sync._unlanded["store:toy#x"] == (
+                laptop_stamp["ts"],
+                "laptop",
+            )
+        trio.offline.add("laptop")
+        clock.tick()
+        trio.sync("mini")
+        trio.offline.discard("laptop")
+        clock.tick()
+        trio.sync("mini")
+        assert data["mini"]["x"] == "v2"
+        for _ in range(2):  # the same version isn't retried every pass
+            clock.tick()
+            trio.sync("rig")
+        assert tries == ["x"]
+    finally:
+        settings_sync.unregister_store("toy")
+
+
+# --------------------------------------------------------------------------- #
+# round 2: origin caches
+# --------------------------------------------------------------------------- #
+def _git_always_times_out(monkeypatch, calls):
+    def slow(cmd, *a, **kw):
+        calls.append(cmd)
+        raise subprocess.TimeoutExpired(cmd, 3)
+
+    monkeypatch.setattr(settings_sync.subprocess, "run", slow)
+    monkeypatch.setattr(settings_sync, "_ORIGINS", {})
+    monkeypatch.setattr(settings_sync, "_CANON", {})
+
+
+def test_a_git_timeout_is_cached_too(tmp_path, monkeypatch):
+    """Under memory pressure git times out (3 s): asked again on every
+    canonical() call, one pass cost N x 3 s while holding the sync lock."""
+    calls = []
+    _git_always_times_out(monkeypatch, calls)
+    (tmp_path / ".git").mkdir()
+    for _ in range(5):
+        assert settings_sync._origin_of(str(tmp_path)) is None
+    assert len(calls) == 1
+    settings_sync._remember_origin(str(tmp_path), "git@x:o/r.git")
+    assert settings_sync._origin_of(str(tmp_path)) == "git@x:o/r.git"
+    assert len(calls) == 1  # the remembered origin answers a cached failure
+
+
+def test_probing_checkouts_asks_git_once_per_checkout(tmp_path, monkeypatch):
+    calls = []
+    _git_always_times_out(monkeypatch, calls)
+    paths = []
+    for i in range(20):
+        (tmp_path / ("r%d" % i) / ".git").mkdir(parents=True)
+        paths.append(str(tmp_path / ("r%d" % i)))
+    monkeypatch.setattr(settings_sync, "known_checkouts", lambda: paths)
+    url = "https://github.com/x/y.git"
+    for _ in range(3):
+        assert settings_sync.localize_url(url, "") == url
+    assert len(calls) == 20
+
+
+def test_the_remembered_origins_are_capped_where_they_are_kept(devices, monkeypatch):
+    import json
+
+    monkeypatch.setattr(settings_sync, "_CANON", {})
+    run(settings_sync.enable(""))
+    for i in range(600):
+        settings_sync._remember_origin("/w/%d" % i, "git@x:o/r%d.git" % i)
+        if i == 0:
+            settings_sync._save(settings_sync._load())
+        if i % 50 == 0:
+            assert settings_sync._canon_get("/w/0")  # used: stays
+            settings_sync._save(settings_sync._load())
+    settings_sync._save(settings_sync._load())
+    p = store.settings_path().parent / "settings_sync.json"
+    canon = json.loads(p.read_text())["canon"]
+    assert len(canon) == settings_sync._CANON_MAX
+    assert "/w/599" in canon and "/w/1" not in canon
+    settings_sync._CANON.clear()
+    settings_sync._load()  # a fresh process reads what was kept
+    assert len(settings_sync._CANON) == settings_sync._CANON_MAX

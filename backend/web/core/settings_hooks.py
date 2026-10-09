@@ -67,6 +67,22 @@ def automation_here() -> bool:
         return True
 
 
+def automation_device() -> str:
+    """The name of another of your devices that says it runs PR review and
+    issue handling (its hello's ``automation``), or ``""`` when none visible
+    does — what Intake names ("runs on <device>") where this one doesn't.
+    Never raises."""
+    try:
+        from backend.web.core import remote as _remote
+
+        for dev in _remote.fleet_devices():
+            if isinstance(dev, dict) and dev.get("automation") is True:
+                return str(dev.get("host") or dev.get("key") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def pipeline_signature() -> Tuple:
     """What the ticket pipeline reads when it boots, reduced to what would
     change its behaviour: the PR/issue switches, their repos, whether there's

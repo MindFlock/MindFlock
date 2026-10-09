@@ -23,6 +23,8 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import {
   ROTATE_TOKENS_LABEL,
+  SYNC_RESUME,
+  addPairedNote,
   admitToast,
   automationHint,
   candidateBlocker,
@@ -31,11 +33,14 @@ import {
   formatCode,
   joinLine,
   joinSettingsNote,
+  joinableCandidates,
+  keyConflicts,
   liveInvite,
   memberStatus,
   pasteJoinBody,
   pinChoices,
   plausibleCode,
+  removalLines,
   removeConfirmText,
   removedToast,
   syncDeviceLine,
@@ -62,6 +67,8 @@ export function Devices(p: ScreenProps) {
   const [busy, setBusy] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
   const [codeFor, setCodeFor] = useState<string | null>(null);
+  /** The candidate whose "Add to my devices" is waiting on its confirm. */
+  const [addFor, setAddFor] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [pasted, setPasted] = useState("");
   /** Remove's "also replace every device's access token" — on by default. */
@@ -182,6 +189,11 @@ export function Devices(p: ScreenProps) {
   const selfHost = st.self.host || st.self.key;
   const selfVersion = self?.version || "";
   const others = st.members.filter((m) => !m.self);
+  // A member whose hello lags the group still comes back as a candidate:
+  // it is already yours, so it gets no join buttons.
+  const candidates = joinableCandidates(st.candidates);
+  const conflicts = keyConflicts(st.members);
+  const removals = removalLines(st);
   const join = st.join;
   const joinBusy = join && (join.state === "waiting" || join.state === "joining");
 
@@ -200,7 +212,7 @@ export function Devices(p: ScreenProps) {
     );
   const joinWithText = () => {
     // A bare code names no device: send it to the one it can be for, or ask.
-    const { body, error } = pasteJoinBody(pasted, st.candidates, codeFor);
+    const { body, error } = pasteJoinBody(pasted, candidates, codeFor);
     if (!body) {
       if (error) toast(error);
       return;
@@ -235,10 +247,18 @@ export function Devices(p: ScreenProps) {
       {st.stale_key && (
         <div className="devices-warn" id="devices-stale-key" role="alert">
           <p>
-            This device was removed or its device key changed while it was offline. Ask to rejoin.
+            {conflicts.length
+              ? "This device and " +
+                conflicts.map((m) => m.host || m.key).join(" and ") +
+                " hold different keys for your devices — they were set up apart. Rejoin this one from " +
+                (conflicts.length > 1 ? "one of them" : "it") +
+                " to make them one group again."
+              : "This device was removed or its device key changed while it was offline. Ask to rejoin."}
           </p>
           <div className="devices-actions">
-            {others
+            {/* In a key conflict, rejoin the group that kept its key — the
+                device(s) holding the other one; otherwise any that's up. */}
+            {(conflicts.length ? conflicts : others)
               .filter((m) => m.reachable)
               .map((m) => (
                 <button
@@ -253,6 +273,32 @@ export function Devices(p: ScreenProps) {
                 </button>
               ))}
           </div>
+        </div>
+      )}
+
+      {!st.stale_key && conflicts.length > 0 && (
+        <div className="devices-warn" id="devices-key-conflict" role="alert">
+          <p>
+            {conflicts.map((m) => m.host || m.key).join(" and ")}{" "}
+            {conflicts.length > 1 ? "have" : "has"} a different key for your devices — the two
+            halves were set up apart. Rejoin one from the other: on{" "}
+            {conflicts.length > 1 ? "each of them" : conflicts[0].host || conflicts[0].key}, use
+            "Ask {selfHost} to rejoin" in Settings → Devices.
+          </p>
+        </div>
+      )}
+      {removals.length > 0 && (
+        <div className="devices-warn" id="devices-removals" role="alert">
+          {removals.map((r) => (
+            <p key={r.key} data-removed={r.key}>
+              {r.text}
+            </p>
+          ))}
+          <p className="devices-note">
+            Your devices all hold the same key, so any of them can remove another. If you didn't
+            make this removal, someone else may be using that device — taking it off your tailnet
+            (Tailscale admin console) cuts it off everywhere at once.
+          </p>
         </div>
       )}
 
@@ -359,7 +405,7 @@ export function Devices(p: ScreenProps) {
                             json: { rotate_tokens: rotate },
                           });
                           setConfirm(null);
-                          toast(removedToast(m.host || m.key, r, rotate), { duration: 8000 });
+                          toast(removedToast(m.host || m.key, r, rotate), { duration: 12000 });
                         });
                       }}
                       onCancel={() => setConfirm(null)}
@@ -535,9 +581,9 @@ export function Devices(p: ScreenProps) {
           )}
         </div>
       )}
-      {st.candidates.length ? (
+      {candidates.length ? (
         <ul className="devices-list" id="devices-candidates">
-          {st.candidates.map((c) => {
+          {candidates.map((c) => {
             const blocker = candidateBlocker(c);
             const name = c.host || c.device;
             const note = blocker || candidateNote(c);
@@ -577,18 +623,8 @@ export function Devices(p: ScreenProps) {
                           type="button"
                           className="test-btn"
                           data-add-paired={c.device}
-                          disabled={!!busy}
-                          onClick={() =>
-                            void run("add:" + c.device, async () => {
-                              const res = await api<{ sync_error?: string }>("/api/fleet/add-paired", {
-                                json: { device: c.device },
-                              });
-                              toast(
-                                admitToast(name, name + " is one of your devices now", res?.sync_error),
-                                res?.sync_error ? { duration: 8000 } : undefined
-                              );
-                            })
-                          }
+                          disabled={!!busy || addFor === c.device}
+                          onClick={() => setAddFor(c.device)}
                         >
                           Add to my devices
                         </button>
@@ -596,10 +632,34 @@ export function Devices(p: ScreenProps) {
                     </span>
                   )}
                 </div>
+                {/* Two directions, said apart: joining takes ITS settings;
+                    adding pulls it in, so it takes THIS one's. */}
                 {!blocker && (
                   <span className="set-hint devices-join-note" data-join-note={c.device}>
-                    {joinSettingsNote(name)}
+                    {(c.has_token ? "Ask to join or Enter code: " : "") + joinSettingsNote(name)}
                   </span>
+                )}
+                {!blocker && addFor === c.device && (
+                  <InlineConfirm
+                    id="devices-add-confirm"
+                    title={"Add " + name + " to your devices?"}
+                    body={<span data-add-note={c.device}>{addPairedNote(name)}</span>}
+                    confirmLabel={busy === "add:" + c.device ? "Adding…" : "Add"}
+                    busy={busy === "add:" + c.device}
+                    onConfirm={() =>
+                      void run("add:" + c.device, async () => {
+                        const res = await api<{ sync_error?: string }>("/api/fleet/add-paired", {
+                          json: { device: c.device },
+                        });
+                        setAddFor(null);
+                        toast(
+                          admitToast(name, name + " is one of your devices now", res?.sync_error),
+                          res?.sync_error ? { duration: 8000 } : undefined
+                        );
+                      })
+                    }
+                    onCancel={() => setAddFor(null)}
+                  />
                 )}
                 {codeFor === c.device && (
                   <div className="set-row devices-code-row">
@@ -736,6 +796,55 @@ function SettingsSyncRows(props: {
   return (
     <>
       <h3 className="set-section-title">Settings sync</h3>
+      {sync.error && (
+        <div className="devices-warn" id="settings-sync-error" role="alert">
+          <p>{sync.error}. Fix or delete it, and the next sync picks up again.</p>
+        </div>
+      )}
+      {/* First: a pause is the one thing here that needs an answer. */}
+      {sync.paused && (
+        <div className="devices-warn" id="settings-sync-paused" role="alert">
+          <p>
+            {sync.paused}. Most of this device's settings went back to their defaults at once — a
+            reset or replaced settings.json, usually — so nothing was sent to your other devices.
+          </p>
+          <div className="devices-actions">
+            {(sync.choices?.length ? sync.choices : ["theirs", "mine"])
+              .filter((k): k is keyof typeof SYNC_RESUME => k in SYNC_RESUME)
+              .map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={"test-btn" + (k === "theirs" ? " devices-primary" : "")}
+                  data-sync-resume={k}
+                  disabled={!!busy}
+                  onClick={() =>
+                    void act(
+                      "resume:" + k,
+                      async () => {
+                        const r = await api<SyncStatus>("/api/settings/sync/resume", {
+                          json: { keep: SYNC_RESUME[k].keep },
+                        });
+                        if (k === "theirs") {
+                          // The fleet's values were just adopted here.
+                          void fetchSettingsDoc().catch(() => {});
+                          void refreshConfig();
+                        }
+                        return r;
+                      },
+                      k === "theirs"
+                        ? "Settings sync resumed — this device took your other devices' settings"
+                        : "Settings sync resumed — this device's settings now go to the others"
+                    )
+                  }
+                >
+                  {SYNC_RESUME[k].label}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+
       <div className="set-row" id="settings-sync-row">
         <span className="set-label">Share settings with my other devices</span>
         {!canSync && !sync.enabled ? (

@@ -470,6 +470,12 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DEVICE",
         help="add a device this one already holds an access token for — no code needed",
     )
+    d_add.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="don't ask first (DEVICE takes this computer's shared settings)",
+    )
     d_join = dev_sub.add_parser(
         "join",
         parents=[server_opts_nested],
@@ -512,7 +518,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "every device's access token is replaced)"
         ),
     )
-    d_rm.add_argument("device", metavar="DEVICE")
+    d_rm.add_argument(
+        "device",
+        metavar="DEVICE",
+        help="device name or host (this computer's own name = leave)",
+    )
     d_rm.add_argument("--yes", "-y", action="store_true", help="don't ask first")
     d_rm.add_argument(
         "--keep-tokens",
@@ -2010,6 +2020,42 @@ def _wait_for_join(base: str, host: str) -> int:
     return 1
 
 
+def _add_paired_note(host: str) -> str:
+    """What ``devices add DEVICE`` does to settings — the other way round from
+    joining: DEVICE adopts this computer's group and starts its settings from
+    here (Devices.tsx says the same beside "Add to my devices")."""
+    return (
+        "%s takes this computer's shared settings where this one has them; its "
+        "own stay where this one has none." % host
+    )
+
+
+def _tailnet_advice(host: str) -> str:
+    """The one cut-off removal can't make: every member holds the same key,
+    so a lost or stolen device is only cut off everywhere — even from devices
+    that are offline now — by taking it off the tailnet."""
+    return (
+        "If %s was lost or stolen, also remove it from your tailnet in the "
+        "Tailscale admin console — that cuts it off everywhere at once, even "
+        "from devices that are offline now." % host
+    )
+
+
+def _leave_devices(base: str, args: argparse.Namespace, path: str) -> int:
+    """``devices leave`` (and ``devices remove <this computer>``, which the
+    server treats as a leave): no re-key and no token rotation — say so."""
+    if not args.yes and not _confirm(
+        "Take this computer out of your devices? Settings stop syncing here. "
+        "(Leaving doesn't change your devices' shared key or any access token — "
+        "remove this computer from another of your devices for that.)"
+    ):
+        print("aborted")
+        return 1
+    client.post(base, path, timeout=60.0)
+    print("left your devices — settings sync is off on this computer")
+    return 0
+
+
 def _cmd_devices(args: argparse.Namespace) -> int:
     """``mindflock devices …`` — thin client over ``/api/fleet`` (Settings →
     Devices in the UI). The server does the device-to-device talking; the CLI
@@ -2032,6 +2078,16 @@ def _cmd_devices(args: argparse.Namespace) -> int:
                 "device",
             )
             device = str(cand.get("device")) if cand else args.device
+            host = str((cand or {}).get("host") or device)
+            if cand and cand.get("member"):
+                # A member whose hello lags the group: adding it again would
+                # reset its settings to this computer's.
+                raise client.ClientError("%s is already one of your devices" % host)
+            if not args.yes and not _confirm(
+                "%s Add %s to your devices?" % (_add_paired_note(host), host)
+            ):
+                print("not added")
+                return 1
             # Talks to the other device and adopts it there: allow for its
             # settings-sync kick-off, not just one round-trip.
             res = client.post(
@@ -2166,10 +2222,19 @@ def _cmd_devices(args: argparse.Namespace) -> int:
                 % (args.device, ", ".join(str(x.get("key")) for x in members) or "none")
             )
         who = m.get("host") or m.get("key")
+        if m.get("self"):
+            # The server answers a self-removal by leaving ({"left": true}):
+            # no new key, no token rotation — ask and report it as a leave.
+            return _leave_devices(
+                base,
+                args,
+                "/api/fleet/members/%s/remove"
+                % urllib.parse.quote(str(m.get("key")), safe=""),
+            )
         rotate = not args.keep_tokens
         if not args.yes and not _confirm(
             "Remove %s from your devices? It stops getting settings and ticket "
-            "claims, your other devices get a new shared key, and %s"
+            "claims, your other devices get a new shared key, and %s %s"
             % (
                 who,
                 (
@@ -2179,6 +2244,7 @@ def _cmd_devices(args: argparse.Namespace) -> int:
                     else "access tokens it already holds KEEP working "
                     "(--keep-tokens)."
                 ),
+                _tailnet_advice(who),
             )
         ):
             print("aborted")
@@ -2193,14 +2259,24 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             )
             or {}
         )
+        if res.get("left"):
+            # Matched by host but it was this computer after all.
+            print("left your devices — settings sync is off on this computer")
+            return 0
         print("removed %s" % who)
         if res.get("rekeyed"):
             print("new key sent to: %s" % ", ".join(map(str, res["rekeyed"])))
-        if res.get("missed"):
+        missed = [str(x) for x in res.get("missed") or []]
+        if missed:
+            # Not lost: the others keep the old key a while and hand the new
+            # one over on their next contact with it.
             print(
-                "! couldn't reach %s — it must join again (mindflock devices join)"
-                % ", ".join(map(str, res["missed"])),
-                file=sys.stderr,
+                "%s offline — %s the new key when %s back"
+                % (
+                    ", ".join(missed) + (" were" if len(missed) > 1 else " was"),
+                    "they get" if len(missed) > 1 else "it gets",
+                    "they're" if len(missed) > 1 else "it's",
+                )
             )
         if res.get("rotated"):
             print("new access token on: %s" % ", ".join(map(str, res["rotated"])))
@@ -2210,16 +2286,10 @@ def _cmd_devices(args: argparse.Namespace) -> int:
                 "(Settings → Security)" % ", ".join(map(str, res["rotate_failed"])),
                 file=sys.stderr,
             )
+        print(_tailnet_advice(who))
         return 0
     if cmd == "leave":
-        if not args.yes and not _confirm(
-            "Take this computer out of your devices? Settings stop syncing here."
-        ):
-            print("aborted")
-            return 1
-        client.post(base, "/api/fleet/leave", timeout=60.0)
-        print("left your devices — settings sync is off on this computer")
-        return 0
+        return _leave_devices(base, args, "/api/fleet/leave")
     print("error: unknown devices command %r" % cmd, file=sys.stderr)
     return 2
 

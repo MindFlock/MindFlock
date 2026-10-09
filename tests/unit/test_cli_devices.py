@@ -372,21 +372,66 @@ class TestAdd:
         assert "mindflock devices join laptop WXYZ-2345" in capsys.readouterr().err
 
     def test_add_paired_resolves_host_to_device_key(self, srv, capsys):
-        assert cli.main(["devices", "add", "work-PC"]) == 0
+        assert cli.main(["devices", "add", "work-PC", "-y"]) == 0
         assert srv.sent("POST") == [("/api/fleet/add-paired", {"device": "work-pc"})]
         assert "added Work-PC to your devices" in capsys.readouterr().out
 
     def test_add_paired_unknown_name_passed_through(self, srv):
         # The server owns the "no such device" answer.
-        cli.main(["devices", "add", "nas"])
+        cli.main(["devices", "add", "nas", "--yes"])
         assert srv.sent("POST") == [("/api/fleet/add-paired", {"device": "nas"})]
 
     def test_add_paired_refusal_exits_one(self, srv, capsys):
         srv.posts["/api/fleet/add-paired"] = client.ApiError(
             400, "no access token for work-pc"
         )
-        assert cli.main(["devices", "add", "work-pc"]) == 1
+        assert cli.main(["devices", "add", "work-pc", "-y"]) == 1
         assert "no access token for work-pc" in capsys.readouterr().err
+
+    def test_add_paired_asks_and_says_the_settings_go_the_other_way(
+        self, srv, monkeypatch
+    ):
+        # add-paired makes Work-PC adopt THIS computer's group and start its
+        # settings from here: the reverse of `devices join`.
+        seen = _inputs(monkeypatch, "y")
+        assert cli.main(["devices", "add", "work-pc"]) == 0
+        assert (
+            "Work-PC takes this computer's shared settings where this one has "
+            "them; its own stay where this one has none." in seen[0]
+        )
+        assert "This computer takes" not in seen[0]
+        assert [p for p, _ in srv.sent("POST")] == ["/api/fleet/add-paired"]
+
+    @pytest.mark.parametrize("answer", ["n", "", EOFError])
+    def test_add_paired_declined_sends_nothing(self, srv, monkeypatch, capsys, answer):
+        _inputs(monkeypatch, answer)
+        assert cli.main(["devices", "add", "work-pc"]) == 1
+        assert srv.sent("POST") == []
+        assert "not added" in capsys.readouterr().out
+
+    def test_add_paired_refuses_a_device_that_is_already_a_member(
+        self, monkeypatch, capsys
+    ):
+        # A member whose hello lags still comes back as a candidate; adding
+        # it again would reset its settings to this computer's.
+        st = _status()
+        st["candidates"].append(
+            {
+                "device": "mac-mini",
+                "host": "Mac-Mini",
+                "version": "0.7.4",
+                "fleet_proto": 1,
+                "reachable": True,
+                "member": True,
+                "in_fleet": False,
+                "same_fleet": False,
+                "has_token": True,
+            }
+        )
+        srv = FakeServer(monkeypatch, st)
+        assert cli.main(["devices", "add", "mac-mini", "-y"]) == 1
+        assert srv.sent("POST") == []
+        assert "Mac-Mini is already one of your devices" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #
@@ -601,6 +646,11 @@ class TestRemoveLeave:
         out, err = capsys.readouterr()
         assert "removed Mac-Mini" in out
         assert "new key sent to: ml-rig" in out
+        assert (
+            "If Mac-Mini was lost or stolen, also remove it from your tailnet in "
+            "the Tailscale admin console — that cuts it off everywhere at once, "
+            "even from devices that are offline now." in out
+        )
         assert err == ""
 
     def test_remove_names_the_members_it_missed(self, srv, capsys):
@@ -609,7 +659,43 @@ class TestRemoveLeave:
             "missed": ["ml-rig"],
         }
         assert cli.main(["devices", "remove", "mac-mini", "-y"]) == 0
-        assert "couldn't reach ml-rig" in capsys.readouterr().err
+        out, err = capsys.readouterr()
+        # Healed on its next contact (the others keep the old key a while) —
+        # not "it must join again".
+        assert "ml-rig was offline — it gets the new key when it's back" in out
+        assert "join again" not in out + err
+
+    def test_remove_confirm_carries_the_tailnet_advice(self, srv, monkeypatch):
+        seen = _inputs(monkeypatch, "n")
+        assert cli.main(["devices", "remove", "mac-mini"]) == 1
+        assert "also remove it from your tailnet" in seen[0]
+
+    def test_remove_this_computer_is_a_leave_with_leave_wording(
+        self, srv, monkeypatch, capsys
+    ):
+        # The server answers a self-removal by leaving: no re-key, no token
+        # rotation — so the CLI must not promise either.
+        seen = _inputs(monkeypatch, "y")
+        srv.posts["/api/fleet/members/laptop/remove"] = {"left": True}
+        assert cli.main(["devices", "remove", "Laptop"]) == 0
+        assert seen[0].startswith("Take this computer out of your devices?")
+        assert "new shared key" not in seen[0]
+        assert "doesn't change your devices' shared key" in seen[0]
+        assert srv.sent("POST") == [("/api/fleet/members/laptop/remove", None)]
+        out = capsys.readouterr().out
+        assert "left your devices" in out
+        assert "removed" not in out
+
+    def test_remove_answer_left_true_reports_a_leave(self, monkeypatch, capsys):
+        # The status listed this computer without `self` (an older server):
+        # the server's {"left": true} still decides what is printed.
+        st = _status()
+        st["members"][0] = {**st["members"][0], "self": False}
+        srv = FakeServer(monkeypatch, st)
+        srv.posts["/api/fleet/members/laptop/remove"] = {"left": True}
+        assert cli.main(["devices", "remove", "laptop", "-y"]) == 0
+        out = capsys.readouterr().out
+        assert "left your devices" in out and "removed laptop" not in out
 
     def test_remove_asks_first(self, srv, monkeypatch, capsys):
         seen = _inputs(monkeypatch, "n")
@@ -789,7 +875,7 @@ class TestSyncErrorShown:
             "device": "work-pc",
             "sync_error": "Work-PC didn't answer",
         }
-        assert cli.main(["devices", "add", "work-pc"]) == 0
+        assert cli.main(["devices", "add", "work-pc", "-y"]) == 0
         assert "! settings sync: Work-PC didn't answer" in capsys.readouterr().err
 
     def test_join_prints_sync_error_field(self, srv, capsys):

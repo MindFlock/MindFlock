@@ -193,7 +193,95 @@ describe("pullPrefs", () => {
   });
 });
 
+describe("pullPrefs while a pull is in flight", () => {
+  it("a local write confirmed DURING a pull isn't reverted by the pull's older snapshot", async () => {
+    const kv = memKV({ mf_prefs_seeded: "1", cs_theme: "dark" });
+    g.localStorage = kv;
+    let server: Record<string, unknown> = { theme: "dark" };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let first = true;
+    routes = {
+      "GET /api/prefs": () => {
+        const snap = { ...server };
+        if (!first) return snap;
+        first = false;
+        return gate.then(() => snap);
+      },
+      "POST /api/prefs": () => ({ ok: true }),
+      "GET /api/settings": () => ({ settings: {} }),
+    };
+    const { pullPrefs } = await import("../lib/prefsSync");
+    const prefs = await import("../lib/prefs");
+    prefs.setPrefSender(async (body) => {
+      server = { ...server, ...(body as object) };
+    });
+    const p = pullPrefs(); // e.g. a reconnect's re-pull: its GET reads "dark"
+    await Promise.resolve();
+    kv.setItem("cs_theme", "light"); // the person toggles the theme meanwhile
+    prefs.notePrefWrite("cs_theme", kv);
+    await prefs.flushPrefWrites(kv); // the POST lands; the field is no longer dirty
+    expect(server.theme).toBe("light");
+    expect(kv.data.mf_prefs_dirty).toBeUndefined();
+    const again = pullPrefs(); // the POST's own settings.synced echo
+    release();
+    await p;
+    expect(kv.data.cs_theme).toBe("light");
+    await again;
+    expect(kv.data.cs_theme).toBe("light");
+  });
+
+  it("a sync event during a pull queues exactly one more pull after it", async () => {
+    const kv = memKV({ mf_prefs_seeded: "1", cs_theme: "dark" });
+    g.localStorage = kv;
+    let server: Record<string, unknown> = { theme: "dark" };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let first = true;
+    routes = {
+      "GET /api/prefs": () => {
+        const snap = { ...server };
+        if (!first) return snap;
+        first = false;
+        return gate.then(() => snap);
+      },
+      "GET /api/settings": () => ({ settings: {} }),
+    };
+    const { pullPrefs } = await import("../lib/prefsSync");
+    const p = pullPrefs();
+    await Promise.resolve();
+    server = { theme: "light" }; // another device's change, adopted after the GET read
+    const a = pullPrefs(); // its settings.synced re-pull
+    const b = pullPrefs(); // …and a reconnect in the same window
+    expect(b).toBe(a); // one follow-up, shared
+    release();
+    await p;
+    await a;
+    expect(kv.data.cs_theme).toBe("light");
+    expect(calls.filter((c) => c.path === "GET /api/prefs").length).toBe(2);
+  });
+});
+
 describe("installPrefsSync", () => {
+  it("the first reconnect re-pulls even when the socket was already up at install", async () => {
+    vi.useFakeTimers();
+    g.localStorage = memKV({ mf_prefs_seeded: "1" });
+    // events.js connects at load, before the bundle's rAF installs this; its
+    // onStatus doesn't replay the current state.
+    const ev = { ...fakeEvents(false), connected: true };
+    g.window = { mindflock: { events: ev }, addEventListener: () => {} };
+    routes = { "GET /api/prefs": () => ({}), "GET /api/settings": () => ({ settings: {} }) };
+    const { installPrefsSync } = await import("../lib/prefsSync");
+    installPrefsSync();
+    await vi.advanceTimersByTimeAsync(0);
+    const count = () => calls.filter((c) => c.path === "GET /api/prefs").length;
+    const base = count();
+    ev.status[0]("disconnected"); // laptop slept; same server, backlog overflowed
+    ev.status[0]("connected");
+    await vi.advanceTimersByTimeAsync(400);
+    expect(count()).toBe(base + 1);
+  });
+
   it("a settings.synced REPLAYED after a reconnect still re-pulls (it is exactly what this page missed)", async () => {
     vi.useFakeTimers();
     g.localStorage = memKV({ mf_prefs_seeded: "1" });

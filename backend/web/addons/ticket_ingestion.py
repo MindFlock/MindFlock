@@ -122,6 +122,22 @@ def _automation_here() -> bool:
         return True
 
 
+def _automation_status() -> dict:
+    """``{automation_here, automation_device}`` for the status payload:
+    whether this device runs PR review / issue handling and, when it
+    doesn't, which of your devices says it does (``""``: none visible)."""
+    here = _automation_here()
+    device = ""
+    if not here:
+        try:
+            from backend.web.core import settings_hooks
+
+            device = settings_hooks.automation_device()
+        except Exception:  # noqa: BLE001 — status must never fail on this
+            device = ""
+    return {"automation_here": here, "automation_device": device}
+
+
 def _pr_review_enabled() -> bool:
     """Whether the automated-PR-review half is switched on: ``github.enabled``
     (unset counts as on, matching the UI) AND at least one repo to watch AND
@@ -463,6 +479,10 @@ class TicketIngestionController:
             "pr_enabled": _pr_review_enabled(),
             # Whether issue handling is switched on (github.issues_enabled+repos).
             "issues_enabled": _issue_handling_enabled(),
+            # Both of those also need THIS device to be the one that runs
+            # them; where it isn't, Intake says "runs on <automation_device>"
+            # instead of naming a switch that is on (and synced).
+            **_automation_status(),
             # Live activity: True while a ticket / a PR batch / an issue is
             # actually being brought in (vs idle-waiting). The pipeline's beacon
             # only knows about the PIPELINE's queue, so a start forced from the

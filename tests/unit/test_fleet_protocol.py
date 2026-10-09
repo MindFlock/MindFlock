@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,9 +66,13 @@ async def test_removal_reaches_a_member_that_was_offline(world):
         assert fleet.prev_key(1) == old
     world.down.discard("mini")
     world.rediscover()
-    # mini looks first: laptop answers 401 with a NEWER epoch -> mini is the
-    # one behind (and rig, still on the old key, can't outvote that).
-    assert await _gossip(world, "mini") is True
+    # mini looks first: laptop answers 401 with a NEWER epoch — but rig
+    # (removed, still on the old key) took mini's key this pass, and a
+    # member that accepts our key means "not stale" (round 2, [7]): no
+    # rejoin banner on mini; laptop's own pass heals it.
+    assert await _gossip(world, "mini") is False
+    with world.on("mini"):
+        assert fleet._PEERS["laptop"]["ahead"] is True
     # laptop's pass: mini answers 401 with an OLDER epoch -> laptop hands it
     # the new key under the old one; laptop is never told "you were removed".
     assert await _gossip(world, "laptop") is False
@@ -107,6 +112,7 @@ async def test_member_routes_401_with_id_and_epoch(world):
                 "error": "not one of this device's devices",
                 "id": fid,
                 "epoch": 1,
+                "kfp": fleet.key_fp(fleet.fleet_key()),
             }
 
 
@@ -580,12 +586,15 @@ def test_fleet_key_passes_the_remote_control_gate(monkeypatch, tmp_path):
     assert r.status_code == 200 and r.json()["id"] == fleet.fleet_id()
     r = c.get("/api/settings/sync/export", headers=member)
     assert r.status_code != 403
-    # A paired non-member is still governed by the toggle.
+    # A paired non-member is still governed by the toggle …
     other = {"Authorization": "Bearer something-else", "X-MindFlock-Remote": "rig"}
-    for path in ("/api/fleet/roster", "/api/instances"):
-        r = c.get(path, headers=other)
-        assert r.status_code == 403
-        assert r.json()["error"] == "remote control is disabled on this device"
+    r = c.get("/api/instances", headers=other)
+    assert r.status_code == 403
+    assert r.json()["error"] == "remote control is disabled on this device"
+    # … except on a member route, which answers for itself — the fleet-aware
+    # 401, so a member on an OLD key learns this device's epoch (round 2 [5]).
+    r = c.get("/api/fleet/roster", headers=other)
+    assert r.status_code == 401 and r.json()["epoch"] == 1
 
 
 def test_disconnect_on_a_member_is_409(monkeypatch, tmp_path):
@@ -662,3 +671,513 @@ async def test_gate_warning_when_serve_exposes_a_local_server(monkeypatch):
     assert fleet.status(True)["gate_warning"] is True
     monkeypatch.setenv("MINDFLOCK_AUTH", "1")
     assert fleet.status(True)["gate_warning"] is False
+
+
+# =========================================================================== #
+# Round 2 — "[n]" below is the index in the round-2 confirmed list.
+# =========================================================================== #
+async def _remove_rig_while_mini_is_away(w):
+    """laptop removes rig while mini is offline; mini comes back on K1."""
+    await _three(w)
+    w.down.add("mini")
+    w.rediscover()
+    with w.on("laptop"):
+        k1 = fleet.fleet_key()
+        out = await fleet.remove("rig")
+        assert out["missed"] == ["mini"]
+        k2 = fleet.fleet_key()
+    w.down.discard("mini")
+    w.rediscover()
+    return k1, k2
+
+
+# --------------------------------------------------------------------------- #
+# [0] [7] rekeys and rejoins never resurrect a removed device, never jump
+# --------------------------------------------------------------------------- #
+async def test_a_delivered_rekey_replaces_a_roster_the_removed_device_wrote(world):
+    k1, k2 = await _remove_rig_while_mini_is_away(world)
+    # rig (removed, still holding K1) writes itself back onto mini's roster
+    # with a fresh added_at before laptop's gossip reaches mini.
+    with world.on("rig"):
+        r = fleet.roster()
+        r["members"]["rig"]["added_at"] = time.time() + 5
+        st, _ = await world.post_json(
+            remote._DEVICES["mini"], "/api/fleet/roster", r, bearer=k1
+        )
+        assert st == 200
+    await _gossip(world, "laptop")  # mini takes K2 — and laptop's roster
+    with world.on("mini"):
+        assert fleet.fleet_key() == k2
+        assert not fleet.is_member("rig")
+    await _gossip(world, "mini")  # mini never hands rig the new key
+    with world.on("rig"):
+        assert fleet.fleet_key() != k2
+    with world.on("laptop"):
+        assert not fleet.is_member("rig")
+
+
+async def test_a_rekey_is_only_ever_the_next_epoch(world):
+    k1, k2 = await _remove_rig_while_mini_is_away(world)
+    with world.on("rig"):
+        body = {
+            "id": fleet.fleet_id(),
+            "epoch": 99,
+            "key": "A" * 43,
+            "members": fleet.roster()["members"],
+            "removed": {"laptop": time.time()},
+        }
+        st, resp = await world.post_json(
+            remote._DEVICES["mini"], "/api/fleet/rekey", body, bearer=k1
+        )
+    assert st == 200 and resp == {"ok": False}
+    with world.on("mini"):
+        assert fleet.fleet_key() == k1 and fleet.state()["epoch"] == 1
+    # The remover is not told it is the stale one; it heals mini instead.
+    assert await _gossip(world, "laptop") is False
+    with world.on("mini"):
+        assert fleet.fleet_key() == k2 and not fleet.is_member("rig")
+
+
+async def test_a_member_two_key_changes_behind_is_walked_up_one_at_a_time(world):
+    await _three(world)
+    world.down.add("mini")
+    world.rediscover()
+    with world.on("laptop"):
+        await fleet.rotate_key()
+        await fleet.rotate_key()
+        k3 = fleet.fleet_key()
+        assert fleet.state()["epoch"] == 3
+    world.down.discard("mini")
+    world.rediscover()
+    assert await _gossip(world, "laptop") is False
+    with world.on("mini"):
+        assert fleet.fleet_key() == k3 and fleet.state()["epoch"] == 3
+    rekeys = [c for c in world.calls if c[1] == "mini" and c[3] == "/api/fleet/rekey"]
+    assert [c[4] for c in rekeys[-2:]] == [200, 200]
+
+
+def test_gossip_never_brings_back_a_device_known_removed_here():
+    fleet.create()
+    fid = fleet.fleet_id()
+    fleet.add_member("rig", "Rig", by="laptop")
+    fleet.remove_member("rig")
+    later = {"rig": {"host": "Rig", "added_at": time.time() + 60, "added_by": "x"}}
+    fleet.merge_roster({"id": fid, "epoch": 1, "members": later, "removed": {}})
+    assert not fleet.is_member("rig")
+    # Re-admitting it HERE (this device's own admit path) is what lets it in.
+    b = fleet.bundle_for("rig", "Rig")
+    fleet.merge_roster(
+        {"id": fid, "epoch": 1, "members": b["members"], "removed": b["removed"]}
+    )
+    assert fleet.is_member("rig")
+    assert fleet.state()["admits"] == {}  # used up
+
+
+def test_tombstones_survive_a_newer_bundle_and_a_rekey():
+    fleet.create()
+    fid = fleet.fleet_id()
+    fleet.add_member("rig", "Rig", by="laptop")
+    fleet.remove_member("rig")
+    fresh = {
+        "laptop": {"host": "Laptop", "added_at": time.time(), "added_by": "laptop"},
+        "rig": {"host": "Rig", "added_at": time.time() + 60, "added_by": "rig"},
+    }
+    body = {"id": fid, "epoch": 2, "key": "B" * 43, "members": fresh, "removed": {}}
+    assert fleet.apply_rekey(body) is True
+    assert fleet.fleet_key() == "B" * 43 and not fleet.is_member("rig")
+    assert fleet.state()["removed"]["rig"]["by"] == "laptop"
+    fleet.adopt_bundle(dict(body, epoch=3, key="C" * 43))  # a rejoin
+    assert fleet.fleet_key() == "C" * 43 and not fleet.is_member("rig")
+    assert fleet.is_member("laptop")
+
+
+def test_a_rekey_that_removes_this_device_makes_it_leave(events):
+    fleet.create()
+    fid = fleet.fleet_id()
+    body = {
+        "id": fid,
+        "epoch": 2,
+        "key": "B" * 43,
+        "members": {},
+        "removed": {"laptop": {"at": time.time() + 1, "by": "rig"}},
+    }
+    assert fleet.apply_rekey(body) is True
+    assert not fleet.in_fleet()
+    gone = [e for e in events if e["event"] == "device.removed"]
+    assert gone and gone[0]["data"]["by"] == "rig"
+
+
+async def test_status_says_who_removed_a_device(world):
+    await _three(world)
+    with world.on("laptop"):
+        await fleet.remove("rig")
+    with world.on("mini"):
+        st = fleet.status(True)
+    [row] = st["removed"]
+    assert row["key"] == "rig" and row["removed_by"] == "laptop"
+    assert row["removed_by_host"] == "Laptop" and row["removed_at"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# [5] a gate-ON member answers member routes with the fleet-aware 401
+# --------------------------------------------------------------------------- #
+def _gated_server(monkeypatch, tmp_path, rc="on"):
+    sf = tmp_path / "settings.json"
+    sf.write_text(json.dumps({"general": {"onboarded": True, "remote_control": rc}}))
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(sf))
+    monkeypatch.setenv("MINDFLOCK_AUTH", "1")
+    monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "own-token-0123456789abcdef")
+    store.invalidate()
+    from backend.web import server
+
+    fleet.create()
+    return TestClient(server.app, client=("100.64.0.7", 5000))
+
+
+@pytest.mark.parametrize("rc", ["on", "off"])
+def test_gate_on_member_routes_say_their_epoch(monkeypatch, tmp_path, rc):
+    c = _gated_server(monkeypatch, tmp_path, rc)
+    newer = {
+        "Authorization": "Bearer newer-key-AAAAAAAAAAAAAAAAAAAA",
+        "X-MindFlock-Remote": "laptop",
+    }
+    for method, path in (
+        ("GET", "/api/fleet/roster"),
+        ("POST", "/api/fleet/roster"),
+        ("POST", "/api/fleet/rekey"),
+        ("POST", "/api/fleet/rotate-token"),
+        ("POST", "/api/settings/sync/nudge"),
+        ("GET", "/api/settings/sync/export"),
+    ):
+        r = c.request(method, path, json={}, headers=newer)
+        assert r.status_code == 401, (path, r.text)
+        assert r.json()["epoch"] == 1 and r.json()["id"] == fleet.fleet_id(), path
+        assert r.json()["kfp"] == fleet.key_fp(fleet.fleet_key())
+    # The current key still works through both gates.
+    ok = {"Authorization": "Bearer " + fleet.fleet_key(), "X-MindFlock-Remote": "l"}
+    assert c.get("/api/fleet/roster", headers=ok).status_code == 200
+    # Everything else is still behind the gate.
+    assert c.get("/api/instances", headers=newer).status_code in (401, 403)
+
+
+def test_a_relayed_own_token_on_a_member_route_obeys_the_toggle(monkeypatch, tmp_path):
+    c = _gated_server(monkeypatch, tmp_path, "off")
+    hdr = {
+        "Authorization": "Bearer own-token-0123456789abcdef",
+        "X-MindFlock-Remote": "paired",
+    }
+    r = c.get("/api/settings/sync/export", headers=hdr)
+    assert r.status_code == 403
+    assert r.json()["error"] == "remote control is disabled on this device"
+
+
+def test_a_member_whose_gate_hides_its_epoch_is_tried_with_kept_keys(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    store.invalidate()
+    monkeypatch.setattr(
+        remote,
+        "self_identity",
+        lambda: {"key": "laptop", "host": "Laptop", "dns": "", "ip": ""},
+    )
+    _fresh()
+    fleet.create()
+    fleet.add_member("mini", "Mini", by="laptop")
+    fleet.add_member("rig", "Rig", by="laptop")
+    old = fleet.fleet_key()
+    fleet.remove_member("rig")
+    fleet.rekey()
+    mini = {"key": "mini", "host": "Mini", "reachable": True, "fleet": fleet.fleet_id()}
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [mini])
+    calls = []
+
+    async def post_json(dev, path, body, timeout=10.0, *, auth=True, bearer=None):
+        calls.append((path, bearer))
+        if bearer == old and path == "/api/fleet/rekey":
+            return 200, {"ok": True}
+        return 401, {"error": "unauthorized"}  # an older build's gate
+
+    monkeypatch.setattr(remote, "post_json", post_json)
+    asyncio.run(fleet.gossip_once())
+    assert ("/api/fleet/rekey", old) in calls
+    assert fleet.stale_key() is False
+    assert fleet._PEERS["mini"]["epoch"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# [8] same epoch, different keys: a conflict with exactly one loser
+# --------------------------------------------------------------------------- #
+async def test_two_removals_apart_are_a_key_conflict_one_side_rejoins(world):
+    await _three(world)
+    world.down.add("mini")
+    world.rediscover()
+    with world.on("laptop"):
+        await fleet.remove("rig")
+    world.down.discard("mini")
+    world.down.add("laptop")
+    world.rediscover()
+    with world.on("mini"):
+        await fleet.remove("rig")
+    world.down.discard("laptop")
+    world.rediscover()
+    stale = {}
+    for k, other in (("laptop", "mini"), ("mini", "laptop")):
+        stale[k] = await _gossip(world, k)
+        with world.on(k):
+            peer = fleet._PEERS[other]
+            assert peer["conflict"] is True
+            assert peer["error"] == (
+                "has a different key for your devices — rejoin one from the other"
+            )
+            assert fleet.peer_on_other_epoch(other)  # no fleet key sent to it
+            assert fleet.prev_key(1)  # not pruned because of it
+            assert fleet.status(True)["members"][
+                [m["key"] for m in fleet.status(True)["members"]].index(other)
+            ]["key_conflict"]
+    assert sorted(stale.values()) == [False, True]
+    loser = [k for k, v in stale.items() if v][0]
+    winner = "mini" if loser == "laptop" else "laptop"
+    with world.on(loser):
+        lfp = fleet.key_fp(fleet.fleet_key())
+    with world.on(winner):
+        assert lfp < fleet.key_fp(fleet.fleet_key())
+    # The loser rejoins the winner (a code made there): one key again, and
+    # rig stays removed on both.
+    await _join_by_code(world, loser, winner)
+    with world.on(loser):
+        lk = fleet.fleet_key()
+        assert not fleet.is_member("rig")
+    with world.on(winner):
+        assert fleet.fleet_key() == lk
+
+
+# --------------------------------------------------------------------------- #
+# [1] [6] Rotate token replaces the devices' key; own token only to its owner
+# --------------------------------------------------------------------------- #
+async def test_rotate_key_reaches_members_and_kills_the_old_key(world):
+    await _three(world)
+    with world.on("laptop"):
+        old = fleet.fleet_key()
+        out = await fleet.rotate_key()
+        new = fleet.fleet_key()
+    assert out == {"rekeyed": ["mini", "rig"], "missed": []}
+    for k in ("rig", "mini"):
+        with world.on(k):
+            assert fleet.fleet_key() == new and not fleet.key_valid(old)
+
+
+def _phone_server(monkeypatch, tmp_path):
+    sf = tmp_path / "settings.json"
+    sf.write_text(
+        json.dumps(
+            {
+                "general": {
+                    "onboarded": True,
+                    "auth_mode": "on",
+                    "auth_token": "own-token-0123456789abcdef",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(sf))
+    monkeypatch.delenv("MINDFLOCK_AUTH", raising=False)
+    monkeypatch.delenv("MINDFLOCK_AUTH_TOKEN", raising=False)
+    store.invalidate()
+    from backend.web import server
+
+    return server
+
+
+def test_rotate_token_route_signs_qr_phones_out_of_the_group(monkeypatch, tmp_path):
+    server = _phone_server(monkeypatch, tmp_path)
+    fleet.create()
+    key = fleet.fleet_key()
+    c = TestClient(server.app, client=("100.64.0.7", 5000))
+    own = {"Authorization": "Bearer own-token-0123456789abcdef"}
+    r = c.post("/api/settings/auth-token/rotate", headers=own)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["in_fleet"] is True and body["token"] and "scan the QR" in body["note"]
+    assert not web_auth.token_valid(key)  # the phone's fleet-key cookie is dead
+    assert fleet.state()["epoch"] == 2
+
+
+def test_mobile_and_rotate_hand_no_own_token_to_a_fleet_key_caller(
+    monkeypatch, tmp_path
+):
+    server = _phone_server(monkeypatch, tmp_path)
+    from backend.web.core import shared_link
+
+    fleet.create()
+    key = fleet.fleet_key()
+    monkeypatch.setattr(remote, "paired_tokens", lambda: {"mac": "MACTOKEN-xyz"})
+    monkeypatch.setattr(shared_link, "advertised_url", lambda: "https://f.ts.net/m")
+    c = TestClient(server.app, client=("100.64.0.7", 5000))
+    for hdr in (
+        {"Authorization": "Bearer " + key},
+        {"Authorization": "Bearer " + key, "X-MindFlock-Remote": "rig"},
+    ):
+        r = c.get("/api/mobile", headers=hdr)
+        assert r.status_code == 200
+        assert r.json()["token"] is None
+        assert "token=" not in (r.json()["qr_target"] or "")
+    # The owner (own token) still gets the QR with every token in it.
+    r = c.get(
+        "/api/mobile", headers={"Authorization": "Bearer own-token-0123456789abcdef"}
+    )
+    assert r.json()["token"] == "own-token-0123456789abcdef"
+    assert "MACTOKEN-xyz" in r.json()["qr_target"]
+    # A rotate asked with the devices' key rotates, but hands back no token.
+    r = c.post(
+        "/api/settings/auth-token/rotate", headers={"Authorization": "Bearer " + key}
+    )
+    assert r.status_code == 200 and r.json()["token"] is None
+    assert "set-cookie" not in r.headers
+    assert not web_auth.own_token_valid("own-token-0123456789abcdef")
+
+
+# --------------------------------------------------------------------------- #
+# [17] one caller is only ever locked out; burning invites takes 3 addresses
+# --------------------------------------------------------------------------- #
+def test_one_caller_never_burns_the_invites(monkeypatch):
+    t = [1000.0]
+    monkeypatch.setattr(fleet, "_now", lambda: t[0])
+    monkeypatch.setattr(fleet, "INVITE_TTL", 1e9)  # outlives the guessing
+    fleet.create_invite()
+    spans = []
+    for _ in range(60):
+        try:
+            fleet.redeem("WRONGCOD", "nobody", "x", ip="100.64.0.66")
+        except fleet.TooManyAttempts:
+            spans.append(fleet._LOCKED_UNTIL["100.64.0.66"] - t[0])
+            t[0] = fleet._LOCKED_UNTIL["100.64.0.66"] + 1
+        except PermissionError:
+            t[0] += 1
+    assert fleet._INVITES, "one address burned everyone's code"
+    # 60 s, doubling each repeat lockout.
+    assert spans[:3] == [
+        pytest.approx(60, abs=2),
+        pytest.approx(120, abs=2),
+        pytest.approx(240, abs=2),
+    ]
+    # Two addresses taking turns don't either.
+    fleet._LOCKED_UNTIL.clear()
+    fleet._FAILS.clear()
+    fleet._ALL_FAILS.clear()
+    for i in range(200):
+        try:
+            fleet.redeem("WRONGCOD", "nobody", "x", ip="100.64.2.%d" % (i % 2))
+        except PermissionError:
+            pass
+        t[0] += 30
+    assert fleet._INVITES
+    # Guessing from several addresses (at least three) still burns them.
+    fleet._LOCKED_UNTIL.clear()
+    fleet._FAILS.clear()
+    fleet._ALL_FAILS.clear()
+    for i in range(20):
+        try:
+            fleet.redeem("WRONGCOD", "nobody", "x", ip="100.64.1.%d" % (i % 5))
+        except PermissionError:
+            pass
+        t[0] += 1
+    assert not fleet._INVITES
+
+
+# --------------------------------------------------------------------------- #
+# [18] public join routes answer only tailnet callers (or this machine)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "client, ok",
+    [
+        (("100.64.0.9", 4321), True),  # a tailnet address
+        (("127.0.0.1", 4321), True),  # this machine, unproxied
+        (("192.168.1.50", 4321), False),  # a LAN neighbour
+    ],
+)
+def test_public_join_routes_answer_only_the_tailnet(monkeypatch, client, ok):
+    from backend.web import server
+
+    c = TestClient(server.app, client=client)
+    body = {"device": "rig", "host": "Rig", "secret_hash": "a" * 64}
+    r = c.post("/api/fleet/requests", json=body)
+    assert (r.status_code == 200) is ok, r.text
+    if not ok:
+        assert r.status_code == 403 and fleet.pending_requests() == []
+        assert c.post("/api/fleet/redeem", json={}).status_code == 403
+        assert c.get("/api/fleet/requests/" + "0" * 16).status_code == 403
+    # Behind an unvouched proxy hop (loopback + a forwarding header): no.
+    r = TestClient(server.app, client=("127.0.0.1", 4321)).post(
+        "/api/fleet/requests", json=body, headers={"X-Forwarded-For": "192.168.1.50"}
+    )
+    assert r.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# [19] after a removal the remover keeps sending the members the key
+# --------------------------------------------------------------------------- #
+async def test_after_remove_the_fleet_key_still_goes_to_the_rekeyed(world):
+    await _three(world)
+    await _gossip(world, "laptop")  # _PEERS[*].epoch == 1
+    with world.on("laptop"):
+        out = await fleet.remove("rig")
+        assert out["rekeyed"] == ["mini"]
+        assert not fleet.peer_on_other_epoch("mini")
+        assert remote._fleet_key_for("mini") == fleet.fleet_key()
+        assert fleet.TAILNET_ADVICE == out["advice"]
+
+
+# --------------------------------------------------------------------------- #
+# [2] [9] PR review stays where it runs; leaving gives the choice back
+# --------------------------------------------------------------------------- #
+async def test_the_joiner_that_runs_pr_review_keeps_it(world):
+    with world.on("rig"):
+        store.update_settings(github={"repos": ["o/r"], "token": "t"})
+        assert fleet.runs_automation() is True
+    await _join_by_code(world, "rig", "laptop")
+    with world.on("rig"):
+        assert store.load_settings().github.run_here is True
+    with world.on("laptop"):
+        assert store.load_settings().github.run_here is False
+
+
+async def test_ask_to_join_and_one_click_add_follow_the_automation_too(world):
+    with world.on("mini"):
+        store.update_settings(github={"issue_repos": ["o/r"], "issues_enabled": True})
+    with world.on("laptop"):
+        fleet.create()
+    with world.on("mini"):
+        out = await fleet.request_join("laptop")
+    with world.on("laptop"):
+        st, _ = await world.ui("POST", "/api/fleet/requests/%s/approve" % out["id"])
+        assert st == 200
+    with world.on("mini"):
+        assert (await _wait_join())["state"] == "joined"
+        assert store.load_settings().github.run_here is True
+    with world.on("laptop"):
+        assert store.load_settings().github.run_here is False
+    # One click: rig runs PR review and is the one ADDED — it keeps it.
+    with world.on("rig"):
+        store.update_settings(github={"repos": ["o/r"]})
+    remote.set_token("rig", world.own_tokens["rig"])
+    world.rediscover()
+    with world.on("laptop"):
+        st, out = await world.ui("POST", "/api/fleet/add-paired", {"device": "rig"})
+    assert st == 200 and out["direction"] == "theirs_take_mine"
+    with world.on("rig"):
+        assert store.load_settings().github.run_here is True
+
+
+async def test_leaving_or_being_removed_gives_run_here_back(world):
+    await _three(world)
+    with world.on("rig"):
+        assert store.load_settings().github.run_here is False
+        await fleet.leave_fleet()
+        assert store.load_settings().github.run_here is None
+    with world.on("mini"):  # a roster that removed mini reaches it
+        r = fleet.roster()
+        r["removed"]["mini"] = {"at": time.time() + 1, "by": "laptop"}
+        fleet.merge_roster(r)
+        assert not fleet.in_fleet()
+        assert store.load_settings().github.run_here is None
