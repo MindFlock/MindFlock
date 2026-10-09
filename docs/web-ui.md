@@ -2958,8 +2958,59 @@ A few screens got quieter:
   card explains why that isn't reachable and gives the tested path (a second
   Tailscale inside WSL) and the alternative (mirrored networking). Mobile
   shows the same card when Tailscale is missing.
+
+  Below it, **This device** says where MindFlock listens ("listens on your
+  tailnet (100.x:8765) · access gate on"). A device bound to 127.0.0.1 can
+  still make a code nobody can use and still join, then sit "offline" on
+  every other screen — so then the line turns into a warning ("Your other
+  devices can't reach this one") with **Make reachable**: one save that turns
+  Tailscale mode AND the access gate on together (never a tailnet bind with
+  the gate off — that would open the machine to the LAN too), after trading
+  this browser's token for its sign-in cookie so it stays signed in, and then
+  waits out the server's own restart. The same fix appears where it matters:
+  **Add a device** is blocked inline on a local-only device (no code to type
+  into a computer that can't reach this one), the toast after joining says
+  "Joined X — but your other devices can't reach this one yet" and its click
+  opens the confirm, and on the device that let someone in, a joiner it can't
+  reach after the join reads "Joined, but rig isn't reachable from here —
+  connection refused on :8765 … On rig: Settings → Devices → Make reachable".
+
+  When the other members do something this one doesn't, **Match my other
+  devices** offers one confirm ("reachable on Tailscale + phone link
+  “mindflock”"): it saves the same reachable settings plus
+  `general.shared_link`, then lists any phone-link checklist step still
+  failing here (tag, operator — see Mobile). The **phone link** row shows
+  who answers the shared link across your devices ("hosted by mac-mini ✓,
+  rig ✓ · laptop ⚠ awaiting approval") with **Host here** for this one.
+
+  "No other MindFlock found" is gone: each tailnet device that isn't a
+  member or a joinable MindFlock gets its own row with what discovery found —
+  "connection refused on :8765 → MindFlock isn't running there, or it's
+  local-only", "timed out on :8765 → your Tailscale policy may block
+  tcp:8765" (with **Copy grant**: the policy lines that open it), "asleep —
+  Tailscale last saw it 2 h ago" — tagged devices first; member rows use the
+  same words instead of "offline".
+
+  A join request shows here whichever of your devices it asked: the asked
+  device copies it to every member, so **Approve** works from any of them
+  (the answer goes back to the asked one under the devices' key, carrying the
+  6-digit code shown — "It asked rig; approving here answers there"), from the
+  bell's own **Approve** on the request's row, and from the phone's approve
+  card on `/m` (an ntfy tap opens `/m#approve=<id>`). The desktop app also
+  raises an OS notification for a join request, someone arriving on a peer
+  link and an update while its window isn't focused; clicking one brings the
+  window forward on the right screen.
+
+  **Paste a code** is ONE box for every code: one of your devices' codes
+  (bare, `<device> <code>`, or the whole `mindflock devices join` command)
+  joins here; someone's `mfp1:`/`mfp2:` invite is joined as a peer link and
+  Work with someone opens on it, with the safety number to compare. The
+  palette's **Paste a code…** focuses it, and a code typed straight into the
+  palette is offered as "Join with code …" at the top.
 - **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`), plus the
-  **tailscale mode** toggle. Setup reads in order: first Tailscale on the
+  **Reachable from your other devices and phone (over Tailscale)** toggle
+  (Tailscale mode; turning it on saves the access gate on with it, the same
+  save as Devices' Make reachable). Setup reads in order: first Tailscale on the
   phone, signed in as this computer's account (with a QR to the app
   download), then the MindFlock QR. Which interface uvicorn binds is fixed at process
   start, so that toggle only means something after a restart — and turning it
@@ -3084,7 +3135,12 @@ A few screens got quieter:
 - **Remote devices** — when `general.remote_control` is on, other MindFlock
   servers on your tailnet appear as sidebar device groups
   (sessions namespaced `<device>::<title>`); pair/unpair via
-  `/api/devices/{device}/connect|disconnect`. A remote session's pane head
+  `/api/devices/{device}/connect|disconnect`. A MindFlock that can join your
+  devices reads "Not one of your devices yet" under its group with **Add to
+  my devices…** (Settings → Devices, its row highlighted — joining turns
+  remote control on, no token to paste); pasting an access token
+  (**Connect…**) is left for one too old to join, and lives in Security →
+  **Pair a device you don't own**. A remote session's pane head
   carries its device's name as a small tag. New Session gains a **Runs on**
   picker once another device is connected: the folder suggestions, Browse…,
   the agent list and the create all answer from the chosen device, and the
