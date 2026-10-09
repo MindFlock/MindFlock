@@ -60,9 +60,7 @@ import asyncio
 import json
 import os
 import re
-import shutil
 import socket
-import subprocess
 import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -70,6 +68,7 @@ from urllib.parse import quote
 from starlette.responses import JSONResponse
 
 from backend import log
+from backend import tailscale_cli as _tailscale_cli
 from backend.config import config
 
 try:
@@ -239,35 +238,15 @@ def _node_entry(node: dict) -> dict:
 #: Test/sandbox hook: when set, :func:`tailscale_nodes` reads this file (a
 #: ``tailscale status --json`` document) instead of running the CLI — how an
 #: end-to-end test stands up several servers on one machine and lets them
-#: discover each other as "devices" without a real tailnet.
-STATUS_FILE_ENV = "MINDFLOCK_TAILSCALE_STATUS_FILE"
+#: discover each other as "devices" without a real tailnet. Owned by
+#: :mod:`backend.tailscale_cli` (every status reader honors it).
+STATUS_FILE_ENV = _tailscale_cli.STATUS_FILE_ENV
 
 
 def _tailscale_status() -> Optional[dict]:
-    """The parsed ``tailscale status --json`` document, or None."""
-    fake = (os.environ.get(STATUS_FILE_ENV) or "").strip()
-    if fake:
-        try:
-            with open(fake, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            return None
-        return data if isinstance(data, dict) else None
-    if shutil.which("tailscale") is None:
-        return None
-    try:
-        cp = subprocess.run(
-            ["tailscale", "status", "--json"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if cp.returncode != 0:
-            return None
-        data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    """The parsed ``tailscale status --json`` document, or None (the shared,
+    briefly cached snapshot — :func:`backend.tailscale_cli.status_json`)."""
+    return _tailscale_cli.status_json()
 
 
 def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:

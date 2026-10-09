@@ -10,6 +10,10 @@ are reported too, but as ``info``/``warn`` — never as a blocker.
 :mod:`backend.web.core.setup_install`): a browser terminal, so the one sudo
 prompt has somewhere to go.
 
+``/api/tailscale/health`` and ``/api/tailscale/login`` live here too: the
+"Tailscale on this device" card (Settings → Devices) is the tailscale row of
+the doctor, in more detail and with a Sign in button.
+
 Results are cached for ~30s (the checks shell out to ``git``/``tmux``, plus the
 optional ``gh``/``tailscale`` probes); pass ``?refresh=1`` to force a re-probe
 after installing something.
@@ -22,12 +26,31 @@ import sys
 import time
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import doctor
 
 from .base import Addon, AppContext, FrontendDescriptor
+
+
+async def _privileged(request: Request) -> bool:
+    try:
+        from backend.web.core import auth as web_auth
+
+        return bool(await web_auth.privileged(request.scope))
+    except Exception:  # noqa: BLE001 — fail closed
+        return False
+
+
+def _qr(data: str) -> str:
+    try:
+        from backend.web.core.mobile_access import qr_svg
+
+        return qr_svg(data) or ""
+    except Exception:  # noqa: BLE001 — the link alone still works
+        return ""
+
 
 #: How long a doctor run stays fresh. Keeps the endpoint cheap under the SPA's
 #: polling without hiding a just-installed dependency for long.
@@ -121,6 +144,46 @@ class DoctorAddon(Addon):
 
             self._cached_payload = None
             return JSONResponse({"closed": setup_install.close()})
+
+        # --- Tailscale on this device ----------------------------------- #
+        @router.get("/tailscale/health")
+        async def tailscale_health(
+            request: Request, refresh: bool = False
+        ) -> JSONResponse:
+            """Read-only :func:`backend.tailscale_cli.health`. Who this device
+            is signed in as, and a pending sign-in URL (which would let
+            whoever opens it put this device on THEIR tailnet), are only for
+            the person at this device: blanked for anyone else."""
+            from backend import tailscale_cli
+
+            h = await asyncio.to_thread(tailscale_cli.health, fresh=refresh)
+            if await _privileged(request):
+                if h.get("auth_url"):
+                    h["auth_qr_svg"] = await asyncio.to_thread(_qr, h["auth_url"])
+            else:
+                h["user"] = ""
+                h["auth_url"] = ""
+            return JSONResponse(h)
+
+        @router.post("/tailscale/login")
+        async def tailscale_login(request: Request) -> JSONResponse:
+            """Start signing this device in to Tailscale (``tailscale login``,
+            or ``up`` when it is only stopped) and hand back the sign-in URL
+            as a link and a QR. Returns within seconds — it never waits for
+            the person to finish; the card polls ``/tailscale/health``.
+            Only for the person at this device (see ``auth.privileged``)."""
+            from backend import tailscale_cli
+
+            if not await _privileged(request):
+                return JSONResponse(
+                    {"error": "Sign in to Tailscale from this device itself."},
+                    status_code=403,
+                )
+            out = await asyncio.to_thread(tailscale_cli.start_login)
+            if out.get("auth_url"):
+                out["auth_qr_svg"] = await asyncio.to_thread(_qr, out["auth_url"])
+            self._cached_payload = None  # the doctor's tailscale row changes
+            return JSONResponse(out, status_code=200 if out.get("ok") else 409)
 
         return router
 

@@ -69,11 +69,11 @@ import asyncio
 import ipaddress
 import json
 import re
-import shutil
 import subprocess
 import threading
 from typing import Callable, Optional, Tuple
 
+from backend import tailscale_cli as _tailscale_cli
 from backend.web.core import auth as _auth
 
 #: The port the service answers on. 443 so the phone URL carries no port.
@@ -131,9 +131,10 @@ def configured_name() -> str:
 
 
 def _run(args: list) -> Tuple[int, str]:
-    """``(returncode, combined output)``; ``(-1, reason)`` when it couldn't run."""
+    """``(returncode, combined output)``; ``(-1, reason)`` when it couldn't run.
+    ``args`` start with ``"tailscale"``, resolved by :mod:`backend.tailscale_cli`."""
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -149,10 +150,10 @@ def _run(args: list) -> Tuple[int, str]:
 def _json_cmd(args: list) -> Optional[dict]:
     """A ``tailscale … --json`` command's object; None when it couldn't be run,
     failed, or didn't print JSON (so callers can tell "unknown" from "empty")."""
-    if shutil.which("tailscale") is None:
+    if _tailscale_cli.tailscale_bin() is None:
         return None
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -167,8 +168,9 @@ def _json_cmd(args: list) -> Optional[dict]:
 
 
 def _tailscale_status() -> dict:
-    """``tailscale status --json`` (``{}`` when unavailable)."""
-    return _json_cmd(["tailscale", "status", "--json"]) or {}
+    """``tailscale status --json`` (``{}`` when unavailable) — the shared,
+    briefly cached snapshot."""
+    return _tailscale_cli.status_json() or {}
 
 
 def _serve_status() -> Optional[dict]:
@@ -421,7 +423,7 @@ def apply(port: int) -> dict:
         if not want:
             _STATE.update(error="", kind="")
             return status()
-        if shutil.which("tailscale") is None:
+        if _tailscale_cli.tailscale_bin() is None:
             _STATE.update(
                 name="", host="", error="Tailscale is not installed.", kind="missing"
             )

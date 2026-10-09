@@ -570,24 +570,91 @@ def check_clipboard() -> Check:
     )
 
 
+def _tailscale_wanted() -> bool:
+    """Whether this host uses something that needs Tailscale: tailscale serve
+    mode, the shared phone link, or "Your devices". Then a missing Tailscale
+    is a ``warn`` in the install plan instead of an optional ``info``."""
+    try:
+        from backend.config.settings import load_settings
+
+        g = load_settings().general
+        if (g.serve_mode or "") == "tailscale" or (g.shared_link or ""):
+            return True
+    except Exception:  # noqa: BLE001 — settings are optional
+        pass
+    try:
+        from backend.web.core import fleet as _fleet
+
+        return bool(_fleet.in_fleet())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def check_tailscale() -> Check:
-    path = shutil.which("tailscale")
-    if not path:
-        fix = (
-            "brew install tailscale"
-            if osenv.os_kind() == "macos"
-            else "curl -fsSL https://tailscale.com/install.sh | sh"
-        )
+    """Tailscale, from :func:`backend.tailscale_cli.health`: found where (PATH,
+    the macOS app bundle, or only as Windows' ``tailscale.exe`` from WSL),
+    signed in or not, key expiry. Present-but-broken is a ``warn`` with the
+    one next step, not a ✓ on presence alone."""
+    from backend import tailscale_cli
+
+    h = tailscale_cli.health()
+    issues = h["issues"]
+    if not h["installed"]:
+        issue = issues[0] if issues else {}
+        if issue.get("id") == "wsl_windows_only":
+            # A second Tailscale node inside WSL is the user's call (it is
+            # its own device in the admin console): offered, never in the
+            # one-shot install plan.
+            return Check(
+                "tailscale",
+                "tailscale",
+                "warn",
+                issue["message"],
+                issue.get("fix", ""),
+                docs=issue.get("docs", ""),
+                cmd=issue.get("fix", ""),
+            )
+        wanted = _tailscale_wanted()
+        fix = issue.get("fix") or tailscale_cli.LINUX_INSTALL
+        if osenv.os_kind() == "macos":
+            # The GUI app (cask `tailscale-app`, or the Standalone download) is
+            # what Tailscale recommends on a Mac; formula `tailscale` is the
+            # headless daemon.
+            hint = "%s (or the Standalone app from %s)" % (
+                fix,
+                tailscale_cli.DOWNLOAD_MAC,
+            )
+        else:
+            hint = fix
         return Check(
             "tailscale",
             "tailscale",
-            "info",
-            "not found (optional — only needed for phone/tailnet access)",
-            fix,
-            docs=_DOCS["tailscale"],
+            "warn" if wanted else "info",
+            (
+                "not found (needed for phone access and Your devices)"
+                if wanted
+                else "not found (optional — only needed for phone/tailnet access)"
+            ),
+            hint,
+            docs=issue.get("docs") or _DOCS["tailscale"],
             cmd=fix,
+            install=wanted,
         )
-    return Check("tailscale", "tailscale", "ok", path)
+    where = h["path"] + (" (Tailscale app)" if h["kind"] == "app-bundle" else "")
+    problem = next((i for i in issues if i["level"] in ("fail", "warn")), None)
+    if problem:
+        return Check(
+            "tailscale",
+            "tailscale",
+            problem["level"],
+            problem["message"],
+            problem.get("fix", ""),
+            docs=problem.get("docs", ""),
+        )
+    who = " · ".join(
+        x for x in (h["tailnet"], h["device"]["dns"] or h["device"]["name"]) if x
+    )
+    return Check("tailscale", "tailscale", "ok", where + (" — " + who if who else ""))
 
 
 def _peer_settings() -> dict:

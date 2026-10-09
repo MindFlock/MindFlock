@@ -545,12 +545,99 @@ class TestOptionalDeps:
         assert "optional" in c.detail
 
     def test_tailscale_present_is_ok(self, monkeypatch):
+        from backend import tailscale_cli
+
         monkeypatch.setattr(
             doctor.shutil, "which", _which({"tailscale": "/usr/bin/tailscale"})
         )
+        monkeypatch.setattr(
+            tailscale_cli,
+            "status_json",
+            lambda fresh=False: {
+                "BackendState": "Running",
+                "CurrentTailnet": {"Name": "me@example.com", "MagicDNSEnabled": True},
+                "CertDomains": ["box.tail.ts.net"],
+                "Self": {"HostName": "box", "DNSName": "box.tail.ts.net."},
+            },
+        )
         c = doctor.check_tailscale()
         assert c.status == "ok"
-        assert c.detail == "/usr/bin/tailscale"
+        assert c.detail == "/usr/bin/tailscale — me@example.com · box.tail.ts.net"
+
+    def test_tailscale_signed_out_is_warn_not_ok(self, monkeypatch):
+        # Present is not working: a logged-out client used to be a ✓.
+        from backend import tailscale_cli
+
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"tailscale": "/usr/bin/tailscale"})
+        )
+        monkeypatch.setattr(
+            tailscale_cli,
+            "status_json",
+            lambda fresh=False: {"BackendState": "NeedsLogin", "Self": {}},
+        )
+        c = doctor.check_tailscale()
+        assert c.status == "warn"
+        assert "signed in" in c.detail
+        assert c.fix == "sudo tailscale up --operator=$USER"
+        assert not c.install
+
+    def test_tailscale_macos_fix_is_the_app_not_the_daemon(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        from backend import tailscale_cli
+
+        monkeypatch.setattr(tailscale_cli, "APP_BUNDLE_CLI", "/nonexistent/Tailscale")
+        c = doctor.check_tailscale()
+        assert c.cmd == "brew install --cask tailscale-app"
+        assert "tailscale.com/download/mac" in c.fix
+        assert "brew install tailscale " not in c.fix + " "
+
+    def test_tailscale_macos_app_bundle_is_installed(self, monkeypatch, tmp_path):
+        # The App Store / Standalone app puts nothing on PATH: its CLI is the
+        # bundle binary, which must count as installed (not "Install").
+        from backend import tailscale_cli
+
+        cli = tmp_path / "Tailscale"
+        cli.write_text("#!/bin/sh\n")
+        cli.chmod(0o755)
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(tailscale_cli, "APP_BUNDLE_CLI", str(cli))
+        monkeypatch.setattr(
+            tailscale_cli,
+            "status_json",
+            lambda fresh=False: {
+                "BackendState": "Running",
+                "Self": {"HostName": "mac"},
+            },
+        )
+        c = doctor.check_tailscale()
+        assert c.status == "ok"
+        assert c.detail.startswith(str(cli) + " (Tailscale app)")
+
+    def test_tailscale_wsl_windows_only_warns_with_wsl_guidance(
+        self, monkeypatch, tmp_path
+    ):
+        from backend import tailscale_cli
+
+        exe = tmp_path / "tailscale.exe"
+        exe.write_text("")
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "wsl")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(tailscale_cli, "WINDOWS_CANDIDATES", (str(exe),))
+        c = doctor.check_tailscale()
+        assert c.status == "warn"
+        assert "on Windows" in c.detail and "WSL" in c.detail
+        assert "tailscale up --hostname=" in c.fix
+        assert not c.install  # a second node is offered, never auto-installed
+
+    def test_tailscale_missing_but_wanted_joins_the_install_plan(self, monkeypatch):
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(doctor, "_tailscale_wanted", lambda: True)
+        c = doctor.check_tailscale()
+        assert c.status == "warn" and c.install
+        assert c.cmd == "curl -fsSL https://tailscale.com/install.sh | sh"
 
 
 class TestClipboard:

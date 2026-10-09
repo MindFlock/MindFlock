@@ -45,13 +45,14 @@ import asyncio
 import ipaddress
 import json
 import os
-import shutil
 import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+
+from backend import tailscale_cli as _tailscale_cli
 
 #: Tailscale's address ranges: CGNAT for IPv4, its ULA prefix for IPv6.
 _TAILNET_NETS = (
@@ -139,10 +140,10 @@ def _parse_whois(data: dict) -> Optional[Peer]:
 
 
 def _whois_uncached(ip: str) -> Optional[Peer]:
-    if shutil.which("tailscale") is None:
+    if _tailscale_cli.tailscale_bin() is None:
         return None
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             ["tailscale", "whois", "--json", ip],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -312,21 +313,8 @@ def status() -> dict:
         "shared_link_supported": sys.platform.startswith("linux"),
         "trusted": trusted_logins(),
     }
-    if shutil.which("tailscale") is None:
-        return out
-    try:
-        cp = subprocess.run(
-            ["tailscale", "status", "--json"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if cp.returncode != 0:
-            return out
-        data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        return out
-    if not isinstance(data, dict):
+    data = _tailscale_cli.status_json()
+    if data is None:
         return out
     users = data.get("User") or {}
 

@@ -1026,9 +1026,9 @@ class PeerService:
             if host:
                 return host
         try:
-            from backend.web.core import mobile_access
+            from backend import tailscale_cli
 
-            _name, ip = mobile_access._tailscale_info()
+            ip = tailscale_cli.self_ipv4()
             if ip:
                 return ip
         except Exception:  # noqa: BLE001

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def fake_ts(monkeypatch):
             state["serve"].get("Services", {}).pop(args[3], None)
         return 0, ""
 
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(shared_link, "_run", run)
     monkeypatch.setattr(shared_link, "_tailscale_status", lambda: state["status"])
     monkeypatch.setattr(shared_link, "_serve_status", lambda: state["serve"])
@@ -429,7 +430,7 @@ def test_recheck_loop_reconciles_only_while_on(monkeypatch):
 
 
 def test_reconcile_never_raises_without_tailscale(monkeypatch):
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     S.update_settings(general={"shared_link": "mindflock"})
     st = shared_link.reconcile(8765)
     assert st["advertised"] is False
