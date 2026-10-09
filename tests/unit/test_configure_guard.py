@@ -204,6 +204,11 @@ GUARDED = [
     ("post", "/api/settings/sync/now", None),
     ("post", "/api/settings/sync/resume", {"keep": "mine"}),
     ("post", "/api/settings/sync/pin", {"path": "ui.accent", "pinned": True}),
+    ("post", "/api/peer/invites", {}),
+    ("post", "/api/peer/join", {"code": "mfp2:x"}),
+    ("post", "/api/peer/links/abc/share", {"path": "/tmp"}),
+    ("post", "/api/peer/links/abc/perms", {"perms": {}}),
+    ("delete", "/api/peer/links/abc", None),
 ]
 
 
@@ -217,7 +222,7 @@ def _send(c: TestClient, method: str, path: str, body):
 def test_anonymous_tailnet_caller_is_refused(app, method, path, body):
     r = _send(_client(app, TAILNET), method, path, body)
     assert r.status_code == 403, (path, r.status_code, r.text)
-    if "/settings/sync" not in path:  # those keep their own wording
+    if "/settings/sync" not in path:  # sync keeps its own wording
         assert r.json()["error"] == auth.CONFIGURE_REFUSED, path
 
 
@@ -226,8 +231,19 @@ def test_a_signed_in_tailnet_caller_gets_past_the_guard(
     app, tmp_path, monkeypatch, method, path, body
 ):
     # The route runs for real now: keep its stores (templates, red zones…)
-    # out of the real ~/.mindflock.
+    # out of the real ~/.mindflock, and the peer service (listener, tunnel)
+    # out of it altogether.
     monkeypatch.setenv("HOME", str(tmp_path))
+    from backend.web import server
+
+    class _NoPeer:
+        def __getattr__(self, name):
+            async def _call(*a, **kw):
+                return {}
+
+            return _call
+
+    monkeypatch.setattr(server, "_peer_service", lambda: _NoPeer())
     c = _client(app, TAILNET, headers={"Authorization": "Bearer " + TOKEN})
     r = _send(c, method, path, body)
     assert r.status_code != 403, (path, r.text)

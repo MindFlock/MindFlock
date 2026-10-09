@@ -511,7 +511,10 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   transport, the `InviteBook`, the `LinkStore`, and one `EgressProxy` +
   `AgentApi` per bound share.
 - Routes: all under `/api/peer`, and all refused with 403 when the request
-  carries `X-MindFlock-Remote`:
+  carries `X-MindFlock-Remote`. Every write is also refused (403) for an
+  anonymous tailnet caller of a gate-off, reachable server — it needs this
+  device's token, the fleet key, this machine or a trusted Tailscale account
+  (`auth.may_configure`, see web-api.md):
 
   | Method | Path | Notes |
   |---|---|---|

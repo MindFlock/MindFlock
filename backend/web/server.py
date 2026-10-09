@@ -14746,17 +14746,24 @@ def _peer_service():
     return _svc.get_service()
 
 
-def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    """Another MindFlock relaying never manages peer links here; and a change
+    (an invite, a join, sharing a folder with someone, its perms) needs the
+    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
+    gate-off device, who could otherwise share its folders with a peer of
+    their own."""
     if _remote.from_remote(request):
         return JSONResponse(
             {"error": "peer links can only be managed on this device"},
             status_code=403,
         )
+    if request.method != "GET" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     return None
 
 
 async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
-    refused = _peer_remote_refusal(request)
+    refused = await _peer_remote_refusal(request)
     if refused is not None:
         return refused
     from backend.peer.service import PeerServiceError

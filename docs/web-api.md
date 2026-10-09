@@ -2038,8 +2038,9 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   `POST/PUT/DELETE /api/providers*`, `POST/DELETE /api/templates*`, `POST
   /api/prefs` with `keymap` or `prompt_presets`, `POST /api/notify/ntfy`,
   `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
-  (add, delete, companions, plan-first), `POST /api/cursor/autoadopt` and
-  `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
+  (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  and `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
   "this changes how your devices run agents, so it needs this device's
   sign-in…"}` unless the caller presents this device's token or the fleet key,
   is this machine itself (loopback, unproxied), or is a trusted Tailscale
