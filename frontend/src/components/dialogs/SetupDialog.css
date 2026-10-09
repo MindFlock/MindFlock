@@ -261,16 +261,26 @@ button.linklike {
   gap: 6px;
   margin: 0 0 8px;
 }
-#install-dialog .ws-head {
+#install-dialog .ws-head,
+#signin-dialog .ws-head {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-#install-dialog .ws-head h2 {
+#install-dialog .ws-head h2,
+#signin-dialog .ws-head h2 {
   margin: 0;
   font-size: 15px;
 }
-#install-status {
+#install-status,
+#signin-status {
   flex: 1;
   font-size: 12px;
+}
+
+/* "Sign in to <agent>": on the doctor's agent-auth row (Setup ① and Settings →
+   Doctor) and beside Setup ②'s agent test. */
+.doctor-detail .agent-signin-btn,
+.setup-acct-row .agent-signin-btn {
+  margin-left: 8px;
 }
