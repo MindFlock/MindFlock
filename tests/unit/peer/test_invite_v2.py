@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 
 import pytest
@@ -148,7 +149,15 @@ def test_invite_book_mints_relay_codes_and_checks_them():
 
 
 _label = st.from_regex(r"[a-z0-9](?:[a-z0-9-]{0,20}[a-z0-9])?", fullmatch=True)
-_hosts = st.lists(_label, min_size=1, max_size=4).map(".".join)
+def _reachable(host: str) -> bool:
+    # Dotted digit labels can spell 0.0.0.0, which codes rightly refuse.
+    try:
+        return not ipaddress.ip_address(host).is_unspecified
+    except ValueError:
+        return True
+
+
+_hosts = st.lists(_label, min_size=1, max_size=4).map(".".join).filter(_reachable)
 _segments = st.from_regex(
     r"[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,20}", fullmatch=True
 ).filter(lambda s: s not in (".", ".."))
