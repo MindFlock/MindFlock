@@ -206,7 +206,9 @@ EVENT_NAMES = (
     # A computer asked to join and waits for approval HERE (data: {"device",
     # "host", "code", "id", "detail": "<host> · code 123 456"} — the same
     # 6-digit code shows on the asking computer, which is how the user tells
-    # it's the right one).
+    # it's the right one). Also emitted on every OTHER member that holds a
+    # copy (approve from wherever you are), with "via" (the asked device's
+    # key) and "via_host" added — the asked device alone pushes it to ntfy.
     "device.join_requested",
     # A computer became one of the user's devices — by code, approval, or
     # one-click add (data: {"device", "host", ...}).

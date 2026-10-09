@@ -607,7 +607,7 @@ It finds — and auto-starts — the server by itself.
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |
 | Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Intake → Pull requests), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
-| Optional — everything else | `cursor` (IDE integration), `tailscale` (phone access) |
+| Optional — everything else | `cursor` (IDE integration), `tailscale` (multiple devices + phone) |
 
 ## How It Works
 

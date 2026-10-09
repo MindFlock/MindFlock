@@ -2,7 +2,7 @@
 
 MindFlock talks to a few external systems — the coding-agent CLI, GitHub (PRs
 and PR-review ingestion), the active ticketing provider (Shortcut / Jira /
-Linear / GitHub Issues / Asana ticket ingestion), and Tailscale (phone access).
+Linear / GitHub Issues / Asana ticket ingestion), and Tailscale (your devices & phone).
 Until now their state was scattered across separate Settings tabs, so a newcomer
 had no single answer to "what am I connected to, and what still needs setting up?".
 
@@ -270,13 +270,13 @@ def _git_connection() -> dict:
 
 
 def _tailscale_connection() -> dict:
-    """Tailscale: reach the web UI from your phone at ``/m``."""
+    """Tailscale: your other computers and your phone reach this one."""
     ts = doctor.check_tailscale()
     connected = ts.status == "ok"
     return {
         "id": "tailscale",
-        "name": "Phone access",
-        "purpose": "Reach MindFlock from your phone over your tailnet.",
+        "name": "Tailscale — your devices & phone",
+        "purpose": "Your other computers and your phone reach MindFlock here over your tailnet.",
         "required": False,
         "status": CONNECTED if connected else NOT_CONNECTED,
         "detail": ts.detail
