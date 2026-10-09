@@ -409,7 +409,7 @@ def setup_git_credential() -> dict:
             "helper": "",
             "error": "the mindflock command isn't on PATH",
         }
-    helper = "!%s git-credential" % exe.replace(" ", "\\ ")
+    helper = "!%s git-credential" % __import__("shlex").quote(exe)
     rc, _out, err = _git(
         "config", "--global", "credential.https://github.com.helper", helper
     )
