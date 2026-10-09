@@ -74,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   taking their values where they have one, and its unset fields never clear
   theirs.
 
+### Fixed
+
+- **Copying from a Claude Code pane gives you the text, not its layout.** Drag-to-copy in a Claude Code agent window used to bring along the `●`/`⏺` bullet, the two-space gutter on every row and a line break wherever Claude Code wrapped a long line, so one sentence pasted as several indented lines. A row is now rejoined with the next one exactly when the next one's first word couldn't have fit on it, the gutter is dropped, and real line breaks (short lines, list items, blank lines, tool output, a line Claude Code cut short with `…`) are kept. Shell tabs and other agents copy as before.
+
 ## [0.7.3] - 2026-10-08
 
 ### Added

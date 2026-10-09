@@ -26338,6 +26338,68 @@ function tourDecision(opts) {
 	return opts.onboarded ? "skip" : "open";
 }
 //#endregion
+//#region src/lib/claudeCopy.ts
+var BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
+var MESSAGE = /^\s*[⏺●❯]\s/;
+function cpWidth(cp) {
+	if (cp >= 4352 && cp <= 4447 || cp >= 11904 && cp <= 42191 && cp !== 12351 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65103 || cp >= 65280 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141) return 2;
+	return 1;
+}
+function displayWidth(s) {
+	let w = 0;
+	for (const ch of s) w += cpWidth(ch.codePointAt(0) || 0);
+	return w;
+}
+function indentOf(row) {
+	return row.length - row.trimStart().length;
+}
+function textIndent(row) {
+	const m = BULLET.exec(row);
+	return m ? m[0].length : indentOf(row);
+}
+function unmark(row) {
+	return row.replace(/^(\s*)[⏺●❯⎿]\s/, (_m, lead) => lead + "  ");
+}
+function cleanClaudeSelection(text, cols, startCol = 0) {
+	if (!text || cols <= 0) return text;
+	const raw = text.replace(/\r/g, "").split("\n").map((r) => r.replace(/\s+$/, ""));
+	const rows = raw.map(unmark);
+	const lines = [];
+	const flush = /* @__PURE__ */ new Set();
+	let cur = "";
+	let curRowWidth = 0;
+	let contIndent = 0;
+	rows.forEach((row, i) => {
+		const width = displayWidth(row) + (i === 0 ? startCol : 0);
+		if (i > 0 && cur.trim() && row.trim()) {
+			const next = row.trim();
+			const firstWord = next.split(/\s+/, 1)[0];
+			const lined = indentOf(row) === contIndent || indentOf(row) === 0;
+			const truncated = cur.endsWith("…");
+			if (lined && !truncated && curRowWidth + 1 + displayWidth(firstWord) > cols) {
+				const lastToken = cur.slice(cur.lastIndexOf(" ") + 1);
+				const midToken = curRowWidth >= cols && lastToken.length >= 12;
+				cur += (midToken ? "" : " ") + next;
+				curRowWidth = width;
+				return;
+			}
+		}
+		if (i > 0) lines.push(cur);
+		if (MESSAGE.test(raw[i])) flush.add(lines.length);
+		cur = row;
+		curRowWidth = width;
+		contIndent = i === 0 && startCol > 0 && rows.length > 1 ? indentOf(rows[1]) : textIndent(row);
+	});
+	lines.push(cur);
+	const indents = (startCol > 0 ? lines.slice(1) : lines).filter((l) => l.trim()).map(indentOf);
+	const common = indents.length ? Math.min(...indents) : 0;
+	return lines.map((l, i) => {
+		if (!l.trim()) return "";
+		if (flush.has(i) || i === 0 && startCol > 0) return l.trimStart();
+		return l.slice(Math.min(common, indentOf(l)));
+	}).join("\n");
+}
+//#endregion
 //#region src/lib/terminals.ts
 function cssVar(name, fallback) {
 	try {
@@ -26392,6 +26454,15 @@ function disableAppMouseReporting(term) {
 		}, swallow);
 	} catch {}
 }
+function runsClaudeCode(session) {
+	if (!session) return false;
+	try {
+		const inst = (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === session);
+		return (inst?.provider || inst?.program || "").toLowerCase().includes("claude");
+	} catch {
+		return false;
+	}
+}
 function attachCopyOnSelect(host, term, opts) {
 	disableAppMouseReporting(term);
 	try {
@@ -26405,13 +26476,20 @@ function attachCopyOnSelect(host, term, opts) {
 		attachFileDrop(host, term, session);
 	}
 	let captured = "";
+	let capturedCol = 0;
+	const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
 	term.onSelectionChange(() => {
 		const s = term.getSelection();
-		if (s && s.trim()) captured = s;
+		if (s && s.trim()) {
+			captured = s;
+			capturedCol = startCol();
+		}
 	});
 	function doCopy() {
 		const live = term.getSelection();
-		const sel = live && live.trim() ? live : captured;
+		const isLive = !!(live && live.trim());
+		let sel = isLive ? live : captured;
+		if (sel && opts.agent && runsClaudeCode(session)) sel = cleanClaudeSelection(sel, term.cols, isLive ? startCol() : capturedCol);
 		if (sel && sel.trim()) {
 			copyText(sel).then((ok) => {
 				if (ok) toast("Copied " + sel.length + " chars");
@@ -26587,7 +26665,10 @@ function makeTerm(title, wsPath, interactive) {
 	const fit = new o();
 	term.loadAddon(fit);
 	term.open(container);
-	attachCopyOnSelect(container, term, { session: title });
+	attachCopyOnSelect(container, term, {
+		session: title,
+		agent: wsPath === "/terminal"
+	});
 	container.addEventListener("focusin", () => handle.resync());
 	attachDragHistoryGesture(container, (edge) => {
 		let ctx;

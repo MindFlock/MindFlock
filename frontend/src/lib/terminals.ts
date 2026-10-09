@@ -17,6 +17,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
+import { cleanClaudeSelection } from "./claudeCopy";
+import { queryClient } from "../state/queries";
+import type { Instance } from "../api/types";
 
 export type TermKind = "agent" | "shell";
 
@@ -134,10 +137,24 @@ function disableAppMouseReporting(term: Terminal) {
   }
 }
 
+/** Whether ``session``'s agent is Claude Code (or a custom provider built on
+ * it): its agent pane gets {@link cleanClaudeSelection} on copy. */
+function runsClaudeCode(session?: string): boolean {
+  if (!session) return false;
+  try {
+    const inst = (queryClient.getQueryData<Instance[]>(["instances"]) || []).find(
+      (i) => i.title === session
+    );
+    return (inst?.provider || inst?.program || "").toLowerCase().includes("claude");
+  } catch {
+    return false;
+  }
+}
+
 function attachCopyOnSelect(
   host: HTMLElement,
   term: Terminal,
-  opts: { session?: string }
+  opts: { session?: string; agent?: boolean }
 ) {
   disableAppMouseReporting(term);
   try {
@@ -158,13 +175,24 @@ function attachCopyOnSelect(
   // Capture the selection continuously (a TUI repaint can wipe the highlight
   // right after mouse-up) and copy the captured value on release/right-click.
   let captured = "";
+  let capturedCol = 0;
+  const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
   term.onSelectionChange(() => {
     const s = term.getSelection();
-    if (s && s.trim()) captured = s;
+    if (s && s.trim()) {
+      captured = s;
+      capturedCol = startCol();
+    }
   });
   function doCopy(): boolean {
     const live = term.getSelection();
-    const sel = live && live.trim() ? live : captured;
+    const isLive = !!(live && live.trim());
+    let sel = isLive ? live : captured;
+    // Claude Code draws its own gutter and wraps its own rows: copy the text,
+    // not the layout (see claudeCopy).
+    if (sel && opts.agent && runsClaudeCode(session)) {
+      sel = cleanClaudeSelection(sel, term.cols, isLive ? startCol() : capturedCol);
+    }
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
         if (ok) toast("Copied " + sel.length + " chars");
@@ -416,7 +444,7 @@ function makeTerm(
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container);
-  attachCopyOnSelect(container, term, { session: title });
+  attachCopyOnSelect(container, term, { session: title, agent: wsPath === "/terminal" });
   // Clicking into a terminal makes this client the one in use — claim the
   // tmux window size for it (see resync).
   container.addEventListener("focusin", () => handle.resync());
