@@ -27,7 +27,7 @@ const { PhoneSteps, SetupChecklist, TokenField, UrlList, TOKEN_MASK } = await im
 type Shared = import("../components/settings/screens/Mobile").SharedLinkState;
 type Step = import("../components/settings/screens/Mobile").SetupStep;
 
-const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"],\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"],\n  },\n},\n"grants": [\n  {"src": ["tag:mindflock"], "dst": ["tag:mindflock"], "ip": ["tcp:8765", "tcp:443"]},\n  {"src": ["autogroup:member"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]},\n],\n"tests": [\n  {"src": "tag:mindflock", "accept": ["tag:mindflock:8765"]},\n],`;
+const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"],\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"],\n  },\n},\n"grants": [\n  {"src": ["tag:mindflock"], "dst": ["tag:mindflock"], "ip": ["tcp:8765", "tcp:443"]},\n  {"src": ["me@example.com"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]},\n],\n"tests": [\n  {"src": "tag:mindflock", "accept": ["tag:mindflock:8765"]},\n],`;
 
 function shared(steps: Partial<Record<string, Step["state"]>>, extra: Partial<Shared> = {}): Shared {
   const ids = ["operator", "tag", "define", "policy", "approval", "phone"];

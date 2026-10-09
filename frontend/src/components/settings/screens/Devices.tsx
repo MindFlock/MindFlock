@@ -1125,7 +1125,7 @@ export function Devices(p: ScreenProps) {
                       copyText(st.policy_grant || "").then((ok) =>
                         toast(
                           ok
-                            ? "Policy lines copied — paste them into Tailscale's admin console → Access controls"
+                            ? "Policy lines copied — paste them into Tailscale's admin console → Access controls (replace the login placeholder if they have one)"
                             : "Copy failed",
                           { duration: 6000 }
                         )

@@ -3043,7 +3043,9 @@ A few screens got quieter:
   member or a joinable MindFlock gets its own row with what discovery found —
   "connection refused on :8765 → MindFlock isn't running there, or it's
   local-only", "timed out on :8765 → your Tailscale policy may block
-  tcp:8765" (with **Copy grant**: the policy lines that open it), "asleep —
+  tcp:8765" (with **Copy grant**: the policy lines that open it to you
+  only — the same owner-scoped grants as Settings → Mobile's policy block),
+  "asleep —
   Tailscale last saw it 2 h ago" — tagged devices first; member rows use the
   same words instead of "offline".
 
@@ -3144,10 +3146,16 @@ A few screens got quieter:
      a device that hasn't advertised isn't told.
   4. **Approve hosts automatically**: one policy block with one Copy
      button, prefilled with this device's own tag, the service name and this
-     server's port: `tagOwners`, `autoApprovers.services`, `grants` (tagged
-     devices to each other and your own devices to them on the port and
-     443, everyone to `svc:<name>` on 443 — what a custom policy such as
-     `autogroup:self` otherwise blocks silently) and a `tests` stanza. A
+     server's port: `tagOwners`, `autoApprovers.services`, `grants` and a
+     `tests` stanza. The grants open MindFlock to its owner only, never to
+     everyone on a shared tailnet: `autogroup:member` → `autogroup:self` on
+     the port (your untagged devices to each other), the tag ↔ the tag on
+     the port and 443, your Tailscale login ↔ the tag (port and 443 in,
+     the port out), and your login → `svc:<name>` on 443 — what a custom
+     policy such as `autogroup:self` otherwise blocks silently. The login is
+     this device's, or on a tagged device the tailnet's one untagged-device
+     owner; when it can't tell (or the caller may not see it) the block
+     names `YOUR-TAILSCALE-LOGIN@example.com` under a `// REPLACE` comment. A
      policy file can't hold a key twice, so the block says, in comments,
      to paste it whole only when none of those keys exist yet and otherwise
      move the lines inside each into the existing key. The policy itself

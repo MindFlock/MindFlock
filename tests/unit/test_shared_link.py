@@ -679,16 +679,77 @@ def _hujson(text: str):
 
 
 def test_policy_block_is_one_complete_parseable_block():
-    doc = _hujson(shared_link.policy_block("mindflock", "tag:mindflock", 9000))
+    doc = _hujson(
+        shared_link.policy_block("mindflock", "tag:mindflock", 9000, "me@example.com")
+    )
     assert set(doc) == {"tagOwners", "autoApprovers", "grants", "tests"}
     assert doc["tagOwners"] == {"tag:mindflock": ["autogroup:admin"]}
     assert doc["autoApprovers"] == {"services": {"svc:mindflock": ["tag:mindflock"]}}
     grants = {(g["src"][0], g["dst"][0]): g["ip"] for g in doc["grants"]}
     # Device to device on the REAL server port, and 443 for the shared link.
     assert grants[("tag:mindflock", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
-    assert grants[("autogroup:member", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
-    assert grants[("autogroup:member", "svc:mindflock")] == ["tcp:443"]
-    assert doc["tests"] == [{"src": "tag:mindflock", "accept": ["tag:mindflock:9000"]}]
+    # Untagged devices: their own owner only.
+    assert grants[("autogroup:member", "autogroup:self")] == ["tcp:9000"]
+    # Tagged devices and the shared link: the owner's login, both ways.
+    assert grants[("me@example.com", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
+    assert grants[("tag:mindflock", "me@example.com")] == ["tcp:9000"]
+    assert grants[("me@example.com", "svc:mindflock")] == ["tcp:443"]
+    assert doc["tests"] == [
+        {"src": "tag:mindflock", "accept": ["tag:mindflock:9000"]},
+        {
+            "src": "me@example.com",
+            "accept": ["tag:mindflock:9000", "tag:mindflock:443"],
+        },
+    ]
+
+
+def _opens_to_everyone(doc) -> list:
+    """Grants that let EVERY tailnet user in: autogroup:member as the source
+    of anything but autogroup:self, or as a destination at all."""
+    return [
+        g
+        for g in doc["grants"]
+        if ("autogroup:member" in g["src"] and g["dst"] != ["autogroup:self"])
+        or "autogroup:member" in g["dst"]
+    ]
+
+
+@pytest.mark.parametrize("login", ["me@example.com", ""])
+def test_policy_never_opens_mindflock_to_every_tailnet_user(login):
+    # Regression: autogroup:member <-> autogroup:member (and <-> the tag) on
+    # the server port opened every device's MindFlock to every PERSON on a
+    # shared tailnet, not just its owner.
+    block = _hujson(shared_link.policy_block("mindflock", "tag:mindflock", 8765, login))
+    grants = _hujson(shared_link.device_grants("tag:mindflock", 8765, login))
+    assert _opens_to_everyone(block) == []
+    assert _opens_to_everyone(grants) == []
+
+
+def test_policy_without_a_login_is_a_marked_placeholder():
+    text = shared_link.device_grants("tag:mindflock", 8765)
+    assert "REPLACE %s" % shared_link.LOGIN_PLACEHOLDER in text
+    doc = _hujson(text)
+    srcs = {g["src"][0] for g in doc["grants"]}
+    assert shared_link.LOGIN_PLACEHOLDER in srcs
+    # Known login: no placeholder, no REPLACE note.
+    text = shared_link.device_grants("tag:mindflock", 8765, "me@github")
+    assert "REPLACE" not in text and shared_link.LOGIN_PLACEHOLDER not in text
+    # Something that isn't a login never lands in a policy file.
+    text = shared_link.policy_block("x", "tag:mindflock", 8765, 'a"], "dst": ["*')
+    assert shared_link.LOGIN_PLACEHOLDER in text and '"*' not in text
+
+
+@pytest.mark.parametrize("may_see", [True, False])
+def test_mobile_names_the_owner_only_for_a_caller_that_may_see_it(
+    fake_ts, captured, monkeypatch, no_device_probes, may_see
+):
+    monkeypatch.setattr(shared_link, "owner_login", lambda: "me@example.com")
+    S.update_settings(general={"shared_link": "mindflock"})
+    fake_ts["status"] = copy.deepcopy(captured["status_pending"])
+    shared_link.apply(8765)
+    policy = mobile_access._mobile_info(include_tokens=may_see)["shared"]["policy"]
+    assert ("me@example.com" in policy) is may_see
+    assert (shared_link.LOGIN_PLACEHOLDER in policy) is not may_see
 
 
 def test_policy_block_lines_move_into_an_existing_key():
