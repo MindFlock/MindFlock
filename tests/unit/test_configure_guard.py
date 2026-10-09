@@ -185,6 +185,8 @@ def test_gate_off_localhost_run_is_unchanged(app, monkeypatch):
 # The other routes that write what runs on the owner's devices
 # --------------------------------------------------------------------------- #
 _PROVIDER = {"name": "evil", "binary": "/bin/sh", "display_name": "Evil"}
+_NOWHERE = "http://127.0.0.1:9"
+_PASTED = "mine-pasted"  # pragma: allowlist secret
 
 GUARDED = [
     ("put", "/api/settings/ticketing/sources", {"sources": []}),
@@ -212,6 +214,16 @@ GUARDED = [
     ("post", "/api/peer/links/abc/share", {"path": "/tmp"}),
     ("post", "/api/peer/links/abc/perms", {"perms": {}}),
     ("delete", "/api/peer/links/abc", None),
+    ("post", "/api/settings/auth-token/rotate", None),
+    # Test / list routes that would use a STORED secret against an endpoint
+    # the body names (a closed local port: nothing leaves this machine).
+    ("post", "/api/settings/test/ticketing", {"base_url": _NOWHERE}),
+    ("post", "/api/settings/ticketing/states", {"base_url": _NOWHERE}),
+    (
+        "post",
+        "/api/settings/test/openrouter",
+        {"profile_id": "p", "base_url": _NOWHERE},
+    ),
 ]
 
 
@@ -250,6 +262,49 @@ def test_a_signed_in_tailnet_caller_gets_past_the_guard(
     c = _client(app, TAILNET, headers={"Authorization": "Bearer " + TOKEN})
     r = _send(c, method, path, body)
     assert r.status_code != 403, (path, r.text)
+
+
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("/api/settings/test/ticketing", {"api_token": _PASTED, "base_url": _NOWHERE}),
+        (
+            "/api/settings/ticketing/states",
+            {"api_token": _PASTED, "base_url": _NOWHERE},
+        ),
+        ("/api/settings/test/openrouter", {"api_key": _PASTED, "base_url": _NOWHERE}),
+    ],
+)
+def test_inline_credentials_stay_testable_by_anyone(app, monkeypatch, path, body):
+    from backend.providers import auth_profiles as ap
+
+    monkeypatch.setattr(ap, "probe_openrouter", lambda key, url: {"ok": False})
+    r = _client(app, TAILNET).post(path, json=body)
+    assert r.status_code != 403, (path, r.text)
+
+
+def test_closing_a_login_terminal_is_the_owners(app, monkeypatch):
+    from backend.web.core import provider_login
+
+    killed = []
+    monkeypatch.setattr(
+        provider_login, "kill_login_session", lambda n, p="": killed.append(n)
+    )
+    r = _client(app, TAILNET).post("/api/providers/claude/login-close")
+    assert r.status_code == 403 and killed == []
+    r = _client(app, LOOPBACK).post("/api/providers/claude/login-close")
+    assert r.status_code == 200 and killed == ["claude"]
+
+
+def test_rotating_the_token_is_the_owners(app, monkeypatch):
+    rotated = []
+    monkeypatch.setattr(
+        auth, "rotate_token", lambda: rotated.append(1) or "new-token-0123"
+    )
+    r = _client(app, TAILNET).post("/api/settings/auth-token/rotate")
+    assert r.status_code == 403 and rotated == []
+    r = _client(app, LOOPBACK).post("/api/settings/auth-token/rotate")
+    assert r.status_code == 200 and rotated == [1]
 
 
 def test_cosmetic_prefs_stay_writable_by_anyone(app):
