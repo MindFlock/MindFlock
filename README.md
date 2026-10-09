@@ -457,13 +457,16 @@ accounts** (untagged devices only; rotating the token does not revoke them).
 
 | | What you get | Anything else? |
 |---|---|---|
-| **Windows** | `MindFlock-Setup.exe` — the app **and** the engine (which runs inside WSL2). | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, the installer does the rest. |
-| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing. First launch offers **Install the engine** — one click, no terminal. |
-| **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch installs the engine for you. |
+| **Windows** | `MindFlock-Setup.exe` — the app. Its engine runs inside WSL2 and is installed there on first launch. | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, first launch does the rest. |
+| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing to do beforehand. First launch offers **Set up MindFlock on this computer** — one click, no terminal. Apple's developer tools (git) and Homebrew are installed along the way if missing (your password, once). |
+| **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch sets everything up for you. |
 
-The app auto-starts the engine every time after that — no terminal, no manual
-steps. If the engine is missing, the app's waiting page says so and shows the
-exact command.
+First launch is one flow: the engine installs under your home folder (no admin
+rights), then the app opens on **Setup → Dependencies** with one **Install**
+button for tmux and your coding agent (it may ask for your password once), then
+**Sign in to Claude** (or your agent) in the same window. The app auto-starts
+the engine every time after that. If the engine is missing, the app's waiting
+page says so and shows the exact command.
 
 <details>
 <summary><b>⚠️ Windows: finish setting up WSL2 <i>before</i> you run the installer</b></summary>
@@ -536,8 +539,9 @@ Most people want the [download buttons above](#download). This section is the
 same thing spelled out, plus every other way in.
 
 Two pieces: the **server/CLI** (runs the engine) and the **desktop app**
-(the one client, Electron — [electron/README.md](electron/README.md)). On
-Windows the `.exe` installs both; elsewhere it's two commands.
+(the one client, Electron — [electron/README.md](electron/README.md)). The
+desktop app installs the server itself on first launch; without it, it's two
+commands.
 
 ### 1. Server + CLI
 

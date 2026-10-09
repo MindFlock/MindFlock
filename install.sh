@@ -76,13 +76,22 @@ has_tty() {
 # Line Tools installer, so `command -v git` succeeds on a machine where git
 # cannot actually clone anything — and uv would then fail deep in step 3 with a
 # baffling error. Check for the real tools up front instead.
+# With a terminal attached, open Apple's installer and WAIT for it (it takes
+# 5-20 minutes) rather than failing and making the user start over.
 if [ "$OS" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
   if has_tty; then
     say "the Xcode Command Line Tools (which provide git) are missing — opening Apple's installer…"
     xcode-select --install >/dev/null 2>&1 || true
+    say "finish Apple's installer; this script continues on its own when it's done (waiting up to 30 min)…"
+    waited=0
+    while ! xcode-select -p >/dev/null 2>&1 && [ "$waited" -lt 1800 ]; do
+      sleep 10
+      waited=$((waited + 10))
+    done
   fi
-  fail "the Xcode Command Line Tools are required (they provide git).
+  xcode-select -p >/dev/null 2>&1 || fail "the Xcode Command Line Tools are required (they provide git).
 Run  xcode-select --install , finish Apple's installer, then re-run this script."
+  say "Xcode Command Line Tools installed"
 fi
 
 command -v curl >/dev/null 2>&1 || fail "curl is required to install — install it with your package manager (e.g. apt/dnf/pacman/zypper) and re-run."
@@ -179,7 +188,16 @@ else
 fi
 
 say ""
-say "Done. Next steps:"
-say "  1. fix anything ✗ above (re-run: mindflock doctor --fix — installs it all in one go)"
-say "  2. cd into a git repo you want to work on"
-say "  3. run: mindflock serve   →  open http://127.0.0.1:8765"
+# The next steps are terminal instructions; the desktop app (no terminal) goes
+# on to its own dependency step instead, so it only gets "Done". The absolute
+# path: in THIS shell ~/.local/bin may not be on PATH yet (a new one has it).
+if has_tty; then
+  MF="$(command -v mindflock)"
+  say "Done. Next steps:"
+  say "  1. fix anything ✗ above (re-run: $MF doctor --fix — installs it all in one go)"
+  say "  2. cd into a git repo you want to work on"
+  say "  3. run: $MF serve   →  open http://127.0.0.1:8765"
+  say "     (in a new terminal, plain \`mindflock\` works too)"
+else
+  say "Done."
+fi

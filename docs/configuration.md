@@ -660,7 +660,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — device discovery reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
 | `MINDFLOCK_NONINTERACTIVE` | — | `install.sh` only — set to `1` to force the read-only `mindflock doctor` report instead of the guided `--fix` prompts. The desktop app sets it for its in-window install (a GUI process has no terminal to answer prompts on) |
-| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
+| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the offline page's **Set up MindFlock on this computer** button runs. Point it at a stub to exercise that flow without reinstalling anything |
 
 > Naming note: launcher variables kept their historical `CS_` prefix
 

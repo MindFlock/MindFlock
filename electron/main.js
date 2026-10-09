@@ -530,9 +530,20 @@ const INSTALL_SENTINEL = 'MINDFLOCK_INSTALL_EXIT='
 const INSTALL_TIMEOUT_MS = 30 * 60 * 1000
 const ANSI_RE = /\x1b\[[0-9;]*m/g
 
-// state: idle | running | done | failed
-let install = { state: 'idle', code: null, lines: [] }
+// state: idle | running | done | failed. `waiting` names what a running install
+// is waiting on before the script itself starts ('xcode': Apple's Command Line
+// Tools installer), so the offline page can say so.
+let install = { state: 'idle', code: null, lines: [], waiting: '' }
 let installTicker = null
+
+// FIRST-RUN CONTINUATION. The engine install above runs the read-only doctor
+// (there is no terminal behind a GUI), so tmux and the agent CLI are still
+// missing when it finishes. When the install was the offline page's first-run
+// one (not an update), the app opens with `?setup=install`: the Setup dialog
+// comes up on its Dependencies step, with the one "Install …" button that
+// installs them all (one password prompt) — instead of dropping the user on an
+// empty grid to go and find it. Cleared once the app page has loaded with it.
+let firstRunDeps = false
 
 function toLines(s) {
   return String(s).replace(ANSI_RE, '').replace(/\r/g, '\n').split('\n')
@@ -559,6 +570,7 @@ function installFinish(code) {
   // the next successful load re-checks (until the server restarts it still
   // reports the OLD version, which is what the toast already told the user).
   engineNotice = null
+  if (code === 0 && install.firstRun) firstRunDeps = true
   if (code === 0) startServerIfNeeded()
 }
 
@@ -570,10 +582,46 @@ function hasXcodeCLT() {
   catch (e) { return false }
 }
 
-function startInstall(ref) {
+// Linux / macOS: run the bundled install.sh. --login so ~/.local/bin (where uv
+// and the CLI land) is on PATH for the doctor step at the end of the script.
+function runUnixInstaller(envAdds) {
+  try {
+    const child = spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
+      env: Object.assign({}, process.env, envAdds),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    child.stdout.on('data', installLog)
+    child.stderr.on('data', installLog)
+    child.on('error', (e) => {
+      installLog('could not run the installer: ' + (e && e.message))
+      installFinish(1)
+    })
+    child.on('exit', (code) => installFinish(code == null ? 1 : code))
+    const killAt = setTimeout(() => {
+      if (install.state !== 'running') return
+      installLog('installer timed out after ' + (INSTALL_TIMEOUT_MS / 60000) + ' minutes.')
+      try { child.kill() } catch (e) {}
+      installFinish(1)
+    }, INSTALL_TIMEOUT_MS)
+    child.on('close', () => clearTimeout(killAt))
+  } catch (e) {
+    installLog('could not run the installer: ' + (e && e.message))
+    installFinish(1)
+  }
+}
+
+// Apple's CLT installer takes 5-20 minutes and says nothing when it is done.
+const XCODE_POLL_MS = 5000
+const XCODE_WAIT_MS = 30 * 60 * 1000
+
+// `opts.firstRun`: the offline page's first-run install (see firstRunDeps).
+function startInstall(ref, opts) {
   ref = ref || INSTALL_REF   // default: this app's pinned version (first install)
   if (install.state === 'running') return { started: false }
-  install = { state: 'running', code: null, lines: [] }
+  install = {
+    state: 'running', code: null, lines: [], waiting: '',
+    firstRun: !!(opts && opts.firstRun),
+  }
   installLog('=== installing the MindFlock engine (' + ref + ') ===')
 
   if (!fs.existsSync(INSTALL_SCRIPT)) {
@@ -591,40 +639,33 @@ function startInstall(ref) {
 
   if (process.platform !== 'win32') {
     if (process.platform === 'darwin' && !hasXcodeCLT()) {
-      installLog('The Xcode Command Line Tools (which provide git) are not installed,')
-      installLog('and the engine cannot be fetched without git.')
-      installLog('Opening Apple’s installer now — finish it, then press Install again.')
+      // Wait for Apple's installer instead of failing: the user would
+      // otherwise come back 15 minutes later to a red transcript and a second
+      // button to press. The install stays 'running' throughout.
+      installLog('Apple is installing developer tools (git) — finish its window.')
+      installLog('MindFlock will continue on its own when it’s done.')
       try {
         spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
       } catch (e) { installLog('could not open it: run  xcode-select --install') }
-      installFinish(1)
+      install.waiting = 'xcode'
+      const since = Date.now()
+      installTicker = setInterval(() => {
+        if (install.state !== 'running') return
+        if (hasXcodeCLT()) {
+          clearInterval(installTicker); installTicker = null
+          install.waiting = ''
+          installLog('Developer tools installed — continuing.')
+          runUnixInstaller(envAdds)
+        } else if (Date.now() - since > XCODE_WAIT_MS) {
+          installLog('Still no developer tools after ' + (XCODE_WAIT_MS / 60000)
+            + ' minutes. Finish Apple’s installer (or run  xcode-select --install ),')
+          installLog('then press Try again.')
+          installFinish(1)
+        }
+      }, XCODE_POLL_MS)
       return { started: true }
     }
-    // --login so ~/.local/bin (where uv and the CLI land) is on PATH for the
-    // doctor step at the end of the script.
-    try {
-      const child = spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
-        env: Object.assign({}, process.env, envAdds),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      child.stdout.on('data', installLog)
-      child.stderr.on('data', installLog)
-      child.on('error', (e) => {
-        installLog('could not run the installer: ' + (e && e.message))
-        installFinish(1)
-      })
-      child.on('exit', (code) => installFinish(code == null ? 1 : code))
-      const killAt = setTimeout(() => {
-        if (install.state !== 'running') return
-        installLog('installer timed out after ' + (INSTALL_TIMEOUT_MS / 60000) + ' minutes.')
-        try { child.kill() } catch (e) {}
-        installFinish(1)
-      }, INSTALL_TIMEOUT_MS)
-      child.on('close', () => clearTimeout(killAt))
-    } catch (e) {
-      installLog('could not run the installer: ' + (e && e.message))
-      installFinish(1)
-    }
+    runUnixInstaller(envAdds)
     return { started: true }
   }
 
@@ -686,11 +727,12 @@ function startInstall(ref) {
   return { started: true }
 }
 
-ipcMain.handle('install:start', () => startInstall())
+ipcMain.handle('install:start', () => startInstall(null, { firstRun: true }))
 ipcMain.handle('install:state', () => ({
   state: install.state,
   code: install.code,
   lines: install.lines,
+  waiting: install.waiting || '',
   // The manual escape hatch the offline page shows when an install fails.
   command: 'curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/'
     + INSTALL_REF + '/install.sh | sh',
@@ -848,10 +890,8 @@ async function autoSignIn() {
     }
     signInLast = { token: tok, at: Date.now() }
     if (!win || win.isDestroyed()) return
-    const target = new URL(APP_URL)
-    target.searchParams.set('token', tok)
     console.log('[mindflock] sign-in page shown; signing in with the local access token')
-    win.loadURL(target.toString()).catch(() => {})
+    win.loadURL(appUrl({ token: tok })).catch(() => {})
   } finally {
     signInInFlight = false
   }
@@ -1252,7 +1292,7 @@ async function updateEverything() {
       if (install.state !== 'done') {
         updateRun = {
           state: 'failed', step: 'engine',
-          message: 'The engine update failed (exit ' + install.code + ') — nothing was changed in the app.',
+          message: 'The engine update failed (exit ' + install.code + ') — MindFlock’s engine may be partially updated. Retry to finish it.',
         }
         return updateRun
       }
@@ -1670,9 +1710,18 @@ function scheduleRetry() {
   retryDelay = Math.min(RETRY_MS, retryDelay * 2)
 }
 
+// The app URL to load: carries `?setup=install` while the first-run
+// dependency step is still owed (see firstRunDeps).
+function appUrl(extra) {
+  const u = new URL(APP_URL)
+  if (firstRunDeps) u.searchParams.set('setup', 'install')
+  for (const k of Object.keys(extra || {})) u.searchParams.set(k, extra[k])
+  return u.toString()
+}
+
 function loadApp() {
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
-  win.loadURL(APP_URL).catch(() => {})
+  win.loadURL(appUrl()).catch(() => {})
 }
 
 const OFFLINE_FILE = path.join(__dirname, 'offline.html')
@@ -1757,6 +1806,8 @@ function createWindow() {
       pushEngineNotice()
       // The server's own sign-in page (access-token gate on) -> sign in.
       autoSignIn().catch(() => {})
+      // The app itself (not its sign-in page) took the first-run hand-off.
+      if (win.webContents.getTitle() !== SIGN_IN_TITLE) firstRunDeps = false
     }
     // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
     console.log('[mindflock] loaded:', win.webContents.getURL().split('?')[0])

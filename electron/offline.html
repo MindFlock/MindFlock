@@ -52,6 +52,9 @@
       <p>Everything looks good — the app is starting the server for you.
          This usually takes a few seconds (a little longer right after a reboot).</p>
       <p class="spin">Connecting automatically…</p>
+      <p class="hint" id="starting-next" hidden>The engine is installed. Next,
+        MindFlock installs tmux and your coding agent — you’ll see one Install
+        button.</p>
       <p class="hint" id="starting-hint" hidden>Taking longer than usual?
         Press <code>Ctrl+Shift+L</code> for app logs.<br>
         Server startup log: <code>~/.mindflock/desktop-server.log</code></p>
@@ -95,13 +98,13 @@
     <!-- The machine answers, but the engine isn't there. One button, no typing. -->
     <section id="s-not-installed" hidden>
       <h1>One more step</h1>
-      <p id="ni-where">MindFlock’s engine isn’t installed in WSL
+      <p id="ni-where">MindFlock isn’t set up in WSL
          (<span class="distro">Ubuntu</span>) yet.</p>
-      <p>Setting it up takes a few minutes and needs no admin rights: it
-         installs a private Python toolchain and the MindFlock engine under
-         your home folder.</p>
-      <button class="action" id="do-install">Install the engine</button>
-      <p class="hint">A one-time setup. MindFlock opens by itself when it finishes.</p>
+      <p>This installs MindFlock’s engine under your home folder, then the
+         tools your agents need (tmux and your coding agent). That last part
+         may ask for your password once.</p>
+      <button class="action" id="do-install">Set up MindFlock on this computer (about 3 min)</button>
+      <p class="hint">A one-time setup. MindFlock opens by itself and carries on from there.</p>
     </section>
 
     <!-- Install in flight, or finished badly. Same section: the transcript is
@@ -135,7 +138,7 @@
     }
     if (state === 'not-installed' && diag && diag.platform !== 'win32') {
       document.getElementById('ni-where').textContent =
-        'MindFlock’s engine isn’t installed on this machine yet.'
+        'MindFlock isn’t set up on this computer yet.'
     }
     // Booting normally takes seconds; only surface log spelunking once it's
     // clearly stuck, so the happy path never shows troubleshooting noise.
@@ -161,11 +164,15 @@
   function showInstall(inst) {
     show('installing', null)
     var failed = inst.state === 'failed'
-    document.getElementById('inst-title').textContent =
-      failed ? 'The install didn’t finish' : 'Installing the MindFlock engine…'
+    var xcode = !failed && inst.waiting === 'xcode'
+    document.getElementById('inst-title').textContent = failed
+      ? 'The install didn’t finish'
+      : xcode ? 'Apple is installing developer tools (git)…' : 'Installing the MindFlock engine…'
     document.getElementById('inst-sub').textContent = failed
-      ? 'Nothing was left half-configured — it’s safe to run it again.'
-      : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
+      ? 'It’s safe to run it again — it picks up where it stopped.'
+      : xcode
+        ? 'Finish Apple’s window (it takes 5–20 minutes). MindFlock will continue on its own.'
+        : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
     renderLog(inst.lines)
     document.getElementById('do-retry').hidden = !failed
     var manual = document.getElementById('inst-manual')
@@ -230,6 +237,9 @@
         // back to the install prompt for one poll.
         if (inst.state === 'done' && state === 'not-installed') state = 'starting'
         if (!restarting) show(state, diag)
+        // Say what comes after the engine, so the app opening on a dependency
+        // step reads as the same setup carrying on.
+        document.getElementById('starting-next').hidden = !(state === 'starting' && inst.state === 'done')
       })
       .catch(function () { show('starting', null) })
   }

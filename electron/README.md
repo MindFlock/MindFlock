@@ -31,16 +31,12 @@ server, reached by scanning the startup QR over your tailnet.)
    enough for macOS to remember folder-access grants, not enough for
    Gatekeeper; see [Versioning & releases](../docs/development.md#versioning--releases)
    for the cert setup.
-2. **Once**: install the server/CLI where the engine runs.
-   - **Windows** — nothing to do: the NSIS installer runs the step below for
-     you inside your default WSL distro (see
-     [Windows: the installer does both](#windows-the-installer-does-both)).
-     Install WSL2 first if you don't have it:
-     [learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install).
-   - **Linux / macOS** — nothing to do either: a `.dmg` is a drag-copy with no
-     post-install hook and an AppImage is never "installed" at all, so first
-     launch offers an **Install the engine** button instead (see
-     [First launch installs the engine](#first-launch-installs-the-engine)).
+2. **Once**: nothing to do. First launch offers **Set up MindFlock on this
+   computer**, which installs the engine (inside your default WSL distro on
+   Windows — install WSL2 first:
+   [learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install))
+   and then carries on into tmux and your agent CLI (see
+   [First launch installs the engine](#first-launch-installs-the-engine)).
 3. **Every time after**: open MindFlock. The app probes port 8765 and, when
    nothing answers, silently starts `mindflock serve`. No terminal windows, no
    manual steps.
@@ -64,26 +60,29 @@ Two details worth knowing before editing this path:
   to a log on the *Windows* filesystem via `wslpath` and the main process tails
   it, with a sentinel last line carrying the real exit code.
 
+- **On a Mac without Apple's developer tools** (git), the button opens Apple's
+  installer and the install *waits* for it (polling `xcode-select -p`, up to
+  30 minutes), then continues by itself — the page says so meanwhile.
+- **It doesn't stop at the engine.** `install.sh` runs the read-only doctor
+  here (no terminal behind a GUI), so tmux and the agent CLI are still missing
+  when it finishes. After a first-run install the app opens with
+  `?setup=install`: the Setup dialog comes up on Dependencies with one
+  **Install …** button (one password prompt, in a real terminal), and then
+  **Sign in to <agent>**. Updates never take this path.
+
 Point `MINDFLOCK_INSTALL_SCRIPT` at a stub to exercise the flow without
 actually reinstalling anything.
 
-## Windows: the installer does both
+## Windows: the installer checks WSL
 
-The app alone is a shell with nothing behind it, so
+The app alone is a shell with nothing behind it, and its engine lives in WSL.
 [`build/installer.nsh`](build/installer.nsh) — picked up automatically by
-electron-builder as the NSIS `customInstall` hook — finishes setup by running
-`install.sh` inside the default WSL distro, pinned to the same version tag as
-the app. Watch it happen via **Show details** during install.
-
-It is deliberately non-fatal: no WSL, a wedged distro, or no network leaves
-the app installed and the offline page explains what's left. Set
-`MINDFLOCK_NO_WSL=1` before launching the installer to skip it entirely, and
-re-running the installer is a safe in-place upgrade of the CLI.
-
-Two things that look like bugs but aren't: it targets your **default** distro
-(`wsl -l -v`; `MINDFLOCK_WSL_DISTRO` only steers the *app*, not the
-installer), and it reaches `wsl.exe` through `$WINDIR\Sysnative` because the
-32-bit NSIS installer can't see the real `System32`.
+electron-builder as the NSIS `customInstall` hook — only checks that WSL is
+present and hands off to the app, whose first launch installs the engine with
+a live transcript (a multi-minute network install inside the setup wizard gave
+no feedback and couldn't be cancelled). It reaches `wsl.exe` through
+`$WINDIR\Sysnative` because the 32-bit NSIS installer can't see the real
+`System32`.
 
 Overrides:
 
