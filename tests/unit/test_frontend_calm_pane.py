@@ -167,7 +167,9 @@ def test_copy_all_lives_in_the_history_bar():
     assert "Copy all" in hist
     assert 'className="hist-copy"' in hist
     assert "onClick={copyAll}" in hist
-    assert "copyText(all)" in hist
+    assert (
+        "copyText(forClipboard(all))" in hist
+    )  # Claude Code layout cleaned (agentCopy)
     assert (
         hist.count("/history?pane=${pane}") == 2
     )  # the view's load + the copy fallback

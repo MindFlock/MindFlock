@@ -26338,6 +26338,101 @@ function tourDecision(opts) {
 	return opts.onboarded ? "skip" : "open";
 }
 //#endregion
+//#region src/lib/claudeCopy.ts
+var BULLET = /^(\s*)(?:[-*•]|\d{1,3}[.)])\s+/;
+var MESSAGE = /^\s*[⏺●❯](?:\s|$)/;
+var MARKER = /^\s*[⏺●❯⎿](?:\s|$)/;
+var CHROME = /^\s*[─-▟⏵]/;
+var DIFF_LINE = /^\s*\d+\s+[-+ ]\s/;
+var CODE_END = /(?:[;{}[(\\]|=>)$/;
+var CODE_START = /^(?:[)}\]]|\/\/|#|\.\w)/;
+function cpWidth(cp) {
+	if (cp >= 4352 && cp <= 4447 || cp >= 11904 && cp <= 42191 && cp !== 12351 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65103 || cp >= 65280 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141) return 2;
+	return 1;
+}
+function displayWidth(s) {
+	let w = 0;
+	for (const ch of s) w += cpWidth(ch.codePointAt(0) || 0);
+	return w;
+}
+function indentOf(row) {
+	return row.length - row.trimStart().length;
+}
+function textIndent(row) {
+	const m = BULLET.exec(row);
+	return m ? m[0].length : indentOf(row);
+}
+function unmark(row) {
+	return row.replace(/^(\s*)[⏺●❯⎿](?:\s|$)/, (_m, lead) => lead + "  ");
+}
+function cleanClaudeSelection(text, cols, startCol = 0) {
+	if (!text || cols <= 0) return text;
+	const raw = text.replace(/\r/g, "").split("\n").map((r) => r.replace(/\s+$/, ""));
+	const rows = raw.map(unmark);
+	const widths = rows.map((r, i) => displayWidth(r) + (i === 0 ? startCol : 0));
+	const usable = Math.max(cols, ...widths) - 1;
+	const lines = [];
+	const flush = /* @__PURE__ */ new Set();
+	let cur = "";
+	let curRow = 0;
+	let contIndent = 0;
+	const joins = (i) => {
+		const prev = rows[curRow];
+		const row = rows[i];
+		if (!cur.trim() || !row.trim()) return false;
+		if (MARKER.test(raw[i]) || BULLET.test(row) || DIFF_LINE.test(row)) return false;
+		if (CHROME.test(row) || CHROME.test(prev)) return false;
+		if (cur.endsWith("…")) return false;
+		const ind = indentOf(row);
+		if (ind !== contIndent && ind !== 0) return false;
+		const next = row.trim();
+		const fw = displayWidth(next.split(/\s+/, 1)[0]);
+		if (fw >= usable - contIndent) return false;
+		if (CODE_END.test(prev) || CODE_START.test(next)) return false;
+		const last = [...prev].pop() || "";
+		const full = widths[curRow] >= usable || widths[curRow] === usable - 1 && displayWidth(last) === 2;
+		if (!prev.trim().includes(" ") && !full) return false;
+		return widths[curRow] + 1 + fw > usable;
+	};
+	rows.forEach((row, i) => {
+		if (i > 0 && joins(i)) {
+			const next = row.trim();
+			const firstWord = next.split(/\s+/, 1)[0];
+			const midToken = displayWidth(cur.slice(cur.lastIndexOf(" ") + 1).trimStart()) + displayWidth(firstWord) > usable - contIndent;
+			cur += (midToken ? "" : " ") + next;
+			curRow = i;
+			return;
+		}
+		if (i > 0) lines.push(cur);
+		if (MESSAGE.test(raw[i])) flush.add(lines.length);
+		cur = row;
+		curRow = i;
+		contIndent = i === 0 && startCol > 0 && rows.length > 1 ? indentOf(rows[1]) : textIndent(row);
+	});
+	lines.push(cur);
+	const indents = (startCol > 0 ? lines.slice(1) : lines).filter((l) => l.trim() && !CHROME.test(l)).map(indentOf);
+	const common = indents.length ? Math.min(...indents) : 0;
+	return lines.map((l, i) => {
+		if (!l.trim()) return "";
+		if (flush.has(i) || i === 0 && startCol > 0) return l.trimStart();
+		return l.slice(Math.min(common, indentOf(l)));
+	}).join("\n");
+}
+//#endregion
+//#region src/lib/agentCopy.ts
+function runsClaudeCode(session) {
+	if (!session) return false;
+	try {
+		const inst = (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === session);
+		return `${inst?.provider || ""} ${inst?.program || ""}`.toLowerCase().includes("claude");
+	} catch {
+		return false;
+	}
+}
+function agentCopyText(text, session, cols, startCol = 0) {
+	return text && runsClaudeCode(session) ? cleanClaudeSelection(text, cols, startCol) : text;
+}
+//#endregion
 //#region src/lib/terminals.ts
 function cssVar(name, fallback) {
 	try {
@@ -26405,13 +26500,27 @@ function attachCopyOnSelect(host, term, opts) {
 		attachFileDrop(host, term, session);
 	}
 	let captured = "";
+	let capturedCol = 0;
+	const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
 	term.onSelectionChange(() => {
 		const s = term.getSelection();
-		if (s && s.trim()) captured = s;
+		if (s && s.trim()) {
+			captured = s;
+			capturedCol = startCol();
+		}
 	});
+	const forClipboard = (text, col) => opts.agent ? agentCopyText(text, session, term.cols, col) : text;
+	host.addEventListener("copy", (ev) => {
+		const live = term.getSelection();
+		if (!opts.agent || !live || !live.trim() || !ev.clipboardData) return;
+		ev.clipboardData.setData("text/plain", forClipboard(live, startCol()));
+		ev.preventDefault();
+		ev.stopPropagation();
+	}, true);
 	function doCopy() {
 		const live = term.getSelection();
-		const sel = live && live.trim() ? live : captured;
+		const isLive = !!(live && live.trim());
+		const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
 		if (sel && sel.trim()) {
 			copyText(sel).then((ok) => {
 				if (ok) toast("Copied " + sel.length + " chars");
@@ -26587,7 +26696,10 @@ function makeTerm(title, wsPath, interactive) {
 	const fit = new o();
 	term.loadAddon(fit);
 	term.open(container);
-	attachCopyOnSelect(container, term, { session: title });
+	attachCopyOnSelect(container, term, {
+		session: title,
+		agent: wsPath === "/terminal"
+	});
 	container.addEventListener("focusin", () => handle.resync());
 	attachDragHistoryGesture(container, (edge) => {
 		let ctx;
@@ -38338,6 +38450,7 @@ function syncFindHighlights() {
 var histCache = /* @__PURE__ */ new Map();
 var HIST_CACHE_MAX = 8;
 function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, initialFind, onClose }) {
+	const forClipboard = (text) => pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
 	const [text, setText] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const scrollRef = (0, import_react.useRef)(null);
@@ -38457,7 +38570,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 			stop();
 			suppressElementCopy.current = true;
 			setTimeout(() => {
-				const s = window.getSelection()?.toString() || "";
+				const s = forClipboard(window.getSelection()?.toString() || "");
 				if (s.trim()) copyText(s).then((ok) => {
 					if (ok) toast("Copied " + s.length + " chars");
 				});
@@ -38620,7 +38733,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 	const copyOnRelease = () => {
 		if (suppressElementCopy.current) return;
 		setTimeout(() => {
-			const sel = window.getSelection?.()?.toString() || "";
+			const sel = forClipboard(window.getSelection?.()?.toString() || "");
 			if (!sel.trim()) return;
 			copyText(sel).then((ok) => {
 				if (ok) toast("Copied " + sel.length + " chars");
@@ -38639,7 +38752,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 				toast("No history to copy");
 				return;
 			}
-			copyText(all).then((ok) => toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed"));
+			copyText(forClipboard(all)).then((ok) => toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed"));
 		}).catch((err) => toast("History copy failed: " + err.message));
 	};
 	const onRootMouseDown = (e) => {

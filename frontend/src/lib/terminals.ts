@@ -17,6 +17,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
+import { agentCopyText } from "./agentCopy";
 
 export type TermKind = "agent" | "shell";
 
@@ -137,7 +138,7 @@ function disableAppMouseReporting(term: Terminal) {
 function attachCopyOnSelect(
   host: HTMLElement,
   term: Terminal,
-  opts: { session?: string }
+  opts: { session?: string; agent?: boolean }
 ) {
   disableAppMouseReporting(term);
   try {
@@ -158,13 +159,36 @@ function attachCopyOnSelect(
   // Capture the selection continuously (a TUI repaint can wipe the highlight
   // right after mouse-up) and copy the captured value on release/right-click.
   let captured = "";
+  let capturedCol = 0;
+  const startCol = () => term.getSelectionPosition()?.start.x ?? 0;
   term.onSelectionChange(() => {
     const s = term.getSelection();
-    if (s && s.trim()) captured = s;
+    if (s && s.trim()) {
+      captured = s;
+      capturedCol = startCol();
+    }
   });
+  // Claude Code draws its own gutter and wraps its own rows: an agent pane
+  // copies the text, not the layout (see claudeCopy / agentCopy).
+  const forClipboard = (text: string, col: number) =>
+    opts.agent ? agentCopyText(text, session, term.cols, col) : text;
+  // Cmd+C / Ctrl+C / the Edit menu's Copy go through the browser's copy
+  // event, which xterm answers with its raw selection: answer it first.
+  host.addEventListener(
+    "copy",
+    (ev) => {
+      const live = term.getSelection();
+      if (!opts.agent || !live || !live.trim() || !ev.clipboardData) return;
+      ev.clipboardData.setData("text/plain", forClipboard(live, startCol()));
+      ev.preventDefault();
+      ev.stopPropagation();
+    },
+    true
+  );
   function doCopy(): boolean {
     const live = term.getSelection();
-    const sel = live && live.trim() ? live : captured;
+    const isLive = !!(live && live.trim());
+    const sel = forClipboard(isLive ? live : captured, isLive ? startCol() : capturedCol);
     if (sel && sel.trim()) {
       copyText(sel).then((ok) => {
         if (ok) toast("Copied " + sel.length + " chars");
@@ -416,7 +440,7 @@ function makeTerm(
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container);
-  attachCopyOnSelect(container, term, { session: title });
+  attachCopyOnSelect(container, term, { session: title, agent: wsPath === "/terminal" });
   // Clicking into a terminal makes this client the one in use — claim the
   // tmux window size for it (see resync).
   container.addEventListener("focusin", () => handle.resync());
