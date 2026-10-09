@@ -10,6 +10,7 @@ import { toast } from "../../../lib/toast";
 import { useConfig } from "../../../state/queries";
 import { useServerRestart } from "../useServerRestart";
 import type { ScreenProps } from "../SettingsDialog";
+import { TailscaleCard } from "./TailscaleCard";
 
 export type StepState = "ok" | "fail" | "unknown";
 
@@ -37,8 +38,8 @@ export interface SharedLinkState {
   error?: string;
   error_kind?: string;
   operator_fix?: string;
+  /** The whole policy-file block (tagOwners, autoApprovers, grants, tests). */
   policy?: string;
-  grants?: string;
   admin?: { machines: string; services: string; policy: string };
   steps?: SetupStep[];
   devices?: Array<{ device: string; host: string; reachable: boolean }>;
@@ -53,6 +54,8 @@ interface MobilePayload {
   note?: string;
   urls?: Array<{ label: string; url: string }>;
   token?: string;
+  /** Step 1 on the phone: the Tailscale app, signed in as `login`. */
+  phone_app?: { url: string; qr_svg?: string; login?: string };
 }
 
 export const TOKEN_MASK = "••••••••••••••••";
@@ -122,19 +125,12 @@ export function Mobile(_: ScreenProps) {
           phone and this machine on a private network, so you can drive your sessions from
           anywhere.
         </p>
-        <p>
-          Get it at{" "}
-          <a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">
-            tailscale.com/download
-          </a>{" "}
-          (sign in on both devices), then reopen this screen — the QR code and phone URLs
-          appear here.
-        </p>
+        {/* What "install" means here depends on the OS (the Mac app, or
+            Tailscale inside WSL when it's only on Windows): the card knows. */}
+        {!tailscale && <TailscaleCard />}
+        <p>Then reopen this screen — the QR code and phone URLs appear here.</p>
       </div>
-      <p className="set-hint">
-        Open MindFlock on your phone. Scan the QR from a device on your Tailscale network, or
-        use one of the URLs below.
-      </p>
+      {tailscale && <PhoneSteps app={data?.phone_app} />}
       <div id="mobile-body" className="mobile-body">
         {!tailscale ? null : error ? (
           <p className="error">{error}</p>
@@ -180,6 +176,40 @@ export function Mobile(_: ScreenProps) {
         )}
       </div>
     </>
+  );
+}
+
+/** Phone setup in order: Tailscale on the phone first (signed in to the same
+ * account — without it the MindFlock QR opens a URL that just hangs), then
+ * the MindFlock QR below. */
+export function PhoneSteps({ app }: { app?: MobilePayload["phone_app"] }) {
+  const url = app?.url || "https://tailscale.com/download";
+  return (
+    <ol className="mobile-phone-steps set-hint" id="mobile-phone-steps">
+      <li data-phone-step="tailscale">
+        Install Tailscale on your phone and sign in
+        {app?.login ? (
+          <>
+            {" "}
+            as <strong>{app.login}</strong>
+          </>
+        ) : (
+          " with the same account as this computer"
+        )}
+        . Scan to get the app, or open{" "}
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          {url.replace(/^https:\/\//, "")}
+        </a>{" "}
+        on the phone.
+        {app?.qr_svg && (
+          // Server-generated segno SVG (trusted).
+          <div className="qr-card ts-app-qr" dangerouslySetInnerHTML={{ __html: app.qr_svg }} />
+        )}
+      </li>
+      <li data-phone-step="mindflock">
+        Open MindFlock on the phone: scan the QR below, or use one of the URLs.
+      </li>
+    </ol>
   );
 }
 
@@ -355,8 +385,8 @@ function SharedLink({
                 others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") +
                 "."
               : "No other device on this link yet. Turn it on, with the same name, on each machine."}{" "}
-            Sign-in carries across devices paired under Remote control: the QR carries their
-            access tokens too.
+            Signing in once covers Your devices (Settings → Devices) and devices paired under
+            Remote control: the QR carries their keys too.
           </p>
         </>
       )}
@@ -463,7 +493,9 @@ function StepFix({ step, shared, qrSvg }: { step: SetupStep; shared: SharedLinkS
                 (<code>{m.ip}</code>)
               </>
             ) : null}{" "}
-            → ⋯ → Edit ACL tags → add <code>{tag}</code>.
+            → ⋯ → Edit ACL tags → add <code>{tag}</code>. Then ⋯ → <strong>Disable key expiry</strong>:
+            tagging a device after it signed in keeps its key expiry, and when the key expires the
+            device silently drops off the link.
           </p>
           {m?.duplicate_of && (
             <p className="set-hint sl-note">
@@ -488,15 +520,14 @@ function StepFix({ step, shared, qrSvg }: { step: SetupStep; shared: SharedLinkS
       return (
         <>
           <p className="set-hint">
-            Add to your access policy so every <code>{tag}</code> device is approved as a host of{" "}
-            <code>{svc}</code> without a click:
+            One block for your access policy: every <code>{tag}</code> device is approved as a host
+            of <code>{svc}</code> without a click, and your devices and phone may reach each
+            other's MindFlock (needed under any custom policy, such as <code>autogroup:self</code>).
+            No <code>tagOwners</code>, <code>autoApprovers</code>, <code>grants</code> or{" "}
+            <code>tests</code> in your policy yet? Paste it whole. Already have one? Move the lines
+            inside it into yours: a key can't appear twice.
           </p>
           {shared.policy && <Snippet text={shared.policy} what="Policy" />}
-          <p className="set-hint">
-            Using a custom policy rather than the default allow-all? Phones must also be allowed to
-            reach <code>{svc}</code> on <code>tcp:443</code>:
-          </p>
-          {shared.grants && <Snippet text={shared.grants} what="Grant" />}
           <AdminLink href={admin?.policy}>Open Access controls</AdminLink>
         </>
       );
