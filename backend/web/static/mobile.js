@@ -1791,6 +1791,102 @@
   if (meta0) meta0.setAttribute("content", cssVar("--bg", "#0f1117"));
   syncAppearance();
 
+  // ---- Update banner: a newer release, here or on your other devices ----
+  // The same facts Settings shows (/api/update/check, /api/fleet), checked on
+  // load and every 30 minutes (the server caches the release lookup). Your
+  // other devices behind → "Update all" (the fleet rollout, one at a time,
+  // this device last); only this one → "Update". Either answers 403 to a
+  // caller who isn't this device's owner, which the banner says.
+  var updBanner = document.getElementById("upd-banner");
+  var updText = document.getElementById("upd-text");
+  var updBtn = document.getElementById("upd-btn");
+  var updAction = null;
+  function cmpVer(a, b) {
+    var pa = String(a || "").replace(/^v/i, "").split(".");
+    var pb = String(b || "").replace(/^v/i, "").split(".");
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var d = (parseInt(pa[i], 10) || 0) - (parseInt(pb[i], 10) || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+  function getJSON(url) {
+    return fetch(url, { credentials: "same-origin" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    });
+  }
+  function showUpdate(text, label, action) {
+    updText.textContent = text;
+    updBtn.textContent = label;
+    updBtn.disabled = !action;
+    updBtn.classList.toggle("hidden", !label);
+    updAction = action;
+    updBanner.classList.remove("hidden");
+  }
+  function waitForNewBuild() {
+    var t0 = Date.now();
+    var t = setInterval(function () {
+      if (Date.now() - t0 > 180000) { clearInterval(t); return; }
+      getJSON("/api/update/check").then(function (c) {
+        if (c && !c.restart_pending && c.state !== "started") { clearInterval(t); location.reload(); }
+      }).catch(function () { /* restarting */ });
+    }, 2500);
+  }
+  function startUpdate(url, body, busyText) {
+    updBtn.disabled = true;
+    fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 403) throw new Error("only this device's owner can update it — sign in with its token");
+        if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+        showUpdate(busyText, "", null);
+        if (url === "/api/update/start") waitForNewBuild();
+      });
+    }).catch(function (err) {
+      showUpdate("Couldn't update: " + err.message, "Update", updAction);
+    });
+  }
+  function checkUpdate() {
+    getJSON("/api/update/check").then(function (c) {
+      if (!c) return;
+      if (c.restart_pending) {
+        showUpdate("Installed — restarting onto it…", "", null);
+        waitForNewBuild();
+        return;
+      }
+      if (!c.latest) return;
+      return getJSON("/api/fleet").catch(function () { return null; }).then(function (f) {
+        var behind = ((f && f.in_fleet && f.members) || []).filter(function (m) {
+          return !m.self && m.reachable && m.version && cmpVer(c.latest, m.version) > 0;
+        });
+        var here = !!c.available;
+        if (f && f.update && f.update.state === "running") {
+          showUpdate("Updating your devices to v" + c.latest + "…", "", null);
+        } else if (behind.length) {
+          var n = behind.length + (here ? 1 : 0);
+          showUpdate(
+            "MindFlock v" + c.latest + " is out — " + n + " of your devices " + (n === 1 ? "is" : "are") + " behind",
+            "Update all",
+            function () { startUpdate("/api/fleet/update", { tag: "v" + c.latest }, "Updating your devices one at a time…"); }
+          );
+        } else if (here && !c.blocked) {
+          showUpdate("MindFlock v" + c.latest + " is out", "Update", function () {
+            startUpdate("/api/update/start", {}, "Updating — this page reloads when it's back…");
+          });
+        } else {
+          updBanner.classList.add("hidden");
+        }
+      });
+    }).catch(function () { /* offline: try again later */ });
+  }
+  updBtn.addEventListener("click", function () { if (updAction) updAction(); });
+  checkUpdate();
+  setInterval(checkUpdate, 30 * 60 * 1000);
+
   applyViewport();
   poll();
   // Visibility-aware cadence: 4s while visible, ~30s while the tab is hidden

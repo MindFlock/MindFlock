@@ -229,7 +229,13 @@ def _no_tailnet_side_effects(monkeypatch):
     # The shared ``status --json`` snapshot is cached for seconds: start every
     # test without one, so a fake (or real) status never leaks across tests.
     tailscale_cli.invalidate()
+    from backend.web.core import tailnet_bind
+
     monkeypatch.setattr(server, "_tailscale_info", lambda: (None, None))
+    # run.main's tailscale-mode bind plan: no tailnet (the 0.0.0.0 fallback),
+    # and the fallback flag it exports never outlives the test.
+    monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: [])
+    monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
     monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
     monkeypatch.setattr(mobile_access, "_tailscale_login", lambda: "")
     monkeypatch.setattr(mobile_announce, "announce_soon", lambda reason: None)

@@ -32,7 +32,7 @@ import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../stat
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
-import { approvableRequest, deviceEventNote } from "../lib/fleet";
+import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 
@@ -75,6 +75,8 @@ interface Notif {
   peer?: boolean;
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
+  /** An update.available row: named "Updates", opens this Settings screen. */
+  settings?: string;
 }
 
 /** How long a join request's Approve stays on its bell row (the server's
@@ -103,6 +105,7 @@ export interface NotifRow {
   device?: boolean;
   peer?: boolean;
   approve?: { id: string; via: string; code: string; host: string } | null;
+  settings?: string;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -196,6 +199,14 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "peer.relay_changed": {
       const n = peerEventNote(env.event, d);
       return n ? { text: n.text, cls: n.cls, peer: true } : null;
+    }
+    // A newer release, and which of your devices are behind it: the click
+    // opens where the Update button is (Devices when others are behind).
+    case "update.available": {
+      const n = updateNote(d);
+      if (!n) return null;
+      const dedupe = "update:" + String(d.latest || "") + ":" + String(d.count ?? "");
+      return { text: n.text, cls: "n-info", settings: n.screen, dedupe };
     }
     default:
       return null;
@@ -522,6 +533,9 @@ export function NotificationsBell() {
                       } else if (n.peer) {
                         setOpen(false);
                         useUi.getState().openDialogFor("settings", PEER_SCREEN);
+                      } else if (n.settings) {
+                        setOpen(false);
+                        useUi.getState().openDialogFor("settings", n.settings);
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -537,6 +551,8 @@ export function NotificationsBell() {
                         ? "Devices"
                         : n.peer && !n.session
                         ? "Collaborate"
+                        : n.settings && !n.session
+                        ? "Updates"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Group"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +

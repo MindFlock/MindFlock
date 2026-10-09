@@ -775,6 +775,36 @@ export interface FleetMember {
   reason?: string;
   /** When MindFlock last answered there (epoch s, 0 = never seen). */
   last_seen?: number;
+  /** The commit its engine was installed from ("" = unknown: an editable
+   * install, or a MindFlock too old to say). */
+  commit?: string;
+  /** How its engine is installed: `uv-tool` (updatable from here),
+   * `editable` (a dev checkout) or `other`; "" when its hello doesn't say. */
+  install?: string;
+  /** Its desktop app's version ("" = none reported: headless, or a
+   * browser-only setup). */
+  shell_version?: string;
+}
+
+/** One device's row in an "Update all my devices" rollout. */
+export interface FleetRolloutRow {
+  key: string;
+  host: string;
+  self?: boolean;
+  step: "queued" | "updating" | "restarting" | "done" | "current" | "skipped" | "failed" | "not_started";
+  detail?: string;
+  shell_version?: string;
+}
+
+/** GET /api/fleet → `update` (backend.web.core.fleet_update.status). */
+export interface FleetRollout {
+  state: "idle" | "running" | "done" | "halted";
+  tag: string;
+  version: string;
+  error?: string;
+  started_at?: number;
+  finished_at?: number;
+  members: FleetRolloutRow[];
 }
 
 /** A tombstone: a device taken out of the group, and who took it out —
@@ -918,6 +948,8 @@ export interface FleetStatus {
   /** Removed here but live on another member's roster: "Allow it here"
    * (POST /api/fleet/members/{key}/allow) lets it back in on this device. */
   readmitted_elsewhere?: FleetReadmitted[];
+  /** "Update all my devices": the last (or running) rollout. */
+  update?: FleetRollout;
 }
 
 /** GET /api/settings/sync (backend.web.core.settings_sync.status). */

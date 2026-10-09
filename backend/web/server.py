@@ -100,7 +100,7 @@ import weakref
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -129,6 +129,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
+from backend.web.core import tailnet_bind as _tailnet_bind
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import settings_sync as _settings_sync
@@ -326,6 +327,7 @@ from backend.web.core.engine import (
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
 from backend.web.core import self_update as _self_update
+from backend.web.core import update_watch as _update_watch
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -527,10 +529,18 @@ async def lifespan(app: FastAPI):
     _register_task(_remote.instances_loop())
     # Settings sync across the paired devices (a no-op tick while it's off).
     _register_task(_settings_sync.sync_loop())
+    # Engine updates: re-exec onto a finished install with no browser tab
+    # open (core.update_watch), and announce a newer release (update.available).
+    _register_task(_update_watch.watch_loop())
     # Shared phone link: keep the Tailscale Service advertisement applied —
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
     _register_task(_shared_link.recheck_loop(_server_port))
+    # Tailscale mode came up bound to every interface because tailscaled
+    # wasn't running yet (run.py's fallback): narrow the bind once it is
+    # (core.tailnet_bind). Never registered otherwise — nor in tests.
+    if _tailnet_bind.fell_back():
+        _register_task(_tailnet_bind.rebind_loop())
     # Peer links: a no-op unless enabled in settings (no identity, no socket).
     try:
         await _peer_service().start()
@@ -5805,8 +5815,15 @@ def list_instances(request: Request) -> JSONResponse:
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #
 @app.get("/api/remote/hello")
-def remote_hello() -> JSONResponse:
-    """Public identity ping other MindFlock devices use for discovery."""
+def remote_hello(request: Request) -> JSONResponse:
+    """Public identity ping other MindFlock devices use for discovery.
+
+    The desktop shell's own engine check sends ``X-MindFlock-Shell: <its
+    version>`` from this machine; that is remembered and reported here as
+    ``shell_version`` (see :func:`backend.web.core.remote.note_shell_version`)."""
+    shell = request.headers.get(_remote.SHELL_HEADER)
+    if shell and _auth._from_this_machine(request.scope):
+        _remote.note_shell_version(shell)
     return JSONResponse(_remote.hello_json())
 
 
@@ -6180,9 +6197,13 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
         release = None
     latest = (release or {}).get("version", "")
     blocked = _self_update.blocked_reason()
+    # Settles a dead installer as interrupted before the state is read.
+    await asyncio.to_thread(_self_update.running)
+    st = _self_update.read_state()
     return JSONResponse(
         {
             "current": current,
+            "commit": _self_update.installed_commit(),
             "latest": latest,
             "tag": (release or {}).get("tag", ""),
             "release_url": (release or {}).get("url", ""),
@@ -6192,20 +6213,56 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
             "kind": _self_update.install_kind(),
             "blocked": blocked,
             "repo": _self_update.UPDATE_REPO,
-            "state": _self_update.read_state().get("state", "idle"),
+            "state": st.get("state", "idle"),
+            # The install finished but this process isn't running it yet: the
+            # screen says "Installed — restarting…", never "Update to vX" again.
+            "restart_pending": _self_update.restart_pending(st),
+            # The last update's outcome, for "was interrupted — Try again" and
+            # "rolled back to vX (see log)".
+            "last": {
+                k: st[k]
+                for k in ("ref", "version", "from_version", "error", "code", "healthy")
+                if k in st
+            },
         }
     )
 
 
 @app.post("/api/update/start")
-async def post_update_start(payload: Optional[dict] = None) -> JSONResponse:
+async def post_update_start(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Install the newest release (or an explicit ``ref``) and report back.
 
     The ref is resolved server-side by default rather than taken from the
     client: the button says "update to the newest version", and the newest
     version is not something a stale settings screen should get to decide.
+
+    Only the owner may start one (:func:`backend.web.core.auth.privileged` —
+    a credential, this machine, or a trusted tailnet account; never a request
+    another MindFlock relays): with the gate off, any tailnet node could
+    otherwise reinstall this engine. And an explicit ``ref`` from anywhere
+    but this machine must be a published release tag at or above the running
+    version (:func:`~backend.web.core.self_update.check_remote_ref`) — a
+    branch or a downgrade is a developer's move, made at this keyboard.
     """
+    try:
+        allowed = bool(await _auth.privileged(request.scope))
+    except Exception:  # noqa: BLE001 — fail closed
+        allowed = False
+    if not allowed:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "updates can only be started by this device's owner",
+            },
+            status_code=403,
+        )
     ref = str((payload or {}).get("ref", "") or "").strip()
+    if ref and not _auth._from_this_machine(request.scope):
+        reason, status = await _self_update.check_remote_ref(ref)
+        if reason:
+            return JSONResponse({"ok": False, "error": reason}, status_code=status)
     if not ref:
         try:
             release = await _self_update.latest_release()
@@ -8971,9 +9028,18 @@ async def red_zones_all() -> JSONResponse:
 
 
 @app.post("/api/red-zones")
-async def red_zones_add(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_add(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Add a REPO zone by repo id (``{"repo_id", "pattern", "name", "note",
-    "label"}``) and re-sync every live worktree of that repo."""
+    "label"}``) and re-sync every live worktree of that repo.
+
+    The repo-scope routes here change what agents may edit in every worktree
+    of the repo, and settings sync spreads them: the owner's only
+    (``auth.may_configure``). A session's own zones (``/api/instances/…``)
+    are part of driving that session."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9028,10 +9094,14 @@ async def red_zones_companions(repo_id: str = "") -> JSONResponse:
 
 
 @app.put("/api/red-zones/companions")
-async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_companions_set(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Replace a repo's companion patterns: ``{"repo_id", "patterns": [...],
     "label"?}``. 400 on a missing repo id or any invalid pattern (nothing is
     saved). Live worktrees of the repo are re-synced at once."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     rid = str(p.get("repo_id") or "").strip()
     pats = p.get("patterns")
@@ -9063,9 +9133,13 @@ async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONRespon
 
 
 @app.post("/api/red-zones/plan-first")
-async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_plan_first(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Turn a repo's Plan-first flag on/off: its intake sessions (tickets,
     issues, PR reviews) open with the plan-first instruction."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9082,8 +9156,10 @@ async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
 
 
 @app.delete("/api/red-zones/{zone_id}")
-async def red_zones_delete(zone_id: str) -> JSONResponse:
+async def red_zones_delete(zone_id: str, request: Request) -> JSONResponse:
     """Remove a zone by id (any scope) and re-sync the guards it reached."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
 
     def _del():
         with _red_zone_monitor.route_write():
@@ -14541,8 +14617,14 @@ def cursor_autoadopt_status() -> JSONResponse:
 
 
 @app.post("/api/cursor/autoadopt")
-def cursor_autoadopt_set(payload: dict) -> JSONResponse:
-    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``."""
+def cursor_autoadopt_set(
+    payload: dict, allowed: bool = Depends(_auth.configure_allowed)
+) -> JSONResponse:
+    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``. Owner
+    only (``auth.may_configure``): on, it launches an agent in every folder
+    opened in the IDE."""
+    if not allowed:
+        return _auth.configure_refused()
     global _CURSOR_AUTOADOPT_ENABLED
     _CURSOR_AUTOADOPT_ENABLED = bool((payload or {}).get("enabled"))
     try:
@@ -14718,17 +14800,24 @@ def _peer_service():
     return _svc.get_service()
 
 
-def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    """Another MindFlock relaying never manages peer links here; and a change
+    (an invite, a join, sharing a folder with someone, its perms) needs the
+    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
+    gate-off device, who could otherwise share its folders with a peer of
+    their own."""
     if _remote.from_remote(request):
         return JSONResponse(
             {"error": "peer links can only be managed on this device"},
             status_code=403,
         )
+    if request.method != "GET" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     return None
 
 
 async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
-    refused = _peer_remote_refusal(request)
+    refused = await _peer_remote_refusal(request)
     if refused is not None:
         return refused
     from backend.peer.service import PeerServiceError

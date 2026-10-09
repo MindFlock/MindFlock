@@ -1445,6 +1445,8 @@ async def test_status_payload(world, monkeypatch):
         "policy_grant",
         "match",
         "phone_link",
+        # "Update all my devices": the last (or running) rollout.
+        "update",
     }
     assert st["in_fleet"] is True
     assert st["self"]["key"] == "laptop" and st["self"]["host"] == "Laptop"
@@ -1464,6 +1466,10 @@ async def test_status_payload(world, monkeypatch):
         "last_seen": 1.0,
         "automation": False,
         "key_conflict": False,
+        # What its hello says about updating it (nothing, from this fake).
+        "commit": "",
+        "install": "",
+        "shell_version": "",
     }
     [cand] = st["candidates"]
     assert cand == {

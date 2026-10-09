@@ -378,3 +378,30 @@
   outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   border-radius: 6px;
 }
+
+/* "Update all my devices": an update chip that wants attention (behind the
+   newest release), and the rollout's per-device lines. */
+.devices-badge.warn {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
+}
+.devices-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+.devices-update-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Update chips can be a sentence ("desktop app v0.7.4 updates on its next
+   launch"): let them wrap on a phone instead of pushing the row wide. */
+.devices-badge[data-update-chip] {
+  white-space: normal;
+}

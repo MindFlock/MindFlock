@@ -21,10 +21,11 @@ import tempfile
 import threading
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from backend.config.config import GetConfigDir
+from backend.web.core import auth as _web_auth
 
 from .base import Addon, AppContext, FrontendDescriptor
 
@@ -151,8 +152,15 @@ class TemplatesAddon(Addon):
         def get_templates() -> JSONResponse:
             return JSONResponse({"templates": list_templates()})
 
+        # A template names a program and a prompt that start sessions, and
+        # settings sync spreads templates: saving or deleting one is the
+        # owner's (auth.may_configure).
         @router.post("")
-        def post_template(body: dict) -> JSONResponse:
+        def post_template(
+            body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            if not allowed:
+                return _web_auth.configure_refused()
             body = body or {}
             name = str(body.get("name", "") or "").strip()
             if not name:
@@ -184,7 +192,11 @@ class TemplatesAddon(Addon):
             return JSONResponse({"template": saved, "templates": list_templates()})
 
         @router.delete("/{name}")
-        def del_template(name: str) -> JSONResponse:
+        def del_template(
+            name: str, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            if not allowed:
+                return _web_auth.configure_refused()
             return JSONResponse({"deleted": delete_template(name)})
 
         return router

@@ -1417,7 +1417,7 @@ devices paired both ways don't echo each other's sessions back as
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`, read once at boot — `""` for an editable or local install), so two builds that both say the same version can be told apart; `install` is how it is installed (`uv-tool`·`editable`·`other` — whether "Update all my devices" can update it); `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state: `{self: {device, host, os}, remote_control, devices: [{device, host, os, ip, version, shared_link, reachable, remote_control, auth, has_token, needs_token, connected, error, sessions, member, fleet_proto, in_fleet, same_fleet}]}`. `member` = on this device's "Your devices" roster, `in_fleet` = in any group, `same_fleet` = in this one; a member never `needs_token` (the fleet key opens it) |
 | POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
@@ -1471,7 +1471,13 @@ settings edits to the others with it, so anyone who can reach that member
 controls your other devices through it. `gate_warning` is true when the gate is
 off and this server is reachable beyond this machine (a non-local
 `CS_WEB_MODE`, or local mode fronted by `tailscale serve` / the shared link);
-Settings → Devices and `mindflock devices` warn then.
+Settings → Devices and `mindflock devices` warn then. The Devices warning has a
+**Turn the gate on** button: it signs that browser in first (`GET
+/api/settings/auth-token`, then `POST /api/auth`) and saves
+`general.auth_mode = "on"`; other members keep working on the fleet key. An
+anonymous tailnet caller of such a member can still drive its sessions, but it
+can no longer change settings that sync would spread (see **Changing what runs
+on your devices** below), nor read the token that would let it.
 
 Browser routes are **privileged**: the caller must present a credential, be
 this machine itself (loopback with no forwarding headers), or be a trusted
@@ -1564,6 +1570,39 @@ requests: there is no generic relayed approve, only this member-to-member one.
 `POST /api/fleet/adopt {bundle, from: {key, host, dns}}` (one-click add) takes
 only this device's OWN access token, never the fleet key → `{ok,
 runs_automation}`; 401 without it, 409 when this device is in another group.
+
+**Update all my devices** (`web/core/fleet_update.py`):
+
+- `POST /api/fleet/update {tag?}` — the owner's browser or CLI (`privileged()`,
+  never relayed; 403 otherwise). Starts a rollout to `tag` (a published
+  release at or above this device's version; default the newest release):
+  every other live member **one at a time**, then this device last. Each
+  member is asked through its `update/apply`, then the rollout waits until
+  that member's own hello reports the new commit (or, without one, the new
+  version) and only then moves on; the first member that fails, rolls back
+  (its installer's health check) or doesn't come back halts the rollout.
+  Members that are offline, already current, a dev checkout or not installed
+  by install.sh (hello `install`), or too old for the route (404) are skipped
+  with the reason. → the rollout; 409 while one runs, 400 outside a group or
+  for a refused tag, 502 when GitHub can't name the newest release.
+- `GET /api/fleet/update` → `{state: idle·running·done·halted, tag, version,
+  error, started_at, finished_at, members: [{key, host, self, step, detail,
+  shell_version}]}` — `step` is `queued·updating·restarting·done·current·
+  skipped·failed·not_started`; a member whose desktop app lags says "desktop
+  app on X (vY) updates on its next launch" in `detail`. Progress persists in
+  `<config dir>/fleet_update.json`; a rollout this device's restart cut off
+  reads as `halted`. `GET /api/fleet` carries the same object as `update`, and
+  each member row adds `commit`, `install` and `shell_version` from its hello.
+- Member to member, **fleet key only** (never this device's own token, never
+  the browser `fwd/` relay — `/api/update/*` stays off `_FWD_ALLOWED`):
+  `POST /api/fleet/update/apply {tag?}` installs `tag` (default the newest
+  release) through the same detached installer as `/api/update/start` → `{ok,
+  ref, commit}` or `{ok: true, current: true}` when already on it; 400 for
+  anything but a published release tag at or above its own version, 409
+  `{blocked: true, install, error}` for a dev checkout / non-install.sh engine
+  (or an install already running). `GET /api/fleet/update/state` → `{version,
+  commit, install, blocked, state, ref, error, restart_pending}`. Both answer
+  401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 
 ## Config, providers, usage, settings
 
@@ -2056,6 +2095,28 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   URL, `token: null`) and the rotate answer withhold it. `GET /api/mobile` and
   the rotate answer hand it only to a caller presenting that own token or to
   this machine itself (unrelayed).
+- **Changing what runs on your devices (gate on or off).** Routes that write
+  what agents run with — `POST /api/settings` (every field except
+  `general.onboarded`, `general.last_repo_path` and `ui.surface`), `PUT
+  /api/settings/ticketing/sources`, `PUT /api/settings/auth-profiles`,
+  `POST/PUT/DELETE /api/providers*`, `POST/DELETE /api/templates*`, `POST
+  /api/prefs` with `keymap` or `prompt_presets`, `POST /api/notify/ntfy`,
+  `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
+  (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  and `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
+  "this changes how your devices run agents, so it needs this device's
+  sign-in…"}` unless the caller presents this device's token or the fleet key,
+  is this machine itself (loopback, unproxied), or is a trusted Tailscale
+  account — and never when another MindFlock relays it
+  (`auth.may_configure`). The one exception is a server nothing beyond this
+  machine can reach (`CS_WEB_MODE` local or unset, no forwarding header). Why:
+  on a gate-off device reachable on the tailnet any node gets past the gate,
+  and a synced field it wrote (`coding_cli.default_launch_args`, a template's
+  program, a custom agent) would be stamped as this device's edit and spread
+  by settings sync to every device holding the fleet key. With the gate on
+  this refuses only relayed requests. None of these routes is on the
+  remote-control forward allow-list.
 
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests and DNS-rebinding hosts. These checks
@@ -2078,7 +2139,7 @@ run **before everything else**, public paths included: a cross-site
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/auth` | Body `{token}` — validate + set the `mf_auth` cookie (login-page target; always allowed through the gate). `200 {ok}` or `401`; never echoes the token |
-| GET | `/api/settings/auth-token` | This device's own token in the clear for Settings → Security (generated and persisted on first use) → `{token, auth_enabled}` — but only to a caller that already presents that own token (cookie or bearer), to this machine itself (loopback, unproxied, not relayed), or, with the gate off, to any caller that isn't another MindFlock relaying. Anyone else — a phone or browser signed in with your devices' key, a member relaying — gets `200 {token: null, auth_enabled, reason: "signed in with your devices' key"}`: the fleet key must not collect every device's own token, which would outlive a removal |
+| GET | `/api/settings/auth-token` | This device's own token in the clear for Settings → Security (generated and persisted on first use) → `{token, auth_enabled}` — but only to a caller that already presents that own token (cookie or bearer), to this machine itself (loopback, unproxied, not relayed), or, with the gate off, to any direct caller of a server nothing beyond this machine can reach (`CS_WEB_MODE` local or unset, no forwarding header) — never to an anonymous tailnet caller of a gate-off, reachable server, which the token would make privileged. Anyone else — a phone or browser signed in with your devices' key, a member relaying — gets `200 {token: null, auth_enabled, reason: "signed in with your devices' key"}`: the fleet key must not collect every device's own token, which would outlive a removal |
 | GET | `/api/settings/tailnet-trust` | Settings → Security's **Trusted Tailscale accounts**: `{available, self_login, self_tagged, logins, shared_link_supported, trusted}` — `logins` are the Tailscale logins owning at least one UNTAGGED node on the tailnet (the choices); `trusted` mirrors `general.tailnet_trusted_logins`; `self_login` is `""` when this node is tagged; `available:false` = no `tailscale` binary or the daemon is stopped. Reads the shared `tailscale status --json` snapshot (re-read at most every ~5 s, `backend/tailscale_cli.py`). The list is saved through `POST /api/settings` (`{"general": {"tailnet_trusted_logins": [...]}}`), lower-cased and de-duplicated on load. What trust grants: see the Trusted Tailscale accounts bullet above |
 | GET | `/api/settings/sync` | Settings → Devices → **Settings sync**: `{enabled, error, paused, choices[], device, joined_from, in_fleet, devices: [{key, label, syncing, last_sync, withheld[], error}], pinned[], separate: {<pin>: <label>}, deferred: [{path, value, reason}], warnings[], syncable: [{path, label, group}]}` — one row per member of "Your devices" (`backend.web.core.settings_sync`). `error` is `"settings.json couldn't be read — sync paused"` while the file won't parse. `paused` is `"This device's settings look reset — sync paused"` (with `choices: ["theirs", "mine"]`) when one background scan — a change nobody made through MindFlock, such as a replaced or restored file — would clear 3 or more settings and at least half of what is set here, with 8 or more set: nothing is stamped or exported until `resume`, and `settings.sync_paused` fires once. A save through a route (`POST /api/settings`, `/api/prefs`, ticket sources, provider TOMLs) explains only what it wrote: settings cleared under the paths that save wrote (a field, a group's fields, a store or its entries) don't count, anything else cleared in the same scan still does — a reset file followed by one save still pauses. `pinned` holds `group.field`, `store:<name>` or single entries (`ticketing.sources#<id>` — a source whose id means something different on the device you joined is kept separate this way; `separate` maps each such pin to that device's label, which the Unpin confirm names). `warnings` include a member whose stamps were skipped because they can't be a real time — more than a year ahead of this clock (`"<host>'s clock is far ahead — its changes are ignored…"`; a merely fast clock is never warned about, since a later edit wins either way), sources kept separate, and ticket sources without an id (never synced). `devices[].error` reads `"<host> paused sync — its settings look reset; answer it in Settings → Devices there"` for a member whose own sync is paused (its export answers 503). `devices[].withheld` is always empty (kept for older clients) |
 | POST | `/api/settings/sync` | `{enabled: true, from?}` turns sync on — from THIS device (`from` empty: its values are stamped now and lead) or by first adopting member `from`'s values (→ adds `{adopted[], deferred[]}`); `{enabled: false}` turns it off. 409 when this device isn't in a group of devices or `from` isn't a reachable member; 403 for a relayed request |
@@ -2113,15 +2174,26 @@ Implementation and the reasoning live in `web/core/self_update.py`.
 
 | Method | Path | Returns / accepts |
 |---|---|---|
-| GET | `/api/update/check` | `{current, latest, tag, release_url, notes, checked, available, kind, blocked, repo, state}`. `?refresh=1` bypasses the 15-minute `RELEASE_TTL_S` cache (the **Check again** button) — the releases endpoint is polled by every open settings screen and GitHub's unauthenticated limit is 60/hour. An unreachable GitHub answers an empty `latest` with `checked: false`, and is **never** reported as up-to-date: "couldn't tell" and "you're current" are different answers. `kind` is how this engine is installed (`uv-tool` \| `editable` \| `other`) and `blocked` is the human sentence for why it can't update here (empty = it can) |
-| POST | `/api/update/start` | Body `{}` (or `{"ref": "v0.3.2"}`). The newest tag is resolved **server-side** by default — the button says "update to the newest version", and a stale settings screen doesn't get to decide what that is — then resolved to a commit and handed to `uv tool install --force`. → `{ok: true, ref, commit}`. **400** is a refusal with a reason: a dev/editable checkout, an engine not installed by `uv tool`, no `uv` on PATH, an install already running, a ref that resolves to nothing. **502** = GitHub unreachable, so there is no newest release to install |
-| GET | `/api/update/state` | The progress file plus `restarting` (and a `log` tail for the UI's detail fold). **This route is also what re-execs the server** — exactly once, on the first poll that sees a finished install. The installer deliberately doesn't do it itself: calling back into the API would mean teaching a shell script the port and the auth token for a request the UI is already making |
+| GET | `/api/update/check` | `{current, commit, latest, tag, release_url, notes, checked, available, kind, blocked, repo, state, restart_pending, last}`. `state` is the last update's (`idle·started·done·failed·rolled_back`); `restart_pending` = installed but this process doesn't run it yet (the server restarts itself onto it within seconds — the screen says "Installed — restarting…" instead of offering the install again); `last` = `{ref, version, from_version, error, code, healthy}` of the last update (`error: "interrupted"` when its installer died). `?refresh=1` bypasses the 15-minute `RELEASE_TTL_S` cache (the **Check again** button) — the releases endpoint is polled by every open settings screen and GitHub's unauthenticated limit is 60/hour. An unreachable GitHub answers an empty `latest` with `checked: false`, and is **never** reported as up-to-date: "couldn't tell" and "you're current" are different answers. `kind` is how this engine is installed (`uv-tool` \| `editable` \| `other`) and `blocked` is the human sentence for why it can't update here (empty = it can) |
+| POST | `/api/update/start` | Body `{}` (or `{"ref": "v0.3.2"}`). **Owner only** (`privileged()`: a credential, this machine, or a trusted Tailscale account — never a request another MindFlock relays): **403** otherwise, so a gate-off device's tailnet neighbours can't reinstall it. The newest tag is resolved **server-side** by default — the button says "update to the newest version", and a stale settings screen doesn't get to decide what that is — then resolved to a commit and handed to `uv tool install --force`. An explicit `ref` from anywhere but this machine must be a **published release tag at or above the running version** (400 for a branch, a commit, an unpublished tag or a downgrade); from this machine any ref still goes, for developers. → `{ok: true, ref, commit}`. **400** is a refusal with a reason: a dev/editable checkout, an engine not installed by `uv tool`, no `uv` on PATH, an install already running, a ref that resolves to nothing. **502** = GitHub unreachable, so there is no newest release to install |
+| GET | `/api/update/state` | The progress file plus `restarting` (and a `log` tail for the UI's detail fold). The server's own watcher (`web/core/update_watch.py`, every 5 s) re-execs onto a finished install with no client involved; this route does the same on the first poll that sees one first — once either way, and never in a process that already runs the installed build |
 
 The operational contract behind them:
 
-- The installer runs **detached** (its own session via `setsid` where there is
-  one), so it survives the restart that ends the update rather than being killed
-  halfway through replacing its own venv.
+- The installer runs **detached** (its own session, `start_new_session`), so it
+  survives the restart that ends the update rather than being killed halfway
+  through replacing its own venv. Its PID is recorded: a `started` marker whose
+  installer is gone reads as `failed` / `error: "interrupted"` at once.
+- The restart needs **no browser**: a lifespan watcher re-execs once the state
+  is `done` (held while Setup's install terminal runs). The ingestion pipeline
+  records its build in its lock file and is restarted at boot when it is a
+  server-started pipeline on an older build.
+- After a good install the installer watches the server's public hello on
+  loopback for 90 s (only when it answered just before): back on the new
+  commit = `healthy`; still the old build = not restarted yet, left alone;
+  gone and never back = the new engine can't boot, so it reinstalls the
+  previous commit (`prev_commit`, from `direct_url.json`), starts the server
+  again with the command line it ran with, and writes `rolled_back`.
 - Progress lives in a **file**, `<config dir>/update.json`, not this process's
   memory — so a client polling *across* the restart still learns how the update
   ended. Full installer output goes to `<config dir>/update.log` (Settings →
@@ -2150,8 +2222,11 @@ manual launching is a headless/dev concern. `run.py` accepts mode/port CLI
 tokens in either order and honors `CS_WEB_MODE`,
 `PORT`/`UVICORN_PORT`. The default (local) mode binds `127.0.0.1` — nothing
 off the machine can reach the server. Tailscale mode is an explicit opt-in
-that binds all interfaces (`0.0.0.0`), so the port is reachable from your LAN
-as well as your tailnet — every non-local bind is protected by the auth token
+that binds `127.0.0.1` plus this node's Tailscale addresses, so the port is on
+your tailnet but not your LAN (`web/core/tailnet_bind.py`; it falls back to
+`0.0.0.0` with a warning while Tailscale is down — restarting onto the narrow
+bind once it is up — or when those addresses can't be bound here, and
+`MINDFLOCK_BIND_ALL=1` asks for `0.0.0.0` on purpose) — every non-local bind is protected by the auth token
 printed at startup (unauthenticated clients get 401). Nothing is exposed to
 the public internet unless you forward the port yourself. For HTTPS run
 `tailscale serve --bg 8765` once and use `./run.sh local`.

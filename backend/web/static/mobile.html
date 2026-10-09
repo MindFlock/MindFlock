@@ -46,6 +46,12 @@
          and the copies it holds for your other devices. A push's tap lands
          here as /m#approve=<id>. -->
     <div id="approve-cards" class="hidden" aria-live="polite"></div>
+    <!-- A newer MindFlock release (this device, or others of "Your devices"
+         behind it): one line and one button, hidden otherwise. -->
+    <div id="upd-banner" class="hidden" role="status">
+      <span id="upd-text"></span>
+      <button type="button" id="upd-btn">Update</button>
+    </div>
 
     <!-- Git workflow bar: the same guided flow the desktop pane header offers
          (Commit → Push → PR → Merge). The step recommended for the selected

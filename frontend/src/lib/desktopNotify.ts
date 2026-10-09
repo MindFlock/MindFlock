@@ -14,7 +14,7 @@ import { useUi } from "../state/store";
 import { PEER_SCREEN } from "./peer";
 
 interface MfNotify {
-  show(o: { title: string; body: string; target: string }): Promise<unknown> | void;
+  show(o: { title: string; body: string; target: string; version?: string }): Promise<unknown> | void;
   onClick(cb: (target: string) => void): (() => void) | void;
 }
 
@@ -29,7 +29,7 @@ function bridge(): MfNotify | null {
 export function desktopNoteFor(
   event: string,
   data: Record<string, unknown> | null | undefined
-): { title: string; body: string; target: string } | null {
+): { title: string; body: string; target: string; version?: string } | null {
   const d = data || {};
   switch (event) {
     case "device.join_requested": {
@@ -50,12 +50,18 @@ export function desktopNoteFor(
       };
     }
     case "update.available": {
-      const v = String(d.version || d.latest || "");
-      const where = d.host || d.device ? " on " + String(d.host || d.device) : "";
+      // {latest, tag, here, behind: [{key, host, version}], count, detail}
+      // (backend.web.core.fleet_update): where the Update button is decides
+      // the click — Devices when other devices are behind.
+      const v = String(d.latest || d.version || "").replace(/^v/i, "");
+      const behind = Array.isArray(d.behind) ? d.behind.length : 0;
       return {
-        title: "MindFlock update" + (v ? " " + v : "") + " available" + where,
-        body: String(d.detail || "Open MindFlock to update"),
-        target: "update",
+        title: "MindFlock " + (v ? v + " " : "") + "is available",
+        body: String(d.detail || "") || (behind ? "Update your devices in Settings → Devices" : "Open MindFlock to update"),
+        target: behind ? "devices" : "update",
+        // The shell shows one notice per release (its own update toast
+        // included), keyed by this.
+        version: v,
       };
     }
     default:

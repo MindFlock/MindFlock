@@ -3043,6 +3043,10 @@ def status(privileged: bool) -> dict:
                 "self": mine,
                 "reachable": True if mine else bool(dev.get("reachable")),
                 "version": __version__ if mine else str(dev.get("version") or ""),
+                # Update all my devices: the build it runs, whether it can be
+                # updated from here (``editable``/``other`` can't), and its
+                # desktop app's version ("" when none reported).
+                **_update_facts(mine, dev),
                 "same_fleet": (
                     True if mine else bool(my_id and dev.get("fleet") == my_id)
                 ),
@@ -3316,6 +3320,28 @@ def _phone_link(doc: dict, known: Dict[str, dict]) -> Optional[dict]:
             }
         )
     return {"name": name, "hosts": hosts}
+
+
+def _update_facts(mine: bool, dev: dict) -> dict:
+    """``{commit, install, shell_version}`` for a member row: this device's
+    own, or what the member's hello reported. Never raises."""
+    if not mine:
+        return {
+            "commit": str(dev.get("commit") or ""),
+            "install": str(dev.get("install") or ""),
+            "shell_version": str(dev.get("shell_version") or ""),
+        }
+    try:
+        from backend.web.core import remote as _remote
+        from backend.web.core import self_update as _su
+
+        return {
+            "commit": _su.installed_commit(),
+            "install": _su.install_kind(),
+            "shell_version": _remote._SHELL["version"],
+        }
+    except Exception:  # noqa: BLE001
+        return {"commit": "", "install": "", "shell_version": ""}
 
 
 def _host_of(doc: dict, known: Dict[str, dict], key: str) -> str:

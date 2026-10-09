@@ -51,6 +51,7 @@ import {
   liveInvite,
   matchText,
   memberStatus,
+  memberUpdateChips,
   pasteJoinBody,
   phoneLinkLine,
   pinChoices,
@@ -61,13 +62,17 @@ import {
   removedToast,
   requestNote,
   routeCode,
+  rolloutLine,
+  rolloutRowText,
   syncDeviceLine,
   thisDeviceLine,
   syncLabel,
   unpinReplaces,
+  updateAllLine,
 } from "../../../lib/fleet";
 import { DEVICES_FOCUS_EVENT, joinPeerInvite, takePendingDevicesFocus } from "../../../lib/deviceActions";
 import type { DevicesFocus } from "../../../lib/deviceActions";
+import { GATE_ON_NOTE, turnGateOn } from "../../../lib/gateOn";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
 import { useMakeReachable } from "../useMakeReachable";
@@ -110,6 +115,9 @@ export function Devices(p: ScreenProps) {
   const [focusDevice, setFocusDevice] = useState("");
   const pasteRef = useRef<HTMLInputElement | null>(null);
   const thisRef = useRef<HTMLDivElement | null>(null);
+  /** The newest released version ("" until known / GitHub unreachable) —
+   * what "Update all my devices" offers. */
+  const [latest, setLatest] = useState("");
 
   const loadFleet = useCallback(async () => {
     try {
@@ -173,6 +181,14 @@ export function Devices(p: ScreenProps) {
     }, POLL_MS);
     return () => clearInterval(t);
   }, [p.active, loadAll, loadFleet, loadSync]);
+
+  // The newest release, once per visit (the server caches it 15 minutes).
+  useEffect(() => {
+    if (!p.active) return;
+    api<{ latest?: string }>("/api/update/check")
+      .then((c) => setLatest(String(c?.latest || "")))
+      .catch(() => {});
+  }, [p.active]);
 
   // A request arriving, a device joining or leaving, or a sync pass that
   // adopted something: refetch now instead of on the next tick.
@@ -270,6 +286,22 @@ export function Devices(p: ScreenProps) {
   const self = st.members.find((m) => m.self);
   const selfHost = st.self.host || st.self.key;
   const selfVersion = self?.version || "";
+  const selfCommit = self?.commit || "";
+  // A finished rollout stays on screen for a day, then only its effect does.
+  const rollout =
+    st.update &&
+    (st.update.state === "running" ||
+      (st.update.state !== "idle" && now - (st.update.finished_at || 0) < 86400))
+      ? st.update
+      : null;
+  const rolloutRunning = rollout?.state === "running";
+  const behindLine = st.in_fleet ? updateAllLine(st.members, latest) : "";
+  const updateAll = () =>
+    run(
+      "update-all",
+      () => api("/api/fleet/update", { json: latest ? { tag: "v" + latest } : {} }),
+      "Updating your devices one at a time — this one last"
+    );
   const others = st.members.filter((m) => !m.self);
   // A member whose hello lags the group still comes back as a candidate:
   // it is already yours, so it gets no join buttons.
@@ -396,11 +428,23 @@ export function Devices(p: ScreenProps) {
         <div className="devices-warn" id="devices-gate-warning" role="alert">
           <p>
             This device's access gate is off and it's reachable on your tailnet — anyone there can
-            control it, and through it your other devices. Turn the gate on in Security.
+            control it, and through it your other devices. With the gate on, your other devices
+            keep working (they use your devices' key); a phone signs in again with the QR in Mobile.
           </p>
-          <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
-            Open Security
-          </button>
+          <div className="devices-actions">
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-gate-on"
+              disabled={!!busy}
+              onClick={() => void run("gate-on", () => turnGateOn(), GATE_ON_NOTE)}
+            >
+              {busy === "gate-on" ? "Turning on…" : "Turn the gate on"}
+            </button>
+            <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
+              Open Security
+            </button>
+          </div>
         </div>
       )}
       {st.stale_key && (
@@ -499,7 +543,8 @@ export function Devices(p: ScreenProps) {
       {st.in_fleet ? (
         <ul className="devices-list" id="devices-members">
           {st.members.map((m) => {
-            const status = memberStatus(m, selfVersion);
+            const status = memberStatus(m, selfVersion, selfCommit);
+            const chips = memberUpdateChips(m, latest);
             const warn = !m.self && (!!m.error || (m.reachable && !!selfVersion && !!m.version && m.version !== selfVersion));
             return (
               <li key={m.key} data-member={m.key} className={m.self ? "is-self" : ""}>
@@ -520,6 +565,15 @@ export function Devices(p: ScreenProps) {
                           runs PR review &amp; issues
                         </span>
                       )}
+                      {chips.map((c) => (
+                        <span
+                          key={c.text}
+                          className={"devices-badge" + (c.warn ? " warn" : "")}
+                          data-update-chip={m.key}
+                        >
+                          {c.text}
+                        </span>
+                      ))}
                     </span>
                     <span className={"devices-note" + (warn ? " warn" : "")}>{status}</span>
                   </span>
@@ -611,6 +665,45 @@ export function Devices(p: ScreenProps) {
         <p className="set-hint set-block-hint" id="devices-intro">
           Your devices share settings, sign-in and ticket claims. Add a computer you own:
         </p>
+      )}
+      {st.in_fleet && (behindLine || rollout) && (
+        <div className="devices-update" id="devices-update" data-rollout={rollout?.state || "idle"}>
+          {rollout && (
+            <p className={"set-hint" + (rollout.state === "halted" ? " devices-hint-warn" : "")} id="devices-rollout-line">
+              {rolloutLine(rollout)}
+            </p>
+          )}
+          {behindLine && !rolloutRunning && (
+            <p className="set-hint" id="devices-update-line">
+              {behindLine}
+            </p>
+          )}
+          {rollout && (
+            <ul className="devices-update-rows" id="devices-update-rows">
+              {rollout.members.map((r) => (
+                <li
+                  key={r.key}
+                  data-rollout-row={r.key}
+                  data-step={r.step}
+                  className={"devices-note" + (r.step === "failed" ? " warn" : "")}
+                >
+                  {rolloutRowText(r)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {behindLine && !rolloutRunning && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-update-all"
+              disabled={!!busy}
+              onClick={() => void updateAll()}
+            >
+              {busy === "update-all" ? "Starting…" : "Update all my devices to v" + latest}
+            </button>
+          )}
+        </div>
       )}
       {auto && (
         <div className="set-row set-switch-row" id="devices-run-here" data-runs-here={auto.here ? "1" : "0"}>

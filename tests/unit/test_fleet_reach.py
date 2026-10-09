@@ -608,7 +608,11 @@ def test_the_desktop_app_raises_os_notifications():
     assert "ipcMain.handle('notify:show'" in main
     assert "win.webContents.send('notify:click', target)" in main
     assert "NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])" in main
-    assert "notifiedUpdate = latest" in main
+    # One notice per release: the shell's own update toast and the page's
+    # update.available share one claim per version.
+    assert "function claimUpdateNotice(version)" in main
+    assert "if (!claimUpdateNotice(version)) return { ok: false }" in main
+    assert "claimUpdateNotice(latest) && unfocused" in main
     assert "exposeInMainWorld('mfnotify'" in pre
     assert "ipcRenderer.invoke('notify:show'" in pre
 
@@ -626,3 +630,51 @@ def test_a_candidate_that_stopped_answering_says_why_on_its_own_row():
     [cand] = st["candidates"]
     assert "connection refused" in cand["reason"]
     assert st["tailnet_peers"] == []  # not listed twice
+
+
+# --------------------------------------------------------------------------- #
+# Make reachable's one save under the configure guard (POST /api/settings)
+# --------------------------------------------------------------------------- #
+from tests.unit.test_configure_guard import (  # noqa: E402,F401 — fixtures
+    LOOPBACK,
+    TAILNET,
+    TOKEN,
+    _client,
+    app,
+    untrusted,
+)
+
+REACHABLE = {"general": {"serve_mode": "tailscale", "auth_mode": "on"}}
+
+
+def _general():
+    from backend.config import settings as S
+
+    S.invalidate()
+    return S.load_settings().general
+
+
+def test_make_reachable_saves_from_this_machine(app, monkeypatch):
+    monkeypatch.setenv("CS_WEB_MODE", "local")  # the device being fixed
+    c = _client(app, LOOPBACK, base_url="http://127.0.0.1:8765")
+    r = c.post("/api/settings", json=REACHABLE)
+    assert r.status_code == 200, r.text
+    g = _general()
+    assert g.serve_mode == "tailscale" and g.auth_mode == "on"
+    r = c.post("/api/settings", json={"general": {"shared_link": "mindflock"}})
+    assert r.status_code == 200 and _general().shared_link == "mindflock"
+
+
+def test_make_reachable_is_refused_remotely(app):
+    from backend.config import settings as S
+
+    r = _client(app, TAILNET).post("/api/settings", json=REACHABLE)
+    assert r.status_code == 403
+    S.update_settings(general={"remote_control": True})
+    relayed = _client(
+        app,
+        LOOPBACK,
+        headers={"Authorization": "Bearer " + TOKEN, "X-MindFlock-Remote": "otherbox"},
+    )
+    assert relayed.post("/api/settings", json=REACHABLE).status_code == 403
+    assert _general().serve_mode != "tailscale"

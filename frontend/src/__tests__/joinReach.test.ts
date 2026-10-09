@@ -244,7 +244,15 @@ describe("desktop notifications", () => {
       target: "devices",
     });
     expect(desktopNoteFor("peer.link_added", { peer_name: "Ana", sas: "12-34" })?.target).toBe("peer");
-    expect(desktopNoteFor("update.available", { version: "0.7.5" })?.title).toBe("MindFlock update 0.7.5 available");
+    expect(desktopNoteFor("update.available", { latest: "0.7.5", tag: "v0.7.5" })).toEqual({
+      title: "MindFlock 0.7.5 is available",
+      body: "Open MindFlock to update",
+      target: "update",
+      version: "0.7.5",
+    });
+    expect(
+      desktopNoteFor("update.available", { latest: "v0.7.5", behind: [{ key: "rig" }], detail: "rig is behind" })
+    ).toMatchObject({ body: "rig is behind", target: "devices", version: "0.7.5" });
     expect(desktopNoteFor("device.joined", {})).toBeNull();
   });
 

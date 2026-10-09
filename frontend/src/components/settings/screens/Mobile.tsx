@@ -144,7 +144,7 @@ export function Mobile(_: ScreenProps) {
           <>
             <div
               className="set-row set-switch-row"
-              title="Listen on your tailnet (with the access gate on) so your other computers and your phone can reach this one"
+              title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
             >
               <span className="set-label">Reachable from your other devices and phone (over Tailscale)</span>
               {/* label wraps only the switch, so clicking the row text no longer flips it */}

@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('mfnotify', {
       title: String((o && o.title) || ''),
       body: String((o && o.body) || ''),
       target: String((o && o.target) || ''),
+      version: String((o && o.version) || ''),
     }),
   onClick: (cb) => {
     const h = (_e, target) => cb(String(target || ''))

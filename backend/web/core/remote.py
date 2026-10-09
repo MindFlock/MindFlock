@@ -317,6 +317,38 @@ def self_identity() -> dict:
     }
 
 
+#: Header the desktop shell's engine check sends to the local hello with its
+#: own version (``electron/main.js`` ``fetchLocalJSON``).
+SHELL_HEADER = "x-mindflock-shell"
+
+#: The desktop app version last seen on this machine ("" = none seen): a
+#: member's engine and its desktop shell update separately, so "Update all my
+#: devices" says when the shell on one lags (it updates on its next launch).
+_SHELL = {"version": ""}
+
+_SHELL_VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z.+-]{0,31}$")
+
+
+def note_shell_version(version: str) -> None:
+    """Remember the desktop app version this machine's shell reported."""
+    v = str(version or "").strip()
+    if _SHELL_VERSION_RE.match(v):
+        _SHELL["version"] = v
+
+
+def _update_facts() -> dict:
+    """``{commit, install}`` for the hello — the installed commit (so two
+    builds that both say 0.7.4 can be told apart) and how this engine is
+    installed (``uv-tool`` · ``editable`` · ``other``: whether "Update all my
+    devices" can update it). Never raises."""
+    try:
+        from backend.web.core import self_update as _su
+
+        return {"commit": _su.installed_commit(), "install": _su.install_kind()}
+    except Exception:  # noqa: BLE001 — the hello must never fail
+        return {"commit": "", "install": ""}
+
+
 def hello_json() -> dict:
     """The identity + capability payload served at ``/api/remote/hello`` — what
     a probing gateway reads to decide this node is a controllable MindFlock."""
@@ -326,6 +358,10 @@ def hello_json() -> dict:
     return {
         "app": "mindflock",
         "version": __version__,
+        **_update_facts(),
+        # The desktop app version on this machine, when its shell reported
+        # one ("" otherwise — a headless server, or a browser-only setup).
+        "shell_version": _SHELL["version"],
         "device": ident["key"],
         "host": ident["host"],
         "remote_control": remote_control_enabled(),
@@ -604,6 +640,11 @@ def _device_state(key: str) -> dict:
             "remote_control": False,
             "auth": False,
             "version": "",
+            # Its installed commit, install kind and desktop app version
+            # (hello; "" from a MindFlock too old to say).
+            "commit": "",
+            "install": "",
+            "shell_version": "",
             "shared_link": "",
             "shared_link_live": None,
             # What the last probe found ("ok", "refused", "timeout", … — see
@@ -645,6 +686,9 @@ def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None
         remote_control=bool(hello.get("remote_control")),
         auth=bool(hello.get("auth")),
         version=str(hello.get("version") or ""),
+        commit=str(hello.get("commit") or "")[:64],
+        install=str(hello.get("install") or "")[:16],
+        shell_version=str(hello.get("shell_version") or "")[:32],
         shared_link=str(hello.get("shared_link") or ""),
         # None: a MindFlock too old to say.
         shared_link_live=(
