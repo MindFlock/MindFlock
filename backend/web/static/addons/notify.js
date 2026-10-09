@@ -151,6 +151,7 @@ window.mindflockAddons.notify = {
       return;
     }
 
+    const DESKTOP_OWNED = new Set(["device.join_requested", "peer.link_added", "update.available"]);
     const lastShown = new Map(); // "session|event" -> ts of last notification
     let rules = [];
     let subscribed = false;
@@ -163,6 +164,9 @@ window.mindflockAddons.notify = {
       // in-app toast guard in app.js (feature-detected so an older core/events.js
       // that lacks isReplay can't break notifications entirely).
       if (ctx.events && typeof ctx.events.isReplay === "function" && ctx.events.isReplay(env)) return;
+      // The desktop app raises its own OS notification for these
+      // (frontend/src/lib/desktopNotify.ts) — don't pop a second one.
+      if (window.mfnotify && DESKTOP_OWNED.has(env.event)) return;
       for (const rule of rules) {
         if (rule.enabled === false) continue;  // user muted this rule
         if (!ruleMatches(rule, env)) continue;

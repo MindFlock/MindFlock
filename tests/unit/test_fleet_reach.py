@@ -464,6 +464,22 @@ async def test_a_wrong_six_digit_code_is_rejected(world):
         assert len(fleet.pending_requests()) == 1
 
 
+async def test_an_answered_request_is_gone_not_a_code_mismatch(world):
+    """The bell's Approve lingers after the request was answered elsewhere: a
+    second click says the request is gone, not that its code doesn't match."""
+    out = await _mini_asks_laptop(world)
+    with world.on("laptop"):
+        [req] = fleet.pending_requests()
+        status, _ = await world.ui(
+            "POST", "/api/fleet/requests/%s/approve" % req["id"], {"code": out["code"]}
+        )
+        assert status == 200
+        status, res = await world.ui(
+            "POST", "/api/fleet/requests/%s/approve" % req["id"], {"code": out["code"]}
+        )
+        assert status == 404 and "gone" in res["error"]
+
+
 async def test_deny_from_another_member(world):
     await _mini_asks_laptop(world)
     with world.on("rig"):

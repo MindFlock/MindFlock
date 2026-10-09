@@ -325,8 +325,13 @@ class FleetAddon(Addon):
             via = _via_arg(body)
             if via:
                 return await _answer_relayed(via, rid, "approve", body)
+            req = fleet._REQUESTS.get(rid)
+            if req is None or req.get("state") != "pending":
+                # Before the code check: an answered request has no code to
+                # match, and "doesn't match" would read like a forgery.
+                return _bad("that request is gone (expired or answered)", 404)
             if body.get("code") and not fleet._code_matches(
-                (fleet._REQUESTS.get(rid) or {}).get("code", ""), str(body["code"])
+                req.get("code", ""), str(body["code"])
             ):
                 return _bad("that code doesn't match the request", 403)
             try:
