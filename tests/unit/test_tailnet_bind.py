@@ -131,6 +131,65 @@ def test_open_sockets_binds_each_host():
             s.close()
 
 
+def test_open_sockets_are_not_inheritable():
+    """A restart is an execv of this process; an inheritable listener would
+    ride along and hold the port against the new image."""
+    socks = tailnet_bind.open_sockets(["127.0.0.1"], 0)
+    try:
+        assert all(not s.get_inheritable() for s in socks)
+    finally:
+        for s in socks:
+            s.close()
+
+
+_EXEC_PARENT = r"""
+import os, sys
+from backend.web.core import tailnet_bind
+socks = tailnet_bind.open_sockets(["127.0.0.1"], 0)
+for s in socks:
+    s.listen(8)
+port, fd = socks[0].getsockname()[1], socks[0].fileno()
+os.execv(sys.executable, [sys.executable, "-c", sys.argv[1], str(port), str(fd)])
+"""
+
+_EXEC_CHILD = r"""
+import os, socket, sys
+port, fd = int(sys.argv[1]), int(sys.argv[2])
+try:
+    os.fstat(fd)
+    leaked = "leaked"
+except OSError:
+    leaked = "closed"
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", port))
+    s.listen(8)
+    print(leaked, "bound")
+except OSError as err:
+    print(leaked, "EADDRINUSE" if "in use" in str(err).lower() else err)
+"""
+
+
+def test_no_listening_socket_survives_the_restarts_execv():
+    """What restart.reexec_soon does, end to end: bind like tailscale mode,
+    exec, and the new image binds the same port (the bug: it inherited the
+    listener and found its own port taken)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(tailnet_bind.__file__).resolve().parents[3]
+    cp = subprocess.run(
+        [sys.executable, "-c", _EXEC_PARENT, _EXEC_CHILD],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert cp.stdout.split() == ["closed", "bound"], cp.stdout + cp.stderr
+
+
 def test_open_sockets_closes_what_it_opened_on_failure(monkeypatch):
     opened = []
     real = socket.socket

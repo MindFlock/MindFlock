@@ -123,7 +123,13 @@ def plan(mode: str) -> Tuple[List[str], str]:
 def open_sockets(hosts: List[str], port: int) -> List[socket.socket]:
     """One listening-ready socket per host (what ``uvicorn.Server.run(
     sockets=…)`` takes). Raises ``OSError`` when one can't be bound (the port
-    is taken) — after closing the ones already opened."""
+    is taken) — after closing the ones already opened.
+
+    Never inheritable: a restart is an ``execv`` of this same process
+    (:func:`backend.web.core.restart.reexec_soon`), and a listening socket
+    carried across it keeps the port held by the new image — whose port check
+    then finds "something that isn't MindFlock" on it (or whose bind fails
+    with EADDRINUSE), so the server never comes back."""
     socks: List[socket.socket] = []
     try:
         for host in hosts:
@@ -133,8 +139,8 @@ def open_sockets(hosts: List[str], port: int) -> List[socket.socket]:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if ":" in host:
                 s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s.set_inheritable(False)  # the default (PEP 446); stated, see above
             s.bind((host, port))
-            s.set_inheritable(True)
     except OSError:
         for s in socks:
             s.close()
