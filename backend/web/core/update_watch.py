@@ -9,11 +9,12 @@ Two jobs, one lifespan task (:func:`watch_loop`):
   from another device then left the server running old Python on a replaced
   venv, lazily importing NEW modules into the OLD process — the stale-copy
   trap. So the server watches the file itself (every :data:`TICK_S`) and
-  re-execs once the install is ``done``, through the same once-only
-  :func:`~backend.web.core.self_update.finish_state` the route uses. It holds
-  off while Setup's install terminal is running (a re-exec mid-install would
-  take a PTY-backed one down with it), and never restarts a process that
-  already runs the installed build (:func:`~backend.web.core.self_update.applied`).
+  re-execs once the install is ``done`` (in the mode it runs in), through the
+  same once-only :func:`~backend.web.core.self_update.finish_state` the route
+  uses — which holds off while Setup's install terminal is running (a re-exec
+  mid-install would take a PTY-backed one down with it), and never restarts a
+  process that already runs the installed build
+  (:func:`~backend.web.core.self_update.applied`).
 
 * **Say a newer release exists** (``update.available``), once per release and
   per set of devices behind it: browsers, the bell and /m learn it without
@@ -54,16 +55,6 @@ def _log(fmt: str, *args) -> None:
             pass
 
 
-def _install_terminal_busy() -> bool:
-    """Whether Setup's dependency install terminal is mid-run."""
-    try:
-        from backend.web.core import setup_install
-
-        return bool((setup_install.state() or {}).get("running"))
-    except Exception:  # noqa: BLE001 — unknown means "not in the way"
-        return False
-
-
 def tick() -> bool:
     """One look at the update state; True when a restart was scheduled.
 
@@ -78,8 +69,7 @@ def tick() -> bool:
             return False
         if state != "done" or st.get("restarted"):
             return False
-        if not _self_update.applied(st) and _install_terminal_busy():
-            return False  # held: "restart pending" until it finishes
+        # Held there while Setup's install terminal runs ("restart pending").
         _, restart_now = _self_update.finish_state()
         if restart_now:
             _log(
@@ -87,7 +77,9 @@ def tick() -> bool:
                 str(st.get("ref") or st.get("version") or "?"),
             )
             _restart.reset_tailscale_attempts()
-            _restart.reexec_soon()
+            # Same mode as now: an update is no reason to drop a rig started
+            # with `mindflock serve tailscale` back to loopback.
+            _restart.reexec_soon(keep_mode=True)
         return restart_now
     except Exception as err:  # noqa: BLE001 — the loop must not die
         _log("update watch failed: %v", err)

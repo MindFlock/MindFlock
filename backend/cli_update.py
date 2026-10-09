@@ -83,9 +83,11 @@ def wait_for_build(
 # restart
 # --------------------------------------------------------------------------- #
 def cmd_restart(args: argparse.Namespace) -> int:
-    """Re-exec the running server (picks up an engine installed under it)."""
+    """Re-exec the running server (picks up an engine installed under it),
+    in the mode it runs in — a server started with ``mindflock serve
+    tailscale`` stays on the tailnet."""
     base = client.discover(args.host, args.port)
-    client.post(base, "/api/server/restart", timeout=10.0)
+    client.post(base, "/api/server/restart", {"keep_mode": True}, timeout=10.0)
     time.sleep(1.5)  # it answers once more before the re-exec lands
     hello = wait_for_build(base, timeout=60.0)
     if not hello:

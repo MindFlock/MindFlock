@@ -63,9 +63,8 @@ def serving() -> bool:
 
 
 def relaunch_argv() -> list:
-    """The command line a re-exec runs: this interpreter and argv, minus any
-    positional mode word (see :data:`_MODE_TOKENS`). Also what the updater's
-    rollback starts the server with (:mod:`backend.web.core.self_update`)."""
+    """The command line a mode-dropping re-exec runs: this interpreter and
+    argv, minus any positional mode word (see :data:`_MODE_TOKENS`)."""
     return [sys.executable] + [
         a for a in sys.argv if a.strip().lower() not in _MODE_TOKENS
     ]

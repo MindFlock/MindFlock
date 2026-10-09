@@ -138,7 +138,8 @@ def test_already_current_does_nothing(srv, capsys):
 def test_restart_waits_for_the_server_to_come_back(srv, capsys):
     srv.gets["/api/remote/hello"] = [None, {"version": "9.9.9", "commit": ""}]
     assert cli.main(["restart"]) == 0
-    assert ("POST", "/api/server/restart", None) in srv.calls
+    # keep_mode: a server started in tailscale mode stays in it.
+    assert ("POST", "/api/server/restart", {"keep_mode": True}) in srv.calls
     assert "restarted — MindFlock v9.9.9" in capsys.readouterr().out
 
 

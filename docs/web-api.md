@@ -2211,15 +2211,22 @@ The operational contract behind them:
   through replacing its own venv. Its PID is recorded: a `started` marker whose
   installer is gone reads as `failed` / `error: "interrupted"` at once.
 - The restart needs **no browser**: a lifespan watcher re-execs once the state
-  is `done` (held while Setup's install terminal runs). The ingestion pipeline
+  is `done` (held while Setup's install terminal runs — the hold lives in
+  `finish_state`, so this route honors it too). It comes back **in the mode it
+  runs in** (`keep_mode`): a server started with `mindflock serve tailscale`
+  stays on the tailnet. `restart_pending` ends once that restart happened, even
+  if a different engine was installed afterwards some other way (install.sh). The ingestion pipeline
   records its build in its lock file and is restarted at boot when it is a
   server-started pipeline on an older build.
 - After a good install the installer watches the server's public hello on
-  loopback for 90 s (only when it answered just before): back on the new
-  commit = `healthy`; still the old build = not restarted yet, left alone;
-  gone and never back = the new engine can't boot, so it reinstalls the
-  previous commit (`prev_commit`, from `direct_url.json`), starts the server
-  again with the command line it ran with, and writes `rolled_back`.
+  loopback (only when it answered just before): back on the new commit =
+  `healthy`; still the old build for 90 s = not restarted yet, left alone;
+  gone for 90 s from the moment it went down (the clock restarts at that edge,
+  so a held restart still gets the whole window) and at least
+  `HEALTH_DOWN_PROBES` consecutive misses = the new engine can't boot, so it
+  reinstalls the previous commit (`prev_commit`, from `direct_url.json`),
+  starts the server again with the command line and `CS_WEB_MODE` it ran with,
+  and writes `rolled_back`.
 - Progress lives in a **file**, `<config dir>/update.json`, not this process's
   memory — so a client polling *across* the restart still learns how the update
   ended. Full installer output goes to `<config dir>/update.log` (Settings →

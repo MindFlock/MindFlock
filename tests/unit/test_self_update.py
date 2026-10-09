@@ -87,6 +87,8 @@ def test_install_kind_reads_where_the_running_package_actually_is():
 def statedir(tmp_path, monkeypatch):
     """Point the module's state + log at a tmp dir (never the real ~/.mindflock)."""
     monkeypatch.setattr(self_update, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(self_update, "_RESTARTING", {"key": ""})
+    monkeypatch.setattr(self_update, "_install_terminal_busy", lambda: False)
     return tmp_path
 
 
@@ -643,6 +645,67 @@ def test_a_process_already_running_the_installed_build_never_restarts_for_it(
     assert self_update.finish_state()[1] is True
 
 
+def test_restart_pending_ends_once_the_restart_happened(statedir, monkeypatch):
+    """An engine installed afterwards some other way (install.sh) makes
+    ``applied`` false for good; "restart pending" must not stick forever."""
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "c" * 40)
+    self_update.write_state(
+        state="done", ref="v9.9.9", commit="a" * 40, code=0, restarted=True
+    )
+    assert self_update.applied() is False
+    assert self_update.restart_pending() is False
+
+
+def test_restart_pending_holds_until_the_re_exec_lands(statedir, monkeypatch):
+    """Between "restart now" and the re-exec, the old process still reads as
+    pending — Settings → Advanced reloads only once it stops, and must not
+    reload onto the build about to go away."""
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "0" * 40)
+    self_update.write_state(state="done", ref="v9.9.9", commit="a" * 40, code=0)
+    assert self_update.restart_pending() is True
+    assert self_update.finish_state()[1] is True
+    assert self_update.read_state()["restarted"] is True
+    assert self_update.restart_pending() is True  # this process: still pending
+    # The re-exec'd process (no memory of answering) running the new build.
+    monkeypatch.setattr(self_update, "_RESTARTING", {"key": ""})
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "a" * 40)
+    assert self_update.restart_pending() is False
+
+
+def test_finish_state_holds_while_the_install_terminal_runs(statedir, monkeypatch):
+    """The hold lives in finish_state, so the /api/update/state route honours
+    it as well as the watcher."""
+    busy = {"on": True}
+    monkeypatch.setattr(self_update, "_install_terminal_busy", lambda: busy["on"])
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "0" * 40)
+    self_update.write_state(state="done", ref="v9.9.9", commit="a" * 40, code=0)
+    assert self_update.finish_state()[1] is False
+    assert "restarted" not in self_update.read_state()
+    assert self_update.restart_pending() is True
+    busy["on"] = False
+    assert self_update.finish_state()[1] is True
+
+
+def test_the_rollback_relaunch_keeps_the_serve_mode(monkeypatch):
+    """A rig started with `mindflock serve tailscale` comes back on the
+    tailnet after a rollback, not on loopback only."""
+    import sys
+
+    from backend.web.core import restart
+
+    monkeypatch.setattr(restart, "serving", lambda: True)
+    monkeypatch.setattr(sys, "argv", ["/x/mindflock", "serve", "tailscale"])
+    monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+    cmd = self_update._relaunch_command()
+    assert cmd.startswith("CS_WEB_MODE='tailscale'; export CS_WEB_MODE; cd ")
+    assert cmd.endswith(
+        "exec %s '/x/mindflock' 'serve' 'tailscale'"
+        % self_update._sh_quote(sys.executable)
+    )
+    monkeypatch.delenv("CS_WEB_MODE")
+    assert self_update._relaunch_command().startswith("unset CS_WEB_MODE; ")
+
+
 def test_applied_falls_back_to_the_version_without_commits(statedir, monkeypatch):
     monkeypatch.setattr(self_update, "installed_commit", lambda: "")
     monkeypatch.setattr(self_update, "installed_version", lambda: "9.9.9")
@@ -690,7 +753,7 @@ async def test_a_published_tag_at_or_above_the_running_version_is_accepted(
 # --------------------------------------------------------------------------- #
 # The installer's health check and rollback
 # --------------------------------------------------------------------------- #
-def _run_health_script(statedir, *, curl_bodies, relaunch=True):
+def _run_health_script(statedir, *, curl_bodies, relaunch=True, down_probes=2):
     """Run the generated script with a stub `uv` (always succeeds, logs its
     spec) and a stub `curl` that answers ``curl_bodies`` in turn (``None`` =
     the server is down), the last one repeating."""
@@ -731,6 +794,8 @@ def _run_health_script(statedir, *, curl_bodies, relaunch=True):
             started_at=123.0,
             health_url="http://127.0.0.1:1/api/remote/hello",
             health_timeout=3,
+            health_poll=1,
+            down_probes=down_probes,
             relaunch=("touch %s" % marker) if relaunch else "",
         ),
         encoding="utf-8",
@@ -783,6 +848,27 @@ def test_a_server_that_has_not_restarted_yet_is_left_alone(statedir):
     cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[_OLD])
     assert cp.returncode == 0
     assert st["state"] == "done" and "healthy" not in st
+    assert len(uv_calls) == 1 and not marker.exists()
+
+
+def test_a_restart_held_near_the_limit_still_gets_the_whole_window(statedir):
+    """Answering old until the window is almost up, then down (the restart),
+    then up on the new build: healthy. The window restarts at the old → down
+    edge — before, the loop ended on that first miss and rolled a good update
+    back."""
+    cp, st, uv_calls, marker = _run_health_script(
+        statedir, curl_bodies=[_OLD, _OLD, _OLD, None, None, _NEW]
+    )
+    assert st["state"] == "done" and st.get("healthy") is True
+    assert len(uv_calls) == 1 and not marker.exists()
+
+
+def test_too_few_failed_looks_never_roll_back(statedir):
+    """A rollback needs several consecutive misses after the restart."""
+    cp, st, uv_calls, marker = _run_health_script(
+        statedir, curl_bodies=[_OLD, None], down_probes=50
+    )
+    assert cp.returncode == 0 and st["state"] == "done"
     assert len(uv_calls) == 1 and not marker.exists()
 
 

@@ -59,8 +59,9 @@ update`.
 
 ### `mindflock restart`
 
-Restarts the running server (`POST /api/server/restart`) and waits until it
-answers again — use it after installing a new engine underneath a running
+Restarts the running server (`POST /api/server/restart` with
+`{"keep_mode": true}`, so a server started in tailscale mode stays in it) and
+waits until it answers again — use it after installing a new engine underneath a running
 server (install.sh does this for you). `mindflock serve` on a port where an
 older build is still running says so and points here.
 

@@ -76,8 +76,17 @@ RELEASE_TTL_S = 15 * 60
 INSTALL_TIMEOUT_S = 30 * 60
 
 #: After a good install, how long the installer waits for the restarted
-#: server to answer with the new build before it puts the previous one back.
+#: server to answer with the new build before it puts the previous one back —
+#: counted from when it saw the server go down (the restart may be held a
+#: while first: an install terminal running, a slow poll).
 HEALTH_TIMEOUT_S = 90
+
+#: Seconds between the installer's looks at the hello.
+HEALTH_POLL_S = 3
+
+#: Consecutive failed looks (after the server went down) a rollback needs —
+#: one missed answer is a slow boot, not a broken engine.
+HEALTH_DOWN_PROBES = 5
 
 #: What another device may ask this one to install: a release tag, nothing
 #: else (no branch, no commit, no "main"). See :func:`check_remote_ref`.
@@ -498,6 +507,8 @@ def _script(
     started_at: float = 0.0,
     health_url: str = "",
     health_timeout: int = HEALTH_TIMEOUT_S,
+    health_poll: int = HEALTH_POLL_S,
+    down_probes: int = HEALTH_DOWN_PROBES,
     relaunch: str = "",
 ) -> str:
     """The installer, as a shell script.
@@ -509,15 +520,21 @@ def _script(
     After a good install, and only when ``health_url`` (this server's public
     hello on loopback) answered just before the state flips to ``done`` — a
     server bound somewhere the script can't reach is never "down" — the
-    script watches that hello for ``health_timeout`` seconds:
+    script watches that hello every ``health_poll`` seconds:
 
       * it answers with ``commit`` (or the new version): healthy;
-      * it still answers with the OLD build: the server simply hasn't
-        restarted yet — leave it, the update takes effect when it does;
-      * it stopped answering and never came back: the new engine can't boot.
-        Put ``prev_commit`` back (``rolled_back``) and start the server again
-        with ``relaunch`` (the command line it was running with) unless
+      * it still answers with the OLD build for ``health_timeout`` seconds:
+        the server simply hasn't restarted yet — leave it, the update takes
+        effect when it does;
+      * it went down (the restart) and never came back: the new engine can't
+        boot. Put ``prev_commit`` back (``rolled_back``) and start the server
+        again with ``relaunch`` (the command line it was running with) unless
         something else already did.
+
+    The ``health_timeout`` clock restarts when the server goes from answering
+    (old) to down, so a restart held until near the limit still gets the
+    whole window to come back; and a rollback needs ``down_probes``
+    consecutive failed looks after that, never a single miss.
     """
     spec = "mindflock[web] @ git+{}@{}".format(INSTALL_REPO, commit)
     prev_spec = (
@@ -547,6 +564,10 @@ def _script(
             "KEEP=%s" % _sh_quote(keep),
             "HEALTH_URL=%s" % _sh_quote(health_url),
             "HEALTH_TIMEOUT=%d" % int(health_timeout),
+            "HEALTH_POLL=%d" % max(1, int(health_poll)),
+            "DOWN_PROBES=%d" % max(1, int(down_probes)),
+            # However often it flips between old and down, the watch ends.
+            "HEALTH_MAX=%d" % (4 * int(health_timeout)),
             "RELAUNCH=%s" % _sh_quote(relaunch),
             'printf "=== updating MindFlock to %s (%s) ===\\n" "$REF" "$COMMIT" >> "$LOG"',
             'PATH="$HOME/.local/bin:$PATH"; export PATH',
@@ -570,19 +591,29 @@ def _script(
             'printf "=== done (exit 0) ===\\n" >> "$LOG"',
             '[ -n "$watch" ] || exit 0',
             'printf "=== waiting for the server to come back on %s ===\\n" "$REF" >> "$LOG"',
-            'waited=0; seen=""',
+            # It answered just now (that is what armed the watch): "old".
+            "waited=0; total=0; seen=old; downs=0",
             # The hello is compact JSON: `"commit":"<sha>"`, `"version":"x"`.
             'PAT_C=\'"commit":"\'"$COMMIT"\'"\'',
             'PAT_V=\'"version":"\'"$VERSION"\'"\'',
-            'while [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do',
-            "  sleep 3; waited=$((waited + 3))",
+            'while [ "$waited" -lt "$HEALTH_TIMEOUT" ] && [ "$total" -lt "$HEALTH_MAX" ]; do',
+            '  sleep "$HEALTH_POLL"',
+            "  waited=$((waited + HEALTH_POLL)); total=$((total + HEALTH_POLL))",
             '  body="$(hello)" || body=""',
             '  case "$body" in *"$PAT_C"*) seen=ok; break ;; esac',
             '  if [ -n "$body" ] && [ "$VERSION" != "$FROM" ]; then',
             '    case "$body" in *"$PAT_V"*) seen=ok; break ;; esac',
             "  fi",
-            '  if [ -n "$body" ]; then seen=old; else seen=down; fi',
+            '  if [ -n "$body" ]; then',
+            "    seen=old; downs=0",
+            "  else",
+            # Answering → down is the restart beginning: the new build gets
+            # the whole window from HERE, however long the restart was held.
+            '    [ "$seen" = old ] && waited=0',
+            "    seen=down; downs=$((downs + 1))",
+            "  fi",
             "done",
+            'if [ "$seen" = down ] && [ "$downs" -lt "$DOWN_PROBES" ]; then seen=unsure; fi',
             'case "$seen" in',
             "  ok)",
             # The server already runs it (that's what healthy means): mark it
@@ -591,6 +622,8 @@ def _script(
             '    printf "=== %s is up ===\\n" "$REF" >> "$LOG" ;;',
             "  old)",
             '    printf "=== the server has not restarted yet; it runs %s once it does ===\\n" "$REF" >> "$LOG" ;;',
+            "  unsure)",
+            '    printf "=== the server is still restarting; not rolling back on a guess ===\\n" >> "$LOG" ;;',
             "  *)",
             '    if [ -z "$PREV" ]; then',
             '      put failed 1 \',"error":"the server did not come back after the update"\'',
@@ -723,14 +756,24 @@ def _health_url() -> str:
 
 def _relaunch_command() -> str:
     """How the installer starts this server again after a rollback, as one
-    shell line ("" when this process isn't the server)."""
+    shell line ("" when this process isn't the server): exactly as it runs
+    now — the same argv (a ``tailscale`` mode word included) and the same
+    ``CS_WEB_MODE`` — so a rig started with ``mindflock serve tailscale``
+    doesn't come back on loopback only."""
     try:
         from backend.web.core import restart as _restart
 
         if not _restart.serving():
             return ""
-        argv = _restart.relaunch_argv()
-        return "unset CS_WEB_MODE; cd %s && exec %s" % (
+        argv = [sys.executable] + list(sys.argv)
+        mode = os.environ.get("CS_WEB_MODE", "")
+        env = (
+            "CS_WEB_MODE=%s; export CS_WEB_MODE" % _sh_quote(mode)
+            if mode
+            else "unset CS_WEB_MODE"
+        )
+        return "%s; cd %s && exec %s" % (
+            env,
             _sh_quote(os.getcwd()),
             " ".join(_sh_quote(a) for a in argv),
         )
@@ -756,11 +799,47 @@ def applied(st: Optional[dict] = None) -> bool:
     )
 
 
+#: The update (:func:`_update_key`) THIS process answered "restart now" for:
+#: between that answer and the re-exec landing, the update is still pending
+#: here even though the state file already says ``restarted``.
+_RESTARTING = {"key": ""}
+
+
+def _update_key(st: dict) -> str:
+    return "%s|%s|%s" % (
+        st.get("commit") or "",
+        st.get("ref") or "",
+        st.get("started_at") or "",
+    )
+
+
+def _install_terminal_busy() -> bool:
+    """Whether Setup's dependency install terminal is mid-run — a re-exec
+    then would take its PTY down with it, so the restart waits."""
+    try:
+        from backend.web.core import setup_install
+
+        return bool((setup_install.state() or {}).get("running"))
+    except Exception:  # noqa: BLE001 — unknown means "not in the way"
+        return False
+
+
 def restart_pending(st: Optional[dict] = None) -> bool:
     """A finished install this process isn't running yet (it restarts soon —
-    the watcher's next tick — or is held while an install terminal runs)."""
+    the watcher's next tick — or is held while an install terminal runs).
+
+    Not once the restart for it happened (``restarted``): an engine installed
+    afterwards some other way (install.sh, a hand-run ``uv tool install``)
+    makes :func:`applied` false for good, and that must not read as "about to
+    restart" forever. The one exception is this process between answering
+    "restart now" and the re-exec landing — a screen polling then must keep
+    waiting rather than reload onto the build that is about to go away."""
     st = read_state() if st is None else st
-    return st.get("state") == "done" and not applied(st)
+    if st.get("state") != "done" or applied(st):
+        return False
+    if not st.get("restarted"):
+        return True
+    return bool(_RESTARTING["key"]) and _RESTARTING["key"] == _update_key(st)
 
 
 def finish_state() -> Tuple[dict, bool]:
@@ -773,12 +852,20 @@ def finish_state() -> Tuple[dict, bool]:
     installed build (:func:`applied`) gets False and marks it restarted: the
     installer rewrites the state after its health check, and that must not
     read as a second update to restart for.
+
+    Held (False, nothing marked) while Setup's install terminal runs, for
+    every caller alike — the watcher and the ``/api/update/state`` route.
     """
     st = read_state()
     st["log"] = log_tail()
     if st.get("state") == "done" and not st.get("restarted"):
+        restart_now = not applied(st)
+        if restart_now and _install_terminal_busy():
+            return st, False  # held: "restart pending" until it finishes
         write_state(
             **{**{k: v for k, v in st.items() if k != "log"}, "restarted": True}
         )
-        return st, not applied(st)
+        if restart_now:
+            _RESTARTING["key"] = _update_key(st)
+        return st, restart_now
     return st, False

@@ -27,11 +27,16 @@ def statedir(tmp_path, monkeypatch):
 @pytest.fixture()
 def restarts(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        update_watch._restart, "reexec_soon", lambda: calls.append("reexec")
-    )
+
+    def _reexec(**kw):
+        # An update keeps the serve mode (a tailscale rig stays on the tailnet).
+        assert kw == {"keep_mode": True}
+        calls.append("reexec")
+
+    monkeypatch.setattr(update_watch._restart, "reexec_soon", _reexec)
     monkeypatch.setattr(update_watch._restart, "reset_tailscale_attempts", lambda: None)
-    monkeypatch.setattr(update_watch, "_install_terminal_busy", lambda: False)
+    monkeypatch.setattr(self_update, "_install_terminal_busy", lambda: False)
+    monkeypatch.setattr(self_update, "_RESTARTING", {"key": ""})
     monkeypatch.setattr(self_update, "installed_commit", lambda: "0" * 40)
     return calls
 
@@ -74,7 +79,7 @@ def test_a_process_already_on_the_installed_build_is_never_restarted(
 
 def test_the_restart_waits_for_setups_install_terminal(statedir, restarts, monkeypatch):
     busy = {"on": True}
-    monkeypatch.setattr(update_watch, "_install_terminal_busy", lambda: busy["on"])
+    monkeypatch.setattr(self_update, "_install_terminal_busy", lambda: busy["on"])
     self_update.write_state(state="done", ref="v9.9.9", commit="a" * 40, code=0)
     assert update_watch.tick() is False
     assert restarts == []
