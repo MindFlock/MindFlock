@@ -751,6 +751,8 @@ def test_a_server_that_comes_back_on_the_new_build_is_healthy(statedir):
     cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[_OLD, _NEW])
     assert cp.returncode == 0
     assert st["state"] == "done" and st.get("healthy") is True
+    # Written after the restart: it must not ask the server to restart again.
+    assert st.get("restarted") is True
     # The fields the server needs after the restart survive the final write.
     assert st["commit"] == "a" * 40 and st["prev_commit"] == "b" * 40
     assert st["from_version"] == "0.7.4" and st["started_at"] == 123.0

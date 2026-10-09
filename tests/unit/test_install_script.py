@@ -35,6 +35,12 @@ def test_the_default_ref_is_the_newest_release_not_main():
 def test_a_running_server_is_restarted_after_the_install():
     tail = _SCRIPT[_SCRIPT.index("# --- 5.") :]
     assert "/api/remote/hello" in tail and '"$MF" restart' in tail
+    # …unless the caller restarts it itself (the desktop app does).
+    assert '"${MINDFLOCK_INSTALL_NO_RESTART:-}" != "1"' in tail
+    main_js = (Path(__file__).resolve().parents[2] / "electron" / "main.js").read_text(
+        encoding="utf-8"
+    )
+    assert main_js.count("MINDFLOCK_INSTALL_NO_RESTART") >= 2  # both transports
 
 
 def _resolver(tmp_path: Path, *, curl: str, git: str, repo: str) -> str:

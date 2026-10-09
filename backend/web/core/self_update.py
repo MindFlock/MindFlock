@@ -585,7 +585,9 @@ def _script(
             "done",
             'case "$seen" in',
             "  ok)",
-            "    put done 0 ',\"healthy\":true'",
+            # The server already runs it (that's what healthy means): mark it
+            # restarted so this rewrite never reads as an update to restart for.
+            '    put done 0 \',"healthy":true,"restarted":true\'',
             '    printf "=== %s is up ===\\n" "$REF" >> "$LOG" ;;',
             "  old)",
             '    printf "=== the server has not restarted yet; it runs %s once it does ===\\n" "$REF" >> "$LOG" ;;',

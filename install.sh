@@ -40,6 +40,8 @@
 #                            a warning is printed.
 #   MINDFLOCK_PORT           port of a running server to restart afterwards
 #                            (default 8765)
+#   MINDFLOCK_INSTALL_NO_RESTART  set to 1 to leave a running server alone (the
+#                            desktop app sets it: it restarts the server itself)
 #   MINDFLOCK_NONINTERACTIVE set to 1 to force the read-only `mindflock doctor`
 #                            report instead of the guided `--fix` prompts. The
 #                            desktop app sets this when it runs this script
@@ -224,7 +226,8 @@ fi
 # just replaced the venv under any server that is running: restart it so it
 # serves the version that was installed instead of the one it booted with.
 PORT_="${MINDFLOCK_PORT:-8765}"
-if curl -fsS --max-time 2 "http://127.0.0.1:$PORT_/api/remote/hello" >/dev/null 2>&1; then
+if [ "${MINDFLOCK_INSTALL_NO_RESTART:-}" != "1" ] \
+  && curl -fsS --max-time 2 "http://127.0.0.1:$PORT_/api/remote/hello" >/dev/null 2>&1; then
   say "restarting the MindFlock server on port $PORT_ onto the new version…"
   MINDFLOCK_PORT="$PORT_" "$MF" restart || say "couldn't restart it — run: $MF restart"
   say ""

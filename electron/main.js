@@ -587,7 +587,14 @@ function startInstall(ref) {
   //   MINDFLOCK_NONINTERACTIVE  there is no controlling terminal behind a GUI
   //     app, so force `mindflock doctor`'s read-only report; its --fix mode
   //     would sit waiting on y/n prompts nobody can answer.
-  const envAdds = { MINDFLOCK_INSTALL_REF: ref, MINDFLOCK_NONINTERACTIVE: '1' }
+  //   MINDFLOCK_INSTALL_NO_RESTART  this app restarts the server itself after
+  //     an engine update (restartServer); install.sh restarting it first
+  //     would be a second restart racing that one.
+  const envAdds = {
+    MINDFLOCK_INSTALL_REF: ref,
+    MINDFLOCK_NONINTERACTIVE: '1',
+    MINDFLOCK_INSTALL_NO_RESTART: '1',
+  }
 
   if (process.platform !== 'win32') {
     if (process.platform === 'darwin' && !hasXcodeCLT()) {
@@ -644,7 +651,8 @@ function startInstall(ref) {
     'L="$(wslpath -a ' + shq(winLog) + ')";'
     + ' S="$(wslpath -a ' + shq(INSTALL_SCRIPT) + ')";'
     + ' T="$(mktemp)"; tr -d "\\r" < "$S" > "$T";'
-    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$T";'
+    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1'
+    + ' MINDFLOCK_INSTALL_NO_RESTART=1 sh "$T";'
     + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1;'
     + ' rm -f "$T"'
   try {
