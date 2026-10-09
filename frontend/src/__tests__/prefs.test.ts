@@ -25,8 +25,11 @@ import {
   prefFieldFor,
   readAllLocal,
   readLocal,
+  refusedFields,
+  resetRefusedNotes,
   setPrefBeacon,
   setPrefSender,
+  setRefusedListener,
   withoutEcho,
   writeLocal,
   type KV,
@@ -487,6 +490,98 @@ describe("dirty writes survive a failed POST and a reload", () => {
     expect(dirtyFields(kv).size).toBe(0);
     await vi.advanceTimersByTimeAsync(600);
     expect(posted).toEqual([]); // the debounce was folded into the beacon
+  });
+});
+
+describe("fields a gate-off device refuses from this caller", () => {
+  const g = globalThis as Record<string, unknown>;
+  let prevLS: unknown;
+  let prev: (b: Partial<Prefs>) => Promise<unknown>;
+  let prevBeacon: (b: Partial<Prefs>) => Promise<unknown>;
+  const said: string[] = [];
+  const WHY = "this changes how your devices run agents";
+  const KEYMAP = JSON.stringify({ keys: { palette: "Ctrl+K" } });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    prevLS = g.localStorage;
+    prev = setPrefSender(async () => {});
+    prevBeacon = setPrefBeacon(async () => {});
+    said.length = 0;
+    resetRefusedNotes();
+    setRefusedListener((_f, msg) => said.push(msg));
+  });
+  afterEach(async () => {
+    setPrefSender(async () => {});
+    await flushPrefWrites(memKV());
+    setPrefSender(prev);
+    setPrefBeacon(prevBeacon);
+    setRefusedListener(() => {});
+    vi.useRealTimers();
+    if (prevLS === undefined) delete g.localStorage;
+    else g.localStorage = prevLS;
+  });
+
+  it("reads the refused list from an answer or from a 403", () => {
+    expect(refusedFields({ theme: "x", refused: ["keymap", "bogus"] })).toEqual(["keymap"]);
+    expect(refusedFields({ status: 403, body: { refused: ["prompt_presets"] } })).toEqual([
+      "prompt_presets",
+    ]);
+    expect(refusedFields({ theme: "x" })).toBeNull();
+    expect(refusedFields(null)).toBeNull();
+  });
+
+  it("a mixed save settles the saved field, keeps the refused one dirty, and says so", async () => {
+    // Used to: a 403 for the whole batch, read as "permanent", dropped BOTH
+    // pending edits — the next pull then put the server's values back.
+    const kv = memKV({ cs_theme: "light", mf_keymap: KEYMAP, mf_prefs_seeded: "1" });
+    g.localStorage = kv;
+    const sent: Array<Partial<Prefs>> = [];
+    setPrefSender(async (b) => {
+      sent.push(b);
+      return { theme: "light", refused: ["keymap"], error: WHY };
+    });
+    notePrefWrite("cs_theme");
+    notePrefWrite("mf_keymap");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sent).toHaveLength(1);
+    expect([...dirtyFields(kv)]).toEqual(["keymap"]);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("keyboard shortcuts");
+    expect(said[0]).toContain("this browser only");
+    expect(said[0]).toContain(WHY);
+    // Kept: a pull doesn't put the server's keymap over it.
+    const plan = planBoot({ keymap: {} } as Partial<Prefs>, readAllLocal(kv), true, dirtyFields(kv));
+    expect(plan.apply.keymap).toBeUndefined();
+    expect(kv.data.mf_keymap).toBe(KEYMAP);
+    // No retry storm: nothing is re-sent on its own.
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("a 403 that names the refused fields keeps them, and is said once per page", async () => {
+    const kv = memKV({ mf_keymap: KEYMAP, mf_prefs_seeded: "1" });
+    g.localStorage = kv;
+    setPrefSender(async () => {
+      throw Object.assign(new Error(WHY), {
+        status: 403,
+        body: { error: WHY, refused: ["keymap"] },
+      });
+    });
+    notePrefWrite("mf_keymap");
+    await flushPrefWrites(kv);
+    await flushPrefWrites(kv);
+    expect(dirtyFields(kv).has("keymap")).toBe(true);
+    expect(said).toHaveLength(1);
+  });
+
+  it("the page-hide sender keeps refused fields dirty too", async () => {
+    const kv = memKV({ cs_theme: "dark", mf_keymap: KEYMAP, [DIRTY_KEY]: '["keymap","theme"]' });
+    g.localStorage = kv;
+    setPrefBeacon(async () => ({ theme: "dark", refused: ["keymap"], error: WHY }));
+    flushPrefsOnHide(kv);
+    await vi.advanceTimersByTimeAsync(0);
+    expect([...dirtyFields(kv)]).toEqual(["keymap"]);
   });
 });
 

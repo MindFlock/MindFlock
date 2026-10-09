@@ -29,9 +29,12 @@ import {
   dirtyFields,
   flushPrefWrites,
   flushPrefsOnHide,
+  noteRefused,
   pendingFields,
   planBoot,
   readAllLocal,
+  refusedFields,
+  setRefusedListener,
   settleFields,
   withoutEcho,
   writeGens,
@@ -194,21 +197,36 @@ export function pullPrefs(): Promise<void> {
       }
       const wasSeeded = seeded();
       const plan = planBoot(server, readAllLocal(), wasSeeded, pendingFields());
+      // Fields this device won't take from this caller (a keymap or saved
+      // prompts, on a gate-off device reached from elsewhere): the rest
+      // still counts as uploaded; these stay dirty — kept in this browser.
+      let refused: PrefField[] = [];
       if (Object.keys(plan.upload).length) {
         try {
-          await api("/api/prefs", { json: plan.upload });
-        } catch {
-          // Not seeded: next load tries the upload again rather than reading
-          // the still-unset server fields as "cleared". Dirty fields stay
-          // dirty, and the write-back retries them.
-          if (Object.keys(plan.apply).length) adopt(plan.apply, started);
-          if (dirtyFields().size) void flushPrefWrites();
-          return;
+          const res = await api("/api/prefs", { json: plan.upload });
+          refused = refusedFields(res) || [];
+          if (refused.length) noteRefused(refused, res);
+        } catch (e) {
+          const r = refusedFields(e);
+          if (r) {
+            refused = r;
+            noteRefused(r, e);
+          } else {
+            // Not seeded: next load tries the upload again rather than
+            // reading the still-unset server fields as "cleared". Dirty
+            // fields stay dirty, and the write-back retries them.
+            if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+            if (dirtyFields().size) void flushPrefWrites();
+            return;
+          }
         }
       }
-      // Every unsent field is now on the server: uploaded just now, or it
-      // already held the same value.
-      settleFields(unsent, gens);
+      // Every other unsent field is now on the server: uploaded just now, or
+      // it already held the same value.
+      settleFields(
+        [...unsent].filter((f) => !refused.includes(f)),
+        gens
+      );
       if (Object.keys(plan.apply).length) adopt(plan.apply, started);
       markSeeded();
       try {
@@ -235,6 +253,7 @@ let installed = false;
 export function installPrefsSync(): void {
   if (installed) return;
   installed = true;
+  setRefusedListener((_fields, message) => toast(message, { duration: 10000 }));
   void pullPrefs();
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     // A reload or a closed desktop window inside the 500 ms debounce used to

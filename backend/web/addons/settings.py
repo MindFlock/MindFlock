@@ -116,12 +116,14 @@ def _masked_view() -> dict:
 #: The only ``group.field``s ``POST /api/settings`` takes from a caller that
 #: :func:`backend.web.core.auth.may_configure` refuses (an anonymous tailnet
 #: caller of a gate-off, reachable device): bookkeeping about this machine
-#: that runs nothing. Everything else — every synced field (settings sync
+#: that runs nothing, and the cosmetic surface and accent. Everything else — every synced field (settings sync
 #: would spread it to the owner's other devices as this one's edit), the
 #: gate/bind/remote-control switches, agent binaries and accounts, the IDE
 #: and terminal commands, peer links — needs the owner. An allow-list, so a
 #: new field is guarded until someone decides otherwise.
-_OPEN_FIELDS = frozenset({"general.onboarded", "general.last_repo_path", "ui.surface"})
+_OPEN_FIELDS = frozenset(
+    {"general.onboarded", "general.last_repo_path", "ui.surface", "ui.accent"}
+)
 
 
 #: ``prefs`` fields ``POST /api/prefs`` takes only from a caller
@@ -865,13 +867,23 @@ class SettingsAddon(Addon):
             """``{field: value, …}`` (a partial update; ``null`` clears a
             field). Unknown fields are ignored. Stamped for sync at once.
             409 while settings.json can't be read — nothing is saved over it.
-            403 for :data:`_GUARDED_PREFS` from a caller
-            ``auth.may_configure`` refuses: a preset is text sent to an agent
-            in one click, on every device sync reaches."""
+
+            :data:`_GUARDED_PREFS` from a caller ``auth.may_configure``
+            refuses (a preset is text sent to an agent in one click, on every
+            device sync reaches) are left out, NOT the whole save: the rest
+            is saved and the answer carries ``refused`` (those fields) and
+            ``error`` (why) beside the prefs — 403 only when nothing else
+            was asked for. The browser keeps a refused edit as its own."""
             known = _prefs_fields()
             clean = {k: v for k, v in (payload or {}).items() if k in known}
-            if not allowed and _GUARDED_PREFS.intersection(clean):
-                return _web_auth.configure_refused()
+            refused = [] if allowed else sorted(_GUARDED_PREFS.intersection(clean))
+            for k in refused:
+                clean.pop(k)
+            if refused and not clean:
+                return JSONResponse(
+                    {"error": _web_auth.CONFIGURE_REFUSED, "refused": refused},
+                    status_code=403,
+                )
             if clean:
                 try:
                     settings_store.update_settings(prefs=clean)
@@ -893,9 +905,12 @@ class SettingsAddon(Addon):
                 except Exception:  # noqa: BLE001 — a save never fails on this
                     pass
             try:
-                return JSONResponse(_prefs_view())
+                view = _prefs_view()
             except settings_store.SettingsUnreadable:
                 return _unreadable_response()
+            if refused:
+                view = dict(view, refused=refused, error=_web_auth.CONFIGURE_REFUSED)
+            return JSONResponse(view)
 
         @router.post("/settings/auth-token/rotate")
         async def rotate_auth_token(request: Request) -> JSONResponse:

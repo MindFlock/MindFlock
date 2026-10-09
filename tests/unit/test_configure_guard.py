@@ -163,11 +163,17 @@ def test_security_and_synced_fields_are_guarded(app, payload):
 def test_open_fields_stay_writable_by_anyone(app):
     r = _client(app, TAILNET).post("/api/settings", json={"ui": {"surface": "calm"}})
     assert r.status_code == 200, r.text
+    # The accent is as cosmetic as the surface.
+    r = _client(app, TAILNET).post("/api/settings", json={"ui": {"accent": "cardinal"}})
+    assert r.status_code == 200, r.text
+    S.invalidate()
+    assert S.load_settings().ui.accent == "cardinal"
 
 
 def test_one_guarded_field_refuses_the_whole_save(app):
     r = _client(app, TAILNET).post(
-        "/api/settings", json={"ui": {"surface": "calm", "accent": "#fff"}}
+        "/api/settings",
+        json={"ui": {"surface": "calm"}, "general": {"remote_control": True}},
     )
     assert r.status_code == 403
     S.invalidate()
@@ -310,6 +316,30 @@ def test_rotating_the_token_is_the_owners(app, monkeypatch):
 def test_cosmetic_prefs_stay_writable_by_anyone(app):
     r = _client(app, TAILNET).post("/api/prefs", json={"theme": "dark"})
     assert r.status_code == 200, r.text
+
+
+def test_a_mixed_prefs_save_keeps_the_allowed_fields(app):
+    """A keymap edit batched with a theme change: the theme is saved, the
+    keymap refused by name — not the whole batch (the browser used to drop
+    every pending edit on that 403)."""
+    keymap = {"keys": {"palette": "Ctrl+K"}}
+    r = _client(app, TAILNET).post(
+        "/api/prefs", json={"theme": "light", "keymap": keymap}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["refused"] == ["keymap"] and body["error"] == auth.CONFIGURE_REFUSED
+    assert body["theme"] == "light" and body["keymap"] != keymap
+    S.invalidate()
+    assert S.load_settings().prefs.theme == "light"
+    # Allowed callers get no refused list.
+    r = _client(app, LOOPBACK).post(
+        "/api/prefs", json={"theme": "dark", "keymap": keymap}
+    )
+    assert r.status_code == 200 and "refused" not in r.json()
+    # Only guarded fields: a 403 that still names them.
+    r = _client(app, TAILNET).post("/api/prefs", json={"keymap": keymap})
+    assert r.status_code == 403 and r.json()["refused"] == ["keymap"]
 
 
 # --------------------------------------------------------------------------- #
