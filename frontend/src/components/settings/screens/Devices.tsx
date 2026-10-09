@@ -54,6 +54,7 @@ import {
   unpinReplaces,
   updateAllLine,
 } from "../../../lib/fleet";
+import { GATE_ON_NOTE, turnGateOn } from "../../../lib/gateOn";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
@@ -286,11 +287,23 @@ export function Devices(p: ScreenProps) {
         <div className="devices-warn" id="devices-gate-warning" role="alert">
           <p>
             This device's access gate is off and it's reachable on your tailnet — anyone there can
-            control it, and through it your other devices. Turn the gate on in Security.
+            control it, and through it your other devices. With the gate on, your other devices
+            keep working (they use your devices' key); a phone signs in again with the QR in Mobile.
           </p>
-          <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
-            Open Security
-          </button>
+          <div className="devices-actions">
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-gate-on"
+              disabled={!!busy}
+              onClick={() => void run("gate-on", () => turnGateOn(), GATE_ON_NOTE)}
+            >
+              {busy === "gate-on" ? "Turning on…" : "Turn the gate on"}
+            </button>
+            <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
+              Open Security
+            </button>
+          </div>
         </div>
       )}
       {st.stale_key && (

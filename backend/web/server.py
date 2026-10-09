@@ -100,7 +100,7 @@ import weakref
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -129,6 +129,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
+from backend.web.core import tailnet_bind as _tailnet_bind
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import settings_sync as _settings_sync
@@ -535,6 +536,11 @@ async def lifespan(app: FastAPI):
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
     _register_task(_shared_link.recheck_loop(_server_port))
+    # Tailscale mode came up bound to every interface because tailscaled
+    # wasn't running yet (run.py's fallback): narrow the bind once it is
+    # (core.tailnet_bind). Never registered otherwise — nor in tests.
+    if _tailnet_bind.fell_back():
+        _register_task(_tailnet_bind.rebind_loop())
     # Peer links: a no-op unless enabled in settings (no identity, no socket).
     try:
         await _peer_service().start()
@@ -9022,9 +9028,18 @@ async def red_zones_all() -> JSONResponse:
 
 
 @app.post("/api/red-zones")
-async def red_zones_add(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_add(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Add a REPO zone by repo id (``{"repo_id", "pattern", "name", "note",
-    "label"}``) and re-sync every live worktree of that repo."""
+    "label"}``) and re-sync every live worktree of that repo.
+
+    The repo-scope routes here change what agents may edit in every worktree
+    of the repo, and settings sync spreads them: the owner's only
+    (``auth.may_configure``). A session's own zones (``/api/instances/…``)
+    are part of driving that session."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9079,10 +9094,14 @@ async def red_zones_companions(repo_id: str = "") -> JSONResponse:
 
 
 @app.put("/api/red-zones/companions")
-async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_companions_set(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Replace a repo's companion patterns: ``{"repo_id", "patterns": [...],
     "label"?}``. 400 on a missing repo id or any invalid pattern (nothing is
     saved). Live worktrees of the repo are re-synced at once."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     rid = str(p.get("repo_id") or "").strip()
     pats = p.get("patterns")
@@ -9114,9 +9133,13 @@ async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONRespon
 
 
 @app.post("/api/red-zones/plan-first")
-async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_plan_first(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Turn a repo's Plan-first flag on/off: its intake sessions (tickets,
     issues, PR reviews) open with the plan-first instruction."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9133,8 +9156,10 @@ async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
 
 
 @app.delete("/api/red-zones/{zone_id}")
-async def red_zones_delete(zone_id: str) -> JSONResponse:
+async def red_zones_delete(zone_id: str, request: Request) -> JSONResponse:
     """Remove a zone by id (any scope) and re-sync the guards it reached."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
 
     def _del():
         with _red_zone_monitor.route_write():
@@ -14592,8 +14617,14 @@ def cursor_autoadopt_status() -> JSONResponse:
 
 
 @app.post("/api/cursor/autoadopt")
-def cursor_autoadopt_set(payload: dict) -> JSONResponse:
-    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``."""
+def cursor_autoadopt_set(
+    payload: dict, allowed: bool = Depends(_auth.configure_allowed)
+) -> JSONResponse:
+    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``. Owner
+    only (``auth.may_configure``): on, it launches an agent in every folder
+    opened in the IDE."""
+    if not allowed:
+        return _auth.configure_refused()
     global _CURSOR_AUTOADOPT_ENABLED
     _CURSOR_AUTOADOPT_ENABLED = bool((payload or {}).get("enabled"))
     try:
@@ -14769,17 +14800,24 @@ def _peer_service():
     return _svc.get_service()
 
 
-def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    """Another MindFlock relaying never manages peer links here; and a change
+    (an invite, a join, sharing a folder with someone, its perms) needs the
+    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
+    gate-off device, who could otherwise share its folders with a peer of
+    their own."""
     if _remote.from_remote(request):
         return JSONResponse(
             {"error": "peer links can only be managed on this device"},
             status_code=403,
         )
+    if request.method != "GET" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     return None
 
 
 async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
-    refused = _peer_remote_refusal(request)
+    refused = await _peer_remote_refusal(request)
     if refused is not None:
         return refused
     from backend.peer.service import PeerServiceError

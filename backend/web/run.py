@@ -3,7 +3,7 @@
 
     python backend/web/run.py              # local mode (DEFAULT): binds 127.0.0.1,
                                          #   reachable only from this machine
-    python backend/web/run.py tailscale    # bind 0.0.0.0 for phone/tailnet access
+    python backend/web/run.py tailscale    # bind 127.0.0.1 + this node's Tailscale IPs
     python backend/web/run.py 9000         # custom port (still local mode)
     python backend/web/run.py tailscale 9000   # tailnet access, custom port
     python backend/web/run.py --setup      # guided first-run setup, then serve
@@ -19,11 +19,14 @@ already running) and the phone UI at ``/m`` (the server prints its mobile URL
 
 Security note: the default (local) mode binds 127.0.0.1 — nothing off this
 machine can reach the server. Phone/tailnet access is an explicit opt-in:
-``mindflock serve tailscale`` binds ALL interfaces (0.0.0.0), so on a machine
-with a LAN interface the port is reachable from that LAN too, not only the
-tailnet. Any non-local bind auto-enables the auth gate: clients need the
-printed access token (see ``core/auth.py``), so an unauthenticated LAN client
-gets 401.
+``mindflock serve tailscale`` binds 127.0.0.1 plus this node's Tailscale
+addresses, so the port is on the tailnet but not on the LAN
+(:mod:`backend.web.core.tailnet_bind`). It falls back to ALL interfaces
+(0.0.0.0, LAN included) — with a warning — when Tailscale isn't up at boot
+(and narrows by itself once it is) or its addresses can't be bound here;
+``MINDFLOCK_BIND_ALL=1`` (or the mode word ``all``) asks for 0.0.0.0 on
+purpose. Any non-local bind auto-enables the auth gate unless the user turned
+it off: clients need the printed access token (see ``core/auth.py``).
 """
 
 from __future__ import annotations
@@ -40,6 +43,10 @@ from typing import List, Optional
 _SRC_ROOT = Path(__file__).resolve().parents[2]  # backend/web/run.py -> repo root
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
+
+from backend.web.core import (
+    tailnet_bind as _tailnet_bind,
+)  # noqa: E402 — after sys.path
 
 # Distribution packages of the web dependency group; a ModuleNotFoundError for
 # one of these means "web extras not installed", not a bug — say so plainly.
@@ -176,6 +183,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     # beyond this machine is an explicit opt-in, and any non-local bind
     # auto-enables the auth gate.
     mode = _norm_mode(os.environ.get("CS_WEB_MODE"))
+    if (os.environ.get("CS_WEB_MODE") or "").strip().lower() == "all":
+        os.environ[_tailnet_bind.BIND_ALL_ENV] = "1"
     port = int(os.environ.get("PORT") or os.environ.get("UVICORN_PORT") or 8765)
     setup = False
     for arg in (sys.argv[1:] if argv is None else argv):
@@ -184,6 +193,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             mode = "local"
         elif a in ("tailscale", "ts", "all"):
             mode = "tailscale"
+            if a == "all":  # every interface, LAN included — on purpose
+                os.environ[_tailnet_bind.BIND_ALL_ENV] = "1"
         elif a in ("--setup", "setup"):
             # Accepted bare as well as flagged, like the mode words above:
             # this parser has never insisted on dashes.
@@ -194,7 +205,15 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not mode:
         mode = _norm_mode(_settings_serve_mode()) or "local"
 
-    host = "127.0.0.1" if mode == "local" else "0.0.0.0"
+    # Tailscale mode binds loopback + this node's Tailscale addresses (not the
+    # LAN), falling back to every interface — see core/tailnet_bind.
+    hosts, why = _tailnet_bind.plan(mode)
+    if why == _tailnet_bind.WHY_NO_TAILNET:
+        os.environ[_tailnet_bind.FALLBACK_ENV] = "1"  # arms the rebind loop
+    else:
+        os.environ.pop(_tailnet_bind.FALLBACK_ENV, None)
+    host = hosts[0] if len(hosts) == 1 else ""
+    bind = _tailnet_bind.describe(hosts)
 
     # Friendly double-launch handling: if the port is already taken, say what
     # is squatting on it instead of dying in uvicorn's raw "address already in
@@ -243,16 +262,32 @@ def main(argv: Optional[List[str]] = None) -> None:
     # 0.0.0.0 isn't a connectable address, so show a usable one. The address is
     # what the desktop app connects to (MINDFLOCK_URL); the server's own
     # startup banner prints the /m mobile URL(s) + a QR for tailscale mode.
-    shown = "127.0.0.1" if host == "0.0.0.0" else host
-    url = f"http://{shown}:{port}"
+    # Every bind includes loopback.
+    url = f"http://127.0.0.1:{port}"
     cwd = Path(os.getcwd())
-    print(f"MindFlock server  ->  {url}   (mode: {mode}, bind: {host})")
+    print(f"MindFlock server  ->  {url}   (mode: {mode}, bind: {bind})")
+    if why == _tailnet_bind.WHY_NO_TAILNET:
+        print(
+            "  Tailscale isn't running, so this binds every interface (0.0.0.0) "
+            "for now — your LAN can reach\n  this port too. Once Tailscale is up "
+            "the server restarts itself onto this machine + its\n  Tailscale "
+            "addresses only.",
+            file=sys.stderr,
+        )
+    elif why == _tailnet_bind.WHY_UNBINDABLE:
+        print(
+            "  This machine's Tailscale addresses can't be bound here (userspace "
+            "networking, or WSL with\n  Tailscale on the Windows side), so this "
+            "binds every interface (0.0.0.0) — your LAN can\n  reach this port "
+            "too.",
+            file=sys.stderr,
+        )
     # Sharp edge: a non-loopback bind with the auth gate resolved OFF (someone
     # set Settings -> Security -> Off, or MINDFLOCK_AUTH=0) puts the control API
     # — create sessions, drive agent terminals with repo write access — on the
     # LAN with no token. Exposure without auth must never be silent; warn loudly
     # (never abort: an explicit Off is the operator's call to make).
-    if host != "127.0.0.1":
+    if hosts != [_tailnet_bind.LOOPBACK]:
         try:
             from backend.web.core import auth as _auth
 
@@ -262,7 +297,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         if not gate_on:
             print(
                 "\n\033[1;31m[mindflock] SECURITY WARNING:\033[0m bound to "
-                f"{host} with the access-token gate OFF.\n"
+                f"{bind} with the access-token gate OFF.\n"
                 "  The control API is reachable UNAUTHENTICATED by anything that "
                 "can route to\n  this host. Turn auth on before exposing it: "
                 "Settings -> Security -> Always on\n  (or run with MINDFLOCK_AUTH=1).\n",
@@ -349,7 +384,24 @@ def main(argv: Optional[List[str]] = None) -> None:
     # itself (tailnet_trust.PeerCaptureMiddleware), AFTER recording the real
     # transport peer — the Tailscale trust check needs to know a request came
     # over loopback from tailscaled, which the rewrite would erase.
-    uvicorn.run(app, host=host, port=port, log_level="warning", proxy_headers=False)
+    if host:
+        uvicorn.run(app, host=host, port=port, log_level="warning", proxy_headers=False)
+        return
+    # Several addresses: uvicorn binds one host, so hand it the sockets.
+    try:
+        socks = _tailnet_bind.open_sockets(hosts, port)
+    except OSError as err:
+        print(f"Couldn't bind {bind} port {port}: {err}", file=sys.stderr)
+        raise SystemExit(1) from err
+    _serve_sockets(app, socks)
+
+
+def _serve_sockets(app, socks) -> None:
+    """uvicorn on pre-bound sockets (tests replace this)."""
+    import uvicorn
+
+    config = uvicorn.Config(app, log_level="warning", proxy_headers=False)
+    uvicorn.Server(config).run(sockets=socks)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ created from either shows up in both.
 
 ```bash
 mindflock serve             # start the web UI (localhost only, port 8765)
-mindflock serve tailscale   # bind 0.0.0.0 for phone/tailnet access (URL + QR + token)
+mindflock serve tailscale   # also bind this node's Tailscale IPs for phone/tailnet access (URL + QR + token)
 mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
 mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
@@ -26,8 +26,14 @@ mindflock restart           # restart the running server (onto whatever is insta
 mindflock --version         # print the installed version
 ```
 
-`serve tailscale` binds all interfaces (0.0.0.0) — the port is reachable from
-your LAN as well as your tailnet — and auto-enables the access-token gate:
+`serve tailscale` binds 127.0.0.1 plus this node's Tailscale addresses — the
+port is on your tailnet but not your LAN. When Tailscale isn't running at boot
+it binds every interface (0.0.0.0) with a warning and restarts itself onto the
+narrow bind once Tailscale is up; it also binds 0.0.0.0 when the Tailscale
+addresses can't be bound on this machine (userspace networking, or WSL with
+Tailscale on the Windows side). `MINDFLOCK_BIND_ALL=1` asks for every interface
+on purpose (a phone on your LAN without Tailscale). It auto-enables the
+access-token gate:
 unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. `mindflock token` prints the same token later (it reads the
 settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.

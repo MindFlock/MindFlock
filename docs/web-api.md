@@ -1471,7 +1471,13 @@ settings edits to the others with it, so anyone who can reach that member
 controls your other devices through it. `gate_warning` is true when the gate is
 off and this server is reachable beyond this machine (a non-local
 `CS_WEB_MODE`, or local mode fronted by `tailscale serve` / the shared link);
-Settings → Devices and `mindflock devices` warn then.
+Settings → Devices and `mindflock devices` warn then. The Devices warning has a
+**Turn the gate on** button: it signs that browser in first (`GET
+/api/settings/auth-token`, then `POST /api/auth`) and saves
+`general.auth_mode = "on"`; other members keep working on the fleet key. An
+anonymous tailnet caller of such a member can still drive its sessions, but it
+can no longer change settings that sync would spread (see **Changing what runs
+on your devices** below), nor read the token that would let it.
 
 Browser routes are **privileged**: the caller must present a credential, be
 this machine itself (loopback with no forwarding headers), or be a trusted
@@ -2060,6 +2066,28 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   URL, `token: null`) and the rotate answer withhold it. `GET /api/mobile` and
   the rotate answer hand it only to a caller presenting that own token or to
   this machine itself (unrelayed).
+- **Changing what runs on your devices (gate on or off).** Routes that write
+  what agents run with — `POST /api/settings` (every field except
+  `general.onboarded`, `general.last_repo_path` and `ui.surface`), `PUT
+  /api/settings/ticketing/sources`, `PUT /api/settings/auth-profiles`,
+  `POST/PUT/DELETE /api/providers*`, `POST/DELETE /api/templates*`, `POST
+  /api/prefs` with `keymap` or `prompt_presets`, `POST /api/notify/ntfy`,
+  `POST /api/notify/rules/{id}`, the repo-scope `/api/red-zones` writes
+  (add, delete, companions, plan-first), `POST /api/cursor/autoadopt`, the
+  `/api/peer` writes (invites, join, unlink, address, perms, share, export)
+  and `POST /api/settings/sync{,/now,/resume,/pin}` — answer **403** `{error:
+  "this changes how your devices run agents, so it needs this device's
+  sign-in…"}` unless the caller presents this device's token or the fleet key,
+  is this machine itself (loopback, unproxied), or is a trusted Tailscale
+  account — and never when another MindFlock relays it
+  (`auth.may_configure`). The one exception is a server nothing beyond this
+  machine can reach (`CS_WEB_MODE` local or unset, no forwarding header). Why:
+  on a gate-off device reachable on the tailnet any node gets past the gate,
+  and a synced field it wrote (`coding_cli.default_launch_args`, a template's
+  program, a custom agent) would be stamped as this device's edit and spread
+  by settings sync to every device holding the fleet key. With the gate on
+  this refuses only relayed requests. None of these routes is on the
+  remote-control forward allow-list.
 
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests and DNS-rebinding hosts. These checks
@@ -2082,7 +2110,7 @@ run **before everything else**, public paths included: a cross-site
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/auth` | Body `{token}` — validate + set the `mf_auth` cookie (login-page target; always allowed through the gate). `200 {ok}` or `401`; never echoes the token |
-| GET | `/api/settings/auth-token` | This device's own token in the clear for Settings → Security (generated and persisted on first use) → `{token, auth_enabled}` — but only to a caller that already presents that own token (cookie or bearer), to this machine itself (loopback, unproxied, not relayed), or, with the gate off, to any caller that isn't another MindFlock relaying. Anyone else — a phone or browser signed in with your devices' key, a member relaying — gets `200 {token: null, auth_enabled, reason: "signed in with your devices' key"}`: the fleet key must not collect every device's own token, which would outlive a removal |
+| GET | `/api/settings/auth-token` | This device's own token in the clear for Settings → Security (generated and persisted on first use) → `{token, auth_enabled}` — but only to a caller that already presents that own token (cookie or bearer), to this machine itself (loopback, unproxied, not relayed), or, with the gate off, to any direct caller of a server nothing beyond this machine can reach (`CS_WEB_MODE` local or unset, no forwarding header) — never to an anonymous tailnet caller of a gate-off, reachable server, which the token would make privileged. Anyone else — a phone or browser signed in with your devices' key, a member relaying — gets `200 {token: null, auth_enabled, reason: "signed in with your devices' key"}`: the fleet key must not collect every device's own token, which would outlive a removal |
 | GET | `/api/settings/tailnet-trust` | Settings → Security's **Trusted Tailscale accounts**: `{available, self_login, self_tagged, logins, shared_link_supported, trusted}` — `logins` are the Tailscale logins owning at least one UNTAGGED node on the tailnet (the choices); `trusted` mirrors `general.tailnet_trusted_logins`; `self_login` is `""` when this node is tagged; `available:false` = no `tailscale` binary or the daemon is stopped. Reads the shared `tailscale status --json` snapshot (re-read at most every ~5 s, `backend/tailscale_cli.py`). The list is saved through `POST /api/settings` (`{"general": {"tailnet_trusted_logins": [...]}}`), lower-cased and de-duplicated on load. What trust grants: see the Trusted Tailscale accounts bullet above |
 | GET | `/api/settings/sync` | Settings → Devices → **Settings sync**: `{enabled, error, paused, choices[], device, joined_from, in_fleet, devices: [{key, label, syncing, last_sync, withheld[], error}], pinned[], separate: {<pin>: <label>}, deferred: [{path, value, reason}], warnings[], syncable: [{path, label, group}]}` — one row per member of "Your devices" (`backend.web.core.settings_sync`). `error` is `"settings.json couldn't be read — sync paused"` while the file won't parse. `paused` is `"This device's settings look reset — sync paused"` (with `choices: ["theirs", "mine"]`) when one background scan — a change nobody made through MindFlock, such as a replaced or restored file — would clear 3 or more settings and at least half of what is set here, with 8 or more set: nothing is stamped or exported until `resume`, and `settings.sync_paused` fires once. A save through a route (`POST /api/settings`, `/api/prefs`, ticket sources, provider TOMLs) explains only what it wrote: settings cleared under the paths that save wrote (a field, a group's fields, a store or its entries) don't count, anything else cleared in the same scan still does — a reset file followed by one save still pauses. `pinned` holds `group.field`, `store:<name>` or single entries (`ticketing.sources#<id>` — a source whose id means something different on the device you joined is kept separate this way; `separate` maps each such pin to that device's label, which the Unpin confirm names). `warnings` include a member whose stamps were skipped because they can't be a real time — more than a year ahead of this clock (`"<host>'s clock is far ahead — its changes are ignored…"`; a merely fast clock is never warned about, since a later edit wins either way), sources kept separate, and ticket sources without an id (never synced). `devices[].error` reads `"<host> paused sync — its settings look reset; answer it in Settings → Devices there"` for a member whose own sync is paused (its export answers 503). `devices[].withheld` is always empty (kept for older clients) |
 | POST | `/api/settings/sync` | `{enabled: true, from?}` turns sync on — from THIS device (`from` empty: its values are stamped now and lead) or by first adopting member `from`'s values (→ adds `{adopted[], deferred[]}`); `{enabled: false}` turns it off. 409 when this device isn't in a group of devices or `from` isn't a reachable member; 403 for a relayed request |
@@ -2165,8 +2193,11 @@ manual launching is a headless/dev concern. `run.py` accepts mode/port CLI
 tokens in either order and honors `CS_WEB_MODE`,
 `PORT`/`UVICORN_PORT`. The default (local) mode binds `127.0.0.1` — nothing
 off the machine can reach the server. Tailscale mode is an explicit opt-in
-that binds all interfaces (`0.0.0.0`), so the port is reachable from your LAN
-as well as your tailnet — every non-local bind is protected by the auth token
+that binds `127.0.0.1` plus this node's Tailscale addresses, so the port is on
+your tailnet but not your LAN (`web/core/tailnet_bind.py`; it falls back to
+`0.0.0.0` with a warning while Tailscale is down — restarting onto the narrow
+bind once it is up — or when those addresses can't be bound here, and
+`MINDFLOCK_BIND_ALL=1` asks for `0.0.0.0` on purpose) — every non-local bind is protected by the auth token
 printed at startup (unauthenticated clients get 401). Nothing is exposed to
 the public internet unless you forward the port yourself. For HTTPS run
 `tailscale serve --bg 8765` once and use `./run.sh local`.

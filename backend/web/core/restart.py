@@ -78,17 +78,24 @@ def _under_pytest() -> bool:
     return "pytest" in sys.modules
 
 
-def reexec_soon(delay: float = 0.5) -> None:
+def reexec_soon(delay: float = 0.5, keep_mode: bool = False) -> None:
     """Re-exec this process after ``delay`` seconds (never returns to caller).
 
     The delay lets the HTTP response that asked for the restart flush to the
     client first — without it the caller sees a dropped connection instead of
     the ``{"ok": true}`` that tells it to start polling for the server's return.
+
+    ``keep_mode``: come back in the mode this process runs in (the mode word
+    and ``CS_WEB_MODE`` kept) — a restart that only re-picks the bind
+    addresses (:mod:`backend.web.core.tailnet_bind`), not the mode.
     """
     if _under_pytest():
         return
-    os.environ.pop("CS_WEB_MODE", None)
-    argv = relaunch_argv()
+    if keep_mode:
+        argv = [sys.executable] + list(sys.argv)
+    else:
+        os.environ.pop("CS_WEB_MODE", None)
+        argv = relaunch_argv()
 
     def _reexec() -> None:
         time.sleep(delay)
