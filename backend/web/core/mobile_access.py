@@ -393,7 +393,9 @@ def _mobile_info(include_tokens: bool = True) -> dict:
     note = None
     qr_url = None
     serve_mode = _serve_mode_setting()
-    shared = _shared_link.status()
+    # The owner's login goes into the policy snippet only for a caller that
+    # may see it (the same rule as the phone-app step's login).
+    shared = _shared_link.status(_shared_link.owner_login() if include_tokens else "")
     shared_url = _shared_link.advertised_url()
     if shared.get("enabled"):
         shared["devices"] = _shared_link_devices(shared["name"])

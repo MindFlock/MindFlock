@@ -525,8 +525,10 @@ function StepFix({ step, shared, qrSvg }: { step: SetupStep; shared: SharedLinkS
         <>
           <p className="set-hint">
             One block for your access policy: every <code>{tag}</code> device is approved as a host
-            of <code>{svc}</code> without a click, and your devices and phone may reach each
-            other's MindFlock (needed under any custom policy, such as <code>autogroup:self</code>).
+            of <code>{svc}</code> without a click, and your own devices and phone may reach each
+            other's MindFlock (needed under any custom policy, such as <code>autogroup:self</code>)
+            — you only, not everyone else on the tailnet. If it says REPLACE, put your Tailscale
+            login where it shows the placeholder.
             No <code>tagOwners</code>, <code>autoApprovers</code>, <code>grants</code> or{" "}
             <code>tests</code> in your policy yet? Paste it whole. Already have one? Move the lines
             inside it into yours: a key can't appear twice.

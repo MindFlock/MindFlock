@@ -324,6 +324,20 @@ async def test_an_offline_member_row_says_why(world):
     assert '"grants"' in st["policy_grant"] and "tcp:8765" in st["policy_grant"]
 
 
+@pytest.mark.parametrize("privileged", [True, False])
+def test_policy_grant_names_the_owner_only_when_privileged(monkeypatch, privileged):
+    # Scoped to the owner's login, never autogroup:member -> autogroup:member;
+    # the login itself only reaches a privileged caller.
+    from backend.web.core import shared_link
+
+    monkeypatch.setattr(shared_link, "owner_login", lambda: "me@example.com")
+    text = fleet._policy_grant(8765, privileged)
+    assert '"dst": ["autogroup:member"]' not in text
+    assert '"dst": ["autogroup:self"]' in text
+    assert ("me@example.com" in text) is privileged
+    assert (shared_link.LOGIN_PLACEHOLDER in text) is not privileged
+
+
 # --------------------------------------------------------------------------- #
 # §0.3: one "Paste a code" box
 # --------------------------------------------------------------------------- #

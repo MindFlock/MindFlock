@@ -371,19 +371,92 @@ def _server_port() -> int:
         return DEFAULT_PORT
 
 
-def policy_block(name: str, tag: str, port: int = DEFAULT_PORT) -> str:
+#: Stands in for the owner's Tailscale login in the policy snippets when
+#: this device can't tell it (or the caller may not see it). A real-looking
+#: address on purpose: a policy naming it saves, and grants nobody anything,
+#: until the person replaces it.
+LOGIN_PLACEHOLDER = "YOUR-TAILSCALE-LOGIN@example.com"
+
+
+def owner_login() -> str:
+    """This device's owner as the policy file names them: its Tailscale
+    login, else (a tagged device belongs to no login) the one person owning
+    the tailnet's untagged devices. ``""`` when unclear. Never raises."""
+    try:
+        from backend.web.core import mobile_access
+
+        return str(mobile_access._tailscale_login() or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+#: What a Tailscale login looks like (``me@example.com``, ``me@github``):
+#: anything else is dropped rather than pasted into someone's policy file.
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9._+\-]+@[A-Za-z0-9._\-]+$")
+
+
+def _safe_login(login: object) -> str:
+    login = str(login or "").strip()
+    return login if _LOGIN_RE.match(login) else ""
+
+
+def _grant_lines(tag: str, login: str, port: int, svc: str = "") -> str:
+    """The grants both snippets share, scoped to ONE person: never
+    ``autogroup:member`` → ``autogroup:member``, which in a tailnet with
+    other people in it opens every MindFlock to all of them.
+
+    Untagged devices are reached only by their own owner
+    (``autogroup:self``). Tagged devices belong to no one, so they're scoped
+    to each other and to ``login`` — the owner, or :data:`LOGIN_PLACEHOLDER`
+    with a comment saying to replace it."""
+    who = login or LOGIN_PLACEHOLDER
+    lines = []
+    if not login:
+        lines.append(
+            "  // REPLACE %s below with your Tailscale login (the account\n"
+            "  // shown top right in the admin console) before saving.\n"
+            % LOGIN_PLACEHOLDER
+        )
+    lines.append(
+        "  // Your own untagged computers and phone reach each other's MindFlock.\n"
+        '  {"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["tcp:%(port)d"]},\n'
+        "  // Your MindFlock devices tagged %(tag)s reach each other (and the shared link).\n"
+        '  {"src": ["%(tag)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        "  // You reach them, and they reach your own devices. Only you: not\n"
+        "  // everyone else on this tailnet.\n"
+        '  {"src": ["%(who)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        '  {"src": ["%(tag)s"], "dst": ["%(who)s"], "ip": ["tcp:%(port)d"]},\n'
+    )
+    if svc:
+        lines.append(
+            "  // The shared phone link, for you.\n"
+            '  {"src": ["%(who)s"], "dst": ["%(svc)s"], "ip": ["tcp:443"]},\n'
+        )
+    return "".join(lines) % {"tag": tag, "who": who, "port": port, "svc": svc}
+
+
+def policy_block(name: str, tag: str, port: int = DEFAULT_PORT, login: str = "") -> str:
     """Everything MindFlock needs in the tailnet policy file, as ONE block
     to copy: who may apply ``tag``, the services auto-approver for
-    ``svc:<name>``, grants so tagged devices and your own devices reach each
-    other's MindFlock on ``port`` (and 443, the shared link) — which a custom
-    policy such as the common ``autogroup:self`` rule otherwise blocks,
-    silently — plus a ``tests`` stanza the policy editor checks on save.
+    ``svc:<name>``, grants so your devices reach each other's MindFlock on
+    ``port`` (and 443, the shared link) — which a custom policy such as the
+    common ``autogroup:self`` rule otherwise blocks, silently — plus a
+    ``tests`` stanza the policy editor checks on save.
+
+    The grants are scoped to ``login`` (the owner — see :func:`_grant_lines`);
+    without one they name :data:`LOGIN_PLACEHOLDER` and say to replace it.
 
     Merge-safe: a policy file can't hold the same key twice, and any tailnet
     with a tagged device already has ``tagOwners``. The block says so, in
     comments (the policy file is HuJSON), and every line inside a key ends in
     a comma so it can be moved into an existing key as-is."""
     svc = service_id(name)
+    login = _safe_login(login)
+    tests = '  {"src": "%(tag)s", "accept": ["%(tag)s:%(port)d"]},\n'
+    if login:
+        tests += (
+            '  {"src": "%(login)s", "accept": ["%(tag)s:%(port)d", "%(tag)s:443"]},\n'
+        )
     return (
         "// MindFlock. Policy has none of these keys yet? Paste the whole block.\n"
         '// Already has one (e.g. "tagOwners")? Move the lines inside it into\n'
@@ -397,36 +470,32 @@ def policy_block(name: str, tag: str, port: int = DEFAULT_PORT) -> str:
         "  },\n"
         "},\n"
         '"grants": [\n'
-        "  // Your MindFlock devices reach each other (and the shared link).\n"
-        '  {"src": ["%(tag)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
-        '  {"src": ["%(tag)s"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
-        "  // Your own phone and computers reach them.\n"
-        '  {"src": ["autogroup:member"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
-        "  // The shared phone link.\n"
-        '  {"src": ["autogroup:member"], "dst": ["%(svc)s"], "ip": ["tcp:443"]},\n'
+        "%(grants)s"
         "],\n"
-        '"tests": [\n'
-        '  {"src": "%(tag)s", "accept": ["%(tag)s:%(port)d"]},\n'
-        "],"
-    ) % {"tag": tag, "svc": svc, "port": port}
+        '"tests": [\n' + tests + "],"
+    ) % {
+        "tag": tag,
+        "svc": svc,
+        "port": port,
+        "login": login,
+        "grants": _grant_lines(tag, login, port, svc),
+    }
 
 
-def device_grants(tag: str, port: int = DEFAULT_PORT) -> str:
+def device_grants(tag: str, port: int = DEFAULT_PORT, login: str = "") -> str:
     """Just the grants that let your MindFlock devices reach each other on
     ``port`` — the part of :func:`policy_block` a device that discovery
     "timed out" on needs (a custom policy such as the common
     ``autogroup:self`` rule drops those packets silently). The same lines,
-    so pasting both never conflicts."""
+    so pasting both never conflicts; scoped to ``login`` the same way."""
+    login = _safe_login(login)
     return (
         "// MindFlock: your devices reach each other on tcp:%(port)d.\n"
         '// Policy already has "grants"? Move these lines inside it.\n'
         '"grants": [\n'
-        '  {"src": ["%(tag)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
-        '  {"src": ["%(tag)s"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
-        '  {"src": ["autogroup:member"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
-        '  {"src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
+        "%(grants)s"
         "],"
-    ) % {"tag": tag, "port": port}
+    ) % {"port": port, "grants": _grant_lines(tag, login, port)}
 
 
 def _explain(output: str) -> Tuple[str, str]:
@@ -729,8 +798,11 @@ def _steps(st: dict) -> list:
     return [op, tag, define, policy, appr, phone]
 
 
-def status() -> dict:
-    """The shared link as Settings → Mobile shows it.
+def status(login: str = "") -> dict:
+    """The shared link as Settings → Mobile shows it. ``login`` is the
+    owner's Tailscale login for the policy's grants (:func:`owner_login`),
+    passed only for a caller that may see it; ``""`` leaves the marked
+    placeholder in.
 
     ``enabled`` is the setting; ``advertised`` whether this device's
     ``tailscale serve`` for it is up (checked against the live serve config);
@@ -774,7 +846,7 @@ def status() -> dict:
         "error_kind": kind,
         "operator_fix": OPERATOR_FIX,
         # One block for the whole policy file, with this server's real port.
-        "policy": policy_block(name, tag, _server_port()),
+        "policy": policy_block(name, tag, _server_port(), login),
         "admin": {
             "machines": ADMIN_MACHINES,
             "services": ADMIN_SERVICES,

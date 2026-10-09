@@ -116,12 +116,14 @@ def _masked_view() -> dict:
 #: The only ``group.field``s ``POST /api/settings`` takes from a caller that
 #: :func:`backend.web.core.auth.may_configure` refuses (an anonymous tailnet
 #: caller of a gate-off, reachable device): bookkeeping about this machine
-#: that runs nothing. Everything else — every synced field (settings sync
+#: that runs nothing, and the cosmetic surface and accent. Everything else — every synced field (settings sync
 #: would spread it to the owner's other devices as this one's edit), the
 #: gate/bind/remote-control switches, agent binaries and accounts, the IDE
 #: and terminal commands, peer links — needs the owner. An allow-list, so a
 #: new field is guarded until someone decides otherwise.
-_OPEN_FIELDS = frozenset({"general.onboarded", "general.last_repo_path", "ui.surface"})
+_OPEN_FIELDS = frozenset(
+    {"general.onboarded", "general.last_repo_path", "ui.surface", "ui.accent"}
+)
 
 
 #: ``prefs`` fields ``POST /api/prefs`` takes only from a caller
@@ -566,6 +568,22 @@ def _gh_cli_status() -> Tuple[bool, bool, str]:
     return installed, authenticated, check.detail
 
 
+async def _stored_secret_refused(request, body: Optional[dict], field: str) -> bool:
+    """Whether a Test / list route must refuse because it would use a STORED
+    secret (``field`` blank or masked in ``body``) for a caller
+    ``auth.may_configure`` refuses. The body may also name the endpoint
+    (``base_url``), so an anonymous tailnet caller of a gate-off device could
+    otherwise have this device send its saved token to a server of theirs.
+    Inline credentials stay testable by anyone. Never raises (fails closed)."""
+    try:
+        v = str((body or {}).get(field, "") or "").strip()
+        if v and v != _MASK:
+            return False
+        return not await _web_auth.may_configure(request.scope)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _source_cfg_from_body(body: dict):
     """Build a :class:`TicketProviderConfig` from a request body, filling any
     missing/masked field from the stored source matched by ``id`` (else the
@@ -849,13 +867,23 @@ class SettingsAddon(Addon):
             """``{field: value, …}`` (a partial update; ``null`` clears a
             field). Unknown fields are ignored. Stamped for sync at once.
             409 while settings.json can't be read — nothing is saved over it.
-            403 for :data:`_GUARDED_PREFS` from a caller
-            ``auth.may_configure`` refuses: a preset is text sent to an agent
-            in one click, on every device sync reaches."""
+
+            :data:`_GUARDED_PREFS` from a caller ``auth.may_configure``
+            refuses (a preset is text sent to an agent in one click, on every
+            device sync reaches) are left out, NOT the whole save: the rest
+            is saved and the answer carries ``refused`` (those fields) and
+            ``error`` (why) beside the prefs — 403 only when nothing else
+            was asked for. The browser keeps a refused edit as its own."""
             known = _prefs_fields()
             clean = {k: v for k, v in (payload or {}).items() if k in known}
-            if not allowed and _GUARDED_PREFS.intersection(clean):
-                return _web_auth.configure_refused()
+            refused = [] if allowed else sorted(_GUARDED_PREFS.intersection(clean))
+            for k in refused:
+                clean.pop(k)
+            if refused and not clean:
+                return JSONResponse(
+                    {"error": _web_auth.CONFIGURE_REFUSED, "refused": refused},
+                    status_code=403,
+                )
             if clean:
                 try:
                     settings_store.update_settings(prefs=clean)
@@ -877,9 +905,12 @@ class SettingsAddon(Addon):
                 except Exception:  # noqa: BLE001 — a save never fails on this
                     pass
             try:
-                return JSONResponse(_prefs_view())
+                view = _prefs_view()
             except settings_store.SettingsUnreadable:
                 return _unreadable_response()
+            if refused:
+                view = dict(view, refused=refused, error=_web_auth.CONFIGURE_REFUSED)
+            return JSONResponse(view)
 
         @router.post("/settings/auth-token/rotate")
         async def rotate_auth_token(request: Request) -> JSONResponse:
@@ -901,10 +932,14 @@ class SettingsAddon(Addon):
             (:func:`backend.web.core.auth.may_see_own_token`): a caller signed
             in with the devices' key gets ``token: null``. 409 when the token
             is pinned by ``MINDFLOCK_AUTH_TOKEN`` (the env var always wins, so
-            rotating the setting would be a lie)."""
+            rotating the setting would be a lie). 403 for a caller
+            ``auth.may_configure`` refuses: a rotation signs every phone and
+            paired device out, on every member it reaches."""
             from backend.web.core import auth as web_auth
             from backend.web.core import fleet as _fleet
 
+            if not await web_auth.may_configure(request.scope):
+                return web_auth.configure_refused()
             mine = web_auth.may_see_own_token(request.scope)
             try:
                 token = web_auth.rotate_token()
@@ -1201,15 +1236,20 @@ class SettingsAddon(Addon):
             )
 
         @router.post("/settings/test/ticketing")
-        async def test_ticketing(body: Optional[dict] = None) -> JSONResponse:
+        async def test_ticketing(
+            request: Request, body: Optional[dict] = None
+        ) -> JSONResponse:
             """Validate the active (or request-supplied) ticketing provider's
             credentials via its own ``test_connection``. Returns the resolved
-            member id so the UI can auto-fill it. Never echoes a token."""
+            member id so the UI can auto-fill it. Never echoes a token. With
+            the STORED token, owner only (:func:`_stored_secret_refused`)."""
             from backend.ticket_ingestion.providers import (
                 ProviderError,
                 get_provider,
             )
 
+            if await _stored_secret_refused(request, body, "api_token"):
+                return _web_auth.configure_refused()
             cfg = _source_cfg_from_body(body or {})
             try:
                 prov = get_provider(cfg)
@@ -1227,16 +1267,21 @@ class SettingsAddon(Addon):
             )
 
         @router.post("/settings/ticketing/states")
-        async def ticketing_states(body: Optional[dict] = None) -> JSONResponse:
+        async def ticketing_states(
+            request: Request, body: Optional[dict] = None
+        ) -> JSONResponse:
             """The workflow states/statuses a ticket can be in, for the "ingest
             only when the ticket is in state X" picker. Uses the request-supplied
-            or stored credentials (never echoes a token). Providers without
+            or stored credentials (never echoes a token; the stored ones owner
+            only — :func:`_stored_secret_refused`). Providers without
             workflow states return ``{"states": []}``."""
             from backend.ticket_ingestion.providers import (
                 ProviderError,
                 get_provider,
             )
 
+            if await _stored_secret_refused(request, body, "api_token"):
+                return _web_auth.configure_refused()
             cfg = _source_cfg_from_body(body or {})
             try:
                 prov = get_provider(cfg)
@@ -1547,16 +1592,22 @@ class SettingsAddon(Addon):
             return JSONResponse(_auth_profiles_view())
 
         @router.post("/settings/test/openrouter")
-        def test_openrouter(body: Optional[dict] = None) -> JSONResponse:
+        def test_openrouter(
+            body: Optional[dict] = None,
+            allowed: bool = Depends(_web_auth.configure_allowed),
+        ) -> JSONResponse:
             """Validate an OpenRouter key (request-supplied, or the one stored
-            on ``profile_id``) and report its spend + the models it can reach —
-            the account-level usage story for key profiles, and the source for
+            on ``profile_id`` — owner only, see :func:`_stored_secret_refused`)
+            and report its spend + the models it can reach — the
+            account-level usage story for key profiles, and the source for
             the model-picker dropdown. Never echoes the key."""
             from backend.providers import auth_profiles as ap
 
             body = body or {}
             key = str(body.get("api_key", "") or "").strip()
             base_url = str(body.get("base_url", "") or "").strip()
+            if key in ("", _MASK) and not allowed:
+                return _web_auth.configure_refused()
             if key in ("", _MASK):
                 pid = str(body.get("profile_id", "") or "").strip()
                 for p in settings_store.load_settings().auth_profiles.profiles:
@@ -1747,10 +1798,19 @@ class SettingsAddon(Addon):
             await pty_run.serve(ws, session)
 
         @router.post("/providers/{name}/login-close")
-        def provider_login_close(name: str, profile: str = "") -> JSONResponse:
+        def provider_login_close(
+            name: str,
+            profile: str = "",
+            allowed: bool = Depends(_web_auth.configure_allowed),
+        ) -> JSONResponse:
             """Tear down a provider's login terminal (called when the UI closes
-            the modal), so a completed login doesn't leave a stray tmux session."""
+            the modal), so a completed login doesn't leave a stray tmux session.
+            Owner only, like the terminal itself: a stranger mustn't kill a
+            sign-in in progress."""
             from backend.web.core import provider_login
+
+            if not allowed:
+                return _web_auth.configure_refused()
 
             provider_login.kill_login_session(name, profile)
             return JSONResponse({"ok": True})

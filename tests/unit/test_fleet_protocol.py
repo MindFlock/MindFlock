@@ -555,7 +555,9 @@ def test_auth_token_is_not_handed_to_a_fleet_key_caller(monkeypatch, tmp_path):
     )
     assert r.json()["token"] == "own-token-0123456789abcdef"
     # This machine itself (the desktop app), unproxied: yes.
-    local = TestClient(server.app, client=("127.0.0.1", 5000))
+    local = TestClient(
+        server.app, client=("127.0.0.1", 5000), headers={"host": "127.0.0.1"}
+    )
     r = local.get(
         "/api/settings/auth-token", headers={"Authorization": "Bearer " + key}
     )
@@ -1134,7 +1136,9 @@ def test_one_caller_never_burns_the_invites(monkeypatch):
 def test_public_join_routes_answer_only_the_tailnet(monkeypatch, client, ok):
     from backend.web import server
 
-    c = TestClient(server.app, client=client)
+    # This machine names itself as a loopback host (auth._from_this_machine).
+    headers = {"host": "127.0.0.1"} if client[0] == "127.0.0.1" else {}
+    c = TestClient(server.app, client=client, headers=headers)
     body = {"device": "rig", "host": "Rig", "secret_hash": "a" * 64}
     r = c.post("/api/fleet/requests", json=body)
     assert (r.status_code == 200) is ok, r.text
@@ -1143,7 +1147,9 @@ def test_public_join_routes_answer_only_the_tailnet(monkeypatch, client, ok):
         assert c.post("/api/fleet/redeem", json={}).status_code == 403
         assert c.get("/api/fleet/requests/" + "0" * 16).status_code == 403
     # Behind an unvouched proxy hop (loopback + a forwarding header): no.
-    r = TestClient(server.app, client=("127.0.0.1", 4321)).post(
+    r = TestClient(
+        server.app, client=("127.0.0.1", 4321), headers={"host": "127.0.0.1"}
+    ).post(
         "/api/fleet/requests", json=body, headers={"X-Forwarded-For": "192.168.1.50"}
     )
     assert r.status_code == 403

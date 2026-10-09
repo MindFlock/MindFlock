@@ -2410,7 +2410,9 @@ def test_github_open_prs_stale_hit_annotates_without_touching_the_cache(
 # --------------------------------------------------------------------------- #
 # Starting an update is privileged (core.auth.privileged): these drive it from
 # this machine itself, where the default TestClient peer ("testclient") isn't.
-local_client = TestClient(app, client=("127.0.0.1", 50000))
+local_client = TestClient(
+    app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+)
 
 
 def test_update_check_reports_a_newer_release(monkeypatch):

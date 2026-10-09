@@ -1684,7 +1684,9 @@ def test_loopback_is_privileged_without_a_token(monkeypatch):
 
     from backend.web import server
 
-    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    c = TestClient(
+        server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+    )
     assert c.post("/api/fleet/invite").status_code == 200
     # ... but not when it was forwarded (tailscale serve also arrives on loopback)
     r = c.post("/api/fleet/invite", headers={"X-Forwarded-For": "100.64.0.7"})

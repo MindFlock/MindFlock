@@ -27,7 +27,9 @@ from backend.web.core import mobile_access, mobile_announce, ntfy
 
 # Loopback: these tests run exposed and gate-off (the ``tailnet`` fixture),
 # where only this machine may change settings (auth.may_configure).
-client = TestClient(server.app, client=("127.0.0.1", 50000))
+client = TestClient(
+    server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+)
 
 #: The real fire-and-forget entry point, captured before tests/conftest.py's
 #: suite-wide stub replaces it (this module is the one that tests that path).

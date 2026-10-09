@@ -330,7 +330,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
           disabled={!!busy}
           onClick={(e) => {
             e.stopPropagation();
-            void run("push", async () => setPush(await api<PushCheck>("/api/github/push-check")));
+            void run("push", async () => setPush(await api<PushCheck>("/api/github/push-check", { method: "POST" })));
           }}
         >
           {busy === "push" ? "Checking…" : "Check I can push"}
@@ -354,7 +354,7 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
                   { method: "POST" }
                 );
                 toast(r.helper === "gh" ? "git pushes through gh now" : "git pushes with your GitHub sign-in now");
-                setPush(await api<PushCheck>("/api/github/push-check"));
+                setPush(await api<PushCheck>("/api/github/push-check", { method: "POST" }));
               });
             }}
           >

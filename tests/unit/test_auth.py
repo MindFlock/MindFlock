@@ -241,6 +241,152 @@ def test_unset_mode_does_not_enforce_host(open_client):
     assert open_client.get("/api/instances").status_code == 200
 
 
+# A node as `tailscale status --json` describes it (host_ok's own names).
+NODE_IP = "100.101.1.2"
+NODE_STATUS = {
+    "BackendState": "Running",
+    "Self": {
+        "HostName": "Box",
+        "DNSName": "box.tail0000.ts.net.",
+        "TailscaleIPs": [NODE_IP, "fd7a:115c:a1e0::1"],
+    },
+    "CertDomains": ["box.tail0000.ts.net"],
+}
+
+
+@pytest.fixture
+def tailscale_node(monkeypatch):
+    """Tailscale mode, gate off, on a node read from NODE_STATUS."""
+    from backend import tailscale_cli
+    from backend.web.core import tailnet_bind
+
+    monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+    monkeypatch.setenv("MINDFLOCK_AUTH", "0")
+    monkeypatch.delenv(tailnet_bind.BIND_ALL_ENV, raising=False)
+    monkeypatch.setattr(tailscale_cli, "status_json", lambda **kw: dict(NODE_STATUS))
+    # Addresses on this machine: its tailnet ones and one LAN one.
+    mine = (NODE_IP, "fd7a:115c:a1e0::1", "192.168.1.20")
+    monkeypatch.setattr(tailnet_bind, "bindable", lambda ip: ip in mine)
+    monkeypatch.setattr(auth, "_LOCAL_IPS", {})
+    monkeypatch.setattr(auth, "_FRONTED_HOSTS", set())
+    monkeypatch.setattr(
+        auth,
+        "_NODE",
+        {
+            "hosts": frozenset(),
+            "lan": frozenset(),
+            "unbindable": False,
+            "at": 0.0,
+            "pending": False,
+        },
+    )
+    auth.read_node_hosts()
+
+
+def _host(value: str) -> dict:
+    return {"type": "http", "headers": [(b"host", value.encode())]}
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost:8765",
+        "127.0.0.1:8765",
+        "[::1]:8765",
+        NODE_IP + ":8765",  # another member / the CLI by IP
+        "[fd7a:115c:a1e0::1]:8765",
+        "box.tail0000.ts.net:8765",  # the phone over MagicDNS
+        "box.tail0000.ts.net",  # tailscale serve (https, no port)
+        "box:8765",  # MagicDNS short name
+    ],
+)
+def test_tailscale_mode_answers_its_own_names(tailscale_node, host):
+    assert auth.host_ok(_host(host)) is True
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "evil.example",  # DNS rebinding onto the tailnet IP or 127.0.0.1
+        "evil.example:8765",
+        "other.tail0000.ts.net:8765",  # another node's name
+        "100.64.0.77:8765",  # another node's address
+        "192.168.1.20:8765",  # a LAN address: not while bound to the tailnet only
+        "",
+    ],
+)
+def test_tailscale_mode_refuses_other_hosts(tailscale_node, host):
+    assert auth.host_ok(_host(host)) is False
+
+
+def test_tailscale_mode_answers_the_shared_link(tailscale_node):
+    # The shared phone link: Host is the service name, fronted by serve.
+    assert auth.host_ok(_host("mindflock.tail0000.ts.net")) is False
+    auth.allow_fronted_host("mindflock.tail0000.ts.net")
+    assert auth.host_ok(_host("mindflock.tail0000.ts.net")) is True
+
+
+def test_bound_to_every_interface_answers_lan_addresses(tailscale_node, monkeypatch):
+    from backend.web.core import tailnet_bind
+
+    for env in (tailnet_bind.BIND_ALL_ENV, tailnet_bind.FALLBACK_ENV):
+        monkeypatch.setenv(env, "1")
+        assert auth.host_ok(_host("192.168.1.20:8765")) is True
+        # Only this machine's own addresses, and never a rebinding name.
+        assert auth.host_ok(_host("192.168.1.99:8765")) is False
+        assert auth.host_ok(_host("evil.example")) is False
+        monkeypatch.delenv(env)
+    assert auth.host_ok(_host("192.168.1.20:8765")) is False
+
+
+def test_unbindable_tailnet_addresses_count_as_every_interface(
+    monkeypatch, tailscale_node
+):
+    # WSL reading the Windows side's tailscale.exe: its IPs can't be bound,
+    # so tailscale mode fell back to 0.0.0.0.
+    from backend.web.core import tailnet_bind
+
+    monkeypatch.setattr(tailnet_bind, "bindable", lambda ip: ip == "192.168.1.20")
+    auth.read_node_hosts()
+    assert auth.host_ok(_host("192.168.1.20:8765")) is True
+
+
+def test_a_failed_status_read_keeps_the_last_names(tailscale_node, monkeypatch):
+    from backend import tailscale_cli
+
+    monkeypatch.setattr(tailscale_cli, "status_json", lambda **kw: None)
+    auth.read_node_hosts()
+    assert auth.host_ok(_host("box.tail0000.ts.net:8765")) is True
+
+
+def test_tailscale_mode_middleware_refuses_a_rebound_host(tailscale_node):
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    assert c.get("/api/instances", headers={"host": "evil.example"}).status_code == 403
+    assert (
+        c.get("/api/instances", headers={"host": "localhost:8765"}).status_code == 200
+    )
+    phone = TestClient(server.app, client=(NODE_IP, 50000))
+    r = phone.get("/api/instances", headers={"host": "box.tail0000.ts.net:8765"})
+    assert r.status_code == 200
+
+
+def test_first_exposed_request_reads_the_node_names(monkeypatch, tailscale_node):
+    import asyncio
+
+    calls = []
+    monkeypatch.setattr(auth, "read_node_hosts", lambda: calls.append(1))
+    monkeypatch.setitem(auth._NODE, "at", 0.0)
+    asyncio.run(auth._ensure_node_hosts())
+    assert calls == [1]
+    # Fresh: no re-read. Unexposed: never.
+    monkeypatch.setitem(auth._NODE, "at", float("inf"))
+    asyncio.run(auth._ensure_node_hosts())
+    monkeypatch.setenv("CS_WEB_MODE", "local")
+    monkeypatch.setitem(auth._NODE, "at", 0.0)
+    asyncio.run(auth._ensure_node_hosts())
+    assert calls == [1]
+
+
 # --------------------------------------------------------------------------- #
 # token rotation (compromise recovery)
 # --------------------------------------------------------------------------- #

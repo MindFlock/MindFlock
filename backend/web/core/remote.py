@@ -1241,10 +1241,31 @@ def _refresh_before_done(send, dev: dict):
     return wrapped
 
 
+async def _may_lend_credential(scope) -> bool:
+    """Whether a proxied request may carry THIS device's credential for the
+    target (the fleet key, or the token pasted for it): when this device's
+    own gate is on (the caller already proved itself to get here), or the
+    caller is :func:`~backend.web.core.auth.privileged` — this machine, a
+    credential holder such as the phone with the fleet-key cookie, a trusted
+    Tailscale account. Otherwise — an anonymous caller of a gate-off device —
+    the request goes out bare, and the target's own gate decides: holding
+    the fleet key must not let this device launder a stranger into a gated
+    one. Never raises (fails closed)."""
+    try:
+        from backend.web.core import auth as _auth
+
+        if _auth.auth_enabled():
+            return True
+        return bool(await _auth.privileged(scope))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class RemoteProxyMiddleware:
     """Forward ``/api/instances/<device>::<title>/…`` (HTTP + websocket) to the
     device that owns the session. Mounted INSIDE the auth gate, so the local
-    token is checked first; the target's token is attached on the way out."""
+    token is checked first; the target's token is attached on the way out —
+    only for a caller this device vouches for (:func:`_may_lend_credential`)."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -1294,6 +1315,7 @@ class RemoteProxyMiddleware:
             return
         qs = (scope.get("query_string") or b"").decode("latin-1")
         url = dev["base_url"] + target_path + (("?" + qs) if qs else "")
+        lend = await _may_lend_credential(scope)
         if scope["type"] == "http":
             await self._proxy_http(
                 scope,
@@ -1304,9 +1326,10 @@ class RemoteProxyMiddleware:
                 timeout=_SLOW_FWD_TIMEOUT.get(
                     (scope.get("method", "GET"), target_path), _HTTP_TIMEOUT
                 ),
+                lend=lend,
             )
         else:
-            await self._proxy_ws(receive, send, dev, url)
+            await self._proxy_ws(receive, send, dev, url, lend=lend)
 
     async def _reject_not_connected(self, scope, receive, send, device: str) -> None:
         """Tell the caller the target device isn't reachable/paired."""
@@ -1339,6 +1362,7 @@ class RemoteProxyMiddleware:
         dev: dict,
         url: str,
         timeout: float = _HTTP_TIMEOUT,
+        lend: bool = False,
     ) -> None:
         body = b""
         while True:
@@ -1348,7 +1372,7 @@ class RemoteProxyMiddleware:
             body += msg.get("body", b"")
             if not msg.get("more_body"):
                 break
-        headers = _headers_for(dev["key"])
+        headers = _headers_for(dev["key"], auth=lend)
         for k, v in scope.get("headers") or []:
             if k == b"content-type":
                 headers["Content-Type"] = v.decode("latin-1")
@@ -1392,7 +1416,9 @@ class RemoteProxyMiddleware:
                     status_code=502,
                 )(scope, receive, send)
 
-    async def _proxy_ws(self, receive, send, dev: dict, url: str) -> None:
+    async def _proxy_ws(
+        self, receive, send, dev: dict, url: str, lend: bool = False
+    ) -> None:
         msg = await receive()
         if msg["type"] != "websocket.connect":
             return
@@ -1402,7 +1428,7 @@ class RemoteProxyMiddleware:
         try:
             async with session.ws_connect(
                 ws_url,
-                headers=_headers_for(dev["key"]),
+                headers=_headers_for(dev["key"], auth=lend),
                 heartbeat=30,
             ) as peer:
                 await send({"type": "websocket.accept"})

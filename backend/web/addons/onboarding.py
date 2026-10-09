@@ -46,6 +46,35 @@ async def _privileged(scope) -> bool:
         return False
 
 
+def _known_repos() -> set:
+    """Real paths a push check may run in: the remembered repo
+    (``general.last_repo_path``) and every session's folder and worktree.
+    Never raises."""
+    out = set()
+    try:
+        from backend.web.core import github_auth
+
+        last = github_auth.remembered_repo()
+        if last:
+            out.add(os.path.realpath(os.path.expanduser(last)))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.web import server
+
+        for inst in list(server.ENGINE.instances.values()):
+            try:
+                wt = inst.GetWorktreePath() or ""
+            except Exception:  # noqa: BLE001
+                wt = ""
+            for p in (wt, getattr(inst, "Path", "") or ""):
+                if p:
+                    out.add(os.path.realpath(p))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _forbidden() -> JSONResponse:
     return JSONResponse(_FORBIDDEN, status_code=403)
 
@@ -100,12 +129,16 @@ class OnboardingAddon(Addon):
             self._checks_at = now
         return list(self._checks)
 
-    def _plan(self, refresh: bool) -> dict:
+    def _plan(self, refresh: bool, privileged: bool = True) -> dict:
+        """The plan. Without ``privileged``, who you are on GitHub stays out
+        of every step — it's yours only (an anonymous tailnet caller of a
+        gate-off device reaches this route)."""
         from backend import onboarding
 
-        return onboarding.build_plan(
-            onboarding.collect(checks=self._doctor_checks(refresh))
-        )
+        facts = onboarding.collect(checks=self._doctor_checks(refresh))
+        if not privileged and isinstance(facts.get("github"), dict):
+            facts["github"] = dict(facts["github"], login="")
+        return onboarding.build_plan(facts)
 
     def _build_router(self) -> APIRouter:  # noqa: C901 — one flat route table
         router = APIRouter(prefix="/api")
@@ -117,8 +150,9 @@ class OnboardingAddon(Addon):
         async def get_onboarding(
             request: Request, refresh: bool = False
         ) -> JSONResponse:
-            plan = await asyncio.to_thread(self._plan, refresh)
-            if not await _privileged(request.scope):
+            mine = await _privileged(request.scope)
+            plan = await asyncio.to_thread(self._plan, refresh, mine)
+            if not mine:
                 for step in plan["steps"]:  # who you are on GitHub: yours only
                     if step["id"] == "github" and step["status"] == "ok":
                         step["reason"] = "connected"
@@ -284,16 +318,25 @@ class OnboardingAddon(Addon):
                 _changed()
             return JSONResponse(out, status_code=200 if out.get("ok") else 409)
 
-        @router.get("/github/push-check")
-        async def push_check(request: Request, repo: str = "") -> JSONResponse:
-            """Can this computer push to the repo's origin (the remembered
-            repo by default)? Runs git against the network — privileged."""
+        @router.post("/github/push-check")
+        async def push_check(request: Request) -> JSONResponse:
+            """Can this computer push to the repo's origin? Body ``{repo}``
+            (the remembered repo by default). Runs git against the network,
+            so privileged — and a POST, so the Origin check applies — and
+            only for a repo MindFlock already knows: the remembered one or a
+            session's worktree, never an arbitrary path."""
             if not await _privileged(request.scope):
                 return _forbidden()
             from backend.web.core import github_auth
 
-            path = repo or github_auth.remembered_repo()
+            body = await _json(request)
+            path = str(body.get("repo") or "") or github_auth.remembered_repo()
             path = os.path.realpath(os.path.expanduser(path)) if path else ""
+            if path and path not in _known_repos():
+                return JSONResponse(
+                    {"error": "not a repo MindFlock knows: open it in a session first"},
+                    status_code=400,
+                )
             out = await asyncio.to_thread(github_auth.push_check, path)
             github_auth.remember_push_check(path, out)
             _changed()

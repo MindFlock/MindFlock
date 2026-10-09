@@ -376,13 +376,16 @@ def _captured_proxy(monkeypatch):
 
     class _Seen(list):
         timeouts: list
+        lends: list
 
     seen = _Seen()
+    seen.lends = []
     timeouts = []
 
-    async def fake_http(self, scope, receive, send, dev, url, timeout=None):
+    async def fake_http(self, scope, receive, send, dev, url, timeout=None, lend=False):
         seen.append((scope["method"], dev["key"], url))
         timeouts.append(timeout)
+        seen.lends.append(lend)
         await remote.JSONResponse({"title": "made-there"})(scope, receive, send)
 
     monkeypatch.setattr(remote.RemoteProxyMiddleware, "_proxy_http", fake_http)
@@ -430,6 +433,126 @@ def test_fwd_to_unpaired_device_is_502():
     c = TestClient(server.app)
     r = c.get("/api/devices/ghost/fwd/api/config")
     assert r.status_code == 502
+
+
+# --------------------------------------------------------------------------- #
+# whose credential the proxy lends: never an anonymous caller's
+# --------------------------------------------------------------------------- #
+FLEET_KEY = "fleet-key-XYZ_0123456789"
+
+
+@pytest.fixture
+def _gate_off_exposed(monkeypatch):
+    """Member A as the owner runs it: tailscale mode, gate off, no trusted
+    Tailscale accounts unless a test says so."""
+    from backend.web.core import auth, tailnet_trust
+
+    monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+    monkeypatch.setenv("MINDFLOCK_AUTH", "0")
+
+    async def _no(scope):
+        return False
+
+    monkeypatch.setattr(tailnet_trust, "request_trusted", _no)
+    monkeypatch.setattr(auth, "_fleet_key_valid", lambda c: c == FLEET_KEY)
+    return tailnet_trust
+
+
+TAILNET_CALLER = ("100.64.0.5", 41000)
+
+
+def test_anonymous_caller_of_a_gate_off_device_gets_no_credential(
+    _captured_proxy, _gate_off_exposed
+):
+    # A stranger on the tailnet drives member B through A: the request goes
+    # out bare, so B's own gate decides.
+    c = TestClient(server.app, client=TAILNET_CALLER)
+    assert c.get("/api/instances/otherbox%3A%3At/queue").status_code == 200
+    c.post("/api/devices/otherbox/fwd/api/instances", json={"title": "x"})
+    assert _captured_proxy.lends == [False, False]
+
+
+@pytest.mark.parametrize(
+    "how", ["loopback", "fleet_key_cookie", "trusted_login", "gate_on"]
+)
+def test_the_owner_still_drives_other_devices(
+    _captured_proxy, _gate_off_exposed, monkeypatch, how
+):
+    from backend.web.core import auth
+
+    kw = {"client": TAILNET_CALLER}
+    if how == "loopback":  # a browser on A itself
+        kw = {"client": ("127.0.0.1", 41000), "headers": {"host": "127.0.0.1:8765"}}
+    elif how == "fleet_key_cookie":  # the phone, signed in with the devices' key
+        kw["cookies"] = {auth.COOKIE_NAME: FLEET_KEY}
+    elif how == "trusted_login":
+
+        async def _yes(scope):
+            return True
+
+        monkeypatch.setattr(_gate_off_exposed, "request_trusted", _yes)
+    else:  # A's gate is on: whoever got here signed in
+        monkeypatch.setenv("MINDFLOCK_AUTH", "1")
+        monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "own-token-abc123")
+        kw["headers"] = {"authorization": "Bearer own-token-abc123"}
+    c = TestClient(server.app, **kw)
+    assert c.get("/api/instances/otherbox%3A%3At/queue").status_code == 200
+    assert _captured_proxy.lends == [True]
+
+
+def test_a_bare_forward_carries_no_authorization(monkeypatch):
+    """What lend=False means on the wire: the remote marker, no bearer."""
+    import asyncio
+
+    monkeypatch.setattr(remote, "_fleet_key_for", lambda d: FLEET_KEY)
+    remote.set_token("otherbox", "pasted-token-0123456789")
+    sent = {}
+
+    class _Resp:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        class content:
+            @staticmethod
+            async def iter_chunked(n):
+                yield b"{}"
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Session:
+        def request(self, method, url, **kw):
+            sent.setdefault("headers", []).append(kw["headers"])
+            return _Ctx()
+
+    async def _session():
+        return _Session()
+
+    monkeypatch.setattr(remote, "_http_session", _session)
+    monkeypatch.setattr(
+        remote, "aiohttp", types.SimpleNamespace(ClientTimeout=lambda **k: None)
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        pass
+
+    scope = {"type": "http", "method": "GET", "headers": []}
+    mw = remote.RemoteProxyMiddleware(None)
+    dev = _fake_device()
+    for lend in (False, True):
+        asyncio.run(
+            mw._proxy_http(scope, receive, send, dev, "http://x/api", lend=lend)
+        )
+    bare, lent = sent["headers"]
+    assert "Authorization" not in bare and remote.REMOTE_HEADER in bare
+    assert lent["Authorization"] == "Bearer " + FLEET_KEY
 
 
 def test_remote_requests_are_never_relayed(_captured_proxy, monkeypatch):

@@ -3182,7 +3182,8 @@ def status(privileged: bool) -> dict:
         "tailnet_peers": _tailnet_peers(doc, known, probes, port),
         # The tailnet policy lines that open this port between your devices
         # (the fix a "timed out" peer points at).
-        "policy_grant": _policy_grant(port),
+        # Scoped to the owner's login, named only for a privileged caller.
+        "policy_grant": _policy_grant(port, privileged),
         # "Match my other devices": what the others do that this one doesn't.
         "match": _match(doc, known, reachable_here) if doc["id"] else None,
         # Who answers the shared phone link (one name, several hosts).
@@ -3226,13 +3227,14 @@ def _tailnet_peers(
     return out
 
 
-def _policy_grant(port: int) -> str:
+def _policy_grant(port: int, privileged: bool = False) -> str:
     try:
         from backend.web.core import remote as _remote
         from backend.web.core import shared_link as _sl
 
         tags = list((_remote._SELF or {}).get("tags") or [])
-        return _sl.device_grants(_sl._host_tag(tags), port)
+        login = _sl.owner_login() if privileged else ""
+        return _sl.device_grants(_sl._host_tag(tags), port, login)
     except Exception:  # noqa: BLE001
         return ""
 
