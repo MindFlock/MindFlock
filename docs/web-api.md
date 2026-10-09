@@ -1471,7 +1471,13 @@ settings edits to the others with it, so anyone who can reach that member
 controls your other devices through it. `gate_warning` is true when the gate is
 off and this server is reachable beyond this machine (a non-local
 `CS_WEB_MODE`, or local mode fronted by `tailscale serve` / the shared link);
-Settings → Devices and `mindflock devices` warn then.
+Settings → Devices and `mindflock devices` warn then. The Devices warning has a
+**Turn the gate on** button: it signs that browser in first (`GET
+/api/settings/auth-token`, then `POST /api/auth`) and saves
+`general.auth_mode = "on"`; other members keep working on the fleet key. An
+anonymous tailnet caller of such a member can still drive its sessions, but it
+can no longer change settings that sync would spread (see **Changing what runs
+on your devices** below), nor read the token that would let it.
 
 Browser routes are **privileged**: the caller must present a credential, be
 this machine itself (loopback with no forwarding headers), or be a trusted
