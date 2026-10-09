@@ -8607,7 +8607,7 @@ def _sessions_on_worktree(wt: str) -> int:
 
 @app.post("/api/instances/{title}/red-zones")
 async def instance_red_zones_add(
-    title: str, payload: Optional[dict] = None
+    title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
     """Add a zone from a session: ``{"pattern", "name", "note", "kind":
     "red"|"green", "scope": "repo"|"worktree", "tell_agent", "exempt"}``.
@@ -8622,7 +8622,12 @@ async def instance_red_zones_add(
     new scope is EXEMPT by default (``"exempt": false`` = treat them as
     breaches) — ``exempt`` / ``committed_outside`` in the answer. The same
     pattern as both kinds → 409. ``tell_agent`` sends the notice (queued
-    mid-turn); a green notice never says "revert"."""
+    mid-turn); a green notice never says "revert".
+
+    A REPO-scope zone reaches every worktree of the repo (and settings sync
+    spreads it), so it is the owner's only (``auth.may_configure``, 403) —
+    as on ``POST /api/red-zones``; a worktree zone is part of driving this
+    session."""
     if not git_available():
         return _no_git_response()
     inst, wt, err = _wt_or_409(title)
@@ -8638,6 +8643,8 @@ async def instance_red_zones_add(
         return JSONResponse(
             {"error": "scope must be 'repo' or 'worktree'"}, status_code=400
         )
+    if scope == "repo" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     if kind == "green" and scope != "worktree":
         return JSONResponse(
             {
@@ -8931,17 +8938,29 @@ def _green_preview(inst, wt: str, pattern: str, base: dict) -> dict:
 
 @app.delete("/api/instances/{title}/red-zones/{zone_id}")
 async def instance_red_zones_delete(
-    title: str, zone_id: str, tell_agent: Optional[bool] = None
+    title: str, zone_id: str, request: Request, tell_agent: Optional[bool] = None
 ) -> JSONResponse:
     """Remove a zone (whatever its scope) and re-sync the guards it reached.
     Removing a GREEN zone narrows the scope: work already done inside it is
     exempted (it was legitimate), and the agent is told (``?tell_agent=0``
-    to skip). A red removal never messages the agent (as in v2)."""
+    to skip). A red removal never messages the agent (as in v2).
+
+    Only a zone scoped to THIS session's worktree is part of driving the
+    session; any other (a repo zone, another worktree's) is the owner's only
+    (``auth.may_configure``, 403)."""
     if not git_available():
         return _no_git_response()
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
+    where = await asyncio.to_thread(_red_zones.find_zone, zone_id)
+    if where is None:
+        return JSONResponse({"error": "unknown zone: %s" % zone_id}, status_code=404)
+    own = where["scope"] == "worktree" and os.path.realpath(
+        where["owner"]
+    ) == os.path.realpath(wt)
+    if not own and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
 
     def _del():
         repo_id, _repo = _rz_repo(wt)

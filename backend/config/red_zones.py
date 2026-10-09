@@ -1209,6 +1209,22 @@ def add_zone(
         return dict(zone)
 
 
+def find_zone(zone_id: str) -> Optional[dict]:
+    """Where a zone lives, without touching it: ``{"scope", "owner",
+    "kind"}`` (``owner`` is the repo id, or the worktree's real path) or None
+    when unknown — what a route asks before letting a session remove it."""
+    with _LOCK:
+        data = _load()
+        for repo_id, repo in data["repos"].items():
+            if any(z.get("id") == zone_id for z in repo.get("zones") or []):
+                return {"scope": "repo", "owner": repo_id, "kind": "red"}
+        for wt, entry in data["worktrees"].items():
+            for key, kind in (("zones", "red"), ("green", "green")):
+                if any(z.get("id") == zone_id for z in entry.get(key) or []):
+                    return {"scope": "worktree", "owner": wt, "kind": kind}
+    return None
+
+
 def remove_zone(zone_id: str) -> Optional[dict]:
     """Remove a zone by id from wherever it lives; returns
     ``{"zone", "scope", "owner", "kind"}`` or None when unknown. Removing the
