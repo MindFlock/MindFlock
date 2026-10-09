@@ -29,7 +29,11 @@ Two halves, the same two audiences as the rest of "Your devices"
   updates itself on its next launch); a member whose shell lags says so.
 
 Progress lives in ``<config dir>/fleet_update.json`` so the screen still shows
-how it went after this device restarts onto the new build at the end.
+how it went after this device restarts onto the new build at the end. That
+last step keeps the rollout ``running`` until this device's own
+``update.json`` settles it — done once the new build answers here, halted
+when it failed or rolled back (:func:`status` finishes it in the restarted
+process).
 """
 
 from __future__ import annotations
@@ -120,32 +124,98 @@ def _running_here() -> bool:
     return task is not None and not task.done()
 
 
+_PENDING = ("updating", "restarting")
+
+
+def _self_row(doc: dict) -> Optional[dict]:
+    return next((r for r in doc.get("members") or [] if r.get("self")), None)
+
+
+def _settle_self(doc: dict, row: dict) -> bool:
+    """Settle THIS device's row from its own ``update.json``: ``done`` once
+    this process runs the installed build, ``failed`` when the install failed
+    or was rolled back (the rollout then reads halted). False while it is
+    still on its way (installing, or installed and restarting)."""
+    st = _self_update.read_state()
+    state = st.get("state")
+    if (state == "done" and _self_update.applied(st)) or (
+        _self_update.installed_version() == doc.get("version")
+    ):
+        row.update(step="done", detail="")
+        return True
+    if state in ("failed", "rolled_back"):
+        detail = (
+            "v%s didn't start here — it was rolled back" % doc.get("version")
+            if state == "rolled_back"
+            else str(st.get("error") or "the install failed here")
+        )
+        row.update(step="failed", detail=detail)
+        if doc.get("state") == "running":
+            doc.update(
+                state="halted",
+                error="this device: %s" % detail,
+                finished_at=time.time(),
+            )
+        return True
+    return False
+
+
+def _self_underway() -> bool:
+    """Whether this device's own update is still on its way: installing, or
+    installed and not yet restarted onto (within :data:`RESTART_GRACE_S`)."""
+    st = _self_update.read_state()
+    if st.get("state") == "started":
+        return _self_update.running()
+    if st.get("state") == "done" and not _self_update.applied(st):
+        finished = float(st.get("finished_at") or 0)
+        return (time.time() - finished) < RESTART_GRACE_S
+    return False
+
+
 def status() -> dict:
-    """The rollout as the screen shows it. A ``running`` record with no task
-    behind it was cut off by a restart of THIS device mid-way — said as
-    halted, not left spinning. This device's own row turns ``done`` once it
-    runs the target build (it restarts onto it at the very end)."""
+    """The rollout as the screen shows it. This device's own row (last, and
+    the one update that restarts the process running the rollout) follows its
+    ``update.json``: ``done`` once this process runs the target build,
+    ``failed`` — and the rollout halted — when it failed or rolled back, and
+    still ``running`` while it installs and restarts. Any other ``running``
+    record with no task behind it was cut off by a restart of THIS device
+    mid-way — said as halted, not left spinning."""
     doc = _read()
     changed = False
+    me = _self_row(doc)
+    if me is not None and me.get("step") in _PENDING:
+        changed = _settle_self(doc, me) or changed
     if doc.get("state") == "running" and not _running_here():
-        doc.update(
-            state="halted",
-            error=doc.get("error") or "interrupted — this device restarted mid-way",
-            finished_at=doc.get("finished_at") or time.time(),
+        others_left = any(
+            r.get("step") in ("queued",) + _PENDING
+            for r in doc.get("members") or []
+            if not r.get("self")
         )
-        for row in doc.get("members") or []:
-            if row.get("step") in ("queued", "updating", "restarting") and not row.get(
-                "self"
-            ):
-                row["step"] = "not_started" if row["step"] == "queued" else "failed"
-        changed = True
-    for row in doc.get("members") or []:
-        if (
-            row.get("self")
-            and row.get("step") in ("updating", "restarting")
-            and _self_update.installed_version() == doc.get("version")
-        ):
-            row.update(step="done", detail="")
+        if me is not None and me.get("step") in _PENDING and not others_left:
+            if not _self_underway():
+                me.update(
+                    step="failed",
+                    detail="installed, but it didn't come back on v%s"
+                    % doc.get("version"),
+                )
+                doc.update(
+                    state="halted",
+                    error="this device: %s" % me["detail"],
+                    finished_at=time.time(),
+                )
+                changed = True
+        elif others_left:
+            doc.update(
+                state="halted",
+                error=doc.get("error") or "interrupted — this device restarted mid-way",
+                finished_at=doc.get("finished_at") or time.time(),
+            )
+            for row in doc.get("members") or []:
+                if row.get("step") in ("queued",) + _PENDING and not row.get("self"):
+                    row["step"] = "not_started" if row["step"] == "queued" else "failed"
+            changed = True
+        else:
+            doc.update(state="done", finished_at=doc.get("finished_at") or time.time())
             changed = True
     if changed:
         _write(doc)
@@ -240,12 +310,19 @@ async def _update_member(doc: dict, row: dict, tag: str, version: str) -> bool:
         row.update(step=name, detail=detail, at=time.time())
         _write(doc)
 
+    def note_shell(dev: dict) -> None:
+        # A hello right after a restart may not know the desktop app yet ("")
+        # — keep what the member said before rather than forget it.
+        row["shell_version"] = str(dev.get("shell_version") or "") or str(
+            row.get("shell_version") or ""
+        )
+
     host = row["host"]
     dev = await _probe(row["key"])
     if not dev or not dev.get("reachable"):
         step("skipped", "offline")
         return True
-    row["shell_version"] = str(dev.get("shell_version") or "")
+    note_shell(dev)
     theirs = str(dev.get("version") or "")
     if theirs and not _self_update.is_newer(version, theirs):
         step("current", "already on v%s" % theirs)
@@ -289,9 +366,14 @@ async def _update_member(doc: dict, row: dict, tag: str, version: str) -> bool:
         await asyncio.sleep(POLL_S)
         dev = await _probe(row["key"]) or dev
         if _hello_matches(dev, version, commit):
-            row["shell_version"] = str(dev.get("shell_version") or "")
+            note_shell(dev)
             step("done", _shell_note(host, row["shell_version"], version))
             return True
+        if not _fleet.member_device(dev):
+            # Re-checked on every look, not just before the apply: the key
+            # only ever goes to the member under its recorded name, and a
+            # restart is exactly when another node could answer for it.
+            continue
         st_status, st = await _remote.get_json(
             dev, "/api/fleet/update/state", bearer=_fleet.fleet_key()
         )
@@ -347,17 +429,38 @@ async def _run(doc: dict) -> None:
         else:
             result = await asyncio.to_thread(_self_update.start_update, tag)
             if result.get("ok"):
-                # The watcher restarts this device onto it; status() turns
-                # the row done once the new build is the one answering.
                 me.update(
                     step="updating", detail="this device restarts once it's installed"
                 )
+                _write(doc)
+                await _await_self(doc, me)
             else:
                 me.update(step="failed", detail=str(result.get("error") or ""))
                 doc.update(state="halted", error="this device: %s" % me["detail"])
     if doc.get("state") == "running":
         doc.update(state="done", finished_at=time.time())
     _write(doc)
+
+
+async def _await_self(doc: dict, me: dict) -> None:
+    """Keep the rollout ``running`` while THIS device installs: settled by
+    its ``update.json`` (failed / rolled back halts the rollout). Once the
+    install is done the watcher re-execs this process — which ends this task
+    mid-wait, on purpose; :func:`status` in the new process finishes the
+    rollout from the same file."""
+    deadline = time.monotonic() + MEMBER_TIMEOUT_S
+    while time.monotonic() < deadline:
+        await asyncio.sleep(POLL_S)
+        if _settle_self(doc, me):
+            return
+        if (
+            me.get("step") == "updating"
+            and _self_update.read_state().get("state") == "done"
+        ):
+            me.update(step="restarting", detail="")
+            _write(doc)
+    me.update(step="failed", detail="timed out waiting for v%s here" % doc["version"])
+    doc.update(state="halted", error="this device: %s" % me["detail"])
 
 
 async def start(tag: str = "") -> Tuple[dict, int]:

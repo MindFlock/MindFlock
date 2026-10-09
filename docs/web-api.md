@@ -1593,8 +1593,12 @@ runs_automation}`; 401 without it, 409 when this device is in another group.
   shell_version}]}` — `step` is `queued·updating·restarting·done·current·
   skipped·failed·not_started`; a member whose desktop app lags says "desktop
   app on X (vY) updates on its next launch" in `detail`. Progress persists in
-  `<config dir>/fleet_update.json`; a rollout this device's restart cut off
-  reads as `halted`. `GET /api/fleet` carries the same object as `update`, and
+  `<config dir>/fleet_update.json`. The rollout stays `running` through this
+  device's own install and restart (its row follows `update.json`: `done` once
+  the new build answers, `failed` and the rollout `halted` when it failed or
+  rolled back); one that this device's restart cut off before the other
+  members finished reads as `halted`. The fleet key goes to a member only
+  while it still matches its recorded name, re-checked on every poll. `GET /api/fleet` carries the same object as `update`, and
   each member row adds `commit`, `install` and `shell_version` from its hello.
 - Member to member, **fleet key only** (never this device's own token, never
   the browser `fwd/` relay — `/api/update/*` stays off `_FWD_ALLOWED`):
