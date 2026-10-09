@@ -21,7 +21,8 @@ routes and who may call them. Three audiences, three rules:
   Withdrawing a request (``requests/<id>/cancel``) is public the same way:
   it needs that request's secret.
 
-* **Another member** (``roster``, ``rekey``, ``rotate-token``) —
+* **Another member** (``roster``, ``rekey``, ``rotate-token``,
+  ``update/apply``, ``update/state``) —
   authenticated with the fleet key, checked HERE against the key (not the
   device token), so a paired non-member can't read the roster. The auth
   middleware lets these through to the route whatever the bearer (see
@@ -43,6 +44,7 @@ from fastapi.responses import JSONResponse
 
 from backend.web.core import auth as web_auth
 from backend.web.core import fleet
+from backend.web.core import fleet_update
 
 from .base import Addon, AppContext
 
@@ -161,7 +163,31 @@ class FleetAddon(Addon):
                 await fleet.refresh_exposure()  # for gate_warning
             except Exception:  # noqa: BLE001
                 pass
-            return JSONResponse(fleet.status(privileged=await _privileged(request)))
+            return JSONResponse(
+                {
+                    **fleet.status(privileged=await _privileged(request)),
+                    # "Update all my devices": the last (or running) rollout.
+                    "update": fleet_update.status(),
+                }
+            )
+
+        @router.post("/fleet/update")
+        async def post_fleet_update(request: Request) -> JSONResponse:
+            """Update every member, one at a time, then this device — see
+            :mod:`backend.web.core.fleet_update`. Body ``{"tag"?}`` (default:
+            the newest release)."""
+            if not await _privileged(request):
+                return JSONResponse(_FORBIDDEN, status_code=403)
+            body = await _json(request) or {}
+            tag = body.get("tag")
+            out, status = await fleet_update.start(
+                tag[:64] if isinstance(tag, str) else ""
+            )
+            return JSONResponse(out, status_code=status)
+
+        @router.get("/fleet/update")
+        async def get_fleet_update(request: Request) -> JSONResponse:
+            return JSONResponse(fleet_update.status())
 
         @router.post("/fleet/invite")
         async def post_invite(request: Request) -> JSONResponse:
@@ -441,6 +467,23 @@ class FleetAddon(Addon):
                     {"ok": False, "error": "couldn't save a new token: %s" % err}
                 )
             return JSONResponse({"ok": True})
+
+        @router.post("/fleet/update/apply")
+        async def post_update_apply(request: Request) -> JSONResponse:
+            """Another member asks this device to update its engine — fleet
+            key ONLY (not this device's token: a paired non-member must not
+            be able to reinstall it), and only to a published release at or
+            above what runs here (see :func:`fleet_update.apply`)."""
+            if not fleet.key_valid(_bearer(request)):
+                return _not_member()
+            out, status = await fleet_update.apply(await _json(request) or {})
+            return JSONResponse(out, status_code=status)
+
+        @router.get("/fleet/update/state")
+        async def get_update_state(request: Request) -> JSONResponse:
+            if not fleet.key_valid(_bearer(request)):
+                return _not_member()
+            return JSONResponse(fleet_update.member_state())
 
         @router.post("/fleet/adopt")
         async def post_adopt(request: Request) -> JSONResponse:

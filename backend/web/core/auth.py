@@ -122,6 +122,10 @@ _MEMBER_FLEET_ROUTES = frozenset(
         ("POST", "/api/fleet/roster"),
         ("POST", "/api/fleet/rekey"),
         ("POST", "/api/fleet/rotate-token"),
+        # "Update all my devices": another member asks this one to update
+        # (backend.web.core.fleet_update), and follows its progress.
+        ("POST", "/api/fleet/update/apply"),
+        ("GET", "/api/fleet/update/state"),
         ("POST", "/api/settings/sync/nudge"),
         ("GET", "/api/settings/sync/export"),
     }
