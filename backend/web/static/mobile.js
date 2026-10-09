@@ -626,6 +626,7 @@
         // sheet is selected the tick it shows up, and both of those read the
         // selection.
         claimPending();
+        pollApprovals();
         // ...and after claimPending, because the session it just selected is
         // exactly the one that is still provisioning.
         attachWhenReady();
@@ -634,6 +635,107 @@
       })
       .catch(function () { /* transient; next tick retries */ });
   }
+
+  // --- your devices: approve a join from the phone --------------------------
+  // GET /api/fleet lists the requests waiting on this device and the copies
+  // it holds for your other devices (`via`): approving one here answers it
+  // there (the server relays it under the devices' key, with the code shown
+  // here). Only a phone signed in to this device sees them — the server
+  // leaves them out for anyone else. A push's tap opens /m#approve=<id>,
+  // which flashes that card (or says it's gone).
+  var approveEl = document.getElementById("approve-cards");
+  var approveWanted = (/(?:^|[#&])approve=([0-9a-f]{16})/.exec(location.hash) || [])[1] || "";
+  var approveSig = "";
+  var approveBusy = false;
+  function renderApprovals(reqs) {
+    if (!approveEl || approveBusy) return;
+    var sig = reqs.map(function (r) { return r.id; }).join(",") + "|" + approveWanted;
+    if (sig === approveSig) return;
+    approveSig = sig;
+    approveEl.innerHTML = "";
+    var missing = approveWanted && !reqs.some(function (r) { return r.id === approveWanted; });
+    if (!reqs.length && !missing) {
+      approveEl.classList.add("hidden");
+      fitSoon();
+      return;
+    }
+    reqs.forEach(function (r) {
+      var card = document.createElement("div");
+      card.className = "approve-card" + (r.id === approveWanted ? " flash" : "");
+      card.setAttribute("data-approve", r.id);
+      var who = r.host || r.device;
+      var line = document.createElement("div");
+      line.textContent = who + " wants to join your devices";
+      var code = document.createElement("div");
+      code.className = "approve-code";
+      code.textContent = r.code || "";
+      var note = document.createElement("div");
+      note.className = "approve-note";
+      note.textContent = "Check " + who + " shows the same code." +
+        (r.via ? " It asked " + (r.via_host || r.via) + "." : "");
+      var btns = document.createElement("div");
+      btns.className = "approve-btns";
+      [["approve", "Approve"], ["deny", "Deny"]].forEach(function (b) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "act" + (b[0] === "approve" ? " is-next" : "");
+        btn.textContent = b[1];
+        btn.addEventListener("click", function () { answerRequest(r, b[0]); });
+        btns.appendChild(btn);
+      });
+      card.appendChild(line);
+      card.appendChild(code);
+      card.appendChild(note);
+      card.appendChild(btns);
+      approveEl.appendChild(card);
+    });
+    if (missing) {
+      var gone = document.createElement("div");
+      gone.className = "approve-card approve-note";
+      gone.textContent = "That join request is gone — it was answered, or it expired.";
+      approveEl.appendChild(gone);
+    }
+    approveEl.classList.remove("hidden");
+    fitSoon();
+  }
+  function answerRequest(r, decision) {
+    approveBusy = true;
+    fetch("/api/fleet/requests/" + encodeURIComponent(r.id) + "/" + decision, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ via: r.via || "", code: r.code || "" }),
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (j) {
+          setStatus(res.ok
+            ? (decision === "approve" ? (r.host || r.device) + " is joining your devices" : "Denied " + (r.host || r.device))
+            : (j && j.error) || "Couldn't answer (HTTP " + res.status + ")");
+          setTimeout(function () { setStatus(""); }, 4000);
+        });
+      })
+      .catch(function () { setStatus("Couldn't reach MindFlock"); })
+      .then(function () {
+        approveBusy = false;
+        if (r.id === approveWanted) approveWanted = "";
+        approveSig = "";
+        pollApprovals();
+      });
+  }
+  function pollApprovals() {
+    if (!approveEl) return;
+    fetch("/api/fleet")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var reqs = (j && Array.isArray(j.requests)) ? j.requests : [];
+        renderApprovals(reqs.filter(function (r) { return r && r.id; }));
+      })
+      .catch(function () { /* transient */ });
+  }
+  window.addEventListener("hashchange", function () {
+    approveWanted = (/(?:^|[#&])approve=([0-9a-f]{16})/.exec(location.hash) || [])[1] || "";
+    approveSig = "";
+    pollApprovals();
+  });
 
   // --- touch scrollback ------------------------------------------------------
   // The agent TUI runs on tmux's alt screen, so xterm's local scrollback is

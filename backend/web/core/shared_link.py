@@ -411,6 +411,24 @@ def policy_block(name: str, tag: str, port: int = DEFAULT_PORT) -> str:
     ) % {"tag": tag, "svc": svc, "port": port}
 
 
+def device_grants(tag: str, port: int = DEFAULT_PORT) -> str:
+    """Just the grants that let your MindFlock devices reach each other on
+    ``port`` — the part of :func:`policy_block` a device that discovery
+    "timed out" on needs (a custom policy such as the common
+    ``autogroup:self`` rule drops those packets silently). The same lines,
+    so pasting both never conflicts."""
+    return (
+        "// MindFlock: your devices reach each other on tcp:%(port)d.\n"
+        '// Policy already has "grants"? Move these lines inside it.\n'
+        '"grants": [\n'
+        '  {"src": ["%(tag)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        '  {"src": ["%(tag)s"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
+        '  {"src": ["autogroup:member"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        '  {"src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
+        "],"
+    ) % {"tag": tag, "port": port}
+
+
 def _explain(output: str) -> Tuple[str, str]:
     """``(kind, message)`` for ``tailscale serve``'s refusal — the fix, where
     we know it. ``kind`` is ``"operator"``, ``"tag"`` or ``"other"``."""

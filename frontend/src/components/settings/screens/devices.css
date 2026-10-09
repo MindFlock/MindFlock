@@ -354,6 +354,31 @@
   align-items: stretch;
 }
 
+/* "This device": where it listens. A plain line while the others can reach
+   it; a .devices-warn (with Make reachable) while they can't. */
+.devices-this {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.devices-this p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.devices-warn .devices-this-title {
+  font-weight: 600;
+}
+
+/* The candidate the sidebar's "Add to my devices…" pointed at. */
+.devices-list li.devices-focus {
+  outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 6px;
+}
+
 /* "Update all my devices": an update chip that wants attention (behind the
    newest release), and the rollout's per-device lines. */
 .devices-badge.warn {

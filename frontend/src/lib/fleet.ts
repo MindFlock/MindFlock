@@ -3,16 +3,21 @@
  * DOM and no fetches, so the wording is tested in node (fleet.test.ts). */
 
 import type {
+  Device,
+  FleetAdmit,
   FleetCandidate,
   FleetJoin,
   FleetMember,
+  FleetPhoneLink,
   FleetRemoved,
+  FleetRequest,
   FleetRollout,
   FleetRolloutRow,
   FleetStatus,
   SyncStatus,
 } from "../api/types";
 import { relTime } from "./format";
+import { extractPeerCode } from "./peer";
 
 /** Crockford base32 — what the server's invite codes are drawn from. */
 // Digits + letters without I L O U, kept as two literals: one 32-symbol
@@ -64,7 +69,9 @@ export function liveInvite(st: FleetStatus | null, nowSec = Date.now() / 1000) {
 export function memberStatus(m: FleetMember, selfVersion: string, selfCommit = ""): string {
   if (m.self) return "this device";
   if (m.error) return m.error;
-  if (!m.reachable) return "offline";
+  // What discovery found ("connection refused on :8765 — …", "asleep — …")
+  // says more than "offline"; else when MindFlock last answered there.
+  if (!m.reachable) return m.reason || (m.last_seen ? "offline · last seen " + relTime(m.last_seen) : "offline");
   if (!m.same_fleet) return "hasn't picked up the change yet";
   if (selfVersion && m.version && m.version !== selfVersion)
     return "runs " + m.version + " — this one runs " + selfVersion + "; update both to the same version";
@@ -187,7 +194,7 @@ export function updateNote(data: Record<string, unknown> | null | undefined): {
 /** What blocks a candidate from joining (shown instead of its buttons), or
  * "" when it can. */
 export function candidateBlocker(c: FleetCandidate): string {
-  if (!c.reachable) return "offline";
+  if (!c.reachable) return c.reason || "offline";
   if (!c.fleet_proto) return "update MindFlock on " + (c.host || c.device) + " to add it";
   return "";
 }
@@ -281,12 +288,16 @@ export function deviceEventNote(
   const host = String(d.host || d.device || "A device");
   const code = String(d.code || "");
   switch (event) {
-    case "device.join_requested":
+    case "device.join_requested": {
+      // A copy of a request waiting on another member (`via`): approvable
+      // here too, so it is said the same way, with where it asked.
+      const via = d.via ? String(d.via_host || d.via) : "";
       return {
         text: String(d.detail || "") || host + " wants to join" + (code ? " · code " + code : ""),
         cls: "n-warn",
-        toast: host + " wants to join your devices" + (code ? " — code " + code : ""),
+        toast: host + " wants to join your devices" + (via ? " (asked " + via + ")" : "") + (code ? " — code " + code : ""),
       };
+    }
     case "device.joined": {
       // `via` is set only on the copy THIS device emits about its own join
       // (it joined someone, or someone added it): its detail is worded from
@@ -685,4 +696,150 @@ export function unpinReplaces(path: string, sync: SyncStatus | null | undefined)
     (leader ? leader + "'s" : "the one your other devices have under that id") +
     ". To keep both, give one of them a different id in Settings → Tickets instead."
   );
+}
+
+/** What a pasted code is — the browser's twin of the server's
+ * fleet.classify_code, so ONE "Paste a code" box (Devices, the palette)
+ * routes it: a peer-link invite (`mfp1:`/`mfp2:` anywhere in the text) to
+ * Work with someone, one of your devices' 8-character codes — bare, as
+ * "<device> <code>", or the whole `mindflock devices join` command — to
+ * Devices. `device` is "" when the text names none. */
+export function routeCode(text: string): { kind: "peer" | "device" | ""; code: string; device: string } {
+  const t = (text || "").trim().slice(0, 2048);
+  const peer = extractPeerCode(t);
+  if (peer) return { kind: "peer", code: peer, device: "" };
+  let tokens = t.split(/\s+/).filter(Boolean);
+  if (tokens.slice(0, 3).map((x) => x.toLowerCase()).join(" ") === "mindflock devices join") tokens = tokens.slice(3);
+  if (tokens.length >= 2 && /^[a-z0-9][a-z0-9-]{0,62}$/.test(tokens[0].toLowerCase())) {
+    const rest = tokens.slice(1).join("");
+    if (plausibleCode(rest)) return { kind: "device", code: formatCode(rest), device: tokens[0].toLowerCase() };
+  }
+  const bare = tokens.join("");
+  if (plausibleCode(bare)) return { kind: "device", code: formatCode(bare), device: "" };
+  return { kind: "", code: "", device: "" };
+}
+
+/** "This device" — where it listens and whether the others can reach it,
+ * as one line ("" while the server doesn't say). */
+export function thisDeviceLine(st: Pick<FleetStatus, "self" | "self_reachable" | "listening" | "gate_on">): string {
+  if (st.listening === undefined || st.listening === "") return "";
+  const name = st.self.host || st.self.key;
+  const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+  if (st.self_reachable === false)
+    return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
+  return (
+    name +
+    " listens on your tailnet (" +
+    where +
+    ") · access gate " +
+    (st.gate_on ? "on" : "off")
+  );
+}
+
+/** The one confirm "Make reachable" asks: what it changes, said once. */
+export const MAKE_REACHABLE_TEXT =
+  "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
+
+/** "Match my other devices": the one sentence its confirm shows, from the
+ * server's `match` ({reachable, shared_link}); "" when nothing differs. */
+export function matchText(match: FleetStatus["match"]): string {
+  if (!match) return "";
+  const bits: string[] = [];
+  if (match.reachable) bits.push("reachable on Tailscale");
+  if (match.shared_link) bits.push("phone link \u201c" + match.shared_link + "\u201d");
+  return bits.length ? "Match your other devices: " + bits.join(" + ") : "";
+}
+
+/** The phone-link host row: 'Phone link "mindflock": hosted by mac-mini ✓,
+ * rig ✓ · laptop ⚠ awaiting approval'. `here` is true when THIS device
+ * doesn't host it yet (the row offers Host here). */
+export function phoneLinkLine(pl: FleetPhoneLink | null | undefined): { text: string; hostHere: boolean } | null {
+  if (!pl || !pl.name) return null;
+  const hosting = pl.hosts.filter((h) => h.state === "hosting").map((h) => (h.host || h.key) + " \u2713");
+  const waiting = pl.hosts.filter((h) => h.state === "waiting").map((h) => (h.host || h.key) + " \u26a0 awaiting approval");
+  const off = pl.hosts.filter((h) => h.state === "off").map((h) => (h.host || h.key) + " not hosting");
+  const unknown = pl.hosts.filter((h) => h.state === "unknown").map((h) => (h.host || h.key) + " ?");
+  const parts = [hosting.length ? "hosted by " + hosting.join(", ") : "no device hosts it yet", ...waiting, ...off, ...unknown];
+  const self = pl.hosts.find((h) => h.self);
+  return {
+    text: "Phone link \u201c" + pl.name + "\u201d: " + parts.join(" \u00b7 "),
+    hostHere: !!self && self.state === "off",
+  };
+}
+
+/** An admit whose joiner this device can't reach: "Joined, but rig isn't
+ * reachable from here — <why>. On rig: Settings → Devices → Make reachable."
+ * "" for any other state. */
+export function admitLine(a: FleetAdmit): string {
+  if (a.state !== "unreachable_joiner") return "";
+  const h = a.host || a.device;
+  return (
+    "Joined, but " +
+    h +
+    " isn't reachable from here" +
+    (a.reason ? " — " + a.reason : "") +
+    ". On " +
+    h +
+    ": Settings \u2192 Devices \u2192 Make reachable."
+  );
+}
+
+/** The toast when THIS device finished joining. A local-only one is a
+ * member the others can't reach — said, with the click that fixes it. */
+export function joinedToast(j: FleetJoin): { text: string; offerReach: boolean } {
+  const host = j.host || j.device;
+  if (j.self_reachable === false)
+    return {
+      text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",
+      offerReach: true,
+    };
+  return { text: "Joined " + host + " — your settings now follow your other devices", offerReach: false };
+}
+
+/** A request row's second line: where it waits when that isn't here. */
+export function requestNote(r: FleetRequest): string {
+  const who = r.host || r.device;
+  const asked = r.via ? " It asked " + (r.via_host || r.via) + "; approving here answers there." : "";
+  return "Check the same code shows on " + who + "." + asked;
+}
+
+/** The sidebar note under another computer's device group, and the one
+ * action it offers. A MindFlock that can join is offered as one of your
+ * devices ("Add to my devices…", which opens Settings → Devices on it) —
+ * joining turns remote control on and needs no token. Pasting an access
+ * token ("Connect…") is only for one that can't join (an older MindFlock). */
+export function sidebarDeviceNote(
+  d: Pick<Device, "reachable" | "remote_control" | "needs_token" | "error" | "connected" | "member" | "fleet_proto">,
+  sessions: number
+): { note: string; action: "add" | "connect" | null } {
+  if (!d.reachable) return { note: "MindFlock not reachable on that device", action: null };
+  const canJoin = !d.member && (d.fleet_proto || 0) >= 1;
+  if (canJoin)
+    return {
+      note: "Not one of your devices yet" + (!d.remote_control ? " — joining turns remote control on" : ""),
+      action: "add",
+    };
+  if (!d.remote_control) return { note: "remote control is off on that device", action: null };
+  if (d.needs_token) return { note: "needs that device's access token", action: "connect" };
+  if (d.error) return { note: String(d.error), action: null };
+  if (d.connected && sessions === 0) return { note: "no sessions", action: null };
+  return { note: "", action: null };
+}
+
+/** What a device.join_requested event lets the bell's Approve button do:
+ * the request (id, the member it waits on — "" for this device — and the
+ * 6-digit code to send with it), or null for anything else. */
+export function approvableRequest(
+  event: string,
+  data: Record<string, unknown> | null | undefined
+): { id: string; via: string; code: string; host: string } | null {
+  if (event !== "device.join_requested" || !data) return null;
+  const id = String(data.id || "");
+  if (!/^[0-9a-f]{16}$/.test(id)) return null;
+  return {
+    id,
+    via: String(data.via || ""),
+    code: String(data.code || ""),
+    host: String(data.host || data.device || "A device"),
+  };
 }

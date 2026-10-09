@@ -62,6 +62,14 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setattr(fleet, "_READMITTED", {})
     monkeypatch.setattr(fleet, "_CACHE", {"sig": None, "doc": None})
     monkeypatch.setattr(fleet, "POLL_INTERVAL", 0.0)
+    monkeypatch.setattr(fleet, "_RELAYED", {})
+    monkeypatch.setattr(fleet, "_ADMITTED", {})
+    # The post-admit re-probe runs in the background on real timers; tests
+    # that want it call fleet.probe_joiner themselves.
+    monkeypatch.setattr(fleet, "ADMIT_PROBE_DELAYS", ())
+    monkeypatch.setattr(remote, "_PROBES", {})
+    monkeypatch.setattr(remote, "_SEEN", {})
+    monkeypatch.setattr(remote, "_OFFLINE", {})
     monkeypatch.setattr(remote, "_DEVICES", {})
     monkeypatch.setattr(remote, "_SELF", {})
     monkeypatch.setattr(remote, "_TOKENS", {})
@@ -1429,10 +1437,19 @@ async def test_status_payload(world, monkeypatch):
         "candidates",
         "removed",
         "readmitted_elsewhere",
+        "self_reachable",
+        "listening",
+        "gate_on",
+        "admitted",
+        "tailnet_peers",
+        "policy_grant",
+        "match",
+        "phone_link",
         # "Update all my devices": the last (or running) rollout.
         "update",
     }
-    assert st["in_fleet"] is True and st["self"] == {"key": "laptop", "host": "Laptop"}
+    assert st["in_fleet"] is True
+    assert st["self"]["key"] == "laptop" and st["self"]["host"] == "Laptop"
     members = {m["key"]: m for m in st["members"]}
     assert set(members) == {"laptop", "rig"}
     assert members["laptop"]["self"] is True and members["laptop"]["reachable"] is True
@@ -1445,6 +1462,8 @@ async def test_status_payload(world, monkeypatch):
         "version": "9.9.9",
         "same_fleet": True,
         "error": "",
+        "reason": "",
+        "last_seen": 1.0,
         "automation": False,
         "key_conflict": False,
         # What its hello says about updating it (nothing, from this fake).
@@ -1463,6 +1482,7 @@ async def test_status_payload(world, monkeypatch):
         "in_fleet": True,
         "same_fleet": False,
         "has_token": True,
+        "reason": "",
     }
     assert st["invites"] == []  # the join used the only one
     with world.on("laptop"):

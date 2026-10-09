@@ -9,6 +9,7 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { useConfig } from "../../../state/queries";
 import { useServerRestart } from "../useServerRestart";
+import { keepSignedIn, reachableFields } from "../useMakeReachable";
 import type { ScreenProps } from "../SettingsDialog";
 import { TailscaleCard } from "./TailscaleCard";
 
@@ -86,8 +87,11 @@ export function Mobile(_: ScreenProps) {
     setModeBusy(true);
     let restarting = false;
     try {
+      // On = the same save as Devices' Make reachable: Tailscale mode AND the
+      // access gate together — never a non-local bind with the gate off.
+      if (on) await keepSignedIn();
       const res = await api<{ restarting?: boolean }>("/api/settings", {
-        json: { general: { serve_mode: on ? "tailscale" : "local" } },
+        json: { general: on ? reachableFields({ reach: true }) : { serve_mode: "local" } },
       });
       restarting = !!res?.restarting;
     } catch {
@@ -140,9 +144,9 @@ export function Mobile(_: ScreenProps) {
           <>
             <div
               className="set-row set-switch-row"
-              title="Listen on this device's Tailscale addresses too, so phones on your tailnet can reach it (your LAN still can't)"
+              title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
             >
-              <span className="set-label">Tailscale mode</span>
+              <span className="set-label">Reachable from your other devices and phone (over Tailscale)</span>
               {/* label wraps only the switch, so clicking the row text no longer flips it */}
               <label className="ca-switch">
                 <input

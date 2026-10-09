@@ -604,6 +604,11 @@ class NotifyAddon(Addon):
             cfg = ntfy.load()
             if not cfg.active:
                 return
+            data = envelope.get("data") or {}
+            if envelope.get("event") == "device.join_requested" and data.get("via"):
+                # A copy of a request waiting on another member (shown here
+                # so it can be approved here): that member already pushed it.
+                return
             for rule in _enabled_rules():
                 if not _matches(rule, envelope):
                     continue
@@ -618,6 +623,9 @@ class NotifyAddon(Addon):
                 # the emitting thread. Empty when there's no tailnet — and then
                 # publish() falls back to the user's own configured click URL.
                 click = mobile_announce.click_for(str(envelope.get("session") or ""))
+                if click and rule["id"] == "device_join" and data.get("id"):
+                    # Straight to the phone's Approve card for this request.
+                    click += "#approve=" + str(data["id"])
                 message = _fill(rule.get("body", ""), envelope)
                 if click:
                     # Also in the text: a notification you have to go find the

@@ -455,6 +455,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "address", metavar="ADDRESS", help="host:port or wss://host/path"
     )
 
+    join_any = sub.add_parser(
+        "join",
+        parents=[server_opts],
+        help="paste any code: one of your devices' (XXXX-XXXX) or someone's peer invite (mfp…)",
+        description=(
+            "One place for every code MindFlock hands out. An 8-character code "
+            "(or the whole `mindflock devices join DEVICE CODE` command) joins "
+            "your devices — the same as `devices join`; an mfp1:/mfp2: invite "
+            "pairs with another person — the same as `peer join`. Needs a "
+            "running server."
+        ),
+    )
+    join_any.add_argument("text", nargs="+", metavar="CODE")
+    join_any.add_argument(
+        "--yes", "-y", action="store_true", help="don't ask first (devices codes)"
+    )
+
     devices = sub.add_parser(
         "devices",
         parents=[server_opts],
@@ -1943,7 +1960,7 @@ def _print_devices(st: dict) -> None:
             if m.get("self"):
                 glyph, state = "✓", "this device"
             elif not m.get("reachable"):
-                glyph, state = "-", "offline"
+                glyph, state = "-", m.get("reason") or "offline"
             elif m.get("same_fleet") is False:
                 # Reachable but its hello names another (or no) group: it left
                 # or never got the roster. Sync skips it until it re-joins.
@@ -1965,6 +1982,18 @@ def _print_devices(st: dict) -> None:
             )
     else:
         print("This computer isn't joined with your other devices yet.")
+    if st.get("self_reachable") is False:
+        print(
+            "! your other devices can't reach this one (it only listens on "
+            "127.0.0.1) — Settings → Devices → Make reachable, or `mindflock "
+            "serve tailscale` with the access gate on"
+        )
+    for a in st.get("admitted") or []:
+        if a.get("state") == "unreachable_joiner":
+            print(
+                "! joined, but %s isn't reachable from here: %s"
+                % (a.get("host") or a.get("device"), a.get("reason") or "")
+            )
     if st.get("gate_warning"):
         print(
             "! the access-token gate is off while serving beyond localhost — "
@@ -1972,9 +2001,10 @@ def _print_devices(st: dict) -> None:
         )
     for r in st.get("requests") or []:
         print(
-            "Asking to join: %s · code %s — check %s shows the same code, then: "
+            "Asking to join%s: %s · code %s — check %s shows the same code, then: "
             "mindflock devices approve %s"
             % (
+                " %s" % (r.get("via_host") or r["via"]) if r.get("via") else "",
                 r.get("host") or r.get("device"),
                 r.get("code") or "?",
                 r.get("host") or r.get("device"),
@@ -2016,6 +2046,21 @@ def _print_devices(st: dict) -> None:
             else:
                 hint = "mindflock devices join %s" % c.get("device")
             print("  %-20s %s" % (name, hint))
+    peers = [p for p in st.get("tailnet_peers") or [] if isinstance(p, dict)]
+    if peers:
+        print("Not answering as a MindFlock you can join:")
+        for p in peers:
+            print(
+                "  %-20s %s"
+                % (p.get("host") or p.get("device"), p.get("reason") or "unreachable")
+            )
+        if any(p.get("outcome") == "timeout" for p in peers) and st.get("policy_grant"):
+            print(
+                "  (a Tailscale policy that blocks the port needs these lines — "
+                "admin console → Access controls:)"
+            )
+            for line in str(st["policy_grant"]).splitlines():
+                print("    " + line)
     if not st.get("in_fleet") and not others:
         print(
             "Make a code here with `mindflock devices add`, or run MindFlock on your "
@@ -2164,6 +2209,64 @@ def _leave_devices(base: str, args: argparse.Namespace, path: str) -> int:
     return 0
 
 
+def _cmd_join(args: argparse.Namespace) -> int:
+    """``mindflock join CODE`` — route any pasted code by its format
+    (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
+    ``peer join``, one of your devices' codes to ``devices join``."""
+    from backend.web.core.fleet import classify_code
+
+    text = " ".join(args.text)
+    hit = classify_code(text)
+    if hit["kind"] == "peer":
+        return _cmd_peer(
+            argparse.Namespace(
+                host=args.host, port=args.port, peer_command="join", code=hit["code"]
+            )
+        )
+    if hit["kind"] != "device":
+        raise client.ClientError(
+            "that isn't a code MindFlock knows — your devices' codes look like "
+            "ABCD-EFGH, someone's invite starts with mfp1: or mfp2:"
+        )
+    device = hit["device"]
+    if not device:
+        base = client.discover(args.host, args.port)
+        st = _fleet_status(base)
+        joinable = [
+            c
+            for c in st.get("candidates") or []
+            if isinstance(c, dict)
+            and c.get("reachable")
+            and not c.get("member")
+            and int(c.get("fleet_proto") or 0) >= 1
+        ]
+        if len(joinable) != 1:
+            raise client.ClientError(
+                "which computer showed that code? run: mindflock devices join "
+                "DEVICE %s%s"
+                % (
+                    hit["code"],
+                    (
+                        " (one of: %s)"
+                        % ", ".join(str(c.get("device")) for c in joinable)
+                        if joinable
+                        else " — no other MindFlock can be joined right now"
+                    ),
+                )
+            )
+        device = str(joinable[0].get("device"))
+    return _cmd_devices(
+        argparse.Namespace(
+            host=args.host,
+            port=args.port,
+            devices_command="join",
+            device=device,
+            code=[hit["code"]],
+            yes=args.yes,
+        )
+    )
+
+
 def _cmd_devices(args: argparse.Namespace) -> int:
     """``mindflock devices …`` — thin client over ``/api/fleet`` (Settings →
     Devices in the UI). The server does the device-to-device talking; the CLI
@@ -2206,6 +2309,14 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             return 0
         inv = client.post(base, "/api/fleet/invite") or {}
         code = str(inv.get("code") or "")
+        if inv.get("warning") == "local_only":
+            print(
+                "! this computer is local-only (bound to 127.0.0.1): the new one "
+                "can't reach it to use this code. Make it reachable first — "
+                "Settings → Devices → Make reachable, or `mindflock serve "
+                "tailscale` with the access gate on.",
+                file=sys.stderr,
+            )
         # The code alone on stdout (scriptable); the instructions on stderr.
         print(code)
         print(
@@ -2310,9 +2421,16 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             urllib.parse.quote(str(req.get("id") or ""), safe=""),
             cmd,
         )
+        # A request waiting on another of your devices: the answer goes
+        # there (``via``), with the code shown here.
+        body = (
+            {"via": req["via"], "code": req.get("code") or ""}
+            if req.get("via")
+            else None
+        )
         # Approving also starts settings sync here (after_admit): allow for
         # that, not just one round-trip.
-        res = client.post(base, path, timeout=60.0)
+        res = client.post(base, path, body, timeout=60.0)
         print(
             "approved %s — it joins your devices now" % who
             if cmd == "approve"
@@ -2417,6 +2535,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inbox": _cmd_inbox,
     "peer": _cmd_peer,
     "devices": _cmd_devices,
+    "join": _cmd_join,
     "update": lambda args: _cli_update().cmd_update(args),
     "restart": lambda args: _cli_update().cmd_restart(args),
 }

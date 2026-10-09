@@ -7,6 +7,8 @@ import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { rotatedToast } from "../../../lib/fleet";
 import { toast } from "../../../lib/toast";
+import { useDevices } from "../../../state/queries";
+import { useUi } from "../../../state/store";
 import { InlineConfirm, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -268,8 +270,8 @@ export function Security(_: ScreenProps) {
           />
         )}
         <span className="set-hint">
-          Enter this on another MindFlock device (its sidebar's "Connect…" button next to this
-          device's name) to let it control this one, or at the browser sign-in page when the
+          Enter this on another MindFlock device ("Pair a device you don't own", below, on that
+          one) to let it control this one, or at the browser sign-in page when the
           token gate is on. Regenerate if the token may have leaked — every signed-in browser and
           token-paired device must then sign in with the new token, your phone must scan the QR
           again, and your devices (Settings → Devices) move to a new shared key.
@@ -298,8 +300,44 @@ export function Security(_: ScreenProps) {
           To cut off one of your own devices, remove it in Settings → Devices.
         </span>
       </label>
+      <PairByToken />
       {/* Settings sync moved to Settings → Devices: it only runs between your
           own devices, so it sits next to adding them. */}
     </>
+  );
+}
+
+/** "Pair a device you don't own": the token-paste pairing (DeviceDialog),
+ * moved here from the sidebar — your own computers join Settings → Devices
+ * instead (settings sync, sign-in, ticket claims; no token to paste). Lists
+ * the MindFlocks on the tailnet that aren't your devices and want a token. */
+function PairByToken() {
+  const { data } = useDevices();
+  const openDialogFor = useUi((s) => s.openDialogFor);
+  const rows = (data?.devices || []).filter((d) => d.reachable && !d.member && d.needs_token);
+  return (
+    <div className="set-row" id="pair-by-token">
+      <span className="set-label">Pair a device you don't own</span>
+      {rows.length ? (
+        <span className="devices-actions">
+          {rows.map((d) => (
+            <button
+              key={d.device}
+              type="button"
+              className="test-btn"
+              data-pair={d.device}
+              onClick={() => openDialogFor("device", d.device)}
+            >
+              Pair {d.host || d.device}…
+            </button>
+          ))}
+        </span>
+      ) : null}
+      <span className="set-hint">
+        Someone else's MindFlock on your tailnet: paste its access token to see and drive its
+        sessions (it needs Allow remote control on). For your own computers use Settings → Devices
+        instead — they share settings and need no token.
+      </span>
+    </div>
   );
 }

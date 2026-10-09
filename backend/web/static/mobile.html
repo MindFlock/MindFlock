@@ -40,6 +40,12 @@
       <button type="button" id="new-btn" aria-label="New session">+</button>
     </header>
 
+    <!-- A computer asking to join your devices: approve it from the phone
+         (after checking the asking screen shows the same code). Filled by
+         mobile.js from GET /api/fleet — the requests waiting on this device
+         and the copies it holds for your other devices. A push's tap lands
+         here as /m#approve=<id>. -->
+    <div id="approve-cards" class="hidden" aria-live="polite"></div>
     <!-- A newer MindFlock release (this device, or others of "Your devices"
          behind it): one line and one button, hidden otherwise. -->
     <div id="upd-banner" class="hidden" role="status">
