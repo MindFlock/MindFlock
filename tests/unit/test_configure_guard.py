@@ -125,8 +125,18 @@ def test_serve_fronted_loopback_counts_as_remote(app, monkeypatch):
     """Local mode fronted by ``tailscale serve``: the tailnet caller arrives
     from 127.0.0.1 with X-Forwarded-For."""
     monkeypatch.setenv("CS_WEB_MODE", "local")
-    c = _client(app, LOOPBACK, headers={"X-Forwarded-For": "100.64.0.9"})
-    assert c.post("/api/settings", json=LAUNCH).status_code == 403
+    c = _client(
+        app,
+        LOOPBACK,
+        base_url="http://127.0.0.1:8765",  # local mode answers loopback Hosts only
+        headers={"X-Forwarded-For": "100.64.0.9"},
+    )
+    r = c.post("/api/settings", json=LAUNCH)
+    assert r.status_code == 403
+    assert r.json()["error"] == auth.CONFIGURE_REFUSED  # not the Host check
+    # …while the same loopback caller without the header is this machine.
+    direct = _client(app, LOOPBACK, base_url="http://127.0.0.1:8765")
+    assert direct.post("/api/settings", json=LAUNCH).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -207,6 +217,8 @@ def _send(c: TestClient, method: str, path: str, body):
 def test_anonymous_tailnet_caller_is_refused(app, method, path, body):
     r = _send(_client(app, TAILNET), method, path, body)
     assert r.status_code == 403, (path, r.status_code, r.text)
+    if "/settings/sync" not in path:  # those keep their own wording
+        assert r.json()["error"] == auth.CONFIGURE_REFUSED, path
 
 
 @pytest.mark.parametrize("method,path,body", GUARDED)
@@ -262,3 +274,34 @@ def test_no_guarded_write_is_forwardable():
     for method, path, _ in GUARDED:
         assert (method.upper(), path) not in remote._FWD_ALLOWED, path
     assert ("POST", "/api/settings") not in remote._FWD_ALLOWED
+
+
+# --------------------------------------------------------------------------- #
+# …and the token that would make the caller privileged isn't handed out
+# --------------------------------------------------------------------------- #
+def test_anonymous_tailnet_caller_is_not_shown_the_token(app):
+    r = _client(app, TAILNET).get("/api/settings/auth-token")
+    assert r.status_code == 200
+    assert r.json()["token"] is None
+
+
+def test_loopback_is_shown_the_token(app):
+    assert _client(app, LOOPBACK).get("/api/settings/auth-token").json()["token"] == (
+        TOKEN
+    )
+
+
+def test_serve_fronted_caller_is_not_shown_the_token(app, monkeypatch):
+    monkeypatch.setenv("CS_WEB_MODE", "local")
+    c = _client(
+        app,
+        LOOPBACK,
+        base_url="http://127.0.0.1:8765",  # local mode answers loopback Hosts only
+        headers={"X-Forwarded-For": "100.64.0.9"},
+    )
+    assert c.get("/api/settings/auth-token").json()["token"] is None
+
+
+def test_unexposed_gate_off_run_still_shows_it(app, monkeypatch):
+    monkeypatch.delenv("CS_WEB_MODE")
+    assert TestClient(app).get("/api/settings/auth-token").json()["token"] == TOKEN

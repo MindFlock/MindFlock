@@ -644,8 +644,10 @@ class SettingsAddon(Addon):
 
             Only to a caller that already holds it (this device's OWN token as
             cookie or bearer), to this machine itself (unproxied, not relayed),
-            or — gate off — to any caller that isn't another MindFlock relaying
-            (the whole server is open then anyway). NOT to a caller that got
+            or — gate off — to any direct caller of a server nothing beyond
+            this machine can reach. Not to an anonymous tailnet caller of a
+            gate-off, reachable one: holding the token would make it
+            privileged (``auth.may_configure``). NOT to a caller that got
             past the gate with the fleet key: a member (or a phone signed in
             with the devices' key) must not be able to harvest every device's
             own token, which would outlive its removal from the group."""

@@ -417,8 +417,11 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
     (Settings → Security's reveal, Settings → Mobile's QR, the answer to a
     rotate): the request presents that own token (cookie or bearer), or it
     comes straight from this machine and isn't relayed by another MindFlock.
-    ``open_gate``: also yes while the gate is off and the request isn't
-    relayed (the whole server is open then anyway).
+    ``open_gate``: also yes while the gate is off and nothing beyond this
+    machine can be the caller (:func:`_unexposed_direct`). NOT for an
+    anonymous tailnet caller of a gate-off, reachable server: the token would
+    make it :func:`privileged` — and :func:`may_configure` — on its next
+    request, reopening the settings laundering path that check closes.
 
     NOT a caller that got past the gate with the fleet key — a member, or a
     phone signed in with the devices' key, must not be able to collect every
@@ -435,9 +438,27 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
             return False
         if _from_this_machine(scope):
             return True
-        return bool(open_gate) and not auth_enabled()
+        return bool(open_gate) and not auth_enabled() and _unexposed_direct(scope)
     except Exception:  # noqa: BLE001
         return False
+
+
+def _unexposed_direct(scope) -> bool:
+    """Whether nothing beyond this machine can be this request's caller: not
+    relayed, no proxy forwarding header (``tailscale serve`` fronting a
+    local-mode server), a transport peer recorded, and the server not started
+    beyond localhost — the gate-off localhost run (and the test suite's
+    in-process client), where every direct caller already is this machine."""
+    headers = scope.get("headers") or []
+    if any(k == _REMOTE_HEADER for k, _ in headers):
+        return False
+    from backend.web.core import tailnet_trust as _tailnet_trust
+
+    if _tailnet_trust.has_forward_headers(scope):
+        return False
+    if not (scope.get("mf_peer") or scope.get("client")):
+        return False
+    return not _exposed_mode()
 
 
 async def privileged(scope) -> bool:
@@ -503,16 +524,7 @@ async def may_configure(scope) -> bool:
     try:
         if await privileged(scope):
             return True
-        headers = scope.get("headers") or []
-        if any(k == _REMOTE_HEADER for k, _ in headers):
-            return False
-        from backend.web.core import tailnet_trust as _tailnet_trust
-
-        if _tailnet_trust.has_forward_headers(scope):
-            return False
-        if not (scope.get("mf_peer") or scope.get("client")):
-            return False
-        return not _exposed_mode()
+        return _unexposed_direct(scope)
     except Exception:  # noqa: BLE001
         return False
 
