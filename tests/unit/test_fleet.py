@@ -59,6 +59,7 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setattr(fleet, "_HITS", {})
     monkeypatch.setattr(fleet, "_STALE", {})
     monkeypatch.setattr(fleet, "_PEERS", {})
+    monkeypatch.setattr(fleet, "_READMITTED", {})
     monkeypatch.setattr(fleet, "_CACHE", {"sig": None, "doc": None})
     monkeypatch.setattr(fleet, "POLL_INTERVAL", 0.0)
     monkeypatch.setattr(remote, "_DEVICES", {})
@@ -1425,6 +1426,7 @@ async def test_status_payload(world, monkeypatch):
         "gate_warning",
         "candidates",
         "removed",
+        "readmitted_elsewhere",
     }
     assert st["in_fleet"] is True and st["self"] == {"key": "laptop", "host": "Laptop"}
     members = {m["key"]: m for m in st["members"]}

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backend.ticket_ingestion.backfill import BackfillScanner
@@ -17,6 +17,7 @@ from backend.ticket_ingestion.config import (
     PipelineConfig,
     agent_now,
     max_sessions_now,
+    pipeline_in_group,
     source_agent_now,
     source_effort_now,
 )
@@ -51,11 +52,15 @@ from backend.ticket_ingestion.provisioner import (
     _open_ide_on_ticket,
 )
 from backend.ticket_ingestion.state import (
+    automation_handover,
     clear_issue_attempts,
     clear_pr_attempts,
+    ledger_started,
     load_pending_stories,
     load_processed_story_ids,
     load_processed_story_statuses,
+    mark_automation_here,
+    mark_ledger_started,
     reap_stale_in_flight,
     record_issue_attempt,
     record_pr_attempt,
@@ -64,6 +69,8 @@ from backend.ticket_ingestion.state import (
     record_processed_story,
     remove_in_flight_story,
     remove_pending_story,
+    seed_processed_issues,
+    seed_processed_prs,
     update_processed_story,
 )
 from backend.ticket_ingestion.cache_refresher import CacheRefresher
@@ -260,6 +267,10 @@ class PipelineOrchestrator:
         # Set while a dequeued ticket waits on the concurrent-session cap:
         # {"live": n, "max": m}. Mirrored to the beacon for the Intake UI.
         self._held: dict[str, int] | None = None
+        # PR review / issue handling just moved here from another of the
+        # user's devices: both loops wait for the ledgers to be seeded first.
+        self._handover_lock = asyncio.Lock()
+        self._handover_done = False
 
     def _write_activity(self) -> None:
         """Mirror the busy counters to the beacon file (atomic replace so the
@@ -554,11 +565,94 @@ class PipelineOrchestrator:
                 self._held = None
                 self._write_activity()
 
+    async def _ensure_handover(self) -> None:
+        """Before the first PR / issue scan, seed the processed-PR and
+        processed-issue ledgers with what is open right now — another of the
+        user's devices already handled those, and this device's ledgers
+        don't know it — when either:
+
+        * PR review and issue handling just moved here from another device
+          (the server records that — :func:`state.note_automation`); or
+        * this device is grouped with another live device
+          (:func:`config.pipeline_in_group`) and that loop never ran here
+          (:func:`state.ledger_started`): it starts here for the first time,
+          whenever the choice of device was made — e.g. it was the chosen
+          device before the group's repos reached it by settings sync.
+
+        Raises when GitHub can't be listed (the loop retries next interval,
+        scanning nothing meanwhile)."""
+        if self._handover_done:
+            return
+        async with self._handover_lock:
+            if self._handover_done:
+                return
+            prev = automation_handover(_STATE_DIR)
+            grouped = pipeline_in_group()
+            gh = self.config.github
+            pr_on = self._pr_monitor is not None and gh and gh.enabled
+            issue_on = self._issue_monitor is not None and gh and gh.issues_enabled
+            seed_prs = pr_on and (
+                prev is not None or (grouped and not ledger_started(_STATE_DIR, "prs"))
+            )
+            seed_issues = issue_on and (
+                prev is not None
+                or (grouped and not ledger_started(_STATE_DIR, "issues"))
+            )
+            source = prev or "another device"
+            # Only what the other device could already have taken: an item
+            # still inside its grace period wasn't eligible there yet, so
+            # seeding it would mean nobody ever handles it.
+            now = datetime.now(timezone.utc)
+            if seed_prs:
+                prs = []
+                for repo in gh.repo_list():
+                    prs.extend(
+                        p
+                        for p in await self._pr_monitor._list_prs(repo)
+                        if p.created_at
+                        <= now - timedelta(minutes=gh.min_age_for(p.repo))
+                    )
+                n = seed_processed_prs(
+                    _STATE_DIR, [(p.repo, p.number, p.head_sha) for p in prs]
+                )
+                _logger.info(
+                    "PR review moved here — %d open PRs already handled on %s "
+                    "are skipped",
+                    n,
+                    source,
+                )
+            if seed_issues:
+                issues = []
+                for repo in gh.issue_repo_list():
+                    issues.extend(
+                        i
+                        for i in await self._issue_monitor._list_issues(repo)
+                        if i.created_at
+                        <= now - timedelta(minutes=gh.issue_min_age_for(i.repo))
+                    )
+                n = seed_processed_issues(
+                    _STATE_DIR, [(i.repo, i.number) for i in issues]
+                )
+                _logger.info(
+                    "Issue handling moved here — %d open issues already handled "
+                    "on %s are skipped",
+                    n,
+                    source,
+                )
+            if pr_on:
+                mark_ledger_started(_STATE_DIR, "prs")
+            if issue_on:
+                mark_ledger_started(_STATE_DIR, "issues")
+            if prev is not None:
+                mark_automation_here(_STATE_DIR)
+            self._handover_done = True
+
     async def _pr_loop(self) -> None:
         assert self._pr_monitor is not None and self.config.github is not None
         interval = self.config.github.poll_interval_seconds
         while True:
             try:
+                await self._ensure_handover()
                 prs = await self._pr_monitor.scan()
                 if prs:
                     self._mark_busy("pr", +1)
@@ -581,6 +675,7 @@ class PipelineOrchestrator:
         interval = self.config.github.issue_poll_interval_seconds
         while True:
             try:
+                await self._ensure_handover()
                 issues = await self._issue_monitor.scan()
                 if issues:
                     self._mark_busy("issue", +1)

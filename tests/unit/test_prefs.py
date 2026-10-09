@@ -184,19 +184,25 @@ def test_a_prefs_save_tells_every_open_browser(client):
     ]
 
 
-def test_switching_run_here_reconciles_the_pipeline(client):
-    """github.run_here gates both GitHub halves, so flipping it in Settings
-    must reach the pipeline the way the on/off switches do."""
-    from backend.web.core import events
+def test_moving_the_automation_reconciles_the_pipeline(client, monkeypatch):
+    """github.automation_device gates both GitHub halves, so moving them to
+    this device (Run here in Settings → Devices) must reach the
+    pipeline the way the on/off switches do."""
+    from backend.web.core import events, fleet, remote
 
+    monkeypatch.setattr(fleet, "in_fleet", lambda: True)
+    monkeypatch.setattr(
+        fleet, "live_members", lambda: {"laptop": {"host": "L"}, "mac": {"host": "M"}}
+    )
+    monkeypatch.setattr(remote, "self_identity", lambda: {"key": "mac", "host": "M"})
     seen = []
     unsubscribe = events.BUS.subscribe(seen.append)
     try:
-        client.post("/api/settings", json={"github": {"run_here": False}})
-        client.post("/api/settings", json={"github": {"run_here": False}})  # same
+        client.post("/api/settings", json={"github": {"automation_device": "mac"}})
+        client.post("/api/settings", json={"github": {"automation_device": "mac"}})
     finally:
         unsubscribe()
     toggles = [e for e in seen if e["event"].endswith("settings.github_toggled")]
-    assert len(toggles) == 1
+    assert len(toggles) == 1  # moved once; the same choice again is no flip
     store.invalidate()
-    assert store.load_settings().github.run_here is False
+    assert store.load_settings().github.automation_device == "mac"

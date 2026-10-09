@@ -166,10 +166,12 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     // has no dedupe, and an orchestrator's chatter would bury every row here.
     case "session.message":
       return messageNotif(d as MessageEventData, displayName);
-    // Your devices (no session): a request to join, a join, a removal.
+    // Your devices (no session): a request to join, a join, a removal — and
+    // settings sync pausing itself, which only Settings → Devices can answer.
     case "device.join_requested":
     case "device.joined":
-    case "device.removed": {
+    case "device.removed":
+    case "settings.sync_paused": {
       const n = deviceEventNote(env.event, d);
       return n ? { text: n.text, cls: n.cls, device: true } : null;
     }

@@ -119,7 +119,7 @@ _installed_path = _settings_hooks.installed_path
 _provider_installed = _settings_hooks.provider_installed
 
 
-def _apply_post(payload: dict) -> None:
+def _apply_post(payload: dict) -> list:
     """Apply a partial ``{group: {field: value}}`` update to the store.
 
     An empty string clears a normal field (falls through the resolution chain);
@@ -128,6 +128,9 @@ def _apply_post(payload: dict) -> None:
 
     The default agent provider is guarded: it may only be set to a CLI that is
     actually installed — you can never make an absent CLI the launch default.
+
+    Returns the ``group.field`` paths it wrote (what :func:`_stamp_for_sync`
+    may count as the person's own edit).
     """
     patches: dict = {}
     for group, fields in (payload or {}).items():
@@ -181,16 +184,21 @@ def _apply_post(payload: dict) -> None:
             github_auth.invalidate()
         except Exception:  # noqa: BLE001 — a settings save must never fail on this
             pass
+    return ["%s.%s" % (g, f) for g, fields in patches.items() for f in fields]
 
 
-def _stamp_for_sync() -> None:
+def _stamp_for_sync(*paths: str) -> None:
     """Stamp a just-saved shared field now, rather than at the next sync pass,
     so "last edit wins" orders by when the user actually changed it — and
-    nudge the user's other devices to pull it now."""
+    nudge the user's other devices to pull it now. ``paths`` are the bases
+    this save wrote (``github.token``, ``ticketing.sources``,
+    ``store:providers``): only what it clears under them is the person's own
+    edit — anything else the scan finds cleared (settings.json replaced or
+    deleted meanwhile) can still pause sync."""
     try:
         from backend.web.core import settings_sync
 
-        settings_sync.local_change()
+        settings_sync.local_change(paths)
     except Exception:  # noqa: BLE001 — a settings save must never fail on this
         pass
 
@@ -805,7 +813,7 @@ class SettingsAddon(Addon):
                     return _unreadable_response()
                 except Exception as err:  # noqa: BLE001
                     return JSONResponse({"error": str(err)}, status_code=400)
-                _stamp_for_sync()
+                _stamp_for_sync(*("prefs." + k for k in clean))
                 # Every other browser on this server (the desktop app beside a
                 # tab) keeps its own localStorage copy: tell them to re-pull,
                 # or the next whole-list save from a stale one drops this
@@ -829,10 +837,14 @@ class SettingsAddon(Addon):
             (compromise recovery). Every signed-in browser cookie, ``/m`` QR
             code, and paired device's stored token stops working immediately.
             In a group of your devices the devices' shared key is replaced
-            too (:func:`backend.web.core.fleet.rotate_key`) — it is in the
-            phone QR, so a lost phone is signed out of every one of them;
-            ``rekeyed`` / ``missed`` say which members took the new key now
-            and which get it when they're back. Phones scan the QR again.
+            too, and every member's own access token
+            (:func:`backend.web.core.fleet.rotate_key`) — the phone QR
+            carries both, so a lost phone is signed out of every member
+            that was reached; ``rekeyed`` / ``missed`` say which members took
+            the new key now and which get it when they're back, ``rotated``
+            / ``rotate_failed`` whose own token was replaced and whose must
+            be rotated there by hand (the note names them). Phones scan the
+            QR again.
 
             The new token goes back (and THIS caller's cookie is re-issued so
             it stays signed in) only to a caller that may see it
@@ -848,6 +860,8 @@ class SettingsAddon(Addon):
                 token = web_auth.rotate_token()
             except RuntimeError as err:
                 return JSONResponse({"error": str(err)}, status_code=409)
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()  # the old token still stands
             except Exception as err:  # noqa: BLE001 — settings store failure
                 return JSONResponse(
                     {"error": "could not persist the new token: %s" % err},
@@ -858,6 +872,8 @@ class SettingsAddon(Addon):
                 "auth_enabled": web_auth.auth_enabled(),
                 "rekeyed": [],
                 "missed": [],
+                "rotated": [],
+                "rotate_failed": [],
                 "in_fleet": False,
                 "note": "Phones signed in before need to scan the QR again.",
             }
@@ -866,9 +882,25 @@ class SettingsAddon(Addon):
                     out.update(await _fleet.rotate_key(), in_fleet=True)
                     out["note"] = (
                         "Phones signed in before need to scan the QR again — "
-                        "on every one of your devices: their shared key was "
-                        "replaced too."
+                        "on every one of your devices: their shared key and "
+                        "their own tokens were replaced too."
                     )
+                    if out["rotate_failed"]:
+                        members = _fleet.live_members()
+                        names = [
+                            (members.get(k) or {}).get("host") or k
+                            for k in out["rotate_failed"]
+                        ]
+                        out["note"] += (
+                            " Not reached: %s — rotate the token on %s too "
+                            "(Settings → Security there), or a lost phone "
+                            "stays signed in on %s."
+                            % (
+                                ", ".join(names),
+                                "it" if len(names) == 1 else "each",
+                                "it" if len(names) == 1 else "them",
+                            )
+                        )
             except Exception as err:  # noqa: BLE001 — the token rotated anyway
                 out["fleet_error"] = "couldn't replace your devices' key: %s" % (
                     err or "error"
@@ -899,8 +931,8 @@ class SettingsAddon(Addon):
             # enabled is Optional[bool]; the UI treats unset/None as "on" for
             # PR review but as "off" for issue handling (opt-in), so compare
             # the normalized on/off states (not raw values).
-            # github.run_here (device-local: does THIS device run them) gates
-            # both halves the same way, so its flip reconciles too.
+            # github.automation_device (synced: which of your devices runs
+            # them) gates both halves the same way, so moving it reconciles too.
             def _toggle_states() -> tuple[bool, bool, bool]:
                 from backend.web.core import settings_hooks
 
@@ -913,7 +945,9 @@ class SettingsAddon(Addon):
 
             gh_in = payload.get("github")
             watch_toggle = isinstance(gh_in, dict) and (
-                "enabled" in gh_in or "issues_enabled" in gh_in or "run_here" in gh_in
+                "enabled" in gh_in
+                or "issues_enabled" in gh_in
+                or "automation_device" in gh_in
             )
             before = _toggle_states() if watch_toggle else None
 
@@ -948,12 +982,12 @@ class SettingsAddon(Addon):
                 payload = {**payload, "general": {**gen_in, "shared_link": name}}
             shared_before = shared_link.configured_name() if watch_shared else None
             try:
-                _apply_post(payload)
+                wrote = _apply_post(payload)
             except settings_store.SettingsUnreadable:
                 return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
-            _stamp_for_sync()
+            _stamp_for_sync(*wrote)
             if watch_toggle and self.ctx is not None:
                 if _toggle_states() != before:
                     try:
@@ -1199,7 +1233,7 @@ class SettingsAddon(Addon):
                 return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
-            _stamp_for_sync()
+            _stamp_for_sync("ticketing.sources")
             return JSONResponse({"sources": _masked_sources()})
 
         # --- auth profiles CRUD (multiple identities per CLI) ---------------
@@ -1667,7 +1701,7 @@ class SettingsAddon(Addon):
             body["name"] = name
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
-            _stamp_for_sync()  # custom providers sync across your devices
+            _stamp_for_sync("store:providers")  # custom providers sync across devices
             p = providers.get(name)
             return JSONResponse(
                 {
@@ -1696,7 +1730,7 @@ class SettingsAddon(Addon):
                 return JSONResponse({"error": err}, status_code=400)
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
-            _stamp_for_sync()
+            _stamp_for_sync("store:providers")
             p = providers.get(name)
             return JSONResponse(
                 {
@@ -1721,7 +1755,7 @@ class SettingsAddon(Addon):
                 except OSError as err:
                     return JSONResponse({"error": str(err)}, status_code=500)
             providers.rebuild_registry()
-            _stamp_for_sync()
+            _stamp_for_sync("store:providers")
             return JSONResponse({"deleted": existed})
 
         return router

@@ -181,39 +181,70 @@ def test_a_bad_paths_argument_never_raises(bus):
 # --------------------------------------------------------------------------- #
 # which device runs PR review / issue handling
 # --------------------------------------------------------------------------- #
-def _fleet_of(monkeypatch, n):
-    from backend.web.core import fleet
+def _fleet_of(monkeypatch, members, me="d0"):
+    """A group of ``members`` (keys; ``int`` n = d0..d{n-1}); this device is
+    ``me``."""
+    from backend.web.core import fleet, remote
 
-    monkeypatch.setattr(fleet, "in_fleet", lambda: n > 0)
+    if isinstance(members, int):
+        members = ["d%d" % i for i in range(members)]
+    monkeypatch.setattr(fleet, "in_fleet", lambda: bool(members))
     monkeypatch.setattr(
-        fleet, "live_members", lambda: {"d%d" % i: {} for i in range(n)}
+        fleet,
+        "live_members",
+        lambda: {k: {"host": k.upper()} for k in members},
     )
+    monkeypatch.setattr(remote, "self_identity", lambda: {"key": me, "host": me})
 
 
 @pytest.mark.parametrize(
-    "run_here,members,want",
+    "chosen,members,me,want",
     [
-        (None, 0, True),  # a lone device: as before
-        (None, 1, True),  # a group of one
-        (None, 2, False),  # one of several: not unless chosen
-        (True, 3, True),
-        (False, 0, False),
+        ("", 0, "d0", True),  # a lone device: as before
+        ("", 1, "d0", True),  # a group of one
+        ("d1", 1, "d0", True),  # alone again: whatever was chosen
+        ("", 2, "d0", True),  # nobody chosen: the lowest key runs them…
+        ("", 2, "d1", False),  # …and only it
+        ("d1", 3, "d1", True),  # the chosen device
+        ("d1", 3, "d0", False),
+        ("gone", 3, "d0", True),  # chosen device left: the lowest key
+        ("gone", 3, "d2", False),
     ],
 )
-def test_automation_here(monkeypatch, run_here, members, want):
-    _fleet_of(monkeypatch, members)
-    store.update_settings(github={"run_here": run_here})
+def test_automation_here(monkeypatch, chosen, members, me, want):
+    _fleet_of(monkeypatch, members, me)
+    store.update_settings(github={"automation_device": chosen})
     assert settings_hooks.automation_here() is want
 
 
-def test_run_here_is_device_local_and_round_trips():
+def test_exactly_one_device_of_a_group_runs_the_automation(monkeypatch):
+    """Every device computes the same answer from the same synced setting and
+    roster — the round-3 bug was two devices each believing they ran it."""
+    for chosen in ("", "mac", "rig", "laptop", "gone"):
+        store.update_settings(github={"automation_device": chosen})
+        runners = []
+        for me in ("laptop", "mac", "rig"):
+            _fleet_of(monkeypatch, ["laptop", "mac", "rig"], me)
+            if settings_hooks.automation_here():
+                runners.append(me)
+        assert len(runners) == 1, (chosen, runners)
+
+
+def test_automation_device_is_synced_and_round_trips():
+    """It's one answer for the whole group, so it syncs; a pre-release
+    device-local run_here is ignored (and dropped on the next save)."""
     from backend.web.core import settings_sync
 
-    assert "run_here" in settings_sync.LOCAL["github"]
-    assert "run_here" not in settings_sync.SYNCED["github"]
-    g = store.GithubSettings.from_dict({"run_here": False})
-    assert g.run_here is False and g.to_dict() == {"run_here": False}
+    assert "automation_device" in settings_sync.SYNCED["github"]
+    assert "run_here" not in settings_sync.LOCAL.get("github", ())
+    g = store.GithubSettings.from_dict({"automation_device": " rig ", "run_here": True})
+    assert g.automation_device == "rig" and g.to_dict() == {"automation_device": "rig"}
+    assert not hasattr(g, "run_here")
     assert store.GithubSettings().to_dict() == {}
+    # One answer for the group: never "kept different on this device".
+    assert "github.automation_device" not in settings_sync.bases()
+    with pytest.raises(ValueError):
+        settings_sync.set_pinned("github.automation_device", True)
 
 
 def test_only_a_change_the_pipeline_cares_about_reconciles_it(bus, monkeypatch):
@@ -244,16 +275,12 @@ def test_the_pipeline_debounce_is_five_seconds():
 
 
 def test_automation_device_names_the_member_that_runs_it(monkeypatch):
-    from backend.web.core import remote
-
-    monkeypatch.setattr(
-        remote,
-        "fleet_devices",
-        lambda: [
-            {"key": "mac", "host": "Mac", "automation": False},
-            {"key": "laptop", "host": "Laptop", "automation": True},
-        ],
-    )
-    assert settings_hooks.automation_device() == "Laptop"
-    monkeypatch.setattr(remote, "fleet_devices", lambda: [{"key": "m", "host": "M"}])
+    _fleet_of(monkeypatch, ["laptop", "mac"], "mac")
+    store.update_settings(github={"automation_device": "laptop"})
+    assert settings_hooks.automation_device() == "LAPTOP"
+    assert settings_hooks.automation_runner() == "laptop"
+    _fleet_of(monkeypatch, ["laptop", "mac"], "laptop")
+    assert settings_hooks.automation_device() == ""  # it's this one
+    _fleet_of(monkeypatch, 0)
     assert settings_hooks.automation_device() == ""
+    assert settings_hooks.automation_runner() == ""

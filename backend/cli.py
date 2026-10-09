@@ -1576,10 +1576,16 @@ def _cmd_accounts(args) -> int:
     }.get(getattr(args, "accounts_command", None))
     if handler is None:  # unreachable via argparse, defensive
         return _cmd_accounts_ls(args)
+    from backend.config import settings as settings_store
+
     try:
         return handler(args)
     except client.ClientError as err:
         print("error: %s" % err, file=sys.stderr)
+        return 1
+    except settings_store.SettingsUnreadable:
+        # Saving would replace the broken file with defaults: say what to do.
+        print("error: %s" % settings_store.UNREADABLE_HINT, file=sys.stderr)
         return 1
 
 
@@ -1922,22 +1928,26 @@ def _print_devices(st: dict) -> None:
 def _print_automation_hint(members: List[dict]) -> None:
     """Warn when no member — or more than one — runs PR review and issue
     handling: both halves act on GitHub, so two devices doing it review every
-    PR twice, and none means nobody does. Older servers send no
-    ``automation`` field at all, and a member too old to say comes as null:
-    leave those out (say nothing when fewer than two are known)."""
+    PR twice, and none means nobody does. The group's one runner is the synced
+    ``github.automation_device`` (moved with Run here, never switched off),
+    so this only fires while a member on an older MindFlock decides for
+    itself. Older servers send no ``automation`` field at all, and a member
+    too old to say comes as null: leave those out (say nothing when fewer
+    than two are known)."""
     members = [m for m in members if isinstance(m.get("automation"), bool)]
     if len(members) < 2:
         return
     on = [str(m.get("host") or m.get("key")) for m in members if m.get("automation")]
     if not on:
         print(
-            "! none of your devices runs PR review & issue handling — turn it on "
-            "for one: Settings → Devices → Run PR review and issue handling here"
+            "! none of your devices runs PR review & issue handling — choose "
+            "Run here (Settings → Devices) on the one that should"
         )
     elif len(on) > 1:
         print(
             "! %s all run PR review & issue handling — each PR gets reviewed more "
-            "than once; turn it off on all but one (Settings → Devices)" % ", ".join(on)
+            "than once; choose Run here (Settings → Devices) on the one that "
+            "should keep it" % ", ".join(on)
         )
 
 

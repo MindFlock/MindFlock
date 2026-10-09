@@ -150,9 +150,11 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
 def _signin_tokens(shared: bool) -> list:
     """The tokens a phone QR carries: this server's own (when the auth gate is
     on), then the fleet key when this device is one of "Your devices" (every
-    member accepts it, so one scan signs the phone in on all of them), plus —
-    for the shared link — every paired device's, so whichever device answers
-    the scan finds its own among them. ``[]`` with the gate off.
+    member accepts it — but the sign-in cookie belongs to the origin scanned,
+    so a per-device QR signs the phone in on THIS device only; the shared
+    link, one origin answered by any member, is what reaches all of them),
+    plus — for the shared link — every paired device's, so whichever device
+    answers the scan finds its own among them. ``[]`` with the gate off.
     """
     try:
         if not _auth.auth_enabled():

@@ -469,10 +469,15 @@ export function notePrefWrite(lsKey: string, kv: KV | null = storage()): void {
 /** A rejection the server meant (a 4xx other than auth, e.g. 404 on an
  * older server without /api/prefs, or a value it refuses): retrying sends
  * the same thing again, so the field stops being dirty. Anything else
- * (network down, server restarting, 5xx) is worth another try. */
+ * (network down, server restarting, 5xx) is worth another try — and so is a
+ * 409: settings.json can't be read right now, so the server kept nothing,
+ * and dropping the dirty mark would let the first pull after the file is
+ * fixed put the old value (or the defaults) back over this change. */
 function permanent(e: unknown): boolean {
   const st = (e as { status?: unknown })?.status;
-  return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 429;
+  return (
+    typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 409 && st !== 429
+  );
 }
 
 function bodyFor(fields: Iterable<PrefField>, kv: KV | null): Partial<Prefs> {

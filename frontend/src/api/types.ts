@@ -749,8 +749,9 @@ export interface FleetMember {
    * after it left/was removed while offline. */
   same_fleet: boolean;
   error: string;
-  /** It runs PR review and issue handling (`github.run_here`, or the
-   * default: on unless it shares a group of 2+ devices). Missing from an
+  /** It runs PR review and issue handling: the synced
+   * `github.automation_device`, or — when that names no live member — the
+   * live member with the lowest key, so exactly one does. Missing from an
    * older MindFlock (null: its hello doesn't say). */
   automation?: boolean | null;
   /** Same group id and epoch but a different key (two halves set up apart);
@@ -769,6 +770,19 @@ export interface FleetRemoved {
   /** The device key that removed it ("" / missing on old tombstones). */
   removed_by?: string;
   removed_by_host?: string;
+  /** The device left on its own (it wrote its own tombstone): not a removal
+   * to suspect, and not sticky — a later re-admit elsewhere revives it. */
+  left?: boolean;
+}
+
+/** A device removed on this one that another member has added back. */
+export interface FleetReadmitted {
+  key: string;
+  host?: string;
+  /** The device key that added it back. */
+  by?: string;
+  /** Its display name ("" when unknown). */
+  by_host?: string;
 }
 
 /** A live "add a device" code (only shown on this device). */
@@ -832,6 +846,9 @@ export interface FleetStatus {
   candidates: FleetCandidate[];
   /** Devices taken out of the group (tombstones), with who removed them. */
   removed?: FleetRemoved[];
+  /** Removed here but live on another member's roster: "Allow it here"
+   * (POST /api/fleet/members/{key}/allow) lets it back in on this device. */
+  readmitted_elsewhere?: FleetReadmitted[];
 }
 
 /** GET /api/settings/sync (backend.web.core.settings_sync.status). */
@@ -850,6 +867,9 @@ export interface SyncStatus {
   /** Base paths ("group.field" or "store:<name>") kept different here, and
    * single entries of a keyed list ("ticketing.sources#<id>"). */
   pinned: string[];
+  /** Unit pins kept separate at join → the device whose different entry
+   * shares the id (its label). Missing from an older server. */
+  separate?: Record<string, string>;
   /** Incoming values not applied here yet (an agent CLI not installed). */
   deferred: { path: string; value?: unknown; reason: string }[];
   warnings: string[];

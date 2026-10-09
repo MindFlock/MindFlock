@@ -14572,7 +14572,12 @@ def ide_open_on_ticket_set(payload: dict) -> JSONResponse:
     from backend.session import provisioned as _prov
 
     want = bool((payload or {}).get("enabled"))
-    _settings.update_settings(engine={"open_cursor": want})
+    try:
+        _settings.update_settings(engine={"open_cursor": want})
+    except _settings.SettingsUnreadable:
+        # Saving defaults over a file that didn't parse would lose it (and
+        # settings sync would spread "everything deleted").
+        return JSONResponse({"error": _settings.UNREADABLE_HINT}, status_code=409)
     return JSONResponse({"enabled": _prov.open_ide_on_ticket()})
 
 

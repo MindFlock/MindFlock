@@ -31,6 +31,13 @@ os.environ.setdefault(
     "MINDFLOCK_EXTENSIONS_DIR",
     tempfile.mkdtemp(prefix="mindflock-test-extensions-"),
 )
+# The pipeline's repo root (``state.json``, ``automation_here.json``, the
+# pipeline lock) resolves ``$MINDFLOCK_REPO_ROOT`` first — and the live server
+# exports it into every agent shell, naming the owner's REAL checkout. The
+# ingestion controller reads it once, at server import (before any fixture),
+# so a status read in any TestClient test wrote the real hand-over file. Drop
+# it here, at import, like CI never sets it; tests that need it set their own.
+os.environ.pop("MINDFLOCK_REPO_ROOT", None)
 
 
 @pytest.fixture(autouse=True)

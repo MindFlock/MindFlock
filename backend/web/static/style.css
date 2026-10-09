@@ -345,6 +345,23 @@
   color: var(--text);
 }
 
+/* A kept-separate source's Unpin confirm: its own line under the row. */
+.devices-plain > li > .set-confirm {
+  flex-basis: 100%;
+}
+
+/* Devices that left on their own: plain lines, no warning box. */
+.devices-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px;
+}
+
+.devices-left .set-hint {
+  margin: 0;
+}
+
 /* Name + the "runs PR review & issues" badge on one line. */
 .devices-name-line {
   display: flex;
@@ -364,8 +381,8 @@
   white-space: nowrap;
 }
 
-/* "Run PR review and issue handling here": label + hint stacked, the
-   switch at the right. */
+/* "PR review and issue handling": label + which device runs them stacked,
+   "Run here" at the right. */
 .devices-run-here-text {
   display: flex;
   flex-direction: column;

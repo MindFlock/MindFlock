@@ -211,13 +211,22 @@ EVENT_NAMES = (
     # A computer became one of the user's devices — by code, approval, or
     # one-click add (data: {"device", "host", ...}).
     "device.joined",
-    # A device left or was removed (data: {"device", ...}; ``device`` is this
-    # one's own key when it was this device that left).
+    # A device left or was removed (data: {"device", "host", "by", "detail"};
+    # ``device`` is this one's own key when it was this device that left or
+    # was removed; ``by`` the device that made the removal — the leaver for a
+    # leave, "" when unknown).
     "device.removed",
-    # Settings sync adopted another device's changes here (data: {"paths":
-    # [unit ids], "from": <device key>}). For UI refetch only; no rule
-    # notifies on it.
+    # Shared settings changed here: adopted from another of the user's devices
+    # (data: {"paths": [unit ids], "from": <its device key>}) or written
+    # locally through POST /api/prefs ("from": ""). For UI refetch only; no
+    # rule notifies on it.
     "settings.synced",
+    # Settings sync paused itself here: a background scan would have cleared
+    # most of this device's settings at once (a reset or replaced
+    # settings.json), so nothing is shared until the person chooses whose
+    # values to keep in Settings → Devices (data: {"cleared": n, "held": n,
+    # "detail"}). Once per pause.
+    "settings.sync_paused",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

@@ -229,7 +229,9 @@ class FleetAddon(Addon):
             runs = bool(out.pop("runs_automation", False))
             # Before the asker's next poll collects the bundle: it pulls
             # settings from here at once (see fleet.after_admit).
-            return JSONResponse({**out, "sync_error": await fleet.after_admit(runs)})
+            return JSONResponse(
+                {**out, "sync_error": await fleet.after_admit(runs, out["device"])}
+            )
 
         @router.post("/fleet/requests/{rid}/deny")
         async def deny_request(rid: str, request: Request) -> JSONResponse:
@@ -273,6 +275,18 @@ class FleetAddon(Addon):
                 resp = web_auth.set_auth_cookies(resp)
             return resp
 
+        @router.post("/fleet/members/{key}/allow")
+        async def allow_member(key: str, request: Request) -> JSONResponse:
+            """Let a device this one removed back in HERE, once another
+            member re-admitted it (status ``readmitted_elsewhere``) — see
+            :func:`backend.web.core.fleet.allow`."""
+            if not await _privileged(request):
+                return JSONResponse(_FORBIDDEN, status_code=403)
+            try:
+                return JSONResponse(fleet.allow(key))
+            except KeyError:
+                return _bad("%s isn't a device removed here" % key, 404)
+
         @router.post("/fleet/leave")
         async def post_leave(request: Request) -> JSONResponse:
             if not await _privileged(request):
@@ -314,7 +328,7 @@ class FleetAddon(Addon):
                 return _bad(str(err))
             # Before answering: the joiner's very next call is a settings pull
             # from here, relayed (see fleet.after_admit).
-            await fleet.after_admit(body.get("runs_automation") is True)
+            await fleet.after_admit(body.get("runs_automation") is True, device)
             return JSONResponse(out)
 
         @router.post("/fleet/requests")

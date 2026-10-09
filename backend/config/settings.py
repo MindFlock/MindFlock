@@ -780,13 +780,14 @@ class GithubSettings:
     #: ``base_branch`` is accepted but unused (issue work branches off the
     #: repo's own default), and dropped rather than silently honoured.
     issue_repo_settings: Dict[str, dict] = field(default_factory=dict)
-    #: Whether THIS device runs PR review and issue handling. Device-local
-    #: (never synced): every field above follows the person across their
-    #: devices, so without it each of them would review the same PRs. ``None``
-    #: = decide for me — on for a lone device, off once it's one of several
-    #: (``settings_hooks.automation_here``); admitting a device sets it on
-    #: here, joining one sets it off.
-    run_here: Optional[bool] = None
+    #: The device (its fleet key) that runs PR review and issue handling for
+    #: the whole group of the user's devices. SYNCED, so every device agrees:
+    #: every field above follows the person across their devices, and without
+    #: one shared answer each of them would review the same PRs. ``""`` (or a
+    #: device that isn't a live member any more) = the live member with the
+    #: lowest key runs them (``settings_hooks.automation_here``); a lone
+    #: device always does. Admitting a device fills it in.
+    automation_device: str = ""
 
     def repo_list(self) -> List[str]:
         """Effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -832,8 +833,8 @@ class GithubSettings:
             d["issue_repo_settings"] = {
                 k: dict(v) for k, v in self.issue_repo_settings.items()
             }
-        if self.run_here is not None:
-            d["run_here"] = self.run_here
+        if self.automation_device:
+            d["automation_device"] = self.automation_device
         return d
 
     @classmethod
@@ -861,7 +862,8 @@ class GithubSettings:
                 for repo, block in _repo_overrides(d.get("issue_repo_settings")).items()
                 if any(k != "base_branch" for k in block)
             },
-            run_here=_opt_bool(d.get("run_here")),
+            # (A device-local ``run_here`` from a pre-release build is ignored.)
+            automation_device=str(d.get("automation_device", "") or "").strip(),
         )
 
 

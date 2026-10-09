@@ -84,6 +84,13 @@ describe("notifFromEvent — your devices", () => {
     expect(removed?.device).toBe(true);
   });
 
+  it("settings sync pausing itself is a warn row that opens Settings → Devices", () => {
+    const n = notifFromEvent(env({ event: "settings.sync_paused", session: "", data: {} }));
+    expect(n?.cls).toBe("n-warn");
+    expect(n?.device).toBe(true);
+    expect(n?.text).toMatch(/^Settings sync paused on this device/);
+  });
+
   it("settings.synced is not news for the bell", () => {
     expect(notifFromEvent(env({ event: "settings.synced", session: "", data: { paths: ["ui.accent"] } }))).toBeNull();
   });

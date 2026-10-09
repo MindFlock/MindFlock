@@ -25964,7 +25964,7 @@ function notePrefWrite(lsKey, kv = storage()) {
 }
 function permanent(e) {
 	const st = e?.status;
-	return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 429;
+	return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 409 && st !== 429;
 }
 function bodyFor(fields, kv) {
 	const body = {};
@@ -32498,6 +32498,7 @@ function pinChoices(sync) {
 function sentence(s) {
 	return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
+var SYNC_PAUSED_NOTE = "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Devices.";
 function deviceEventNote(event, data) {
 	const d = data || {};
 	const host = String(d.host || d.device || "A device");
@@ -32528,6 +32529,11 @@ function deviceEventNote(event, data) {
 			text: sentence(String(d.detail || "")) || host + " is no longer one of your devices",
 			cls: "n-info",
 			toast: ""
+		};
+		case "settings.sync_paused": return {
+			text: SYNC_PAUSED_NOTE,
+			cls: "n-warn",
+			toast: SYNC_PAUSED_NOTE
 		};
 		default: return null;
 	}
@@ -32612,10 +32618,13 @@ function clockTime$1(ts, nowSec = Date.now() / 1e3) {
 	][d.getMonth()] + " " + d.getDate() + ", " + hm;
 }
 var REMOVED_SHOWN_S = 1209600;
+function isLeave(r) {
+	return r.left === true || !!r.removed_by && r.removed_by === r.key;
+}
 function removalLines(st, nowSec = Date.now() / 1e3) {
 	const me = st?.self?.key || "";
 	const hostOf = (key, fallback) => key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || st?.removed?.find((r) => r.key === key)?.host || fallback || key;
-	return (st?.removed || []).filter((r) => r && r.key && r.removed_by && r.removed_by !== me).map((r) => ({
+	return (st?.removed || []).filter((r) => r && r.key && r.removed_by && r.removed_by !== me && !isLeave(r)).map((r) => ({
 		r,
 		at: Number(r.removed_at ?? r.at ?? 0)
 	})).filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S).sort((a, b) => b.at - a.at).map(({ r, at }) => {
@@ -32628,15 +32637,48 @@ function removalLines(st, nowSec = Date.now() / 1e3) {
 		};
 	});
 }
+function leftLines(st, nowSec = Date.now() / 1e3) {
+	const me = st?.self?.key || "";
+	return (st?.removed || []).filter((r) => r && r.key && r.key !== me && isLeave(r)).map((r) => ({
+		r,
+		at: Number(r.removed_at ?? r.at ?? 0)
+	})).filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S).sort((a, b) => b.at - a.at).map(({ r, at }) => {
+		const when = clockTime$1(at, nowSec);
+		return {
+			key: r.key,
+			text: (r.host || r.key) + " left your devices" + (when.includes(",") ? " on " : " at ") + when
+		};
+	});
+}
+function readmittedLines(st) {
+	const me = st?.self?.key || "";
+	const hostOf = (key, fallback) => key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || fallback || key;
+	return (st?.readmitted_elsewhere || []).filter((r) => r && r.key).map((r) => {
+		const host = r.host || r.key;
+		const by = r.by ? hostOf(r.by, r.by_host) : "another of your devices";
+		return {
+			key: r.key,
+			host,
+			text: host + " was added back on " + by + ", but it's still removed on this device — it gets no settings sync, sign-in or ticket claims from here until you allow it."
+		};
+	});
+}
 function keyConflicts(members) {
 	return (members || []).filter((m) => !m.self && (m.key_conflict === true || /different key for your devices/i.test(m.error || "")));
 }
 function rotatedToast(r) {
 	const rekeyed = r?.rekeyed || r?.fleet?.rekeyed || [];
 	const missed = r?.missed || r?.fleet?.missed || [];
+	const rotated = r?.rotated || r?.fleet?.rotated;
+	const failed = r?.rotate_failed || r?.fleet?.rotate_failed || [];
 	const bits = ["Access token regenerated — scan the QR again on your phone; other browsers sign in again"];
 	if (rekeyed.length) bits.push("new device key sent to " + rekeyed.join(", "));
 	if (missed.length) bits.push(missed.join(", ") + (missed.length > 1 ? " get" : " gets") + " the new device key when back online");
+	if (rotated) {
+		if (rotated.length) bits.push("access token replaced on " + rotated.join(", "));
+		const byHand = [...failed, ...missed.filter((k) => !failed.includes(k))];
+		if (byHand.length) bits.push("regenerate the access token on " + byHand.join(", ") + " too (Security there) — " + (byHand.length > 1 ? "theirs still work" : "its old one still works"));
+	}
 	if (r?.fleet_error) bits.push(r.fleet_error);
 	return bits.join(" · ");
 }
@@ -32650,13 +32692,47 @@ var SYNC_RESUME = {
 		label: "Keep this device's"
 	}
 };
+function automationLine(members) {
+	if ((members || []).length < 2) return null;
+	const known = members.filter((m) => typeof m.automation === "boolean");
+	if (!known.length) return null;
+	const on = known.filter((m) => m.automation);
+	const runner = on.length === 1 ? on[0] : null;
+	const here = !!runner?.self;
+	if (here) return {
+		runner,
+		here,
+		text: "This device runs PR review and issue handling for all your devices. To move them, choose Run here in Settings → Devices on the device that should run them.",
+		canMove: false
+	};
+	if (runner) return {
+		runner,
+		here,
+		text: (runner.host || runner.key) + " runs PR review and issue handling for all your devices — your repos and ticket sources are shared, but only one device reviews PRs and picks up issues.",
+		canMove: true
+	};
+	return {
+		runner: null,
+		here: false,
+		text: automationHint(members),
+		canMove: true
+	};
+}
 function automationHint(members) {
 	const known = members.filter((m) => typeof m.automation === "boolean");
 	if (known.length < 2) return "";
 	const on = known.filter((m) => m.automation);
 	if (on.length === 1) return "";
-	if (!on.length) return "None of your devices runs PR review and issue handling — turn it on here or on one of the others.";
-	return on.map((m) => m.host || m.key).join(" and ") + " all run PR review and issue handling, so the same PRs get reviewed more than once — keep it on one.";
+	if (!on.length) return "None of your devices runs PR review and issue handling — choose Run here on the one that should.";
+	return on.map((m) => m.host || m.key).join(" and ") + " all run PR review and issue handling, so the same PRs get reviewed more than once — choose Run here on the one that should keep it.";
+}
+function unpinReplaces(path, sync) {
+	const hash = path.indexOf("#");
+	if (hash <= 0 || path.slice(0, hash) !== "ticketing.sources") return "";
+	const id = path.slice(hash + 1);
+	const from = sync?.joined_from || "";
+	const leader = sync?.separate?.[path] || (from ? sync?.devices?.find((d) => d.key === from)?.label || from : "");
+	return "This replaces this device's “" + id + "” (and its token) with " + (leader ? leader + "'s" : "the one your other devices have under that id") + ". To keep both, give one of them a different id in Settings → Tickets instead.";
 }
 //#endregion
 //#region src/components/NotificationsBell.tsx
@@ -32754,7 +32830,8 @@ function notifFromEvent(env) {
 		case "session.message": return messageNotif(d, displayName);
 		case "device.join_requested":
 		case "device.joined":
-		case "device.removed": {
+		case "device.removed":
+		case "settings.sync_paused": {
 			const n = deviceEventNote(env.event, d);
 			return n ? {
 				text: n.text,
@@ -33312,7 +33389,11 @@ function EventToasts() {
 				duration: 8e3
 			});
 		}));
-		for (const name of ["device.join_requested", "device.joined"]) unsubs.push(ev.subscribe(name, (env) => {
+		for (const name of [
+			"device.join_requested",
+			"device.joined",
+			"settings.sync_paused"
+		]) unsubs.push(ev.subscribe(name, (env) => {
 			if (isReplay(env)) return;
 			const n = deviceEventNote(env.event, env.data);
 			if (!n?.toast) return;
@@ -65568,10 +65649,10 @@ function StalledNote({ s }) {
 			" starts",
 			" ",
 			many ? "these" : "this one",
-			" on its own; this computer doesn't (Settings → Devices →",
+			" on its own; this computer doesn't (to move them here, choose",
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run PR review and issue handling here" }),
-			" picks which one does). You can still start ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run here" }),
+			" in Settings → Devices). You can still start ",
 			many ? "any of them" : "it",
 			" here, with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start now" }),
@@ -70131,7 +70212,8 @@ function Devices(p) {
 			"device.join_requested",
 			"device.joined",
 			"device.removed",
-			"settings.synced"
+			"settings.synced",
+			"settings.sync_paused"
 		].map((name) => ev.subscribe(name, () => loadAll()));
 		return () => offs.forEach((off) => off());
 	}, [loadAll]);
@@ -70195,6 +70277,8 @@ function Devices(p) {
 	const candidates = joinableCandidates(st.candidates);
 	const conflicts = keyConflicts(st.members);
 	const removals = removalLines(st);
+	const lefts = leftLines(st);
+	const readmitted = readmittedLines(st);
 	const join = st.join;
 	const joinBusy = join && (join.state === "waiting" || join.state === "joining");
 	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
@@ -70218,8 +70302,8 @@ function Devices(p) {
 			setPasted("");
 		});
 	};
-	const setRunHere = (on) => run("run-here", () => api("/api/settings", { json: { github: { run_here: on } } }), on ? "PR review and issue handling run on this device" : "PR review and issue handling are off on this device");
-	const autoHint = automationHint(st.members);
+	const runHere = () => run("run-here", () => api("/api/settings", { json: { github: { automation_device: st.self.key } } }), "PR review and issue handling run on this device now");
+	const auto = st.in_fleet ? automationLine(st.members) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		st.gate_warning && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-warn",
@@ -70279,6 +70363,32 @@ function Devices(p) {
 				className: "devices-note",
 				children: "Your devices all hold the same key, so any of them can remove another. If you didn't make this removal, someone else may be using that device — taking it off your tailnet (Tailscale admin console) cuts it off everywhere at once."
 			})]
+		}),
+		readmitted.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "devices-readmitted",
+			role: "alert",
+			children: readmitted.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-row",
+				"data-readmitted": r.key,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: r.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-allow": r.key,
+					disabled: !!busy,
+					onClick: () => void run("allow:" + r.key, () => api("/api/fleet/members/" + encodeURIComponent(r.key) + "/allow", { method: "POST" }), r.host + " is one of your devices here again"),
+					children: busy === "allow:" + r.key ? "Allowing…" : "Allow it here"
+				})]
+			}, r.key))
+		}),
+		lefts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-left",
+			id: "devices-left",
+			children: lefts.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				"data-left": r.key,
+				children: r.text
+			}, r.key))
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -70381,27 +70491,27 @@ function Devices(p) {
 			id: "devices-intro",
 			children: "Your devices share settings, sign-in and ticket claims. Add a computer you own:"
 		}),
-		st.in_fleet && self && typeof self.automation === "boolean" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		auto && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row set-switch-row",
 			id: "devices-run-here",
+			"data-runs-here": auto.here ? "1" : "0",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "devices-run-here-text",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
-					children: "Run PR review and issue handling here"
+					children: "PR review and issue handling"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint" + (autoHint ? " devices-hint-warn" : ""),
+					className: "set-hint" + (auto.runner ? "" : " devices-hint-warn"),
 					id: "devices-run-here-hint",
-					children: autoHint || "Your GitHub repos and ticket sources are shared, but only one of your devices should review PRs and pick up issues — or each PR is reviewed once per device."
+					children: auto.text
 				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					checked: self.automation,
-					disabled: busy === "run-here",
-					onChange: (e) => void setRunHere(e.target.checked)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			}), auto.canMove && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-run-here-btn",
+				disabled: !!busy,
+				onClick: () => void runHere(),
+				children: busy === "run-here" ? "Moving…" : "Run here"
 			})]
 		}),
 		st.requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -70714,6 +70824,7 @@ function SettingsSyncRows(props) {
 	const [from, setFrom] = (0, import_react.useState)("");
 	const [pin, setPin] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)("");
+	const [unpinFor, setUnpinFor] = (0, import_react.useState)(null);
 	if (!sync) return null;
 	const act = async (key, fn, ok) => {
 		setBusy(key);
@@ -70757,7 +70868,12 @@ function SettingsSyncRows(props) {
 			className: "devices-warn",
 			id: "settings-sync-paused",
 			role: "alert",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [sync.paused, ". Most of this device's settings went back to their defaults at once — a reset or replaced settings.json, usually — so nothing was sent to your other devices."] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				sync.paused,
+				". Most of this device's settings went back to their defaults at once — a reset or replaced settings.json, usually — so nothing was sent to your other devices, and nothing comes in from them until you choose. \"",
+				SYNC_RESUME.theirs.label,
+				"\" also replaces anything changed here since."
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "devices-actions",
 				children: (sync.choices?.length ? sync.choices : ["theirs", "mine"]).filter((k) => k in SYNC_RESUME).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -70909,17 +71025,35 @@ function SettingsSyncRows(props) {
 				}),
 				sync.pinned?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 					className: "devices-plain",
-					children: sync.pinned.map((path) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-						"data-pinned": path,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: syncLabel(path, sync) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							"data-unpin": path,
-							disabled: !!busy,
-							onClick: () => void setPinned(path, false),
-							children: "Unpin"
-						})]
-					}, path))
+					children: sync.pinned.map((path) => {
+						const replaces = unpinReplaces(path, sync);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							"data-pinned": path,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: syncLabel(path, sync) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									"data-unpin": path,
+									disabled: !!busy || unpinFor === path,
+									onClick: () => replaces ? setUnpinFor(path) : void setPinned(path, false),
+									children: "Unpin"
+								}),
+								replaces && unpinFor === path && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+									id: "settings-sync-unpin-confirm",
+									title: "Unpin " + syncLabel(path, sync) + "?",
+									body: replaces,
+									confirmLabel: busy === "pin:" + path ? "Unpinning…" : "Unpin",
+									busy: busy === "pin:" + path,
+									onConfirm: () => {
+										setUnpinFor(null);
+										setPinned(path, false);
+									},
+									onCancel: () => setUnpinFor(null)
+								})
+							]
+						}, path);
+					})
 				}) : null,
 				choices.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "devices-actions",

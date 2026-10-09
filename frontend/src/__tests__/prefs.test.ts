@@ -447,6 +447,28 @@ describe("dirty writes survive a failed POST and a reload", () => {
     expect(dirtyFields(kv).size).toBe(0);
   });
 
+  it("a 409 (settings.json unreadable) keeps the field dirty and retries, so fixing the file can't revert it", async () => {
+    const kv = memKV({ cs_theme: "light", mf_prefs_seeded: "1" });
+    g.localStorage = kv;
+    let fail = true;
+    const posted: Array<Partial<Prefs>> = [];
+    setPrefSender(async (b) => {
+      if (fail) throw Object.assign(new Error("/api/prefs -> 409"), { status: 409 });
+      posted.push(b);
+    });
+    notePrefWrite("cs_theme");
+    await flushPrefWrites(kv);
+    expect(dirtyFields(kv).has("theme")).toBe(true);
+    // The file is fixed; the server still holds the old theme. A pull now
+    // must not apply it over the unsent local change.
+    const plan = planBoot({ theme: "dark" } as Partial<Prefs>, readAllLocal(kv), true, dirtyFields(kv));
+    expect(plan.apply.theme).toBeUndefined();
+    fail = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(posted).toEqual([{ theme: "light" }]);
+    expect(dirtyFields(kv).size).toBe(0);
+  });
+
   it("page hide sends every unsent field with the keepalive sender", async () => {
     const kv = memKV({ cs_theme: "light", mf_hints: "false", [DIRTY_KEY]: '["hints"]' });
     g.localStorage = kv;

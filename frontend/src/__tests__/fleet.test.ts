@@ -7,8 +7,10 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   ROTATE_TOKENS_LABEL,
   addPairedNote,
+  SYNC_PAUSED_NOTE,
   admitToast,
   automationHint,
+  automationLine,
   candidateBlocker,
   candidateNote,
   deviceEventNote,
@@ -18,18 +20,21 @@ import {
   joinSettingsNote,
   joinableCandidates,
   keyConflicts,
+  leftLines,
   liveInvite,
   memberStatus,
   normalizeCode,
   pasteJoinBody,
   pinChoices,
   plausibleCode,
+  readmittedLines,
   removalLines,
   removeConfirmText,
   removedToast,
   rotatedToast,
   syncDeviceLine,
   syncLabel,
+  unpinReplaces,
 } from "../lib/fleet";
 import type { FleetCandidate, FleetJoin, FleetMember, FleetStatus, SyncStatus } from "../api/types";
 
@@ -214,6 +219,24 @@ describe("settings sync rows", () => {
     ]);
     expect(pinChoices(null)).toEqual([]);
   });
+
+  it("unpinning a source kept separate at join says it replaces this device's source and its token", () => {
+    const st = {
+      ...sync,
+      joined_from: "ml-rig",
+      devices: [{ key: "ml-rig", label: "rig", syncing: true, last_sync: null, error: "" }],
+    } as unknown as SyncStatus;
+    // The leader comes from `separate` when the server names it, else the
+    // device this one joined from.
+    expect(unpinReplaces("ticketing.sources#sc", { ...st, separate: { "ticketing.sources#sc": "mac-mini" } })).toBe(
+      "This replaces this device's “sc” (and its token) with mac-mini's. To keep both, give one of them a different id in Settings → Tickets instead."
+    );
+    expect(unpinReplaces("ticketing.sources#sc", st)).toMatch(/^This replaces this device's “sc” \(and its token\) with rig's\./);
+    expect(unpinReplaces("ticketing.sources#sc", null)).toMatch(/with the one your other devices have under that id\./);
+    // Any other pin just takes the others' value again: no confirm.
+    expect(unpinReplaces("prefs.keymap", st)).toBe("");
+    expect(unpinReplaces("store:templates", st)).toBe("");
+  });
 });
 
 describe("deviceEventNote", () => {
@@ -237,6 +260,12 @@ describe("deviceEventNote", () => {
     expect(removed?.cls).toBe("n-info");
     expect(removed?.toast).toBe("");
     expect(deviceEventNote("session.created", {})).toBeNull();
+  });
+
+  it("settings sync pausing itself warns, toasts and points at Settings → Devices", () => {
+    const n = deviceEventNote("settings.sync_paused", {});
+    expect(n).toEqual({ text: SYNC_PAUSED_NOTE, cls: "n-warn", toast: SYNC_PAUSED_NOTE });
+    expect(SYNC_PAUSED_NOTE).toMatch(/Settings → Devices/);
   });
 });
 
@@ -395,6 +424,32 @@ describe("who runs PR review and issue handling", () => {
     const old = { ...m("mini"), automation: null };
     expect(automationHint([m("laptop", false), old, { ...old, key: "rig" }])).toBe("");
   });
+
+  it("names the one device that runs them, and offers Run here only on the others", () => {
+    const self = (key: string, automation?: boolean) => ({ ...m(key, automation), self: true });
+    const elsewhere = automationLine([self("laptop", false), { ...m("ml-rig", true), host: "rig" }, m("mini", false)]);
+    expect(elsewhere?.runner?.key).toBe("ml-rig");
+    expect(elsewhere?.here).toBe(false);
+    expect(elsewhere?.canMove).toBe(true);
+    expect(elsewhere?.text).toMatch(/^rig runs PR review and issue handling for all your devices/);
+    // On the device that runs them there is no off switch: they're moved
+    // from the device that should take them.
+    const here = automationLine([self("laptop", true), m("mini", false)]);
+    expect(here?.here).toBe(true);
+    expect(here?.canMove).toBe(false);
+    expect(here?.text).toMatch(/^This device runs PR review and issue handling/);
+    expect(here?.text).toMatch(/Run here in Settings → Devices on the device that should run them/);
+  });
+
+  it("not exactly one (older members deciding for themselves): the warning, with Run here", () => {
+    const both = automationLine([{ ...m("laptop", true), self: true }, m("mini", true)]);
+    expect(both?.runner).toBeNull();
+    expect(both?.canMove).toBe(true);
+    expect(both?.text).toMatch(/^laptop and mini all run/);
+    // A group of one, or members too old to say: nothing to show.
+    expect(automationLine([{ ...m("laptop", true), self: true }])).toBeNull();
+    expect(automationLine([m("laptop"), m("mini")])).toBeNull();
+  });
 });
 
 describe("removals, key conflicts and the token rotation", () => {
@@ -445,6 +500,61 @@ describe("removals, key conflicts and the token rotation", () => {
     expect(removalLines(null, now)).toEqual([]);
   });
 
+  it("a device that LEFT on its own is not flagged as a possibly forged removal", () => {
+    const st = {
+      self: { key: "ml-rig", host: "rig" },
+      members: [member("ml-rig", { host: "rig", self: true })],
+      removed: [
+        // The server's `left` flag, and an older server's "removed by itself".
+        { key: "laptop", host: "Laptop", removed_at: at(10, 32), removed_by: "laptop", left: true },
+        { key: "nas", host: "nas", removed_at: at(11, 5), removed_by: "nas" },
+        { key: "mini", host: "mac-mini", removed_at: at(11, 30), removed_by: "laptop", removed_by_host: "Laptop" },
+      ],
+    };
+    expect(removalLines(st, now)).toEqual([
+      { key: "mini", text: "Laptop removed mac-mini at 11:30 — if that wasn't you, remove Laptop from your tailnet" },
+    ]);
+    expect(leftLines(st, now)).toEqual([
+      { key: "nas", text: "nas left your devices at 11:05" },
+      { key: "laptop", text: "Laptop left your devices at 10:32" },
+    ]);
+    // Shown as long as a removal is, then gone.
+    expect(leftLines(st, at(11, 0) + 15 * 86400)).toEqual([]);
+    expect(leftLines(null, now)).toEqual([]);
+  });
+
+  it("a device added back on another member is offered back here, naming who added it", () => {
+    const st = {
+      self: { key: "laptop", host: "laptop" },
+      members: [member("laptop"), member("ml-rig", { host: "rig" })],
+      readmitted_elsewhere: [{ key: "mini", host: "mac-mini", by: "ml-rig" }, { key: "nas" }],
+    };
+    expect(readmittedLines(st)).toEqual([
+      {
+        key: "mini",
+        host: "mac-mini",
+        text:
+          "mac-mini was added back on rig, but it's still removed on this device — it gets no settings sync, sign-in or ticket claims from here until you allow it.",
+      },
+      {
+        key: "nas",
+        host: "nas",
+        text:
+          "nas was added back on another of your devices, but it's still removed on this device — it gets no settings sync, sign-in or ticket claims from here until you allow it.",
+      },
+    ]);
+    expect(readmittedLines({ self: { key: "laptop", host: "laptop" }, members: [] })).toEqual([]);
+    // The adder isn't a member row here (it was removed too, or not known
+    // yet): the server's by_host names it, not its raw key.
+    expect(
+      readmittedLines({
+        self: { key: "laptop", host: "laptop" },
+        members: [],
+        readmitted_elsewhere: [{ key: "mini", host: "mac-mini", by: "n123abc", by_host: "ml-rig" }],
+      })[0].text
+    ).toMatch(/^mac-mini was added back on ml-rig,/);
+  });
+
   it("a member holding a different key is a conflict, flagged or said in its error", () => {
     const ms = [
       member("laptop"),
@@ -463,6 +573,14 @@ describe("removals, key conflicts and the token rotation", () => {
       "Access token regenerated — scan the QR again on your phone; other browsers sign in again · new device key sent to mini · rig gets the new device key when back online"
     );
     expect(rotatedToast({ fleet: { rekeyed: ["mini"], missed: [] } })).toMatch(/new device key sent to mini$/);
+    // Each member's own access token too: where it was replaced, and where
+    // it's still to do by hand (refused, or offline).
+    expect(rotatedToast({ rekeyed: ["mini", "nas"], missed: ["rig"], rotated: ["mini"], rotate_failed: ["nas"] })).toBe(
+      "Access token regenerated — scan the QR again on your phone; other browsers sign in again · new device key sent to mini, nas · rig gets the new device key when back online · access token replaced on mini · regenerate the access token on nas, rig too (Security there) — theirs still work"
+    );
+    expect(rotatedToast({ rekeyed: ["mini"], missed: [], rotated: ["mini"], rotate_failed: [] })).toMatch(
+      /access token replaced on mini$/
+    );
     // The token changed but the devices' key didn't: say so.
     expect(rotatedToast({ fleet_error: "couldn't replace your devices' key: boom" })).toMatch(
       / · couldn't replace your devices' key: boom$/

@@ -444,6 +444,13 @@ _INTERNAL_RULE_FIELDS = ("default_enabled", "priority", "tags")
 _DEDUPE_SECONDS = 5.0
 
 
+def _unreadable_response() -> JSONResponse:
+    """409 for a save refused because settings.json exists but can't be read
+    (saving would replace it with defaults — and settings sync would spread
+    "everything deleted" to every device)."""
+    return JSONResponse({"error": settings_store.UNREADABLE_HINT}, status_code=409)
+
+
 def _rule_enabled(rule: dict, muted: set, opted_in: set) -> bool:
     """Whether ``rule`` is active given the muted (opt-out) and enabled (opt-in)
     id sets. Default-on rules fire unless muted; default-off rules fire only when
@@ -666,9 +673,12 @@ class NotifyAddon(Addon):
                     opted_in.append(rule_id)
                 elif not enabled:
                     opted_in = [e for e in opted_in if e != rule_id]
-            settings_store.update_settings(
-                notifications={"muted_rules": muted, "enabled_rules": opted_in}
-            )
+            try:
+                settings_store.update_settings(
+                    notifications={"muted_rules": muted, "enabled_rules": opted_in}
+                )
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
             return JSONResponse({"rules": _rules_with_state()})
 
         @router.get("/ntfy")
@@ -755,7 +765,10 @@ class NotifyAddon(Addon):
                 )
 
             if patch:
-                settings_store.update_settings(notifications=patch)
+                try:
+                    settings_store.update_settings(notifications=patch)
+                except settings_store.SettingsUnreadable:
+                    return _unreadable_response()
             # Channel just came on: the first thing worth pushing to a phone
             # that has never heard from this machine is how to reach it.
             if patch.get("ntfy_enabled") and not stored.ntfy_enabled:

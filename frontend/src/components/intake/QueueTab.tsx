@@ -136,8 +136,8 @@ function StalledNote({ s }: { s: Section }) {
     return (
       <div className="ik-queue-stalled" data-runs-on={s.runsOn || ""}>
         {runsOnText(s.runsOn)} — {s.runsOn || "that device"} starts{" "}
-        {many ? "these" : "this one"} on its own; this computer doesn't (Settings → Devices →{" "}
-        <strong>Run PR review and issue handling here</strong> picks which one does). You can
+        {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
+        <strong>Run here</strong> in Settings → Devices). You can
         still start {many ? "any of them" : "it"} here, with <strong>Start now</strong>.
       </div>
     );

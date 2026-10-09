@@ -20,6 +20,7 @@ MINDFLOCK_SKIP_E2E=1.
 from __future__ import annotations
 
 import json
+import secrets
 import os
 import socket
 import stat
@@ -141,6 +142,10 @@ class Server:
                 "MINDFLOCK_HOOKS_DIR": str(self.dir / "hooks"),
                 "MINDFLOCK_TEMPLATES_FILE": str(self.dir / "templates.json"),
                 "MINDFLOCK_TAILSCALE_STATUS_FILE": str(self.status_file),
+                # The pipeline's repo root (its ledger, automation_here.json,
+                # lock): its own dir — never the checkout, nor the real one a
+                # live server's exported MINDFLOCK_REPO_ROOT names.
+                "MINDFLOCK_REPO_ROOT": str(self.dir),
                 "TMUX_TMPDIR": "/tmp/mf-e2e-%s-%d" % (name, port),
                 "PORT": str(port),
                 "UVICORN_PORT": str(port),
@@ -149,30 +154,43 @@ class Server:
         if self.token:
             env["MINDFLOCK_AUTH_TOKEN"] = self.token
         os.makedirs(env["TMUX_TMPDIR"], exist_ok=True)
-        self.log = open(self.dir / "server.log", "wb")
+        self.env = env
+        self.cmd = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "backend.web.server:app",
+            "--host",
+            self.ip,
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ]
+        self._launch()
+
+    def _launch(self) -> None:
+        self.log = open(self.dir / "server.log", "ab")
         self.proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "backend.web.server:app",
-                "--host",
-                self.ip,
-                "--port",
-                str(port),
-                "--log-level",
-                "warning",
-            ],
+            self.cmd,
             cwd=str(_repo_root()),
-            env=env,
+            env=self.env,
             stdout=self.log,
             stderr=subprocess.STDOUT,
         )
         self.http = httpx.Client(
-            base_url="http://%s:%d" % (self.ip, port),
+            base_url="http://%s:%d" % (self.ip, self.port),
             headers={"Authorization": "Bearer " + self.token} if self.token else {},
             timeout=30.0,
         )
+
+    def restart(self) -> None:
+        """Stop the process and start it again on the same address, port,
+        $HOME and settings dir (its fleet.json and settings_sync.json kept),
+        then wait until it answers."""
+        self.stop()
+        self._launch()
+        wait_for(lambda: self.get("/api/remote/hello"), timeout=60)
 
     # -- http ----------------------------------------------------------------
     def get(self, path: str, **kw):
@@ -236,11 +254,14 @@ class Server:
             self.proc.wait(timeout=8)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+            self.proc.wait(timeout=8)
         self.log.close()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def fleet(tmp_path_factory):
+    """Four fresh servers per test (each test builds its own group), torn
+    down before the next test starts its own."""
     for spec in NODES.values():  # the loopback aliases must be bindable
         s = socket.socket()
         try:
@@ -515,3 +536,249 @@ def test_fleet_end_to_end(fleet):
     beta.post("/api/fleet/leave")
     assert beta.fleet()["in_fleet"] is False
     wait_for(lambda: {m["key"] for m in alpha.fleet()["members"]} == {"alpha"})
+
+
+# --------------------------------------------------------------------------- #
+# offline removal, restarts, and a rogue claiming the group's id
+# --------------------------------------------------------------------------- #
+def _members(srv: Server) -> set:
+    return {m["key"] for m in srv.fleet()["members"]}
+
+
+def _roster_status(srv: Server, key: str) -> int:
+    """GET a member-only route on ``srv`` with ``key`` as the bearer."""
+    r = httpx.get(
+        "http://%s:%d/api/fleet/roster" % (srv.ip, srv.port),
+        headers={"Authorization": "Bearer " + key},
+        timeout=30.0,
+    )
+    return r.status_code
+
+
+def _group_of_three(alpha: Server, beta: Server, gamma: Server) -> None:
+    """beta then gamma join alpha with codes made on alpha; wait until every
+    one of them lists all three."""
+    invite = alpha.post("/api/fleet/invite")
+    beta.post("/api/fleet/join", {"device": "alpha", "code": invite["code"]})
+    wait_for(lambda: beta.fleet()["in_fleet"])
+    # gamma must see beta's hello name the group before it joins, so its
+    # announce reaches beta too (not only on the next gossip round).
+    for srv in (alpha, beta, gamma):
+        srv.refresh()
+    invite = alpha.post("/api/fleet/invite")
+    gamma.post("/api/fleet/join", {"device": "alpha", "code": invite["code"]})
+    wait_for(lambda: gamma.fleet()["in_fleet"])
+    for srv in (alpha, beta, gamma):
+        srv.refresh()
+    for srv in (alpha, beta, gamma):
+        wait_for(
+            lambda s=srv: _members(s) == {"alpha", "beta", "gamma"},
+            timeout=45,
+            every=1.0,
+        )
+    ids = {srv.fleet_file()["id"] for srv in (alpha, beta, gamma)}
+    assert len(ids) == 1 and "" not in ids, ids
+
+
+def _converged(servers, fn: Callable[[Server], bool]) -> Callable[[], bool]:
+    def check() -> bool:
+        for srv in servers:
+            srv.refresh()
+            srv.sync_now()
+        return all(fn(srv) for srv in servers)
+
+    return check
+
+
+def test_removal_while_a_member_is_offline_then_restart(fleet):
+    alpha, beta, gamma = (fleet[n] for n in ("alpha", "beta", "gamma"))
+    _seed_alpha(alpha)
+    _group_of_three(alpha, beta, gamma)
+    wait_for(
+        lambda: gamma.settings()["github"].get("repos") == ["acme/app", "acme/api"]
+    )
+    fid = alpha.fleet_file()["id"]
+
+    # --- (a) gamma is away while alpha removes beta ---------------------------
+    old_key = beta.fleet_file()["key"]
+    assert gamma.fleet_file()["key"] == old_key
+    assert _roster_status(gamma, old_key) == 200  # beta's key works on gamma now
+    gamma.stop()  # its dir (fleet.json, settings_sync.json) stays
+
+    removed = alpha.post("/api/fleet/members/beta/remove")
+    assert "gamma" in removed["missed"], removed
+    new_key = alpha.fleet_file()["key"]
+    assert new_key != old_key
+    assert _members(alpha) == {"alpha", "gamma"}
+
+    gamma.restart()
+    # Back on the key it left with — it hasn't heard yet.
+    assert gamma.fleet_file()["key"] == old_key
+    for srv in (alpha, gamma):
+        srv.refresh()
+    # alpha's next gossip round finds gamma on the old epoch and walks it up
+    # under the old key it kept (no route triggers a round: up to one
+    # INTERVAL, 30 s, after alpha's discovery sees gamma again).
+    started = time.time()
+    wait_for(lambda: gamma.fleet_file()["key"] == new_key, timeout=90, every=1.0)
+    print("gamma took the new key %.1fs after coming back" % (time.time() - started))
+    assert gamma.fleet_file()["id"] == fid
+    assert gamma.fleet_file()["epoch"] == alpha.fleet_file()["epoch"]
+    wait_for(lambda: _members(gamma) == {"alpha", "gamma"}, timeout=30)
+    assert "beta" in {r["key"] for r in gamma.fleet()["removed"]}
+    # The removed device's key no longer opens gamma; the new one does.
+    assert _roster_status(gamma, old_key) == 401
+    assert _roster_status(gamma, new_key) == 200
+    r = httpx.get(
+        "http://%s:%d/api/settings/sync/export" % (gamma.ip, gamma.port),
+        headers={"Authorization": "Bearer " + old_key},
+        timeout=30.0,
+    )
+    assert r.status_code == 401, r.text
+    # beta, still running on the old key, gets nothing back into the group.
+    for srv in (alpha, gamma, beta):
+        srv.refresh()
+    time.sleep(2.0)
+    assert _members(gamma) == {"alpha", "gamma"}
+    assert _members(alpha) == {"alpha", "gamma"}
+    wait_for(lambda: not gamma.fleet()["stale_key"], timeout=40, every=2.0)
+
+    # --- (b) a restarted member is still in the group and still syncs ---------
+    before = alpha.fleet_file()
+    alpha.restart()
+    st = alpha.fleet()
+    assert st["in_fleet"] is True
+    after = alpha.fleet_file()
+    assert (after["id"], after["key"], after["epoch"]) == (
+        before["id"],
+        before["key"],
+        before["epoch"],
+    )
+    assert _members(alpha) == {"alpha", "gamma"}
+    assert alpha.get("/api/settings/sync")["enabled"] is True
+
+    gamma.post("/api/settings", {"general": {"session_budget_usd": 33.0}})
+    wait_for(
+        _converged(
+            (alpha,), lambda s: s.settings()["general"].get("session_budget_usd") == 33
+        ),
+        timeout=40,
+        every=1.0,
+    )
+    # ...and the other way round, from the device that restarted.
+    alpha.post("/api/settings", {"general": {"session_budget_usd": 44.0}})
+    wait_for(
+        _converged(
+            (gamma,), lambda s: s.settings()["general"].get("session_budget_usd") == 44
+        ),
+        timeout=40,
+        every=1.0,
+    )
+    # beta, removed, got none of it.
+    assert beta.settings()["general"].get("session_budget_usd") not in (33.0, 44.0)
+
+
+def test_a_rogue_claiming_the_group_id_is_never_a_sync_source(fleet):
+    alpha, beta, gamma, rogue = (fleet[n] for n in ("alpha", "beta", "gamma", "rogue"))
+    _seed_alpha(alpha)
+    _group_of_three(alpha, beta, gamma)
+    members = (alpha, beta, gamma)
+    wait_for(
+        _converged(
+            members,
+            lambda s: s.settings()["github"].get("repos") == ["acme/app", "acme/api"],
+        ),
+        timeout=40,
+        every=1.0,
+    )
+
+    # --- (c) the rogue fakes membership: the real id, a key of its own, a ----
+    # roster naming everyone (itself included), and settings sync on.
+    real = alpha.fleet_file()
+    rogue.stop()
+    fake_members = {k: dict(v) for k, v in real["members"].items()}
+    fake_members["rogue"] = {
+        "host": "rogue",
+        "added_at": time.time(),
+        "added_by": "alpha",
+        "dns": "rogue.%s" % DOMAIN,
+    }
+    fake_key = secrets.token_urlsafe(32)
+    (rogue.dir / "fleet.json").write_text(
+        json.dumps(
+            {
+                "id": real["id"],
+                "key": fake_key,
+                "epoch": real["epoch"],
+                "members": fake_members,
+                "removed": {},
+                "prev_keys": {},
+                "admits": {},
+            }
+        )
+    )
+    (rogue.dir / "settings_sync.json").write_text(
+        json.dumps({"v": 2, "enabled": True})  # a v2 state (no "v" = v1: off)
+    )
+    rogue.restart()
+    assert rogue.get("/api/remote/hello")["fleet"] == real["id"]
+    assert rogue.fleet()["in_fleet"] is True
+    # A fresh, distinctive edit on the rogue — stamped newer than anything.
+    rogue.post(
+        "/api/settings",
+        {
+            "github": {"repos": ["evil/rogue-repo"]},
+            "general": {"session_budget_usd": 666.0},
+        },
+    )
+    for srv in members:
+        srv.refresh()
+    rogue.refresh()
+    rogue.sync_now()  # its pass: pulls with a key nobody accepts, nudges
+    # It really tries: it counts the three as its sync peers, and each one
+    # refuses its key.
+    tried = {d["key"]: d for d in rogue.get("/api/settings/sync")["devices"]}
+    assert set(tried) == {"alpha", "beta", "gamma"}, tried
+    assert all("refused" in d["error"] for d in tried.values()), tried
+    # What its gossip would push (its roster, rogue included) is refused too.
+    r = httpx.get(
+        "http://%s:%d/api/fleet/roster" % (rogue.ip, rogue.port),
+        headers={"Authorization": "Bearer " + fake_key},
+        timeout=30.0,
+    )
+    assert r.status_code == 200 and "rogue" in r.json()["members"], r.text
+    fake_roster = r.json()
+    for srv in members:
+        r = httpx.post(
+            "http://%s:%d/api/fleet/roster" % (srv.ip, srv.port),
+            json=fake_roster,
+            headers={"Authorization": "Bearer " + fake_key},
+            timeout=30.0,
+        )
+        assert r.status_code == 401, (srv.name, r.text)
+
+    # Looks like one of us on a naive check (the same id in its hello)...
+    devs = {d["device"]: d for d in alpha.get("/api/devices")["devices"]}
+    assert devs["rogue"]["same_fleet"] is True, devs["rogue"]
+    assert devs["rogue"]["member"] is False, devs["rogue"]
+    # ...but is nobody's sync peer, gossip peer or member.
+    for _ in range(3):
+        for srv in members:
+            srv.refresh()
+            srv.sync_now()
+        time.sleep(1.0)
+    for srv in members:
+        st = srv.settings()
+        assert st["github"].get("repos") == ["acme/app", "acme/api"], srv.name
+        assert st["general"].get("session_budget_usd") != 666.0, srv.name
+        assert "rogue" not in _members(srv), srv.name
+        peers = {d["key"] for d in srv.get("/api/settings/sync")["devices"]}
+        assert "rogue" not in peers, (srv.name, peers)
+        assert {"alpha", "beta", "gamma"} - {srv.name} <= peers, (srv.name, peers)
+        # Its key opens nothing on a member.
+        assert _roster_status(srv, fake_key) == 401, srv.name
+    # The rogue's own key fingerprints differ from the group's: no member
+    # took it as a member in a conflict either.
+    for srv in members:
+        assert all(not m.get("key_conflict") for m in srv.fleet()["members"])
+    assert rogue.settings()["github"].get("repos") == ["evil/rogue-repo"]

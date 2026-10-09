@@ -102,8 +102,13 @@ class Devices:
         with self.on(dev["key"]):
             try:
                 return 200, settings_sync.export()
-            except store.SettingsUnreadable:  # what the export route answers
-                return 503, {"error": settings_sync.UNREADABLE}
+            except store.SettingsUnreadable as err:  # what the export route answers
+                why = (
+                    settings_sync.PAUSED
+                    if str(err) == settings_sync.PAUSED
+                    else settings_sync.UNREADABLE
+                )
+                return 503, {"error": why}
 
     async def post_json(self, dev, path, body, timeout=10.0, *, auth=True, bearer=None):
         self.posts.append((self.me, dev["key"], path))
@@ -424,6 +429,8 @@ def test_join_keeps_a_different_source_under_the_same_id_separate(devices, clock
     assert _id_project_token() == [("sc", "home", "h")]
     st = settings_sync.status()
     assert "ticketing.sources#sc" in st["pinned"]
+    # Who it's kept separate from (Settings → Devices' Unpin confirm).
+    assert st["separate"] == {"ticketing.sources#sc": "Rig"}
     assert any(
         "“sc” differs between Rig and this device — kept separate" in w
         for w in st["warnings"]
@@ -1076,7 +1083,8 @@ def test_a_corrupt_settings_file_pauses_sync_instead_of_deleting_everywhere(
     assert p.read_text() == broken  # never saved over
     st = settings_sync.status()
     assert st["error"] == settings_sync.UNREADABLE
-    assert any(settings_sync.UNREADABLE in w for w in st["warnings"])
+    # Said once (its own banner), not again in the warnings list.
+    assert not any(settings_sync.UNREADABLE in w for w in st["warnings"])
     with pytest.raises(LookupError):
         run(settings_sync.enable("rig"))
     assert p.read_text() == broken
@@ -1303,9 +1311,9 @@ def test_an_incoming_path_that_doesnt_exist_here_never_replaces_ours(tmp_path):
 # --------------------------------------------------------------------------- #
 # stamps from the far future
 # --------------------------------------------------------------------------- #
-def test_a_far_future_stamp_is_never_adopted(devices, clock):
-    """A stamp beyond the skew allowance (or not a number at all) isn't
-    taken — clamped, it would still outrank every later edit here."""
+def test_a_stamp_that_cant_be_a_real_time_is_never_adopted(devices, clock):
+    """Not a finite number, negative, or years ahead: skipped (clamped, it
+    would outrank every later edit here), and the device is named."""
     devices.all_on()
     rogue = {
         "protocol": settings_sync.PROTOCOL,
@@ -1316,24 +1324,33 @@ def test_a_far_future_stamp_is_never_adopted(devices, clock):
             "ui.accent": {"ts": 1e18, "by": "rig", "h": "x"},
             "ui.scroll_speed": {"ts": float("inf"), "by": "rig", "h": "x"},
             "repository.base_branch": {"ts": float("nan"), "by": "rig", "h": "x"},
+            "repository.live_branch": {"ts": -5, "by": "rig", "h": "x"},
         },
         "values": {
             "ui.accent": "teal",
             "ui.scroll_speed": 3,
             "repository.base_branch": "x",
+            "repository.live_branch": "y",
         },
         "withheld": [],
     }
     assert settings_sync.merge(rogue) == []
     assert devices.get("ui", "accent") == ""
-    assert any("Rig's clock is ahead" in w for w in settings_sync.status()["warnings"])
+    assert any(
+        "Rig's clock is far ahead — its changes are ignored" in w
+        for w in settings_sync.status()["warnings"]
+    )
 
 
-def test_a_fast_clock_waits_instead_of_reverting_a_later_edit(devices, clock):
-    """The rig's clock runs an hour fast. Clamped to now + 5 min, its stamp
-    moved forward every pass and kept beating an edit made here after it —
-    the edit was reverted within a pass. Now its change waits, said so, and
-    lands once its clock is right."""
+def test_a_fast_clock_is_taken_and_a_later_edit_here_still_wins(devices, clock):
+    """The rig's clock runs an hour fast. Holding its change back (round 2)
+    only postponed the comparison: once the hold lapsed — the clock still
+    wrong, or fixed — its old stamp beat an edit made here AFTER it, and the
+    later edit was reverted out of nowhere. Now its change is taken at once
+    (with a note about its clock) and an edit here after seeing it is
+    stamped later still, so it wins and stays. No warning about rig's clock:
+    the lead it reads is carried forward by every later edit (HLC), so it
+    would name healthy devices too."""
     devices.all_on()
     clock.skew["rig"] = 3600.0
     clock.tick()
@@ -1342,41 +1359,122 @@ def test_a_fast_clock_waits_instead_of_reverting_a_later_edit(devices, clock):
         settings_sync.scan_local()
     clock.tick()
     devices.sync("laptop")
-    assert devices.get("ui", "accent") == ""
-    assert any(
-        "Rig's clock is ahead by 60 min — its changes wait until it's fixed" in w
-        for w in settings_sync.status()["warnings"]
-    )
+    assert devices.get("ui", "accent") == "teal"  # nothing waits for a clock
+    assert not any("clock" in w for w in settings_sync.status()["warnings"])
     clock.tick(5)
-    store.update_settings(ui={"accent": "red"})
+    store.update_settings(ui={"accent": "red"})  # the later edit, here
     settings_sync.local_change()
     clock.tick(5)
-    devices.sync("laptop")
-    assert devices.get("ui", "accent") == "red"  # never reverted
-    # The rig's clock is fixed; its next edit lands and the warning goes.
+    devices.sync("laptop", "rig")
+    assert devices.get("ui", "accent") == "red"
+    with devices.on("rig"):
+        assert devices.get("ui", "accent") == "red"
+    # 55 minutes on, rig's clock still fast: nothing is reverted.
+    clock.tick(3300)
+    devices.sync("laptop", "rig")
+    assert devices.get("ui", "accent") == "red"
+    # NTP fixes rig's clock; nobody edits: still nothing is reverted.
     clock.skew["rig"] = 0.0
+    clock.tick(60)
+    devices.sync("laptop", "rig")
+    assert devices.get("ui", "accent") == "red"
+    # rig's next edit lands.
     clock.tick(4000)
     with devices.on("rig"):
         store.update_settings(ui={"accent": "gold"})
-        settings_sync.scan_local()
+        settings_sync.local_change()
     clock.tick()
     devices.sync("laptop")
     assert devices.get("ui", "accent") == "gold"
     assert not any("clock" in w for w in settings_sync.status()["warnings"])
 
 
-def test_a_join_never_takes_a_stamp_from_a_fast_clock(devices, clock):
+def test_a_lead_carried_by_a_later_edit_never_blames_its_editor(trio, monkeypatch):
+    """Rig runs an hour fast; the laptop takes its change, then edits on top
+    — stamped rig's time + 1 ms, by the laptop (HLC). Mini pulls the laptop
+    with rig asleep: the laptop's clock is fine, so nothing may name it (the
+    "clock looks N min ahead" note did, for an hour). A stamp that can't be
+    real is still skipped and named."""
+    clock = _clock(monkeypatch, trio)
+    trio.all_on()
+    clock.skew["rig"] = 3600.0
+    clock.tick()
+    with trio.on("rig"):
+        store.update_settings(ui={"accent": "teal"})
+        settings_sync.scan_local()
+    clock.tick()
+    trio.sync("laptop")
+    clock.tick(5)
+    store.update_settings(ui={"accent": "red"})
+    settings_sync.local_change(["ui.accent"])
+    clock.tick(5)
+    trio.offline.add("rig")
+    with trio.on("mini"):
+        trio.sync("mini")
+        assert trio.get("ui", "accent") == "red"
+        assert not any("clock" in w for w in settings_sync.status()["warnings"])
+
+
+def test_a_stamp_too_big_for_a_float_is_skipped(devices, clock, tmp_path):
+    """A 400-digit JSON integer parses to an int that float() can't hold
+    (OverflowError, not ValueError): skipped like any junk stamp — never an
+    exception that aborts the pull or the load."""
+    import json
+
+    devices.all_on()
+    body = {
+        "protocol": settings_sync.PROTOCOL,
+        "fleet": FLEET,
+        "device": "rig",
+        "enabled": True,
+        "stamps": {"ui.accent": {"ts": 10**400, "by": "rig", "h": "x"}},
+        "values": {"ui.accent": "teal"},
+        "withheld": [],
+    }
+    assert settings_sync.merge(json.loads(json.dumps(body))) == []
+    assert devices.get("ui", "accent") == ""
+    p = tmp_path / "laptop" / "settings_sync.json"
+    data = json.loads(p.read_text())
+    data["stamps"]["ui.accent"] = {"ts": 10**400, "by": "laptop", "h": "x"}
+    p.write_text(json.dumps(data))
+    assert "ui.accent" not in settings_sync._load()["stamps"]
+
+
+def test_a_slow_clock_here_still_takes_the_others_changes(devices, clock):
+    """This device's clock is 10 min behind (WSL after sleep): every other
+    device's stamp looks ahead. It used to skip them all and blame the
+    healthy devices; now they're taken, and a few minutes ahead says
+    nothing."""
+    devices.all_on()
+    clock.skew["laptop"] = -600.0
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(ui={"accent": "teal"})
+        settings_sync.scan_local()
+    devices.sync("laptop")
+    assert devices.get("ui", "accent") == "teal"
+    assert not any("clock" in w for w in settings_sync.status()["warnings"])
+
+
+def test_a_join_takes_the_leaders_value_from_a_fast_clock(devices, clock):
+    """Joining takes the leader's values; a fast clock there no longer makes
+    the leader's value wait (and an edit here afterwards still wins)."""
     clock.skew["rig"] = 3600.0
     with devices.on("rig"):
         store.update_settings(ui={"accent": "teal"})
         run(settings_sync.enable(""))
     store.update_settings(ui={"accent": "red"})
     run(settings_sync.enable("rig"))
-    assert devices.get("ui", "accent") == "red"
-    assert settings_sync._load()["stamps"]["ui.accent"]["ts"] < 1000 + 300
+    assert devices.get("ui", "accent") == "teal"
+    clock.tick()
+    store.update_settings(ui={"accent": "red"})
+    settings_sync.local_change()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("ui", "accent") == "red"
 
 
-def test_stored_stamps_are_clamped_on_load(devices, clock, tmp_path):
+def test_stored_stamps_that_cant_be_real_are_clamped_on_load(devices, clock, tmp_path):
     import json
 
     run(settings_sync.enable(""))
@@ -1384,10 +1482,12 @@ def test_stored_stamps_are_clamped_on_load(devices, clock, tmp_path):
     data = json.loads(p.read_text())
     data["stamps"]["ui.accent"]["ts"] = 1e18
     data["stamps"]["ui.scroll_speed"]["ts"] = -5
+    data["stamps"]["repository.base_branch"]["ts"] = 4000.0
     p.write_text(json.dumps(data))
     stamps = settings_sync._load()["stamps"]
-    assert stamps["ui.accent"]["ts"] <= 1000 + settings_sync._MAX_SKEW
+    assert stamps["ui.accent"]["ts"] <= 1000 + settings_sync._MAX_AHEAD
     assert "ui.scroll_speed" not in stamps
+    assert stamps["repository.base_branch"]["ts"] == 4000.0  # a fast clock: kept
 
 
 # --------------------------------------------------------------------------- #
@@ -1488,9 +1588,9 @@ def test_a_write_that_fails_is_reported_and_not_retried_every_pass(
 # a v1 state file
 # --------------------------------------------------------------------------- #
 def test_a_v1_state_file_loads_cleanly(devices, tmp_path):
-    """v1 (whole-field stamps, any connected device, no fleet): unit ids this
-    version doesn't sync are dropped, and with no fleet yet status reads off
-    with a hint instead of crashing."""
+    """v1 (whole-field stamps, any connected device, no fleet, no "v"): read
+    as a fresh state — sync off, no stamps — and with no fleet yet status
+    reads off with a hint instead of crashing."""
     import json
 
     store.update_settings(github={"token": "ghp_x"}, ui={"accent": "teal"})
@@ -1524,8 +1624,8 @@ def test_a_v1_state_file_loads_cleanly(devices, tmp_path):
     )
     devices.members.discard("laptop")
     data = settings_sync._load()
-    assert "ticketing.sources" not in data["stamps"]
-    assert set(data["stamps"]) == {"github.token", "ui.accent"}
+    assert data["stamps"] == {} and data["enabled"] is False
+    assert data["joined_from"] == "" and data["pinned"] == []
     status = settings_sync.status()
     assert status["enabled"] is False
     assert any("isn't one of your devices" in w for w in status["warnings"])
@@ -1536,6 +1636,233 @@ def test_a_v1_state_file_loads_cleanly(devices, tmp_path):
         store.set_ticketing_sources([_src("r")])
         run(settings_sync.enable("laptop"))
         assert [s for s, _ in _sources()] == ["r", "a", "b"]
+
+
+# --------------------------------------------------------------------------- #
+# round 3: upgrading from v1
+# --------------------------------------------------------------------------- #
+_V1_SIMPLE = [p for p in settings_sync._simple_paths() if not p.startswith("prefs.")]
+
+
+def _v1_enable(tmp_path, me, ts):
+    """Exactly what v1's enable("") wrote: every shared field stamped at a
+    real time, unset ones included — and no "v" marker."""
+    import json
+
+    store.invalidate()
+    doc = store.load_settings().to_dict()
+    stamps = {}
+    for p in _V1_SIMPLE:
+        g, _, f = p.partition(".")
+        v = (doc.get(g) or {}).get(f)
+        stamps[p] = {"ts": ts, "by": me, "h": settings_sync._hash(v)}
+    (tmp_path / me / "settings_sync.json").write_text(
+        json.dumps({"enabled": True, "joined_from": me, "stamps": stamps})
+    )
+
+
+@pytest.fixture
+def upgrade(tmp_path, monkeypatch):
+    yield Devices(tmp_path, monkeypatch, names=("laptop", "mac"))
+    store.invalidate()
+
+
+def _admit_here():
+    """What fleet.after_admit does to sync on the admitting device."""
+    if not settings_sync.enabled():
+        run(settings_sync.enable("", seed=True))
+
+
+def test_a_v1_laptop_never_wipes_what_a_joining_device_has(
+    upgrade, tmp_path, monkeypatch
+):
+    """The laptop ran v1 sync (every field stamped, unset ones too). Kept,
+    those stamps made every field it never set a "deliberate default" that
+    cleared the mac's own ntfy topic, budget, launch flags and the phone's
+    trusted sign-in when the mac joined it."""
+    clock = _clock(monkeypatch, upgrade)
+    store.update_settings(github={"token": "ghp_laptop", "repos": ["o/r"]})
+    _v1_enable(tmp_path, "laptop", 500.0)
+    with upgrade.on("mac"):
+        store.update_settings(
+            notifications={"ntfy_enabled": True, "ntfy_topic": "mac-topic"},
+            general={
+                "session_budget_usd": 7.5,
+                "tailnet_trusted_logins": ["owner@example.com"],
+            },
+            coding_cli={"default_launch_args": {"claude": "--model opus"}},
+        )
+    clock.tick(100)
+    _admit_here()
+    st = settings_sync._load()
+    assert st["stamps"]["notifications.ntfy_topic"]["ts"] <= settings_sync._SEED_TS
+    clock.tick(5)
+    with upgrade.on("mac"):
+        run(settings_sync.enable("laptop"))
+        assert upgrade.get("notifications", "ntfy_topic") == "mac-topic"
+        assert upgrade.get("general", "session_budget_usd") == 7.5
+        assert upgrade.get("general", "tailnet_trusted_logins") == ["owner@example.com"]
+        assert upgrade.get("coding_cli", "default_launch_args") == {
+            "claude": "--model opus"
+        }
+        assert upgrade.get("github", "token") == "ghp_laptop"
+
+
+def test_a_v1_laptops_saves_never_wipe_the_joiners_prefs(
+    upgrade, tmp_path, monkeypatch
+):
+    clock = _clock(monkeypatch, upgrade)
+    _v1_enable(tmp_path, "laptop", 500.0)
+    clock.tick(100)
+    store.update_settings(ui={"scroll_speed": 3})  # a Settings save, pre-join
+    settings_sync.local_change()
+    with upgrade.on("mac"):
+        store.update_settings(prefs={"theme": "dark", "keymap": {"keys": {"x": "y"}}})
+    clock.tick(100)
+    _admit_here()
+    with upgrade.on("mac"):
+        run(settings_sync.enable("laptop"))
+        assert upgrade.get("prefs", "theme") == "dark"
+        assert upgrade.get("prefs", "keymap") == {"keys": {"x": "y"}}
+
+
+def test_the_state_file_carries_its_version(devices, tmp_path):
+    import json
+
+    run(settings_sync.enable(""))
+    data = json.loads((tmp_path / "laptop" / "settings_sync.json").read_text())
+    assert data["v"] == settings_sync.STATE_VERSION == 2
+    assert "v1" not in data
+    assert settings_sync.enabled() is True  # a v2 file is read as it is
+
+
+def _group_of(monkeypatch, *keys):
+    """fleet.live_members() for a group of ``keys`` (the Devices harness
+    fakes membership, not the roster)."""
+    monkeypatch.setattr(
+        fleet_module(monkeypatch), "live_members", lambda: {k: {} for k in keys}
+    )
+
+
+def test_an_unmarked_file_in_a_group_turns_sync_back_on_seeded(
+    upgrade, tmp_path, monkeypatch
+):
+    """A device that ran an earlier build with sync on (no "v" marker) and
+    is already in a group: no join is coming to turn sync back on, so the
+    migration does it at once, seeded — instead of stopping silently. What
+    the other device has wins; what only this one has spreads."""
+    import json
+
+    clock = _clock(monkeypatch, upgrade)
+    _group_of(monkeypatch, "laptop", "mac")
+    with upgrade.on("mac"):
+        store.update_settings(
+            prefs={"theme": "dark"}, notifications={"ntfy_topic": "mac-topic"}
+        )
+        run(settings_sync.enable(""))
+    store.update_settings(github={"token": "ghp_laptop"}, prefs={"theme": "light"})
+    _v1_enable(tmp_path, "laptop", 500.0)
+    clock.tick(100)
+    st = settings_sync.status()
+    assert st["enabled"] is True
+    assert not any("isn't one of your devices" in w for w in st["warnings"])
+    disk = json.loads((tmp_path / "laptop" / "settings_sync.json").read_text())
+    assert disk["v"] == settings_sync.STATE_VERSION and disk["enabled"] is True
+    assert "v1" not in disk
+    assert all(x["ts"] <= settings_sync._SEED_TS for x in disk["stamps"].values())
+    assert disk["stamps"]["notifications.ntfy_topic"]["ts"] == settings_sync._UNSET_TS
+    clock.tick()
+    upgrade.sync("laptop", "mac", "laptop")
+    assert upgrade.get("prefs", "theme") == "dark"
+    assert upgrade.get("notifications", "ntfy_topic") == "mac-topic"
+    with upgrade.on("mac"):
+        assert upgrade.get("github", "token") == "ghp_laptop"
+        assert upgrade.get("notifications", "ntfy_topic") == "mac-topic"
+    assert settings_sync._load()["enabled"] is True  # migrated once, stays on
+
+
+def test_an_unmarked_file_off_or_alone_stays_off(upgrade, tmp_path, monkeypatch):
+    """Sync was off in it, or this device's group is just itself: nothing
+    turns on."""
+    import json
+
+    p = tmp_path / "laptop" / "settings_sync.json"
+    _group_of(monkeypatch, "laptop", "mac")
+    p.write_text(json.dumps({"enabled": False, "stamps": {}}))
+    assert settings_sync._load()["enabled"] is False
+    _group_of(monkeypatch, "laptop")
+    _v1_enable(tmp_path, "laptop", 500.0)
+    assert settings_sync._load()["enabled"] is False
+    assert "v" not in json.loads(p.read_text())  # nothing written
+
+
+def test_an_unmarked_file_waits_for_a_readable_settings_file(
+    upgrade, tmp_path, monkeypatch
+):
+    import json
+
+    _group_of(monkeypatch, "laptop", "mac")
+    store.update_settings(github={"token": "ghp_laptop"})
+    _v1_enable(tmp_path, "laptop", 500.0)
+    sj = tmp_path / "laptop" / "settings.json"
+    good = sj.read_text()
+    _corrupt(sj)
+    assert settings_sync._load()["enabled"] is False  # can't stamp: not yet
+    assert "v" not in json.loads(
+        (tmp_path / "laptop" / "settings_sync.json").read_text()
+    )
+    sj.write_text(good)
+    store.invalidate()
+    assert settings_sync._load()["enabled"] is True
+
+
+def test_two_seeded_devices_never_clear_a_value_by_key_order(
+    upgrade, tmp_path, monkeypatch
+):
+    """Both devices migrate (or seed) at once: every stamp at the seed time.
+    A tie between "dark" on the laptop and "not set" on the mac used to go to
+    the higher key — the mac — and cleared the laptop's theme. Not set is
+    stamped below any seeded value."""
+    clock = _clock(monkeypatch, upgrade)
+    _group_of(monkeypatch, "laptop", "mac")
+    store.update_settings(prefs={"theme": "dark"})
+    run(settings_sync.enable("", seed=True))
+    with upgrade.on("mac"):
+        store.update_settings(github={"token": "ghp_mac"})
+        run(settings_sync.enable("", seed=True))
+    clock.tick()
+    upgrade.sync("laptop", "mac", "laptop")
+    assert upgrade.get("prefs", "theme") == "dark"
+    assert upgrade.get("github", "token") == "ghp_mac"
+    with upgrade.on("mac"):
+        assert upgrade.get("prefs", "theme") == "dark"
+        assert upgrade.get("github", "token") == "ghp_mac"
+
+
+def test_a_new_unset_field_is_stamped_older_than_any_edit(devices, clock, tmp_path):
+    """A field this device's stamps don't know yet (an upgrade added it) and
+    that isn't set here: stamped "now", it outranked a value set on another
+    device and cleared it there."""
+    import json
+
+    devices.all_on()
+    p = tmp_path / "laptop" / "settings_sync.json"
+    data = json.loads(p.read_text())
+    data["stamps"].pop("prefs.theme")  # this device never knew the field
+    p.write_text(json.dumps(data))
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(prefs={"theme": "dark"})
+        settings_sync.local_change()
+    clock.tick()
+    assert "prefs.theme" in settings_sync.scan_local()
+    assert (
+        settings_sync._load()["stamps"]["prefs.theme"]["ts"] == settings_sync._UNSET_TS
+    )
+    devices.sync("laptop", "rig")
+    assert devices.get("prefs", "theme") == "dark"
+    with devices.on("rig"):
+        assert devices.get("prefs", "theme") == "dark"
 
 
 # --------------------------------------------------------------------------- #
@@ -1563,12 +1890,10 @@ def test_no_writer_saves_defaults_over_a_broken_file(devices, tmp_path):
 def test_a_side_write_on_a_paused_broken_file_never_spreads_deletes(
     devices, clock, tmp_path
 ):
-    """The pause held, then anything else wrote (admitting a device sets
-    github.run_here; a browser flushes a pref): the lenient read saved
-    defaults over the file, and the next pass spread "every source deleted,
-    the token cleared" to every device."""
-    from backend.web.core import fleet
-
+    """The pause held, then anything else wrote (admitting a device picks
+    github.automation_device; a browser flushes a pref): the lenient read
+    saved defaults over the file, and the next pass spread "every source
+    deleted, the token cleared" to every device."""
     store.update_settings(github={"token": "ghp_real", "repos": ["o/r"]})
     store.set_ticketing_sources(
         [{"id": "sc", "provider": "shortcut", "api_token": "T"}]
@@ -1576,7 +1901,8 @@ def test_a_side_write_on_a_paused_broken_file_never_spreads_deletes(
     devices.all_on()
     clock.tick()
     broken = _corrupt(tmp_path / "laptop" / "settings.json")
-    fleet._default_run_here(True)  # logs, saves nothing
+    with pytest.raises(store.SettingsUnreadable):  # a side write: refused
+        store.update_settings(github={"automation_device": "laptop"})
     assert settings_sync.local_change() == []
     clock.tick()
     devices.sync("laptop", "rig")
@@ -1623,9 +1949,12 @@ def _reset_laptop(tmp_path):
 
 
 def _configured(devices):
+    """A device with 8 settings set (the pause's floor)."""
     store.update_settings(
-        github={"token": "ghp_x", "repos": ["o/r"]},
+        github={"token": "ghp_x", "repos": ["o/r"], "issue_repos": ["o/i"]},
         ui={"accent": "red"},
+        notifications={"ntfy_topic": "t0p1c"},
+        repository={"base_branch": "dev"},
     )
     store.set_ticketing_sources([_src("a"), _src("b")])
     devices.all_on()
@@ -1646,7 +1975,10 @@ def test_a_scan_that_clears_most_of_this_device_pauses(devices, clock, tmp_path)
     with devices.on("rig"):
         assert devices.get("github", "token") == "ghp_x"
         assert [s for s, _ in _sources()] == ["a", "b"]
-        assert "sync is paused there" in settings_sync.status()["devices"][0]["error"]
+        assert settings_sync.status()["devices"][0]["error"] == (
+            "Laptop paused sync — its settings look reset; answer it in "
+            "Settings → Devices there"
+        )
     assert devices.get("github", "token") == ""  # nothing adopted while paused
 
 
@@ -1681,6 +2013,127 @@ def test_resume_mine_spreads_the_reset(devices, clock, tmp_path):
         assert _sources() == []
     with pytest.raises(ValueError):
         run(settings_sync.resume("both"))
+
+
+def test_a_pause_is_announced_once(devices, clock, tmp_path):
+    from backend.web.core import events
+
+    _configured(devices)
+    clock.tick()
+    seen = []
+    unsubscribe = events.BUS.subscribe(seen.append)
+    try:
+        _reset_laptop(tmp_path)
+        settings_sync.scan_local()
+        settings_sync.scan_local()  # still paused: not announced again
+    finally:
+        unsubscribe()
+    paused = [e for e in seen if e["event"] == "settings.sync_paused"]
+    assert len(paused) == 1
+    assert paused[0]["data"]["cleared"] == 8 and paused[0]["data"]["held"] == 8
+    assert "Settings → Devices" in paused[0]["data"]["detail"]
+
+
+_BULK_CLEAR = {
+    "github": {"repos": [], "issue_repos": []},
+    "ui": {"accent": ""},
+    "notifications": {"ntfy_topic": ""},
+}
+
+
+def test_a_bulk_clear_saved_through_a_route_never_pauses(devices, client, clock):
+    """Saved on a screen, clearing most of what's set is the person's own
+    edit: what the route wrote never counts toward a pause."""
+    _configured(devices)
+    clock.tick()
+    r = client.post("/api/settings", json=_BULK_CLEAR)
+    assert r.status_code == 200
+    r = client.put("/api/settings/ticketing/sources", json={"sources": []})
+    assert r.status_code == 200
+    assert settings_sync.status()["paused"] == ""
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("ui", "accent") == ""
+        assert _sources() == []
+        assert devices.get("github", "token") == "ghp_x"  # not touched
+
+
+def test_the_same_bulk_clear_unattributed_pauses(devices, clock):
+    """The control for the test above: the very same clears, found by a
+    scan that no route explains, pause."""
+    _configured(devices)
+    clock.tick()
+    store.update_settings(**_BULK_CLEAR)
+    assert settings_sync.local_change() == []  # names nothing it saved
+    assert settings_sync.status()["paused"] == settings_sync.PAUSED
+
+
+def test_a_route_explains_only_what_it_saved(devices, clock, tmp_path):
+    """settings.json replaced with {} — then one unrelated save on a screen
+    before the background scan sees it. Only the accent is the person's
+    edit; the rest of the reset is unexplained and pauses sync, so the
+    token and the sources stay on the other devices."""
+    _configured(devices)
+    clock.tick()
+    _reset_laptop(tmp_path)
+    store.update_settings(ui={"accent": "blue"})
+    assert settings_sync.local_change(["ui.accent"]) == []
+    assert settings_sync.status()["paused"] == settings_sync.PAUSED
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("github", "token") == "ghp_x"
+        assert [s for s, _ in _sources()] == ["a", "b"]
+
+
+def test_deleting_a_broken_file_then_a_pref_retry_still_pauses(
+    devices, client, clock, tmp_path
+):
+    """settings.json won't parse; the person deletes it ("fix or delete
+    it") and the browser's kept-dirty pref retries POST /api/prefs before
+    the background scan runs. The pref is theirs; every token and source
+    gone with the file is not — sync pauses instead of wiping the fleet."""
+    _configured(devices)
+    clock.tick()
+    p = tmp_path / "laptop" / "settings.json"
+    _corrupt(p)
+    assert settings_sync.scan_local() == []
+    p.unlink()
+    store.invalidate()
+    assert client.post("/api/prefs", json={"theme": "light"}).status_code == 200
+    assert settings_sync.status()["paused"] == settings_sync.PAUSED
+    clock.tick()
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("github", "token") == "ghp_x"
+        assert [s for s, _ in _sources()] == ["a", "b"]
+
+
+def test_attribution_covers_only_units_under_the_saved_bases():
+    under = settings_sync._attributed
+    saved = frozenset({"github", "prefs.theme", "ticketing.sources", "store:providers"})
+    assert under("github.token", saved)
+    assert under("prefs.theme", saved)
+    assert under("ticketing.sources#a", saved)
+    assert under("store:providers#cli", saved)
+    assert not under("githubx.token", saved)
+    assert not under("prefs.themes", saved)
+    assert not under("prefs.prompt_presets#p", saved)
+    assert not under("store:templates#t", saved)
+    assert not under("ui.accent", frozenset())
+
+
+def test_a_lightly_configured_device_never_pauses(devices, clock):
+    """Below 8 settings set, a bulk delete found by the background scan (a
+    templates file edited by hand…) is just an edit."""
+    store.update_settings(github={"token": "ghp_x"}, ui={"accent": "red"})
+    store.set_ticketing_sources([_src("a"), _src("b"), _src("c"), _src("d")])
+    devices.all_on()
+    clock.tick()
+    store.set_ticketing_sources([_src("a")])
+    assert len(settings_sync.scan_local()) == 3
+    assert settings_sync.status()["paused"] == ""
 
 
 def test_a_small_delete_is_just_an_edit(devices, clock):

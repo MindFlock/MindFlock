@@ -33,10 +33,13 @@ tombstone stamp (``deleted: true``) so a stale copy elsewhere can't bring it
 back. A change is noticed by the hash — a Settings save calls
 :func:`scan_local` at once (and nudges the other devices to pull now), the
 loop rescans every :data:`INTERVAL` s. Stamps are hybrid-logical: a change
-gets ``max(now, previous stamp + 1 ms)``, so a value adopted from a device
-whose clock runs fast can still be overwritten by a later edit here. A stamp
-more than :data:`_MAX_SKEW` s ahead of this clock isn't adopted at all — its
-unit waits, with a warning naming that device, until its clock is fixed.
+gets ``max(now, previous stamp + 1 ms)``, so an edit made here after seeing
+a value from a device whose clock runs fast still wins over it — nothing is
+held back for a clock (holding only delayed the comparison, then reverted
+the later edit), and nothing warns about a clock that is merely ahead: a
+stamp carried forward by :func:`_tick` would name the wrong device. Only a
+stamp that can't be a real time (not a finite number, negative, more than
+:data:`_MAX_AHEAD` s ahead) is skipped, and its device named in a warning.
 
 **Canonical, then local.** A value that names a local checkout (``repository
 .url``, a ticket source's ``repo_url``, a template's ``repo_path``) travels as
@@ -70,7 +73,16 @@ than shipped as this machine's path (the last origin seen is remembered in
 (``settings.update_settings`` raises instead of saving defaults over it). A
 scan that would clear most of what this device has set at once — a reset or
 replaced file — pauses sync until the person says whose values to keep
-(:func:`resume`).
+(:func:`resume`). What a route just saved is the person's own edit and never
+counts toward that (:func:`local_change` names it); a clear anywhere else
+does, whichever scan finds it first.
+
+**State file.** ``settings_sync.json`` carries ``"v": 2``. One without it was
+written by v1 (whole-field stamps, every shared field stamped at a real time
+— unset ones too): it is read as a fresh state (sync off, no stamps), or its
+stamps would make every field it never set wipe the other devices' values.
+If sync was on in it and this device is already in a group of two or more,
+sync is turned straight back on, seeded (no join is coming to do it).
 """
 
 from __future__ import annotations
@@ -87,7 +99,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from backend import log
 
@@ -141,6 +153,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "issue_agent",
         "repo_settings",
         "issue_repo_settings",
+        "automation_device",
     ),
     "engine": ("skip_permissions", "agent"),
     "ui": ("scroll_speed", "accent"),
@@ -202,7 +215,6 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "ingestion_autostart",
     ),
     "notifications": ("ntfy_click_url",),
-    "github": ("run_here",),
     "peer": (
         "enabled",
         "listen_host",
@@ -240,19 +252,31 @@ DEFER_PATHS = frozenset(
     }
 )
 
+#: Shared fields that can't be kept different on one device: they are one
+#: answer for the whole group (pinned on one device, two of them could each
+#: believe they run PR review and review every PR twice).
+UNPINNABLE = frozenset({"github.automation_device"})
+
 #: The stamp a joined device gives values it took from a device that wasn't
 #: syncing yet: older than any real edit, so that device's first pass wins.
 _SEED_TS = 1.0
+#: The stamp of a plain field that isn't set, given without a real edit (a
+#: new field, a seeded start): below :data:`_SEED_TS`, so a value seeded on
+#: another device always beats "not set" here — never a tie broken by key.
+_UNSET_TS = 0.5
 
 #: Seconds a checkout's origin URL is remembered (canonical form).
 _ORIGIN_TTL = 60.0
 
-#: Seconds a stamp from another device may lie ahead of this clock. A later
-#: one is NOT adopted (nor clamped — a clamp moves with the clock, so the fast
-#: device would keep winning): its unit waits, with a warning, until that
-#: device's clock is fixed. Stored stamps that far ahead (an older version
-#: took them) are clamped on load.
-_MAX_SKEW = 300.0
+#: Seconds a stamp may lie ahead of this clock and still be a real time. A
+#: later one (or a non-finite / negative one) is skipped, with a warning; a
+#: stored one is clamped on load. Anything closer is adopted as it is: a
+#: change made here after it is stamped later still (:func:`_tick`).
+_MAX_AHEAD = 365 * 24 * 3600.0
+
+#: The ``settings_sync.json`` format; a file without it is v1 (see the
+#: module doc's **State file**).
+STATE_VERSION = 2
 
 #: What the UI shows while settings.json can't be read.
 UNREADABLE = "settings.json couldn't be read — sync paused"
@@ -263,9 +287,12 @@ PAUSED = "This device's settings look reset — sync paused"
 #: :func:`resume`'s choices: take the other devices' values back, or spread
 #: this device's (reset) ones.
 RESUME_CHOICES = ("theirs", "mine")
-#: A scan that would delete/clear at least this many units, and at least
-#: half of what this device has set, pauses instead of stamping.
+#: A background scan that would delete/clear at least this many units, and
+#: at least half of what this device has set, pauses instead of stamping…
 _MASS_MIN = 3
+#: …once this device has at least this many units set (below it a bulk
+#: delete is just an edit: a lightly configured device has little to lose).
+_MASS_FLOOR = 8
 
 #: How many checkout -> origin answers are remembered (least recently used
 #: go first), in memory and in settings_sync.json.
@@ -319,6 +346,7 @@ LABELS: Dict[str, str] = {
     "github.issue_agent": "Issue agent",
     "github.repo_settings": "PR review: per-repo settings",
     "github.issue_repo_settings": "Issues: per-repo settings",
+    "github.automation_device": "Device that runs PR review and issues",
     "engine.skip_permissions": "Skip permission prompts",
     "engine.agent": "Ticket agent",
     "ui.scroll_speed": "Terminal scroll speed",
@@ -373,6 +401,7 @@ _ORIGINS: Dict[str, Tuple[float, Optional[str]]] = {}
 #: Least recently used first; at most :data:`_CANON_MAX`.
 _CANON: Dict[str, str] = {}
 _unreadable_logged = ""
+_v1_logged = False
 
 #: The loop the server runs sync on — a Settings save (a threadpool route)
 #: schedules its nudge there.
@@ -450,8 +479,11 @@ def _simple_paths() -> List[str]:
 
 
 def bases() -> List[str]:
-    """Everything pinnable: every settings field + ``store:<name>``."""
-    return paths() + ["store:%s" % n for n in _stores()]
+    """Everything pinnable: every settings field (but :data:`UNPINNABLE`) +
+    ``store:<name>``."""
+    return [p for p in paths() if p not in UNPINNABLE] + [
+        "store:%s" % n for n in _stores()
+    ]
 
 
 def _split(unit: str) -> Tuple[str, Optional[str]]:
@@ -516,7 +548,7 @@ def _clean_ts(raw: object, cap: float) -> Optional[float]:
     non-negative number; clamped to ``cap``."""
     try:
         ts = float(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # 1e400 as a JSON int
         return None
     if not math.isfinite(ts) or ts < 0:
         return None
@@ -526,15 +558,17 @@ def _clean_ts(raw: object, cap: float) -> Optional[float]:
 def _remote_ts(rs: object, ahead: Optional[Dict[str, float]] = None) -> Optional[float]:
     """The time of another device's stamp ``rs``; ``None`` — skip the unit —
     when it isn't a finite, non-negative number or lies more than
-    :data:`_MAX_SKEW` s ahead of this clock (``ahead`` then records by how
-    much, per device that made it)."""
+    :data:`_MAX_AHEAD` s ahead of this clock — ``ahead`` records, per device
+    that made such a stamp, its biggest lead (the warning). Any closer stamp
+    is taken as it is, unremarked: nothing waits for a clock, and a lead
+    carried forward by :func:`_tick` says nothing about whose clock is off."""
     if not isinstance(rs, dict):
         return None
     ts = _clean_ts(rs.get("ts") or 0, math.inf)
     if ts is None:
         return None
     lead = ts - time.time()
-    if lead > _MAX_SKEW:
+    if lead > _MAX_AHEAD:
         if ahead is not None:
             by = str(rs.get("by") or "")
             ahead[by] = max(ahead.get(by, 0.0), lead)
@@ -545,11 +579,11 @@ def _remote_ts(rs: object, ahead: Optional[Dict[str, float]] = None) -> Optional
 def _clean_stamps(raw: object) -> Dict[str, dict]:
     """Stored stamps, minus what this version can't use: a unit id it
     doesn't sync (a v1 whole-list stamp like ``ticketing.sources``), a
-    malformed stamp, a time that isn't a finite number. A time too far ahead
-    is clamped, so a device that already took one recovers."""
+    malformed stamp, a time that isn't a finite number. A time that can't be
+    real (more than :data:`_MAX_AHEAD` s ahead) is clamped."""
     if not isinstance(raw, dict):
         return {}
-    cap = time.time() + _MAX_SKEW
+    cap = time.time() + _MAX_AHEAD
     out: Dict[str, dict] = {}
     for unit, st in raw.items():
         if not isinstance(st, dict) or not _valid_unit(unit):
@@ -562,12 +596,23 @@ def _clean_stamps(raw: object) -> Dict[str, dict]:
 
 
 def _load() -> dict:
+    global _v1_logged
     try:
         data = json.loads(_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     if not isinstance(data, dict):
         data = {}
+    unmarked = bool(data) and data.get("v") != STATE_VERSION
+    if unmarked:
+        # v1: every shared field stamped at a real time, unset ones too — kept,
+        # those stamps would make what this device never set clear the other
+        # devices' values the moment they join it. Start fresh (sync off; a
+        # join turns it on, seeded — and so does already being in a group,
+        # below); only the remembered origins are kept.
+        data = {"canon": data.get("canon"), "v1": bool(data.get("enabled"))}
+    data["v"] = STATE_VERSION
+    data["v1"] = bool(data.get("v1"))
     data["stamps"] = _clean_stamps(data.get("stamps"))
     data["enabled"] = bool(data.get("enabled"))
     _seed_canon(data.get("canon"))
@@ -586,7 +631,57 @@ def _load() -> dict:
     }
     paused = data.get("paused")
     data["paused"] = paused if isinstance(paused, dict) else None
+    if unmarked and not (data["v1"] and _resume_migrated(data)) and not _v1_logged:
+        _v1_logged = True
+        _log_error(
+            "settings sync: %v is from an earlier version — starting fresh "
+            "(sync turns on again when this device joins your others)",
+            str(_state_path()),
+        )
     return data
+
+
+def _resume_migrated(data: dict) -> bool:
+    """A state file from an earlier version had sync on, and this device is
+    already in a group of two or more: no join is coming to turn sync back
+    on, so turn it on now, seeded (:func:`_lead_from_here`'s ``seed``: what's
+    here spreads only where no other device has a value) — instead of
+    stopping without a word. Left off (and retried on the next load) while
+    settings.json can't be read. Returns whether it did."""
+    if _live_count() < 2:
+        return False
+    me = _self_key()
+    if not me:
+        return False
+    with _LOCK:
+        try:
+            stamps = _lead_stamps(data, me, True)
+        except Exception:  # noqa: BLE001 — SettingsUnreadable: next load retries
+            return False
+        data.update(stamps=stamps, enabled=True, joined_from=me, paused=None)
+        _save(data)  # marked "v": 2 — migrated once
+        data["v1"] = False  # _save drops it from the dict
+    _log_error(
+        "settings sync: %v was from an earlier version; this device is in a "
+        "group of devices, so sync is back on — seeded: where another device "
+        "has a value, it wins",
+        str(_state_path()),
+    )
+    return True
+
+
+def _live_count() -> int:
+    """How many live members this device's group has (itself included);
+    0 when it isn't in one."""
+    try:
+        from backend.web.core import fleet as _fleet
+
+        if not _fleet.in_fleet():
+            return 0
+        live = _fleet.live_members()
+        return len(live) if isinstance(live, dict) else 0
+    except Exception:  # noqa: BLE001 — no fleet store = a lone device
+        return 0
 
 
 def _seed_canon(canon: object) -> None:
@@ -617,6 +712,8 @@ def _trim_canon() -> None:
 def _save(data: dict) -> None:
     _trim_canon()
     data["canon"] = dict(_CANON)
+    data["v"] = STATE_VERSION
+    data.pop("v1", None)  # in memory only: "v1 sync was on here" (status())
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".sync.", suffix=".tmp")
@@ -1137,103 +1234,165 @@ def paused() -> bool:
     return bool(_load()["paused"])
 
 
-def scan_local(now: Optional[float] = None, *, force: bool = False) -> List[str]:
+def scan_local(
+    now: Optional[float] = None,
+    *,
+    force: bool = False,
+    attributed: Iterable[str] = (),
+) -> List[str]:
     """Stamp every unit whose value changed since its stamp (a save here, a
     hand edit, another process) and tombstone keyed/store entries that are
     gone. Returns the changed units. Nothing at all while settings.json
     can't be read; a unit whose checkout origin git can't tell right now is
-    skipped (:class:`_Unresolved`).
+    skipped (:class:`_Unresolved`). A plain field seen for the first time
+    while it is unset is stamped older than any real edit: a new field has
+    nothing to spread yet.
 
-    A scan that would delete or clear :data:`_MASS_MIN`+ units AND at least
-    half of what this device has set looks like a reset file (replaced,
-    restored from an old backup), not edits: nothing is stamped, sync pauses
-    (:data:`PAUSED`) until :func:`resume` — ``force`` is its "keep mine"."""
+    A scan whose unexplained clears (outside ``attributed`` — a change
+    nobody here made through MindFlock) would delete or clear
+    :data:`_MASS_MIN`+ units
+    AND at least half of what this device has set (once that's
+    :data:`_MASS_FLOOR`+ units) looks like a reset file (replaced, restored
+    from an old backup), not edits: nothing is stamped, sync pauses
+    (:data:`PAUSED`, announced as ``settings.sync_paused``) until
+    :func:`resume` — ``force`` is its "keep mine". ``attributed`` names the
+    bases a route just saved (:func:`local_change`): what this scan clears
+    under them is the person's own edit and never counts toward a pause;
+    anything else it clears (a file replaced or deleted since the last scan)
+    still does."""
+    paused_now: Optional[dict] = None
+    if isinstance(attributed, str):
+        attributed = (attributed,)
+    mine = frozenset(p for p in attributed if isinstance(p, str) and p)
+    try:
+        with _LOCK:
+            changed, paused_now = _scan_locked(now, force, mine)
+    finally:
+        if paused_now is not None:
+            _emit_paused(paused_now)
+    return changed
+
+
+def _emit_paused(info: dict) -> None:
+    try:
+        from backend.web.core import events as _events
+
+        _events.BUS.emit("settings.sync_paused", data=info)
+    except Exception as err:  # noqa: BLE001 — an event is best-effort
+        _log_error("settings sync: announcing the pause failed: %v", err)
+
+
+def _attributed(unit: str, paths: FrozenSet[str]) -> bool:
+    """Whether ``unit`` lies under one of the bases a route saved: the unit
+    itself, its keyed/store base (``ticketing.sources``, ``store:providers``)
+    or a settings group / field above it (``github``)."""
+    base = _split(unit)[0]
+    return any(unit == p or base == p or base.startswith(p + ".") for p in paths)
+
+
+def _scan_locked(
+    now: Optional[float], force: bool, attributed: FrozenSet[str]
+) -> Tuple[List[str], Optional[dict]]:
+    """:func:`scan_local` under :data:`_LOCK`: ``(changed, pause info when
+    this scan paused sync)``."""
     from backend.config import settings as _settings
 
-    with _LOCK:
-        data = _load()
-        if not data["enabled"] or (data["paused"] and not force):
-            return []
-        now = time.time() if now is None else now
-        me = _self_key()
-        pinned = set(data["pinned"])
+    data = _load()
+    if not data["enabled"] or (data["paused"] and not force):
+        return [], None
+    now = time.time() if now is None else now
+    me = _self_key()
+    pinned = set(data["pinned"])
+    try:
+        raw, failed = _snapshot()
+    except _settings.SettingsUnreadable as err:
+        _note_unreadable(err)
+        return [], None
+    # A unit kept separate whose entry is gone here (renamed, deleted)
+    # has nothing left to keep apart: the fleet's entry may come in.
+    dropped = [
+        u
+        for u in pinned
+        if _split(u)[1] is not None and u not in raw and _split(u)[0] not in failed
+    ]
+    for u in dropped:
+        pinned.discard(u)
+        data["separate"].pop(u, None)
+        data["stamps"].pop(u, None)
+    data["pinned"] = sorted(pinned)
+    stamps = dict(data["stamps"])
+    changed = []
+    cleared = []
+    unresolved: Set[str] = set()
+    for unit, value in raw.items():
+        if _is_pinned(unit, pinned):
+            continue
         try:
-            raw, failed = _snapshot()
-        except _settings.SettingsUnreadable as err:
-            _note_unreadable(err)
-            return []
-        # A unit kept separate whose entry is gone here (renamed, deleted)
-        # has nothing left to keep apart: the fleet's entry may come in.
-        dropped = [
-            u
-            for u in pinned
-            if _split(u)[1] is not None and u not in raw and _split(u)[0] not in failed
-        ]
-        for u in dropped:
-            pinned.discard(u)
-            data["separate"].pop(u, None)
-            data["stamps"].pop(u, None)
-        data["pinned"] = sorted(pinned)
-        stamps = dict(data["stamps"])
-        changed = []
-        cleared = []
-        unresolved: Set[str] = set()
-        for unit, value in raw.items():
-            if _is_pinned(unit, pinned):
-                continue
-            try:
-                h = _hash(canonical(unit, value))
-            except _Unresolved:
-                unresolved.add(unit)
-                continue
-            st = stamps.get(unit)
-            if isinstance(st, dict) and not st.get("deleted") and st.get("h") == h:
-                continue
-            if (
-                _split(unit)[1] is None
-                and _set_here(unit, st)
-                and h in _unset_hashes(unit)
-            ):
-                cleared.append(unit)
-            stamps[unit] = {"ts": _tick(now, st), "by": me, "h": h}
-            changed.append(unit)
-        for unit, st in list(stamps.items()):
-            base, key = _split(unit)
-            if key is None or unit in raw or _is_pinned(unit, pinned):
-                continue
-            if base in failed:
-                continue
-            if unit in _unlanded:
-                continue  # never landed here: that isn't a delete
-            if isinstance(st, dict) and st.get("deleted"):
-                continue
-            stamps[unit] = {"ts": _tick(now, st), "by": me, "h": "-", "deleted": True}
-            changed.append(unit)
+            h = _hash(canonical(unit, value))
+        except _Unresolved:
+            unresolved.add(unit)
+            continue
+        st = stamps.get(unit)
+        if isinstance(st, dict) and not st.get("deleted") and st.get("h") == h:
+            continue
+        plain_unset = _split(unit)[1] is None and h in _unset_hashes(unit)
+        if plain_unset and _set_here(unit, st):
             cleared.append(unit)
-        _unresolved.clear()
-        _unresolved.update(unresolved)
-        held = sum(
-            1
-            for u, st in data["stamps"].items()
-            if not _is_pinned(u, pinned)
-            and _split(u)[0] not in failed
-            and _set_here(u, st)
+        if st is None and plain_unset:
+            # First sight of a field that isn't set (a new field, a device
+            # that never had it): nothing to spread — older than any edit,
+            # and than any seeded value elsewhere.
+            stamps[unit] = {"ts": _UNSET_TS, "by": me, "h": h}
+        else:
+            stamps[unit] = {"ts": _tick(now, st), "by": me, "h": h}
+        changed.append(unit)
+    for unit, st in list(stamps.items()):
+        base, key = _split(unit)
+        if key is None or unit in raw or _is_pinned(unit, pinned):
+            continue
+        if base in failed:
+            continue
+        if unit in _unlanded:
+            continue  # never landed here: that isn't a delete
+        if isinstance(st, dict) and st.get("deleted"):
+            continue
+        stamps[unit] = {"ts": _tick(now, st), "by": me, "h": "-", "deleted": True}
+        changed.append(unit)
+        cleared.append(unit)
+    _unresolved.clear()
+    _unresolved.update(unresolved)
+    held = sum(
+        1
+        for u, st in data["stamps"].items()
+        if not _is_pinned(u, pinned) and _split(u)[0] not in failed and _set_here(u, st)
+    )
+    # What a route just saved is the person's edit; the rest is unexplained.
+    unexplained = [u for u in cleared if not _attributed(u, attributed)]
+    if (
+        not force
+        and len(unexplained) >= _MASS_MIN
+        and held >= _MASS_FLOOR
+        and 2 * len(unexplained) >= held
+    ):
+        data["paused"] = {"at": now, "units": sorted(cleared)}
+        _save(data)  # the pause (and dropped pins) only — no stamps
+        _log_error(
+            "settings sync paused: one scan would clear %v of %v settings here",
+            len(cleared),
+            held,
         )
-        if not force and len(cleared) >= _MASS_MIN and 2 * len(cleared) >= held:
-            data["paused"] = {"at": now, "units": sorted(cleared)}
-            _save(data)  # the pause (and dropped pins) only — no stamps
-            _log_error(
-                "settings sync paused: one scan would clear %v of %v settings here",
-                len(cleared),
-                held,
-            )
-            return []
-        if force:
-            data["paused"] = None
-        data["stamps"] = stamps
-        if changed or dropped or force:
-            _save(data)
-        return sorted(changed)
+        return [], {
+            "cleared": len(cleared),
+            "held": held,
+            "detail": PAUSED + " — choose whose settings to keep in Settings "
+            "→ Devices",
+        }
+    if force:
+        data["paused"] = None
+    data["stamps"] = stamps
+    if changed or dropped or force:
+        _save(data)
+    return sorted(changed), None
 
 
 def export() -> dict:
@@ -1327,16 +1486,17 @@ def _device_label(key: str) -> str:
 
 
 def _note_clocks(rstamps: Dict[str, object], ahead: Dict[str, float]) -> None:
-    """Warn about each device whose stamps were skipped for lying in the
-    future (:func:`_remote_ts`); clear the warning for every device in
+    """Name each device that made a stamp more than :data:`_MAX_AHEAD` s
+    ahead of this clock (:func:`_remote_ts`): it can't be a real time, so
+    those changes are skipped. Clear the warning for every device in
     ``rstamps`` that no longer does."""
     seen = {str(rs.get("by") or "") for rs in rstamps.values() if isinstance(rs, dict)}
     for by in seen - set(ahead):
         _warnings.pop("clock:" + by, None)
-    for by, lead in ahead.items():
+    for by in ahead:
         _warnings["clock:" + by] = (
-            "%s's clock is ahead by %d min — its changes wait until it's fixed"
-            % (_device_label(by), max(1, math.ceil(lead / 60.0)))
+            "%s's clock is far ahead — its changes are ignored until it's fixed"
+            % _device_label(by)
         )
 
 
@@ -1375,7 +1535,7 @@ def merge(remote: dict) -> List[str]:
                 continue
             ts = _remote_ts(rs, ahead)
             if ts is None:
-                continue  # unusable, or from a clock running ahead: waits
+                continue  # not a real time (junk, years ahead): skipped
             by = str(rs.get("by") or "")
             if not _newer({"ts": ts, "by": by}, data["stamps"].get(unit)):
                 _deferred.pop(unit, None)
@@ -1588,7 +1748,7 @@ def _adopt_all(body: dict, start_from: str) -> Tuple[List[str], Optional[tuple]]
             rs = rstamps.get(unit)
             rts = _remote_ts(rs, ahead) if rs is not None else None
             if rs is not None and rts is None:
-                held.add(unit)  # a clock running ahead (or junk): waits
+                held.add(unit)  # not a real time (junk, years ahead): skipped
                 continue
             if (
                 _split(unit)[1] is None
@@ -1690,23 +1850,32 @@ def _lead_from_here(me: str, seed: bool) -> None:
         data = _load()
         if seed and data["enabled"]:
             return
-        now = time.time()
-        pinned = set(data["pinned"])
-        raw, _failed = _snapshot()
-        stamps: Dict[str, dict] = {}
-        for u, v in raw.items():
-            if _is_pinned(u, pinned):
-                continue
-            try:
-                h = _hash(canonical(u, v))
-            except _Unresolved:
-                continue  # stamped by a later scan, once git answers
-            plain_unset = _split(u)[1] is None and _is_unset(u, v)
-            ts = _SEED_TS if (seed or plain_unset) else now
-            stamps[u] = {"ts": ts, "by": me, "h": h}
+        data["stamps"] = _lead_stamps(data, me, seed)
         data.update(enabled=True, joined_from=me, paused=None)
-        data["stamps"] = stamps
         _save(data)
+
+
+def _lead_stamps(data: dict, me: str, seed: bool) -> Dict[str, dict]:
+    """:func:`_lead_from_here`'s stamps for what's here now (raises
+    ``SettingsUnreadable``): a plain field that's unset at
+    :data:`_UNSET_TS`, the rest now — or, ``seed``, at :data:`_SEED_TS`."""
+    now = time.time()
+    pinned = set(data["pinned"])
+    raw, _failed = _snapshot()
+    stamps: Dict[str, dict] = {}
+    for u, v in raw.items():
+        if _is_pinned(u, pinned):
+            continue
+        try:
+            h = _hash(canonical(u, v))
+        except _Unresolved:
+            continue  # stamped by a later scan, once git answers
+        if _split(u)[1] is None and _is_unset(u, v):
+            ts = _UNSET_TS
+        else:
+            ts = _SEED_TS if seed else now
+        stamps[u] = {"ts": ts, "by": me, "h": h}
+    return stamps
 
 
 async def enable(start_from: str = "", *, seed: bool = False) -> dict:
@@ -1917,12 +2086,17 @@ async def nudge_peers() -> List[str]:
     return [k for k in got if k]
 
 
-def local_change() -> List[str]:
+def local_change(paths: Iterable[str] = ()) -> List[str]:
     """A Settings save here: stamp now (so "last edit wins" orders by when the
     user really changed it) and, when that stamped anything, nudge the other
-    devices. Returns the stamped units; never raises."""
+    devices. ``paths`` are the bases the save wrote (``github``,
+    ``prefs.theme``, ``ticketing.sources``, ``store:providers``): whatever it
+    clears under them is the person's own edit and never pauses sync; a
+    clear anywhere else (settings.json replaced or deleted before this scan)
+    still counts toward the pause (``attributed``). Returns the stamped
+    units; never raises."""
     try:
-        changed = scan_local()
+        changed = scan_local(attributed=paths)
     except Exception as err:  # noqa: BLE001 — a settings save must never fail on this
         _log_error("settings sync: stamping a save failed: %v", err)
         return []
@@ -2017,9 +2191,16 @@ async def sync_once() -> List[str]:
         if status == 404:
             entry["error"] = "that device's MindFlock is too old to sync settings"
         elif status == 503:
-            entry["error"] = (
-                "%s's settings file can't be read — sync is paused there" % label
-            )
+            why = body.get("error") if isinstance(body, dict) else ""
+            if why == PAUSED:
+                entry["error"] = (
+                    "%s paused sync — its settings look reset; answer it in "
+                    "Settings → Devices there" % label
+                )
+            else:
+                entry["error"] = (
+                    "%s's settings file can't be read — sync is paused there" % label
+                )
         elif status == 401:
             entry["error"] = _refused_text(label, body)
         elif not ok:
@@ -2088,16 +2269,12 @@ def status() -> dict:
             }
         )
     warnings = []
-    if data["enabled"] and not in_fleet:
+    if (data["enabled"] or data["v1"]) and not in_fleet:
         # Also what a v1 state file (sync on, from before devices were
         # grouped) reads as: off until this device joins the others.
         warnings.append(
             "Settings sync was on here, but this device isn't one of your devices "
             "yet — nothing is shared until you join them (Settings → Devices)."
-        )
-    if not ok:
-        warnings.append(
-            UNREADABLE + " — fix the file (or restore it) and sync picks up again."
         )
     if data["enabled"] and in_fleet and _unresolved:
         warnings.append(
@@ -2131,6 +2308,9 @@ def status() -> dict:
         "in_fleet": in_fleet,
         "devices": devices,
         "pinned": list(data["pinned"]),
+        # A pin kept separate at join → the device whose different entry
+        # shares its id (by label): the Unpin confirm names it.
+        "separate": dict(data["separate"]),
         "deferred": [dict(v) for _k, v in sorted(_deferred.items())],
         "warnings": warnings,
         "syncable": syncable(),

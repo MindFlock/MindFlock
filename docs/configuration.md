@@ -190,6 +190,10 @@ poll_interval_seconds = 60       # default 60
 enabled = true                   # default true
 skip_authors = []                # review comments by these authors are ignored
 token = ""                       # secret; empty → $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`
+# With several of "Your devices", PR review and issue handling run on ONE of
+# them: settings.json's synced `github.automation_device` (Settings → Devices →
+# PR review and issue handling → Run here) — see "Where PR review and issue
+# handling run" under Web-exposed settings.
 # Automated issue handling (opt-in, OFF by default): new issues in issue_repos
 # each get a coding session on a fresh branch. issue_repos is separate from the
 # PR-review `repos`; these knobs are independent of the PR ones above.
@@ -578,6 +582,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 |---|---|---|
 | `MINDFLOCK_CONFIG` | — | Overrides the `config.toml` search path (engine/web) |
 | `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
+| `MINDFLOCK_PIPELINE_AUTOMATION` | set by the server | `1` / `0`: whether this device runs PR review and issue handling (see `github.automation_device`), passed by the web server to the pipeline it starts — the pipeline can't tell which of your devices it is on, and is restarted when the answer changes. Unset (a pipeline started by hand) → decided from `settings.json` |
+| `MINDFLOCK_PIPELINE_FLEET` | set by the server | `1` / `0`: whether this device is in a group of "Your devices" with another live member, passed by the web server to the pipeline it starts. When `1`, a PR review / issue handling loop that has never run on this device seeds its ledger with what is open before its first scan (see [ingestion-pipeline.md](ingestion-pipeline.md#state-and-files)). Unset (a pipeline started by hand) → read from the fleet store |
 | `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
 | `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
 | `MINDFLOCK_GIT_TRANSPORT` | `auto` | Overrides `[repository].git_transport` — `auto` \| `ssh` \| `https`, the URL form used when the pipeline must build a clone URL from an `owner/repo` slug. Never affects pushing, and never rewrites a URL you configured |
@@ -651,6 +657,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
 | `MINDFLOCK_CLAUDE_JSON` | `~/.claude.json` | Path of the `.claude.json` used for pre-trust seeding of workspaces |
 | `MINDFLOCK_SEED_PROMPT_DIR` | `~/.mindflock-assistant/.seed-prompts` | Where generated seed prompts are written |
+| `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — device discovery reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
 | `MINDFLOCK_NONINTERACTIVE` | — | `install.sh` only — set to `1` to force the read-only `mindflock doctor` report instead of the guided `--fix` prompts. The desktop app sets it for its in-window install (a GUI process has no terminal to answer prompts on) |
 | `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
@@ -748,19 +755,99 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   no restart. A ticked login's phone has full agent-terminal control, and
   rotating the token does not revoke it: untick the login instead. See
   [web-api.md](web-api.md#authentication).
-- **Settings sync** (Settings → Security → **Settings sync**; state in
+- **Your devices** (Settings → Devices, `mindflock devices`; state in
+  `fleet.json` beside `settings.json`, not a setting itself): the computers
+  you own as one group sharing one key, which every member accepts as a
+  credential. Joining or admitting a device turns `general.remote_control` on
+  there. **Removing** one gives the rest a new key (a member that is offline
+  gets it when it is next seen) and, by default, a new access token on every
+  device, so phones signed in before scan the QR again. A lost or stolen
+  device should also be removed from your tailnet in the Tailscale admin
+  console: until an offline member hears of the removal, the old key still
+  opens it. A removal stays: gossip never brings back a device that another
+  device removed, and if one member lets it back in, each member that knew of
+  the removal keeps it out and offers **Allow it here**. Leaving changes no key or token, and a
+  device that left can be added again from any member. **Security → Rotate
+  token** in a group also replaces the shared key and every reachable member's
+  own token (it names the members to rotate by hand). Each member is only as
+  locked as the least locked one: a member with the access gate off (and
+  reachable beyond localhost) lets anyone who can reach it control your other
+  devices through it, and Settings → Devices warns about that. See
+  [web-api.md](web-api.md#your-devices-fleet).
+- **Where PR review and issue handling run** (`github.automation_device`;
+  Settings → Devices → **PR review and issue handling** → **Run here**): the
+  key of the one device of "Your devices" that runs them. It is synced, so
+  every device reads the same choice (and it can't be kept different on one
+  device), because the GitHub settings themselves follow you and every device
+  would otherwise review the same PRs. A device on its own (no group, or a
+  group of one) always runs them. In a group of two or more only the device
+  `automation_device` names runs them while it is a live member; when it is
+  unset or names a device that isn't one, the member with the lowest device
+  key does (every device computes the same answer, so exactly one runs them).
+  Joining sets it only where the group hasn't chosen: to the joining device
+  when it already runs PR review or issue handling (its processed-PR history
+  is there), otherwise to the device it joins through. Removing the device
+  that runs them moves them to the device doing the removing; leaving on the
+  device that runs them hands them to the remaining member with the lowest
+  key first. To move them, choose **Run here** on the device that should run
+  them (there is no "off": pick another device instead). When they move to a
+  device, its pipeline first marks every PR and issue open right now as
+  already handled (logged as "PR review moved here — n open PRs already
+  handled on X are skipped"; the last answer is kept in `automation_here.json`
+  next to the pipeline's `state.json`), so nothing the other device reviewed is
+  reviewed again. Intake says *runs on <device>* where this device doesn't
+  (`GET /api/mindflock/status` → `automation_here`, `automation_device`).
+- **Settings sync** (Settings → Devices → **Settings sync**; state in
   `settings_sync.json` beside `settings.json`, not a setting itself): keeps the
-  shareable settings identical on every paired device that turns it on —
-  two-way, last edit wins per field, pulled every 30 s. Shared: ticket sources,
+  shareable settings identical on every one of "Your devices" — two-way, last
+  edit wins per field or per list entry (ticket sources by id, prompt presets
+  by name), deletes included, pulled every 30 s and nudged at once on a save.
+  It only ever talks to fleet members, with the fleet key: a MindFlock that is
+  merely on the same tailnet is never pulled from. Shared: ticket sources,
   GitHub options/repos/token, repository branches and Verify options, default
   agents and launch args, budgets, agent limits, trusted Tailscale accounts,
-  notification rules and ntfy, accent and scroll speed, disabled extensions.
-  Never shared: paths, binary paths, workspace dir, bind/serve mode, the access
-  token and gate mode, remote control, shared link, ingestion autostart, the
-  engine mode/session cap, the local model, platform/IDE commands, signed-in
-  accounts, peer links. Tokens travel only to devices paired with this
-  device's access token. Turning it on "from" another device adopts that
-  device's shareable values first, so the longest-used machine leads.
+  notification rules and ntfy, accent and scroll speed, disabled extensions,
+  UI preferences (`prefs`: keymap, prompt presets, theme, diff view, bars,
+  break/idle reminders, hints), session templates, red zones of repos with a
+  remote, and user agent-CLI providers (`~/.mindflock/providers/*.toml`; a
+  machine's own `coding_cli.binary_paths` still overrides a synced provider's
+  `binary_path`). Never shared: paths, binary paths, workspace dir, bind/serve
+  mode, the access token and gate mode, remote control, shared link, ingestion
+  autostart, the engine mode/session cap, the local model, platform/IDE
+  commands, signed-in accounts and peer links. A
+  repository given as a local checkout travels as its origin URL and lands as
+  the other machine's checkout of the same repo. A default agent that isn't
+  installed on a machine is held back there ("not applied here") until it is.
+  **Keep different on this device** pins a field, a whole store, or one entry
+  (`ticketing.sources#<id>`) so it neither sends nor receives. A ticket source
+  needs an `id` to sync; one without stays on its device (with a warning).
+  Joining a device starts sync from the device you joined, so the
+  longest-used machine leads: this device takes the values that device set,
+  and keeps its own only where that device has none. A ticket source whose id
+  names a different source on the device you joined is kept separate (pinned
+  per entry, with a warning) rather than renamed. Guards: a settings.json that
+  won't parse is never saved over (writes answer 409) and nothing is exported
+  from it. A background scan (a change nobody made through MindFlock, such
+  as a replaced or restored file) that would clear 3 or more settings and at
+  least half of what's set here, once 8 or more are set, **pauses** sync
+  (event `settings.sync_paused`) and asks whether to take your other devices'
+  settings back or keep this device's (`POST /api/settings/sync/resume`). A
+  save through Settings or the API explains only the settings it wrote: a
+  cleared setting under what that save wrote (the field, the group's fields,
+  the store, or its entries) never counts, while one cleared anywhere else in
+  the same scan still does — so a reset file followed by any save still
+  pauses. Nothing waits for a clock: an edit made after seeing another
+  device's value always wins over it, however fast either clock runs, and
+  only a stamp that can't be a real time (more than a year ahead, negative,
+  not finite) is ignored — that device is named in a warning ("X's clock is
+  far ahead — its changes are ignored until it's fixed"). A `settings_sync.json` written by
+  an earlier version (no `"v": 2`) drops its stamps and pins. If it had sync
+  on and this device is already in a group with another live device, sync
+  turns back on at once, seeded: what's set here is stamped older than any
+  real edit, so where another device has a value it wins (logged "sync is
+  back on — seeded"); a field unset here is stamped older still, so it never
+  clears another device's value. Otherwise sync stays off (logged once) until
+  the device joins your others again.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

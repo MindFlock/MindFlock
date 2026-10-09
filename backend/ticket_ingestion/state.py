@@ -659,3 +659,165 @@ def clear_pr_attempts(state_dir: Path | str, repo: str, number: int) -> None:
         return
     data["pr_attempts"] = attempts
     _write_state(state_dir, data)
+
+
+# --------------------------------------------------------------------------- #
+# PR review / issue handling moving between the user's devices
+# --------------------------------------------------------------------------- #
+#: Beside state.json: whether PR review / issue handling ran on THIS device
+#: when last seen, and if not, on which device. Written by the server (it
+#: watches the answer change) and by the pipeline (after a hand-over).
+_AUTOMATION_FILENAME = "automation_here.json"
+
+#: The ``status`` a ledger entry gets when it was seeded at a hand-over (the
+#: device that ran PR review / issue handling before already handled it).
+HANDED_OVER = "handed_over"
+
+
+def _automation_path(state_dir: Path | str) -> Path:
+    from backend.config.home_guard import guard_ledger_dir
+
+    guard_ledger_dir(state_dir)
+    return Path(state_dir) / _AUTOMATION_FILENAME
+
+
+def load_automation_mark(state_dir: Path | str) -> Optional[dict]:
+    """``{"here": bool, "runner": str}`` as last recorded, or ``None`` when
+    nothing was (a device that never saw the question — before devices could
+    be grouped, every one ran its own)."""
+    try:
+        data = json.loads(_automation_path(state_dir).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("here"), bool):
+        return None
+    return {"here": data["here"], "runner": str(data.get("runner") or "")}
+
+
+def _write_automation_mark(state_dir: Path | str, here: bool, runner: str) -> None:
+    path = _automation_path(state_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"here": here, "runner": "" if here else runner}))
+    os.replace(tmp, path)
+
+
+def note_automation(state_dir: Path | str, here: bool, runner: str = "") -> None:
+    """The server's observation: PR review / issue handling run on this
+    device (``here``) or on ``runner`` (a device name). "Elsewhere" is always
+    recorded; "here" only when nothing is yet — turning "elsewhere" into
+    "here" is the pipeline's, AFTER it has seeded its ledgers
+    (:func:`automation_handover`), or it would review every open PR the other
+    device already did."""
+    mark = load_automation_mark(state_dir)
+    if here:
+        if mark is None:
+            _write_automation_mark(state_dir, True, "")
+        return
+    if mark != {"here": False, "runner": runner}:
+        _write_automation_mark(state_dir, False, runner)
+
+
+def automation_handover(state_dir: Path | str) -> Optional[str]:
+    """Whether PR review / issue handling just moved HERE: the name of the
+    device they ran on before (``"another device"`` when unknown), or ``None``
+    when they already ran here (or nothing was ever recorded). The pipeline
+    seeds its ledgers, then calls :func:`mark_automation_here`."""
+    mark = load_automation_mark(state_dir)
+    if mark is None or mark["here"]:
+        return None
+    return mark["runner"] or "another device"
+
+
+def mark_automation_here(state_dir: Path | str) -> None:
+    _write_automation_mark(state_dir, True, "")
+
+
+#: state.json key: the ledgers (``"prs"`` / ``"issues"``) whose loop has run
+#: here — its first-run hand-over check is done (:func:`ledger_started`).
+_STARTED_KEY = "ledger_started"
+
+_LEDGER_KEYS = {
+    "prs": ("processed_prs", "pr_attempts"),
+    "issues": ("processed_issues", "issue_attempts"),
+}
+
+
+def ledger_started(state_dir: Path | str, kind: str) -> bool:
+    """Whether the PR review (``kind="prs"``) / issue handling (``"issues"``)
+    loop ever ran on this device: its ledger has an entry or an attempt, or
+    :func:`mark_ledger_started` recorded it. False for no state file or an
+    empty ledger — a loop starting here for the first time."""
+    data = _read_state(state_dir)
+    started = data.get(_STARTED_KEY)
+    if isinstance(started, dict) and started.get(kind) is True:
+        return True
+    return any(bool(data.get(key)) for key in _LEDGER_KEYS[kind])
+
+
+def mark_ledger_started(state_dir: Path | str, kind: str) -> None:
+    """Record that ``kind``'s loop has run here (one write, only if new)."""
+    data = _read_state(state_dir)
+    started = data.get(_STARTED_KEY)
+    if not isinstance(started, dict):
+        started = {}
+    if started.get(kind) is True:
+        return
+    started[kind] = True
+    data[_STARTED_KEY] = started
+    _write_state(state_dir, data)
+
+
+def seed_processed_prs(state_dir: Path | str, prs: list[tuple[str, int, str]]) -> int:
+    """Record ``(repo, number, head_sha)`` PRs as already handled (status
+    :data:`HANDED_OVER`) unless they are in the ledger. Returns how many were
+    added. One write."""
+    data = _read_state(state_dir)
+    entries = data.get("processed_prs")
+    if not isinstance(entries, list):
+        entries = []
+    have = load_processed_prs(state_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    added = 0
+    for repo, number, head_sha in prs:
+        if (repo, number) in have:
+            continue
+        have.add((repo, number))
+        entry: dict = {
+            "number": number,
+            "head_sha": head_sha,
+            "processed_at": now,
+            "status": HANDED_OVER,
+        }
+        if repo:
+            entry["repo"] = repo
+        entries.append(entry)
+        added += 1
+    if added:
+        data["processed_prs"] = entries
+        _write_state(state_dir, data)
+    return added
+
+
+def seed_processed_issues(state_dir: Path | str, issues: list[tuple[str, int]]) -> int:
+    """The issue twin of :func:`seed_processed_prs` (``(repo, number)``)."""
+    data = _read_state(state_dir)
+    entries = data.get("processed_issues")
+    if not isinstance(entries, list):
+        entries = []
+    have = load_processed_issues(state_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    added = 0
+    for repo, number in issues:
+        if (repo, number) in have:
+            continue
+        have.add((repo, number))
+        entry: dict = {"number": number, "processed_at": now, "status": HANDED_OVER}
+        if repo:
+            entry["repo"] = repo
+        entries.append(entry)
+        added += 1
+    if added:
+        data["processed_issues"] = entries
+        _write_state(state_dir, data)
+    return added

@@ -98,17 +98,21 @@ class TestIssueHandlingEnabled:
 
 class TestAutomationHere:
     """PR review / issue handling settings follow the person to every one of
-    their devices; ``github.run_here`` (device-local) — or, unset, "only when
-    this is a lone device" — keeps them all from reviewing the same PRs."""
+    their devices; ONE device of the group runs them — the synced
+    ``github.automation_device``, else the lowest-keyed live member — so they
+    don't all review the same PRs. A lone device always does."""
 
     @staticmethod
-    def _fleet(monkeypatch, n):
-        from backend.web.core import fleet
+    def _fleet(monkeypatch, n, me="d1"):
+        """A group of ``n`` (d0…); this device is ``me`` — by default not
+        the lowest key, so not the runner unless chosen."""
+        from backend.web.core import fleet, remote
 
         monkeypatch.setattr(fleet, "in_fleet", lambda: n > 0)
         monkeypatch.setattr(
             fleet, "live_members", lambda: {"d%d" % i: {} for i in range(n)}
         )
+        monkeypatch.setattr(remote, "self_identity", lambda: {"key": me, "host": me})
 
     def test_a_lone_device_behaves_as_before(self):
         S.update_settings(
@@ -124,13 +128,47 @@ class TestAutomationHere:
         )
         assert ti._pr_review_enabled() is False
         assert ti._issue_handling_enabled() is False
-        S.update_settings(github={"run_here": True})
+        S.update_settings(github={"automation_device": "d1"})
         assert ti._pr_review_enabled() is True
         assert ti._issue_handling_enabled() is True
 
-    def test_switched_off_here(self):
-        S.update_settings(github={"repos": ["o/r"], "run_here": False})
+    def test_another_device_chosen(self, monkeypatch):
+        self._fleet(monkeypatch, 2, me="d0")
+        S.update_settings(github={"repos": ["o/r"], "automation_device": "d1"})
         assert ti._pr_review_enabled() is False
+
+    def test_the_pipeline_takes_the_servers_answer(self, monkeypatch):
+        """The pipeline process can't tell which device it is on (no tailnet
+        identity): the server that starts it says, and restarts it when the
+        answer moves."""
+        from backend.ticket_ingestion.config import AUTOMATION_ENV, _merge_layers
+
+        S.update_settings(github={"repos": ["o/r"]})
+        monkeypatch.setenv(AUTOMATION_ENV, "0")
+        assert _merge_layers({})["github"]["enabled"] is False  # even alone
+        self._fleet(monkeypatch, 2)
+        monkeypatch.setenv(AUTOMATION_ENV, "1")
+        assert _merge_layers({})["github"].get("enabled", True) is not False
+        ctrl = ti.TicketIngestionController()
+        assert ctrl._env()[AUTOMATION_ENV] == "0"  # d1 isn't the runner
+        S.update_settings(github={"automation_device": "d1"})
+        assert ctrl._env()[AUTOMATION_ENV] == "1"
+
+    def test_the_pipeline_is_told_whether_it_is_grouped(self, monkeypatch):
+        """Round 4 A: the pipeline seeds a ledger that never ran when this
+        device is grouped with another live one — the server says which."""
+        from backend.ticket_ingestion.config import FLEET_ENV, pipeline_in_group
+
+        ctrl = ti.TicketIngestionController()
+        assert ctrl._env()[FLEET_ENV] == "0"  # alone
+        self._fleet(monkeypatch, 1)
+        assert ctrl._env()[FLEET_ENV] == "0"  # a group of one
+        self._fleet(monkeypatch, 2)
+        assert ctrl._env()[FLEET_ENV] == "1"
+        monkeypatch.setenv(FLEET_ENV, "0")  # the server's answer wins
+        assert pipeline_in_group() is False
+        monkeypatch.delenv(FLEET_ENV)
+        assert pipeline_in_group() is True  # else read here
 
     def test_synced_settings_never_start_a_pipeline_on_another_device(
         self, monkeypatch
@@ -491,16 +529,20 @@ class TestEndpoints:
         client, addon = endpoint_client
         monkeypatch.setattr(ti, "_ingestion_repo_available", lambda: False)
         monkeypatch.setattr(addon.ctrl, "_external_lock_pid", lambda: None)
-        S.update_settings(github={"repos": ["o/r"], "run_here": False})
+        S.update_settings(github={"repos": ["o/r"], "automation_device": "laptop"})
+        from backend.web.core import fleet
+
+        monkeypatch.setattr(fleet, "in_fleet", lambda: True)
         monkeypatch.setattr(
-            remote,
-            "fleet_devices",
-            lambda: [{"key": "laptop", "host": "Laptop", "automation": True}],
+            fleet,
+            "live_members",
+            lambda: {"laptop": {"host": "Laptop"}, "mac": {"host": "Mac"}},
         )
+        monkeypatch.setattr(remote, "self_identity", lambda: {"key": "mac"})
         body = client.get("/api/mindflock/status").json()
         assert body["automation_here"] is False
         assert body["automation_device"] == "Laptop"
-        S.update_settings(github={"run_here": True})
+        S.update_settings(github={"automation_device": "mac"})
         body = client.get("/api/mindflock/status").json()
         assert body["automation_here"] is True and body["automation_device"] == ""
         assert settings_hooks.automation_here() is True

@@ -2,7 +2,7 @@
  * countdown formatting, and the one-line status texts the screen shows. No
  * DOM and no fetches, so the wording is tested in node (fleet.test.ts). */
 
-import type { FleetCandidate, FleetJoin, FleetMember, FleetStatus, SyncStatus } from "../api/types";
+import type { FleetCandidate, FleetJoin, FleetMember, FleetRemoved, FleetStatus, SyncStatus } from "../api/types";
 import { relTime } from "./format";
 
 /** Crockford base32 — what the server's invite codes are drawn from. */
@@ -143,7 +143,11 @@ function sentence(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
-/** The device.* events (backend fleet.py) as one line each — the bell's row
+/** The bell row and toast for settings.sync_paused. */
+export const SYNC_PAUSED_NOTE =
+  "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Devices.";
+
+/** The device.* events (backend fleet.py) and settings.sync_paused as one line each — the bell's row
  * text and class, and the toast's wording for the two that toast. */
 export function deviceEventNote(
   event: string,
@@ -181,6 +185,14 @@ export function deviceEventNote(
     }
     case "device.removed":
       return { text: sentence(String(d.detail || "")) || host + " is no longer one of your devices", cls: "n-info", toast: "" };
+    // Emitted on the device that paused (its own scan saw most settings go
+    // back to defaults at once): nothing syncs either way until it's answered.
+    case "settings.sync_paused":
+      return {
+        text: SYNC_PAUSED_NOTE,
+        cls: "n-warn",
+        toast: SYNC_PAUSED_NOTE,
+      };
     default:
       return null;
   }
@@ -323,11 +335,19 @@ export function clockTime(ts: number, nowSec = Date.now() / 1000): string {
  * didn't make, short enough that old tombstones don't pile up. */
 const REMOVED_SHOWN_S = 14 * 86400;
 
+/** A tombstone the device wrote about itself: it left (Leave, `mindflock
+ * devices leave`), nobody removed it. The server says so (`left`); an older
+ * one only by naming the device as its own remover. */
+function isLeave(r: FleetRemoved): boolean {
+  return r.left === true || (!!r.removed_by && r.removed_by === r.key);
+}
+
 /** Removals another device made, newest first, as one line each: "rig removed
  * laptop at 10:32 — if that wasn't you, remove rig from your tailnet". Every
  * member holds the same key, so a removal from a device you don't recognise
  * is the one sign of a forged one — the remover is who has to go. This
- * device's own removals are left out (it knows it made them). */
+ * device's own removals are left out (it knows it made them), and so are
+ * devices that left on their own (`leftLines`: nothing to suspect there). */
 export function removalLines(
   st: Pick<FleetStatus, "removed" | "members" | "self"> | null | undefined,
   nowSec = Date.now() / 1000
@@ -341,7 +361,7 @@ export function removalLines(
         fallback ||
         key;
   return (st?.removed || [])
-    .filter((r) => r && r.key && r.removed_by && r.removed_by !== me)
+    .filter((r) => r && r.key && r.removed_by && r.removed_by !== me && !isLeave(r))
     .map((r) => ({ r, at: Number(r.removed_at ?? r.at ?? 0) }))
     .filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S)
     .sort((a, b) => b.at - a.at)
@@ -364,6 +384,55 @@ export function removalLines(
     });
 }
 
+/** Devices that left on their own, newest first: "laptop left your devices
+ * at 10:32", said plainly — a leave is the device's own doing, so there is no
+ * remover to suspect. Shown as long as a removal is. */
+export function leftLines(
+  st: Pick<FleetStatus, "removed" | "self"> | null | undefined,
+  nowSec = Date.now() / 1000
+): Array<{ key: string; text: string }> {
+  const me = st?.self?.key || "";
+  return (st?.removed || [])
+    .filter((r) => r && r.key && r.key !== me && isLeave(r))
+    .map((r) => ({ r, at: Number(r.removed_at ?? r.at ?? 0) }))
+    .filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S)
+    .sort((a, b) => b.at - a.at)
+    .map(({ r, at }) => {
+      const when = clockTime(at, nowSec);
+      return {
+        key: r.key,
+        text: (r.host || r.key) + " left your devices" + (when.includes(",") ? " on " : " at ") + when,
+      };
+    });
+}
+
+/** Devices removed here that another of your devices has since added back
+ * (its roster says they're live): this device still refuses them until you
+ * allow them here too — a removal is never undone behind your back. */
+export function readmittedLines(
+  st: Pick<FleetStatus, "readmitted_elsewhere" | "members" | "self"> | null | undefined
+): Array<{ key: string; host: string; text: string }> {
+  const me = st?.self?.key || "";
+  const hostOf = (key: string, fallback?: string) =>
+    key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || fallback || key;
+  return (st?.readmitted_elsewhere || [])
+    .filter((r) => r && r.key)
+    .map((r) => {
+      const host = r.host || r.key;
+      const by = r.by ? hostOf(r.by, r.by_host) : "another of your devices";
+      return {
+        key: r.key,
+        host,
+        text:
+          host +
+          " was added back on " +
+          by +
+          ", but it's still removed on this device — it gets no settings sync, sign-in or " +
+          "ticket claims from here until you allow it.",
+      };
+    });
+}
+
 /** Members that hold a different key under the same group id and epoch —
  * two halves of one group that were set up apart. Marked by the server
  * (`key_conflict`), or by the error it gives the member row. */
@@ -380,18 +449,34 @@ export function rotatedToast(
     | {
         rekeyed?: string[];
         missed?: string[];
+        rotated?: string[];
+        rotate_failed?: string[];
         fleet_error?: string;
-        fleet?: { rekeyed?: string[]; missed?: string[] };
+        fleet?: { rekeyed?: string[]; missed?: string[]; rotated?: string[]; rotate_failed?: string[] };
       }
     | null
     | undefined
 ): string {
   const rekeyed = r?.rekeyed || r?.fleet?.rekeyed || [];
   const missed = r?.missed || r?.fleet?.missed || [];
+  const rotated = r?.rotated || r?.fleet?.rotated;
+  const failed = r?.rotate_failed || r?.fleet?.rotate_failed || [];
   const bits = ["Access token regenerated — scan the QR again on your phone; other browsers sign in again"];
   if (rekeyed.length) bits.push("new device key sent to " + rekeyed.join(", "));
   if (missed.length)
     bits.push(missed.join(", ") + (missed.length > 1 ? " get" : " gets") + " the new device key when back online");
+  // A server that also replaces each member's own access token (so the phone
+  // is signed out everywhere) says where it did and where it couldn't; one
+  // that was offline or refused keeps its old token until it's done there.
+  if (rotated) {
+    if (rotated.length) bits.push("access token replaced on " + rotated.join(", "));
+    const byHand = [...failed, ...missed.filter((k) => !failed.includes(k))];
+    if (byHand.length)
+      bits.push(
+        "regenerate the access token on " + byHand.join(", ") + " too (Security there) — " +
+          (byHand.length > 1 ? "theirs still work" : "its old one still works")
+      );
+  }
   if (r?.fleet_error) bits.push(r.fleet_error);
   return bits.join(" · ");
 }
@@ -402,19 +487,78 @@ export const SYNC_RESUME = {
   mine: { keep: "mine", label: "Keep this device's" },
 } as const;
 
-/** The hint under "Run PR review and issue handling here": exactly one of
- * your devices should, or the same PRs get reviewed once per device (and
- * none means nobody does). "" when exactly one does. Members whose MindFlock
- * doesn't say (an older version) are left out. */
+/** Which of your devices runs PR review and issue handling — exactly one
+ * does (the server derives it from `github.automation_device`, falling back
+ * to the live member with the lowest key, so every device names the same
+ * one). `here` is this device; `text` is the line the screen shows; `canMove`
+ * offers "Run here" (only on this device's own screen, for itself — another
+ * device is moved from its own screen). Null when no member says (an older
+ * MindFlock) or the group is just this device. */
+export function automationLine(
+  members: FleetMember[]
+): { runner: FleetMember | null; here: boolean; text: string; canMove: boolean } | null {
+  if ((members || []).length < 2) return null;
+  const known = members.filter((m) => typeof m.automation === "boolean");
+  if (!known.length) return null;
+  const on = known.filter((m) => m.automation);
+  const runner = on.length === 1 ? on[0] : null;
+  const here = !!runner?.self;
+  if (here)
+    return {
+      runner,
+      here,
+      text:
+        "This device runs PR review and issue handling for all your devices. To move them, choose " +
+        "Run here in Settings → Devices on the device that should run them.",
+      canMove: false,
+    };
+  if (runner)
+    return {
+      runner,
+      here,
+      text:
+        (runner.host || runner.key) +
+        " runs PR review and issue handling for all your devices — your repos and ticket sources are " +
+        "shared, but only one device reviews PRs and picks up issues.",
+      canMove: true,
+    };
+  return { runner: null, here: false, text: automationHint(members), canMove: true };
+}
+
+/** The warning when it isn't exactly one (members on an older MindFlock that
+ * decide for themselves): the same PRs get reviewed once per device, or none
+ * means nobody does. "" when exactly one does. Members whose MindFlock
+ * doesn't say are left out. */
 export function automationHint(members: FleetMember[]): string {
   const known = members.filter((m) => typeof m.automation === "boolean");
   if (known.length < 2) return "";
   const on = known.filter((m) => m.automation);
   if (on.length === 1) return "";
   if (!on.length)
-    return "None of your devices runs PR review and issue handling — turn it on here or on one of the others.";
+    return "None of your devices runs PR review and issue handling — choose Run here on the one that should.";
   return (
     on.map((m) => m.host || m.key).join(" and ") +
-    " all run PR review and issue handling, so the same PRs get reviewed more than once — keep it on one."
+    " all run PR review and issue handling, so the same PRs get reviewed more than once — choose Run here on the one that should keep it."
+  );
+}
+
+/** Unpinning a ticket source kept separate at join (`ticketing.sources#<id>`)
+ * isn't "take the others' value again" like any other pin: the other device
+ * has a DIFFERENT source under the same id, so this device's one — and its
+ * API token — is replaced by it. The confirm's sentence; "" for a pin whose
+ * unpin needs no confirm. */
+export function unpinReplaces(path: string, sync: SyncStatus | null | undefined): string {
+  const hash = path.indexOf("#");
+  if (hash <= 0 || path.slice(0, hash) !== "ticketing.sources") return "";
+  const id = path.slice(hash + 1);
+  const from = sync?.joined_from || "";
+  const leader =
+    sync?.separate?.[path] || (from ? sync?.devices?.find((d) => d.key === from)?.label || from : "");
+  return (
+    "This replaces this device's “" +
+    id +
+    "” (and its token) with " +
+    (leader ? leader + "'s" : "the one your other devices have under that id") +
+    ". To keep both, give one of them a different id in Settings → Tickets instead."
   );
 }

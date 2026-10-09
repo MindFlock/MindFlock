@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import threading
-from typing import Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from backend import log
 
@@ -44,43 +44,85 @@ _last_sig: Optional[tuple] = None
 # --------------------------------------------------------------------------- #
 # Does this device run PR review / issue handling?
 # --------------------------------------------------------------------------- #
-def automation_here() -> bool:
-    """Whether PR review and issue handling run on THIS device.
-
-    ``github.run_here`` (device-local) decides when set. Unset: yes on a lone
-    device (what every install did before devices could be grouped), no once
-    this device is one of two or more of your devices — the GitHub settings
-    sync, so each of them would otherwise review the same PRs. Never raises."""
-    try:
-        from backend.config import settings as _settings
-
-        run_here = _settings.load_settings().github.run_here
-    except Exception:  # noqa: BLE001
-        run_here = None
-    if run_here is not None:
-        return bool(run_here)
+def _live_members() -> Dict[str, dict]:
+    """This device's group of devices (live members, itself included), or
+    ``{}`` when it isn't in one. Never raises."""
     try:
         from backend.web.core import fleet as _fleet
 
-        return not (_fleet.in_fleet() and len(_fleet.live_members()) >= 2)
+        if not _fleet.in_fleet():
+            return {}
+        live = _fleet.live_members()
+        return dict(live) if isinstance(live, dict) else {}
     except Exception:  # noqa: BLE001 — no fleet store = a lone device
-        return True
+        return {}
 
 
-def automation_device() -> str:
-    """The name of another of your devices that says it runs PR review and
-    issue handling (its hello's ``automation``), or ``""`` when none visible
-    does — what Intake names ("runs on <device>") where this one doesn't.
-    Never raises."""
+def _self_key() -> str:
     try:
         from backend.web.core import remote as _remote
 
-        for dev in _remote.fleet_devices():
-            if isinstance(dev, dict) and dev.get("automation") is True:
-                return str(dev.get("host") or dev.get("key") or "")
+        return str(_remote.self_identity().get("key") or "")
     except Exception:  # noqa: BLE001
-        pass
-    return ""
+        return ""
+
+
+def automation_runner(live: Optional[Dict[str, dict]] = None) -> str:
+    """The key of the device that runs PR review and issue handling for the
+    group (``live``: its live members; read when not given): the synced
+    ``github.automation_device`` while it names a live member, else the live
+    member with the lowest key — every device computes the same answer from
+    the same roster, so exactly one runs them. ``""`` outside a group of two
+    or more. Never raises."""
+    if live is None:
+        live = _live_members()
+    if len(live) < 2:
+        return ""
+    try:
+        from backend.config import settings as _settings
+
+        chosen = (_settings.load_settings().github.automation_device or "").strip()
+    except Exception:  # noqa: BLE001
+        chosen = ""
+    return chosen if chosen in live else min(live)
+
+
+def automation_here() -> bool:
+    """Whether PR review and issue handling run on THIS device.
+
+    A lone device (no group, or a group of one) always runs them — what every
+    install did before devices could be grouped. In a group of two or more,
+    only :func:`automation_runner` does: their settings (``github.*``) follow
+    the person to every device, so each would otherwise review the same PRs.
+    Never raises."""
+    live = _live_members()
+    if len(live) < 2:
+        return True
+    me = _self_key()
+    return bool(me) and automation_runner(live) == me
+
+
+def automation_device() -> str:
+    """The name of the OTHER device that runs PR review and issue handling
+    (:func:`automation_runner`, by its host), or ``""`` when it is this one
+    or there's no group — what Intake names ("runs on <device>") where this
+    one doesn't. Never raises."""
+    live = _live_members()
+    key = automation_runner(live)
+    if not key or key == _self_key():
+        return ""
+    host = str((live.get(key) or {}).get("host") or "")
+    if not host:
+        try:
+            from backend.web.core import remote as _remote
+
+            for dev in _remote.fleet_devices():
+                if isinstance(dev, dict) and dev.get("key") == key:
+                    host = str(dev.get("host") or "")
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    return host or key
 
 
 def pipeline_signature() -> Tuple:
@@ -221,7 +263,8 @@ def after_settings_change(
 ) -> None:
     """Run the side effects of ``paths`` having changed underneath the server
     (sync unit ids), then announce ``settings.synced`` so open UIs refetch.
-    ``source`` is the device the values came from; ``pipeline_before`` the
+    ``source`` is the device the values came from (``""`` for a local write —
+    ``POST /api/prefs`` announces its own saves this way); ``pipeline_before`` the
     :func:`pipeline_signature` from before the write (the pipeline is only
     reconciled when it moved). Never raises."""
     global _last_sig

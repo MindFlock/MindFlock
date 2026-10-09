@@ -109,11 +109,18 @@ def _record_desired_running(on: bool) -> None:
         pass
 
 
+#: Seconds between re-checks of which device runs PR review / issue handling:
+#: the answer follows the group's roster, which can change by gossip with no
+#: event here (a device removed elsewhere), and the pipeline is wired with it
+#: at boot.
+AUTOMATION_RECHECK = 30.0
+
+
 def _automation_here() -> bool:
     """Whether THIS device runs the GitHub halves (PR review, issue handling).
-    Their settings follow the person to every one of their devices; this
-    device-local answer keeps them from all reviewing the same PRs. A lone
-    device always does (``settings_hooks.automation_here``)."""
+    Their settings follow the person to every one of their devices; one
+    device of the group runs them (``settings_hooks.automation_here``: the
+    synced ``github.automation_device``). A lone device always does."""
     try:
         from backend.web.core import settings_hooks
 
@@ -122,11 +129,36 @@ def _automation_here() -> bool:
         return True
 
 
-def _automation_status() -> dict:
+def _observe_automation(state_dir: Optional[Path] = None) -> bool:
+    """:func:`_automation_here`, also recorded beside the pipeline's ledger
+    (``state.note_automation``) so a pipeline that becomes the runner later
+    knows PR review / issue handling moved here and from where — it then
+    skips what the other device already handled. Never raises."""
+    here = _automation_here()
+    runner = ""
+    if not here:
+        try:
+            from backend.web.core import settings_hooks
+
+            runner = settings_hooks.automation_device()
+        except Exception:  # noqa: BLE001
+            runner = ""
+    try:
+        from backend.ticket_ingestion import state as _state
+
+        _state.note_automation(
+            state_dir if state_dir is not None else _resolve_repo_root(), here, runner
+        )
+    except Exception:  # noqa: BLE001 — a status read never fails on this
+        pass
+    return here
+
+
+def _automation_status(state_dir: Optional[Path] = None) -> dict:
     """``{automation_here, automation_device}`` for the status payload:
     whether this device runs PR review / issue handling and, when it
-    doesn't, which of your devices says it does (``""``: none visible)."""
-    here = _automation_here()
+    doesn't, which of your devices does (``""``: unknown)."""
+    here = _observe_automation(state_dir)
     device = ""
     if not here:
         try:
@@ -297,6 +329,23 @@ class TicketIngestionController:
             env["MINDFLOCK_MCP_PYTHONPATH"] = mcp_attach.mcp_pythonpath()
             env["MINDFLOCK_SERVER_PORT"] = str(mcp_attach.server_port())
         except Exception:  # noqa: BLE001 — never block the pipeline over the MCP
+            pass
+        # Which device runs PR review / issue handling is the server's to
+        # say: the child can't tell which of the user's devices it is on.
+        try:
+            from backend.ticket_ingestion.config import AUTOMATION_ENV
+
+            env[AUTOMATION_ENV] = "1" if _observe_automation(self._repo_root) else "0"
+        except Exception:  # noqa: BLE001
+            pass
+        # …and whether it is grouped with another live device: a PR review /
+        # issue ledger that never ran here is then seeded before its first
+        # scan (another member may have handled what is open).
+        try:
+            from backend.ticket_ingestion.config import FLEET_ENV, fleet_shared_now
+
+            env[FLEET_ENV] = "1" if fleet_shared_now() else "0"
+        except Exception:  # noqa: BLE001
             pass
         return env
 
@@ -482,7 +531,7 @@ class TicketIngestionController:
             # Both of those also need THIS device to be the one that runs
             # them; where it isn't, Intake says "runs on <automation_device>"
             # instead of naming a switch that is on (and synced).
-            **_automation_status(),
+            **_automation_status(self._repo_root),
             # Live activity: True while a ticket / a PR batch / an issue is
             # actually being brought in (vs idle-waiting). The pipeline's beacon
             # only knows about the PIPELINE's queue, so a start forced from the
@@ -568,13 +617,15 @@ class TicketIngestionAddon(Addon):
 
         self._unsub_toggle = ctx.subscribe("addon.settings.github_toggled", _on_toggle)
 
-        # Joining or leaving a group of devices can flip whether THIS device
-        # runs the GitHub halves (github.run_here unset = on only when alone)
-        # without any settings save — reconcile when that answer moved.
-        self._automation = _automation_here()
+        # Joining or leaving a group of devices, or the roster changing by
+        # gossip, can flip whether THIS device runs the GitHub halves (the
+        # group's one runner: github.automation_device, else the lowest-keyed
+        # live member) without any settings save — reconcile when that
+        # answer moved: on a device event, and every AUTOMATION_RECHECK s.
+        self._automation = _observe_automation(self.ctrl._repo_root)
 
         def _on_devices(_envelope: dict) -> None:
-            now = _automation_here()
+            now = _observe_automation(self.ctrl._repo_root)
             if now == self._automation:
                 return
             self._automation = now
@@ -584,6 +635,17 @@ class TicketIngestionAddon(Addon):
             ctx.subscribe(name, _on_devices)
             for name in ("device.joined", "device.removed")
         ]
+
+        async def _recheck() -> None:
+            while True:
+                await asyncio.sleep(AUTOMATION_RECHECK)
+                try:
+                    await asyncio.to_thread(_on_devices, {})
+                except Exception as err:  # noqa: BLE001 — the loop must not die
+                    if log.ErrorLog is not None:
+                        log.ErrorLog.Printf("automation recheck failed: %v", err)
+
+        self._recheck_task = asyncio.get_running_loop().create_task(_recheck())
 
     # --- toggle → process reconciliation ----------------------------------- #
     @staticmethod
@@ -695,6 +757,9 @@ class TicketIngestionAddon(Addon):
 
     # --- lifecycle -------------------------------------------------------- #
     async def on_shutdown(self, ctx: AppContext) -> None:
+        task = getattr(self, "_recheck_task", None)
+        if task is not None:
+            task.cancel()
         # Stop only the child WE own on shutdown — never an operator's
         # independently-started standalone pipeline (matches stop()'s own/external
         # split). The old code leaked the child on server exit.

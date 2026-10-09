@@ -13,7 +13,8 @@
  * runs between these devices, so turning it on belongs next to adding them.
  *
  * Everything is /api/fleet* and /api/settings/sync*. Polls every 3 s while
- * open and refetches on device.* / settings.synced events. No native
+ * open and refetches on device.* / settings.synced / settings.sync_paused
+ * events. No native
  * prompt/confirm anywhere: the desktop app has neither (InlineConfirm). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -26,7 +27,7 @@ import {
   SYNC_RESUME,
   addPairedNote,
   admitToast,
-  automationHint,
+  automationLine,
   candidateBlocker,
   candidateNote,
   fmtCountdown,
@@ -35,16 +36,19 @@ import {
   joinSettingsNote,
   joinableCandidates,
   keyConflicts,
+  leftLines,
   liveInvite,
   memberStatus,
   pasteJoinBody,
   pinChoices,
   plausibleCode,
+  readmittedLines,
   removalLines,
   removeConfirmText,
   removedToast,
   syncDeviceLine,
   syncLabel,
+  unpinReplaces,
 } from "../../../lib/fleet";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
@@ -115,7 +119,13 @@ export function Devices(p: ScreenProps) {
   useEffect(() => {
     const ev = window.mindflock?.events;
     if (!ev) return;
-    const offs = ["device.join_requested", "device.joined", "device.removed", "settings.synced"].map(
+    const offs = [
+      "device.join_requested",
+      "device.joined",
+      "device.removed",
+      "settings.synced",
+      "settings.sync_paused",
+    ].map(
       (name) => ev.subscribe(name, () => loadAll())
     );
     return () => offs.forEach((off) => off());
@@ -194,6 +204,8 @@ export function Devices(p: ScreenProps) {
   const candidates = joinableCandidates(st.candidates);
   const conflicts = keyConflicts(st.members);
   const removals = removalLines(st);
+  const lefts = leftLines(st);
+  const readmitted = readmittedLines(st);
   const join = st.join;
   const joinBusy = join && (join.state === "waiting" || join.state === "joining");
 
@@ -222,13 +234,17 @@ export function Devices(p: ScreenProps) {
       setPasted("");
     });
   };
-  const setRunHere = (on: boolean) =>
+  // One device runs PR review and issue handling, named by the synced
+  // `github.automation_device`: "Run here" moves them to this device (every
+  // device follows within seconds). There is no "off here": moving them is
+  // done from the device that should take them.
+  const runHere = () =>
     run(
       "run-here",
-      () => api("/api/settings", { json: { github: { run_here: on } } }),
-      on ? "PR review and issue handling run on this device" : "PR review and issue handling are off on this device"
+      () => api("/api/settings", { json: { github: { automation_device: st.self.key } } }),
+      "PR review and issue handling run on this device now"
     );
-  const autoHint = automationHint(st.members);
+  const auto = st.in_fleet ? automationLine(st.members) : null;
 
   return (
     <>
@@ -299,6 +315,39 @@ export function Devices(p: ScreenProps) {
             make this removal, someone else may be using that device — taking it off your tailnet
             (Tailscale admin console) cuts it off everywhere at once.
           </p>
+        </div>
+      )}
+      {readmitted.length > 0 && (
+        <div className="devices-warn" id="devices-readmitted" role="alert">
+          {readmitted.map((r) => (
+            <div className="devices-row" key={r.key} data-readmitted={r.key}>
+              <p>{r.text}</p>
+              <button
+                type="button"
+                className="test-btn"
+                data-allow={r.key}
+                disabled={!!busy}
+                onClick={() =>
+                  void run(
+                    "allow:" + r.key,
+                    () => api("/api/fleet/members/" + encodeURIComponent(r.key) + "/allow", { method: "POST" }),
+                    r.host + " is one of your devices here again"
+                  )
+                }
+              >
+                {busy === "allow:" + r.key ? "Allowing…" : "Allow it here"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {lefts.length > 0 && (
+        <div className="devices-left" id="devices-left">
+          {lefts.map((r) => (
+            <p key={r.key} className="set-hint" data-left={r.key}>
+              {r.text}
+            </p>
+          ))}
         </div>
       )}
 
@@ -420,24 +469,25 @@ export function Devices(p: ScreenProps) {
           Your devices share settings, sign-in and ticket claims. Add a computer you own:
         </p>
       )}
-      {st.in_fleet && self && typeof self.automation === "boolean" && (
-        <div className="set-row set-switch-row" id="devices-run-here">
+      {auto && (
+        <div className="set-row set-switch-row" id="devices-run-here" data-runs-here={auto.here ? "1" : "0"}>
           <span className="devices-run-here-text">
-            <span className="set-label">Run PR review and issue handling here</span>
-            <span className={"set-hint" + (autoHint ? " devices-hint-warn" : "")} id="devices-run-here-hint">
-              {autoHint ||
-                "Your GitHub repos and ticket sources are shared, but only one of your devices should review PRs and pick up issues — or each PR is reviewed once per device."}
+            <span className="set-label">PR review and issue handling</span>
+            <span className={"set-hint" + (auto.runner ? "" : " devices-hint-warn")} id="devices-run-here-hint">
+              {auto.text}
             </span>
           </span>
-          <label className="ca-switch">
-            <input
-              type="checkbox"
-              checked={self.automation}
-              disabled={busy === "run-here"}
-              onChange={(e) => void setRunHere(e.target.checked)}
-            />
-            <span className="ca-slider" />
-          </label>
+          {auto.canMove && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-run-here-btn"
+              disabled={!!busy}
+              onClick={() => void runHere()}
+            >
+              {busy === "run-here" ? "Moving…" : "Run here"}
+            </button>
+          )}
         </div>
       )}
 
@@ -751,6 +801,8 @@ function SettingsSyncRows(props: {
   const [from, setFrom] = useState("");
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState("");
+  /** The kept-separate source whose Unpin waits on its confirm. */
+  const [unpinFor, setUnpinFor] = useState<string | null>(null);
 
   if (!sync) return null;
 
@@ -806,7 +858,9 @@ function SettingsSyncRows(props: {
         <div className="devices-warn" id="settings-sync-paused" role="alert">
           <p>
             {sync.paused}. Most of this device's settings went back to their defaults at once — a
-            reset or replaced settings.json, usually — so nothing was sent to your other devices.
+            reset or replaced settings.json, usually — so nothing was sent to your other devices,
+            and nothing comes in from them until you choose. "{SYNC_RESUME.theirs.label}" also
+            replaces anything changed here since.
           </p>
           <div className="devices-actions">
             {(sync.choices?.length ? sync.choices : ["theirs", "mine"])
@@ -957,20 +1011,39 @@ function SettingsSyncRows(props: {
           <span className="set-label">Kept different on this device</span>
           {sync.pinned?.length ? (
             <ul className="devices-plain">
-              {sync.pinned.map((path) => (
-                <li key={path} data-pinned={path}>
-                  <span>{syncLabel(path, sync)}</span>
-                  <button
-                    type="button"
-                    className="test-btn"
-                    data-unpin={path}
-                    disabled={!!busy}
-                    onClick={() => void setPinned(path, false)}
-                  >
-                    Unpin
-                  </button>
-                </li>
-              ))}
+              {sync.pinned.map((path) => {
+                // A source kept separate at join: unpinning swaps it (and its
+                // token) for the other device's different one — confirm first.
+                const replaces = unpinReplaces(path, sync);
+                return (
+                  <li key={path} data-pinned={path}>
+                    <span>{syncLabel(path, sync)}</span>
+                    <button
+                      type="button"
+                      className="test-btn"
+                      data-unpin={path}
+                      disabled={!!busy || unpinFor === path}
+                      onClick={() => (replaces ? setUnpinFor(path) : void setPinned(path, false))}
+                    >
+                      Unpin
+                    </button>
+                    {replaces && unpinFor === path && (
+                      <InlineConfirm
+                        id="settings-sync-unpin-confirm"
+                        title={"Unpin " + syncLabel(path, sync) + "?"}
+                        body={replaces}
+                        confirmLabel={busy === "pin:" + path ? "Unpinning…" : "Unpin"}
+                        busy={busy === "pin:" + path}
+                        onConfirm={() => {
+                          setUnpinFor(null);
+                          void setPinned(path, false);
+                        }}
+                        onCancel={() => setUnpinFor(null)}
+                      />
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
           {choices.length > 0 && (

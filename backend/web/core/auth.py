@@ -40,11 +40,12 @@ for the phone.
   what any server trusts.
 * **The fleet key.** The one exception is the key the owner's devices share
   once they are joined ("Your devices", :mod:`backend.web.core.fleet`). Every
-  member accepts it beside its own token (:func:`token_valid`), so one QR
-  signs a phone in on all of them and members authenticate to each other with
-  it. Holding it IS being one of the owner's devices; it only ever leaves a
-  member inside an approved join. :func:`own_token_valid` is the check that
-  excludes it.
+  member accepts it beside its own token (:func:`token_valid`), so members
+  authenticate to each other with it and a phone that holds it is accepted by
+  any of them — on the origin it signed in on (cookies are per origin; the
+  shared link is the one origin every member answers). Holding it IS being
+  one of the owner's devices; it only ever leaves a member inside an approved
+  join. :func:`own_token_valid` is the check that excludes it.
 * **Privileged actions.** Some routes (approving a device into the fleet,
   showing a join code) must be done by the person AT this device, never
   relayed by another MindFlock nor reached by an anonymous tailnet caller of a

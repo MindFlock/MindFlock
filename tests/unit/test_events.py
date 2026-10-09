@@ -124,6 +124,7 @@ def test_event_names_vocabulary_is_complete():
         "device.joined",
         "device.removed",
         "settings.synced",
+        "settings.sync_paused",
     }
 
 

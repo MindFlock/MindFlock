@@ -436,9 +436,11 @@ export function EventToasts() {
     }
     // Your devices: someone asking to join is the one that needs you (the
     // click opens Settings → Devices, where Approve is — after comparing the
-    // code both screens show); a join is news. Never for a replayed backlog:
-    // a request from an hour ago has expired, and the bell keeps the record.
-    for (const name of ["device.join_requested", "device.joined"]) {
+    // code both screens show); a join is news; settings sync pausing itself
+    // stops all syncing until it's answered there. Never for a replayed
+    // backlog: a request from an hour ago has expired, and the bell keeps the
+    // record.
+    for (const name of ["device.join_requested", "device.joined", "settings.sync_paused"]) {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;
