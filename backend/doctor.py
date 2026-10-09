@@ -461,6 +461,52 @@ def check_assistant_cli() -> Optional[Check]:
     return _agent_cli_check("assistant-cli", name, "assistant CLI", "warn")
 
 
+def check_synced_agents() -> List[Check]:
+    """Agent CLIs your other devices' synced settings name (the default
+    agent, PR review's…) that aren't installed here. Settings sync holds
+    such a value back until the CLI exists (``settings_sync.DEFER_PATHS``);
+    listing them as ``install`` rows puts them in the one-shot install plan,
+    so Settings → Devices can install them with one click and the next sync
+    applies the setting. Empty outside a server (only it syncs)."""
+    try:
+        from backend.web.core import settings_sync
+
+        names = sorted(settings_sync.deferred_providers())
+    except Exception:  # noqa: BLE001 — no web extras / no sync state
+        return []
+    covered = {_default_provider_name(), _assistant_provider_name()}
+    return [
+        _agent_cli_check(f"synced-{n}-cli", n, "synced agent CLI", "warn")
+        for n in names
+        if n and n not in covered
+    ]
+
+
+def check_git_identity() -> Optional[Check]:
+    """git's ``user.name``/``user.email`` (``warn`` when either is unset).
+    Without them the first commit on a fresh machine or WSL distro fails with
+    "Please tell me who you are". ``None`` without git (its own row says so)."""
+    if not shutil.which("git"):
+        return None
+    _, name = _run(["git", "config", "--get", "user.name"])
+    _, email = _run(["git", "config", "--get", "user.email"])
+    name, email = _first_line(name), _first_line(email)
+    if name and email:
+        return Check("git-identity", "git identity", "ok", f"{name} <{email}>")
+    unset = " and ".join(
+        k for k, v in (("user.name", name), ("user.email", email)) if not v
+    )
+    return Check(
+        "git-identity",
+        "git identity",
+        "warn",
+        f"{unset} not set — commits will fail on this computer",
+        "Setup → Connect GitHub fills it in from your account, or: "
+        'git config --global user.name "Your Name" && '
+        "git config --global user.email you@example.com",
+    )
+
+
 def _npm_install_wanted(name: str) -> bool:
     """Whether agent ``name`` is missing AND its installer is an npm one."""
     import re
@@ -1154,15 +1200,17 @@ def check_cache_seeds() -> Check:
 
 #: A probe may answer ``None`` — "doesn't apply on this host" (the Assistant
 #: CLI check when the Assistant uses the default provider) — and is then left
-#: out of the report entirely.
-CHECKS_BY_ID: dict[str, Callable[[], Optional[Check]]] = {
+#: out of the report entirely; or a list (one row per synced agent CLI).
+CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "git": check_git,
+    "git-identity": check_git_identity,
     "tmux": check_tmux,
     "gh": check_gh,
     "agent-cli": check_agent_cli,
     "assistant-cli": check_assistant_cli,
     "node": check_node,
     "agent-auth": check_agent_auth,
+    "synced-agents": check_synced_agents,
     "local-model": check_local_model,
     "uv": check_uv,
     "clipboard": check_clipboard,
@@ -1173,7 +1221,9 @@ CHECKS_BY_ID: dict[str, Callable[[], Optional[Check]]] = {
     "cache-seeds": check_cache_seeds,
 }
 
-_ALL_CHECKS: List[Callable[[], Optional[Check]]] = list(CHECKS_BY_ID.values())
+_ALL_CHECKS: List[Callable[[], "Optional[Check] | List[Check]"]] = list(
+    CHECKS_BY_ID.values()
+)
 
 
 def run_checks() -> List[Check]:
@@ -1186,7 +1236,9 @@ def run_checks() -> List[Check]:
         except Exception as err:  # noqa: BLE001 — degrade, never raise
             cid = fn.__name__.removeprefix("check_").replace("_", "-")
             check = Check(cid, cid, "warn", f"check errored: {err}")
-        if check is not None:
+        if isinstance(check, list):
+            out.extend(check)
+        elif check is not None:
             out.append(check)
     return out
 

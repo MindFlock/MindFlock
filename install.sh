@@ -4,6 +4,12 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
 #
+# Option (after `sh -s --`):
+#   --join 'DEVICE CODE'  after installing, start the server, sign in to
+#                         Tailscale if needed, and join DEVICE's devices with
+#                         the code it showed (Settings → Devices → Add a device
+#                         prints the whole line, pinned to its own version).
+#
 # What it does (and prints as it goes):
 #   1. Checks the platform (Linux, macOS, or WSL; native Windows is refused
 #      with a pointer to WSL2).
@@ -56,6 +62,17 @@ UV_INSTALLER_SHA256="504a79fd2ed0dcd47e7f04f0792cfd0871f62e24a7fe40fa8ae0f563a36
 
 say()  { printf '\033[1;36m[mindflock]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[mindflock] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+JOIN=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --join)
+      [ $# -ge 2 ] || fail "--join needs 'DEVICE CODE' (what Add a device shows)"
+      JOIN="$2"; shift 2 ;;
+    --join=*) JOIN="${1#--join=}"; shift ;;
+    *) fail "unknown option: $1 (supported: --join 'DEVICE CODE')" ;;
+  esac
+done
 
 REPO="${MINDFLOCK_INSTALL_REPO:-https://github.com/MindFlock/MindFlock}"
 REF="${MINDFLOCK_INSTALL_REF:-}"
@@ -239,9 +256,29 @@ if [ "${MINDFLOCK_INSTALL_NO_RESTART:-}" != "1" ] \
   && curl -fsS --max-time 2 "http://127.0.0.1:$PORT_/api/remote/hello" >/dev/null 2>&1; then
   say "restarting the MindFlock server on port $PORT_ onto the new version…"
   MINDFLOCK_PORT="$PORT_" "$MF" restart || say "couldn't restart it — run: $MF restart"
-  say ""
-  say "Done — the server on http://127.0.0.1:$PORT_ runs the new version."
-  exit 0
+  if [ -z "$JOIN" ]; then
+    say ""
+    say "Done — the server on http://127.0.0.1:$PORT_ runs the new version."
+    exit 0
+  fi
+fi
+
+# --- 6. join your other computer (--join) ------------------------------------
+# A new computer added from another one's "Add a device" line. Not fatal:
+# MindFlock is installed either way, and the line to finish is printed.
+if [ -n "$JOIN" ]; then
+  say "joining your devices ($JOIN)…"
+  if has_tty; then
+    "$MF" devices bootstrap --join "$JOIN" </dev/tty && JOINED=1 || JOINED=0
+  else
+    "$MF" devices bootstrap --join "$JOIN" && JOINED=1 || JOINED=0
+  fi
+  if [ "$JOINED" = 1 ]; then
+    say "joined — this computer is one of your devices now"
+  else
+    say "joining didn't finish — once the above is fixed, run:"
+    say "  $MF devices bootstrap --join '$JOIN'"
+  fi
 fi
 
 say ""

@@ -53,6 +53,7 @@ Core vocabulary (emitted by the server):
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
 | `session.message` | Another session (or the CLI / an external client, `from: ""`) left a message for this one | `data: {id, from, kind, text, delivery: delivered·pending·held, status?}` (`status` only on a `kind: "result"` report: `done`·`blocked`·`failed`) |
+| `session.push_failed` | The Push button's push failed for want of a credential or a git identity (read from the push's own output; once per push) | `data: {reason: https_auth·ssh_auth·identity·forbidden·not_found, message, fix, detail}` |
 | `session.pr_state_changed` | The branch's PR genuinely moved | `"" · OPEN · MERGED · CLOSED`, `data: {url}` |
 | `session.pr_review_changed` | A reviewer decided on the branch's open PR | `"" · approved · changes_requested` |
 | `session.red_zone_blocked` | The red-zone guard denied the agent an edit — or a push/PR while zoned files are committed (`push: true`) — once per session and zone (or push) per work cycle | `data: {count, zone_ids, patterns, paths, tool, push, detail}` |

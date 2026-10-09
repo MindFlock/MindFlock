@@ -36,6 +36,7 @@ Installed via ``[project.scripts]``::
     mindflock devices cancel      # …stop asking to join
     mindflock devices approve DEV # …let a computer that asked join (deny DEV refuses)
     mindflock devices remove DEV  # …take one out (the rest get a new key); leave = this one
+    mindflock devices bootstrap   # …one line that installs + joins a brand-new computer
     mindflock devices update      # …update every one of them, one at a time (this one last)
 
     mindflock update              # update this MindFlock to the newest release and restart
@@ -567,6 +568,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "(the removed device keeps any it was given)"
         ),
     )
+    d_boot = dev_sub.add_parser(
+        "bootstrap",
+        parents=[server_opts_nested],
+        help=(
+            "print one line that installs MindFlock on a brand-new computer and "
+            "joins it to your devices (pinned to this version); --join runs that here"
+        ),
+    )
+    d_boot.add_argument(
+        "--join",
+        metavar="'DEVICE CODE'",
+        default=None,
+        help=(
+            "on the NEW computer (install.sh --join runs this): start the server, "
+            "sign in to Tailscale if needed, and join DEVICE with CODE — or ask "
+            "DEVICE to approve when the code expired meanwhile"
+        ),
+    )
     d_leave = dev_sub.add_parser(
         "leave",
         parents=[server_opts_nested],
@@ -663,6 +682,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    git_cred = sub.add_parser(
+        "git-credential",
+        help=argparse.SUPPRESS,  # a git credential helper, not a human command
+        description=(
+            "git credential helper: answers `get` for https://github.com with "
+            "the GitHub token MindFlock has (Setup → Connect GitHub registers it, "
+            "only when you click for it and git has no helper of its own)."
+        ),
+    )
+    git_cred.add_argument("operation", nargs="?", default="get")
+
     uninstall = sub.add_parser(
         "uninstall",
         parents=[server_opts],
@@ -744,6 +774,20 @@ def _cmd_init(assume_yes: bool = False) -> int:
     from backend import init_wizard
 
     return init_wizard.run(assume_yes=assume_yes)
+
+
+def _cmd_git_credential(operation: str) -> int:
+    """``mindflock git-credential get``: git's credential-helper protocol —
+    the GitHub token for https://github.com, nothing for anything else (git
+    then asks its next helper). ``store``/``erase`` are no-ops: the token is
+    managed in Setup, not by git."""
+    if operation != "get":
+        sys.stdin.read()
+        return 0
+    from backend.web.core import github_auth
+
+    sys.stdout.write(github_auth.credential_answer(sys.stdin.read()))
+    return 0
 
 
 def _cmd_token(out: Optional[TextIO] = None) -> int:
@@ -1412,6 +1456,32 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
         if answer.strip().lower() not in ("y", "yes"):
             print("aborted")
             return 0
+
+    # Leave "Your devices" first, so the others don't keep a ghost of this
+    # computer (or keep it running their PR review).
+    left = uninstall_mod.leave_devices(dry_run=args.dry_run)
+    if left["state"] == "would":
+        print("  would leave your devices (%s)" % (", ".join(left["others"]) or "—"))
+    elif left["state"] == "left":
+        print(
+            "  left your devices%s"
+            % (" — told " + ", ".join(left["others"]) if left["others"] else "")
+        )
+    elif left["state"] in ("partial", "failed"):
+        fix = "remove this computer from one of them: mindflock devices remove %s" % (
+            left["self"] or "<this computer>"
+        )
+        msg = "couldn't tell %s that this computer left (%s) — %s" % (
+            ", ".join(left["missed"]) or "your other devices",
+            "offline" if left["state"] == "partial" else left["error"] or "unreachable",
+            fix,
+        )
+        if args.purge:
+            # Purging deletes the group's key here: after this, only another
+            # device can take this one off its list.
+            print("warning: %s" % msg, file=sys.stderr)
+        else:
+            print("  note: %s" % msg)
 
     report = uninstall_mod.execute(
         plan,
@@ -2209,6 +2279,211 @@ def _leave_devices(base: str, args: argparse.Namespace, path: str) -> int:
     return 0
 
 
+#: How long ``devices bootstrap --join`` waits for a server it started, and
+#: for Tailscale to be signed in (a person is opening a link meanwhile).
+_BOOT_SERVER_WAIT_S = 60.0
+_BOOT_TAILSCALE_WAIT_S = 600.0
+
+
+def _start_server_detached() -> str:
+    """Start ``mindflock serve`` in the background (its own session, output in
+    ~/.mindflock/logs/serve.log); return the log path."""
+    from backend.config.config import GetConfigDir
+
+    exe = shutil.which("mindflock")
+    argv = [exe, "serve"] if exe else [sys.executable, "-m", "backend.cli", "serve"]
+    log_dir = os.path.join(GetConfigDir(), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    path = os.path.join(log_dir, "serve.log")
+    with open(path, "ab") as fh:
+        subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            cwd=os.path.expanduser("~"),
+        )
+    return path
+
+
+def _ensure_server(args: argparse.Namespace) -> str:
+    try:
+        return client.discover(args.host, args.port)
+    except client.AuthRejected:
+        raise
+    except client.ServerNotFound:
+        pass
+    log_path = _start_server_detached()
+    print("Starting MindFlock in the background (log: %s)…" % log_path)
+    deadline = time.monotonic() + _BOOT_SERVER_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(1.0)
+        try:
+            return client.discover(args.host, args.port)
+        except client.ServerNotFound:
+            continue
+    raise client.ClientError(
+        "the server didn't come up — see %s, or run `mindflock serve`" % log_path
+    )
+
+
+def _bootstrap_tailscale(base: str) -> bool:
+    """Make sure Tailscale is signed in here (the join goes over it): print
+    the sign-in link and wait for it. False when it can't be."""
+    h = client.get(base, "/api/tailscale/health?refresh=1") or {}
+    if h.get("backend_state") == "Running":
+        return True
+    issue = (h.get("issues") or [{}])[0]
+    if not h.get("installed"):
+        print("Tailscale isn't installed here: %s" % (issue.get("message") or ""))
+        if issue.get("fix"):
+            print("  install it:  %s" % issue["fix"])
+        print("then run the same line again.")
+        return False
+    print(
+        "Signing this computer in to Tailscale (use the same account as your other computer)…"
+    )
+    try:
+        r = client.post(base, "/api/tailscale/login", timeout=30.0) or {}
+    except client.ApiError as err:
+        print("! %s" % err, file=sys.stderr)
+        if (err.payload or {}).get("fix"):
+            print("  fix: %s" % err.payload["fix"], file=sys.stderr)
+        return False
+    if r.get("auth_url"):
+        print("  open this link and sign in:  %s" % r["auth_url"])
+    deadline = time.monotonic() + _BOOT_TAILSCALE_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(3.0)
+        h = client.get(base, "/api/tailscale/health?refresh=1") or {}
+        if h.get("backend_state") == "Running":
+            print("✓ Tailscale signed in")
+            return True
+    print("Tailscale still isn't signed in — finish it, then run the same line again.")
+    return False
+
+
+#: What Settings → Devices → Make reachable saves (useMakeReachable.ts): the
+#: tailnet bind AND the access gate, together — never one without the other.
+_REACHABLE = {"serve_mode": "tailscale", "auth_mode": "on"}
+
+
+def _bootstrap_reachable(base: str, args: argparse.Namespace) -> str:
+    """A fresh install listens on 127.0.0.1 only, so the device it joins
+    couldn't reach it back. Do what Make reachable does — before the join, so
+    the admitting device's re-probe finds it — wait out the restart that
+    save triggers, and return the server's base URL."""
+    try:
+        st = _fleet_status(base)
+    except client.ClientError:
+        return base
+    if st.get("self_reachable") is not False:
+        return base
+    print(
+        "Making this computer reachable from your other devices "
+        "(Tailscale mode + access gate on)…"
+    )
+    try:
+        r = client.post(
+            base, "/api/settings", {"general": dict(_REACHABLE)}, timeout=30.0
+        )
+    except client.ClientError as err:
+        print(
+            "! couldn't (%s) — afterwards: Settings → Devices → Make reachable" % err,
+            file=sys.stderr,
+        )
+        return base
+    if isinstance(r, dict) and r.get("restarting"):
+        time.sleep(2.0)
+        client.reset_auth_token()  # the gate's token, made at boot
+        deadline = time.monotonic() + _BOOT_SERVER_WAIT_S
+        while time.monotonic() < deadline:
+            try:
+                base = client.discover(args.host, args.port)
+                break
+            except client.ServerNotFound:
+                time.sleep(1.0)
+                client.reset_auth_token()
+    print(
+        "✓ reachable on your tailnet, with the access gate on — this computer's "
+        "access token (for its sign-in page or your phone): mindflock token"
+    )
+    return base
+
+
+def _bootstrap_join(base: str, pair: str, args: argparse.Namespace) -> int:
+    """``devices bootstrap --join 'DEVICE CODE'`` on a brand-new computer."""
+    tokens = (pair or "").split()
+    if len(tokens) < 2:
+        raise client.ClientError("--join wants 'DEVICE CODE' (what Add a device shows)")
+    device, code = tokens[0].lower(), "".join(tokens[1:])
+    if not _bootstrap_tailscale(base):
+        return 1
+    base = _bootstrap_reachable(base, args)
+    try:
+        client.post(base, "/api/devices/refresh", timeout=30.0)
+    except client.ClientError:
+        pass  # discovery also runs on its own
+    print("Joining %s…" % device)
+    try:
+        res = (
+            client.post(
+                base, "/api/fleet/join", {"device": device, "code": code}, timeout=60.0
+            )
+            or {}
+        )
+        return _report_join(res)
+    except client.ApiError as err:
+        if "wrong or expired" not in str(err):
+            print("error: %s" % err, file=sys.stderr)
+            return 1
+    # Setting up took longer than the code lives: ask instead, and the person
+    # approves on the other computer after comparing the 6-digit code.
+    print(
+        "The code expired while this computer was being set up — asking %s instead."
+        % device
+    )
+    res = (
+        client.post(base, "/api/fleet/request", {"device": device}, timeout=30.0) or {}
+    )
+    if res.get("state") in _JOIN_DONE:
+        return _report_join(res)
+    host = res.get("host") or device
+    print(
+        "Approve on %s (Settings → Devices); check it shows code %s  (Ctrl-C to stop asking)"
+        % (host, res.get("code") or "?")
+    )
+    return _wait_for_join(base, host)
+
+
+def _print_bootstrap(b: dict) -> None:
+    """``devices bootstrap``: the line for a brand-new computer."""
+    # The line alone on stdout (scriptable); the rest on stderr.
+    print(b.get("line") or "")
+    pin = (
+        "pinned to MindFlock %s, the version this computer runs" % b.get("ref")
+        if b.get("pinned")
+        else "this is a development build, so it installs main"
+    )
+    desk = b.get("desktop") or {}
+    print(
+        "Run that on the new computer (macOS, Linux or WSL): it installs MindFlock "
+        "(%s), signs in to Tailscale if needed, makes itself reachable, and joins your devices.\n"
+        "Desktop app instead: install it from %s, then Settings → Devices → "
+        "Paste a code:  %s\n"
+        "Single-use code, expires in %s — if it runs out, the new computer asks "
+        "this one to approve instead."
+        % (
+            pin,
+            desk.get("download") or "the releases page",
+            desk.get("paste") or "",
+            _time_left(b.get("expires_at")),
+        ),
+        file=sys.stderr,
+    )
+
+
 def _cmd_join(args: argparse.Namespace) -> int:
     """``mindflock join CODE`` — route any pasted code by its format
     (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
@@ -2271,8 +2546,14 @@ def _cmd_devices(args: argparse.Namespace) -> int:
     """``mindflock devices …`` — thin client over ``/api/fleet`` (Settings →
     Devices in the UI). The server does the device-to-device talking; the CLI
     only ever reaches its own server."""
-    base = client.discover(args.host, args.port)
     cmd = args.devices_command or "list"
+    if cmd == "bootstrap" and getattr(args, "join", None):
+        # The new computer: there may be no server yet — start one.
+        return _bootstrap_join(_ensure_server(args), args.join, args)
+    base = client.discover(args.host, args.port)
+    if cmd == "bootstrap":
+        _print_bootstrap(client.post(base, "/api/fleet/bootstrap") or {})
+        return 0
     if cmd == "list":
         st = _fleet_status(base)
         if getattr(args, "as_json", False):
@@ -2574,6 +2855,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # server lazily per tool call, so it never goes through the
         # ServerNotFound handler below either.
         return _cmd_mcp(args)
+    if args.command == "git-credential":
+        return _cmd_git_credential(args.operation)
     if args.command == "token":
         # Offline on purpose: it reads the same store the server does, so it
         # works when the only thing in the way is the sign-in page itself

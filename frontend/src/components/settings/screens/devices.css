@@ -354,6 +354,23 @@
   align-items: stretch;
 }
 
+/* A brand-new computer in one line (DeviceReadiness.tsx). */
+.devices-bootstrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.devices-bootstrap-open {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.devices-readiness {
+  font-size: 11px;
+}
+
 /* "This device": where it listens. A plain line while the others can reach
    it; a .devices-warn (with Make reachable) while they can't. */
 .devices-this {

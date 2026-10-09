@@ -103,9 +103,18 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             cmd = "%s; %s" % (exports, cmd)
         except Exception as err:  # noqa: BLE001 — a profile quirk must not 500
             return session, str(err)
+    return session, ensure_command_session(session, cmd)
+
+
+def ensure_command_session(session: str, cmd: str) -> Optional[str]:
+    """Run ``cmd`` (built server-side, never from a client) in a login-style
+    terminal named ``session`` in HOME — tmux, or a plain PTY without it —
+    reusing one already running. The agent sign-in above and Setup's GitHub
+    sign-in (``gh auth login --web``) both open one. Returns an error or
+    ``None``."""
     home = os.path.expanduser("~")
     if not _have_tmux():
-        return session, _ensure_direct(session, cmd, home)
+        return _ensure_direct(session, cmd, home)
     try:
         if (
             subprocess.run(
@@ -116,9 +125,9 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             ).returncode
             == 0
         ):
-            return session, None
+            return None
     except subprocess.TimeoutExpired:
-        return session, "tmux timed out after 10s"
+        return "tmux timed out after 10s"
     # Keep the pane alive after login returns so the user sees success/failure
     # instead of the session vanishing the instant the command exits.
     wrapped = (
@@ -144,7 +153,7 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             timeout=10,
         )
     except subprocess.TimeoutExpired:
-        return session, "tmux new-session timed out after 10s"
+        return "tmux new-session timed out after 10s"
     if created.returncode != 0:
         # Race: two clients opened the login terminal at once; the loser gets
         # "duplicate session". If it exists now, that's success.
@@ -158,13 +167,10 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
                 ).returncode
                 == 0
             ):
-                return session, None
+                return None
         except subprocess.TimeoutExpired:
             pass
-        return (
-            session,
-            created.stderr.decode("utf-8", "replace").strip() or "tmux failed",
-        )
+        return created.stderr.decode("utf-8", "replace").strip() or "tmux failed"
     for opt, val in (
         ("mouse", "on"),
         ("history-limit", "10000"),
@@ -179,7 +185,7 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             )
         except subprocess.TimeoutExpired:
             pass  # cosmetic; never block on a wedged tmux
-    return session, None
+    return None
 
 
 def _ensure_direct(session: str, cmd: str, home: str) -> Optional[str]:
@@ -204,14 +210,19 @@ def _ensure_direct(session: str, cmd: str, home: str) -> Optional[str]:
 
 def kill_login_session(name: str, profile_id: str = "") -> None:
     """Tear down provider ``name``'s login session (best-effort)."""
+    kill_session(login_session_name(name, profile_id))
+
+
+def kill_session(session: str) -> None:
+    """Tear down a terminal :func:`ensure_command_session` made (best-effort)."""
     from backend.web.core import pty_run
 
-    pty_run.kill(login_session_name(name, profile_id))
+    pty_run.kill(session)
     if not _have_tmux():
         return
     try:
         subprocess.run(
-            ["tmux", "kill-session", "-t=" + login_session_name(name, profile_id)],
+            ["tmux", "kill-session", "-t=" + session],
             stdout=_DN,
             stderr=_DN,
             timeout=10,

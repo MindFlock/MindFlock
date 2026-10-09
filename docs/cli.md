@@ -16,6 +16,8 @@ mindflock serve tailscale   # also bind this node's Tailscale IPs for phone/tail
 mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
 mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
+mindflock init              # guided first run: the same ordered plan as Setup (deps, first computer
+                            # or join?, agent sign-in, Tailscale, GitHub, your repo)
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
@@ -101,6 +103,16 @@ What it deliberately will **not** do:
 * delete a branch that already existed before its session;
 * run while a server is up (that would tear down worktrees under live
   sessions). `--dry-run` is still allowed then.
+
+It also **leaves "Your devices"** first (best-effort, the way Settings →
+Devices → Leave does): the other devices get this computer's tombstone, so
+they don't keep an offline row for it forever, and PR review and issue
+handling move off it when it ran them. Members that are offline (or a
+Tailscale that is down) miss it: the command names them and the fix —
+`mindflock devices remove <this computer>` on one of them. With `--purge`
+that is a `warning:` on stderr, since the group's key is deleted with
+`~/.mindflock` and only another device can take this one off its list
+afterwards. `--dry-run` only says it would leave.
 
 `--purge` is opt-in because `~/.mindflock` and `~/.mindflock-assistant` hold
 your settings, session state and usage history — without it, a reinstall picks
@@ -333,7 +345,7 @@ computer on your tailnet that can be joined, and with several it asks which
 (`mfp1:`/`mfp2:`, also inside a pasted message) runs `peer join`. Anything
 else exits 1 saying what the two formats look like.
 
-### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update]`
+### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update|bootstrap]`
 
 "Your devices" (Settings → Devices in the app) over `/api/fleet`: group the
 computers **you** own, found over Tailscale, so settings follow you between
@@ -347,6 +359,8 @@ MindFlock is refused.
 | `devices` / `devices list [--json]` | your devices (`✓` this device / reachable, `-` offline, `!` reachable but in another group; `runs PR review & issues` marks the one that does — a `!` line warns when none or several do), computers asking to join and their codes, live invite codes, an outgoing request still waiting, and the other computers on your tailnet with the command that adds each. A `!` line also says when this device's key is out of date (re-join), when the access-token gate is off while serving beyond localhost (anyone who can reach this computer could then control your other devices through it), when your other devices can't reach this one (it only listens on 127.0.0.1), and when a device you just let in can't be reached from here. An offline member says why (what discovery found: connection refused, timed out, asleep with when Tailscale last saw it), and every other tailnet device that isn't a MindFlock you can join gets its own line with the reason — after a time-out, the tailnet policy lines that open the port are printed too |
 | `devices add` | prints a one-time code (`XXXX-XXXX`, 10 min, single use) on stdout, and on stderr the command to run on the new computer: `mindflock devices join <this device> <code>`. On a local-only computer a `!` line on stderr says the new one can't reach it to use the code — make it reachable first |
 | `devices add DEVICE [--yes]` | adds a device this one already holds an access token for (pasted under Remote control). No code needed. It first asks you to confirm, because it's the other way round from joining: DEVICE takes **this** computer's shared settings where this one has them (its own stay where this one has none); `--yes` skips the question, and answering no prints `not added` and exits 1. Refused for a device that is already one of yours. A `! settings sync:` line on stderr means the device was added but settings sync didn't start here |
+| `devices bootstrap` | makes a fresh code and prints, on stdout, one line for a brand-new computer that has nothing installed: `curl -LsSf …/<ref>/install.sh \| MINDFLOCK_INSTALL_REF=<ref> sh -s -- --join '<this device> <code>'`, where `<ref>` is `v<this device's version>` (`main` from a source checkout) — so the new computer runs the same version and settings sync works at once. On stderr: the desktop-app twin (download the app, paste `<device> <code>` into Settings → Devices → Paste a code) and how long the code lives |
+| `devices bootstrap --join 'DEVICE CODE'` | the new computer's half (`install.sh --join` runs it): starts the server in the background when none is running (output in `~/.mindflock/logs/serve.log`), signs this computer in to Tailscale when it isn't (prints the sign-in link and waits up to 10 min), makes it reachable when it only listens on 127.0.0.1 (what Settings → Devices → Make reachable saves: Tailscale mode and the access gate on together, then the server's own restart; `mindflock token` shows the access token), sweeps the tailnet, and joins DEVICE with CODE. When the code expired while the computer was being set up, it asks DEVICE instead and waits for the approval there (compare the 6-digit code) |
 | `devices join DEVICE CODE [--yes]` | joins DEVICE's group with a code made there. It first asks you to confirm, because this computer takes DEVICE's shared settings wherever DEVICE has them (your own stay where it has none); `--yes` skips the question |
 | `devices join DEVICE [--yes]` | asks DEVICE (after the same confirmation), prints `Approve on <host>; check it shows code 123 456`, then waits up to 10 min for an answer (it polls every 2 s). Ctrl-C withdraws the request, on DEVICE too. Run it again while the request is still out and it picks the wait back up |
 | `devices cancel` | stops asking to join, and withdraws the request on the other device. Once that device has approved and the join is under way it's too late; the command says so and exits 1 |

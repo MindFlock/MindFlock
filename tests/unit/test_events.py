@@ -106,6 +106,7 @@ def test_event_names_vocabulary_is_complete():
         "session.turn_ended",
         "session.autopilot_changed",
         "session.pushed",
+        "session.push_failed",
         "session.test_plan_ready",
         "session.test_plan_failed",
         "session.test_plan_checked",

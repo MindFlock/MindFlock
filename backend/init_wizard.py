@@ -28,6 +28,14 @@ check that already carries a runnable command, and a second copy of that
 confirm-run-re-probe dance would drift from the first one the day a fix line
 changes.
 
+Between the dependency table and the folder, :func:`run` walks the shared
+first-run plan (:mod:`backend.onboarding` — the same ordered steps Setup
+shows in the web UI): it asks "first computer, or join one you already
+have?" BEFORE offering the agent sign-in, because joining brings the default
+agent, the GitHub token and ticket sources along (not the sign-in itself —
+accounts stay on each computer), and then prints every step with its one
+next command.
+
 Nothing here sets ``general.onboarded``. In this codebase that flag means "has
 created a session" and gates the desktop app's own first-run surfaces; setting
 it at the end of a wizard would silently suppress the welcome tour for someone
@@ -201,6 +209,81 @@ def _git_note(candidate: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# The shared first-run plan (backend.onboarding)
+# --------------------------------------------------------------------------- #
+_PLAN_GLYPHS = {"ok": "✓", "todo": "•", "skip": "–"}
+
+
+def _plan(checks: List["Check"]) -> Optional[dict]:
+    """The first-run plan for these checks, or ``None`` when it can't be
+    built. Never asks GitHub who the token is (no network from here)."""
+    try:
+        from backend import onboarding
+
+        return onboarding.build_plan(
+            onboarding.collect(checks=[c.to_dict() for c in checks], check_user=False)
+        )
+    except Exception:  # noqa: BLE001 — the plan is advice; the wizard goes on
+        return None
+
+
+def _print_plan(plan: dict, out: Optional[TextIO] = None) -> None:
+    """Every step, in order, with its reason — and the command for each one
+    still to do (Setup in the web UI has a button for each instead)."""
+    out = out if out is not None else sys.stdout
+    width = max(len(s["title"]) for s in plan["steps"])
+    for step in plan["steps"]:
+        glyph = _PLAN_GLYPHS.get(step["status"], "?")
+        print(
+            "  %s %s  %s" % (glyph, step["title"].ljust(width), step["reason"]),
+            file=out,
+        )
+        if step["status"] == "todo" and step.get("cli"):
+            print("    %s  run: %s" % (" " * width, step["cli"]), file=out)
+
+
+def _devices_step(plan: Optional[dict]) -> dict:
+    return next((s for s in (plan or {}).get("steps", []) if s["id"] == "devices"), {})
+
+
+def _ask_devices(plan: Optional[dict]) -> str:
+    """Ask Setup's devices question when it hasn't been answered; store the
+    answer (``"first"``/``"join"``) and return it — ``""`` when not asked."""
+    step = _devices_step(plan)
+    if step.get("status") != "todo" or not step.get("ask"):
+        return ""
+    print()
+    print(
+        "Is this your first computer with MindFlock, or do you already use it on another one?"
+    )
+    print(
+        "  (joining that one first brings your settings, GitHub token and ticket sources)"
+    )
+    try:
+        answer = (
+            input("\n  [F]irst computer / [j]oin the one I already have: ")
+            .strip()
+            .lower()
+        )
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+    choice = "join" if answer.startswith("j") else "first"
+    try:
+        from backend import onboarding
+
+        onboarding.set_choice(choice)
+    except Exception:  # noqa: BLE001 — an unwritable store costs the memory only
+        pass
+    if choice == "join":
+        print()
+        print("  On your other computer: Settings → Devices → Add a device (or run")
+        print("  `mindflock devices bootstrap` there). It shows a code; then, here:")
+        print("    mindflock devices join DEVICE CODE")
+    return choice
+
+
+# --------------------------------------------------------------------------- #
 # Non-interactive report (the first-serve banner)
 # --------------------------------------------------------------------------- #
 def report(stream: Optional[TextIO] = None, *, serving: bool = False) -> None:
@@ -334,13 +417,34 @@ def run(assume_yes: bool = False, *, serving: bool = False) -> int:
             "  (the dependency check could not run — `mindflock doctor` has the details)"
         )
 
+    plan = _plan(checks)
     if not assume_yes:
-        checks = cli._fix_checks(checks)
+        _ask_devices(plan)
+        plan = _plan(checks)
+    joining = _devices_step(plan).get("choice") == "join" and (
+        _devices_step(plan).get("status") != "ok"
+    )
+    if not assume_yes:
+        if joining:
+            # Sign the agent in after joining: the join may change which
+            # agent is the default here.
+            later = [c for c in checks if c.id == "agent-auth"]
+            checks = (
+                cli._fix_checks([c for c in checks if c.id != "agent-auth"]) + later
+            )
+        else:
+            checks = cli._fix_checks(checks)
     elif _needs_attention(checks):
         print()
         print(
             "  --yes never runs an installer unwatched — the fix lines above are the list."
         )
+
+    plan = _plan(checks) if plan is not None else None
+    if plan is not None:
+        print()
+        print("Your setup, in order:")
+        _print_plan(plan)
 
     print()
     repo = _pick_repo(_candidate_repos(), assume_yes)

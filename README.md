@@ -559,6 +559,22 @@ code instead), and finishes with `mindflock doctor` so anything still missing
 (git, tmux, `claude`) is listed with the exact install command for your
 platform.
 
+**A second computer?** On the first one, Settings → Devices → **Add a
+device** → *New computer with nothing installed yet?* (or `mindflock devices
+bootstrap`) gives one line to paste on the new one. It installs the same
+MindFlock version, signs in to Tailscale, and joins your devices, so your
+settings, GitHub token and ticket sources come along:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/v<version>/install.sh \
+  | MINDFLOCK_INSTALL_REF=v<version> sh -s -- --join '<device> <CODE>'
+```
+
+Then open the app's **Setup** (or run `mindflock init`): one ordered list —
+dependencies, "first computer or join one?", your agent's sign-in, Tailscale
+when you have more than one computer, **Connect GitHub** (a browser sign-in,
+no token to copy when gh is installed), and your first repo.
+
 > **Note on `curl | sh`:** it isn't a blind one — the uv installer it fetches
 > is version-pinned and sha256-verified before it runs, and the requested
 > branch/tag is resolved to a full commit SHA that is printed and pinned for
