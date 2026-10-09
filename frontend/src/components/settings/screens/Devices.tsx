@@ -39,6 +39,7 @@ import {
   leftLines,
   liveInvite,
   memberStatus,
+  memberUpdateChips,
   pasteJoinBody,
   pinChoices,
   plausibleCode,
@@ -46,9 +47,12 @@ import {
   removalLines,
   removeConfirmText,
   removedToast,
+  rolloutLine,
+  rolloutRowText,
   syncDeviceLine,
   syncLabel,
   unpinReplaces,
+  updateAllLine,
 } from "../../../lib/fleet";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
@@ -78,6 +82,9 @@ export function Devices(p: ScreenProps) {
   /** Remove's "also replace every device's access token" — on by default. */
   const [rotateTokens, setRotateTokens] = useState(true);
   const [now, setNow] = useState(() => Date.now() / 1000);
+  /** The newest released version ("" until known / GitHub unreachable) —
+   * what "Update all my devices" offers. */
+  const [latest, setLatest] = useState("");
 
   const loadFleet = useCallback(async () => {
     try {
@@ -113,6 +120,14 @@ export function Devices(p: ScreenProps) {
     }, POLL_MS);
     return () => clearInterval(t);
   }, [p.active, loadAll, loadFleet, loadSync]);
+
+  // The newest release, once per visit (the server caches it 15 minutes).
+  useEffect(() => {
+    if (!p.active) return;
+    api<{ latest?: string }>("/api/update/check")
+      .then((c) => setLatest(String(c?.latest || "")))
+      .catch(() => {});
+  }, [p.active]);
 
   // A request arriving, a device joining or leaving, or a sync pass that
   // adopted something: refetch now instead of on the next tick.
@@ -198,6 +213,22 @@ export function Devices(p: ScreenProps) {
   const self = st.members.find((m) => m.self);
   const selfHost = st.self.host || st.self.key;
   const selfVersion = self?.version || "";
+  const selfCommit = self?.commit || "";
+  // A finished rollout stays on screen for a day, then only its effect does.
+  const rollout =
+    st.update &&
+    (st.update.state === "running" ||
+      (st.update.state !== "idle" && now - (st.update.finished_at || 0) < 86400))
+      ? st.update
+      : null;
+  const rolloutRunning = rollout?.state === "running";
+  const behindLine = st.in_fleet ? updateAllLine(st.members, latest) : "";
+  const updateAll = () =>
+    run(
+      "update-all",
+      () => api("/api/fleet/update", { json: latest ? { tag: "v" + latest } : {} }),
+      "Updating your devices one at a time — this one last"
+    );
   const others = st.members.filter((m) => !m.self);
   // A member whose hello lags the group still comes back as a candidate:
   // it is already yours, so it gets no join buttons.
@@ -356,7 +387,8 @@ export function Devices(p: ScreenProps) {
       {st.in_fleet ? (
         <ul className="devices-list" id="devices-members">
           {st.members.map((m) => {
-            const status = memberStatus(m, selfVersion);
+            const status = memberStatus(m, selfVersion, selfCommit);
+            const chips = memberUpdateChips(m, latest);
             const warn = !m.self && (!!m.error || (m.reachable && !!selfVersion && !!m.version && m.version !== selfVersion));
             return (
               <li key={m.key} data-member={m.key} className={m.self ? "is-self" : ""}>
@@ -377,6 +409,15 @@ export function Devices(p: ScreenProps) {
                           runs PR review &amp; issues
                         </span>
                       )}
+                      {chips.map((c) => (
+                        <span
+                          key={c.text}
+                          className={"devices-badge" + (c.warn ? " warn" : "")}
+                          data-update-chip={m.key}
+                        >
+                          {c.text}
+                        </span>
+                      ))}
                     </span>
                     <span className={"devices-note" + (warn ? " warn" : "")}>{status}</span>
                   </span>
@@ -468,6 +509,45 @@ export function Devices(p: ScreenProps) {
         <p className="set-hint set-block-hint" id="devices-intro">
           Your devices share settings, sign-in and ticket claims. Add a computer you own:
         </p>
+      )}
+      {st.in_fleet && (behindLine || rollout) && (
+        <div className="devices-update" id="devices-update" data-rollout={rollout?.state || "idle"}>
+          {rollout && (
+            <p className={"set-hint" + (rollout.state === "halted" ? " devices-hint-warn" : "")} id="devices-rollout-line">
+              {rolloutLine(rollout)}
+            </p>
+          )}
+          {behindLine && !rolloutRunning && (
+            <p className="set-hint" id="devices-update-line">
+              {behindLine}
+            </p>
+          )}
+          {rollout && (
+            <ul className="devices-update-rows" id="devices-update-rows">
+              {rollout.members.map((r) => (
+                <li
+                  key={r.key}
+                  data-rollout-row={r.key}
+                  data-step={r.step}
+                  className={"devices-note" + (r.step === "failed" ? " warn" : "")}
+                >
+                  {rolloutRowText(r)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {behindLine && !rolloutRunning && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-update-all"
+              disabled={!!busy}
+              onClick={() => void updateAll()}
+            >
+              {busy === "update-all" ? "Starting…" : "Update all my devices to v" + latest}
+            </button>
+          )}
+        </div>
       )}
       {auto && (
         <div className="set-row set-switch-row" id="devices-run-here" data-runs-here={auto.here ? "1" : "0"}>

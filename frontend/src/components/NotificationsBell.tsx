@@ -32,7 +32,7 @@ import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../stat
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
-import { deviceEventNote } from "../lib/fleet";
+import { deviceEventNote, updateNote } from "../lib/fleet";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -69,6 +69,8 @@ interface Notif {
   rule?: string;
   /** A device.* row ("Your devices"): named "Devices", opens Settings → Devices. */
   device?: boolean;
+  /** An update.available row: named "Updates", opens this Settings screen. */
+  settings?: string;
 }
 
 /** A stage change, said as what happened. */
@@ -91,6 +93,7 @@ export interface NotifRow {
   dedupe?: string;
   rule?: string;
   device?: boolean;
+  settings?: string;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -174,6 +177,14 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "settings.sync_paused": {
       const n = deviceEventNote(env.event, d);
       return n ? { text: n.text, cls: n.cls, device: true } : null;
+    }
+    // A newer release, and which of your devices are behind it: the click
+    // opens where the Update button is (Devices when others are behind).
+    case "update.available": {
+      const n = updateNote(d);
+      if (!n) return null;
+      const dedupe = "update:" + String(d.latest || "") + ":" + String(d.count ?? "");
+      return { text: n.text, cls: "n-info", settings: n.screen, dedupe };
     }
     default:
       return null;
@@ -497,6 +508,9 @@ export function NotificationsBell() {
                         // Approve / Deny, and the roster, are in Settings → Devices.
                         setOpen(false);
                         useUi.getState().openDialogFor("settings", "devices");
+                      } else if (n.settings) {
+                        setOpen(false);
+                        useUi.getState().openDialogFor("settings", n.settings);
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -510,6 +524,8 @@ export function NotificationsBell() {
                     <span className="notif-sess">
                       {n.device && !n.session
                         ? "Devices"
+                        : n.settings && !n.session
+                        ? "Updates"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Group"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
