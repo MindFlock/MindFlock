@@ -25888,17 +25888,53 @@ var beacon = (body) => fetch("/api/prefs", {
 	keepalive: true,
 	headers: { "Content-Type": "application/json" },
 	body: JSON.stringify(body)
-}).then((r) => {
-	if (!r.ok) throw new PrefPostError(r.status);
-	return r;
+}).then(async (r) => {
+	let parsed = null;
+	try {
+		parsed = await r.json();
+	} catch {}
+	if (!r.ok) throw new PrefPostError(r.status, parsed);
+	return parsed;
 });
 var PrefPostError = class extends Error {
 	status;
-	constructor(status) {
+	body;
+	constructor(status, body = null) {
 		super("/api/prefs -> " + status);
 		this.status = status;
+		this.body = body;
 	}
 };
+function refusedFields(resOrErr) {
+	const o = resOrErr;
+	const list = o && (Array.isArray(o.refused) ? o.refused : o.body?.refused);
+	if (!Array.isArray(list)) return null;
+	return list.filter((f) => FIELDS.has(f));
+}
+function refusalReason(resOrErr) {
+	const o = resOrErr;
+	const why = o && (typeof o.error === "string" ? o.error : o.body?.error);
+	return typeof why === "string" ? why : "";
+}
+var FIELD_WORDS = {
+	keymap: "keyboard shortcuts",
+	prompt_presets: "saved prompts"
+};
+var onRefused = () => {};
+var told = /* @__PURE__ */ new Set();
+function setRefusedListener(fn) {
+	const prev = onRefused;
+	onRefused = fn;
+	return prev;
+}
+function noteRefused(fields, resOrErr = null) {
+	const fresh = fields.filter((f) => !told.has(f));
+	if (!fresh.length) return;
+	for (const f of fresh) told.add(f);
+	const what = fresh.map((f) => FIELD_WORDS[f] || f).join(" and ");
+	const why = refusalReason(resOrErr);
+	onRefused(fresh, "Your " + what + " are kept in this browser only — this device didn't save them" + (why ? ": " + why : "."));
+}
 var FIELDS = new Set(PREF_MAP.map((p) => p.field));
 function dirtyFields(kv = storage()) {
 	const out = /* @__PURE__ */ new Set();
@@ -25981,9 +26017,15 @@ async function flushPrefWrites(kv = storage()) {
 	pending$2.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
+	let res;
 	try {
-		await sender(bodyFor(fields, kv));
+		res = await sender(bodyFor(fields, kv));
 	} catch (e) {
+		const refused = refusedFields(e);
+		if (refused) {
+			settleExcept(fields, refused, sentGen, kv, e);
+			return;
+		}
 		if (permanent(e)) {
 			settleFields(fields, sentGen, kv);
 			return;
@@ -25993,7 +26035,13 @@ async function flushPrefWrites(kv = storage()) {
 		return;
 	}
 	retryMs = 0;
-	settleFields(fields, sentGen, kv);
+	settleExcept(fields, refusedFields(res) || [], sentGen, kv, res);
+}
+function settleExcept(fields, refused, sentGen, kv, resOrErr) {
+	const keep = new Set(refused);
+	settleFields([...fields].filter((f) => !keep.has(f)), sentGen, kv);
+	const mine = refused.filter((f) => fields.has(f));
+	if (mine.length) noteRefused(mine, resOrErr);
 }
 function flushPrefsOnHide(kv = storage()) {
 	if (timer) clearTimeout(timer);
@@ -26002,8 +26050,10 @@ function flushPrefsOnHide(kv = storage()) {
 	pending$2.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
-	beacon(bodyFor(fields, kv)).then(() => settleFields(fields, sentGen, kv), (e) => {
-		if (permanent(e)) settleFields(fields, sentGen, kv);
+	beacon(bodyFor(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
+		const refused = refusedFields(e);
+		if (refused) settleExcept(fields, refused, sentGen, kv, e);
+		else if (permanent(e)) settleFields(fields, sentGen, kv);
 	});
 }
 //#endregion
@@ -29395,7 +29445,7 @@ function apply(dim, name) {
 		if (name) localStorage.setItem(dim.lsKey, name);
 		else localStorage.removeItem(dim.lsKey);
 	} catch {}
-	api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch(() => {});
+	api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch((e) => toast("Couldn't save the " + dim.field + " for your other devices — " + (e?.message || "the server refused it"), { duration: 8e3 }));
 	rethemeAll();
 }
 function Appearance(_) {
@@ -30184,14 +30234,23 @@ function pullPrefs() {
 			}
 			const wasSeeded = seeded();
 			const plan = planBoot(server, readAllLocal(), wasSeeded, pendingFields());
+			let refused = [];
 			if (Object.keys(plan.upload).length) try {
-				await api("/api/prefs", { json: plan.upload });
-			} catch {
-				if (Object.keys(plan.apply).length) adopt(plan.apply, started);
-				if (dirtyFields().size) flushPrefWrites();
-				return;
+				const res = await api("/api/prefs", { json: plan.upload });
+				refused = refusedFields(res) || [];
+				if (refused.length) noteRefused(refused, res);
+			} catch (e) {
+				const r = refusedFields(e);
+				if (r) {
+					refused = r;
+					noteRefused(r, e);
+				} else {
+					if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+					if (dirtyFields().size) flushPrefWrites();
+					return;
+				}
 			}
-			settleFields(unsent, gens);
+			settleFields([...unsent].filter((f) => !refused.includes(f)), gens);
 			if (Object.keys(plan.apply).length) adopt(plan.apply, started);
 			markSeeded();
 			try {
@@ -30207,6 +30266,7 @@ var installed = false;
 function installPrefsSync() {
 	if (installed) return;
 	installed = true;
+	setRefusedListener((_fields, message) => toast(message, { duration: 1e4 }));
 	pullPrefs();
 	if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
 		window.addEventListener("pagehide", () => flushPrefsOnHide());
@@ -32719,6 +32779,11 @@ function rolloutLine(u) {
 	const skipped = (u.members || []).filter((r) => r.step === "skipped").length;
 	return "Your devices are on " + v + (skipped ? " — " + skipped + " skipped (see below)." : ".");
 }
+function updateToastWanted(data, desktop) {
+	if (!desktop) return true;
+	const behind = (data || {}).behind;
+	return Array.isArray(behind) && behind.length > 0;
+}
 function updateNote(data) {
 	const d = data || {};
 	const latest = String(d.latest || "");
@@ -34114,10 +34179,9 @@ function EventToasts() {
 		}));
 		unsubs.push(ev.subscribe("update.available", (env) => {
 			if (isReplay(env)) return;
-			if (window.mfengine) {
-				desktopNotify(env.event, env.data);
-				return;
-			}
+			const desktop = !!window.mfengine;
+			if (desktop) desktopNotify(env.event, env.data);
+			if (!updateToastWanted(env.data, desktop)) return;
 			const n = updateNote(env.data);
 			if (!n) return;
 			notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
@@ -37958,7 +38022,7 @@ function ConnectGitHub({ onChange }) {
 						disabled: !!busy,
 						onClick: (e) => {
 							e.stopPropagation();
-							run("push", async () => setPush(await api("/api/github/push-check")));
+							run("push", async () => setPush(await api("/api/github/push-check", { method: "POST" })));
 						},
 						children: busy === "push" ? "Checking…" : "Check I can push"
 					}),
@@ -37974,7 +38038,7 @@ function ConnectGitHub({ onChange }) {
 							e.stopPropagation();
 							run("cred", async () => {
 								toast((await api("/api/github/git-credential", { method: "POST" })).helper === "gh" ? "git pushes through gh now" : "git pushes with your GitHub sign-in now");
-								setPush(await api("/api/github/push-check"));
+								setPush(await api("/api/github/push-check", { method: "POST" }));
 							});
 						},
 						children: "Let git push with this sign-in"
@@ -68657,9 +68721,9 @@ function StepFix({ step, shared, qrSvg }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
 					" device is approved as a host of ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-					" without a click, and your devices and phone may reach each other's MindFlock (needed under any custom policy, such as ",
+					" without a click, and your own devices and phone may reach each other's MindFlock (needed under any custom policy, such as ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autogroup:self" }),
-					"). No ",
+					") — you only, not everyone else on the tailnet. If it says REPLACE, put your Tailscale login where it shows the placeholder. No ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tagOwners" }),
 					", ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autoApprovers" }),
@@ -73472,7 +73536,7 @@ function Devices(p) {
 							type: "button",
 							className: "test-btn",
 							"data-copy-grant": t.device,
-							onClick: () => copyText(st.policy_grant || "").then((ok) => toast(ok ? "Policy lines copied — paste them into Tailscale's admin console → Access controls" : "Copy failed", { duration: 6e3 })),
+							onClick: () => copyText(st.policy_grant || "").then((ok) => toast(ok ? "Policy lines copied — paste them into Tailscale's admin console → Access controls (replace the login placeholder if they have one)" : "Copy failed", { duration: 6e3 })),
 							children: "Copy grant"
 						})
 					]
