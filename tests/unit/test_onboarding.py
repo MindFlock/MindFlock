@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import types
 
 import pytest
 from fastapi import FastAPI
@@ -226,7 +227,7 @@ def client(monkeypatch):
         ("post", "/api/github/gh-login-close", None),
         ("post", "/api/github/identity", {"name": "a", "email": "a@b"}),
         ("post", "/api/github/git-credential", None),
-        ("get", "/api/github/push-check", None),
+        ("post", "/api/github/push-check", None),
         ("post", "/api/fleet/bootstrap", None),
         ("get", "/api/fleet/readiness", None),
     ],
@@ -235,6 +236,36 @@ def test_mutating_routes_refuse_a_non_privileged_caller(client, method, path, bo
     kw = {"json": body} if body is not None else {}
     r = getattr(client, method)(path, **kw)
     assert r.status_code == 403, (path, r.text)
+
+
+def test_push_check_runs_only_in_a_repo_mindflock_knows(client, monkeypatch, tmp_path):
+    from backend.web import server
+    from backend.web.core import github_auth
+
+    client.state["privileged"] = True
+    known = tmp_path / "known"
+    session = tmp_path / "session-wt"
+    stranger = tmp_path / "elsewhere"
+    for d in (known, session, stranger):
+        d.mkdir()
+    ran = []
+    monkeypatch.setattr(github_auth, "remembered_repo", lambda: str(known))
+    monkeypatch.setattr(
+        github_auth, "push_check", lambda p: ran.append(p) or {"ok": True, "repo": p}
+    )
+    monkeypatch.setattr(github_auth, "remember_push_check", lambda p, out: None)
+    inst = types.SimpleNamespace(GetWorktreePath=lambda: str(session), Path="")
+    monkeypatch.setattr(server.ENGINE, "instances", {"s": inst})
+    # GET is gone: a cross-site page can't make this machine run git.
+    assert client.get("/api/github/push-check").status_code == 405
+    assert client.post("/api/github/push-check").status_code == 200
+    assert (
+        client.post("/api/github/push-check", json={"repo": str(session)}).status_code
+        == 200
+    )
+    r = client.post("/api/github/push-check", json={"repo": str(stranger)})
+    assert r.status_code == 400 and "knows" in r.json()["error"]
+    assert ran == [os.path.realpath(known), os.path.realpath(session)]
 
 
 def test_readiness_self_wants_the_fleet_key(client, monkeypatch):

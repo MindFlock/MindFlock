@@ -1665,7 +1665,7 @@ credential, or a trusted tailnet device; never a relayed request): 403
 | POST | `/api/github/import-gh` | Copy `gh auth token` into `github.token` → `{ok, login}`; 409 while gh isn't signed in |
 | POST | `/api/github/identity` | `{name, email}` → `git config --global user.name/user.email` → `{ok, name, email}`; 400 for a blank name or an email without `@` |
 | POST | `/api/github/git-credential` | Let git push to github.com over HTTPS with the connected sign-in: `gh auth setup-git` when gh is signed in, else `credential.https://github.com.helper = !mindflock git-credential` in the global git config — refused (409) when git already has a helper for GitHub → `{ok, helper: gh\|mindflock, error}` |
-| GET | `/api/github/push-check` | `?repo=` (default `general.last_repo_path`) → `{ok: bool\|null, repo, remote, id, message, fix}`: a `git push --dry-run` of HEAD to a scratch ref on origin with `GIT_TERMINAL_PROMPT=0` (changes nothing; authenticates like a push). `id` names the cause when it fails (`https_auth`, `ssh_auth`, `identity`, `forbidden`, `not_found`, `other`); `ok: null` without a repo or origin |
+| POST | `/api/github/push-check` | Body `{repo}` (default `general.last_repo_path`; a POST so the Origin check applies). `repo` must be the remembered repo or a session's folder or worktree — **400** for any other path → `{ok: bool\|null, repo, remote, id, message, fix}`: a `git push --dry-run` of HEAD to a scratch ref on origin with `GIT_TERMINAL_PROMPT=0` (changes nothing; authenticates like a push). `id` names the cause when it fails (`https_auth`, `ssh_auth`, `identity`, `forbidden`, `not_found`, `other`); `ok: null` without a repo or origin |
 
 ## Session events (WebSocket)
 
