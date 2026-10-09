@@ -7,6 +7,10 @@ validation — loads as empty and is moved aside to ``links.json.corrupt-<ts>``.
 
 Peer-supplied strings are untrusted: ``peer_name`` is sanitized to
 ``[A-Za-z0-9 ._-]{1,32}`` (empty -> ``peer``) whenever a Link is built.
+
+An entry with a field this version doesn't know (written by a newer
+MindFlock) keeps its known fields and drops the rest, instead of condemning the
+whole file: a downgrade must not cost every link.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import fcntl
+import hmac
 import json
 import logging
 import os
@@ -33,6 +38,10 @@ log = logging.getLogger(__name__)
 PERM_KEYS = ("messages", "diff", "read_file")
 DEFAULT_PERMS = {"messages": True, "diff": True, "read_file": True}
 ROLES = ("listener", "dialer")
+#: How the peer reaches a link: ``tcp`` (dialing our direct listener),
+#: ``relay`` (through the relay ingress), ``""`` = not known yet (a link from
+#: before this field; the listener rule treats it as either).
+CARRIERS = ("", "tcp", "relay")
 _DOC_VERSION = 1
 _MAX_FILE = 16 * 1024 * 1024
 
@@ -68,6 +77,13 @@ class Link:
     perms: dict = field(default_factory=lambda: dict(DEFAULT_PERMS))
     share_id: str | None = None
     session_title: str | None = None
+    # How the peer last reached us (listener links) or how we dial (dialer
+    # links) — see CARRIERS. A link that pairs or connects directly keeps the
+    # direct listener up even while a relay serves new invites.
+    carrier: str = ""
+    # The user pressed "It matches" after comparing the safety number. A
+    # re-pair draws a new number, so it resets.
+    sas_verified: bool = False
 
     def __post_init__(self):
         self.peer_name = sanitize_name(self.peer_name)
@@ -118,6 +134,10 @@ class Link:
             or not 0 < len(self.session_title) <= _TITLE_MAX
         ):
             raise ValueError("bad session_title")
+        if self.carrier not in CARRIERS:
+            raise ValueError("bad carrier")
+        if not isinstance(self.sas_verified, bool):
+            raise ValueError("bad sas_verified")
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -127,10 +147,9 @@ class Link:
         if not isinstance(d, dict):
             raise ValueError("link entry is not an object")
         names = {f.name for f in dataclasses.fields(cls)}
-        if set(d) - names:
-            raise ValueError("unknown link fields")
+        # A newer version's fields are dropped, not fatal (module docstring).
         try:
-            link = cls(**d)
+            link = cls(**{k: v for k, v in d.items() if k in names})
         except TypeError:
             raise ValueError("missing link fields") from None
         link.validate()
@@ -138,7 +157,17 @@ class Link:
 
 
 _MUTABLE = frozenset(
-    {"peer_name", "peer_addr", "last_seen", "sas", "perms", "share_id", "session_title"}
+    {
+        "peer_name",
+        "peer_addr",
+        "last_seen",
+        "sas",
+        "perms",
+        "share_id",
+        "session_title",
+        "carrier",
+        "sas_verified",
+    }
 )
 
 
@@ -283,6 +312,19 @@ class LinkStore:
             links[link_id] = new
             self._save(links)
             return new
+
+    def find_by_pub(self, peer_pub: str, role: str) -> list[Link]:
+        """Every ``role`` link pinned to ``peer_pub`` (newest first) — the
+        same person pairing again."""
+        if not isinstance(peer_pub, str) or not _PUB_RE.match(peer_pub):
+            return []
+        with self._locked():
+            hits = [
+                l
+                for l in self._load().values()
+                if l.role == role and hmac.compare_digest(l.peer_pub, peer_pub)
+            ]
+        return sorted(hits, key=lambda l: l.created, reverse=True)
 
     def remove(self, link_id: str) -> bool:
         with self._locked():

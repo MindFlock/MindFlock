@@ -158,7 +158,7 @@ async def test_relay_stops_when_nothing_needs_it():
 
 
 async def test_listener_links_keep_the_relay_up():
-    svc = make_service(link())  # a listener-role link
+    svc = make_service(link(carrier="relay"))  # a listener link that came by relay
     await svc.sync_listener()
     assert len(FakeTunnel.made) == 1 and FakeTunnel.made[0].alive
     assert svc.transport.listening is False
@@ -183,7 +183,9 @@ async def test_tunnel_failure_is_a_502_and_rolls_back():
     svc = make_service()
     with pytest.raises(PeerServiceError) as exc:
         await svc.create_invite(300)
-    assert exc.value.status == 502 and "edge unreachable" in exc.value.message
+    # Our own words for it — never the tunnel's raw output.
+    assert exc.value.status == 502 and "didn't start" in exc.value.message
+    assert "edge unreachable" not in exc.value.message
     assert svc.invites.book == {}
     assert all(i.stopped for i in FakeIngress.made)
 
@@ -225,7 +227,7 @@ async def test_unknown_relay_mode_is_off():
 
 
 async def test_switching_relay_on_closes_the_direct_listener():
-    svc = make_service(link(), relay="off")
+    svc = make_service(link(carrier="relay"), relay="off")
     await svc.sync_listener()
     assert svc.transport.listening is True
     svc.conf["relay"] = "cloudflare"
@@ -395,3 +397,111 @@ def test_peer_settings_default_relay_is_auto_and_accepted():
     assert PeerSettings().effective()["relay"] == "auto"
     assert PeerSettings.from_dict({"relay": "auto"}).relay == "auto"
     assert PeerSettings.from_dict({"relay": "off"}).effective()["relay"] == "off"
+
+
+# -- carriers: a relay never strands a direct link (join plan rank 4) ----------
+
+
+async def test_cloudflared_appearing_keeps_the_listener_for_direct_links():
+    """relay=auto + cloudflared installed + a link that pairs directly: the
+    relay serves new invites, and the direct listener keeps running for it."""
+    svc = make_service(link(carrier="tcp"), relay="auto", cloudflared=None)
+    await svc.sync_listener()
+    assert svc.transport.listening is True and FakeTunnel.made == []
+    svc._cloudflared_finder = lambda: "/usr/bin/cloudflared"  # just installed
+    await svc.sync_listener()
+    assert svc.transport.listening is True  # the direct link can still come back
+    assert FakeTunnel.made == []  # no relay link or invite needs a tunnel yet
+    inv = await svc.create_invite(300)
+    assert inv["relay"] == "cloudflare" and inv["direct"] is False
+    assert svc.transport.listening is True and svc.transport.relay is True
+
+
+async def test_a_link_of_unknown_carrier_keeps_both_up():
+    svc = make_service(link())  # paired before carriers were recorded
+    await svc.sync_listener()
+    assert svc.transport.listening is True and svc.transport.relay is True
+
+
+async def test_relay_only_closes_the_direct_listener():
+    svc = make_service(link(carrier="relay"))
+    await svc.sync_listener()
+    assert svc.transport.listening is False and svc.transport.relay is True
+
+
+# -- reach: direct invites on request, and the labelled fallback (rank 6) ------
+
+
+async def test_tunnel_failure_in_auto_falls_back_to_a_labelled_direct_invite():
+    from backend.peer.tunnel import TunnelError
+
+    FakeTunnel.fail = TunnelError("x", "rate_limited")
+    svc = make_service(relay="auto", advertise_host="100.64.0.1")
+    events = []
+    svc._emit = lambda e, d: events.append((e, d))
+    inv = await svc.create_invite(300, op_id="op1")
+    assert inv["direct"] is True and "relay" not in inv
+    assert (inv["host"], inv["port"]) == ("100.64.0.1", 8799)
+    assert inv["fallback"]["reason"] == "rate_limited"
+    assert (
+        "only works for someone on your network or tailnet" in inv["fallback"]["text"]
+    )
+    assert "rate-limiting" in inv["fallback"]["text"]
+    # A direct mfp1 code, and the direct listener is up for it.
+    book = list(svc.invites.book.values())[0]
+    assert getattr(book, "relay_path", None) is None
+    assert svc.transport.listening is True
+    stages = [d["stage"] for e, d in events if e == "peer.progress"]
+    assert stages == ["relay", "fallback", "ready"]
+
+
+async def test_tunnel_failure_with_relay_forced_is_still_an_error():
+    FakeTunnel.fail = RuntimeError("edge unreachable")
+    svc = make_service(relay="cloudflare")
+    with pytest.raises(PeerServiceError) as exc:
+        await svc.create_invite(300)
+    assert exc.value.status == 502
+
+
+async def test_reach_direct_skips_the_relay():
+    svc = make_service(relay="auto", advertise_host="100.64.0.1")
+    inv = await svc.create_invite(300, reach="direct")
+    assert inv["direct"] is True and FakeTunnel.made == []
+    assert svc.transport.listening is True
+    (view,) = svc.invite_views()
+    assert view["direct"] is True
+    await svc.revoke_invite(inv["invite_id"])
+    assert svc.transport.listening is False
+
+
+async def test_reach_tunnel_without_cloudflared_says_install_it():
+    svc = make_service(relay="auto", cloudflared=None)
+    with pytest.raises(PeerServiceError) as exc:
+        await svc.create_invite(300, reach="tunnel")
+    assert exc.value.status == 409 and "cloudflared" in exc.value.message
+    assert svc.invites.book == {}
+
+
+async def test_bad_reach_is_refused():
+    svc = make_service()
+    with pytest.raises(PeerServiceError):
+        await svc.create_invite(300, reach="carrier-pigeon")
+
+
+async def test_a_changed_relay_host_is_announced_once(monkeypatch):
+    svc = make_service(link(carrier="relay"))
+    events = []
+    svc._emit = lambda e, d: events.append((e, d))
+    await svc.sync_listener()
+    assert events == []  # the first host ever: nothing to compare
+    await svc._stop_relay()
+    FakeTunnel.host = "other-name-here.trycloudflare.com"
+    await svc.sync_listener()
+    assert events == [
+        (
+            "peer.relay_changed",
+            {"host": "other-name-here.trycloudflare.com", "peers": ["Bob"]},
+        )
+    ]
+    # The address the link needs is not in the event (it holds the token).
+    assert svc._relay_token() not in repr(events)

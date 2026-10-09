@@ -59,6 +59,7 @@ import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
 import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
 import type { RunDTO } from "../../api/types";
 import { SessionRowItems } from "./SessionRowItems";
+import { PEER_SANDBOX_HINT, PEER_SCREEN, peerChip } from "../../lib/peer";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -310,6 +311,9 @@ export const SidebarRow = memo(function SidebarRow({
     leadAsks: !!lchip || (isLead && !!leadRun && RUN_DONE_STATES.has(leadRun.state)),
   });
   const rz = extra.rz;
+  // A shared-folder (peer-link) session: its chip, and the actions the
+  // server refuses for it left out of the menu below.
+  const peer = peerChip(inst);
 
   const act = async (fn: () => void | Promise<void>, e?: MouseEvent) => {
     e?.stopPropagation();
@@ -605,6 +609,22 @@ export const SidebarRow = memo(function SidebarRow({
             {extra.check.label}
           </span>
         )}
+        {peer && (
+          // Rank 2 of the peer-link UX scan: a shared-folder session says so
+          // HERE, on the rail row (a pane-head chip renders 0x0 — see
+          // grid/DiffTab.css). Click: Work with someone, where its link is.
+          <button
+            type="button"
+            className={"stagechip peerchip" + (peer.connected === false ? " peer-offline" : "")}
+            title={peer.title}
+            aria-label={peer.title}
+            onClick={(e) => act(() => openDialogFor("settings", PEER_SCREEN), e)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {peer.connected !== null && <span className="peerchip-dot" aria-hidden="true" />}
+            {peer.label}
+          </button>
+        )}
         {rz && !pending && (
           <button
             type="button"
@@ -675,7 +695,18 @@ export const SidebarRow = memo(function SidebarRow({
               </button>
             ) : (
               <>
-                {caps.git && (
+                {peer && (
+                  <>
+                    <button
+                      title="Checkpoint the shared folder and bring it into your own repo as a peer/… branch"
+                      onClick={() => openDialogFor("settings", PEER_SCREEN)}
+                    >
+                      Bring work home…
+                    </button>
+                    <div className="menu-sep" />
+                  </>
+                )}
+                {caps.git && !peer && (
                   <>
                     <button onClick={() => commitSession(title)}>
                       Commit…<span className="kbd">Ctrl+K C</span>
@@ -711,7 +742,7 @@ export const SidebarRow = memo(function SidebarRow({
                     pieces…, Move out of a group, Message… — with a separator
                     of its own. */}
                 <SessionRowItems inst={inst} />
-                {inst.setup?.state === "failed" && (
+                {inst.setup?.state === "failed" && !peer && (
                   <button
                     onClick={(e) =>
                       act(async () => {
@@ -728,7 +759,7 @@ export const SidebarRow = memo(function SidebarRow({
                     Re-run worktree setup
                   </button>
                 )}
-                {inst.check && inst.check.state !== "running" && (
+                {inst.check && inst.check.state !== "running" && !peer && (
                   <button
                     onClick={(e) =>
                       act(async () => {
@@ -745,13 +776,19 @@ export const SidebarRow = memo(function SidebarRow({
                     Run checks now
                   </button>
                 )}
-                <button onClick={() => openDialogFor("rename", title)}>Rename…</button>
-                <button onClick={() => copySession(title)}>
-                  Duplicate session<span className="kbd">Ctrl+K D</span>
-                </button>
-                <button onClick={() => ideSession(title)}>
-                  Open / focus {ideName}<span className="kbd">Ctrl+K O</span>
-                </button>
+                {/* Rename, copies and the IDE are refused for a shared
+                    (sandboxed) folder — not offered rather than 409ing. */}
+                {!peer && (
+                  <>
+                    <button onClick={() => openDialogFor("rename", title)}>Rename…</button>
+                    <button onClick={() => copySession(title)}>
+                      Duplicate session<span className="kbd">Ctrl+K D</span>
+                    </button>
+                    <button onClick={() => ideSession(title)}>
+                      Open / focus {ideName}<span className="kbd">Ctrl+K O</span>
+                    </button>
+                  </>
+                )}
                 <button onClick={() => hideSession(title)}>
                   {hidden ? "Show window" : "Hide window"}
                   {!hidden && <span className="kbd">Ctrl+K H</span>}
@@ -772,10 +809,15 @@ export const SidebarRow = memo(function SidebarRow({
                     Open preview ↗<span className="kbd">:{inst.ports.base}</span>
                   </button>
                 ) : null}
-                <button onClick={() => (paused ? resumeSession(title) : pauseSession(title))}>
+                <button
+                  disabled={!!peer && !paused}
+                  title={peer && !paused ? PEER_SANDBOX_HINT : undefined}
+                  onClick={() => (paused ? resumeSession(title) : pauseSession(title))}
+                >
                   {paused ? "Resume session" : "Pause session"}
                 </button>
                 {caps.git &&
+                  !peer &&
                   (wipeArmed ? (
                     <div
                       className="wipe-confirm"

@@ -570,13 +570,7 @@ ATTACK_FRAMES = {
     "deep_nesting": _frame(b'{"t":"ping","x":' + b"[" * 40 + b"]" * 40 + b"}"),
     "duplicate_keys": _frame(b'{"t":"ping","t":"ping"}'),
     "bad_utf8": _frame(b'{"t":"\xff"}'),
-    "unknown_op": wire.encode({"t": "req", "id": 1, "op": "exec", "p": {"cmd": "id"}}),
-    "extra_frame_key": wire.encode(
-        {"t": "req", "id": 1, "op": "status", "p": {}, "admin": True}
-    ),
-    "extra_payload_key": wire.encode(
-        {"t": "req", "id": 1, "op": "status", "p": {"x": 1}}
-    ),
+    "unsane_op": wire.encode({"t": "req", "id": 1, "op": "Exec Me", "p": {}}),
     "bool_as_int_id": wire.encode({"t": "req", "id": True, "op": "status", "p": {}}),
     "bool_as_int_arg": wire.encode(
         {"t": "req", "id": 1, "op": "diff", "p": {"max_chars": True}}
@@ -602,6 +596,48 @@ async def test_malformed_frames_close_connection(make_node, tmp_path, name):
     assert await closed_by_peer(raw.reader)
     assert a.handler.calls == []
     assert await eventually(lambda: not a.t.is_connected(raw.link_id))
+
+
+async def test_unknown_op_is_answered_unsupported_and_the_link_stays(
+    make_node, tmp_path
+):
+    """A newer peer asking for an op we don't have gets ``err: unsupported``;
+    the connection stays up and the handler never sees it."""
+    a = make_node("alice")
+    raw = await authed_raw(a, tmp_path)
+    await raw.send({"t": "req", "id": 1, "op": "room_join", "p": {"room": "x"}})
+    assert await raw.recv() == {"t": "res", "id": 1, "ok": False, "err": "unsupported"}
+    await raw.send({"t": "ping"})
+    assert await raw.recv() == {"t": "pong"}
+    assert a.t.is_connected(raw.link_id)
+    assert a.handler.calls == []
+
+
+async def test_unknown_keys_are_dropped_before_the_handler(make_node, tmp_path):
+    a = make_node("alice")
+    raw = await authed_raw(a, tmp_path)
+    await raw.send({"t": "req", "id": 3, "op": "status", "p": {"x": 1}, "trace": "abc"})
+    res = await raw.recv()
+    assert res["ok"] is True and res["id"] == 3
+    assert a.handler.calls[-1][1:] == ("status", {})
+    assert a.t.is_connected(raw.link_id)
+
+
+async def test_a_newer_peers_extra_response_keys_are_ignored(make_node, tmp_path):
+    a = make_node("alice")
+    raw = await authed_raw(a, tmp_path)
+    task = asyncio.create_task(a.t.request(raw.link_id, "status", {}))
+    req = await raw.recv()
+    await raw.send(
+        {
+            "t": "res",
+            "id": req["id"],
+            "ok": True,
+            "p": {"shared": False, "agent": "none", "name": "x", "grants": {}},
+        }
+    )
+    assert await task == {"shared": False, "agent": "none", "name": "x"}
+    assert a.t.is_connected(raw.link_id)
 
 
 async def test_unknown_response_ids_ignored(make_node, tmp_path):
@@ -936,3 +972,51 @@ async def test_secrets_and_text_never_logged(make_node, caplog):
     logged = caplog.text
     for needle in (code, code[5:20], secret.hex(), text):
         assert needle not in logged
+
+
+# -- pairing the same person again (join plan rank 3) ----------------------------------
+
+
+async def test_repairing_the_same_key_reuses_the_link_on_both_sides(make_node):
+    """B pastes a fresh invite from A while already linked (A's relay address
+    changed, say): no duplicate link — the same link id, its perms and shared
+    folder, with a new safety number; the invite is consumed as usual."""
+    a, b = make_node("alice"), make_node("bob")
+    first = await paired(a, b)
+    a.store.update(first.link_id, perms={"diff": False}, sas_verified=True)
+    b.store.update(first.link_id, share_id="ab" * 16, session_title="peer-alice-abab")
+    a.handler.added.clear()
+    repaired_a, repaired_b = [], []
+    a.handler.on_link_repaired = repaired_a.append
+    b.handler.on_link_repaired = repaired_b.append
+
+    again = await b.t.pair(a.code())
+
+    assert again.link_id == first.link_id
+    assert [l.link_id for l in a.store.list()] == [first.link_id]
+    assert [l.link_id for l in b.store.list()] == [first.link_id]
+    a_link, b_link = a.store.get(first.link_id), b.store.get(first.link_id)
+    assert a_link.perms["diff"] is False  # kept
+    assert a_link.sas_verified is False  # a new number to compare
+    assert b_link.share_id == "ab" * 16  # the share survives
+    assert a_link.sas == b_link.sas
+    assert a.handler.added == []  # not announced as a new person
+    assert [l.link_id for l in repaired_a] == [first.link_id]
+    assert [l.link_id for l in repaired_b] == [first.link_id]
+    assert not a.invites.active()  # single use, as always
+    assert await eventually(lambda: b.t.is_connected(first.link_id))
+
+
+async def test_a_listener_link_records_its_carrier(make_node):
+    a, b = make_node("alice"), make_node("bob")
+    link = await paired(a, b)
+    assert a.store.get(link.link_id).carrier == "tcp"
+    assert b.store.get(link.link_id).carrier == "tcp"
+
+
+async def test_progress_stages_for_a_direct_join(make_node):
+    a, b = make_node("alice"), make_node("bob")
+    await a.listen()
+    stages: list[str] = []
+    await b.t.pair(a.code(), progress=stages.append)
+    assert stages == ["connecting", "verifying"]

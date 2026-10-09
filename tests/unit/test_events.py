@@ -125,6 +125,12 @@ def test_event_names_vocabulary_is_complete():
         "device.removed",
         "settings.synced",
         "settings.sync_paused",
+        "peer.link_added",
+        "peer.link_removed",
+        "peer.state",
+        "peer.progress",
+        "peer.message",
+        "peer.relay_changed",
     }
 
 

@@ -882,6 +882,71 @@
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+.peer-action > .linklike {
+  align-self: flex-start;
+  font-size: 12px;
+}
+/* A labelled same-network invite (the relay failed in automatic mode). */
+.peer-warn {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 3px solid var(--warn, #d9a441);
+  font-size: 12px;
+}
+.peer-stage {
+  font-style: italic;
+}
+.peer-invites {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-link-card .peer-on {
+  color: var(--green, inherit);
+}
+.peer-link-card .peer-off {
+  color: var(--muted, inherit);
+}
+.peer-link-card .peer-reconnect input,
+.peer-msgs textarea {
+  flex: 1;
+  min-width: 0;
+}
+.peer-msgs-toggle .queue-tab-badge {
+  margin-left: 6px;
+}
+.peer-msg-log {
+  list-style: none;
+  margin: 6px 0;
+  padding: 6px 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.peer-msg {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 2px 0;
+}
+.peer-diff pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 4px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 11px ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.peer-addr {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
 .peer-advanced {
   margin-top: 16px;
 }

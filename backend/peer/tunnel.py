@@ -22,6 +22,9 @@ Hardening:
   with a path, like the API endpoint in error messages), and never logged.
 * :meth:`QuickTunnel.stop` terminates it (then kills it); MindFlock stops the
   tunnel as soon as no invite or listener link needs it.
+* Why a start failed is classified against a fixed set of patterns
+  (:func:`classify_failure`) into one of :data:`FAILURE_TEXT`'s reasons; the
+  line itself never leaves this module.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ from backend.peer import paths
 __all__ = [
     "QuickTunnel",
     "TunnelError",
+    "FAILURE_TEXT",
+    "classify_failure",
     "find_cloudflared",
     "parse_quick_tunnel_host",
     "QUICK_TUNNEL_SUFFIX",
@@ -68,8 +73,47 @@ _RESERVED_LABELS = frozenset({"api", "www"})
 _REGISTERED_RE = re.compile(r"\bRegistered tunnel connection\b")
 
 
+#: Why a quick tunnel didn't come up, in words a person can act on. The keys
+#: are all :attr:`TunnelError.reason` can be; nothing from cloudflared's own
+#: output is ever shown.
+FAILURE_TEXT = {
+    "rate_limited": "Cloudflare is rate-limiting quick tunnels right now",
+    "unreachable": "this computer can't reach Cloudflare (a firewall or proxy?)",
+    "failed": "the Cloudflare tunnel didn't start",
+}
+
+# Fixed patterns over cloudflared's (untrusted) output; first match wins.
+_FAILURE_PATTERNS = (
+    ("rate_limited", re.compile(r"\b429\b|too many requests|rate.?limit", re.I)),
+    (
+        "unreachable",
+        re.compile(
+            r"i/o timeout|no such host|connection refused|network is unreachable"
+            r"|failed to (?:dial|request quick tunnel)|context deadline exceeded"
+            r"|tls handshake",
+            re.I,
+        ),
+    ),
+)
+
+
+def classify_failure(line) -> str | None:
+    """The :data:`FAILURE_TEXT` reason one output line points at, or None."""
+    if not isinstance(line, str):
+        return None
+    line = line[:MAX_LINE]
+    for reason, rx in _FAILURE_PATTERNS:
+        if rx.search(line):
+            return reason
+    return None
+
+
 class TunnelError(Exception):
-    pass
+    """``reason`` is a :data:`FAILURE_TEXT` key."""
+
+    def __init__(self, message: str = "", reason: str = "failed"):
+        super().__init__(message)
+        self.reason = reason if reason in FAILURE_TEXT else "failed"
 
 
 def find_cloudflared(configured: str = "") -> str | None:
@@ -149,6 +193,8 @@ class QuickTunnel:
         self.proc = None
         self.hostname: str | None = None
         self.registered = False
+        # The FAILURE_TEXT reason the output pointed at while starting.
+        self.failure: str | None = None
         self._reader: asyncio.Task | None = None
         self._stopping = False
 
@@ -195,6 +241,7 @@ class QuickTunnel:
             return self.hostname
         await self.stop()
         self._stopping = False
+        self.failure = None
         cfg, env = self._prepare()
         try:
             self.proc = await self._spawn(
@@ -220,11 +267,15 @@ class QuickTunnel:
             async with asyncio.timeout(self.start_timeout):
                 host = await found
         except TimeoutError:
+            reason = self.failure or "unreachable"
             await self.stop()
-            raise TunnelError("cloudflared did not report a tunnel address") from None
-        except TunnelError:
+            raise TunnelError(
+                "cloudflared did not report a tunnel address", reason
+            ) from None
+        except TunnelError as e:
+            reason = self.failure or e.reason
             await self.stop()
-            raise
+            raise TunnelError(str(e), reason) from None
         self.hostname = host
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(self.register_grace):
@@ -243,6 +294,8 @@ class QuickTunnel:
                     host = parse_quick_tunnel_host(line)
                     if host is not None:
                         found.set_result(host)
+                    elif self.failure is None:
+                        self.failure = classify_failure(_ANSI_RE.sub("", line))
                 elif not registered.is_set() and _REGISTERED_RE.search(line):
                     registered.set()
                     self.registered = True

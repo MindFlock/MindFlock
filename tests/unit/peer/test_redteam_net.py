@@ -183,8 +183,8 @@ async def test_unlink_during_handshake_does_not_adopt(make_node, tmp_path):
 
     orig = a.t._server_handshake
 
-    async def racing(reader, writer):
-        result = await orig(reader, writer)
+    async def racing(reader, writer, *rest):
+        result = await orig(reader, writer, *rest)
         if result is not None:  # the user unlinks while the welcome drains
             await a.t.unlink(result[0].link_id)
         return result
@@ -268,7 +268,8 @@ async def test_msg_never_reaches_another_links_shared_session(engine, tmp_path):
     res = await svc.handle_request(
         lnk, "msg", {"msg_id": "pm1", "text": "hi", "reply_to": None}
     )
-    assert res == {"accepted": False}
+    # Kept on the link for the people, never typed into carol's session.
+    assert res == {"accepted": True}
     assert mb.unread_count("peer-carol-cdcd") == 0
 
 

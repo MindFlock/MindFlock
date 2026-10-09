@@ -734,3 +734,40 @@
   opacity: 1;
   color: rgba(var(--accent-rgb), 0.95);
 }
+
+/* "Shared with <name>" — a shared-folder (peer-link) session's rail chip.
+   On the rail row only: a pane-head chip renders 0x0. */
+.stagechip.peerchip {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  flex: none !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+.stagechip.peerchip .peerchip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+.stagechip.peerchip.peer-offline .peerchip-dot {
+  background: var(--muted);
+}
+.stagechip.peerchip:hover {
+  filter: brightness(1.15);
+}
+.stagechip.peerchip:focus-visible {
+  outline: 1px solid var(--accent);
+}

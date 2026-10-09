@@ -14763,11 +14763,22 @@ async def peer_status(request: Request) -> JSONResponse:
     return await _peer_call(request, lambda: _peer_service().status())
 
 
+@app.post("/api/peer/enable")
+async def peer_enable(request: Request) -> JSONResponse:
+    """Turn peer links on without minting an invite (the "they're somewhere
+    else" step: the doctor then offers cloudflared before the first invite)."""
+    return await _peer_call(request, _peer_service().enable)
+
+
 @app.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
-    """``{ttl_s?, advertise_host?}`` → ``{invite_id, code, expires_in, host,
-    port}``. ``advertise_host`` overrides the address the code carries (setting
-    ``peer.advertise_host``, else Tailscale, else LAN). The only response that
+    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
+    message, expires_in, host, port, direct, relay?, fallback?}``.
+    ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
+    ``advertise_host`` overrides the address a direct code carries (setting
+    ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
+    ``peer.progress`` events. ``fallback: {reason, text}`` marks a direct
+    invite made because the tunnel wouldn't start. The only response that
     ever contains an invite code; starts the listener."""
     body = await _peer_body(request)
     return await _peer_call(
@@ -14775,6 +14786,8 @@ async def peer_create_invite(request: Request) -> JSONResponse:
         _peer_service().create_invite,
         body.get("ttl_s"),
         str(body.get("advertise_host") or body.get("host") or ""),
+        str(body.get("reach") or "auto"),
+        str(body.get("op_id") or ""),
         status=201,
     )
 
@@ -14786,10 +14799,16 @@ async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/peer/join")
 async def peer_join(request: Request) -> JSONResponse:
-    """``{code}`` → the new link (with its SAS to compare out of band)."""
+    """``{code, op_id?}`` → the link (with its safety number to compare out
+    of band) and ``reconnected`` — true when the code re-paired someone
+    already linked (same link, share kept)."""
     body = await _peer_body(request)
     return await _peer_call(
-        request, _peer_service().join, str(body.get("code") or ""), status=201
+        request,
+        _peer_service().join,
+        str(body.get("code") or ""),
+        str(body.get("op_id") or ""),
+        status=201,
     )
 
 
@@ -14816,6 +14835,48 @@ async def peer_set_address(link_id: str, request: Request) -> JSONResponse:
         link_id,
         str(body.get("address") or ""),
     )
+
+
+@app.post("/api/peer/links/{link_id}/verified")
+async def peer_set_verified(link_id: str, request: Request) -> JSONResponse:
+    """``{verified: bool}`` — "It matches": the safety number was compared."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _peer_service().set_verified, link_id, body.get("verified")
+    )
+
+
+@app.get("/api/peer/links/{link_id}/messages")
+async def peer_messages(link_id: str, request: Request) -> JSONResponse:
+    """The link's message log, both directions → ``{messages: [{id, dir,
+    by, text, ts, delivered_to, read}], unread}``. Read-only."""
+    try:
+        limit = int(request.query_params.get("limit") or 100)
+    except ValueError:
+        limit = 100
+    return await _peer_call(request, _peer_service().messages, link_id, limit)
+
+
+@app.post("/api/peer/links/{link_id}/messages/read")
+async def peer_messages_read(link_id: str, request: Request) -> JSONResponse:
+    return await _peer_call(request, _peer_service().mark_messages_read, link_id)
+
+
+@app.post("/api/peer/links/{link_id}/message")
+async def peer_send_message(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — you, messaging the peer directly (no shared session
+    needed on either side) → ``{msg_id, delivered}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _peer_service().human_message, link_id, body.get("text")
+    )
+
+
+@app.get("/api/peer/links/{link_id}/diff")
+async def peer_their_changes(link_id: str, request: Request) -> JSONResponse:
+    """The peer's shared-folder changes, read-only (their ``diff``; their
+    permissions decide) → ``{stat, diff, truncated}``."""
+    return await _peer_call(request, _peer_service().their_changes, link_id)
 
 
 @app.post("/api/peer/links/{link_id}/perms")
