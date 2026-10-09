@@ -54,9 +54,13 @@ __all__ = [
     "GeneralSettings",
     "NotificationSettings",
     "ExtensionsSettings",
+    "PrefsSettings",
     "Settings",
     "settings_path",
     "load_settings",
+    "load_settings_strict",
+    "SettingsUnreadable",
+    "UNREADABLE_HINT",
     "save_settings",
     "update_settings",
     "set_ticketing_sources",
@@ -776,6 +780,14 @@ class GithubSettings:
     #: ``base_branch`` is accepted but unused (issue work branches off the
     #: repo's own default), and dropped rather than silently honoured.
     issue_repo_settings: Dict[str, dict] = field(default_factory=dict)
+    #: The device (its fleet key) that runs PR review and issue handling for
+    #: the whole group of the user's devices. SYNCED, so every device agrees:
+    #: every field above follows the person across their devices, and without
+    #: one shared answer each of them would review the same PRs. ``""`` (or a
+    #: device that isn't a live member any more) = the live member with the
+    #: lowest key runs them (``settings_hooks.automation_here``); a lone
+    #: device always does. Admitting a device fills it in.
+    automation_device: str = ""
 
     def repo_list(self) -> List[str]:
         """Effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -821,6 +833,8 @@ class GithubSettings:
             d["issue_repo_settings"] = {
                 k: dict(v) for k, v in self.issue_repo_settings.items()
             }
+        if self.automation_device:
+            d["automation_device"] = self.automation_device
         return d
 
     @classmethod
@@ -848,6 +862,8 @@ class GithubSettings:
                 for repo, block in _repo_overrides(d.get("issue_repo_settings")).items()
                 if any(k != "base_branch" for k in block)
             },
+            # (A device-local ``run_here`` from a pre-release build is ignored.)
+            automation_device=str(d.get("automation_device", "") or "").strip(),
         )
 
 
@@ -896,7 +912,10 @@ class EngineSettings:
 
 @dataclass
 class UiSettings:
-    scroll_speed: Optional[int] = None
+    # Lines per wheel notch, in thirds of a line (0.3333 … 3) — fractional, so
+    # not an int: a whole value stays an int on disk. The live value is the
+    # scroll-speed FILE (web/core/terminal.py); this copy is what syncs.
+    scroll_speed: Optional[float] = None
     cursor_autoadopt: Optional[bool] = None
     # Appearance themes (Settings → Appearance): accent preset name and surface
     # (background/panel/border/text) preset name. Empty = built-in defaults.
@@ -920,7 +939,7 @@ class UiSettings:
     @classmethod
     def from_dict(cls, d: dict) -> "UiSettings":
         return cls(
-            scroll_speed=_opt_int(d.get("scroll_speed")),
+            scroll_speed=_opt_speed(d.get("scroll_speed")),
             cursor_autoadopt=_opt_bool(d.get("cursor_autoadopt")),
             accent=str(d.get("accent") or ""),
             surface=str(d.get("surface") or ""),
@@ -1219,6 +1238,93 @@ class ExtensionsSettings:
         return cls(disabled=_str_list(d.get("disabled")))
 
 
+@dataclass
+class PrefsSettings:
+    """UI preferences that follow the PERSON across their devices.
+
+    The browser keeps each one in localStorage (its synchronous cache) and
+    mirrors it here (``GET/POST /api/prefs``), so settings sync carries a
+    keymap, prompt presets or the light/dark choice to every device. Shapes
+    are the frontend's own: ``keymap`` is ``{"keys": {…}, "chords": {…}}``,
+    a prompt preset ``{"name", "prompt"}``. ``None`` / empty = "never set
+    here", which the browser reads as "use the built-in default".
+    """
+
+    keymap: dict = field(default_factory=dict)
+    prompt_presets: List[dict] = field(default_factory=list)
+    theme: str = ""  # "" | "light" | "dark"
+    diff_mode: str = ""
+    diff_base: str = ""
+    hidden_bars: Optional[List[str]] = None  # None = never set; [] = none hidden
+    bar_order: List[str] = field(default_factory=list)
+    reduce_motion: Optional[bool] = None
+    break_on: Optional[bool] = None
+    break_every: Optional[int] = None
+    idle_flock: Optional[bool] = None
+    idle_after: Optional[int] = None
+    hints: Optional[bool] = None
+
+    _STRS = ("theme", "diff_mode", "diff_base")
+    _BOOLS = ("reduce_motion", "break_on", "idle_flock", "hints")
+    _INTS = ("break_every", "idle_after")
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.keymap:
+            d["keymap"] = dict(self.keymap)
+        if self.prompt_presets:
+            d["prompt_presets"] = [dict(p) for p in self.prompt_presets]
+        for f in self._STRS:
+            if getattr(self, f):
+                d[f] = getattr(self, f)
+        if self.hidden_bars is not None:
+            d["hidden_bars"] = list(self.hidden_bars)
+        if self.bar_order:
+            d["bar_order"] = list(self.bar_order)
+        for f in self._BOOLS + self._INTS:
+            if getattr(self, f) is not None:
+                d[f] = getattr(self, f)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PrefsSettings":
+        keymap = d.get("keymap")
+        hidden = d.get("hidden_bars")
+        return cls(
+            keymap=dict(keymap) if isinstance(keymap, dict) else {},
+            prompt_presets=_prompt_presets(d.get("prompt_presets")),
+            theme=str(d.get("theme") or ""),
+            diff_mode=str(d.get("diff_mode") or ""),
+            diff_base=str(d.get("diff_base") or ""),
+            hidden_bars=(
+                _str_list(hidden) if isinstance(hidden, (list, tuple)) else None
+            ),
+            bar_order=_str_list(d.get("bar_order")),
+            reduce_motion=_opt_bool(d.get("reduce_motion")),
+            break_on=_opt_bool(d.get("break_on")),
+            break_every=_opt_int(d.get("break_every")),
+            idle_flock=_opt_bool(d.get("idle_flock")),
+            idle_after=_opt_int(d.get("idle_after")),
+            hints=_opt_bool(d.get("hints")),
+        )
+
+
+def _prompt_presets(v: Any) -> List[dict]:
+    """``[{name, prompt}]`` — entries without a name are dropped, and a name
+    repeated (case-insensitively: a preset IS its name) keeps the first."""
+    out: List[dict] = []
+    seen = set()
+    for item in v if isinstance(v, (list, tuple)) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        out.append({"name": name, "prompt": str(item.get("prompt") or "")})
+    return out
+
+
 #: Peer-link listener defaults (docs/peer-link.md). The port is the inviter's
 #: TLS listener — never the HTTP API's.
 PEER_DEFAULT_LISTEN_HOST = "0.0.0.0"
@@ -1387,6 +1493,7 @@ class Settings:
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
     extensions: ExtensionsSettings = field(default_factory=ExtensionsSettings)
     peer: PeerSettings = field(default_factory=PeerSettings)
+    prefs: PrefsSettings = field(default_factory=PrefsSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -1416,6 +1523,7 @@ class Settings:
             "notifications": self.notifications,
             "extensions": self.extensions,
             "peer": self.peer,
+            "prefs": self.prefs,
         }
 
     @classmethod
@@ -1457,6 +1565,7 @@ class Settings:
             notifications=NotificationSettings.from_dict(_group(d, "notifications")),
             extensions=ExtensionsSettings.from_dict(_group(d, "extensions")),
             peer=PeerSettings.from_dict(_group(d, "peer")),
+            prefs=PrefsSettings.from_dict(_group(d, "prefs")),
             schema_version=version,
         )
 
@@ -1519,6 +1628,14 @@ def _opt_float(v: Any) -> Optional[float]:
         return float(s) if s else None
     except (TypeError, ValueError):
         return None
+
+
+def _opt_speed(v: Any) -> Optional[float]:
+    """A fractional number, kept an ``int`` when whole (``2`` not ``2.0``)."""
+    f = _opt_float(v)
+    if f is None or f != f or f in (float("inf"), float("-inf")):  # unset / NaN
+        return None
+    return int(f) if f.is_integer() else f
 
 
 #: The ``general`` fields holding the spawn guard-rails (see GeneralSettings).
@@ -1814,6 +1931,40 @@ def load_settings() -> Settings:
     return settings
 
 
+class SettingsUnreadable(Exception):
+    """``settings.json`` exists but can't be read or parsed."""
+
+
+#: What a route answers (409) when a save is refused because settings.json
+#: exists but can't be read — saving would replace it with defaults.
+UNREADABLE_HINT = "settings.json couldn't be read — fix or delete it"
+
+
+def load_settings_strict() -> Settings:
+    """The settings store, read from disk — but RAISES
+    :class:`SettingsUnreadable` when the file exists and can't be read or
+    isn't a JSON object (a missing file is empty settings).
+
+    For callers that would do damage by mistaking a broken file for an empty
+    one: settings sync reads "every source is gone, every token cleared" and
+    spreads that to every device; a read-modify-write saves over the file the
+    user could still fix. Bypasses (and leaves alone) the cache."""
+    path = settings_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return Settings()
+    except OSError as err:
+        raise SettingsUnreadable("%s couldn't be read: %s" % (path, err)) from err
+    try:
+        parsed = json.loads(raw)
+    except ValueError as err:
+        raise SettingsUnreadable("%s isn't valid JSON: %s" % (path, err)) from err
+    if not isinstance(parsed, dict):
+        raise SettingsUnreadable("%s isn't a JSON object" % path)
+    return Settings.from_dict(parsed)
+
+
 def save_settings(settings: Settings) -> None:
     """Persist the settings store atomically with owner-only permissions.
 
@@ -1860,8 +2011,13 @@ def update_settings(**group_patches: dict) -> Settings:
     Example::
 
         update_settings(github={"token": "ghp_…"}, repository={"url": "…"})
+
+    Raises :class:`SettingsUnreadable` (and saves nothing) when the file
+    exists but doesn't parse: read as empty, the save would replace every
+    token and source with defaults — and settings sync would then spread
+    "all deleted" to every device. A missing file is empty settings.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     for group, patch in group_patches.items():
         if not isinstance(patch, dict):
@@ -1887,8 +2043,9 @@ def set_ticketing_sources(sources: list) -> Settings:
     ``sources`` is a list of dicts (each a :class:`TicketingSource` shape). The
     field-merge :func:`update_settings` can't express a list replacement, so the
     ticketing CRUD endpoints go through here. Returns the new state.
+    Raises :class:`SettingsUnreadable` like :func:`update_settings`.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     clean = [s for s in (sources or []) if isinstance(s, dict) and s.get("provider")]
     if clean:
@@ -1908,9 +2065,10 @@ def set_auth_profiles(profiles: list) -> Settings:
     :func:`update_settings` can't express a list replacement. The group's
     ``default_profile`` scalar is preserved — unless it names a profile that no
     longer exists, in which case it is cleared so new sessions can't resolve to
-    a deleted identity. Returns the new state.
+    a deleted identity. Returns the new state. Raises
+    :class:`SettingsUnreadable` like :func:`update_settings`.
     """
-    current = load_settings()
+    current = load_settings_strict()
     merged = current.to_dict()
     clean = [p for p in (profiles or []) if isinstance(p, dict) and p.get("id")]
     group = dict(merged.get("auth_profiles", {}))

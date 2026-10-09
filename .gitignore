@@ -113,6 +113,9 @@ secrets.*
 # secrets.py is a source module (the secret *resolver*), not secret data — keep it tracked
 !secrets.py
 state.json
+# The pipeline's record of where PR review / issue handling last ran (beside
+# state.json in the repo root).
+automation_here.json
 # Atomic writes land next to their target first (config.py names the temp
 # "<file>.tmp.<rand>", settings.py ".settings.*.tmp"), so a `git add -A` that
 # happens to race a save would otherwise stage live session/settings state.

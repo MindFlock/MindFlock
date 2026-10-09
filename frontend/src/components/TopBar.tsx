@@ -21,6 +21,7 @@ import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
 import { api } from "../api/client";
+import { notePrefWrite, THEME_CHANGED } from "../lib/prefs";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 
 function applyTheme(light: boolean) {
@@ -52,6 +53,19 @@ export function TopBar() {
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
   const [fullScreen, setFullScreen] = useState(false);
+
+  // The theme is a person-wide pref (lib/prefs.ts): one adopted from another
+  // of your devices flips the <html> class from outside — follow it, and
+  // repaint what the toggle below would have.
+  useEffect(() => {
+    const onTheme = () => {
+      setLight(document.documentElement.classList.contains("light"));
+      rethemeAll();
+      redrawFavicon();
+    };
+    document.addEventListener(THEME_CHANGED, onTheme);
+    return () => document.removeEventListener(THEME_CHANGED, onTheme);
+  }, []);
 
   useEffect(() => {
     if (!mac) return;
@@ -96,6 +110,7 @@ export function TopBar() {
     } catch {
       /* storage unavailable */
     }
+    notePrefWrite("cs_theme"); // follows you to your other devices
     applyTheme(next);
     rethemeAll(); // re-theme already-open terminals
     redrawFavicon(); // the tab favicon inverts with the theme

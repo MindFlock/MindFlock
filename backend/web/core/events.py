@@ -201,6 +201,32 @@ EVENT_NAMES = (
     # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
     # "detail"}).
     "run.finished",
+    # "Your devices" (core.fleet is their emitter; ``session`` is always "").
+    #
+    # A computer asked to join and waits for approval HERE (data: {"device",
+    # "host", "code", "id", "detail": "<host> · code 123 456"} — the same
+    # 6-digit code shows on the asking computer, which is how the user tells
+    # it's the right one).
+    "device.join_requested",
+    # A computer became one of the user's devices — by code, approval, or
+    # one-click add (data: {"device", "host", ...}).
+    "device.joined",
+    # A device left or was removed (data: {"device", "host", "by", "detail"};
+    # ``device`` is this one's own key when it was this device that left or
+    # was removed; ``by`` the device that made the removal — the leaver for a
+    # leave, "" when unknown).
+    "device.removed",
+    # Shared settings changed here: adopted from another of the user's devices
+    # (data: {"paths": [unit ids], "from": <its device key>}) or written
+    # locally through POST /api/prefs ("from": ""). For UI refetch only; no
+    # rule notifies on it.
+    "settings.synced",
+    # Settings sync paused itself here: a background scan would have cleared
+    # most of this device's settings at once (a reset or replaced
+    # settings.json), so nothing is shared until the person chooses whose
+    # values to keep in Settings → Devices (data: {"cleared": n, "held": n,
+    # "detail"}). Once per pause.
+    "settings.sync_paused",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

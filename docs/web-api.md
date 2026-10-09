@@ -1417,11 +1417,124 @@ devices paired both ways don't echo each other's sessions back as
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, device, host, remote_control, auth, shared_link}`. `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
-| GET | `/api/devices` | Tailnet devices running MindFlock + their connection state |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, device, host, remote_control, auth, shared_link, fleet, fleet_proto, automation}`. `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
+| GET | `/api/devices` | Tailnet devices running MindFlock + their connection state: `{self: {device, host, os}, remote_control, devices: [{device, host, os, ip, version, shared_link, reachable, remote_control, auth, has_token, needs_token, connected, error, sessions, member, fleet_proto, in_fleet, same_fleet}]}`. `member` = on this device's "Your devices" roster, `in_fleet` = in any group, `same_fleet` = in this one; a member never `needs_token` (the fleet key opens it) |
+| POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
-| POST | `/api/devices/{device}/disconnect` | Drop the pairing |
+| POST | `/api/devices/{device}/disconnect` | Drop the pairing. **409** `{error: "<host> is one of your devices — remove it in Settings → Devices"}` for a member: the fleet key keeps it connected whatever happens to a pasted token |
 | * | `/api/devices/{device}/fwd/<path>` | Forward to that device with its stored token (502 when not connected). Allow-listed to what New Session asks: `GET /api/config`, `/api/settings`, `/api/templates`, `/api/providers`, `/api/providers/manage`, `/api/repos/suggest`, `/api/repos/search`, `/api/repos/check`, `/api/browse`; `POST /api/mkdir`, `/api/session-plan`, `/api/instances` — anything else 404s. A forwarded create refreshes that device's session list before answering, so the next `GET /api/instances` already carries `<device>::<title>` |
+
+### Your devices (fleet)
+
+One person's computers as one group (`backend.web.core.fleet`, routes in
+`backend/web/addons/fleet.py`, roster in `fleet.json` beside `settings.json`).
+Every member holds the shared **fleet key**, which is a full credential on
+every member (bearer, cookie, `?token=`, websocket), and only members exchange
+settings (sync) or rosters. A device joins with an 8-character code made on a
+member, by asking a member that then approves it (both screens show the same
+6-digit code), or in one click when this device already holds the other's
+pasted access token. Joining or admitting a device turns
+`general.remote_control` on there, since members talk through relayed
+requests, and a request bearing the current fleet key passes the
+remote-control gate even if the toggle is switched off later.
+
+**Removing** a member gives the rest a new key: members reachable now take it
+at once, and one that is offline gets it automatically the next time a member
+sees it (old keys are kept up to 30 days, `prev_keys`, to hand it over under
+the key it still holds). By default every member that took the new key, and
+this device, also replaces its **own access token**, so tokens the removed
+device held stop working and phones signed in before must scan the QR again.
+Each removal records who made it (`removed[].removed_by`): "rig removed laptop"
+when you didn't is how a forged removal shows. One shared key can't tell a
+removed device from a member that hasn't heard yet, so until an offline member
+is handed the new key the removed device can still reach it with the old one:
+a lost or stolen device must **also** be removed from the tailnet (Tailscale
+admin console), which cuts it off everywhere at once. Every removal answer
+carries that advice (`advice`).
+
+A removal is **sticky**: a roster from another member never brings back a
+device this one knows another device removed (every member holds the same
+key, so a roster entry can't prove who wrote it). If another member lets it
+back in anyway, it stays out here and is listed under `readmitted_elsewhere`
+until you allow it here (`POST /api/fleet/members/{key}/allow`). A device that
+**left** on its own (its tombstone names itself) isn't held off: a later join
+through any member, learned by gossip like any change, brings it back
+everywhere. When a device rejoins through a member that still lists a device
+this one removed (two removals made apart, a missed key change), the joiner
+removes that device again and then replaces the shared key and the members'
+own tokens without it (`rotate_key`), since the member it joined through may
+have handed it the key.
+
+**Every member is only as locked as the least locked one.** A member with the
+access gate off holds the fleet key and relays `<device>::<title>` routes and
+settings edits to the others with it, so anyone who can reach that member
+controls your other devices through it. `gate_warning` is true when the gate is
+off and this server is reachable beyond this machine (a non-local
+`CS_WEB_MODE`, or local mode fronted by `tailscale serve` / the shared link);
+Settings → Devices and `mindflock devices` warn then.
+
+Browser routes are **privileged**: the caller must present a credential, be
+this machine itself (loopback with no forwarding headers), or be a trusted
+Tailscale account, and the request must not be relayed by another MindFlock.
+Anything else gets 403 `{"error": "open this on the device itself"}`.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/fleet` | `{in_fleet, id, epoch, self: {key, host}, members: [{key, host, added_at, self, reachable, version, same_fleet, error, key_conflict, automation}], invites: [{code, expires_at, device, command}], requests: [{id, device, host, code, created_at, expires_at, ip}], join, stale_key, gate_warning, candidates: [{device, host, version, fleet_proto, reachable, member, in_fleet, same_fleet, has_token}], removed: [{key, host, removed_at, removed_by, removed_by_host, left}], readmitted_elsewhere: [{key, host, by, by_host}]}`. `automation` is whether that member runs PR review and issue handling — derived from the synced `github.automation_device` the same way on every member, so exactly one is `true`. `left` is true when the device took itself out (`removed_by` is itself) rather than being removed by another device; only the latter is flagged as a removal you may not have made. `readmitted_elsewhere` lists devices removed here that another member's roster has let back in since: they stay out here until you allow them (below). `key_conflict`: same group and epoch but a different key (two removals made apart) — one side must rejoin the other; `stale_key` is true on this device when it is the side that must (or a member answered with a newer epoch, or every reachable one rejects its key). `removed` lists tombstones newest first. `join` is the outgoing join state (below). An unprivileged caller gets empty `invites`/`requests` and a blank `join.code` |
+| POST / DELETE | `/api/fleet/invite` | Make a single-use code (`{code: "XXXX-XXXX", expires_at, device, command}`; TTL 10 min, at most 3 live; starts the group if there is none) / cancel every live code → `{ok}` |
+| POST | `/api/fleet/join` | `{device, code}` or `{text}` (the pasted `mindflock devices join …` line) → redeem the code on `device` and join. Returns the join state; 400 with the join state plus `error` when it fails |
+| POST / GET / DELETE | `/api/fleet/request` | Ask `{device}` to let this one in (→ `{state: "waiting", code: "123 456", …}`; polls it in the background) / this device's join state `{state, device, host, code, error, id}` (`state`: `idle·waiting·joining·joined·denied·expired·error`) / cancel (withdraws the request on the other device too; refused once `joining` — the state comes back unchanged) |
+| POST | `/api/fleet/requests/{id}/approve` · `/deny` | Answer a pending request → approve `{ok, device, host, sync_error}` (settings sync is started here first, `sync_error` `""` when it did) · deny `{ok, device, host}`; 404 once it's gone |
+| POST | `/api/fleet/add-paired` | `{device}` → add a device this one holds a pasted token for → `{ok, device, host, sync_error, direction: "theirs_take_mine"}`: the added device takes THIS device's shared settings where this one has them (the other way round from joining). 400 without a pasted token, 502 when it refuses |
+| POST | `/api/fleet/members/{key}/remove` | Body `{rotate_tokens?: bool = true}` → `{ok, rekeyed[], missed[], rotated[], rotate_failed[], advice}`: `rekeyed` took the new key now, `missed` get it when they're next seen, `rotated` replaced their own access token (this device included), `rotate_failed` didn't — a missed member's token is never replaced later, so do it there (Settings → Security). `rotate_tokens: false` only re-keys. The response re-issues this browser's cookie when this device's token changed. Removing **this** device is leaving → `{ok, left: true}` (no new key, no token change). When the removed device was the one running PR review and issue handling (`github.automation_device`), they move to this device. 404 for a key that isn't a member |
+| POST | `/api/fleet/members/{key}/allow` | Let a device removed here back in on this device (Settings → Devices → **Allow it here**, offered for a `readmitted_elsewhere` row): the tombstone here goes and it is a member again, added now by this device (fires `device.joined`) → `{ok, device, host}`. 404 `{error}` for a device that wasn't removed here by another device |
+| POST | `/api/fleet/leave` | Leave the group → `{ok}`: when this device runs PR review and issue handling, `github.automation_device` first moves to the remaining live member with the lowest key (and the others are nudged to pull it); then the members get a tombstone for this device and settings sync turns off here. On its own again, this device runs PR review and issue handling itself. Leaving changes no key and no token, and isn't held against the device: a later join through any member brings it back everywhere |
+
+Device-to-device, **public** (the auth middleware exempts exactly these four
+method + path shapes). Each is validated, rate-limited per client IP (20 a
+minute; 90 for the poll and the cancel; 429 when over), and answered only to a
+caller on the tailnet (a direct tailnet address, or one `tailscale serve`
+forwarded and this machine vouches for) or this machine itself, unproxied —
+anything else gets 403 `{"error": "join from one of your devices on the
+tailnet"}`:
+
+- `POST /api/fleet/redeem {code, device, host, dns?, fleet_proto,
+  runs_automation?}` → the bundle `{id, key, epoch, members, removed}`. 403
+  for a wrong or expired code (or a tailnet address that isn't `device`'s).
+  5 wrong codes from one address within 10 min lock that address out for a
+  minute, doubling with each repeat lockout up to an hour (429 "too many wrong
+  codes — wait N minutes"); it never costs anyone else their code. Every live
+  code is cancelled only after 20 wrong codes within 10 min from at least 3
+  different addresses.
+- `POST /api/fleet/requests {device, host, dns?, secret_hash, fleet_proto,
+  runs_automation?}` → `{id, code}` (fires `device.join_requested`).
+- `GET /api/fleet/requests/{id}?secret=…` → `{state[, bundle]}` (the bundle is
+  served once).
+- `POST /api/fleet/requests/{id}/cancel {secret}` → `{ok: true, state:
+  "withdrawn"}`, or `{ok: false, state}` once it was answered; 404 unknown id,
+  403 wrong secret.
+
+`runs_automation` is the joiner saying it runs PR review / issue handling now
+(they run there and one of them is set up). Only when the group hasn't chosen
+(`github.automation_device` unset, or naming a device that isn't a live
+member) do both sides set it — to the joiner when it runs them, else to the
+device that admitted it; the joiner settles it again after its first settings
+pull, so a choice the group already made stands.
+
+Member to member, with the fleet key as the bearer: `GET` / `POST
+/api/fleet/roster` (gossip of `{id, epoch, members, removed}`, every 30 s),
+`POST /api/fleet/rekey` (the next epoch's `{id, epoch, key, members, removed}`
+→ `{ok}`; only `epoch == mine + 1` is taken, and it replaces the roster) and
+`POST /api/fleet/rotate-token` (replace this device's own access token → `{ok}`,
+or `{ok: false, error}` when `MINDFLOCK_AUTH_TOKEN` pins it or saving fails —
+the CURRENT key only). The middleware lets these (and the sync `nudge` /
+`export` routes) past the token and remote-control gates, because each checks
+the key itself and refuses with **401** `{error, id, epoch, kfp}`: this
+device's group id, key epoch and key fingerprint (non-secret), so the caller
+can tell "I missed a key change" from "it did" from "we hold different keys".
+`POST /api/fleet/adopt {bundle, from: {key, host, dns}}` (one-click add) takes
+only this device's OWN access token, never the fleet key → `{ok,
+runs_automation}`; 401 without it, 409 when this device is in another group.
 
 ## Config, providers, usage, settings
 
@@ -1621,7 +1734,7 @@ and can stop an externally-started pipeline):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/mindflock/status` | `{running, pid, since, log, available}` |
+| GET | `/api/mindflock/status` | `{running, pid, since, log, available, …}` — also `pr_enabled` / `issues_enabled` (switched on AND run on this device), `automation_here` (this device runs PR review and issue handling: always on a lone device; in a group, the member the synced `github.automation_device` names, else the lowest-keyed live member) and `automation_device` (where it doesn't: that member's host, `""` when this device runs them). Intake shows *runs on <device>* from these |
 | POST | `/api/mindflock/start` | starts it (400 if no `config.toml`) |
 | POST | `/api/mindflock/stop` | stops it (SIGTERM → SIGKILL of the process group) |
 | WS | `/api/mindflock/logs` | read-only `tail -F` of `logs/ticket-ingestion.log` |
@@ -1658,8 +1771,7 @@ or the UI starts writing the literal mask into the store as a password.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET/POST | `/api/settings` | The masked settings store (secrets never echoed). POST **rejects** `coding_cli.default_provider` when that CLI is not installed (a `ValueError`-derived 400) — an absent CLI can never become the launch default. Two `github.*` keys are maps, not scalars: `repo_settings` and `issue_repo_settings`, keyed by `owner/name`, hold the PER-REPO overrides the Intake tab's repo cards write — `agent`, `base_branch` (PR review only; accepted but dropped for issues, whose work branches off the repo's own default), `min_age_minutes`, `skip_authors`. An absent repo key, or an absent field inside one, inherits the flat `github.*` value; a blank is dropped rather than stored, which is how a card field means "inherit the default" instead of "set it to empty" (`_repo_overrides` / `REPO_OVERRIDE_KEYS` in `backend/config/settings.py`) |
-| GET | `/api/settings/auth-token` | The active web-auth token (for the QR / copy button) |
+| GET/POST | `/api/settings` | The masked settings store (secrets never echoed). POST **rejects** `coding_cli.default_provider` when that CLI is not installed (a `ValueError`-derived 400) — an absent CLI can never become the launch default. Two `github.*` keys are maps, not scalars: `repo_settings` and `issue_repo_settings`, keyed by `owner/name`, hold the PER-REPO overrides the Intake tab's repo cards write — `agent`, `base_branch` (PR review only; accepted but dropped for issues, whose work branches off the repo's own default), `min_age_minutes`, `skip_authors`. An absent repo key, or an absent field inside one, inherits the flat `github.*` value; a blank is dropped rather than stored, which is how a card field means "inherit the default" instead of "set it to empty" (`_repo_overrides` / `REPO_OVERRIDE_KEYS` in `backend/config/settings.py`). `github.automation_device` (a device key, synced) picks which of your devices runs PR review and issue handling; a save that changes whether this device runs them, or flips `github.enabled` / `github.issues_enabled`, reconciles the pipeline (restarted, started or stopped — its halves are wired at boot). A change that arrives by sync or a roster change is picked up within 30 s |
 | POST | `/api/settings/test/shortcut` | Validate a Shortcut token (body `{api_token}` or the stored one) → `{ok, member_id, name, mention_name}` for auto-fill, or `{ok: false, error}` |
 | POST | `/api/settings/test/github` | `{ok, token_source: "settings·env·gh-cli·none", gh_installed, gh_authenticated, detail}` |
 | POST | `/api/settings/test/github-repo` | Body `{repo: "owner/name"}` — the per-repo twin of the row above: that one answers "is there a credential", this one answers "does it reach THIS repo", which is the failure people actually hit (a typo'd slug, a private repo the token has no scope for). One `GET /repos/{repo}` with the resolved token → `{ok: true, name, private, default_branch, can_push}` — `name` is GitHub's own `full_name`, `can_push` the token's push permission (reviewing pushes nothing, issue handling needs a branch, so read-only is worth saying out loud). Otherwise `{ok: false, error}`: a slug that isn't `owner/name`, no token available, an unreachable `api.github.com`, or GitHub's own `message` — a 404 reads as "no such repo, or this token cannot see it", because that is also what a private repo returns. **Always 200**, like the other probes, so branch on `ok`. Backs the **Test access** button on every repo card in Intake → Pull requests / Issues |
@@ -1899,7 +2011,20 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   server's token. `?token=` may repeat (the shared QR carries one per paired
   device). The request passes if one of them is this server's, and the
   redirect then stores all of them, each held to `[A-Za-z0-9_-]{8,256}`. A
-  server never accepts a token that isn't its own.
+  server never accepts another device's own token.
+- **Your devices' key.** Once devices are joined ("Your devices", see
+  [above](#your-devices-fleet)) every member also accepts the shared fleet key
+  beside its own token, in each of the forms above. A device's phone QR
+  carries its own token plus the fleet key (none at all with the gate off),
+  and the sign-in cookie it sets belongs to that device's origin, so a phone
+  that scanned one device's QR is signed in there, not on the others' own
+  URLs. Only the shared phone link, one origin answered by any of your
+  devices, signs it in wherever the link lands. A caller signed in with the
+  fleet key is never shown a device's own token: `GET
+  /api/settings/auth-token`, `GET /api/mobile` (its QR comes back as the bare
+  URL, `token: null`) and the rotate answer withhold it. `GET /api/mobile` and
+  the rotate answer hand it only to a caller presenting that own token or to
+  this machine itself (unrelayed).
 
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests and DNS-rebinding hosts. These checks
@@ -1922,12 +2047,17 @@ run **before everything else**, public paths included: a cross-site
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/auth` | Body `{token}` — validate + set the `mf_auth` cookie (login-page target; always allowed through the gate). `200 {ok}` or `401`; never echoes the token |
-| GET | `/api/settings/auth-token` | This device's token in the clear (behind the gate) for Settings → Security |
+| GET | `/api/settings/auth-token` | This device's own token in the clear for Settings → Security (generated and persisted on first use) → `{token, auth_enabled}` — but only to a caller that already presents that own token (cookie or bearer), to this machine itself (loopback, unproxied, not relayed), or, with the gate off, to any caller that isn't another MindFlock relaying. Anyone else — a phone or browser signed in with your devices' key, a member relaying — gets `200 {token: null, auth_enabled, reason: "signed in with your devices' key"}`: the fleet key must not collect every device's own token, which would outlive a removal |
 | GET | `/api/settings/tailnet-trust` | Settings → Security's **Trusted Tailscale accounts**: `{available, self_login, self_tagged, logins, shared_link_supported, trusted}` — `logins` are the Tailscale logins owning at least one UNTAGGED node on the tailnet (the choices); `trusted` mirrors `general.tailnet_trusted_logins`; `self_login` is `""` when this node is tagged; `available:false` = no `tailscale` binary or the daemon is stopped. Runs `tailscale status --json` on every call (no cache). The list is saved through `POST /api/settings` (`{"general": {"tailnet_trusted_logins": [...]}}`), lower-cased and de-duplicated on load. What trust grants: see the Trusted Tailscale accounts bullet above |
-| GET | `/api/settings/sync` | Settings → Security → **Settings sync**: `{enabled, device, joined_from, devices: [{key, label, syncing, last_sync, withheld[], error}]}` — one row per connected device with its last pass (`backend.web.core.settings_sync`) |
-| POST | `/api/settings/sync` | `{enabled: true, from?}` turns sync on — from THIS device (`from` empty: its shareable values are stamped now and lead) or by first adopting connected device `from`'s shareable values under its stamps (→ adds `{adopted[], withheld[]}`); `{enabled: false}` turns it off and drops the stamps. 409 when `from` isn't connected or can't be read; 403 for a request relayed by another device (each device opts in itself) |
-| GET | `/api/settings/sync/export` | What the user's other devices pull every 30 s: `{device, enabled, stamps: {<group.field>: {ts, by, h}}, values, withheld[]}` for every SHARED field (`settings_sync.SYNCED`; machine-specific fields are in `LOCAL` and never leave the device). A device adopts each field whose stamp is newer than its own (`(ts, by)` order — last edit wins, device key breaks a tie). The credential-bearing fields (`github.token`, `notifications.ntfy_token`, `ticketing.sources`) are included only when the request itself carries this device's token (bearer or sign-in cookie, `auth.presented_token`) — reaching the route with the gate off is not enough — and are otherwise listed in `withheld` and left untouched on the puller |
-| POST | `/api/settings/auth-token/rotate` | Mint + persist a NEW token (compromise recovery): every issued cookie/QR/paired device is invalidated (trusted Tailscale accounts are not — untick them); the response re-issues the caller's cookie. `409` when `MINDFLOCK_AUTH_TOKEN` pins the token; `500` when persisting the new token fails (the old token stays valid) |
+| GET | `/api/settings/sync` | Settings → Devices → **Settings sync**: `{enabled, error, paused, choices[], device, joined_from, in_fleet, devices: [{key, label, syncing, last_sync, withheld[], error}], pinned[], separate: {<pin>: <label>}, deferred: [{path, value, reason}], warnings[], syncable: [{path, label, group}]}` — one row per member of "Your devices" (`backend.web.core.settings_sync`). `error` is `"settings.json couldn't be read — sync paused"` while the file won't parse. `paused` is `"This device's settings look reset — sync paused"` (with `choices: ["theirs", "mine"]`) when one background scan — a change nobody made through MindFlock, such as a replaced or restored file — would clear 3 or more settings and at least half of what is set here, with 8 or more set: nothing is stamped or exported until `resume`, and `settings.sync_paused` fires once. A save through a route (`POST /api/settings`, `/api/prefs`, ticket sources, provider TOMLs) explains only what it wrote: settings cleared under the paths that save wrote (a field, a group's fields, a store or its entries) don't count, anything else cleared in the same scan still does — a reset file followed by one save still pauses. `pinned` holds `group.field`, `store:<name>` or single entries (`ticketing.sources#<id>` — a source whose id means something different on the device you joined is kept separate this way; `separate` maps each such pin to that device's label, which the Unpin confirm names). `warnings` include a member whose stamps were skipped because they can't be a real time — more than a year ahead of this clock (`"<host>'s clock is far ahead — its changes are ignored…"`; a merely fast clock is never warned about, since a later edit wins either way), sources kept separate, and ticket sources without an id (never synced). `devices[].error` reads `"<host> paused sync — its settings look reset; answer it in Settings → Devices there"` for a member whose own sync is paused (its export answers 503). `devices[].withheld` is always empty (kept for older clients) |
+| POST | `/api/settings/sync` | `{enabled: true, from?}` turns sync on — from THIS device (`from` empty: its values are stamped now and lead) or by first adopting member `from`'s values (→ adds `{adopted[], deferred[]}`); `{enabled: false}` turns it off. 409 when this device isn't in a group of devices or `from` isn't a reachable member; 403 for a relayed request |
+| POST | `/api/settings/sync/now` | Run one pass now → the status plus `adopted[]` (403 relayed) |
+| POST | `/api/settings/sync/resume` | `{keep: "theirs" \| "mine"}` while `paused` → the status plus `adopted[]`. `theirs` takes your other devices' values back (what's here is stamped older than any real edit, then a pass runs); `mine` treats what's here as the change and spreads it. 400 for another `keep`, 409 while settings.json can't be read, 403 relayed. Turning sync on again (joining a device, or leading from this one) or off — leaving included — also clears the pause |
+| POST | `/api/settings/sync/pin` | `{path, pinned}` — keep `path` (`group.field`, `store:<name>`, or one entry such as `ticketing.sources#<id>`) different on this device, or stop (un-pinning lets the group's value win on the next pass) → the status. 400 for a path that doesn't sync, and for `github.automation_device` (which device runs PR review is one answer for the whole group); 403 relayed |
+| POST | `/api/settings/sync/nudge` | A member changed something: pull in about a second → `{ok, scheduled}`. Fleet key bearer only (401 `{error, id, epoch, kfp}` otherwise) |
+| GET | `/api/settings/sync/export` | What members pull: `{protocol: 2, fleet, device, enabled, stamps: {<unit>: {ts, by, h[, deleted]}}, values, withheld: []}`. Units are `group.field`, `group.field#<key>` for list entries (ticket sources by id, prompt presets by name) and `store:<name>#<key>` (templates, red zones, user provider TOMLs); pinned units are left out. Last edit wins per unit; deletes travel as tombstones. Stamps are hybrid-logical (`max(now, previous + 1 ms)`), so an edit made after seeing a value always wins over it whatever the clocks say; nothing is held back for a clock, and only a stamp that can't be a real time (not finite, negative, or more than 365 days in the puller's future) is skipped. Secrets are included, so the request itself must carry the fleet key or this device's token (401 `{error, id, epoch, kfp}` otherwise), and a puller ignores an export from another group or protocol. **503** `{error}` while settings.json can't be read or sync is paused here — never an empty export, which would read as "everything deleted" |
+| GET / POST | `/api/prefs` | UI preferences that follow the person (keymap, prompt presets, theme, diff mode/base, bars, break/idle/hints): GET returns every field with defaults filled; POST takes a partial update (`null` clears a field, unknown fields are ignored), is stamped for sync and emits `settings.synced` with `from: ""` so other open UIs on this server re-pull. Both answer **409** `{error: "settings.json couldn't be read — fix or delete it"}` while the file won't parse (nothing is saved over it, and no defaults are served in its place); so do `POST /api/settings`, `PUT /api/settings/ticketing/sources`, `PUT /api/settings/auth-profiles`, `POST /api/notify/rules/{rule_id}`, `POST /api/notify/ntfy`, `POST /api/ide/open-on-ticket` and `POST /api/settings/auth-token/rotate` (the old token stays valid) |
+| POST | `/api/settings/auth-token/rotate` | Mint + persist a NEW token (compromise recovery): every issued cookie/QR/paired device is invalidated (trusted Tailscale accounts are not — untick them). In a group of your devices the devices' shared key is replaced too, and so is every reached member's own access token (`/api/fleet/rotate-token` under the new key; the shared-link QR carries the members' own tokens), so a phone signed in before is signed out of all of them. → `{token, auth_enabled, rekeyed[], missed[], rotated[], rotate_failed[], in_fleet, note[, fleet_error]}`: `rekeyed` members took the new key now, `missed` get it when they're back, `rotated` replaced their own token, `rotate_failed` didn't — `missed` ones included, since a member's own token is never replaced later: `note` says phones must scan the QR again and names those members ("Not reached: <hosts> — rotate the token on it/each too (Settings → Security there)…"). `fleet_error` when the key change failed (the token rotated anyway). `token` (and a re-issued cookie for this caller) only for a caller that presents this device's own token or is this machine itself, unrelayed; anyone else — a caller signed in with the fleet key, or any remote caller of a gate-off server — gets `token: null` and no cookie. `409` when `MINDFLOCK_AUTH_TOKEN` pins the token, or (`{error: "settings.json couldn't be read — fix or delete it"}`) while settings.json won't parse; `500` when persisting the new token fails (the old token stays valid in both cases) |
 
 ## Server lifecycle
 

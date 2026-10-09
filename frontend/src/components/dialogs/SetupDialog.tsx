@@ -426,6 +426,22 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           </button>
         </div>
       </div>
+      {/* Not a step: a second computer skips most of the above by joining the
+          first one — its settings, sign-in and ticket claims come along. */}
+      <p className="muted setup-hint setup-optional setup-devices">
+        Already use MindFlock on another computer?{" "}
+        <button
+          type="button"
+          className="setup-open-devices linklike"
+          onClick={(e) => {
+            e.stopPropagation();
+            closeSetup();
+            useUi.getState().openDialogFor("settings", "devices");
+          }}
+        >
+          Connect it
+        </button>
+      </p>
     </>
   );
 }

@@ -60,3 +60,38 @@ describe("notifFromEvent", () => {
     expect(n?.text).toBe("sent the next queued prompt (2 left)");
   });
 });
+
+describe("notifFromEvent — your devices", () => {
+  it("a join request is a warn row carrying the server's detail, marked as a device row", () => {
+    const n = notifFromEvent(
+      env({
+        event: "device.join_requested",
+        session: "",
+        data: { device: "mini", host: "mac-mini", code: "123 456", detail: "mac-mini · code 123 456" },
+      })
+    );
+    expect(n).toEqual({ text: "mac-mini · code 123 456", cls: "n-warn", device: true });
+  });
+
+  it("joined is done, removed is info — both click through to Settings → Devices", () => {
+    expect(notifFromEvent(env({ event: "device.joined", session: "", data: { host: "ml-rig" } }))).toEqual({
+      text: "ml-rig joined your devices",
+      cls: "n-done",
+      device: true,
+    });
+    const removed = notifFromEvent(env({ event: "device.removed", session: "", data: { device: "rig" } }));
+    expect(removed?.cls).toBe("n-info");
+    expect(removed?.device).toBe(true);
+  });
+
+  it("settings sync pausing itself is a warn row that opens Settings → Devices", () => {
+    const n = notifFromEvent(env({ event: "settings.sync_paused", session: "", data: {} }));
+    expect(n?.cls).toBe("n-warn");
+    expect(n?.device).toBe(true);
+    expect(n?.text).toMatch(/^Settings sync paused on this device/);
+  });
+
+  it("settings.synced is not news for the bell", () => {
+    expect(notifFromEvent(env({ event: "settings.synced", session: "", data: { paths: ["ui.accent"] } }))).toBeNull();
+  });
+});

@@ -17,15 +17,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   devices reach the same ticket at the same moment, the one that marked it
   first keeps it. A device that's off or unreachable never blocks the queue.
 
-- **Settings sync across your devices.** Settings → Security → **Settings
+- **Your devices.** Settings → Devices (and `mindflock devices`) joins the
+  computers you own into one group: type a code made on one into the other,
+  ask from the new one and approve on the old one (both show the same 6-digit
+  code), or add a computer you already pasted an access token for in one
+  click. Your devices share one key, so they reach each other with no pasted
+  tokens, and a phone signed in through the shared phone link reaches all of
+  them (a QR from one device signs the phone in on that device). PR review and
+  issue handling run on exactly one of your devices, a choice your devices
+  share (`github.automation_device`): at first the one that was already
+  running them when you joined. Choose **Run here** in Settings → Devices to
+  move them, and Intake says where they run. When they move, the new device
+  skips the PRs and issues open at that moment, which the old one already
+  handled. Removing the device that runs them moves them to the one you
+  removed it from; a device that leaves hands them on first. A device that
+  starts PR review or issue handling for the first time while grouped with
+  your others also skips what's open at that moment, once. Removing a device
+  gives the rest a new key (one that's offline gets it when it's back) and, by
+  default, a new access token on every device, so phones scan the QR again. If
+  the device was lost or stolen, also remove it from your tailnet in the
+  Tailscale admin console: that cuts it off everywhere at once, even from
+  devices that are offline now. Settings → Devices shows which device removed
+  which, so a removal you didn't make stands out; a device that left on its
+  own is shown plainly and can join again from any device. A removed device
+  that another of your devices lets back in stays out until you choose **Allow
+  it here**. Security → Rotate token now also changes your devices' key and
+  every device's own access token, so a lost phone is signed out of all of
+  them; it names any device it couldn't reach, to rotate there. Your devices
+  are only as locked as the least locked one: a device with the access gate
+  off lets anyone who can reach it control your other devices through it, and
+  Settings → Devices warns you when that's the case.
+
+- **Settings sync across your devices.** Settings → Devices → **Settings
   sync** keeps ticket sources, GitHub repos and options, notifications, agent
-  limits, budgets, trusted Tailscale accounts and the accent the same on every
-  paired device that turns it on — change one anywhere and the others follow
-  within ~30 s; the latest change wins. Turn it on first on the machine whose
-  settings should lead, then on the others starting from it. Paths, ports, the
-  access token, the IDE and signed-in accounts stay per device. Tokens (GitHub,
-  ticket sources, ntfy) are shared only with devices paired using that
-  device's access token.
+  limits, budgets, trusted Tailscale accounts, the accent, your keymap, prompt
+  presets, theme and other UI preferences, session templates, red zones and
+  your own agent CLIs the same on every one of your devices. Change one
+  anywhere and the others follow within seconds. The latest change wins,
+  separately for each ticket source or preset, and deletes travel too. It
+  only ever talks to your devices: another MindFlock on the same tailnet is
+  never synced from. A device that joins starts from the device it joined.
+  Pick **Keep different on this device** to hold one setting back. An agent
+  that isn't installed on a machine waits there until it is, and a ticket
+  source needs an id to sync. Paths, ports, the access token, the IDE and
+  signed-in accounts stay per device. Sync protects what you have: a
+  settings.json that won't open is never saved over (saves answer 409 and
+  `mindflock accounts` says what to do), and a device whose settings suddenly
+  look reset outside MindFlock pauses sync, tells you so (a toast and a bell
+  row), and asks whether to take your other devices' settings back or keep
+  its own; saving one setting afterwards doesn't wave the reset through.
+  Nothing waits for a clock: a later edit wins even against a device whose
+  clock runs fast, and only a clock more than a year off is ignored (Settings
+  → Devices names that device). A device that ran a development build of
+  settings sync from before this release drops its old sync state; if it is
+  already grouped with your other devices it turns sync back on at once,
+  taking their values where they have one, and its unset fields never clear
+  theirs.
 
 ## [0.7.3] - 2026-10-08
 

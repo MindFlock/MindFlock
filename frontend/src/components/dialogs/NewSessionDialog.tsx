@@ -42,6 +42,7 @@ import {
   findPreset,
   loadUserPresets,
   saveUserPresets,
+  upsertUserPreset,
   type Preset,
 } from "../../lib/presets";
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
@@ -2097,13 +2098,16 @@ export function NewSessionDialog() {
     const text = prompt.trim();
     const name = (presetName || "").trim();
     if (!text || !name) return;
-    const list = loadUserPresets().filter((p) => p.name !== name);
-    list.push({ name, prompt: text });
-    saveUserPresets(list);
-    setSavedPresets(list);
+    // Same name ignoring case = the same prompt (the server's rule).
+    const { replaced } = upsertUserPreset(name, text);
+    setSavedPresets(loadUserPresets());
     setPresetValue("u:" + name);
     setPresetName(null);
-    toast(`Saved prompt “${name}”`);
+    toast(
+      replaced
+        ? `Saved prompt “${name}” — it replaced “${replaced}” (names ignore case)`
+        : `Saved prompt “${name}”`
+    );
   };
 
   return (

@@ -111,6 +111,21 @@ def _is_loopback(host: Optional[str]) -> bool:
     return ip.is_loopback
 
 
+def is_loopback(host: Optional[str]) -> bool:
+    """Whether ``host`` is a loopback address (IPv4-mapped forms included)."""
+    return _is_loopback(host)
+
+
+def has_forward_headers(scope) -> bool:
+    """Whether the request carries any proxy forwarding header.
+
+    A loopback transport peer alone does not mean "this machine's user":
+    ``tailscale serve`` hands tailnet traffic to us from 127.0.0.1 too, naming
+    the real client in ``X-Forwarded-For``. So "came from this machine" is a
+    loopback peer AND none of these headers (see ``auth.privileged``)."""
+    return any(k in _FORWARD_HEADERS for k, _ in scope.get("headers") or [])
+
+
 def _parse_whois(data: dict) -> Optional[Peer]:
     node = data.get("Node") or {}
     login = str((data.get("UserProfile") or {}).get("LoginName") or "").strip().lower()
@@ -246,7 +261,7 @@ def peer_ip(scope) -> Optional[str]:
     if not peer:
         return None
     host, port = peer[0], peer[1]
-    forwarded = any(k in _FORWARD_HEADERS for k, _ in headers)
+    forwarded = has_forward_headers(scope)
     if is_tailnet_ip(host):
         # A direct tailnet connection carries no forwarding headers. If it
         # does, uvicorn may have rewritten the peer from them — don't guess.

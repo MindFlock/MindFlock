@@ -35,6 +35,7 @@ import {
   collectQueued,
   queuedOf,
   runState,
+  runsOnText,
   type QueuedItem,
   type QueueKind,
   type QueueRunState,
@@ -71,6 +72,8 @@ interface Section {
   blockedOn: string;
   /** True when the blocking switch lives on another tab than this section's. */
   blockedElsewhere: boolean;
+  /** For `elsewhere`: the device that runs it ("" when the server can't say). */
+  runsOn?: string;
   items: QueuedItem[];
   note: string;
 }
@@ -82,6 +85,11 @@ interface IngestionStatus {
   /** github.enabled AND repos configured, folded server-side. */
   pr_enabled?: boolean;
   issues_enabled?: boolean;
+  /** False when PR review and issue handling run on another of your devices
+   * (Settings → Devices); `automation_device` names it ("" when unknown).
+   * Missing from an older server: read as "here". */
+  automation_here?: boolean;
+  automation_device?: string;
   /** Set while the next ticket waits on engine.max_sessions. */
   held_for_slot?: { live: number; max: number } | null;
 }
@@ -104,8 +112,14 @@ function useIngestionStatus() {
 }
 
 /** The chip beside a section heading — one vocabulary for all three kinds. */
-function StateChip({ state }: { state: QueueRunState }) {
+function StateChip({ state, device }: { state: QueueRunState; device?: string }) {
   if (state === "unset") return <span className="pr-open-chip">not set up</span>;
+  if (state === "elsewhere")
+    return (
+      <span className="pr-open-chip" data-runs-on={device || ""}>
+        {runsOnText(device).toLowerCase()}
+      </span>
+    );
   if (state === "on") return <span className="pr-open-chip ok">auto-start on</span>;
   // Neutral rather than a colour-coded warning: the words say it, the sentence
   // below says what to do, and a hue would need its own contrast pass in both
@@ -114,9 +128,19 @@ function StateChip({ state }: { state: QueueRunState }) {
 }
 
 /** Why these rows are not moving and which switch fixes it. One sentence shape
- * for every kind; only the switch's name changes. */
+ * for every kind; only the switch's name changes. Run elsewhere, nothing here
+ * needs fixing: say where they run, and that the switch isn't the reason. */
 function StalledNote({ s }: { s: Section }) {
   const many = s.items.length !== 1;
+  if (s.state === "elsewhere")
+    return (
+      <div className="ik-queue-stalled" data-runs-on={s.runsOn || ""}>
+        {runsOnText(s.runsOn)} — {s.runsOn || "that device"} starts{" "}
+        {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
+        <strong>Run here</strong> in Settings → Devices). You can
+        still start {many ? "any of them" : "it"} here, with <strong>Start now</strong>.
+      </div>
+    );
   return (
     <div className="ik-queue-stalled">
       {many ? "These are" : "This one is"} ready, but auto-start is off —{" "}
@@ -155,7 +179,7 @@ function SectionBlock({
       <div className="ik-queue-head">
         <span className="ik-queue-kind">{s.label}</span>
         <span className="ik-tab-count">{s.items.length}</span>
-        <StateChip state={s.state} />
+        <StateChip state={s.state} device={s.runsOn} />
         <button
           type="button"
           className="test-btn ik-queue-goto"
@@ -233,10 +257,17 @@ export function QueueTab({ gotoTab }: TabProps) {
   const engineAvailable = !!status?.available;
   // `desired` is the switch's own last position; `running` can lag it by a boot.
   const engineOn = !!(status?.desired ?? status?.running);
+  // PR review and issue handling run on ONE of your devices; on the others
+  // their sections say where, not "switch it on" (that switch is shared, and
+  // the server folds "not here" into pr_enabled/issues_enabled).
+  const runsElsewhere = status?.automation_here === false;
+  const runsOn = runsElsewhere ? status?.automation_device || "" : "";
 
   const agentChoices = useAgentChoices();
   const s = useSettings();
   const gh = (s.settings.github || {}) as {
+    enabled?: boolean;
+    issues_enabled?: boolean;
     agent?: string;
     issue_agent?: string;
     repo_settings?: RepoOverrides;
@@ -345,11 +376,15 @@ export function QueueTab({ gotoTab }: TabProps) {
         engineAvailable,
         engineOn,
         switchOn: status?.pr_enabled !== false,
+        // The shared switch itself (absent = on): when it is off it is off
+        // on every device, and that IS the thing to fix.
+        runsElsewhere: runsElsewhere && gh.enabled !== false,
       }),
       // Its own toggle is off => name that; the engine being down => name the
       // engine, because turning PR review on would still start nothing.
       blockedOn: status?.pr_enabled === false ? "Automated PR review" : "Automated ingestion",
       blockedElsewhere: status?.pr_enabled !== false,
+      runsOn,
       items: queuedOf("prs", payloads),
       note: noteFor(prsQ, "PRs"),
     },
@@ -362,10 +397,12 @@ export function QueueTab({ gotoTab }: TabProps) {
         engineAvailable,
         engineOn,
         switchOn: status?.issues_enabled === true,
+        runsElsewhere: runsElsewhere && gh.issues_enabled === true,
       }),
       blockedOn:
         status?.issues_enabled !== true ? "Automated issue handling" : "Automated ingestion",
       blockedElsewhere: status?.issues_enabled === true,
+      runsOn,
       items: queuedOf("issues", payloads),
       note: noteFor(issuesQ, "issues"),
     },

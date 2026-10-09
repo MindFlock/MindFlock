@@ -35,6 +35,7 @@ import {
 } from "./sessionActions";
 import { openFastTrackMenu } from "./laneActions";
 import { toast } from "./toast";
+import { notePrefWrite } from "./prefs";
 import { useUi, type DialogName } from "../state/store";
 
 /** One key combination as matched by the dispatcher and stored in the
@@ -192,8 +193,11 @@ export function modalOpen(): boolean {
 
 // --- User-customized bindings ------------------------------------------------
 // Rebinding lives in the "?" sheet (click a row, press the new keys) and is
-// stored per-browser in localStorage: a keyboard is a property of the
-// device, not the account. Shape: { keys: {id: [{key,mod,shift,alt}, …]},
+// cached in localStorage — and, since "Your devices", it follows the person:
+// every save is mirrored to the server's prefs.keymap (lib/prefs.ts), which
+// settings sync carries to your other computers. To keep one machine's
+// keyboard different (a laptop without the keys your desk has), pin
+// prefs.keymap in Settings → Devices → "Kept different on this device". Shape: { keys: {id: [{key,mod,shift,alt}, …]},
 // chords: {defaultLetter: newSecondKey} }. An action can hold several
 // combos (the sheet's "+" appends one). Anything missing or unparseable
 // means "the defaults below"; a bare object (the pre-array format) is
@@ -211,27 +215,35 @@ interface KeyOverrides {
 const RETIRED_KEY_IDS = ["outbox"];
 
 let _keyOv: KeyOverrides = { keys: {}, chords: {} };
-try {
-  const v = JSON.parse(localStorage.getItem("mf_keymap") || "{}") || {};
-  if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
-  if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
-  let migrated = false;
-  for (const id of RETIRED_KEY_IDS) {
-    if (id in _keyOv.keys) {
-      delete _keyOv.keys[id];
-      migrated = true;
+
+/** Read the overrides from localStorage (startup, and again when an adopted
+ * pref replaced them — reloadKeymap). Drops retired ids and normalizes the
+ * pre-array format, writing the cleaned copy back. */
+function _loadKeyOv() {
+  _keyOv = { keys: {}, chords: {} };
+  try {
+    const v = JSON.parse(localStorage.getItem("mf_keymap") || "{}") || {};
+    if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
+    if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
+    let migrated = false;
+    for (const id of RETIRED_KEY_IDS) {
+      if (id in _keyOv.keys) {
+        delete _keyOv.keys[id];
+        migrated = true;
+      }
     }
+    Object.keys(_keyOv.keys).forEach((k) => {
+      if (!Array.isArray(_keyOv.keys[k])) {
+        _keyOv.keys[k] = [_keyOv.keys[k] as unknown as Combo];
+        migrated = true;
+      }
+    });
+    if (migrated) localStorage.setItem("mf_keymap", JSON.stringify(_keyOv));
+  } catch {
+    /* defaults */
   }
-  Object.keys(_keyOv.keys).forEach((k) => {
-    if (!Array.isArray(_keyOv.keys[k])) {
-      _keyOv.keys[k] = [_keyOv.keys[k] as unknown as Combo];
-      migrated = true;
-    }
-  });
-  if (migrated) localStorage.setItem("mf_keymap", JSON.stringify(_keyOv));
-} catch {
-  /* defaults */
 }
+_loadKeyOv();
 
 function _saveKeyOv() {
   try {
@@ -239,6 +251,7 @@ function _saveKeyOv() {
   } catch {
     /* storage unavailable */
   }
+  notePrefWrite("mf_keymap");
 }
 
 // Change notification so the "?" sheet's labels live-update (works with
@@ -257,6 +270,13 @@ export function keymapVersion(): number {
 function _notify() {
   _version++;
   _subs.forEach((cb) => cb());
+}
+
+/** Re-read the overrides after localStorage was replaced underneath us (a
+ * keymap adopted from another of your devices) and repaint every listener. */
+export function reloadKeymap() {
+  _loadKeyOv();
+  _notify();
 }
 
 /** The user's custom combos for an action id, or undefined for defaults. */

@@ -163,6 +163,25 @@ def test_the_ticket_ledger_refuses_the_app_checkout(monkeypatch):
         ledger.load_processed_story_statuses(os.path.dirname(checkout))
 
 
+def test_the_ticket_ledger_refuses_another_mindflock_checkout(tmp_path):
+    """A sibling checkout (the owner's main one, named by the
+    ``MINDFLOCK_REPO_ROOT`` a live server exports into agent shells) is just
+    as real as this one: the hand-over record must never land there."""
+    from backend.ticket_ingestion import state as ledger
+
+    other = tmp_path / "app"
+    (other / "backend" / "ticket_ingestion").mkdir(parents=True)
+    with pytest.raises(RealHomeStoreError, match="ticket ledger"):
+        ledger.note_automation(other, False, "alpha")
+    assert not (other / "automation_here.json").exists()
+
+
+def test_the_suite_never_inherits_a_real_repo_root():
+    """The ingestion controller resolves its repo root at server import, so
+    an exported ``MINDFLOCK_REPO_ROOT`` must be gone before any test runs."""
+    assert "MINDFLOCK_REPO_ROOT" not in os.environ
+
+
 def test_the_ledger_in_a_tmp_dir_still_works(tmp_path):
     from backend.ticket_ingestion import state as ledger
 

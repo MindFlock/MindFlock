@@ -5827,8 +5827,30 @@ async def connect_device(device: str, payload: Optional[dict] = None) -> JSONRes
 
 @app.post("/api/devices/{device}/disconnect")
 def disconnect_device(device: str) -> JSONResponse:
-    """Forget a device's stored token (its sessions drop off the sidebar)."""
+    """Forget a device's stored token (its sessions drop off the sidebar).
+
+    409 for one of "Your devices": the fleet key keeps it connected whatever
+    happens to a pasted token, so forgetting the token would say
+    "disconnected" and change nothing — it is removed in Settings → Devices."""
+    dev = _remote._DEVICES.get(device)
+    if dev is not None and _remote._member_device(dev):
+        host = dev.get("host") or device
+        return JSONResponse(
+            {
+                "error": "%s is one of your devices — remove it in Settings → Devices"
+                % host
+            },
+            status_code=409,
+        )
     _remote.forget_device(device)
+    return JSONResponse(_remote.devices_json())
+
+
+@app.post("/api/devices/refresh")
+async def refresh_devices() -> JSONResponse:
+    """Sweep the tailnet now instead of on the next discovery tick (Settings →
+    Devices' Refresh) and return the fresh ``GET /api/devices`` payload."""
+    await _remote.discover_now()
     return JSONResponse(_remote.devices_json())
 
 
@@ -6081,10 +6103,17 @@ async def _red_zone_loop() -> None:
 
 
 @app.get("/api/mobile")
-def get_mobile() -> JSONResponse:
-    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Mobile)."""
+def get_mobile(request: Request) -> JSONResponse:
+    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Mobile).
+
+    The QR's sign-in tokens (this device's own, the devices' key, every
+    paired device's) and ``token`` go only to a caller that may see this
+    device's own token (:func:`backend.web.core.auth.may_see_own_token`):
+    anyone else — a member relaying, a phone signed in with the devices' key —
+    gets the bare URLs, ``token: null``."""
     try:
-        return JSONResponse(_mobile_info())
+        mine = _auth.may_see_own_token(request.scope)
+        return JSONResponse(_mobile_info(include_tokens=mine))
     except Exception:  # noqa: BLE001 — never 500 the settings screen
         return JSONResponse(
             {"urls": [], "qr_svg": None, "token": "", "note": "unavailable"}
@@ -6092,7 +6121,7 @@ def get_mobile() -> JSONResponse:
 
 
 @app.post("/api/mobile/shared/recheck")
-def recheck_shared_link() -> JSONResponse:
+def recheck_shared_link(request: Request) -> JSONResponse:
     """Settings → Mobile's Re-check: re-read the shared link's setup from
     Tailscale, re-apply what drifted (and re-advertise a tagged host that
     still isn't approved), then return the refreshed ``/api/mobile`` payload."""
@@ -6100,7 +6129,7 @@ def recheck_shared_link() -> JSONResponse:
         _shared_link.reconcile(_server_port(), nudge=True)
     except Exception:  # noqa: BLE001 — best-effort, like the module itself
         pass
-    return get_mobile()
+    return get_mobile(request)
 
 
 @app.post("/api/server/restart")
@@ -14543,7 +14572,12 @@ def ide_open_on_ticket_set(payload: dict) -> JSONResponse:
     from backend.session import provisioned as _prov
 
     want = bool((payload or {}).get("enabled"))
-    _settings.update_settings(engine={"open_cursor": want})
+    try:
+        _settings.update_settings(engine={"open_cursor": want})
+    except _settings.SettingsUnreadable:
+        # Saving defaults over a file that didn't parse would lose it (and
+        # settings sync would spread "everything deleted").
+        return JSONResponse({"error": _settings.UNREADABLE_HINT}, status_code=409)
     return JSONResponse({"enabled": _prov.open_ide_on_ticket()})
 
 
@@ -14559,13 +14593,22 @@ def scroll_speed_set(payload: dict) -> JSONResponse:
 
     Tunes the tmux copy-mode wheel binding (server-wide), so the change takes
     effect immediately on already-open terminals — no restart needed. The value
-    is clamped to a sane range."""
+    is clamped to a sane range. Also written to settings ``ui.scroll_speed``
+    (and stamped) so settings sync carries it to the user's other devices —
+    the file stays the live value; the setting is what travels."""
     speed = save_scroll_speed((payload or {}).get("speed"))
     try:
         apply_scroll_speed(speed)
     except (
         Exception
     ):  # noqa: BLE001 — best-effort; persisted value still applies on next session
+        pass
+    try:
+        from backend.config import settings as _settings
+
+        _settings.update_settings(ui={"scroll_speed": speed})
+        _settings_sync.local_change()
+    except Exception:  # noqa: BLE001 — the live speed is set; sync is a bonus
         pass
     return JSONResponse({"speed": speed})
 

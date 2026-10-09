@@ -120,6 +120,11 @@ def test_event_names_vocabulary_is_complete():
         "run.needs_you",
         "run.task_shipped",
         "run.finished",
+        "device.join_requested",
+        "device.joined",
+        "device.removed",
+        "settings.synced",
+        "settings.sync_paused",
     }
 
 

@@ -186,6 +186,33 @@ def test_security_and_accounts_never_call_a_native_confirm():
     assert "save(p.next, p.nextDefault, true)" in acc
 
 
+def test_devices_screen_asks_inline_and_owns_settings_sync():
+    """Settings → Devices: Remove / Leave ask with InlineConfirm and codes are
+    typed into inline inputs — the desktop app has no native confirm/prompt,
+    so either would silently do nothing there. Settings sync moved here from
+    Security (it only runs between your own devices)."""
+    dev = _code(_SETTINGS / "screens" / "Devices.tsx")
+    assert not re.search(r"\b(confirm|prompt|alert)\(", dev)
+    assert "<InlineConfirm" in dev
+    for route in (
+        '"/api/fleet"',
+        '"/api/fleet/invite"',
+        '"/api/fleet/join"',
+        '"/api/fleet/request"',
+        '"/api/fleet/add-paired"',
+        '"/api/fleet/leave"',
+        '"/api/devices/refresh"',
+        '"/api/settings/sync"',
+        '"/api/settings/sync/now"',
+        '"/api/settings/sync/pin"',
+    ):
+        assert route in dev, route
+    sec = _code(_SETTINGS / "screens" / "Security.tsx")
+    assert "SettingsSyncRows" not in sec
+    assert "/api/settings/sync" not in sec
+    assert "TailnetTrustRows" in sec
+
+
 def _screens_block() -> str:
     src = _read(_SETTINGS / "SettingsDialog.tsx")
     return src.split("> = [", 1)[1].split("];", 1)[0]
@@ -209,6 +236,7 @@ def test_settings_nav_order_and_groups():
         "orchestration",
         "workspace",
         "ide",
+        "devices",
         "security",
         "appearance",
         "mobile",
@@ -225,7 +253,9 @@ def test_settings_nav_order_and_groups():
         assert groups[k] == "Agents", k
     for k in ("workspace", "ide"):
         assert groups[k] == "Code", k
-    for k in ("security", "appearance", "mobile", "peer"):
+    # "Devices" (your other computers, settings sync) leads "This device":
+    # it is where a second computer becomes one of yours.
+    for k in ("devices", "security", "appearance", "mobile", "peer"):
         assert groups[k] == "This device", k
     for k in ("doctor", "logs", "advanced", "extensions", "traffic"):
         assert groups[k] == "Troubleshooting", k

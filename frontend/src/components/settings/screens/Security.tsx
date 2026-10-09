@@ -1,9 +1,11 @@
 /** Settings → Security (partial 114 + section 21's auth wiring): the
- * access-token gate, token reveal/copy/rotate, remote control. */
+ * access-token gate, token reveal/copy/rotate, trusted Tailscale accounts,
+ * remote control. (Settings sync lives in Settings → Devices.) */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
+import { rotatedToast } from "../../../lib/fleet";
 import { toast } from "../../../lib/toast";
 import { InlineConfirm, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
@@ -11,9 +13,15 @@ import type { ScreenProps } from "../SettingsDialog";
 const AUTH_TOKEN_MASK = "••••••••••••••••";
 
 let authTokenCache: string | null = null;
+/** Why the server didn't hand the token over (it only does to this machine
+ * or a caller holding it — not to one signed in with the devices' key). */
+let authTokenWithheld = "";
 async function fetchAuthToken(): Promise<string> {
-  if (authTokenCache === null)
-    authTokenCache = ((await api<{ token?: string }>("/api/settings/auth-token")) || {}).token || "";
+  if (authTokenCache === null) {
+    const r = (await api<{ token?: string | null; reason?: string }>("/api/settings/auth-token")) || {};
+    authTokenCache = r.token || "";
+    authTokenWithheld = r.token == null && r.reason ? r.reason : "";
+  }
   return authTokenCache;
 }
 
@@ -95,138 +103,6 @@ function TailnetTrustRows() {
   );
 }
 
-/** GET /api/settings/sync (backend.web.core.settings_sync.status). */
-interface SyncStatus {
-  enabled: boolean;
-  device: string;
-  joined_from: string;
-  devices: {
-    key: string;
-    label: string;
-    syncing: boolean;
-    last_sync: number | null;
-    withheld: string[];
-    error: string;
-  }[];
-}
-
-/** "Settings sync": share the shareable settings with the other devices
- * (two-way, last edit wins). Turning it on picks where to start from — the
- * device whose settings everyone takes first. */
-function SettingsSyncRows() {
-  const [st, setSt] = useState<SyncStatus | null>(null);
-  const [from, setFrom] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = () =>
-    api<SyncStatus>("/api/settings/sync")
-      .then((r) => setSt(r || null))
-      .catch(() => setSt(null));
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const set = async (body: { enabled: boolean; from?: string }) => {
-    setBusy(true);
-    try {
-      const r = await api<SyncStatus & { adopted?: string[]; withheld?: string[] }>(
-        "/api/settings/sync",
-        { json: body },
-      );
-      setSt(r || null);
-      if (body.enabled && body.from)
-        toast(
-          "Settings sync on — took " +
-            (r?.adopted?.length || 0) +
-            " settings from " +
-            (st?.devices.find((d) => d.key === body.from)?.label || body.from) +
-            (r?.withheld?.length ? " (tokens withheld — pair with its access token to share them)" : ""),
-        );
-      else toast(body.enabled ? "Settings sync on" : "Settings sync off");
-    } catch (e) {
-      toast("Settings sync: " + (e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!st) return null;
-  return (
-    <>
-      <h3 className="set-section-title">Settings sync</h3>
-      <div className="set-row" id="settings-sync-row">
-        <span className="set-label">Share settings with my other devices</span>
-        {st.enabled ? (
-          <div className="settings-sync-on">
-            <ul className="settings-sync-devices">
-              {st.devices.length ? (
-                st.devices.map((d) => (
-                  <li key={d.key}>
-                    <strong>{d.label}</strong>{" "}
-                    <span className="muted">
-                      {d.error
-                        ? d.error
-                        : !d.syncing
-                          ? "sync is off there"
-                          : d.withheld.length
-                            ? "in sync, except tokens (it was paired without this device's access token)"
-                            : "in sync"}
-                    </span>
-                  </li>
-                ))
-              ) : (
-                <li className="muted">No other devices connected right now.</li>
-              )}
-            </ul>
-            <button
-              type="button"
-              className="test-btn"
-              id="settings-sync-off"
-              disabled={busy}
-              onClick={() => void set({ enabled: false })}
-            >
-              Turn off
-            </button>
-          </div>
-        ) : (
-          <div className="settings-sync-off">
-            <select
-              id="settings-sync-from"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              title="Whose settings everyone starts with — pick your longest-used machine"
-            >
-              <option value="">Start from this device's settings</option>
-              {st.devices.map((d) => (
-                <option key={d.key} value={d.key}>
-                  Start from {d.label}'s settings{d.syncing ? " (already syncing)" : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="test-btn"
-              id="settings-sync-on"
-              disabled={busy}
-              onClick={() => void set({ enabled: true, from })}
-            >
-              Turn on
-            </button>
-          </div>
-        )}
-        <span className="set-hint">
-          Ticket sources, GitHub repos, notifications, agent limits, accent and trusted Tailscale
-          accounts stay the same on every device that turns this on — change one anywhere and the
-          others follow within ~30 s (the latest change wins). Paths, ports, the access token, the
-          IDE and signed-in accounts stay per device. Tokens are shared only with devices paired
-          using this device's access token. Turn it on first on the machine whose settings should
-          lead, then on the others starting from it.
-        </span>
-      </div>
-    </>
-  );
-}
-
 export function Security(_: ScreenProps) {
   const s = useSettings();
   const [shown, setShown] = useState(false);
@@ -255,12 +131,15 @@ export function Security(_: ScreenProps) {
     // same response, so only OTHER devices get signed out.
     setRotating(true);
     try {
-      const r = await api<{ token?: string }>("/api/settings/auth-token/rotate", {
-        method: "POST",
-      });
+      const r = await api<{ token?: string | null; rekeyed?: string[]; missed?: string[]; fleet_error?: string }>(
+        "/api/settings/auth-token/rotate",
+        { method: "POST" }
+      );
+      // A caller that isn't this machine (or doesn't hold the old token) is
+      // not handed the new one: re-read it on the next Show.
       authTokenCache = r?.token || null;
-      if (shown) setTokenText(authTokenCache || "(none set)");
-      toast("Access token regenerated — other devices must sign in again");
+      if (shown) setTokenText(authTokenCache || "(regenerated — open Security on this computer to see it)");
+      toast(rotatedToast(r), { duration: 10000 });
     } catch (e) {
       toast("Couldn't regenerate the token: " + (e as Error).message);
     } finally {
@@ -327,7 +206,8 @@ export function Security(_: ScreenProps) {
                 return;
               }
               try {
-                setTokenText((await fetchAuthToken()) || "(none set)");
+                const t = await fetchAuthToken();
+                setTokenText(t || (authTokenWithheld ? "(hidden: " + authTokenWithheld + ")" : "(none set)"));
                 setShown(true);
               } catch (e) {
                 toast("Couldn't load the access token: " + (e as Error).message);
@@ -344,7 +224,11 @@ export function Security(_: ScreenProps) {
               try {
                 const t = await fetchAuthToken();
                 if (!t) {
-                  toast("No access token is set");
+                  toast(
+                    authTokenWithheld
+                      ? "The token isn't shown here (" + authTokenWithheld + ") — copy it on this computer"
+                      : "No access token is set"
+                  );
                   return;
                 }
                 const ok = await copyText(t);
@@ -371,8 +255,10 @@ export function Security(_: ScreenProps) {
             id="auth-token-rotate-confirm"
             title="Regenerate the access token?"
             body={
-              "Every other signed-in browser, phone QR code, and paired MindFlock device " +
-              "stops working until it re-authenticates with the new token. This browser " +
+              "Every other signed-in browser and token-paired MindFlock stops working until it " +
+              "signs in with the new token, and your phone must scan the QR again. If this " +
+              "computer is one of your devices, their shared device key is replaced too — they " +
+              "get the new one on their own (one that's offline, when it's back). This browser " +
               "stays signed in."
             }
             confirmLabel={rotating ? "Regenerating…" : "Regenerate"}
@@ -384,15 +270,16 @@ export function Security(_: ScreenProps) {
         <span className="set-hint">
           Enter this on another MindFlock device (its sidebar's "Connect…" button next to this
           device's name) to let it control this one, or at the browser sign-in page when the
-          token gate is on. Regenerate if the token may have leaked — every signed-in device,
-          QR code, and paired device must then re-authenticate with the new token.
+          token gate is on. Regenerate if the token may have leaked — every signed-in browser and
+          token-paired device must then sign in with the new token, your phone must scan the QR
+          again, and your devices (Settings → Devices) move to a new shared key.
         </span>
       </div>
       <TailnetTrustRows />
       <h3 className="set-section-title">Remote control</h3>
       <label
         className="set-row"
-        title="Whether other MindFlock devices on your tailnet may list and drive this device's sessions."
+        title="Whether MindFlock devices you paired by access token may list and drive this device's sessions. Your devices (Settings → Devices) always can."
       >
         <span className="set-label">Allow remote control</span>
         <select
@@ -401,16 +288,18 @@ export function Security(_: ScreenProps) {
           value={remote}
           onChange={(e) => s.saveField("general", "remote_control", e.target.value)}
         >
-          <option value="">Off (default) — other devices cannot control this one</option>
-          <option value="on">On — devices with this device's access token can control it</option>
+          <option value="">Off (default) — only your devices can control this one</option>
+          <option value="on">On — devices paired by token can control it too</option>
         </select>
-        <span className="set-hint">
-          Lets another MindFlock on your Tailscale network show this device's sessions in its
-          sidebar and drive them (terminal, prompts, commits). The controlling device still
-          needs this device's access token.
+        <span className="set-hint" id="remote-control-hint">
+          Other MindFlock devices you paired by token. Your devices (Settings → Devices) can
+          always reach each other. With this on, a MindFlock that holds this device's access
+          token shows its sessions in its sidebar and drives them (terminal, prompts, commits).
+          To cut off one of your own devices, remove it in Settings → Devices.
         </span>
       </label>
-      <SettingsSyncRows />
+      {/* Settings sync moved to Settings → Devices: it only runs between your
+          own devices, so it sits next to adding them. */}
     </>
   );
 }

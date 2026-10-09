@@ -31,6 +31,13 @@ os.environ.setdefault(
     "MINDFLOCK_EXTENSIONS_DIR",
     tempfile.mkdtemp(prefix="mindflock-test-extensions-"),
 )
+# The pipeline's repo root (``state.json``, ``automation_here.json``, the
+# pipeline lock) resolves ``$MINDFLOCK_REPO_ROOT`` first — and the live server
+# exports it into every agent shell, naming the owner's REAL checkout. The
+# ingestion controller reads it once, at server import (before any fixture),
+# so a status read in any TestClient test wrote the real hand-over file. Drop
+# it here, at import, like CI never sets it; tests that need it set their own.
+os.environ.pop("MINDFLOCK_REPO_ROOT", None)
 
 
 @pytest.fixture(autouse=True)
@@ -224,6 +231,23 @@ def _no_tailnet_side_effects(monkeypatch):
     monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)
     monkeypatch.setattr(mobile_announce, "_CACHED_URL", None)
     monkeypatch.setattr(mobile_announce, "_CACHED_AT", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_pipeline_reconcile():
+    """A synced ``github.*``/``ticketing.*`` change reconciles the ticket
+    pipeline :data:`~backend.web.core.settings_hooks.PIPELINE_DEBOUNCE` (5 s)
+    later, on a timer thread — long enough to outlive the test that scheduled
+    it and land its event inside a later test's bus. Cancel it on the way out.
+    Never imports the module (a test that didn't load it can't have a timer)."""
+    yield
+    hooks = sys.modules.get("backend.web.core.settings_hooks")
+    if hooks is None:
+        return
+    with hooks._TIMER_LOCK:
+        if hooks._pipeline_timer is not None:
+            hooks._pipeline_timer.cancel()
+            hooks._pipeline_timer = None
 
 
 @pytest.fixture(autouse=True)

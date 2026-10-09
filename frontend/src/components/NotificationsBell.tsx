@@ -32,6 +32,7 @@ import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../stat
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
+import { deviceEventNote } from "../lib/fleet";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -66,6 +67,8 @@ interface Notif {
   dedupe?: string;
   /** The notify rule that gated it ("run_needs_you" rows point at a needs row). */
   rule?: string;
+  /** A device.* row ("Your devices"): named "Devices", opens Settings → Devices. */
+  device?: boolean;
 }
 
 /** A stage change, said as what happened. */
@@ -87,6 +90,7 @@ export interface NotifRow {
   lead?: string;
   dedupe?: string;
   rule?: string;
+  device?: boolean;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -162,6 +166,15 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     // has no dedupe, and an orchestrator's chatter would bury every row here.
     case "session.message":
       return messageNotif(d as MessageEventData, displayName);
+    // Your devices (no session): a request to join, a join, a removal — and
+    // settings sync pausing itself, which only Settings → Devices can answer.
+    case "device.join_requested":
+    case "device.joined":
+    case "device.removed":
+    case "settings.sync_paused": {
+      const n = deviceEventNote(env.event, d);
+      return n ? { text: n.text, cls: n.cls, device: true } : null;
+    }
     default:
       return null;
   }
@@ -480,6 +493,10 @@ export function NotificationsBell() {
                           setOpen(false);
                           showGroup(n.run);
                         }
+                      } else if (n.device) {
+                        // Approve / Deny, and the roster, are in Settings → Devices.
+                        setOpen(false);
+                        useUi.getState().openDialogFor("settings", "devices");
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -491,7 +508,9 @@ export function NotificationsBell() {
                     }}
                   >
                     <span className="notif-sess">
-                      {n.run && !n.session
+                      {n.device && !n.session
+                        ? "Devices"
+                        : n.run && !n.session
                         ? runLookups.name(n.run) || "Group"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
                           (n.session ? windowName(n.session) : "—")}

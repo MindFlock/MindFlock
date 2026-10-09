@@ -54,6 +54,15 @@
   opacity: 0.7;
 }
 
+/* "yours": one of Your devices (Settings → Devices) — connected through the
+   shared device key, so it has no Disconnect ✕. */
+.device-group .dev-member {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .device-group .dev-forget {
   background: none;
   border: 0;

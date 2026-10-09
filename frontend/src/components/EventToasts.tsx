@@ -27,6 +27,7 @@ import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
+import { deviceEventNote } from "../lib/fleet";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -429,6 +430,25 @@ export function EventToasts() {
               else showGroup(n.run);
             },
             duration: 8000,
+          });
+        })
+      );
+    }
+    // Your devices: someone asking to join is the one that needs you (the
+    // click opens Settings → Devices, where Approve is — after comparing the
+    // code both screens show); a join is news; settings sync pausing itself
+    // stops all syncing until it's answered there. Never for a replayed
+    // backlog: a request from an hour ago has expired, and the bell keeps the
+    // record.
+    for (const name of ["device.join_requested", "device.joined", "settings.sync_paused"]) {
+      unsubs.push(
+        ev.subscribe(name, (env) => {
+          if (isReplay(env)) return;
+          const n = deviceEventNote(env.event, env.data);
+          if (!n?.toast) return;
+          notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
+            onClick: () => useUi.getState().openDialogFor("settings", "devices"),
+            duration: 6000,
           });
         })
       );

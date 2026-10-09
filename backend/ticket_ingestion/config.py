@@ -1,5 +1,6 @@
 """Pipeline configuration loading."""
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -791,6 +792,12 @@ def _merge_layers(raw: dict) -> dict:
         github["issue_repo_settings"] = {
             k: dict(v) for k, v in _gh.issue_repo_settings.items()
         }
+    if github and not _github_automation_here():
+        # Another of the user's devices runs PR review / issue handling (the
+        # settings above follow the person to every device): a pipeline here
+        # for tickets alone must not review the same PRs again.
+        github["enabled"] = False
+        github["issues_enabled"] = False
 
     # --- engine block (settings override the [mindflock] section) --------------
     eng_enabled = _s.resolve_bool(
@@ -1135,6 +1142,57 @@ def _parse_generic_config(
         engine=engine_cfg,
         ticketing_sources=sources,
     )
+
+
+#: Set by the server for the pipeline it starts: whether THIS device runs PR
+#: review / issue handling ("1" / "0"). The server knows which device it is
+#: (its tailnet identity); a pipeline process on its own doesn't, and is
+#: restarted whenever the answer changes.
+AUTOMATION_ENV = "MINDFLOCK_PIPELINE_AUTOMATION"
+
+
+def _github_automation_here() -> bool:
+    """Whether THIS device runs PR review / issue handling: what the server
+    that started this pipeline said (:data:`AUTOMATION_ENV`), else
+    ``settings_hooks.automation_here`` (the synced
+    ``github.automation_device``; a lone device always does). A lone device
+    on any error."""
+    env = (os.environ.get(AUTOMATION_ENV) or "").strip()
+    if env in ("0", "1"):
+        return env == "1"
+    try:
+        from backend.web.core import settings_hooks
+
+        return settings_hooks.automation_here()
+    except Exception:  # noqa: BLE001
+        return True
+
+
+#: Set by the server for the pipeline it starts: whether THIS device is in a
+#: group of the user's devices with at least one other live member ("1" /
+#: "0") — then a PR review / issue ledger that never ran here can't tell
+#: what another member already handled (see :func:`pipeline_in_group`).
+FLEET_ENV = "MINDFLOCK_PIPELINE_FLEET"
+
+
+def fleet_shared_now() -> bool:
+    """Whether this device is in a group of devices with >= 2 live members
+    (itself included), read from the fleet store now. False on any error."""
+    try:
+        from backend.web.core import fleet
+
+        return fleet.in_fleet() and len(fleet.live_members()) >= 2
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pipeline_in_group() -> bool:
+    """:func:`fleet_shared_now` as the server that started this pipeline saw
+    it (:data:`FLEET_ENV`), else read here."""
+    env = (os.environ.get(FLEET_ENV) or "").strip()
+    if env in ("0", "1"):
+        return env == "1"
+    return fleet_shared_now()
 
 
 def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:

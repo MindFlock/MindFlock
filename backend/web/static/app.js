@@ -25644,6 +25644,369 @@ function orderedBars(order, extraDefs = []) {
 	return orderedSections(order, extraDefs.map((b) => b.key)).map((key) => byKey.get(key)).filter((b) => !!b);
 }
 //#endregion
+//#region src/lib/prefs.ts
+var PREF_DEFAULTS = {
+	keymap: {},
+	prompt_presets: [],
+	theme: "",
+	diff_mode: "",
+	diff_base: "",
+	hidden_bars: null,
+	bar_order: [],
+	reduce_motion: null,
+	break_on: null,
+	break_every: null,
+	idle_flock: null,
+	idle_after: null,
+	hints: null
+};
+var PREF_MAP = [
+	{
+		ls: "mf_keymap",
+		field: "keymap",
+		kind: "json-object"
+	},
+	{
+		ls: "mindflock.prompt_presets",
+		field: "prompt_presets",
+		kind: "json-list"
+	},
+	{
+		ls: "cs_theme",
+		field: "theme",
+		kind: "raw",
+		values: ["light", "dark"]
+	},
+	{
+		ls: "cs_diffmode",
+		field: "diff_mode",
+		kind: "raw",
+		values: ["split", "unified"]
+	},
+	{
+		ls: "mf_diffbase",
+		field: "diff_base",
+		kind: "raw",
+		values: ["fork", "head"]
+	},
+	{
+		ls: "mf_hiddenbars",
+		field: "hidden_bars",
+		kind: "json-list"
+	},
+	{
+		ls: "mf_barorder",
+		field: "bar_order",
+		kind: "json-list"
+	},
+	{
+		ls: "mf_reduce_motion",
+		field: "reduce_motion",
+		kind: "json-bool"
+	},
+	{
+		ls: "mf_break_on",
+		field: "break_on",
+		kind: "json-bool"
+	},
+	{
+		ls: "mf_break_every",
+		field: "break_every",
+		kind: "json-number"
+	},
+	{
+		ls: "mf_idle_flock",
+		field: "idle_flock",
+		kind: "json-bool"
+	},
+	{
+		ls: "mf_idle_after",
+		field: "idle_after",
+		kind: "json-number"
+	},
+	{
+		ls: "mf_hints",
+		field: "hints",
+		kind: "json-bool"
+	}
+];
+var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
+var BY_FIELD = new Map(PREF_MAP.map((p) => [p.field, p]));
+var THEME_CHANGED = "mf-theme-changed";
+var SEEDED_KEY = "mf_prefs_seeded";
+function storage() {
+	try {
+		return globalThis.localStorage || null;
+	} catch {
+		return null;
+	}
+}
+function prefFieldFor(lsKey) {
+	return BY_LS.get(lsKey)?.field ?? null;
+}
+function coerce(p, v) {
+	switch (p.kind) {
+		case "json-object": return v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
+		case "json-list": return Array.isArray(v) ? v : void 0;
+		case "json-bool": return typeof v === "boolean" ? v : void 0;
+		case "json-number": return typeof v === "number" && isFinite(v) ? v : void 0;
+		case "raw": return typeof v === "string" && (!p.values || p.values.includes(v)) ? v : void 0;
+	}
+}
+function readLocal(field, kv = storage()) {
+	const p = BY_FIELD.get(field);
+	if (!p || !kv) return void 0;
+	let raw = null;
+	try {
+		raw = kv.getItem(p.ls);
+	} catch {
+		return;
+	}
+	if (raw === null) return void 0;
+	if (p.kind === "raw") return coerce(p, raw);
+	try {
+		return coerce(p, JSON.parse(raw));
+	} catch {
+		return;
+	}
+}
+function readAllLocal(kv = storage()) {
+	const out = {};
+	for (const p of PREF_MAP) {
+		const v = readLocal(p.field, kv);
+		if (v !== void 0) out[p.field] = v;
+	}
+	return out;
+}
+function writeLocal(field, value, kv = storage()) {
+	const p = BY_FIELD.get(field);
+	if (!p || !kv) return;
+	try {
+		if (isUnset(field, value)) kv.removeItem(p.ls);
+		else kv.setItem(p.ls, p.kind === "raw" ? String(value) : JSON.stringify(value));
+	} catch {}
+}
+function isUnset(field, v) {
+	if (v === void 0 || v === null) return true;
+	const p = BY_FIELD.get(field);
+	if (!p) return true;
+	if (coerce(p, v) === void 0) return true;
+	if (field === "keymap") {
+		const km = v;
+		const empty = (o) => !o || typeof o !== "object" || !Object.keys(o).length;
+		return empty(km.keys) && empty(km.chords);
+	}
+	if (field === "hidden_bars") return false;
+	if (Array.isArray(v)) return v.length === 0;
+	if (typeof v === "string") return v === "";
+	return false;
+}
+function same(a, b) {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+function presetKey(name) {
+	return String(name || "").trim().toLowerCase();
+}
+function normalizePresets(list) {
+	const at = /* @__PURE__ */ new Map();
+	const out = [];
+	const dropped = [];
+	for (const p of Array.isArray(list) ? list : []) {
+		if (!p || typeof p.name !== "string") continue;
+		const name = p.name.trim();
+		if (!name) continue;
+		const entry = {
+			...p,
+			name
+		};
+		const k = presetKey(name);
+		const i = at.get(k);
+		if (i === void 0) {
+			at.set(k, out.length);
+			out.push(entry);
+		} else {
+			dropped.push(out[i].name);
+			out[i] = entry;
+		}
+	}
+	return {
+		list: out,
+		dropped
+	};
+}
+function mergePresets(server, local) {
+	const mine = /* @__PURE__ */ new Map();
+	for (const p of normalizePresets(local).list) mine.set(presetKey(p.name), p);
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const p of normalizePresets(server).list) {
+		const k = presetKey(p.name);
+		seen.add(k);
+		out.push(mine.get(k) || p);
+	}
+	for (const [k, p] of mine) if (!seen.has(k)) out.push(p);
+	return out;
+}
+function planBoot(server, local, seeded, dirty = /* @__PURE__ */ new Set()) {
+	const upload = {};
+	const apply = {};
+	for (const p of PREF_MAP) {
+		const f = p.field;
+		const s = server[f];
+		const l = local[f];
+		const localSet = !isUnset(f, l);
+		if (dirty.has(f)) {
+			if (!same(s, l)) upload[f] = l === void 0 ? null : l;
+		} else if (!isUnset(f, s)) {
+			if (f === "prompt_presets" && !seeded && localSet) {
+				const merged = mergePresets(s, l);
+				if (!same(merged, s)) upload[f] = merged;
+				if (!same(merged, l)) apply[f] = merged;
+			} else if (!localSet || !same(s, l)) apply[f] = s;
+		} else if (localSet) {
+			if (seeded) apply[f] = PREF_DEFAULTS[f];
+			else upload[f] = l;
+		}
+	}
+	return {
+		upload,
+		apply
+	};
+}
+var DEBOUNCE_MS = 500;
+var RETRY_MIN_MS = 5e3;
+var RETRY_MAX_MS$1 = 12e4;
+var DIRTY_KEY = "mf_prefs_dirty";
+var pending = /* @__PURE__ */ new Set();
+var gen = /* @__PURE__ */ new Map();
+var timer = null;
+var retryMs = 0;
+var suspended = 0;
+var sender = (body) => api("/api/prefs", { json: body });
+var beacon = (body) => fetch("/api/prefs", {
+	method: "POST",
+	keepalive: true,
+	headers: { "Content-Type": "application/json" },
+	body: JSON.stringify(body)
+}).then((r) => {
+	if (!r.ok) throw new PrefPostError(r.status);
+	return r;
+});
+var PrefPostError = class extends Error {
+	status;
+	constructor(status) {
+		super("/api/prefs -> " + status);
+		this.status = status;
+	}
+};
+var FIELDS = new Set(PREF_MAP.map((p) => p.field));
+function dirtyFields(kv = storage()) {
+	const out = /* @__PURE__ */ new Set();
+	if (!kv) return out;
+	try {
+		const arr = JSON.parse(kv.getItem(DIRTY_KEY) || "[]");
+		if (Array.isArray(arr)) {
+			for (const f of arr) if (FIELDS.has(f)) out.add(f);
+		}
+	} catch {}
+	return out;
+}
+function saveDirty(set, kv) {
+	if (!kv) return;
+	try {
+		if (set.size) kv.setItem(DIRTY_KEY, JSON.stringify([...set].sort()));
+		else kv.removeItem(DIRTY_KEY);
+	} catch {}
+}
+function markDirty(field, kv) {
+	const d = dirtyFields(kv);
+	if (d.has(field)) return;
+	d.add(field);
+	saveDirty(d, kv);
+}
+function settleFields(fields, sentGen = null, kv = storage()) {
+	const d = dirtyFields(kv);
+	let changed = false;
+	for (const f of fields) {
+		if (sentGen && (gen.get(f) || 0) !== (sentGen.get(f) || 0)) continue;
+		if (pending.has(f)) continue;
+		if (d.delete(f)) changed = true;
+	}
+	if (changed) saveDirty(d, kv);
+}
+function writeGens(fields) {
+	const m = /* @__PURE__ */ new Map();
+	for (const f of fields) m.set(f, gen.get(f) || 0);
+	return m;
+}
+function withoutEcho(fn) {
+	suspended++;
+	try {
+		return fn();
+	} finally {
+		suspended--;
+	}
+}
+function pendingFields(kv = storage()) {
+	const out = dirtyFields(kv);
+	for (const f of pending) out.add(f);
+	return out;
+}
+function notePrefWrite(lsKey, kv = storage()) {
+	const field = prefFieldFor(lsKey);
+	if (!field || suspended) return;
+	pending.add(field);
+	gen.set(field, (gen.get(field) || 0) + 1);
+	markDirty(field, kv);
+	retryMs = 0;
+	if (timer) clearTimeout(timer);
+	timer = setTimeout(() => void flushPrefWrites(), DEBOUNCE_MS);
+}
+function permanent(e) {
+	const st = e?.status;
+	return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 409 && st !== 429;
+}
+function bodyFor(fields, kv) {
+	const body = {};
+	for (const f of fields) {
+		const v = readLocal(f, kv);
+		body[f] = v === void 0 ? null : v;
+	}
+	return body;
+}
+async function flushPrefWrites(kv = storage()) {
+	if (timer) clearTimeout(timer);
+	timer = null;
+	const fields = /* @__PURE__ */ new Set([...pending, ...dirtyFields(kv)]);
+	pending.clear();
+	if (!fields.size) return;
+	const sentGen = writeGens(fields);
+	try {
+		await sender(bodyFor(fields, kv));
+	} catch (e) {
+		if (permanent(e)) {
+			settleFields(fields, sentGen, kv);
+			return;
+		}
+		retryMs = Math.min(RETRY_MAX_MS$1, retryMs ? retryMs * 2 : RETRY_MIN_MS);
+		if (!timer) timer = setTimeout(() => void flushPrefWrites(), retryMs);
+		return;
+	}
+	retryMs = 0;
+	settleFields(fields, sentGen, kv);
+}
+function flushPrefsOnHide(kv = storage()) {
+	if (timer) clearTimeout(timer);
+	timer = null;
+	const fields = /* @__PURE__ */ new Set([...pending, ...dirtyFields(kv)]);
+	pending.clear();
+	if (!fields.size) return;
+	const sentGen = writeGens(fields);
+	beacon(bodyFor(fields, kv)).then(() => settleFields(fields, sentGen, kv), (e) => {
+		if (permanent(e)) settleFields(fields, sentGen, kv);
+	});
+}
+//#endregion
 //#region src/state/store.ts
 var SIDEBAR_MIN_W = 260;
 var SIDEBAR_MAX_W = 560;
@@ -25672,6 +26035,7 @@ function save(key, value, stringify = true) {
 	try {
 		localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
 	} catch {}
+	notePrefWrite(key);
 }
 function windowKey(kind, ref = "") {
 	return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref : kind === "ext" ? "\0ext:" + ref : "\0assistant-chat";
@@ -28890,6 +29254,23 @@ function applyStoredAppearance() {
 		else document.documentElement.removeAttribute(dim.attr);
 	}
 }
+function storedAccent() {
+	try {
+		return localStorage.getItem(DIMS.accent.lsKey) || "";
+	} catch {
+		return "";
+	}
+}
+function adoptAccent(name) {
+	const dim = DIMS.accent;
+	if (name) document.documentElement.setAttribute(dim.attr, name);
+	else document.documentElement.removeAttribute(dim.attr);
+	try {
+		if (name) localStorage.setItem(dim.lsKey, name);
+		else localStorage.removeItem(dim.lsKey);
+	} catch {}
+	rethemeAll();
+}
 function current(dim) {
 	return document.documentElement.getAttribute(dim.attr) || "";
 }
@@ -29021,27 +29402,35 @@ var _keyOv = {
 	keys: {},
 	chords: {}
 };
-try {
-	const v = JSON.parse(localStorage.getItem("mf_keymap") || "{}") || {};
-	if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
-	if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
-	let migrated = false;
-	for (const id of RETIRED_KEY_IDS) if (id in _keyOv.keys) {
-		delete _keyOv.keys[id];
-		migrated = true;
-	}
-	Object.keys(_keyOv.keys).forEach((k) => {
-		if (!Array.isArray(_keyOv.keys[k])) {
-			_keyOv.keys[k] = [_keyOv.keys[k]];
+function _loadKeyOv() {
+	_keyOv = {
+		keys: {},
+		chords: {}
+	};
+	try {
+		const v = JSON.parse(localStorage.getItem("mf_keymap") || "{}") || {};
+		if (v.keys && typeof v.keys === "object") _keyOv.keys = v.keys;
+		if (v.chords && typeof v.chords === "object") _keyOv.chords = v.chords;
+		let migrated = false;
+		for (const id of RETIRED_KEY_IDS) if (id in _keyOv.keys) {
+			delete _keyOv.keys[id];
 			migrated = true;
 		}
-	});
-	if (migrated) localStorage.setItem("mf_keymap", JSON.stringify(_keyOv));
-} catch {}
+		Object.keys(_keyOv.keys).forEach((k) => {
+			if (!Array.isArray(_keyOv.keys[k])) {
+				_keyOv.keys[k] = [_keyOv.keys[k]];
+				migrated = true;
+			}
+		});
+		if (migrated) localStorage.setItem("mf_keymap", JSON.stringify(_keyOv));
+	} catch {}
+}
+_loadKeyOv();
 function _saveKeyOv() {
 	try {
 		localStorage.setItem("mf_keymap", JSON.stringify(_keyOv));
 	} catch {}
+	notePrefWrite("mf_keymap");
 }
 var _version = 0;
 var _subs = /* @__PURE__ */ new Set();
@@ -29057,6 +29446,10 @@ function keymapVersion() {
 function _notify() {
 	_version++;
 	_subs.forEach((cb) => cb());
+}
+function reloadKeymap() {
+	_loadKeyOv();
+	_notify();
 }
 function getKeyOverride(id) {
 	return _keyOv.keys[id];
@@ -29497,6 +29890,236 @@ function installKeymap(host) {
 	};
 }
 //#endregion
+//#region src/lib/presets.ts
+var PRESET_STORE_KEY = "mindflock.prompt_presets";
+var BUILTIN_PRESETS = [
+	{
+		name: "Fix failing tests",
+		prompt: "Run the test suite, find the failing tests, and fix the underlying causes. Do not weaken, skip, or delete tests just to make them pass."
+	},
+	{
+		name: "Address PR review comments",
+		prompt: "Look up the open pull request for this branch, read every unresolved review comment, and address each one with a code change (or explain why no change is needed)."
+	},
+	{
+		name: "Write tests for recent changes",
+		prompt: "Inspect the most recent commits and the working tree, then write focused tests covering the changed behavior. Run them and make them pass."
+	},
+	{
+		name: "Refactor for clarity — no behavior change",
+		prompt: "Refactor the code you touch for clarity and simplicity WITHOUT changing behavior. Keep the public API stable and keep all tests green."
+	}
+];
+function loadUserPresets() {
+	try {
+		const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
+		return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string") : [];
+	} catch {
+		return [];
+	}
+}
+var PRESETS_CHANGED = "mf-presets-changed";
+function saveUserPresets(list) {
+	const { list: clean, dropped } = normalizePresets(list);
+	try {
+		localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(clean));
+	} catch {}
+	notePrefWrite(PRESET_STORE_KEY);
+	if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
+	return dropped;
+}
+function upsertUserPreset(name, prompt) {
+	const n = name.trim();
+	const k = presetKey(n);
+	const old = loadUserPresets();
+	const hit = old.find((p) => presetKey(p.name) === k);
+	const list = old.filter((p) => presetKey(p.name) !== k);
+	list.push({
+		name: n,
+		prompt
+	});
+	saveUserPresets(list);
+	return {
+		list,
+		replaced: hit && hit.name.trim() !== n ? hit.name : null
+	};
+}
+function tidyUserPresets() {
+	let raw;
+	try {
+		raw = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(raw)) return [];
+	const { list, dropped } = normalizePresets(raw);
+	if (!dropped.length) return [];
+	saveUserPresets(list);
+	return dropped;
+}
+function findPreset(value) {
+	const m = /^([bu]):([\s\S]*)$/.exec(value || "");
+	if (!m) return null;
+	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
+}
+//#endregion
+//#region src/lib/prefsSync.ts
+function seeded() {
+	try {
+		return localStorage.getItem(SEEDED_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+function markSeeded() {
+	try {
+		localStorage.setItem(SEEDED_KEY, "1");
+	} catch {}
+}
+function applyLive(fields) {
+	const st = {};
+	for (const f of Object.keys(fields)) {
+		const v = fields[f];
+		switch (f) {
+			case "hidden_bars":
+				st.hiddenBars = new Set(Array.isArray(v) ? v : defaultHiddenBars());
+				break;
+			case "bar_order":
+				st.barOrder = Array.isArray(v) ? v : [];
+				break;
+			case "reduce_motion":
+				st.reduceMotion = v === true;
+				break;
+			case "break_on":
+				st.breakReminder = v === true;
+				break;
+			case "break_every":
+				st.breakEveryMin = clampBreakMinutes(typeof v === "number" ? v : BREAK_DEFAULT_MINUTES);
+				break;
+			case "idle_flock":
+				st.idleFlock = v !== false;
+				break;
+			case "idle_after":
+				st.idleFlockAfterMin = clampIdleMinutes(typeof v === "number" ? v : IDLE_DEFAULT_MINUTES);
+				break;
+			case "hints":
+				st.hintsEnabled = v !== false;
+				break;
+			case "keymap":
+				reloadKeymap();
+				break;
+			case "prompt_presets":
+				document.dispatchEvent(new Event(PRESETS_CHANGED));
+				break;
+			case "theme":
+				document.documentElement.classList.toggle("light", v === "light");
+				document.dispatchEvent(new Event(THEME_CHANGED));
+		}
+	}
+	if (Object.keys(st).length) useUi.setState(st);
+}
+function adopt(fields, since = null) {
+	const inFlight = pendingFields();
+	const now = since ? writeGens(since.keys()) : null;
+	const take = {};
+	for (const f of Object.keys(fields)) {
+		if (inFlight.has(f)) continue;
+		if (since && now && (now.get(f) || 0) !== (since.get(f) || 0)) continue;
+		take[f] = fields[f];
+	}
+	withoutEcho(() => {
+		for (const f of Object.keys(take)) writeLocal(f, take[f]);
+	});
+	applyLive(take);
+}
+function reconcileAccent(settings, mayUpload) {
+	if (!settings || typeof settings !== "object") return;
+	const rawUi = settings.ui;
+	const server = String((rawUi && typeof rawUi === "object" ? rawUi : {}).accent ?? "");
+	const local = storedAccent();
+	if (server === local) return;
+	if (!server && local && mayUpload) {
+		api("/api/settings", { json: { ui: { accent: local } } }).catch(() => {});
+		return;
+	}
+	adoptAccent(server);
+}
+var pulling = null;
+var queued = null;
+var ALL_FIELDS = PREF_MAP.map((p) => p.field);
+function pullPrefs() {
+	if (pulling) {
+		if (!queued) queued = pulling.catch(() => {}).then(() => {
+			queued = null;
+			return pullPrefs();
+		});
+		return queued;
+	}
+	pulling = (async () => {
+		try {
+			const dropped = tidyUserPresets();
+			if (dropped.length) toast("Saved prompts are one per name (ignoring case) — kept the newer of " + dropped.map((n) => "“" + n + "”").join(", "));
+			let server;
+			const unsent = pendingFields();
+			const gens = writeGens(unsent);
+			const started = writeGens(ALL_FIELDS);
+			try {
+				server = await api("/api/prefs") || {};
+			} catch {
+				return;
+			}
+			const wasSeeded = seeded();
+			const plan = planBoot(server, readAllLocal(), wasSeeded, pendingFields());
+			if (Object.keys(plan.upload).length) try {
+				await api("/api/prefs", { json: plan.upload });
+			} catch {
+				if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+				if (dirtyFields().size) flushPrefWrites();
+				return;
+			}
+			settleFields(unsent, gens);
+			if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+			markSeeded();
+			try {
+				reconcileAccent((await api("/api/settings"))?.settings, !wasSeeded);
+			} catch {}
+		} finally {
+			pulling = null;
+		}
+	})();
+	return pulling;
+}
+var installed = false;
+function installPrefsSync() {
+	if (installed) return;
+	installed = true;
+	pullPrefs();
+	if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+		window.addEventListener("pagehide", () => flushPrefsOnHide());
+		if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "hidden") flushPrefsOnHide();
+		});
+	}
+	const ev = window.mindflock?.events;
+	if (!ev) return;
+	let t = null;
+	const repull = () => {
+		if (t) clearTimeout(t);
+		t = setTimeout(() => void pullPrefs(), 300);
+	};
+	ev.subscribe("settings.synced", () => {
+		queryClient.invalidateQueries({ queryKey: ["settings"] });
+		refreshConfig();
+		repull();
+	});
+	let connectedOnce = ev.connected === true;
+	if (typeof ev.onStatus === "function") ev.onStatus((status) => {
+		if (status !== "connected") return;
+		if (connectedOnce) repull();
+		connectedOnce = true;
+	});
+}
+//#endregion
 //#region \0vite/preload-helper.js
 var scriptRel = "modulepreload";
 var assetsURL = function(dep) {
@@ -29604,7 +30227,7 @@ function extError(extId, msg, err) {
 	if (err !== void 0) console.error("[extension " + extId + "] " + msg, err);
 	else console.error("[extension " + extId + "] " + msg);
 }
-function errText(err) {
+function errText$1(err) {
 	return String(err?.message || err);
 }
 function getRecord(ext) {
@@ -29667,7 +30290,7 @@ function activateExtension(ext) {
 			bump();
 		} catch (err) {
 			rec.status = "error";
-			rec.error = errText(err);
+			rec.error = errText$1(err);
 			extError(ext.id, "activation failed", err);
 			toast("Extension " + (ext.label || ext.id) + " failed: " + rec.error);
 			drainRegistrations(rec);
@@ -29945,7 +30568,7 @@ async function startRuntime(rec, key, runtime) {
 	try {
 		runtime.cleanup = renderer(makeSurfaceHost(liveRec, key, runtime));
 	} catch (err) {
-		runtime.error = errText(err);
+		runtime.error = errText$1(err);
 		extError(rec.ext.id, "surface " + runtime.surfaceId + " failed to render", err);
 	}
 	bump();
@@ -31784,6 +32407,334 @@ function showGroup(runId) {
 	else selectSession(to.row);
 }
 //#endregion
+//#region src/lib/fleet.ts
+var CODE_ALPHABET = ["0123456789", "ABCDEFGHJKMNPQRSTVWXYZ"].join("");
+function normalizeCode(s) {
+	return (s || "").toUpperCase().replace(/[\s-]+/g, "").replace(/[IL]/g, "1").replace(/O/g, "0").replace(/U/g, "V");
+}
+function formatCode(s) {
+	const n = normalizeCode(s);
+	return n.length === 8 ? n.slice(0, 4) + "-" + n.slice(4) : n;
+}
+function plausibleCode(s) {
+	const n = normalizeCode(s);
+	return n.length === 8 && [...n].every((ch) => CODE_ALPHABET.includes(ch));
+}
+function fmtCountdown(expiresAt, nowSec = Date.now() / 1e3) {
+	const left = Math.max(0, Math.floor(expiresAt - nowSec));
+	return Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0");
+}
+function liveInvite(st, nowSec = Date.now() / 1e3) {
+	const live = (st?.invites || []).filter((i) => i.expires_at > nowSec);
+	return live.length ? live.reduce((a, b) => b.expires_at > a.expires_at ? b : a) : null;
+}
+function memberStatus(m, selfVersion) {
+	if (m.self) return "this device";
+	if (m.error) return m.error;
+	if (!m.reachable) return "offline";
+	if (!m.same_fleet) return "hasn't picked up the change yet";
+	if (selfVersion && m.version && m.version !== selfVersion) return "runs " + m.version + " — this one runs " + selfVersion + "; update both to the same version";
+	return "online";
+}
+function candidateBlocker(c) {
+	if (!c.reachable) return "offline";
+	if (!c.fleet_proto) return "update MindFlock on " + (c.host || c.device) + " to add it";
+	return "";
+}
+function candidateNote(c) {
+	const bits = [];
+	if (c.version) bits.push(c.version);
+	if (c.in_fleet && !c.same_fleet) bits.push("already one of another set of devices");
+	if (c.has_token) bits.push("paired");
+	return bits.join(" · ");
+}
+function joinLine(j) {
+	if (!j) return "";
+	const host = j.host || j.device;
+	switch (j.state) {
+		case "waiting": return "Waiting for approval on " + host + (j.code ? " — code " + j.code : "");
+		case "joining": return "Joining " + host + "…";
+		case "joined": return "Joined " + host + ".";
+		case "denied": return host + " said no.";
+		case "expired": return "The request to " + host + " expired — ask again.";
+		case "error": return j.error || "Couldn't join " + host + ".";
+		default: return "";
+	}
+}
+function syncDeviceLine(d) {
+	if (d.error) return d.error;
+	if (!d.syncing) return "sync is off there";
+	if (!d.last_sync) return "waiting for the first sync";
+	return "in sync · " + relTime(d.last_sync);
+}
+function syncLabel(path, sync) {
+	const hit = sync?.syncable?.find((s) => s.path === path)?.label;
+	if (hit) return hit;
+	const hash = path.indexOf("#");
+	if (hash > 0) {
+		const base = path.slice(0, hash);
+		const id = path.slice(hash + 1);
+		return (sync?.syncable?.find((s) => s.path === base)?.label || base) + ": " + id;
+	}
+	return path;
+}
+function pinChoices(sync) {
+	const pinned = new Set(sync?.pinned || []);
+	const groups = /* @__PURE__ */ new Map();
+	for (const s of sync?.syncable || []) {
+		if (pinned.has(s.path)) continue;
+		const g = s.group || "Other";
+		if (!groups.has(g)) groups.set(g, []);
+		groups.get(g).push({
+			path: s.path,
+			label: s.label || s.path
+		});
+	}
+	return [...groups].map(([group, items]) => ({
+		group,
+		items
+	}));
+}
+function sentence(s) {
+	return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+var SYNC_PAUSED_NOTE = "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Devices.";
+function deviceEventNote(event, data) {
+	const d = data || {};
+	const host = String(d.host || d.device || "A device");
+	const code = String(d.code || "");
+	switch (event) {
+		case "device.join_requested": return {
+			text: String(d.detail || "") || host + " wants to join" + (code ? " · code " + code : ""),
+			cls: "n-warn",
+			toast: host + " wants to join your devices" + (code ? " — code " + code : "")
+		};
+		case "device.joined": {
+			const detail = String(d.detail || "");
+			if (d.via) {
+				const via = String(d.via);
+				return {
+					text: /^joined /.test(detail) ? "This device " + detail : /^added /.test(detail) ? "This device was " + detail : detail || "This device joined " + via + "'s devices",
+					cls: "n-done",
+					toast: ""
+				};
+			}
+			return {
+				text: detail || host + " joined your devices",
+				cls: "n-done",
+				toast: host + " joined your devices"
+			};
+		}
+		case "device.removed": return {
+			text: sentence(String(d.detail || "")) || host + " is no longer one of your devices",
+			cls: "n-info",
+			toast: ""
+		};
+		case "settings.sync_paused": return {
+			text: SYNC_PAUSED_NOTE,
+			cls: "n-warn",
+			toast: SYNC_PAUSED_NOTE
+		};
+		default: return null;
+	}
+}
+function joinSettingsNote(host) {
+	if (!host) return "This computer takes the other computer's shared settings where it has them; your own stay where it has none.";
+	return "This computer takes " + host + "'s shared settings where " + host + " has them; your own stay where it has none.";
+}
+function addPairedNote(host) {
+	return (host || "The other computer") + " takes this computer's shared settings where this one has them; its own stay where this one has none.";
+}
+function joinableCandidates(candidates) {
+	return (candidates || []).filter((c) => !c.member);
+}
+function pasteJoinBody(text, candidates, openFor) {
+	const t = (text || "").trim();
+	if (!t) return {
+		body: null,
+		error: ""
+	};
+	if (!plausibleCode(t)) return {
+		body: { text: t },
+		error: ""
+	};
+	const joinable = joinableCandidates(candidates).filter((c) => !candidateBlocker(c));
+	const device = (openFor && joinable.some((c) => c.device === openFor) ? openFor : "") || (joinable.length === 1 ? joinable[0].device : "");
+	if (device) return {
+		body: {
+			text: t,
+			device
+		},
+		error: ""
+	};
+	return {
+		body: null,
+		error: joinable.length ? "That's just a code — use Enter code next to the computer that showed it, or paste the whole command." : "No other MindFlock can be joined right now — make sure it's running, then Refresh."
+	};
+}
+function admitToast(name, ok, syncError) {
+	const err = typeof syncError === "string" ? syncError.trim() : "";
+	return err ? name + " is one of your devices, but settings sync didn't start here: " + err : ok;
+}
+function tailnetAdvice(host) {
+	return "If " + (host || "it") + " was lost or stolen, also remove it from your tailnet in the Tailscale admin console — that cuts it off everywhere at once, even from devices that are offline now.";
+}
+function removeConfirmText(host) {
+	return host + " stops getting settings sync, sign-in and ticket claims from your other devices: every device still with you gets a new device key (one that's offline right now gets it when it's back). Its own sessions and settings stay on it. " + tailnetAdvice(host);
+}
+var ROTATE_TOKENS_LABEL = "Also replace every device's access token (do this if it was lost or stolen — your phone will need to scan the QR again)";
+function removedToast(host, r, rotateAsked) {
+	const bits = ["Removed " + host];
+	const missed = r?.missed || [];
+	if (missed.length) {
+		const many = missed.length > 1;
+		bits.push(missed.join(", ") + (many ? " were offline — they get" : " was offline — it gets") + " the new key when " + (many ? "they're" : "it's") + " back");
+	}
+	if (rotateAsked) {
+		const failed = r?.rotate_failed || [];
+		if (failed.length) bits.push("couldn't replace the access token on " + failed.join(", ") + " — do it there in Security");
+		else bits.push("access tokens replaced");
+	} else bits.push("access tokens it already has still work");
+	return bits.join(" — ") + ". " + tailnetAdvice(host);
+}
+function clockTime$1(ts, nowSec = Date.now() / 1e3) {
+	const d = /* @__PURE__ */ new Date(ts * 1e3);
+	const n = /* @__PURE__ */ new Date(nowSec * 1e3);
+	const hm = d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+	if (d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()) return hm;
+	return [
+		"Jan",
+		"Feb",
+		"Mar",
+		"Apr",
+		"May",
+		"Jun",
+		"Jul",
+		"Aug",
+		"Sep",
+		"Oct",
+		"Nov",
+		"Dec"
+	][d.getMonth()] + " " + d.getDate() + ", " + hm;
+}
+var REMOVED_SHOWN_S = 1209600;
+function isLeave(r) {
+	return r.left === true || !!r.removed_by && r.removed_by === r.key;
+}
+function removalLines(st, nowSec = Date.now() / 1e3) {
+	const me = st?.self?.key || "";
+	const hostOf = (key, fallback) => key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || st?.removed?.find((r) => r.key === key)?.host || fallback || key;
+	return (st?.removed || []).filter((r) => r && r.key && r.removed_by && r.removed_by !== me && !isLeave(r)).map((r) => ({
+		r,
+		at: Number(r.removed_at ?? r.at ?? 0)
+	})).filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S).sort((a, b) => b.at - a.at).map(({ r, at }) => {
+		const by = hostOf(r.removed_by, r.removed_by_host);
+		const what = r.key === me ? "this device" : r.host || r.key;
+		const when = clockTime$1(at, nowSec);
+		return {
+			key: r.key,
+			text: by + " removed " + what + (when.includes(",") ? " on " : " at ") + when + " — if that wasn't you, remove " + by + " from your tailnet"
+		};
+	});
+}
+function leftLines(st, nowSec = Date.now() / 1e3) {
+	const me = st?.self?.key || "";
+	return (st?.removed || []).filter((r) => r && r.key && r.key !== me && isLeave(r)).map((r) => ({
+		r,
+		at: Number(r.removed_at ?? r.at ?? 0)
+	})).filter(({ at }) => Number.isFinite(at) && at > 0 && nowSec - at < REMOVED_SHOWN_S).sort((a, b) => b.at - a.at).map(({ r, at }) => {
+		const when = clockTime$1(at, nowSec);
+		return {
+			key: r.key,
+			text: (r.host || r.key) + " left your devices" + (when.includes(",") ? " on " : " at ") + when
+		};
+	});
+}
+function readmittedLines(st) {
+	const me = st?.self?.key || "";
+	const hostOf = (key, fallback) => key === me ? "this device" : st?.members?.find((m) => m.key === key)?.host || fallback || key;
+	return (st?.readmitted_elsewhere || []).filter((r) => r && r.key).map((r) => {
+		const host = r.host || r.key;
+		const by = r.by ? hostOf(r.by, r.by_host) : "another of your devices";
+		return {
+			key: r.key,
+			host,
+			text: host + " was added back on " + by + ", but it's still removed on this device — it gets no settings sync, sign-in or ticket claims from here until you allow it."
+		};
+	});
+}
+function keyConflicts(members) {
+	return (members || []).filter((m) => !m.self && (m.key_conflict === true || /different key for your devices/i.test(m.error || "")));
+}
+function rotatedToast(r) {
+	const rekeyed = r?.rekeyed || r?.fleet?.rekeyed || [];
+	const missed = r?.missed || r?.fleet?.missed || [];
+	const rotated = r?.rotated || r?.fleet?.rotated;
+	const failed = r?.rotate_failed || r?.fleet?.rotate_failed || [];
+	const bits = ["Access token regenerated — scan the QR again on your phone; other browsers sign in again"];
+	if (rekeyed.length) bits.push("new device key sent to " + rekeyed.join(", "));
+	if (missed.length) bits.push(missed.join(", ") + (missed.length > 1 ? " get" : " gets") + " the new device key when back online");
+	if (rotated) {
+		if (rotated.length) bits.push("access token replaced on " + rotated.join(", "));
+		const byHand = [...failed, ...missed.filter((k) => !failed.includes(k))];
+		if (byHand.length) bits.push("regenerate the access token on " + byHand.join(", ") + " too (Security there) — " + (byHand.length > 1 ? "theirs still work" : "its old one still works"));
+	}
+	if (r?.fleet_error) bits.push(r.fleet_error);
+	return bits.join(" · ");
+}
+var SYNC_RESUME = {
+	theirs: {
+		keep: "theirs",
+		label: "Use my other devices' settings"
+	},
+	mine: {
+		keep: "mine",
+		label: "Keep this device's"
+	}
+};
+function automationLine(members) {
+	if ((members || []).length < 2) return null;
+	const known = members.filter((m) => typeof m.automation === "boolean");
+	if (!known.length) return null;
+	const on = known.filter((m) => m.automation);
+	const runner = on.length === 1 ? on[0] : null;
+	const here = !!runner?.self;
+	if (here) return {
+		runner,
+		here,
+		text: "This device runs PR review and issue handling for all your devices. To move them, choose Run here in Settings → Devices on the device that should run them.",
+		canMove: false
+	};
+	if (runner) return {
+		runner,
+		here,
+		text: (runner.host || runner.key) + " runs PR review and issue handling for all your devices — your repos and ticket sources are shared, but only one device reviews PRs and picks up issues.",
+		canMove: true
+	};
+	return {
+		runner: null,
+		here: false,
+		text: automationHint(members),
+		canMove: true
+	};
+}
+function automationHint(members) {
+	const known = members.filter((m) => typeof m.automation === "boolean");
+	if (known.length < 2) return "";
+	const on = known.filter((m) => m.automation);
+	if (on.length === 1) return "";
+	if (!on.length) return "None of your devices runs PR review and issue handling — choose Run here on the one that should.";
+	return on.map((m) => m.host || m.key).join(" and ") + " all run PR review and issue handling, so the same PRs get reviewed more than once — choose Run here on the one that should keep it.";
+}
+function unpinReplaces(path, sync) {
+	const hash = path.indexOf("#");
+	if (hash <= 0 || path.slice(0, hash) !== "ticketing.sources") return "";
+	const id = path.slice(hash + 1);
+	const from = sync?.joined_from || "";
+	const leader = sync?.separate?.[path] || (from ? sync?.devices?.find((d) => d.key === from)?.label || from : "");
+	return "This replaces this device's “" + id + "” (and its token) with " + (leader ? leader + "'s" : "the one your other devices have under that id") + ". To keep both, give one of them a different id in Settings → Tickets instead.";
+}
+//#endregion
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -31877,6 +32828,17 @@ function notifFromEvent(env) {
 			cls: "n-warn"
 		};
 		case "session.message": return messageNotif(d, displayName);
+		case "device.join_requested":
+		case "device.joined":
+		case "device.removed":
+		case "settings.sync_paused": {
+			const n = deviceEventNote(env.event, d);
+			return n ? {
+				text: n.text,
+				cls: n.cls,
+				device: true
+			} : null;
+		}
 		default: return null;
 	}
 }
@@ -32146,6 +33108,9 @@ function NotificationsBell() {
 								setOpen(false);
 								showGroup(n.run);
 							}
+						} else if (n.device) {
+							setOpen(false);
+							useUi.getState().openDialogFor("settings", "devices");
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -32154,7 +33119,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -32424,6 +33389,19 @@ function EventToasts() {
 				duration: 8e3
 			});
 		}));
+		for (const name of [
+			"device.join_requested",
+			"device.joined",
+			"settings.sync_paused"
+		]) unsubs.push(ev.subscribe(name, (env) => {
+			if (isReplay(env)) return;
+			const n = deviceEventNote(env.event, env.data);
+			if (!n?.toast) return;
+			notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
+				onClick: () => useUi.getState().openDialogFor("settings", "devices"),
+				duration: 6e3
+			});
+		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
 			clearClarify(env.session);
@@ -32482,6 +33460,15 @@ function TopBar() {
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
+		const onTheme = () => {
+			setLight(document.documentElement.classList.contains("light"));
+			rethemeAll();
+			redrawFavicon();
+		};
+		document.addEventListener(THEME_CHANGED, onTheme);
+		return () => document.removeEventListener(THEME_CHANGED, onTheme);
+	}, []);
+	(0, import_react.useEffect)(() => {
 		if (!mac) return;
 		let live = true;
 		isFullScreen().then((f) => {
@@ -32512,6 +33499,7 @@ function TopBar() {
 		try {
 			localStorage.setItem("cs_theme", next ? "light" : "dark");
 		} catch {}
+		notePrefWrite("cs_theme");
 		applyTheme(next);
 		rethemeAll();
 		redrawFavicon();
@@ -32970,6 +33958,29 @@ function VoiceInput() {
 		className: caption == null ? "hidden" : "",
 		children: caption || ""
 	})] });
+}
+//#endregion
+//#region src/lib/devices.ts
+function devicePath(device, path) {
+	return device ? `/api/devices/${encodeURIComponent(device)}/fwd${path}` : path;
+}
+function deviceApi(device) {
+	return (path, opts) => api(devicePath(device, path), opts);
+}
+function deviceTitle(device, title) {
+	return device ? `${device}::${title}` : title;
+}
+function startableDevices(resp) {
+	return (resp?.devices || []).filter((d) => d.connected && !!d.device);
+}
+function deviceLabel(d, all, selfHost = "") {
+	const key = d.device;
+	const host = d.host || "";
+	if (!host) return key;
+	return host === selfHost || all.filter((o) => (o.host || "") === host).length > 1 ? key : host;
+}
+function canDisconnect(d) {
+	return !!d.has_token && !d.member;
 }
 //#endregion
 //#region src/components/sidebar/rowDnd.ts
@@ -34813,47 +35824,6 @@ async function pastePrompt(target, running, prompt) {
 	}
 }
 //#endregion
-//#region src/lib/presets.ts
-var PRESET_STORE_KEY = "mindflock.prompt_presets";
-var BUILTIN_PRESETS = [
-	{
-		name: "Fix failing tests",
-		prompt: "Run the test suite, find the failing tests, and fix the underlying causes. Do not weaken, skip, or delete tests just to make them pass."
-	},
-	{
-		name: "Address PR review comments",
-		prompt: "Look up the open pull request for this branch, read every unresolved review comment, and address each one with a code change (or explain why no change is needed)."
-	},
-	{
-		name: "Write tests for recent changes",
-		prompt: "Inspect the most recent commits and the working tree, then write focused tests covering the changed behavior. Run them and make them pass."
-	},
-	{
-		name: "Refactor for clarity — no behavior change",
-		prompt: "Refactor the code you touch for clarity and simplicity WITHOUT changing behavior. Keep the public API stable and keep all tests green."
-	}
-];
-function loadUserPresets() {
-	try {
-		const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-		return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string") : [];
-	} catch {
-		return [];
-	}
-}
-var PRESETS_CHANGED = "mf-presets-changed";
-function saveUserPresets(list) {
-	try {
-		localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(list));
-	} catch {}
-	if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
-}
-function findPreset(value) {
-	const m = /^([bu]):([\s\S]*)$/.exec(value || "");
-	if (!m) return null;
-	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
-}
-//#endregion
 //#region src/components/sidebar/PromptsMenu.tsx
 function PromptsMenu({ anchor, mine, builtins, targetLabel, onPick, onManage, onClose }) {
 	const entries = [
@@ -36182,6 +37152,23 @@ function SetupChecklist$1(_props) {
 					children: "+ New session"
 				})
 			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "muted setup-hint setup-optional setup-devices",
+			children: [
+				"Already use MindFlock on another computer?",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "setup-open-devices linklike",
+					onClick: (e) => {
+						e.stopPropagation();
+						closeSetup();
+						useUi.getState().openDialogFor("settings", "devices");
+					},
+					children: "Connect it"
+				})
+			]
 		})
 	] });
 }
@@ -36599,8 +37586,9 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										badge,
 										badgeOff,
 										collapsed,
-										title: dev.host + (dev.os ? "  ·  " + dev.os : "") + (dev.ip ? "  ·  " + dev.ip : ""),
-										showForget: !!d.has_token,
+										title: dev.host + (dev.os ? "  ·  " + dev.os : "") + (dev.ip ? "  ·  " + dev.ip : "") + (d.member ? "  ·  One of your devices — remove it in Settings → Devices" : ""),
+										showForget: canDisconnect(dev),
+										member: !!d.member,
 										note,
 										connectBtn,
 										onToggle: () => ui.toggleDeviceCollapsed(dkey),
@@ -36713,6 +37701,11 @@ function DeviceHeader(props) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-name",
 				children: props.label
+			}),
+			props.member && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-member",
+				"aria-label": "One of your devices",
+				children: "yours"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge" + (props.badgeOff ? " off" : ""),
@@ -36895,6 +37888,7 @@ function setDiffMode(m) {
 	try {
 		localStorage.setItem("cs_diffmode", m);
 	} catch {}
+	notePrefWrite("cs_diffmode");
 }
 function getDiffBase() {
 	let b = "fork";
@@ -36907,6 +37901,7 @@ function setDiffBase(b) {
 	try {
 		localStorage.setItem("mf_diffbase", b);
 	} catch {}
+	notePrefWrite("mf_diffbase");
 }
 //#endregion
 //#region src/components/grid/DiffTab.tsx
@@ -54399,7 +55394,7 @@ function SessionPanel({ m, a }) {
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
-var POLL_MS = 2e3;
+var POLL_MS$1 = 2e3;
 var NULL_FP_REFRESH_MS = 2e4;
 var PARTIAL_REFRESH_MS = 3e3;
 function entryFor(title) {
@@ -54626,7 +55621,7 @@ function CodeMap({ title, active }) {
 		if (!entryFor(title).snap) loadSnap();
 		const t = setInterval(() => {
 			if (!document.hidden) poll();
-		}, POLL_MS);
+		}, POLL_MS$1);
 		const onVis = () => {
 			if (!document.hidden) poll();
 		};
@@ -57558,6 +58553,11 @@ function CommandPalette({ host }) {
 			run: () => host.openDoctor()
 		});
 		acts.push({
+			label: "Your devices",
+			hint: "add a computer you own, or join one; settings sync",
+			run: () => ui.openDialogFor("settings", "devices")
+		});
+		acts.push({
 			label: "Peer links…",
 			hint: "invite someone, or join with their code",
 			run: () => ui.openDialogFor("settings", "peer")
@@ -58024,26 +59024,6 @@ function ShortcutsSheet() {
 			]
 		})
 	});
-}
-//#endregion
-//#region src/lib/devices.ts
-function devicePath(device, path) {
-	return device ? `/api/devices/${encodeURIComponent(device)}/fwd${path}` : path;
-}
-function deviceApi(device) {
-	return (path, opts) => api(devicePath(device, path), opts);
-}
-function deviceTitle(device, title) {
-	return device ? `${device}::${title}` : title;
-}
-function startableDevices(resp) {
-	return (resp?.devices || []).filter((d) => d.connected && !!d.device);
-}
-function deviceLabel(d, all, selfHost = "") {
-	const key = d.device;
-	const host = d.host || "";
-	if (!host) return key;
-	return host === selfHost || all.filter((o) => (o.host || "") === host).length > 1 ? key : host;
 }
 //#endregion
 //#region src/lib/fileDropTextarea.ts
@@ -60243,16 +61223,11 @@ function NewSessionDialog() {
 		const text = prompt.trim();
 		const name = (presetName || "").trim();
 		if (!text || !name) return;
-		const list = loadUserPresets().filter((p) => p.name !== name);
-		list.push({
-			name,
-			prompt: text
-		});
-		saveUserPresets(list);
-		setSavedPresets(list);
+		const { replaced } = upsertUserPreset(name, text);
+		setSavedPresets(loadUserPresets());
 		setPresetValue("u:" + name);
 		setPresetName(null);
-		toast(`Saved prompt “${name}”`);
+		toast(replaced ? `Saved prompt “${name}” — it replaced “${replaced}” (names ignore case)` : `Saved prompt “${name}”`);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "new-dialog",
@@ -64613,9 +65588,13 @@ function collectQueued(payloads) {
 }
 function runState(opts) {
 	if (!opts.engineAvailable || !opts.configured) return "unset";
+	if (opts.runsElsewhere) return "elsewhere";
 	if (!opts.switchOn) return "off-switch";
 	if (!opts.engineOn) return "off-engine";
 	return "on";
+}
+function runsOnText(device) {
+	return "Runs on " + (device || "another of your devices");
 }
 function byGroup(items) {
 	const out = [];
@@ -64639,10 +65618,15 @@ function useIngestionStatus() {
 		retry: false
 	});
 }
-function StateChip({ state }) {
+function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip",
 		children: "not set up"
+	});
+	if (state === "elsewhere") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "pr-open-chip",
+		"data-runs-on": device || "",
+		children: runsOnText(device).toLowerCase()
 	});
 	if (state === "on") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip ok",
@@ -64655,6 +65639,26 @@ function StateChip({ state }) {
 }
 function StalledNote({ s }) {
 	const many = s.items.length !== 1;
+	if (s.state === "elsewhere") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-queue-stalled",
+		"data-runs-on": s.runsOn || "",
+		children: [
+			runsOnText(s.runsOn),
+			" — ",
+			s.runsOn || "that device",
+			" starts",
+			" ",
+			many ? "these" : "this one",
+			" on its own; this computer doesn't (to move them here, choose",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run here" }),
+			" in Settings → Devices). You can still start ",
+			many ? "any of them" : "it",
+			" here, with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start now" }),
+			"."
+		]
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-queue-stalled",
 		children: [
@@ -64690,7 +65694,10 @@ function SectionBlock({ s, gotoTab, agents, configuredFor, onStart }) {
 						className: "ik-tab-count",
 						children: s.items.length
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, { state: s.state }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StateChip, {
+						state: s.state,
+						device: s.runsOn
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "test-btn ik-queue-goto",
@@ -64750,6 +65757,8 @@ function QueueTab({ gotoTab }) {
 	const status = useIngestionStatus().data;
 	const engineAvailable = !!status?.available;
 	const engineOn = !!(status?.desired ?? status?.running);
+	const runsElsewhere = status?.automation_here === false;
+	const runsOn = runsElsewhere ? status?.automation_device || "" : "";
 	const agentChoices = useAgentChoices();
 	const s = useSettings();
 	const gh = s.settings.github || {};
@@ -64833,10 +65842,12 @@ function QueueTab({ gotoTab }) {
 				configured: (prsQ.data?.repos || []).length > 0,
 				engineAvailable,
 				engineOn,
-				switchOn: status?.pr_enabled !== false
+				switchOn: status?.pr_enabled !== false,
+				runsElsewhere: runsElsewhere && gh.enabled !== false
 			}),
 			blockedOn: status?.pr_enabled === false ? "Automated PR review" : "Automated ingestion",
 			blockedElsewhere: status?.pr_enabled !== false,
+			runsOn,
 			items: queuedOf("prs", payloads),
 			note: noteFor(prsQ, "PRs")
 		},
@@ -64848,10 +65859,12 @@ function QueueTab({ gotoTab }) {
 				configured: (issuesQ.data?.repos || []).length > 0,
 				engineAvailable,
 				engineOn,
-				switchOn: status?.issues_enabled === true
+				switchOn: status?.issues_enabled === true,
+				runsElsewhere: runsElsewhere && gh.issues_enabled === true
 			}),
 			blockedOn: status?.issues_enabled !== true ? "Automated issue handling" : "Automated ingestion",
 			blockedElsewhere: status?.issues_enabled === true,
+			runsOn,
 			items: queuedOf("issues", payloads),
 			note: noteFor(issuesQ, "issues")
 		}
@@ -68871,8 +69884,13 @@ function Providers(_) {
 //#region src/components/settings/screens/Security.tsx
 var AUTH_TOKEN_MASK = "••••••••••••••••";
 var authTokenCache = null;
+var authTokenWithheld = "";
 async function fetchAuthToken() {
-	if (authTokenCache === null) authTokenCache = (await api("/api/settings/auth-token") || {}).token || "";
+	if (authTokenCache === null) {
+		const r = await api("/api/settings/auth-token") || {};
+		authTokenCache = r.token || "";
+		authTokenWithheld = r.token == null && r.reason ? r.reason : "";
+	}
 	return authTokenCache;
 }
 function TailnetTrustRows() {
@@ -68937,100 +69955,6 @@ function TailnetTrustRows() {
 		]
 	});
 }
-function SettingsSyncRows() {
-	const [st, setSt] = (0, import_react.useState)(null);
-	const [from, setFrom] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const load = () => api("/api/settings/sync").then((r) => setSt(r || null)).catch(() => setSt(null));
-	(0, import_react.useEffect)(() => {
-		load();
-	}, []);
-	const set = async (body) => {
-		setBusy(true);
-		try {
-			const r = await api("/api/settings/sync", { json: body });
-			setSt(r || null);
-			if (body.enabled && body.from) toast("Settings sync on — took " + (r?.adopted?.length || 0) + " settings from " + (st?.devices.find((d) => d.key === body.from)?.label || body.from) + (r?.withheld?.length ? " (tokens withheld — pair with its access token to share them)" : ""));
-			else toast(body.enabled ? "Settings sync on" : "Settings sync off");
-		} catch (e) {
-			toast("Settings sync: " + e.message);
-		} finally {
-			setBusy(false);
-		}
-	};
-	if (!st) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-		className: "set-section-title",
-		children: "Settings sync"
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		id: "settings-sync-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Share settings with my other devices"
-			}),
-			st.enabled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "settings-sync-on",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-					className: "settings-sync-devices",
-					children: st.devices.length ? st.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: d.label }),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: d.error ? d.error : !d.syncing ? "sync is off there" : d.withheld.length ? "in sync, except tokens (it was paired without this device's access token)" : "in sync"
-						})
-					] }, d.key)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-						className: "muted",
-						children: "No other devices connected right now."
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					id: "settings-sync-off",
-					disabled: busy,
-					onClick: () => void set({ enabled: false }),
-					children: "Turn off"
-				})]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "settings-sync-off",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					id: "settings-sync-from",
-					value: from,
-					onChange: (e) => setFrom(e.target.value),
-					title: "Whose settings everyone starts with — pick your longest-used machine",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "",
-						children: "Start from this device's settings"
-					}), st.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-						value: d.key,
-						children: [
-							"Start from ",
-							d.label,
-							"'s settings",
-							d.syncing ? " (already syncing)" : ""
-						]
-					}, d.key))]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					id: "settings-sync-on",
-					disabled: busy,
-					onClick: () => void set({
-						enabled: true,
-						from
-					}),
-					children: "Turn on"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "Ticket sources, GitHub repos, notifications, agent limits, accent and trusted Tailscale accounts stay the same on every device that turns this on — change one anywhere and the others follow within ~30 s (the latest change wins). Paths, ports, the access token, the IDE and signed-in accounts stay per device. Tokens are shared only with devices paired using this device's access token. Turn it on first on the machine whose settings should lead, then on the others starting from it."
-			})
-		]
-	})] });
-}
 function Security(_) {
 	const s = useSettings();
 	const [shown, setShown] = (0, import_react.useState)(false);
@@ -69051,9 +69975,10 @@ function Security(_) {
 	const rotate = async () => {
 		setRotating(true);
 		try {
-			authTokenCache = (await api("/api/settings/auth-token/rotate", { method: "POST" }))?.token || null;
-			if (shown) setTokenText(authTokenCache || "(none set)");
-			toast("Access token regenerated — other devices must sign in again");
+			const r = await api("/api/settings/auth-token/rotate", { method: "POST" });
+			authTokenCache = r?.token || null;
+			if (shown) setTokenText(authTokenCache || "(regenerated — open Security on this computer to see it)");
+			toast(rotatedToast(r), { duration: 1e4 });
 		} catch (e) {
 			toast("Couldn't regenerate the token: " + e.message);
 		} finally {
@@ -69138,7 +70063,8 @@ function Security(_) {
 									return;
 								}
 								try {
-									setTokenText(await fetchAuthToken() || "(none set)");
+									const t = await fetchAuthToken();
+									setTokenText(t || (authTokenWithheld ? "(hidden: " + authTokenWithheld + ")" : "(none set)"));
 									setShown(true);
 								} catch (e) {
 									toast("Couldn't load the access token: " + e.message);
@@ -69154,7 +70080,7 @@ function Security(_) {
 								try {
 									const t = await fetchAuthToken();
 									if (!t) {
-										toast("No access token is set");
+										toast(authTokenWithheld ? "The token isn't shown here (" + authTokenWithheld + ") — copy it on this computer" : "No access token is set");
 										return;
 									}
 									toast(await copyText(t) ? "Access token copied" : "Copy failed — use Show and copy manually");
@@ -69177,7 +70103,7 @@ function Security(_) {
 				confirmRotate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					id: "auth-token-rotate-confirm",
 					title: "Regenerate the access token?",
-					body: "Every other signed-in browser, phone QR code, and paired MindFlock device stops working until it re-authenticates with the new token. This browser stays signed in.",
+					body: "Every other signed-in browser and token-paired MindFlock stops working until it signs in with the new token, and your phone must scan the QR again. If this computer is one of your devices, their shared device key is replaced too — they get the new one on their own (one that's offline, when it's back). This browser stays signed in.",
 					confirmLabel: rotating ? "Regenerating…" : "Regenerate",
 					busy: rotating,
 					onConfirm: () => void rotate(),
@@ -69185,7 +70111,7 @@ function Security(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Enter this on another MindFlock device (its sidebar's \"Connect…\" button next to this device's name) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in device, QR code, and paired device must then re-authenticate with the new token."
+					children: "Enter this on another MindFlock device (its sidebar's \"Connect…\" button next to this device's name) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices (Settings → Devices) move to a new shared key."
 				})
 			]
 		}),
@@ -69196,7 +70122,7 @@ function Security(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
-			title: "Whether other MindFlock devices on your tailnet may list and drive this device's sessions.",
+			title: "Whether MindFlock devices you paired by access token may list and drive this device's sessions. Your devices (Settings → Devices) always can.",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
@@ -69209,19 +70135,961 @@ function Security(_) {
 					onChange: (e) => s.saveField("general", "remote_control", e.target.value),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "",
-						children: "Off (default) — other devices cannot control this one"
+						children: "Off (default) — only your devices can control this one"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: "on",
-						children: "On — devices with this device's access token can control it"
+						children: "On — devices paired by token can control it too"
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Lets another MindFlock on your Tailscale network show this device's sessions in its sidebar and drive them (terminal, prompts, commits). The controlling device still needs this device's access token."
+					id: "remote-control-hint",
+					children: "Other MindFlock devices you paired by token. Your devices (Settings → Devices) can always reach each other. With this on, a MindFlock that holds this device's access token shows its sessions in its sidebar and drives them (terminal, prompts, commits). To cut off one of your own devices, remove it in Settings → Devices."
+				})
+			]
+		})
+	] });
+}
+//#endregion
+//#region src/components/settings/screens/Devices.tsx
+var POLL_MS = 3e3;
+var JOIN_POLL_MS = 2e3;
+function errText(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function Devices(p) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [sync, setSync] = (0, import_react.useState)(null);
+	const [loadErr, setLoadErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [confirm, setConfirm] = (0, import_react.useState)(null);
+	const [codeFor, setCodeFor] = (0, import_react.useState)(null);
+	const [addFor, setAddFor] = (0, import_react.useState)(null);
+	const [code, setCode] = (0, import_react.useState)("");
+	const [pasted, setPasted] = (0, import_react.useState)("");
+	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
+	const [now, setNow] = (0, import_react.useState)(() => Date.now() / 1e3);
+	const loadFleet = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api("/api/fleet"));
+			setLoadErr("");
+		} catch (e) {
+			setLoadErr(errText(e));
+		}
+	}, []);
+	const loadSync = (0, import_react.useCallback)(async () => {
+		try {
+			setSync(await api("/api/settings/sync"));
+		} catch {
+			setSync(null);
+		}
+	}, []);
+	const loadAll = (0, import_react.useCallback)(() => {
+		loadFleet();
+		loadSync();
+	}, [loadFleet, loadSync]);
+	(0, import_react.useEffect)(() => {
+		if (!p.active) return;
+		loadAll();
+		let tick = 0;
+		const t = setInterval(() => {
+			if (document.hidden) return;
+			tick++;
+			loadFleet();
+			if (tick % 2 === 0) loadSync();
+		}, POLL_MS);
+		return () => clearInterval(t);
+	}, [
+		p.active,
+		loadAll,
+		loadFleet,
+		loadSync
+	]);
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		const offs = [
+			"device.join_requested",
+			"device.joined",
+			"device.removed",
+			"settings.synced",
+			"settings.sync_paused"
+		].map((name) => ev.subscribe(name, () => loadAll()));
+		return () => offs.forEach((off) => off());
+	}, [loadAll]);
+	const invite = liveInvite(st, now);
+	const inviteCode = invite?.code || "";
+	(0, import_react.useEffect)(() => {
+		if (!inviteCode) return;
+		const t = setInterval(() => setNow(Date.now() / 1e3), 1e3);
+		return () => clearInterval(t);
+	}, [inviteCode]);
+	const joinState = st?.join?.state || "idle";
+	const lastJoin = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (joinState !== "waiting" && joinState !== "joining") return;
+		const t = setInterval(async () => {
+			try {
+				const j = await api("/api/fleet/request");
+				setSt((prev) => prev ? {
+					...prev,
+					join: j
+				} : prev);
+			} catch {}
+		}, JOIN_POLL_MS);
+		return () => clearInterval(t);
+	}, [joinState]);
+	(0, import_react.useEffect)(() => {
+		const j = st?.join || null;
+		const was = lastJoin.current?.state;
+		lastJoin.current = j;
+		if (!j || !was || was === j.state) return;
+		if (j.state === "joined") {
+			toast("Joined " + (j.host || j.device) + " — your settings now follow your other devices", { duration: 6e3 });
+			fetchSettingsDoc().catch(() => {});
+			refreshConfig();
+			loadAll();
+		} else if (j.state === "denied" || j.state === "expired") toast(joinLine(j));
+	}, [st?.join, loadAll]);
+	const run = async (key, fn, ok) => {
+		setBusy(key);
+		try {
+			await fn();
+			if (ok) toast(ok);
+		} catch (e) {
+			toast(errText(e));
+		} finally {
+			setBusy("");
+			loadAll();
+		}
+	};
+	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+		className: "set-section-title",
+		children: "Your devices"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		children: loadErr ? "Couldn't load your devices: " + loadErr : "Loading…"
+	})] });
+	const self = st.members.find((m) => m.self);
+	const selfHost = st.self.host || st.self.key;
+	const selfVersion = self?.version || "";
+	const others = st.members.filter((m) => !m.self);
+	const candidates = joinableCandidates(st.candidates);
+	const conflicts = keyConflicts(st.members);
+	const removals = removalLines(st);
+	const lefts = leftLines(st);
+	const readmitted = readmittedLines(st);
+	const join = st.join;
+	const joinBusy = join && (join.state === "waiting" || join.state === "joining");
+	const askToJoin = (device) => run("ask:" + device, () => api("/api/fleet/request", { json: { device } }));
+	const cancelJoin = () => run("cancel-join", () => api("/api/fleet/request", { method: "DELETE" }));
+	const joinWithCode = (device) => run("code:" + device, async () => {
+		await api("/api/fleet/join", { json: {
+			device,
+			code: formatCode(code)
+		} });
+		setCode("");
+		setCodeFor(null);
+	});
+	const joinWithText = () => {
+		const { body, error } = pasteJoinBody(pasted, candidates, codeFor);
+		if (!body) {
+			if (error) toast(error);
+			return;
+		}
+		return run("paste", async () => {
+			await api("/api/fleet/join", { json: body });
+			setPasted("");
+		});
+	};
+	const runHere = () => run("run-here", () => api("/api/settings", { json: { github: { automation_device: st.self.key } } }), "PR review and issue handling run on this device now");
+	const auto = st.in_fleet ? automationLine(st.members) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		st.gate_warning && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "devices-gate-warning",
+			role: "alert",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device's access gate is off and it's reachable on your tailnet — anyone there can control it, and through it your other devices. Turn the gate on in Security." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: () => p.gotoScreen("security"),
+				children: "Open Security"
+			})]
+		}),
+		st.stale_key && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "devices-stale-key",
+			role: "alert",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: conflicts.length ? "This device and " + conflicts.map((m) => m.host || m.key).join(" and ") + " hold different keys for your devices — they were set up apart. Rejoin this one from " + (conflicts.length > 1 ? "one of them" : "it") + " to make them one group again." : "This device was removed or its device key changed while it was offline. Ask to rejoin." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "devices-actions",
+				children: (conflicts.length ? conflicts : others).filter((m) => m.reachable).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-rejoin": m.key,
+					disabled: !!busy || !!joinBusy,
+					onClick: () => void askToJoin(m.key),
+					children: [
+						"Ask ",
+						m.host || m.key,
+						" to rejoin"
+					]
+				}, m.key))
+			})]
+		}),
+		!st.stale_key && conflicts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "devices-key-conflict",
+			role: "alert",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				conflicts.map((m) => m.host || m.key).join(" and "),
+				" ",
+				conflicts.length > 1 ? "have" : "has",
+				" a different key for your devices — the two halves were set up apart. Rejoin one from the other: on",
+				" ",
+				conflicts.length > 1 ? "each of them" : conflicts[0].host || conflicts[0].key,
+				", use \"Ask ",
+				selfHost,
+				" to rejoin\" in Settings → Devices."
+			] })
+		}),
+		removals.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "devices-removals",
+			role: "alert",
+			children: [removals.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				"data-removed": r.key,
+				children: r.text
+			}, r.key)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "devices-note",
+				children: "Your devices all hold the same key, so any of them can remove another. If you didn't make this removal, someone else may be using that device — taking it off your tailnet (Tailscale admin console) cuts it off everywhere at once."
+			})]
+		}),
+		readmitted.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "devices-readmitted",
+			role: "alert",
+			children: readmitted.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-row",
+				"data-readmitted": r.key,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: r.text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-allow": r.key,
+					disabled: !!busy,
+					onClick: () => void run("allow:" + r.key, () => api("/api/fleet/members/" + encodeURIComponent(r.key) + "/allow", { method: "POST" }), r.host + " is one of your devices here again"),
+					children: busy === "allow:" + r.key ? "Allowing…" : "Allow it here"
+				})]
+			}, r.key))
+		}),
+		lefts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-left",
+			id: "devices-left",
+			children: lefts.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				"data-left": r.key,
+				children: r.text
+			}, r.key))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Your devices"
+		}),
+		st.in_fleet ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "devices-list",
+			id: "devices-members",
+			children: st.members.map((m) => {
+				const status = memberStatus(m, selfVersion);
+				const warn = !m.self && (!!m.error || m.reachable && !!selfVersion && !!m.version && m.version !== selfVersion);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					"data-member": m.key,
+					className: m.self ? "is-self" : "",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "devices-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "devices-dot" + (m.self || m.reachable ? " on" : ""),
+								"aria-hidden": "true"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "devices-name",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "devices-name-line",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m.host || m.key }), m.automation && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "devices-badge",
+										"data-automation": m.key,
+										title: "This device runs PR review and issue handling for your repos",
+										children: "runs PR review & issues"
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "devices-note" + (warn ? " warn" : ""),
+									children: status
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								"data-remove": m.key,
+								disabled: !!busy || confirm === m.key,
+								onClick: () => {
+									setConfirm(m.key);
+									setRotateTokens(true);
+								},
+								children: m.self ? "Leave" : "Remove"
+							})
+						]
+					}), confirm === m.key && (m.self ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+						id: "devices-leave-confirm",
+						title: "Leave your devices?",
+						body: "This device stops sharing settings, sign-in and ticket claims with the others, and settings sync turns off here. Its own settings stay as they are.",
+						confirmLabel: busy === "leave" ? "Leaving…" : "Leave",
+						busy: busy === "leave",
+						onConfirm: () => void run("leave", async () => {
+							await api("/api/fleet/leave", { method: "POST" });
+							setConfirm(null);
+						}, "This device left your devices"),
+						onCancel: () => setConfirm(null)
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+						id: "devices-remove-confirm",
+						title: "Remove " + (m.host || m.key) + "?",
+						body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							removeConfirmText(m.host || m.key),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "devices-check",
+								id: "devices-remove-rotate",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: rotateTokens,
+									disabled: busy === "remove:" + m.key,
+									onChange: (e) => setRotateTokens(e.target.checked)
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: ROTATE_TOKENS_LABEL })]
+							}),
+							!rotateTokens && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "devices-note warn devices-check-warn",
+								children: [
+									"Without it, any access token ",
+									m.host || m.key,
+									" already holds keeps working on your other devices."
+								]
+							})
+						] }),
+						confirmLabel: busy === "remove:" + m.key ? "Removing…" : "Remove",
+						busy: busy === "remove:" + m.key,
+						onConfirm: () => {
+							const rotate = rotateTokens;
+							run("remove:" + m.key, async () => {
+								const r = await api("/api/fleet/members/" + encodeURIComponent(m.key) + "/remove", { json: { rotate_tokens: rotate } });
+								setConfirm(null);
+								toast(removedToast(m.host || m.key, r, rotate), { duration: 12e3 });
+							});
+						},
+						onCancel: () => setConfirm(null)
+					}))]
+				}, m.key);
+			})
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint set-block-hint",
+			id: "devices-intro",
+			children: "Your devices share settings, sign-in and ticket claims. Add a computer you own:"
+		}),
+		auto && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "devices-run-here",
+			"data-runs-here": auto.here ? "1" : "0",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "devices-run-here-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "PR review and issue handling"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint" + (auto.runner ? "" : " devices-hint-warn"),
+					id: "devices-run-here-hint",
+					children: auto.text
+				})]
+			}), auto.canMove && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-run-here-btn",
+				disabled: !!busy,
+				onClick: () => void runHere(),
+				children: busy === "run-here" ? "Moving…" : "Run here"
+			})]
+		}),
+		st.requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-requests",
+			id: "devices-requests",
+			children: st.requests.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "devices-request",
+				"data-request": r.id,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "devices-name",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: r.host || r.device }), " wants to join your devices"] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "devices-pin",
+									"aria-label": "code " + r.code,
+									children: r.code
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "devices-note",
+									children: [
+										"Check the same code shows on ",
+										r.host || r.device,
+										"."
+									]
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn devices-primary",
+							"data-approve": r.id,
+							disabled: !!busy,
+							onClick: () => void run("approve:" + r.id, async () => {
+								const res = await api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/approve", { method: "POST" });
+								toast(admitToast(r.host || r.device, (r.host || r.device) + " is joining your devices", res?.sync_error), res?.sync_error ? { duration: 8e3 } : void 0);
+							}),
+							children: "Approve"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							"data-deny": r.id,
+							disabled: !!busy,
+							onClick: () => void run("deny:" + r.id, () => api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/deny", { method: "POST" })),
+							children: "Deny"
+						})
+					]
+				})
+			}, r.id))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+			className: "set-subtitle",
+			children: "Add a device"
+		}),
+		invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-invite",
+			id: "devices-invite",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "devices-code",
+					id: "devices-invite-code",
+					children: invite.code
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-command",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						id: "devices-invite-command",
+						children: invite.command
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "devices-invite-copy",
+						onClick: () => copyText(invite.command).then((ok) => toast(ok ? "Command copied" : "Copy failed")),
+						children: "Copy"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [
+						"On the new computer: Settings → Devices → choose ",
+						selfHost,
+						" → Enter code (or run the command). Works once · expires in",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							id: "devices-invite-countdown",
+							children: fmtCountdown(invite.expires_at, now)
+						}),
+						"."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn devices-self-start",
+					id: "devices-invite-cancel",
+					disabled: !!busy,
+					onClick: () => void run("cancel-invite", () => api("/api/fleet/invite", { method: "DELETE" })),
+					children: "Cancel"
+				})
+			]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-add",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-invite-new",
+				disabled: !!busy,
+				onClick: () => void run("invite", async () => {
+					await api("/api/fleet/invite", { json: {} });
+					setNow(Date.now() / 1e3);
+				}),
+				children: busy === "invite" ? "Making a code…" : "Add a device"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Shows a one-time code to type on the other computer."
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-subhead",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
+				children: "Join another computer"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-refresh",
+				disabled: !!busy,
+				onClick: () => void run("refresh", () => api("/api/devices/refresh", { method: "POST" })),
+				children: busy === "refresh" ? "Looking…" : "Refresh"
+			})]
+		}),
+		join && join.state !== "idle" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-join devices-join-" + join.state,
+			id: "devices-join-status",
+			role: "status",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: joinLine(join) }), join.state === "waiting" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-join-cancel",
+				disabled: busy === "cancel-join",
+				onClick: () => void cancelJoin(),
+				children: "Cancel"
+			})]
+		}),
+		candidates.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "devices-list",
+			id: "devices-candidates",
+			children: candidates.map((c) => {
+				const blocker = candidateBlocker(c);
+				const name = c.host || c.device;
+				const note = blocker || candidateNote(c);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					"data-candidate": c.device,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "devices-row",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "devices-dot" + (c.reachable ? " on" : ""),
+									"aria-hidden": "true"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "devices-name",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: name }), note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "devices-note" + (blocker && c.reachable ? " warn" : ""),
+										children: note
+									})]
+								}),
+								!blocker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "devices-actions",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "test-btn",
+											"data-ask": c.device,
+											disabled: !!busy || !!joinBusy,
+											onClick: () => void askToJoin(c.device),
+											children: "Ask to join"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "test-btn",
+											"data-enter-code": c.device,
+											disabled: !!busy,
+											onClick: () => {
+												setCodeFor(codeFor === c.device ? null : c.device);
+												setCode("");
+											},
+											children: "Enter code"
+										}),
+										c.has_token && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "test-btn",
+											"data-add-paired": c.device,
+											disabled: !!busy || addFor === c.device,
+											onClick: () => setAddFor(c.device),
+											children: "Add to my devices"
+										})
+									]
+								})
+							]
+						}),
+						!blocker && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint devices-join-note",
+							"data-join-note": c.device,
+							children: (c.has_token ? "Ask to join or Enter code: " : "") + joinSettingsNote(name)
+						}),
+						!blocker && addFor === c.device && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+							id: "devices-add-confirm",
+							title: "Add " + name + " to your devices?",
+							body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								"data-add-note": c.device,
+								children: addPairedNote(name)
+							}),
+							confirmLabel: busy === "add:" + c.device ? "Adding…" : "Add",
+							busy: busy === "add:" + c.device,
+							onConfirm: () => void run("add:" + c.device, async () => {
+								const res = await api("/api/fleet/add-paired", { json: { device: c.device } });
+								setAddFor(null);
+								toast(admitToast(name, name + " is one of your devices now", res?.sync_error), res?.sync_error ? { duration: 8e3 } : void 0);
+							}),
+							onCancel: () => setAddFor(null)
+						}),
+						codeFor === c.device && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "set-row devices-code-row",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									className: "devices-code-input",
+									"data-code-for": c.device,
+									placeholder: "XXXX-XXXX",
+									autoComplete: "off",
+									spellCheck: false,
+									autoFocus: true,
+									value: code,
+									onChange: (e) => setCode(e.target.value),
+									onKeyDown: (e) => {
+										if (e.key === "Enter" && plausibleCode(code) && !busy) joinWithCode(c.device);
+										if (e.key === "Escape") {
+											e.stopPropagation();
+											setCodeFor(null);
+										}
+									}
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									disabled: !!busy || !plausibleCode(code),
+									onClick: () => void joinWithCode(c.device),
+									children: "Join"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "set-hint",
+									children: [
+										"The code ",
+										name,
+										" shows under Settings → Devices → Add a device."
+									]
+								})
+							]
+						})
+					]
+				}, c.device);
+			})
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "devices-no-candidates",
+			children: "No other MindFlock found on your tailnet. Make sure it's running and signed in to the same Tailscale, then Refresh."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row devices-paste-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "devices-paste",
+					placeholder: "…or paste the code or command from the other computer",
+					autoComplete: "off",
+					spellCheck: false,
+					value: pasted,
+					onChange: (e) => setPasted(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && pasted.trim() && !busy) joinWithText();
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-paste-join",
+					disabled: !!busy || !pasted.trim(),
+					onClick: () => void joinWithText(),
+					children: "Join"
+				}),
+				pasted.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint devices-join-note",
+					id: "devices-paste-note",
+					children: joinSettingsNote("")
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsSyncRows, {})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsSyncRows, {
+			st,
+			sync,
+			setSync,
+			reload: loadSync
+		})
+	] });
+}
+function SettingsSyncRows(props) {
+	const { st, sync, setSync, reload } = props;
+	const [from, setFrom] = (0, import_react.useState)("");
+	const [pin, setPin] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [unpinFor, setUnpinFor] = (0, import_react.useState)(null);
+	if (!sync) return null;
+	const act = async (key, fn, ok) => {
+		setBusy(key);
+		try {
+			const r = await fn();
+			if (r && typeof r === "object" && "enabled" in r) setSync(r);
+			else await reload();
+			if (ok) toast(ok);
+		} catch (e) {
+			toast("Settings sync: " + errText(e));
+		} finally {
+			setBusy("");
+		}
+	};
+	const setEnabled = (body) => act(body.enabled ? "on" : "off", async () => {
+		const r = await api("/api/settings/sync", { json: body });
+		if (body.enabled && body.from) {
+			fetchSettingsDoc().catch(() => {});
+			refreshConfig();
+		}
+		return r;
+	}, body.enabled ? body.from ? "Settings sync on — started from " + (sync.devices.find((d) => d.key === body.from)?.label || body.from) : "Settings sync on" : "Settings sync off");
+	const setPinned = (path, pinned) => act("pin:" + path, () => api("/api/settings/sync/pin", { json: {
+		path,
+		pinned
+	} }));
+	const choices = pinChoices(sync);
+	const canSync = st.in_fleet || sync.in_fleet;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Settings sync"
+		}),
+		sync.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "settings-sync-error",
+			role: "alert",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [sync.error, ". Fix or delete it, and the next sync picks up again."] })
+		}),
+		sync.paused && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "settings-sync-paused",
+			role: "alert",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				sync.paused,
+				". Most of this device's settings went back to their defaults at once — a reset or replaced settings.json, usually — so nothing was sent to your other devices, and nothing comes in from them until you choose. \"",
+				SYNC_RESUME.theirs.label,
+				"\" also replaces anything changed here since."
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "devices-actions",
+				children: (sync.choices?.length ? sync.choices : ["theirs", "mine"]).filter((k) => k in SYNC_RESUME).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn" + (k === "theirs" ? " devices-primary" : ""),
+					"data-sync-resume": k,
+					disabled: !!busy,
+					onClick: () => void act("resume:" + k, async () => {
+						const r = await api("/api/settings/sync/resume", { json: { keep: SYNC_RESUME[k].keep } });
+						if (k === "theirs") {
+							fetchSettingsDoc().catch(() => {});
+							refreshConfig();
+						}
+						return r;
+					}, k === "theirs" ? "Settings sync resumed — this device took your other devices' settings" : "Settings sync resumed — this device's settings now go to the others"),
+					children: SYNC_RESUME[k].label
+				}, k))
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "settings-sync-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Share settings with my other devices"
+				}),
+				!canSync && !sync.enabled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					id: "settings-sync-needs-fleet",
+					children: "Settings sync only talks to your own devices — add or join one above first."
+				}) : sync.enabled ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "settings-sync-on",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "devices-list settings-sync-devices",
+						children: sync.devices.length ? sync.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+							"data-sync-device": d.key,
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "devices-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "devices-dot" + (d.syncing && !d.error ? " on" : ""),
+									"aria-hidden": "true"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "devices-name",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: d.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "devices-note" + (d.error ? " warn" : ""),
+										children: syncDeviceLine(d)
+									})]
+								})]
+							})
+						}, d.key)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+							className: "muted",
+							children: "None of your other devices is online right now."
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "devices-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "settings-sync-now",
+							disabled: !!busy,
+							onClick: () => void act("now", () => api("/api/settings/sync/now", { method: "POST" }), "Synced"),
+							children: busy === "now" ? "Syncing…" : "Sync now"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "settings-sync-off",
+							disabled: !!busy,
+							onClick: () => void setEnabled({ enabled: false }),
+							children: "Turn off"
+						})]
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "settings-sync-off devices-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "settings-sync-from",
+						value: from,
+						onChange: (e) => setFrom(e.target.value),
+						title: "Whose settings everyone starts with — pick your longest-used machine",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "Start from this device's settings"
+						}), sync.devices.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+							value: d.key,
+							children: [
+								"Start from ",
+								d.label,
+								"'s settings",
+								d.syncing ? " (already syncing)" : ""
+							]
+						}, d.key))]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "settings-sync-on",
+						disabled: !!busy,
+						onClick: () => void setEnabled({
+							enabled: true,
+							from
+						}),
+						children: "Turn on"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Ticket sources, GitHub repos, notifications, agent limits, saved prompts, shortcuts, theme, accent, templates and zones stay the same on every one of your devices — change one anywhere and the others follow within seconds (the latest change wins). Repo paths are matched to each computer's own checkout. Ports, the access token, the IDE and signed-in accounts stay per device."
+				})
+			]
+		}),
+		sync.warnings?.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "settings-sync-warnings",
+			children: sync.warnings.map((w, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: w }, i))
+		}),
+		sync.deferred?.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "settings-sync-deferred",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Not applied here"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "devices-plain devices-deferred",
+					children: sync.deferred.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						"data-deferred": d.path,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: syncLabel(d.path, sync) }),
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: ["— ", d.reason]
+							})
+						] })
+					}, d.path))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Install it here and the next sync applies it."
+				})
+			]
+		}),
+		(sync.enabled || sync.pinned?.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "settings-sync-pinned",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Kept different on this device"
+				}),
+				sync.pinned?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "devices-plain",
+					children: sync.pinned.map((path) => {
+						const replaces = unpinReplaces(path, sync);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							"data-pinned": path,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: syncLabel(path, sync) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									"data-unpin": path,
+									disabled: !!busy || unpinFor === path,
+									onClick: () => replaces ? setUnpinFor(path) : void setPinned(path, false),
+									children: "Unpin"
+								}),
+								replaces && unpinFor === path && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+									id: "settings-sync-unpin-confirm",
+									title: "Unpin " + syncLabel(path, sync) + "?",
+									body: replaces,
+									confirmLabel: busy === "pin:" + path ? "Unpinning…" : "Unpin",
+									busy: busy === "pin:" + path,
+									onConfirm: () => {
+										setUnpinFor(null);
+										setPinned(path, false);
+									},
+									onCancel: () => setUnpinFor(null)
+								})
+							]
+						}, path);
+					})
+				}) : null,
+				choices.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "settings-sync-pin-pick",
+						value: pin,
+						onChange: (e) => setPin(e.target.value),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "Choose a setting…"
+						}), choices.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+							label: g.group,
+							children: g.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: it.path,
+								children: it.label
+							}, it.path))
+						}, g.group))]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "settings-sync-pin",
+						disabled: !!busy || !pin,
+						onClick: () => {
+							const path = pin;
+							setPin("");
+							setPinned(path, true);
+						},
+						children: "Keep different"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "A setting kept different keeps this device's own value: it isn't sent to your other devices, and theirs isn't applied here. Unpin it to take the others' value again."
+				})
+			]
+		})
 	] });
 }
 //#endregion
@@ -70895,6 +72763,12 @@ var SCREENS = [
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ide, { ...p })
 	},
 	{
+		key: "devices",
+		label: "Devices",
+		group: "This device",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Devices, { ...p })
+	},
+	{
 		key: "security",
 		label: "Security",
 		group: "This device",
@@ -71253,16 +73127,11 @@ function PromptsPanel() {
 			toast("Enter the prompt text");
 			return;
 		}
-		const list = loadUserPresets().filter((p) => p.name !== n);
-		list.push({
-			name: n,
-			prompt: t
-		});
-		saveUserPresets(list);
-		setSaved(list);
+		const { replaced } = upsertUserPreset(n, t);
+		setSaved(loadUserPresets());
 		setName("");
 		setText("");
-		toast(`Added prompt “${n}”`);
+		toast(replaced ? `Saved prompt “${n}” — it replaced “${replaced}” (names ignore case)` : `Added prompt “${n}”`);
 	};
 	const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "prompts-group-label",
@@ -75984,4 +77853,5 @@ requestAnimationFrame(() => {
 	s.src = "/core/slots.js";
 	document.body.appendChild(s);
 });
+requestAnimationFrame(() => installPrefsSync());
 //#endregion

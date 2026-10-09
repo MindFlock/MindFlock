@@ -82,6 +82,361 @@
 .hint.hint-footer {
   margin: 0 0 8px;
 }
+/* Settings → Devices ("Your devices"). Rows are a dot + name/status stack +
+   buttons pinned right, the same shape as the sidebar's device rows, so a
+   computer reads the same wherever it is listed. */
+
+.devices-list,
+.devices-plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, transparent);
+}
+
+.devices-list > li.is-self {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.devices-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.devices-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.6;
+}
+
+.devices-dot.on {
+  background: var(--green);
+  opacity: 1;
+}
+
+.devices-name {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.devices-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.devices-note.warn {
+  color: var(--gold);
+}
+
+.devices-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.devices-row .test-btn,
+.devices-actions .test-btn {
+  white-space: nowrap;
+}
+
+.devices-primary {
+  border-color: var(--accent);
+}
+
+/* The 6-digit code someone asking to join is shown — what you compare, so
+   big enough to read off the other screen. */
+.devices-pin {
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.devices-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices-request {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Something to fix first: the gate is off, or this device's key is stale. */
+.devices-warn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.devices-warn p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.devices-warn > .test-btn {
+  align-self: flex-start;
+}
+
+.devices-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.set-screen[data-screen="devices"] h4.set-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.devices-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* The invite: the code big enough to read across a desk. */
+.devices-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2, transparent);
+}
+
+.devices-code {
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text);
+  user-select: all;
+}
+
+.devices-command {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.devices-command code {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.devices-self-start {
+  align-self: flex-start;
+}
+
+.devices-join {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.devices-join-waiting,
+.devices-join-joining {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.devices-join-joined {
+  border-color: color-mix(in srgb, var(--green) 55%, var(--border));
+}
+
+.devices-join-error,
+.devices-join-denied,
+.devices-join-expired {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
+.devices-code-row,
+.devices-paste-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.devices-code-row input,
+.devices-paste-row input {
+  flex: 1;
+  min-width: 160px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.devices-code-row input.devices-code-input {
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  max-width: 160px;
+}
+
+.devices-code-row .set-hint {
+  flex-basis: 100%;
+}
+
+.devices-plain > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+/* A kept-separate source's Unpin confirm: its own line under the row. */
+.devices-plain > li > .set-confirm {
+  flex-basis: 100%;
+}
+
+/* Devices that left on their own: plain lines, no warning box. */
+.devices-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px;
+}
+
+.devices-left .set-hint {
+  margin: 0;
+}
+
+/* Name + the "runs PR review & issues" badge on one line. */
+.devices-name-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.devices-badge {
+  font-size: 10.5px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* "PR review and issue handling": label + which device runs them stacked,
+   "Run here" at the right. */
+.devices-run-here-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.devices-hint-warn {
+  color: var(--gold);
+}
+
+/* Remove's "also replace every access token" checkbox, under the copy. */
+.devices-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  font-weight: normal;
+  cursor: pointer;
+}
+
+.devices-check input {
+  margin: 2px 0 0;
+  flex: none;
+}
+
+.devices-check-warn {
+  display: block;
+  margin-top: 4px;
+}
+
+/* "This computer takes <host>'s shared settings…" under each join action. */
+.devices-join-note {
+  display: block;
+}
+
+.devices-paste-row .devices-join-note {
+  flex-basis: 100%;
+}
+
+/* The pickers sit next to .test-btn buttons: the button's text size and
+   corners rather than the taller form-field select from .set-row, and the
+   row stretches both to one height (a select's box is never quite a
+   button's, whatever the padding). */
+.set-row .devices-actions select {
+  padding: 3px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.set-row .devices-actions:has(> select) {
+  align-items: stretch;
+}
 /* The welcome walkthrough card. Rides the shared .modal overlay. */
 
 #welcome-tour {
@@ -1413,7 +1768,8 @@ p.set-hint {
   white-space: nowrap;
 }
 
-/* Security → access-token reveal row */
+/* Devices → Settings sync: the device list on its own line, the buttons
+   (or the start-from picker) wrapping under it. */
 .settings-sync-on,
 .settings-sync-off {
   display: flex;
@@ -1441,6 +1797,7 @@ p.set-hint {
   overflow-wrap: anywhere;
 }
 
+/* Security → access-token reveal row */
 .token-reveal {
   display: flex;
   align-items: center;
@@ -15247,6 +15604,13 @@ body.conn-lost #cs-errors {
   margin-bottom: 8px;
 }
 
+/* "Already use MindFlock on another computer?" under the steps: optional, so
+   the same quiet weight as the folds above rather than a fourth step. */
+.setup-devices {
+  font-size: 12px;
+  margin-top: 10px;
+}
+
 button.linklike {
   background: none;
   border: none;
@@ -19159,6 +19523,15 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   background: transparent;
   color: var(--muted);
   opacity: 0.7;
+}
+
+/* "yours": one of Your devices (Settings → Devices) — connected through the
+   shared device key, so it has no Disconnect ✕. */
+.device-group .dev-member {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .device-group .dev-forget {

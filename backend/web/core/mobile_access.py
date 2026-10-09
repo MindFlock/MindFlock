@@ -149,8 +149,12 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
 
 def _signin_tokens(shared: bool) -> list:
     """The tokens a phone QR carries: this server's own (when the auth gate is
-    on), plus — for the shared link — every paired device's, so whichever
-    device answers the scan finds its own among them. ``[]`` with the gate off.
+    on), then the fleet key when this device is one of "Your devices" (every
+    member accepts it — but the sign-in cookie belongs to the origin scanned,
+    so a per-device QR signs the phone in on THIS device only; the shared
+    link, one origin answered by any member, is what reaches all of them),
+    plus — for the shared link — every paired device's, so whichever device
+    answers the scan finds its own among them. ``[]`` with the gate off.
     """
     try:
         if not _auth.auth_enabled():
@@ -159,6 +163,14 @@ def _signin_tokens(shared: bool) -> list:
     except Exception:  # noqa: BLE001
         return []
     tokens = [own] if own else []
+    try:
+        from backend.web.core import fleet as _fleet
+
+        key = _fleet.fleet_key() if _fleet.in_fleet() else ""
+        if key and key not in tokens:
+            tokens.append(key)
+    except Exception:  # noqa: BLE001 — the own token still works here
+        pass
     if shared:
         try:
             from backend.web.core import remote as _remote
@@ -376,12 +388,15 @@ def qr_svg(data: str):
 _mobile_svg = qr_svg
 
 
-def _mobile_info() -> dict:
+def _mobile_info(include_tokens: bool = True) -> dict:
     """Mobile (/m) URLs + a scannable QR + access token for Settings → Mobile.
 
     Mirrors the startup banner (:func:`_mobile_banner`): the QR encodes the best
     tailnet URL a phone can actually reach (with ``?token=`` baked in when the
     auth gate is on), and is omitted in local-only mode where no phone URL works.
+    Without ``include_tokens`` (a caller that may not see this device's own
+    token — see :func:`backend.web.core.auth.may_see_own_token`) no token goes
+    anywhere: ``token`` is None and the QR is the bare URL.
     """
     srv = _server()
     port = srv._server_port()
@@ -427,8 +442,8 @@ def _mobile_info() -> dict:
     if shared_url:
         note = None  # the shared link works whatever this server is bound to
 
-    tokens = _signin_tokens(bool(shared_url))
-    token = tokens[0] if tokens else ""
+    tokens = _signin_tokens(bool(shared_url)) if include_tokens else []
+    token = (tokens[0] if tokens else "") if include_tokens else None
 
     qr_target = qr_url  # only tailnet URLs are reachable from a phone
     if qr_target and tokens:

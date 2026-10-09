@@ -12,6 +12,7 @@ import { api } from "../../api/client";
 import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
 import { useUi, windowKey, type ViewMode } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { canDisconnect } from "../../lib/devices";
 import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
 import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
@@ -539,9 +540,13 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                           title={
                             dev.host +
                             (dev.os ? "  ·  " + dev.os : "") +
-                            (dev.ip ? "  ·  " + dev.ip : "")
+                            (dev.ip ? "  ·  " + dev.ip : "") +
+                            (d.member ? "  ·  One of your devices — remove it in Settings → Devices" : "")
                           }
-                          showForget={!!d.has_token}
+                          // A member stays connected through the shared device
+                          // key, so forgetting its token disconnects nothing.
+                          showForget={canDisconnect(dev)}
+                          member={!!d.member}
                           note={note}
                           connectBtn={connectBtn}
                           onToggle={() => ui.toggleDeviceCollapsed(dkey)}
@@ -641,12 +646,19 @@ function DeviceHeader(props: {
   title: string;
   showForget: boolean;
   devKey?: string;
+  /** One of "Your devices" (Settings → Devices). */
+  member?: boolean;
   onToggle(): void;
 }) {
   return (
     <li className="device-group" title={props.title} onClick={props.onToggle}>
       <span className="dev-caret">{props.collapsed ? "▸" : "▾"}</span>
       <span className="dev-name">{props.label}</span>
+      {props.member && (
+        <span className="dev-member" aria-label="One of your devices">
+          yours
+        </span>
+      )}
       <span className={"dev-badge" + (props.badgeOff ? " off" : "")}>{props.badge}</span>
       {props.showForget && props.devKey && (
         <button
@@ -680,6 +692,7 @@ function DeviceSection(props: {
   collapsed: boolean;
   title: string;
   showForget: boolean;
+  member?: boolean;
   note: string;
   connectBtn: boolean;
   onToggle(): void;

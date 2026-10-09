@@ -81,13 +81,19 @@ def guard_ledger_dir(path, what: str = "ticket ledger"):
     ledger, which lives in the app CHECKOUT rather than ``~/.mindflock``: under
     pytest, also refuse any directory that contains this source tree (the
     checkout itself, or the ``config.toml`` ancestor a worktree resolves to —
-    the owner's real pipeline ledger)."""
+    the owner's real pipeline ledger) and any OTHER MindFlock checkout (one
+    holding ``backend/ticket_ingestion``): a ``$MINDFLOCK_REPO_ROOT`` the live
+    server exports into agent shells names the owner's main checkout while
+    the suite runs from a sibling worktree."""
     if not path or not under_pytest():
         return path
     guard(str(path), what)
     resolved = os.path.realpath(os.path.expanduser(str(path)))
     here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
-    if resolved != os.sep and _inside(here, resolved):
+    if resolved != os.sep and (
+        _inside(here, resolved)
+        or os.path.isdir(os.path.join(resolved, "backend", "ticket_ingestion"))
+    ):
         raise RealHomeStoreError(
             "refusing to touch the real {} under {} under pytest: point the "
             "module's _REPO_ROOT at a tmp dir (tests/conftest.py does for "

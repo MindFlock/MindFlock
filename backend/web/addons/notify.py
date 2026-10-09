@@ -408,6 +408,23 @@ NOTIFY_RULES: List[dict] = [
         "priority": 4,
         "tags": ["rotating_light"],
     },
+    {
+        # A computer asks to join "Your devices" and waits for someone to
+        # approve it on THIS one. Default-on and loud: nothing happens until a
+        # human answers, and the request expires in 10 minutes. The body is the
+        # emitter's "<host> · code 123 456" — the code is how the user checks
+        # it's the computer in front of them (core.fleet.open_request).
+        "id": "device_join",
+        "label": "A device asks to join your devices",
+        "event": "device.join_requested",
+        "old": None,
+        "new": None,
+        "title": "Device wants to join",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["computer"],
+    },
 ]
 
 #: Rule fields the client never needs: opt-in/opt-out semantics (it gets the
@@ -425,6 +442,13 @@ _INTERNAL_RULE_FIELDS = ("default_enabled", "priority", "tags")
 #: which is why "the agent has finished" is deduped by spending its evidence
 #: instead — see ``server._note_turn_boundary``.
 _DEDUPE_SECONDS = 5.0
+
+
+def _unreadable_response() -> JSONResponse:
+    """409 for a save refused because settings.json exists but can't be read
+    (saving would replace it with defaults — and settings sync would spread
+    "everything deleted" to every device)."""
+    return JSONResponse({"error": settings_store.UNREADABLE_HINT}, status_code=409)
 
 
 def _rule_enabled(rule: dict, muted: set, opted_in: set) -> bool:
@@ -649,9 +673,12 @@ class NotifyAddon(Addon):
                     opted_in.append(rule_id)
                 elif not enabled:
                     opted_in = [e for e in opted_in if e != rule_id]
-            settings_store.update_settings(
-                notifications={"muted_rules": muted, "enabled_rules": opted_in}
-            )
+            try:
+                settings_store.update_settings(
+                    notifications={"muted_rules": muted, "enabled_rules": opted_in}
+                )
+            except settings_store.SettingsUnreadable:
+                return _unreadable_response()
             return JSONResponse({"rules": _rules_with_state()})
 
         @router.get("/ntfy")
@@ -738,7 +765,10 @@ class NotifyAddon(Addon):
                 )
 
             if patch:
-                settings_store.update_settings(notifications=patch)
+                try:
+                    settings_store.update_settings(notifications=patch)
+                except settings_store.SettingsUnreadable:
+                    return _unreadable_response()
             # Channel just came on: the first thing worth pushing to a phone
             # that has never heard from this machine is how to reach it.
             if patch.get("ntfy_enabled") and not stored.ntfy_enabled:

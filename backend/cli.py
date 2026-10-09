@@ -29,6 +29,13 @@ Installed via ``[project.scripts]``::
     mindflock peer share LINK REPO [--branch B] [--program P]   # share ONE folder
     mindflock peer export LINK TARGET_REPO peer/BRANCH          # bring work home
 
+    mindflock devices             # your devices (settings follow you between them)
+    mindflock devices add         # …one-time code for a new computer
+    mindflock devices join DEV [CODE]  # …join DEV's group (no code = ask, wait for approval)
+    mindflock devices cancel      # …stop asking to join
+    mindflock devices approve DEV # …let a computer that asked join (deny DEV refuses)
+    mindflock devices remove DEV  # …take one out (the rest get a new key); leave = this one
+
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
 
@@ -429,6 +436,108 @@ def _build_parser() -> argparse.ArgumentParser:
     p_addr.add_argument(
         "address", metavar="ADDRESS", help="host:port or wss://host/path"
     )
+
+    devices = sub.add_parser(
+        "devices",
+        parents=[server_opts],
+        help="your devices: join your other computers so settings follow you",
+        description=(
+            "Group the computers YOU own (found over Tailscale) so settings "
+            "sync between them. A new computer joins with a code made on one "
+            "already in the group (`devices add` there, `devices join DEVICE "
+            "CODE` here), or by asking (`devices join DEVICE`) and being "
+            "approved there. Needs a running server."
+        ),
+    )
+    dev_sub = devices.add_subparsers(dest="devices_command")
+    d_list = dev_sub.add_parser(
+        "list",
+        parents=[server_opts_nested],
+        help="your devices, pending join requests, other computers you could join",
+    )
+    d_list.add_argument(
+        "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
+    )
+    d_add = dev_sub.add_parser(
+        "add",
+        parents=[server_opts_nested],
+        help="make a one-time code for a new computer (or add DEVICE you paired with a token)",
+    )
+    d_add.add_argument(
+        "device",
+        nargs="?",
+        default=None,
+        metavar="DEVICE",
+        help="add a device this one already holds an access token for — no code needed",
+    )
+    d_add.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="don't ask first (DEVICE takes this computer's shared settings)",
+    )
+    d_join = dev_sub.add_parser(
+        "join",
+        parents=[server_opts_nested],
+        help="join DEVICE's group: with its CODE, or ask and wait for approval there",
+    )
+    d_join.add_argument("device", metavar="DEVICE", help="device name (or host)")
+    # nargs="*" so a code typed with a space ("ABCD EFGH") still arrives whole;
+    # the server normalizes spaces/dashes and look-alike letters away.
+    d_join.add_argument("code", nargs="*", metavar="CODE", help="XXXX-XXXX")
+    d_join.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="don't ask first (this computer takes DEVICE's shared settings)",
+    )
+    dev_sub.add_parser(
+        "cancel",
+        parents=[server_opts_nested],
+        help="stop asking to join (the request is withdrawn on the other device too)",
+    )
+    for name, verb in (("approve", "let"), ("deny", "refuse")):
+        d_ans = dev_sub.add_parser(
+            name,
+            parents=[server_opts_nested],
+            help="%s a computer asking to join (by device name or request id)" % verb,
+        )
+        d_ans.add_argument("request", metavar="DEVICE|ID")
+        if name == "approve":
+            d_ans.add_argument(
+                "--yes",
+                "-y",
+                action="store_true",
+                help="skip the check-the-code confirmation",
+            )
+    d_rm = dev_sub.add_parser(
+        "remove",
+        parents=[server_opts_nested],
+        help=(
+            "take DEVICE out of your devices (the others get a new key, and "
+            "every device's access token is replaced)"
+        ),
+    )
+    d_rm.add_argument(
+        "device",
+        metavar="DEVICE",
+        help="device name or host (this computer's own name = leave)",
+    )
+    d_rm.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+    d_rm.add_argument(
+        "--keep-tokens",
+        action="store_true",
+        help=(
+            "only re-key the group; keep every device's own access token "
+            "(the removed device keeps any it was given)"
+        ),
+    )
+    d_leave = dev_sub.add_parser(
+        "leave",
+        parents=[server_opts_nested],
+        help="take THIS computer out of your devices (settings sync stops)",
+    )
+    d_leave.add_argument("--yes", "-y", action="store_true", help="don't ask first")
 
     mcp = sub.add_parser(
         "mcp",
@@ -1467,10 +1576,16 @@ def _cmd_accounts(args) -> int:
     }.get(getattr(args, "accounts_command", None))
     if handler is None:  # unreachable via argparse, defensive
         return _cmd_accounts_ls(args)
+    from backend.config import settings as settings_store
+
     try:
         return handler(args)
     except client.ClientError as err:
         print("error: %s" % err, file=sys.stderr)
+        return 1
+    except settings_store.SettingsUnreadable:
+        # Saving would replace the broken file with defaults: say what to do.
+        print("error: %s" % settings_store.UNREADABLE_HINT, file=sys.stderr)
         return 1
 
 
@@ -1644,6 +1759,551 @@ def _cmd_peer(args: argparse.Namespace) -> int:
     return 2
 
 
+#: ``devices join DEVICE`` (no code) polls the request this often. The server
+#: drops a request after 10 minutes, so the client gives up a little later —
+#: by then the server has already said "expired".
+_JOIN_POLL_S = 2.0
+_JOIN_WAIT_S = 660.0
+
+#: Join states that end the wait (``waiting``/``joining`` keep it going).
+#: ``idle`` means the request vanished — cancelled from the web UI, or the
+#: server restarted (requests live in memory only).
+_JOIN_DONE = ("joined", "denied", "expired", "error", "idle")
+
+
+def _time_left(ts: object) -> str:
+    """``9m`` / ``40s`` until an epoch timestamp (``0s`` once past)."""
+    try:
+        left = max(0, int(float(ts) - time.time()))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "?"
+    return "%dm" % (left // 60) if left >= 60 else "%ds" % left
+
+
+def _confirm(question: str) -> bool:
+    """A ``[y/N]`` prompt; EOF/Ctrl-C (a script, a closed stdin) is a no."""
+    try:
+        answer = input(question + " [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("", file=sys.stderr)
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _fleet_status(base: str) -> dict:
+    return client.get(base, "/api/fleet") or {}
+
+
+def _match_device(rows: List[dict], needle: str, key_field: str) -> Optional[dict]:
+    """The row whose device key is ``needle``, else the ONE whose host is
+    (case-insensitive) — people type what the UI shows, which is the host."""
+    for row in rows:
+        if str(row.get(key_field) or "") == needle:
+            return row
+    low = needle.lower()
+    hits = [r for r in rows if str(r.get("host") or "").lower() == low]
+    if len(hits) > 1:
+        raise client.ClientError(
+            "%r names %d devices — use the device name: %s"
+            % (needle, len(hits), ", ".join(str(r.get(key_field)) for r in hits))
+        )
+    return hits[0] if hits else None
+
+
+def _pending_request(status: dict, needle: str) -> dict:
+    """A pending join request from its id, device name, host, or a unique id
+    prefix — so ``devices approve laptop`` works without copying an id."""
+    reqs = [r for r in status.get("requests") or [] if isinstance(r, dict)]
+    for r in reqs:
+        if str(r.get("id") or "") == needle:
+            return r
+    hit = _match_device(reqs, needle, "device")
+    if hit is not None:
+        return hit
+    pref = [r for r in reqs if needle and str(r.get("id") or "").startswith(needle)]
+    if len(pref) == 1:
+        return pref[0]
+    if not reqs:
+        raise client.ClientError("no device is asking to join right now")
+    raise client.ClientError(
+        "no pending request matches %r (waiting: %s)"
+        % (
+            needle,
+            ", ".join(str(r.get("device") or r.get("id")) for r in reqs),
+        )
+    )
+
+
+def _print_devices(st: dict) -> None:
+    """The human ``devices list`` view of the GET /api/fleet payload."""
+    me = st.get("self") or {}
+    me_key = str(me.get("key") or "")
+    if st.get("in_fleet"):
+        members = [m for m in st.get("members") or [] if isinstance(m, dict)]
+        print("Your devices (%d):" % len(members))
+        for m in members:
+            if m.get("self"):
+                glyph, state = "✓", "this device"
+            elif not m.get("reachable"):
+                glyph, state = "-", "offline"
+            elif m.get("same_fleet") is False:
+                # Reachable but its hello names another (or no) group: it left
+                # or never got the roster. Sync skips it until it re-joins.
+                glyph, state = "!", "reachable, but not in this group any more"
+            else:
+                glyph, state = "✓", "reachable"
+            if m.get("version") and not m.get("self"):
+                state += " · v%s" % m["version"]
+            if m.get("error"):
+                state += " — %s" % m["error"]
+            if m.get("automation"):
+                state += " · runs PR review & issues"
+            print("  %s %-20s %s" % (glyph, m.get("host") or m.get("key"), state))
+        _print_automation_hint(members)
+        if st.get("stale_key"):
+            print(
+                "! this device's key is out of date (it was removed or re-keyed while "
+                "away) — re-join: mindflock devices join DEVICE"
+            )
+    else:
+        print("This computer isn't joined with your other devices yet.")
+    if st.get("gate_warning"):
+        print(
+            "! the access-token gate is off while serving beyond localhost — "
+            "turn it on (Settings → Security) before joining devices"
+        )
+    for r in st.get("requests") or []:
+        print(
+            "Asking to join: %s · code %s — check %s shows the same code, then: "
+            "mindflock devices approve %s"
+            % (
+                r.get("host") or r.get("device"),
+                r.get("code") or "?",
+                r.get("host") or r.get("device"),
+                r.get("device") or r.get("id"),
+            )
+        )
+    for inv in st.get("invites") or []:
+        print(
+            "Code %s (expires in %s) — on the new computer: %s"
+            % (
+                inv.get("code"),
+                _time_left(inv.get("expires_at")),
+                inv.get("command")
+                or "mindflock devices join %s %s" % (me_key, inv.get("code")),
+            )
+        )
+    join = st.get("join") or {}
+    if join.get("state") == "waiting":
+        print(
+            "Waiting for approval on %s — code %s (stop asking: mindflock devices "
+            "cancel)"
+            % (join.get("host") or join.get("device"), join.get("code") or "?")
+        )
+    elif join.get("state") == "joining":
+        print("Joining %s…" % (join.get("host") or join.get("device")))
+    others = [
+        c
+        for c in st.get("candidates") or []
+        if isinstance(c, dict) and c.get("reachable") and not c.get("member")
+    ]
+    if others:
+        print("Other computers on your tailnet:")
+        for c in others:
+            name = c.get("host") or c.get("device")
+            if not int(c.get("fleet_proto") or 0):
+                hint = "update MindFlock on %s first" % name
+            elif c.get("has_token"):
+                hint = "mindflock devices add %s" % c.get("device")
+            else:
+                hint = "mindflock devices join %s" % c.get("device")
+            print("  %-20s %s" % (name, hint))
+    if not st.get("in_fleet") and not others:
+        print(
+            "Make a code here with `mindflock devices add`, or run MindFlock on your "
+            "other computer (same tailnet) and `mindflock devices join` it."
+        )
+
+
+def _print_automation_hint(members: List[dict]) -> None:
+    """Warn when no member — or more than one — runs PR review and issue
+    handling: both halves act on GitHub, so two devices doing it review every
+    PR twice, and none means nobody does. The group's one runner is the synced
+    ``github.automation_device`` (moved with Run here, never switched off),
+    so this only fires while a member on an older MindFlock decides for
+    itself. Older servers send no ``automation`` field at all, and a member
+    too old to say comes as null: leave those out (say nothing when fewer
+    than two are known)."""
+    members = [m for m in members if isinstance(m.get("automation"), bool)]
+    if len(members) < 2:
+        return
+    on = [str(m.get("host") or m.get("key")) for m in members if m.get("automation")]
+    if not on:
+        print(
+            "! none of your devices runs PR review & issue handling — choose "
+            "Run here (Settings → Devices) on the one that should"
+        )
+    elif len(on) > 1:
+        print(
+            "! %s all run PR review & issue handling — each PR gets reviewed more "
+            "than once; choose Run here (Settings → Devices) on the one that "
+            "should keep it" % ", ".join(on)
+        )
+
+
+def _sync_error(res: object) -> None:
+    """Print the admission's ``sync_error`` (settings sync failed to start
+    here) — the membership stands either way, so the exit code doesn't
+    change."""
+    err = res.get("sync_error") if isinstance(res, dict) else ""
+    if err:
+        print("! settings sync: %s" % err, file=sys.stderr)
+
+
+def _withdraw_join(base: str) -> dict:
+    """``DELETE /api/fleet/request``: stop asking to join — the server also
+    withdraws the request on the device that was asked. It refuses (answers
+    ``joining``) once that device has approved and the join is under way."""
+    return client.delete(base, "/api/fleet/request", timeout=30.0) or {}
+
+
+def _report_join(st: dict) -> int:
+    """Print how a join ended (a ``join_status()`` dict); exit code."""
+    state = st.get("state")
+    host = st.get("host") or st.get("device") or "the other device"
+    if state == "joined":
+        print("joined — this computer is now one of your devices, with %s" % host)
+        err = st.get("sync_error") or st.get("error")
+        if err:
+            # The join stands; only turning settings sync on failed.
+            print("! settings sync: %s" % err, file=sys.stderr)
+        return 0
+    if state == "denied":
+        print("%s said no" % host, file=sys.stderr)
+    elif state == "expired":
+        print(
+            "the request expired before %s approved it — run the command again" % host,
+            file=sys.stderr,
+        )
+    elif state == "idle":
+        print("the join request was cancelled", file=sys.stderr)
+    else:
+        print("error: %s" % (st.get("error") or "join failed"), file=sys.stderr)
+    return 1
+
+
+def _wait_for_join(base: str, host: str) -> int:
+    """Poll our join request until it ends. Ctrl-C (and giving up) withdraws
+    it — on the asked device too, so a late approval can't add a member
+    that never collects its key."""
+    deadline = time.monotonic() + _JOIN_WAIT_S
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(_JOIN_POLL_S)
+            try:
+                res = client.get(base, "/api/fleet/request") or {}
+            except client.ServerNotFound:
+                # A blip (or a restart) of our own server: keep waiting;
+                # a restart loses the request and reads back as "idle".
+                continue
+            if res.get("state") in _JOIN_DONE:
+                return _report_join(res)
+    except KeyboardInterrupt:
+        res = _withdraw_join(base)
+        if res.get("state") == "joining":
+            print(
+                "\n%s already approved — the join is finishing; check it with "
+                "`mindflock devices`" % host,
+                file=sys.stderr,
+            )
+        else:
+            print("\ncancelled — stopped asking %s" % host, file=sys.stderr)
+        return 130
+    if _withdraw_join(base).get("state") == "joining":
+        print(
+            "%s approved just now — the join is finishing; check it with "
+            "`mindflock devices`" % host,
+            file=sys.stderr,
+        )
+        return 1
+    print("gave up waiting for %s to approve" % host, file=sys.stderr)
+    return 1
+
+
+def _add_paired_note(host: str) -> str:
+    """What ``devices add DEVICE`` does to settings — the other way round from
+    joining: DEVICE adopts this computer's group and starts its settings from
+    here (Devices.tsx says the same beside "Add to my devices")."""
+    return (
+        "%s takes this computer's shared settings where this one has them; its "
+        "own stay where this one has none." % host
+    )
+
+
+def _tailnet_advice(host: str) -> str:
+    """The one cut-off removal can't make: every member holds the same key,
+    so a lost or stolen device is only cut off everywhere — even from devices
+    that are offline now — by taking it off the tailnet."""
+    return (
+        "If %s was lost or stolen, also remove it from your tailnet in the "
+        "Tailscale admin console — that cuts it off everywhere at once, even "
+        "from devices that are offline now." % host
+    )
+
+
+def _leave_devices(base: str, args: argparse.Namespace, path: str) -> int:
+    """``devices leave`` (and ``devices remove <this computer>``, which the
+    server treats as a leave): no re-key and no token rotation — say so."""
+    if not args.yes and not _confirm(
+        "Take this computer out of your devices? Settings stop syncing here. "
+        "(Leaving doesn't change your devices' shared key or any access token — "
+        "remove this computer from another of your devices for that.)"
+    ):
+        print("aborted")
+        return 1
+    client.post(base, path, timeout=60.0)
+    print("left your devices — settings sync is off on this computer")
+    return 0
+
+
+def _cmd_devices(args: argparse.Namespace) -> int:
+    """``mindflock devices …`` — thin client over ``/api/fleet`` (Settings →
+    Devices in the UI). The server does the device-to-device talking; the CLI
+    only ever reaches its own server."""
+    base = client.discover(args.host, args.port)
+    cmd = args.devices_command or "list"
+    if cmd == "list":
+        st = _fleet_status(base)
+        if getattr(args, "as_json", False):
+            print(json.dumps(st, indent=2))
+        else:
+            _print_devices(st)
+        return 0
+    if cmd == "add":
+        if args.device:
+            st = _fleet_status(base)
+            cand = _match_device(
+                [c for c in st.get("candidates") or [] if isinstance(c, dict)],
+                args.device,
+                "device",
+            )
+            device = str(cand.get("device")) if cand else args.device
+            host = str((cand or {}).get("host") or device)
+            if cand and cand.get("member"):
+                # A member whose hello lags the group: adding it again would
+                # reset its settings to this computer's.
+                raise client.ClientError("%s is already one of your devices" % host)
+            if not args.yes and not _confirm(
+                "%s Add %s to your devices?" % (_add_paired_note(host), host)
+            ):
+                print("not added")
+                return 1
+            # Talks to the other device and adopts it there: allow for its
+            # settings-sync kick-off, not just one round-trip.
+            res = client.post(
+                base, "/api/fleet/add-paired", {"device": device}, timeout=60.0
+            )
+            print("added %s to your devices" % ((cand or {}).get("host") or device))
+            _sync_error(res)
+            return 0
+        inv = client.post(base, "/api/fleet/invite") or {}
+        code = str(inv.get("code") or "")
+        # The code alone on stdout (scriptable); the instructions on stderr.
+        print(code)
+        print(
+            "On the other computer run:  %s\n(or there: Settings → Devices → "
+            "choose %s → Enter code). Single use, expires in %s."
+            % (
+                inv.get("command")
+                or "mindflock devices join %s %s" % (inv.get("device") or "?", code),
+                inv.get("device") or "this device",
+                _time_left(inv.get("expires_at")),
+            ),
+            file=sys.stderr,
+        )
+        return 0
+    if cmd == "join":
+        st = _fleet_status(base)
+        cand = _match_device(
+            [c for c in st.get("candidates") or [] if isinstance(c, dict)],
+            args.device,
+            "device",
+        )
+        device = str(cand.get("device")) if cand else args.device
+        code = " ".join(args.code).strip()
+        host = (cand or {}).get("host") or device
+        pending = st.get("join") or {}
+        if pending.get("state") in ("waiting", "joining"):
+            asked = {str(pending.get(k) or "").lower() for k in ("device", "host")}
+            same = bool({device.lower(), args.device.lower()} & (asked - {""}))
+            if code or not same:
+                raise client.ClientError(
+                    "already asking %s to join — stop that first: mindflock devices "
+                    "cancel" % (pending.get("host") or pending.get("device"))
+                )
+            # The same request is still out (this command was interrupted, or
+            # it was made in the app): wait for it instead of failing.
+            print(
+                "Still waiting for %s; check it shows code %s  (Ctrl-C to stop asking)"
+                % (pending.get("host") or host, pending.get("code") or "?")
+            )
+            return _wait_for_join(base, pending.get("host") or host)
+        if not args.yes and not _confirm(
+            "This computer takes %s's shared settings where %s has them; your own "
+            "stay where it has none. Join %s's devices?" % (host, host, host)
+        ):
+            print("not joined")
+            return 1
+        if code:
+            # Redeem + adopt + first settings pull happen server-side.
+            res = (
+                client.post(
+                    base,
+                    "/api/fleet/join",
+                    {"device": device, "code": code},
+                    timeout=60.0,
+                )
+                or {}
+            )
+            return _report_join(res)
+        res = (
+            client.post(base, "/api/fleet/request", {"device": device}, timeout=30.0)
+            or {}
+        )
+        if res.get("state") in _JOIN_DONE:
+            return _report_join(res)
+        host = res.get("host") or host
+        print(
+            "Approve on %s; check it shows code %s  (Ctrl-C to stop asking)"
+            % (host, res.get("code") or "?")
+        )
+        return _wait_for_join(base, host)
+    if cmd == "cancel":
+        before = (_fleet_status(base).get("join") or {}).get("state")
+        if before not in ("waiting", "joining"):
+            print("not asking to join anything")
+            return 0
+        res = _withdraw_join(base)
+        if res.get("state") == "joining":
+            print(
+                "too late to cancel — %s already approved; the join is finishing"
+                % (res.get("host") or res.get("device") or "the other device"),
+                file=sys.stderr,
+            )
+            return 1
+        print("stopped asking to join")
+        return 0
+    if cmd in ("approve", "deny"):
+        req = _pending_request(_fleet_status(base), args.request)
+        who = req.get("host") or req.get("device")
+        if cmd == "approve" and not args.yes:
+            # The code is the whole defence against approving a stranger who
+            # asked at the same moment — make the person look at it.
+            if not _confirm(
+                "%s wants to join your devices — code %s. Does %s show the same "
+                "code? Approve?" % (who, req.get("code") or "?", who)
+            ):
+                print(
+                    "not approved (deny it with `mindflock devices deny %s`)"
+                    % (req.get("device") or req.get("id"))
+                )
+                return 1
+        path = "/api/fleet/requests/%s/%s" % (
+            urllib.parse.quote(str(req.get("id") or ""), safe=""),
+            cmd,
+        )
+        # Approving also starts settings sync here (after_admit): allow for
+        # that, not just one round-trip.
+        res = client.post(base, path, timeout=60.0)
+        print(
+            "approved %s — it joins your devices now" % who
+            if cmd == "approve"
+            else "denied %s" % who
+        )
+        _sync_error(res)
+        return 0
+    if cmd == "remove":
+        st = _fleet_status(base)
+        members = [m for m in st.get("members") or [] if isinstance(m, dict)]
+        m = _match_device(members, args.device, "key")
+        if m is None:
+            raise client.ClientError(
+                "%r isn't one of your devices (%s)"
+                % (args.device, ", ".join(str(x.get("key")) for x in members) or "none")
+            )
+        who = m.get("host") or m.get("key")
+        if m.get("self"):
+            # The server answers a self-removal by leaving ({"left": true}):
+            # no new key, no token rotation — ask and report it as a leave.
+            return _leave_devices(
+                base,
+                args,
+                "/api/fleet/members/%s/remove"
+                % urllib.parse.quote(str(m.get("key")), safe=""),
+            )
+        rotate = not args.keep_tokens
+        if not args.yes and not _confirm(
+            "Remove %s from your devices? It stops getting settings and ticket "
+            "claims, your other devices get a new shared key, and %s %s"
+            % (
+                who,
+                (
+                    "every device's own access token is replaced (phones and "
+                    "other places holding one need the new token)."
+                    if rotate
+                    else "access tokens it already holds KEEP working "
+                    "(--keep-tokens)."
+                ),
+                _tailnet_advice(who),
+            )
+        ):
+            print("aborted")
+            return 1
+        res = (
+            client.post(
+                base,
+                "/api/fleet/members/%s/remove"
+                % urllib.parse.quote(str(m.get("key")), safe=""),
+                {"rotate_tokens": rotate},
+                timeout=60.0,
+            )
+            or {}
+        )
+        if res.get("left"):
+            # Matched by host but it was this computer after all.
+            print("left your devices — settings sync is off on this computer")
+            return 0
+        print("removed %s" % who)
+        if res.get("rekeyed"):
+            print("new key sent to: %s" % ", ".join(map(str, res["rekeyed"])))
+        missed = [str(x) for x in res.get("missed") or []]
+        if missed:
+            # Not lost: the others keep the old key a while and hand the new
+            # one over on their next contact with it.
+            print(
+                "%s offline — %s the new key when %s back"
+                % (
+                    ", ".join(missed) + (" were" if len(missed) > 1 else " was"),
+                    "they get" if len(missed) > 1 else "it gets",
+                    "they're" if len(missed) > 1 else "it's",
+                )
+            )
+        if res.get("rotated"):
+            print("new access token on: %s" % ", ".join(map(str, res["rotated"])))
+        if res.get("rotate_failed"):
+            print(
+                "! couldn't replace the access token on %s — do it there "
+                "(Settings → Security)" % ", ".join(map(str, res["rotate_failed"])),
+                file=sys.stderr,
+            )
+        print(_tailnet_advice(who))
+        return 0
+    if cmd == "leave":
+        return _leave_devices(base, args, "/api/fleet/leave")
+    print("error: unknown devices command %r" % cmd, file=sys.stderr)
+    return 2
+
+
 _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "new": _cmd_new,
     "ls": _cmd_ls,
@@ -1654,6 +2314,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "msg": _cmd_msg,
     "inbox": _cmd_inbox,
     "peer": _cmd_peer,
+    "devices": _cmd_devices,
 }
 
 
