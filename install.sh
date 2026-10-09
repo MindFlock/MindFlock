@@ -180,8 +180,10 @@ latest_release_tag() {
     fi
   fi
   if [ -z "$tag" ]; then
+    # Release tags only (vX.Y.Z): `v*` also matches a pre-release or any
+    # other tag someone pushed, and the highest of those is no release.
     tag="$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v*' 2>/dev/null \
-      | head -n1 | sed 's|.*refs/tags/||')"
+      | sed 's|.*refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
   fi
   case "$tag" in v[0-9]*) printf %s "$tag" ;; esac
 }
@@ -255,11 +257,19 @@ PORT_="${MINDFLOCK_PORT:-8765}"
 if [ "${MINDFLOCK_INSTALL_NO_RESTART:-}" != "1" ] \
   && curl -fsS --max-time 2 "http://127.0.0.1:$PORT_/api/remote/hello" >/dev/null 2>&1; then
   say "restarting the MindFlock server on port $PORT_ onto the new version…"
-  MINDFLOCK_PORT="$PORT_" "$MF" restart || say "couldn't restart it — run: $MF restart"
-  if [ -z "$JOIN" ]; then
-    say ""
-    say "Done — the server on http://127.0.0.1:$PORT_ runs the new version."
-    exit 0
+  if MINDFLOCK_PORT="$PORT_" "$MF" restart; then
+    if [ -z "$JOIN" ]; then
+      say ""
+      say "Done — the server on http://127.0.0.1:$PORT_ runs the new version."
+      exit 0
+    fi
+  else
+    say "couldn't restart it — it runs the previous version until you run: $MF restart"
+    if [ -z "$JOIN" ]; then
+      say ""
+      say "Installed. The server on http://127.0.0.1:$PORT_ still runs the previous version."
+      exit 1
+    fi
   fi
 fi
 
