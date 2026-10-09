@@ -8,14 +8,19 @@ uses (:func:`backend.web.core.terminal.pump_pty`).
 
 Deliberately minimal: the session runs in the user's HOME (login is never
 repo-specific) and holds the pane open after the command returns so the result
-stays on screen. It is not tracked as an instance — it's a disposable helper the
-Settings → Providers panel opens and closes.
+stays on screen. It is not tracked as an instance — it's a disposable helper that Setup, the
+doctor's agent-auth row and Settings open and close.
+
+A host without tmux runs the login under a plain PTY instead
+(:mod:`backend.web.core.pty_run`), so signing in never waits on installing tmux
+first.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from typing import Optional, Tuple
 
@@ -35,6 +40,10 @@ def login_session_name(name: str, profile_id: str = "") -> str:
     if profile_id:
         session += "_" + re.sub(r"[^A-Za-z0-9_.-]", "_", profile_id.strip().lower())
     return session
+
+
+def _have_tmux() -> bool:
+    return shutil.which("tmux") is not None
 
 
 def _login_command_for(name: str) -> Optional[str]:
@@ -94,6 +103,9 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             cmd = "%s; %s" % (exports, cmd)
         except Exception as err:  # noqa: BLE001 — a profile quirk must not 500
             return session, str(err)
+    home = os.path.expanduser("~")
+    if not _have_tmux():
+        return session, _ensure_direct(session, cmd, home)
     try:
         if (
             subprocess.run(
@@ -107,7 +119,6 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
             return session, None
     except subprocess.TimeoutExpired:
         return session, "tmux timed out after 10s"
-    home = os.path.expanduser("~")
     # Keep the pane alive after login returns so the user sees success/failure
     # instead of the session vanishing the instant the command exits.
     wrapped = (
@@ -171,8 +182,33 @@ def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional
     return session, None
 
 
+def _ensure_direct(session: str, cmd: str, home: str) -> Optional[str]:
+    """The no-tmux login: ``cmd`` under a plain PTY (reused while it runs).
+    No shell after it — nothing would close one — the transcript stays on
+    screen until the window closes. Returns an error or ``None``."""
+    from backend.web.core import pty_run
+
+    run = pty_run.get(session)
+    if run is not None and run.alive():
+        return None
+    wrapped = (
+        "%s; echo; echo '[mindflock] login command finished — "
+        "you can close this terminal'" % cmd
+    )
+    try:
+        pty_run.start(session, ["sh", "-c", wrapped], home)
+    except Exception as err:  # noqa: BLE001 — surfaced in the terminal
+        return "could not start the login terminal: %s" % err
+    return None
+
+
 def kill_login_session(name: str, profile_id: str = "") -> None:
     """Tear down provider ``name``'s login session (best-effort)."""
+    from backend.web.core import pty_run
+
+    pty_run.kill(login_session_name(name, profile_id))
+    if not _have_tmux():
+        return
     try:
         subprocess.run(
             ["tmux", "kill-session", "-t=" + login_session_name(name, profile_id)],

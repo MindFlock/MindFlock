@@ -14,6 +14,7 @@ import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { InstallMissing, type InstallStep } from "./InstallTerminal";
+import { AgentSignIn, signInTarget } from "./AgentSignIn";
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -23,6 +24,10 @@ export interface DoctorCheckItem {
   status?: "ok" | "info" | "warn" | "fail" | string;
   detail?: string;
   fix?: string;
+  /** The runnable fix (an agent-auth row's declared login command). */
+  cmd?: string;
+  /** The agent provider an agent row is about (drives "Sign in to …"). */
+  provider?: string;
 }
 
 export interface DoctorPayload {
@@ -58,6 +63,27 @@ export function useDoctorWarn() {
 }
 
 let setupAutoShown = false; // auto-open the setup dialog at most once per load
+
+/** The desktop app's first-run hand-off: after installing the engine it opens
+ * the app with `?setup=install`, asking for the Setup dialog on its
+ * Dependencies step (tmux and the agent CLI are still missing — the engine
+ * install can't do them without a terminal). Returns whether it was asked for,
+ * and strips the parameter so a reload doesn't ask again. */
+export function consumeSetupIntent(
+  loc: { search: string; pathname: string; hash: string } = window.location,
+  hist: { replaceState(data: unknown, unused: string, url?: string): void } = window.history
+): boolean {
+  const params = new URLSearchParams(loc.search);
+  if (params.get("setup") !== "install") return false;
+  params.delete("setup");
+  const q = params.toString();
+  try {
+    hist.replaceState(null, "", loc.pathname + (q ? "?" + q : "") + loc.hash);
+  } catch {
+    /* a URL we can't rewrite still opened the dialog */
+  }
+  return true;
+}
 
 /** Should a failing doctor probe pop the first-run checklist at this user?
  *
@@ -109,6 +135,12 @@ export function useDoctorAutoShow() {
   const failing = useDoctorWarnStore((s) => s.failing);
 
   useEffect(() => {
+    // Asked for by the desktop app's first run: open now, whatever the probe
+    // says, and spend the once-per-load latch on it.
+    if (consumeSetupIntent()) {
+      setupAutoShown = true;
+      useUi.getState().openDialogFor("setup");
+    }
     const check = async () => {
       try {
         const d = await api<DoctorPayload>("/api/doctor");
@@ -185,6 +217,13 @@ export function DoctorList({ reprobeKey }: { reprobeKey?: number }) {
             <span className="doctor-detail">
               {c.detail || ""}
               {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
+              {signInTarget(c) && (
+                <AgentSignIn
+                  provider={signInTarget(c) as string}
+                  className="doctor-signin"
+                  onDone={() => setInstalled((n) => n + 1)}
+                />
+              )}
             </span>
           </li>
         ))}
@@ -255,7 +294,24 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
   const [gh, setGh] = useState<TestState>(idleTest);
   const [sc, setSc] = useState<TestState>(idleTest);
   const [agent, setAgent] = useState<TestState>(idleTest);
+  // The default agent's provider when it has no login yet (from the doctor's
+  // agent-auth row, then from each agent test) — offers "Sign in to …".
+  const [signIn, setSignIn] = useState<string | null>(null);
   const [scToken, setScToken] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api<DoctorPayload>("/api/doctor")
+      .then((d) => {
+        if (live) setSignIn(signInTarget((d.checks || []).find((c) => c.id === "agent-auth")));
+      })
+      .catch(() => {
+        /* the checklist above reports an unreachable doctor */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const closeSetup = () => {
     if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
@@ -300,10 +356,11 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
   const testAgent = useCallback(async () => {
     setAgent({ testing: true });
     try {
-      const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: { detail?: string } }>(
+      const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: DoctorCheckItem }>(
         "/api/settings/test/agent",
         { method: "POST" }
       );
+      setSignIn(signInTarget(r?.auth));
       const bits: string[] = [];
       if (r?.cli?.detail) bits.push(r.cli.detail);
       if (r?.auth?.detail) bits.push(r.auth.detail);
@@ -341,6 +398,7 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
             Test agent CLI
           </button>
           <TestResult state={agent} />
+          {signIn && <AgentSignIn provider={signIn} onDone={() => void testAgent()} />}
         </div>
         {/* The agent CLI is the one account a first session needs. GitHub and
             Shortcut matter only once you push or pull tickets, so their tests

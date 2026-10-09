@@ -3,9 +3,11 @@
  *
  * Top section is the *connection* view — for every provider (built-in and
  * custom) show whether its CLI is installed and, when missing, a copy-paste
- * install command. Login is intentionally NOT surfaced here: each CLI prompts
- * for sign-in on its own the first time a session launches it. Below it, the
- * manager to add / remove custom providers. */
+ * install command. Sign-in lives where a missing login is reported — Setup ②
+ * and the doctor's agent-auth row offer "Sign in to <agent>" (the CLI's own
+ * login in a terminal window; see dialogs/AgentSignIn). It used to be left to
+ * each CLI's first session, but it was the last onboarding step that still
+ * needed a terminal. Below it, the manager to add / remove custom providers. */
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";

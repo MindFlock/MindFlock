@@ -1667,7 +1667,9 @@ persisted in `localStorage`):
   View picks how many panes show; the Assistant), **Shipping** (the pane's
   next-step button, ⏩ Fast-track, and the bell for anything waiting on you),
   **Where work comes from** (Intake, Verify for checking what you shipped, and
-  ⚙ Customize for more bars, like Prompts) and **You're all set** (hints, Replay tour, Doctor). The fourth
+  ⚙ Customize for more bars, like Prompts) and **You're all set** (hints, Replay tour, Doctor) —
+  or, while the doctor still reports a required tool missing, **One thing left**
+  with an **Open Setup** button instead of Open Settings. The fourth
   slide carries **Set up now →**, which opens **Intake** on its Tickets tab
   (`LEGACY_SCREEN_TABS` decides that from the slide's `screen` key). The tour
   pauses behind Settings, Intake or Setup rather than ending, so closing one
@@ -1677,22 +1679,32 @@ persisted in `localStorage`):
   `tourDone`.
 - **Get set up** — with no sessions the grid shows a card headed *Get set up*,
   *Three steps to a running agent.*: ① the dependency checklist with
-  **Re-check**, ② **Test agent CLI**, with **Test GitHub** and the Shortcut
+  **Re-check**, ② **Test agent CLI** (plus **Sign in to <agent>** while the
+  doctor finds no login for a CLI that declares a login flow), with **Test GitHub** and the Shortcut
   token test folded under *Optional: test GitHub or a Shortcut token*, and ③
   **+ New session**. A line under ② says where tokens live: *Ticket and GitHub
   tokens are set up in Intake · agent logins in Settings → Accounts*, each half
   a link. The **Setup** modal shows the same checklist, so on a machine not yet
   onboarded it only opens by itself when a check fails *and* sessions already
   exist (the card is gone then); with zero sessions the card is the one
-  welcome.
-- **Install everything missing** — above the dependency checklist (the card,
-  the Setup modal and Settings → Doctor) whenever something this machine needs
-  is missing, with what it installs beside it. One click opens a terminal
-  running a single script: one package-manager run for every system package
-  (one sudo prompt), then each tool's own installer — including whichever agent
-  CLI you chose, not just claude. Closing the window mid-install doesn't stop
+  welcome. The desktop app's first run opens the app with `?setup=install`,
+  which opens the Setup modal straight away (once; the parameter is stripped).
+- **Install …** — above the dependency checklist (the card, the Setup modal and
+  Settings → Doctor) whenever something this machine needs is missing. The
+  button names what it installs when that's short (*Install tmux + claude*,
+  else *Install everything missing*), with the full list beside it and *asks
+  for your password once* when a package-manager or Homebrew step is in it.
+  One click opens a terminal running a single script: Homebrew first on a Mac
+  that lacks it, one package-manager run for every system package (one sudo
+  prompt), then each tool's own installer — including whichever agent CLI you
+  chose, not just claude. It works without tmux (a plain PTY — tmux is
+  usually what's being installed). Closing the window mid-install doesn't stop
   it (the next click reattaches); when it finishes the checklist re-checks
   itself.
+- **Sign in to <agent>** — on the doctor's *agent auth* row (the card, Setup
+  and Settings → Doctor) and beside ②'s agent test, whenever no login was found
+  for a CLI that declares a login flow. It opens the CLI's own login in a
+  terminal window (`AgentSignIn.tsx`); closing it re-runs the check.
 - **Hints** (`onboarding/Hint.tsx`) — small dismissible 💡 inline callouts that
   nudge toward a feature. Each needs a **stable `id`**; dismissing one remembers
   that id (`dismissHint` → `dismissedHints`). A master switch (`hintsEnabled`,

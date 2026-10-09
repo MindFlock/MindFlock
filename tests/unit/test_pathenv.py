@@ -328,3 +328,43 @@ def test_lifespan_survives_ensure_enriched_raising(monkeypatch):
     # answers requests.
     with TestClient(app) as c:
         assert c.get("/api/addons").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# refresh — after an install
+# --------------------------------------------------------------------------- #
+def test_refresh_picks_up_a_dir_created_after_boot(monkeypatch, tmp_path):
+    """The boot-time probe dropped ~/.opencode/bin for not existing; once an
+    installer creates it, refresh() — not a server restart — puts it on PATH."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("SHELL", raising=False)  # no login-shell probe
+    monkeypatch.setenv("PATH", "/usr/bin")
+    new_dir = home / ".opencode" / "bin"
+    pathenv.ensure_enriched()  # the boot-time call
+    assert str(new_dir) not in os.environ["PATH"]
+
+    new_dir.mkdir(parents=True)
+    # Still cached: without a refresh nothing changes.
+    assert str(new_dir) not in pathenv.well_known_dirs()
+    assert str(new_dir) not in pathenv.ensure_enriched()
+
+    added = pathenv.refresh()
+    assert str(new_dir) in added
+    assert str(new_dir) in os.environ["PATH"].split(os.pathsep)
+
+
+def test_refresh_clears_every_cache(monkeypatch):
+    for fn in (pathenv.login_shell_dirs, pathenv.well_known_dirs):
+        fn()
+    pathenv.ensure_enriched()
+    cached = (
+        pathenv.login_shell_dirs,
+        pathenv.well_known_dirs,
+        pathenv.ensure_enriched,
+    )
+    monkeypatch.setenv("MINDFLOCK_NO_PATH_ENRICH", "1")  # refresh's re-run: no probe
+    pathenv.refresh()
+    # ensure_enriched ran once more (1 entry); the two probes are cold again.
+    assert [fn.cache_info().currsize for fn in cached] == [0, 0, 1]

@@ -661,7 +661,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_TAILSCALE_BIN` | — | The `tailscale` CLI to use (a path, or a name on `PATH`), ahead of discovery. Without it MindFlock looks on `PATH`, then (macOS) the app's own CLI at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. On WSL, a Windows-side `tailscale.exe` is reported (Settings → Devices, the doctor) but never used — it is a different tailnet device (`backend/tailscale_cli.py`) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
 | `MINDFLOCK_NONINTERACTIVE` | — | `install.sh` only — set to `1` to force the read-only `mindflock doctor` report instead of the guided `--fix` prompts. The desktop app sets it for its in-window install (a GUI process has no terminal to answer prompts on) |
-| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
+| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the offline page's **Set up MindFlock on this computer** button runs. Point it at a stub to exercise that flow without reinstalling anything |
 
 > Naming note: launcher variables kept their historical `CS_` prefix
 

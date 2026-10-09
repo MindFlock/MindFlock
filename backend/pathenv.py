@@ -18,7 +18,10 @@ spawn afterwards (tmux → provider CLIs, git, gh, node …) then see the same
 
 Call :func:`ensure_enriched` once at startup. It is idempotent, never raises, and
 only *adds* directories — existing entries keep their resolution priority, so a
-tool already on ``PATH`` still resolves exactly as before.
+tool already on ``PATH`` still resolves exactly as before. After something was
+installed, call :func:`refresh`: the probes are cached, and a directory an
+installer just created (``/opt/homebrew/bin``, ``~/.opencode/bin``) was filtered
+out at boot for not existing yet.
 """
 
 from __future__ import annotations
@@ -29,7 +32,13 @@ import subprocess
 
 from backend import log, osenv
 
-__all__ = ["enriched_path", "ensure_enriched", "login_shell_dirs", "well_known_dirs"]
+__all__ = [
+    "enriched_path",
+    "ensure_enriched",
+    "login_shell_dirs",
+    "refresh",
+    "well_known_dirs",
+]
 
 # Delimiter framing the ``env`` dump so we can recover ``PATH`` even when the
 # user's rc files print banners/noise to stdout. Parsing ``env`` output (rather
@@ -102,6 +111,7 @@ def well_known_dirs() -> tuple[str, ...]:
         "/opt/homebrew/sbin",
         "/home/linuxbrew/.linuxbrew/bin",  # Linux Homebrew
         "~/.npm-global/bin",  # npm global prefix override
+        "~/.opencode/bin",  # opencode's installer
         "~/.cargo/bin",  # rustup / cargo install
         "~/.bun/bin",  # bun
         "~/.deno/bin",  # deno
@@ -163,3 +173,20 @@ def ensure_enriched() -> tuple[str, ...]:
         return added
     except Exception:  # noqa: BLE001 — PATH repair must never break startup
         return ()
+
+
+def refresh() -> tuple[str, ...]:
+    """Re-probe after an install and repair ``PATH`` again. Returns the added dirs.
+
+    All three probes are cached for the life of the process, and
+    :func:`well_known_dirs` keeps only directories that existed when it first
+    ran — so without this, a tool that landed in a directory created after boot
+    stayed "not found" in the doctor (next to the installer's own "everything
+    installed") until the server restarted, which quitting the desktop app does
+    not do. Sessions started afterwards inherit the repaired ``PATH``. Never
+    raises."""
+    for fn in (login_shell_dirs, well_known_dirs, ensure_enriched):
+        clear = getattr(fn, "cache_clear", None)
+        if clear is not None:
+            clear()
+    return ensure_enriched()

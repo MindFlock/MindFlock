@@ -42,6 +42,7 @@ __all__ = [
     "to_payload",
     "check_agent_cli",
     "check_agent_auth",
+    "check_node",
     "install_plan",
 ]
 
@@ -55,6 +56,8 @@ _DOCS = {
     "tailscale": "https://tailscale.com/download",
     "cloudflared": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
     "claude": "https://docs.anthropic.com/en/docs/claude-code/setup",
+    "node": "https://nodejs.org/en/download",
+    "brew": "https://brew.sh",
     "bubblewrap": "https://github.com/containers/bubblewrap",
 }
 
@@ -78,6 +81,10 @@ class Check:
     #: its settings) that is missing and that ``pkg``/``cmd`` installs. Login
     #: commands and optional extras stay out — they are offered on their own.
     install: bool = False
+    #: The agent provider a row is about (agent CLI / agent auth rows), so the
+    #: UI can offer that provider's own sign-in terminal ("" for everything
+    #: else).
+    provider: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,6 +139,54 @@ def _pkg_fix(pkg: str) -> str:
 def _pkg_supported() -> bool:
     """Whether :func:`_pkg_fix` names a real package manager here."""
     return osenv.os_kind() in ("macos", "linux", "wsl")
+
+
+#: Where Homebrew's installer puts ``brew`` (Apple silicon, then Intel). A
+#: desktop-launched engine may not have either on PATH even when it exists.
+_BREW_PATHS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+
+#: Homebrew's official installer. NONINTERACTIVE skips its "Press RETURN", but
+#: it then refuses to ask for a password itself (``sudo -n``), so ``sudo -v``
+#: asks first — in the install terminal, where the one sudo prompt goes.
+_BREW_INSTALL = (
+    "sudo -v && NONINTERACTIVE=1 /bin/bash -c "
+    '"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+)
+
+#: Puts a just-installed (or merely off-PATH) Homebrew on this shell's PATH.
+_BREW_SHELLENV = (
+    'eval "$( (/opt/homebrew/bin/brew shellenv || /usr/local/bin/brew shellenv)'
+    ' 2>/dev/null)"'
+)
+
+
+def _brew_installed() -> bool:
+    """Whether Homebrew exists on this Mac, on PATH or not."""
+    return bool(shutil.which("brew")) or any(os.path.isfile(p) for p in _BREW_PATHS)
+
+
+def _npm_path() -> str:
+    """``npm`` on PATH, or ``""``.
+
+    On WSL the Windows PATH is appended, so a Windows Node answers ``which npm``
+    from ``/mnt/c/…`` — and installs Windows binaries a Linux engine can't run.
+    That one doesn't count."""
+    path = shutil.which("npm") or ""
+    if path and osenv.os_kind() == "wsl" and path.startswith("/mnt/"):
+        return ""
+    return path
+
+
+def _node_pkg() -> str:
+    """The system package(s) that bring ``npm`` on this host ("" = no route)."""
+    kind = osenv.os_kind()
+    if kind == "macos":
+        return "node"
+    if kind in ("linux", "wsl"):
+        # Debian/Ubuntu split npm out of nodejs; naming both is harmless on
+        # the managers that don't.
+        return "nodejs npm"
+    return ""
 
 
 def _parse_version(text: str) -> Tuple[int, ...]:
@@ -299,9 +354,9 @@ def _resolve_agent_binary(name: str) -> str:
 def _agent_install_cmd(name: str, binary: str) -> str:
     """The command that installs provider ``name``'s CLI, or ``""``.
 
-    Asked of the provider itself (``install_hint``: claude's installer, codex's
-    npm package, aider's pip package…), so whichever agent you picked gets a
-    runnable install — not just claude. A provider that names no installer gets
+    Asked of the provider itself (``install_hint``: each vendor's own
+    installer — claude's, codex's, aider's…), so whichever agent you picked
+    gets a runnable install — not just claude. A provider that names no installer gets
     none: guessing a package name for an arbitrary custom CLI would install the
     wrong thing.
     """
@@ -312,6 +367,32 @@ def _agent_install_cmd(name: str, binary: str) -> str:
         return provider.install_hint() or ""
     except Exception:  # noqa: BLE001 — a provider quirk must not break the doctor
         return ""
+
+
+def _agent_version(name: str, binary: str) -> str:
+    """The CLI's own version line (``"2.1.295 (Claude Code)"``), or ``""``.
+
+    Asked with the provider's declared ``version_args`` only — a CLI that
+    declares none is never run — and only an answer that exits 0 and carries
+    a version number counts, so a CLI that ignores the flag and starts its UI
+    (killed by the probe timeout) reports nothing rather than garbage."""
+    provider = _agent_provider(name)
+    try:
+        args = tuple(provider.version_args()) if provider is not None else ()
+    except Exception:  # noqa: BLE001 — a provider quirk must not break the doctor
+        args = ()
+    if not args:
+        return ""
+    code, out = _run([binary, *args])
+    line = _first_line(out)
+    if code != 0 or not _parse_version(line):
+        return ""
+    return line[:80]
+
+
+def _with_version(name: str, binary: str) -> str:
+    ver = _agent_version(name, binary)
+    return f"{binary} — {ver}" if ver else binary
 
 
 def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
@@ -326,17 +407,18 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
     if os.sep in binary:  # explicit path override — check it directly
         p = Path(binary).expanduser()
         if p.is_file() and os.access(p, os.X_OK):
-            return Check(cid, label, "ok", str(p))
+            return Check(cid, label, "ok", _with_version(name, str(p)), provider=name)
         return Check(
             cid,
             label,
             missing,
             f"configured binary {binary} is missing or not executable",
             "fix the binary path in Settings → Coding CLI",
+            provider=name,
         )
     path = shutil.which(binary)
     if path:
-        return Check(cid, label, "ok", path)
+        return Check(cid, label, "ok", _with_version(name, path), provider=name)
     cmd = _agent_install_cmd(name, binary)
     fix = cmd or f"install `{binary}` or set a binary path in Settings → Coding CLI"
     return Check(
@@ -348,6 +430,7 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
         docs=_DOCS["claude"] if binary == "claude" else "",
         cmd=cmd,
         install=bool(cmd),
+        provider=name,
     )
 
 
@@ -376,6 +459,49 @@ def check_assistant_cli() -> Optional[Check]:
     if not name or name == _default_provider_name():
         return None
     return _agent_cli_check("assistant-cli", name, "assistant CLI", "warn")
+
+
+def _npm_install_wanted(name: str) -> bool:
+    """Whether agent ``name`` is missing AND its installer is an npm one."""
+    import re
+
+    binary = _resolve_agent_binary(name)
+    if os.sep in binary or shutil.which(binary):
+        return False
+    cmd = _agent_install_cmd(name, binary)
+    return bool(re.search(r"(?:^|[;&|(]\s*)npm\s", cmd))
+
+
+def check_node() -> Optional[Check]:
+    """Node.js, but only as a means: when an agent CLI this host needs is
+    missing and npm is the only way its vendor ships it (cline). ``None`` —
+    no row at all — otherwise; nobody else needs Node.
+
+    Its package joins the install plan's one package-manager run, which goes
+    before every installer, so the npm step that follows finds npm."""
+    names = [_default_provider_name(), _assistant_provider_name()]
+    wanting = [n for n in dict.fromkeys(names) if n and _npm_install_wanted(n)]
+    if not wanting:
+        return None
+    who = ", ".join(wanting)
+    path = _npm_path()
+    if path:
+        return Check("node", "Node.js (npm)", "ok", f"{path} (installs {who})")
+    pkg = _node_pkg()
+    detail = f"npm not found — {who} is installed with npm"
+    if shutil.which("npm"):  # only the Windows one, through WSL interop
+        detail += " (the Windows npm under /mnt/ can't install Linux tools)"
+    return Check(
+        "node",
+        "Node.js (npm)",
+        "warn",
+        detail,
+        _pkg_fix(pkg) if pkg else "install Node.js from nodejs.org",
+        docs=_DOCS["node"],
+        cmd=_pkg_fix(pkg) if pkg else "",
+        pkg=pkg,
+        install=bool(pkg),
+    )
 
 
 def _agent_provider(name: str):
@@ -508,19 +634,26 @@ def check_agent_auth() -> Check:
         )
     evidence = _auth_evidence(provider)
     if evidence:
-        return Check("agent-auth", label, "ok", evidence)
+        return Check("agent-auth", label, "ok", evidence, provider=name)
     if not _declares_auth_sources(provider):
         return Check(
             "agent-auth",
             label,
             "info",
             f"there is no login probe for `{base}` — check its status inside the CLI itself",
+            provider=name,
         )
     if not shutil.which(base) and os.sep not in binary:
         return Check(
-            "agent-auth", label, "warn", "agent CLI not installed — cannot probe auth"
+            "agent-auth",
+            label,
+            "warn",
+            "agent CLI not installed — cannot probe auth",
+            provider=name,
         )
     fix, cmd = _login_fix(provider, base)
+    # `provider` is what the UI's "Sign in to <agent>" button opens the login
+    # terminal for; `cmd` (a DECLARED login flow) is what makes it offer one.
     return Check(
         "agent-auth",
         label,
@@ -529,20 +662,40 @@ def check_agent_auth() -> Check:
         fix,
         docs=_DOCS["claude"] if base == "claude" else "",
         cmd=cmd,
+        provider=name,
+    )
+
+
+def _uv_install_cmd() -> str:
+    """Download → verify → run the SAME pinned uv installer ``install.sh``
+    uses (:mod:`backend._pins`), never an unpinned ``curl | sh``. A checksum
+    mismatch refuses to run it."""
+    from backend import _pins
+
+    url = f"https://astral.sh/uv/{_pins.UV_PINNED_VERSION}/install.sh"
+    return (
+        f'T="$(mktemp)" && curl -LsSf -o "$T" {url}'
+        ' && S="$( (sha256sum "$T" 2>/dev/null || shasum -a 256 "$T") | cut -d" " -f1)"'
+        f' && if [ "$S" = "{_pins.UV_INSTALLER_SHA256}" ]; then sh "$T";'
+        ' else echo "uv installer checksum mismatch — not running it" >&2; false; fi;'
+        ' r=$?; rm -f "$T"; [ "$r" = 0 ]'
     )
 
 
 def check_uv() -> Check:
     path = shutil.which("uv")
     if not path:
+        from backend import _pins
+
         return Check(
             "uv",
             "uv",
             "warn",
             "not found on PATH (used for installs/updates)",
-            "curl -LsSf https://astral.sh/uv/install.sh | sh",
+            f"install uv {_pins.UV_PINNED_VERSION} (Astral's installer, "
+            "pinned and sha256-verified)",
             docs=_DOCS["uv"],
-            cmd="curl -LsSf https://astral.sh/uv/install.sh | sh",
+            cmd=_uv_install_cmd(),
             install=True,
         )
     _, out = _run(["uv", "--version"])
@@ -1008,6 +1161,7 @@ CHECKS_BY_ID: dict[str, Callable[[], Optional[Check]]] = {
     "gh": check_gh,
     "agent-cli": check_agent_cli,
     "assistant-cli": check_assistant_cli,
+    "node": check_node,
     "agent-auth": check_agent_auth,
     "local-model": check_local_model,
     "uv": check_uv,
@@ -1042,7 +1196,11 @@ def _pkg_install_line(pkgs: List[str]) -> str:
     manager (non-interactive: the user already said yes to the whole plan)."""
     names = " ".join(pkgs)
     if osenv.os_kind() == "macos":
-        return f"brew install {names}"
+        if shutil.which("brew"):
+            return f"brew install {names}"
+        # Homebrew installed earlier in this same script, or present but off
+        # this process's PATH (a desktop-launched engine): put it on PATH first.
+        return f"{_BREW_SHELLENV}; brew install {names}"
     mgr = _linux_pkg_manager()
     if mgr == "pacman":
         return f"sudo pacman -S --needed --noconfirm {names}"
@@ -1073,7 +1231,8 @@ def install_plan(checks: List[Check]) -> dict:
     package-manager run (one sudo prompt, one ``apt-get update``); the rest run
     their own installers after it, each in turn, so one failure doesn't stop
     the others. The script ends by saying what failed, and exits non-zero if
-    anything did.
+    anything did. On a Mac without Homebrew, installing Homebrew is the first
+    step whenever there is a package to install.
 
     Returns ``{"steps": [{"id", "label", "cmd"}], "packages": [...],
     "script": str}`` — ``steps`` empty (and ``script`` ``""``) when there is
@@ -1088,6 +1247,17 @@ def install_plan(checks: List[Check]) -> dict:
             if c.pkg not in pkgs:
                 pkgs.append(c.pkg)
             pkg_labels.append(c.label)
+    if pkgs and osenv.os_kind() == "macos" and not _brew_installed():
+        # A fresh Mac has no Homebrew, and every package below is a `brew
+        # install` — so Homebrew itself goes first (it asks for the password
+        # once, in the install terminal).
+        steps.append(
+            {
+                "id": "homebrew",
+                "label": "Homebrew (the macOS package manager)",
+                "cmd": _BREW_INSTALL,
+            }
+        )
     if pkgs:
         steps.append(
             {

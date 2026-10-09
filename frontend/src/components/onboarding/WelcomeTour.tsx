@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
+import { useDoctorWarn } from "../dialogs/SetupDialog";
 import "./WelcomeTour.css";
 
 interface Slide {
@@ -89,6 +90,26 @@ const SLIDES: Slide[] = [
   },
 ];
 
+/** The last slide when the doctor still reports a required tool missing: "You're
+ * all set" would be untrue, so it names the one thing left and opens Setup,
+ * whose Dependencies step installs it in one click. */
+const NOT_YET_SET: Slide = {
+  logo: true,
+  title: "One thing left",
+  body: (
+    <>
+      A tool MindFlock needs is still missing on this computer — usually tmux or
+      your coding agent. <b>Setup</b> installs everything missing in one go, then
+      signs your agent in.
+    </>
+  ),
+};
+
+/** Which last slide to show: the doctor's verdict decides. */
+export function lastSlide(failing: boolean): Slide {
+  return failing ? NOT_YET_SET : SLIDES[SLIDES.length - 1];
+}
+
 /** The brand mark, painted with the current accent via CSS mask. */
 function Logo() {
   return <div className="wt-logo" role="img" aria-label="MindFlock" />;
@@ -106,6 +127,7 @@ export function WelcomeTour() {
     (s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup"
   );
   const finishTour = useUi((s) => s.finishTour);
+  const failing = useDoctorWarn().failing;
   const openDialogFor = useUi((s) => s.openDialogFor);
   const [i, setI] = useState(0);
 
@@ -133,7 +155,7 @@ export function WelcomeTour() {
   if (!open || paused) return null;
 
   const last = i === SLIDES.length - 1;
-  const slide = SLIDES[i];
+  const slide = last ? lastSlide(failing) : SLIDES[i];
 
   // Open the setup surface ON TOP of the (now paused) tour instead of ending it,
   // so the user lands back on this exact slide when they close it. A legacy
@@ -193,9 +215,16 @@ export function WelcomeTour() {
           </button>
           {last ? (
             <div className="wt-nav-end">
-              <button type="button" className="wt-btn ghost" onClick={() => jumpTo("connections")}>
-                Open Settings
-              </button>
+              {failing ? (
+                // Opens over the paused tour, like "Set up now".
+                <button type="button" className="wt-btn ghost" onClick={() => openDialogFor("setup")}>
+                  Open Setup
+                </button>
+              ) : (
+                <button type="button" className="wt-btn ghost" onClick={() => jumpTo("connections")}>
+                  Open Settings
+                </button>
+              )}
               <button type="button" className="wt-btn primary" onClick={finishTour}>
                 Get started
               </button>

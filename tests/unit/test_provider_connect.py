@@ -96,7 +96,7 @@ def test_detect_auth_miss_is_empty_not_false():
         ("claude", "claude", True),
         ("codex", "codex login", True),
         ("opencode", "opencode auth login", True),
-        ("goose", "goose configure", False),
+        ("goose", "goose configure", True),
         ("aider", "aider", True),
         ("antigravity", "agy", False),
     ],
@@ -153,8 +153,17 @@ def test_user_toml_connect_table(tmp_path, monkeypatch):
 def client():
     from backend.web.server import app
 
-    with TestClient(app) as c:
+    # From this machine: the login terminal is privileged() (a loopback peer
+    # with no forwarding headers counts as the person at this device).
+    with TestClient(app, client=("127.0.0.1", 50000)) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _tmux_present(monkeypatch):
+    """The login-session tests fake tmux; pin "tmux is installed" so a CI box
+    without it doesn't take the plain-PTY path under them."""
+    monkeypatch.setattr(provider_login, "_have_tmux", lambda: True)
 
 
 def test_status_endpoint_shape(client, monkeypatch):
@@ -274,22 +283,17 @@ def test_base_provider_login_command_uses_first_alias():
 
 
 # --------------------------------------------------------------------------- #
-# ClaudeProvider.install_hint — npm when present, else the native script.
+# ClaudeProvider.install_hint — the native installer, piped to bash, always.
 # --------------------------------------------------------------------------- #
-def test_claude_install_hint_prefers_npm(monkeypatch):
-    monkeypatch.setattr(
-        shutil, "which", lambda b: "/usr/bin/npm" if b == "npm" else None
-    )
+@pytest.mark.parametrize("npm", ["/usr/bin/npm", None])
+def test_claude_install_hint_is_the_native_installer_even_with_npm(monkeypatch, npm):
+    # npm on PATH used to switch it to `npm install -g` (EACCES with a distro
+    # Node, no auto-update); the script is bash-only, so never `| sh`.
+    monkeypatch.setattr(shutil, "which", lambda b: npm if b == "npm" else None)
     assert (
         providers.get("claude").install_hint()
-        == "npm install -g @anthropic-ai/claude-code"
+        == "curl -fsSL https://claude.ai/install.sh | bash"
     )
-
-
-def test_claude_install_hint_falls_back_to_curl(monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda b: None)
-    hint = providers.get("claude").install_hint()
-    assert hint.startswith("curl") and "claude.ai/install.sh" in hint
 
 
 # --------------------------------------------------------------------------- #
@@ -804,3 +808,52 @@ def test_kill_login_session_swallows_timeout(monkeypatch):
     monkeypatch.setattr(provider_login.subprocess, "run", _run)
     # Must not raise.
     provider_login.kill_login_session("codex")
+
+
+# --------------------------------------------------------------------------- #
+# No tmux: the login runs under a plain PTY, and the route still refuses
+# anyone who isn't at this device.
+# --------------------------------------------------------------------------- #
+def test_login_without_tmux_runs_under_a_plain_pty(monkeypatch):
+    from backend.web.core import pty_run
+
+    monkeypatch.setattr(provider_login, "_have_tmux", lambda: False)
+    monkeypatch.setattr(
+        provider_login, "_login_command_for", lambda name: "echo signed-in-ok"
+    )
+
+    def _no_tmux(*a, **kw):
+        raise AssertionError("tmux must not be called")
+
+    monkeypatch.setattr(provider_login.subprocess, "run", _no_tmux)
+    session, err = provider_login.ensure_login_session("codex")
+    try:
+        assert err is None
+        run = pty_run.get(session)
+        assert run is not None
+        import time
+
+        deadline = time.time() + 10
+        while run.alive() and time.time() < deadline:
+            time.sleep(0.05)
+        backlog = run.attach(lambda _d: None)
+        assert b"signed-in-ok" in backlog
+        assert b"login command finished" in backlog
+    finally:
+        provider_login.kill_login_session("codex")
+    assert pty_run.get(session) is None
+
+
+def test_login_terminal_refuses_a_caller_not_at_this_device(monkeypatch):
+    from backend.web.core import tailnet_trust
+    from backend.web.server import app
+
+    async def _untrusted(scope):
+        return False
+
+    monkeypatch.setattr(tailnet_trust, "request_trusted", _untrusted)
+
+    c = TestClient(app, client=("100.64.0.9", 50000))  # a tailnet peer
+    with c.websocket_connect("/api/providers/codex/login-terminal") as ws:
+        msg = ws.receive_json()
+    assert msg["type"] == "error" and "only allowed" in msg["message"]

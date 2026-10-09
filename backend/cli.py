@@ -723,6 +723,12 @@ def _install_all(checks: list[Check]) -> list[Check]:
     proc = subprocess.run(plan["script"], shell=True)
     if proc.returncode != 0:
         print(f"  install script exited {proc.returncode}")
+    # The installers just created directories (~/.local/bin, Homebrew's) this
+    # process's PATH has never seen — re-read it, or the re-probe below reports
+    # a freshly installed tool as missing.
+    from backend import pathenv
+
+    pathenv.refresh()
     try:
         fresh = doctor.run_checks()
     except Exception:  # noqa: BLE001 — a broken re-probe keeps the old list
@@ -775,6 +781,14 @@ def _fix_checks(checks: list[Check]) -> list[Check]:
         if answer not in ("", "y", "yes"):
             print("  skipped")
             continue
+        if c.id == "agent-auth" and "login" not in c.cmd:
+            # A bare program (`claude`) signs in from inside its own UI, which
+            # then just sits there: say how to get back. It runs in THIS
+            # directory, which is why it may first ask to trust it.
+            print(
+                f"  `{c.cmd}` opens — sign in when it asks (a browser window may "
+                "open), then quit it (/exit in Claude Code) to come back here."
+            )
         # shell=True: fix commands are trusted strings we authored (pipes like
         # the uv installer need a shell); stdio is inherited for interactivity.
         proc = subprocess.run(c.cmd, shell=True)

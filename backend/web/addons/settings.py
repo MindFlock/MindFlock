@@ -1645,11 +1645,27 @@ class SettingsAddon(Addon):
             the user authenticates the CLI through the CLI itself. With
             ``?profile=<id>`` the login runs under that auth profile's isolated
             config dir, so a second (work) account signs in without touching
-            the first."""
-            from backend.web.core import provider_login
-            from backend.web.core.terminal import pump_pty, spawn_tmux_attach
+            the first. Setup's and the doctor's "Sign in to <agent>" open it
+            too. Works without tmux (a plain PTY).
+
+            Only for the person at this device (:func:`privileged`): a sign-in
+            lands credentials HERE, so an anonymous caller of an exposed
+            gate-off server, or a relaying MindFlock, must not drive one."""
+            from backend.web.core import auth, provider_login, pty_run
 
             await ws.accept()
+            if not await auth.privileged(ws.scope):
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "signing in is only allowed from this "
+                            "computer or a signed-in device",
+                        }
+                    )
+                )
+                await ws.close(code=4403)
+                return
             session, err = await asyncio.to_thread(
                 provider_login.ensure_login_session, name, profile
             )
@@ -1657,13 +1673,7 @@ class SettingsAddon(Addon):
                 await ws.send_text(json.dumps({"type": "error", "message": err}))
                 await ws.close(code=4500)
                 return
-            try:
-                proc = spawn_tmux_attach(session)
-            except Exception as exc:  # noqa: BLE001
-                await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
-                await ws.close(code=4500)
-                return
-            await pump_pty(ws, proc, allow_input=True)
+            await pty_run.serve(ws, session)
 
         @router.post("/providers/{name}/login-close")
         def provider_login_close(name: str, profile: str = "") -> JSONResponse:

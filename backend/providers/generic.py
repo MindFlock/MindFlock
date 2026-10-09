@@ -261,6 +261,9 @@ class GenericProvider(BaseProvider):
     def install_hint(self) -> str:
         return self.cfg.install_hint
 
+    def version_args(self) -> tuple:
+        return tuple(self.cfg.version_args)
+
     # --- peer shared sessions ------------------------------------------- #
     def sandbox_profile(self):
         """From the config's ``sandbox_*`` fields; ``None`` unless it names the

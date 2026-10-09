@@ -20,6 +20,23 @@ def _linux(monkeypatch):
     monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "linux")
 
 
+@pytest.fixture(autouse=True)
+def _no_path_probe(monkeypatch):
+    """``?refresh=1`` re-reads PATH (a login-shell probe that edits
+    os.environ) — record the calls instead."""
+    from backend import pathenv
+
+    calls = []
+    monkeypatch.setattr(pathenv, "refresh", lambda: calls.append(1) or ())
+    return calls
+
+
+#: codex's install hint (OpenAI's native installer).
+CODEX_INSTALL = (
+    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+)
+
+
 def _which(mapping):
     """A shutil.which stand-in from a {name: path-or-None} mapping."""
     return lambda name: mapping.get(name)
@@ -223,23 +240,18 @@ class TestGh:
 
 
 class TestAgentCli:
-    def test_missing_claude_suggests_npm_install_when_npm_present(self, monkeypatch):
+    @pytest.mark.parametrize("which", [{"npm": "/usr/bin/npm"}, {}])
+    def test_missing_claude_suggests_the_native_installer(self, monkeypatch, which):
+        # With or without npm: the native installer, piped to bash (it is a
+        # bash script; `| sh` is dash on Debian/Ubuntu/WSL and dies parsing it).
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
         monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "claude")
-        monkeypatch.setattr(doctor.shutil, "which", _which({"npm": "/usr/bin/npm"}))
+        monkeypatch.setattr(doctor.shutil, "which", _which(which))
         c = doctor.check_agent_cli()
         assert c.status == "fail"
-        assert "npm install -g @anthropic-ai/claude-code" in c.fix
-        assert c.cmd == c.fix
-
-    def test_missing_claude_suggests_native_installer_without_npm(self, monkeypatch):
-        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
-        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "claude")
-        monkeypatch.setattr(doctor.shutil, "which", _which({}))
-        c = doctor.check_agent_cli()
-        assert c.status == "fail"
-        assert c.fix == "curl -fsSL https://claude.ai/install.sh | sh"
-        assert c.cmd == c.fix
+        assert c.fix == "curl -fsSL https://claude.ai/install.sh | bash"
+        assert c.cmd == c.fix and c.install is True
+        assert c.provider == "claude"
 
     def test_present_is_ok(self, monkeypatch):
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
@@ -247,8 +259,50 @@ class TestAgentCli:
         monkeypatch.setattr(
             doctor.shutil, "which", _which({"claude": "/usr/local/bin/claude"})
         )
+        monkeypatch.setattr(doctor, "_run", lambda argv: (None, ""))
         c = doctor.check_agent_cli()
         assert c.status == "ok" and c.detail == "/usr/local/bin/claude"
+
+    def test_present_shows_the_cli_version(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "claude")
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"claude": "/usr/local/bin/claude"})
+        )
+        seen = []
+        monkeypatch.setattr(
+            doctor,
+            "_run",
+            lambda argv: seen.append(argv) or (0, "2.1.295 (Claude Code)\n"),
+        )
+        c = doctor.check_agent_cli()
+        assert seen == [["/usr/local/bin/claude", "--version"]]
+        assert c.detail == "/usr/local/bin/claude — 2.1.295 (Claude Code)"
+
+    @pytest.mark.parametrize(
+        "answer", [(1, "2.1.0"), (0, "Welcome! Starting UI"), (None, "")]
+    )
+    def test_a_version_probe_that_fails_reports_just_the_path(
+        self, monkeypatch, answer
+    ):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "claude")
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"claude": "/usr/local/bin/claude"})
+        )
+        monkeypatch.setattr(doctor, "_run", lambda argv: answer)
+        assert doctor.check_agent_cli().detail == "/usr/local/bin/claude"
+
+    def test_a_provider_without_version_args_is_never_run(self, monkeypatch):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "antigravity")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "agy")
+        monkeypatch.setattr(doctor.shutil, "which", _which({"agy": "/usr/bin/agy"}))
+
+        def _never(argv):
+            raise AssertionError("agy must not be run")
+
+        monkeypatch.setattr(doctor, "_run", _never)
+        assert doctor.check_agent_cli().detail == "/usr/bin/agy"
 
     def test_broken_path_override_is_fail(self, monkeypatch, tmp_path):
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "codex")
@@ -273,14 +327,14 @@ class TestAgentCli:
         self, monkeypatch
     ):
         # Any agent you pick is installable, not just claude: the command comes
-        # from the provider (aider's pip package), and it joins the one-shot
+        # from the provider (aider's own installer), and it joins the one-shot
         # install plan.
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "aider")
         monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "aider")
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_agent_cli()
         assert c.status == "fail"
-        assert c.cmd == "python -m pip install aider-chat"
+        assert c.cmd == "curl -LsSf https://aider.chat/install.sh | sh"
         assert c.fix == c.cmd
         assert c.install is True
         assert c.docs == ""
@@ -291,7 +345,7 @@ class TestAgentCli:
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_agent_cli()
         assert c.label == "agent CLI (codex)"
-        assert c.cmd == "npm install -g @openai/codex"
+        assert c.cmd == CODEX_INSTALL
         assert "claude" not in c.cmd
 
     def test_provider_without_installer_has_no_runnable_cmd(self, monkeypatch):
@@ -322,7 +376,7 @@ class TestAssistantCli:
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_assistant_cli()
         assert c.id == "assistant-cli" and c.status == "warn"
-        assert c.cmd == "npm install -g @openai/codex" and c.install
+        assert c.cmd == CODEX_INSTALL and c.install
 
     def test_a_none_check_is_left_out_of_the_report(self, monkeypatch):
         monkeypatch.setattr(
@@ -526,10 +580,47 @@ class TestAgentAuth:
 
 class TestOptionalDeps:
     def test_uv_missing_is_warn(self, monkeypatch):
+        from backend import _pins
+
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_uv()
-        assert c.status == "warn"
-        assert "astral.sh/uv" in c.fix
+        assert c.status == "warn" and c.install is True
+        # The pinned installer install.sh uses — never an unpinned curl | sh.
+        assert f"astral.sh/uv/{_pins.UV_PINNED_VERSION}/install.sh" in c.cmd
+        assert _pins.UV_INSTALLER_SHA256 in c.cmd
+        assert "install.sh | sh" not in c.cmd  # downloaded, verified, then run
+
+    @pytest.mark.parametrize("good", [True, False])
+    def test_uv_fix_runs_the_installer_only_when_its_checksum_matches(
+        self, monkeypatch, tmp_path, good
+    ):
+        """Run the real fix command under dash/sh with a stub ``curl`` that
+        "downloads" a script; it must run exactly when the sha256 matches."""
+        import hashlib
+        import subprocess
+
+        from backend import _pins
+
+        payload = f"touch {tmp_path}/ran\n"
+        sha = hashlib.sha256(payload.encode()).hexdigest()
+        monkeypatch.setattr(_pins, "UV_INSTALLER_SHA256", sha if good else "0" * 64)
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        src = tmp_path / "installer.sh"
+        src.write_text(payload)
+        curl = bindir / "curl"
+        # curl -LsSf -o <out> <url>
+        curl.write_text(f'#!/bin/sh\ncp {src} "$3"\n')
+        curl.chmod(0o755)
+        cmd = doctor._uv_install_cmd()
+        env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+        proc = subprocess.run(
+            ["sh", "-c", cmd], env=env, capture_output=True, text=True
+        )
+        assert (tmp_path / "ran").exists() is good
+        assert (proc.returncode == 0) is good
+        if not good:
+            assert "checksum mismatch" in proc.stderr
 
     def test_uv_present_is_ok(self, monkeypatch):
         monkeypatch.setattr(doctor.shutil, "which", _which({"uv": "/usr/bin/uv"}))
@@ -808,6 +899,7 @@ class TestDoctorApi:
             "cmd",
             "pkg",
             "install",
+            "provider",
         }
 
         # Without ?refresh the cached payload is served (run_checks not re-run).
@@ -1098,3 +1190,135 @@ class TestInstallPlan:
             {"id": "uv", "label": "uv", "cmd": "curl uv | sh"}
         ]
         assert "script" not in payload["install"]
+
+
+class TestNode:
+    """Node.js is in the plan only as a means to an npm-only agent CLI."""
+
+    def _agent(self, monkeypatch, name="cline", which=None):
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: name)
+        monkeypatch.setattr(doctor, "_assistant_provider_name", lambda: "")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda n: n)
+        monkeypatch.setattr(doctor.shutil, "which", _which(which or {}))
+
+    def test_no_row_when_no_missing_agent_installs_with_npm(self, monkeypatch):
+        self._agent(monkeypatch, "claude")
+        assert doctor.check_node() is None
+        self._agent(monkeypatch, "cline", {"cline": "/x/cline"})  # installed
+        assert doctor.check_node() is None
+
+    def test_missing_npm_joins_the_package_run_before_the_npm_step(self, monkeypatch):
+        self._agent(monkeypatch, "cline")
+        monkeypatch.setattr(doctor, "_linux_pkg_manager", lambda: "apt")
+        node = doctor.check_node()
+        assert node.status == "warn" and node.install is True
+        assert node.pkg == "nodejs npm" and "cline" in node.detail
+        plan = doctor.install_plan([node, doctor.check_agent_cli()])
+        assert [s["id"] for s in plan["steps"]] == ["packages", "agent-cli"]
+        assert "nodejs npm" in plan["steps"][0]["cmd"]
+        assert plan["steps"][1]["cmd"].startswith("npm install -g --prefix ~/.local")
+
+    def test_present_npm_is_ok(self, monkeypatch):
+        self._agent(monkeypatch, "cline", {"npm": "/usr/bin/npm"})
+        assert doctor.check_node().status == "ok"
+
+    def test_a_windows_npm_seen_through_wsl_does_not_count(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "wsl")
+        self._agent(monkeypatch, "cline", {"npm": "/mnt/c/Program Files/nodejs/npm"})
+        node = doctor.check_node()
+        assert node.status == "warn" and node.install is True
+        assert "/mnt/" in node.detail
+
+    def test_macos_installs_node_with_brew(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        self._agent(monkeypatch, "cline")
+        assert doctor.check_node().pkg == "node"
+
+    def test_the_assistant_cli_counts_too(self, monkeypatch):
+        self._agent(monkeypatch, "claude", {"claude": "/x/claude"})
+        monkeypatch.setattr(doctor, "_assistant_provider_name", lambda: "cline")
+        assert doctor.check_node().install is True
+
+
+class TestHomebrewBootstrap:
+    """A fresh Mac has no Homebrew, and every package is a `brew install`."""
+
+    def _tmux_missing(self):
+        return Check("tmux", "tmux", "fail", pkg="tmux", install=True)
+
+    def test_homebrew_goes_first_when_missing(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(doctor.os.path, "isfile", lambda p: False)
+        plan = doctor.install_plan([self._tmux_missing()])
+        assert [s["id"] for s in plan["steps"]] == ["homebrew", "packages"]
+        brew = plan["steps"][0]["cmd"]
+        assert "Homebrew/install/HEAD/install.sh" in brew
+        assert "NONINTERACTIVE=1" in brew and brew.startswith("sudo -v")
+        # The package run finds the brew that step just installed.
+        pkgs = plan["steps"][1]["cmd"]
+        assert "brew shellenv" in pkgs and pkgs.endswith("brew install tmux")
+
+    def test_no_bootstrap_when_brew_exists_off_path(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(
+            doctor.os.path, "isfile", lambda p: p == "/opt/homebrew/bin/brew"
+        )
+        plan = doctor.install_plan([self._tmux_missing()])
+        assert [s["id"] for s in plan["steps"]] == ["packages"]
+        assert "brew shellenv" in plan["steps"][0]["cmd"]
+
+    def test_brew_on_path_is_used_plainly(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"brew": "/opt/homebrew/bin/brew"})
+        )
+        plan = doctor.install_plan([self._tmux_missing()])
+        assert plan["steps"] == [
+            {
+                "id": "packages",
+                "label": "system packages: tmux",
+                "cmd": "brew install tmux",
+            }
+        ]
+
+    def test_no_bootstrap_without_a_package_to_install(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        monkeypatch.setattr(doctor.os.path, "isfile", lambda p: False)
+        plan = doctor.install_plan([Check("uv", "uv", "warn", cmd="x", install=True)])
+        assert [s["id"] for s in plan["steps"]] == ["uv"]
+
+    def test_linux_never_bootstraps_homebrew(self, monkeypatch):
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        plan = doctor.install_plan([self._tmux_missing()])
+        assert [s["id"] for s in plan["steps"]] == ["packages"]
+
+
+class TestPathRefresh:
+    """A re-probe after an install re-reads PATH first (pathenv.refresh)."""
+
+    def test_refresh_param_refreshes_path(self, monkeypatch, _no_path_probe):
+        from backend.web.addons.doctor import DoctorAddon
+
+        addon = DoctorAddon()
+        monkeypatch.setattr(doctor, "run_checks", lambda: [])
+        addon._payload()
+        assert _no_path_probe == []
+        addon._payload(refresh=True)
+        assert _no_path_probe == [1]
+
+    def test_install_finishing_refreshes_path_once(self, monkeypatch, _no_path_probe):
+        from backend.web import server
+        from backend.web.core import setup_install
+
+        st = {"running": True, "exit_code": None}
+        monkeypatch.setattr(setup_install, "state", lambda: dict(st))
+        c = TestClient(server.app)
+        c.get("/api/doctor/install-state")
+        assert _no_path_probe == []
+        st.update(running=False, exit_code=0)
+        c.get("/api/doctor/install-state")
+        c.get("/api/doctor/install-state")  # polled again: no second refresh
+        assert _no_path_probe == [1]
