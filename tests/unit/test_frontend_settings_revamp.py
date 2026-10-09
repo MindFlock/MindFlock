@@ -3,11 +3,14 @@ screens, browser-notification opt-in, the budget-lock overlay, and the removals
 (sidebar checkbox, foreign-repo chip, pane maximize, repo-path line)."""
 
 import re
+from pathlib import Path
 
 from starlette.testclient import TestClient
 
 from backend.web import server
 from tests._bundle import in_bundle, squash
+
+FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 client = TestClient(server.app)
 
@@ -284,19 +287,21 @@ def test_style_has_budget_lock_rules():
 
 
 def test_app_js_provider_login_ui_removed():
-    """The one-click provider login flow is gone: each CLI prompts for sign-in
-    itself, so the UI carries no login terminal, login modal, or the now-dead
-    absolutePath branch of makeTerm.connect()."""
+    """The old provider login modal is gone, along with the now-dead
+    absolutePath branch of makeTerm.connect(). Signing in to an agent is back,
+    but only as Setup's and the doctor's "Sign in to <agent>"
+    (components/dialogs/AgentSignIn.tsx), the one owner of the login
+    terminal."""
     js = client.get("/app.js").text
-    # No login-terminal / login-close wiring and no login modal remain.
-    for gone in (
-        "makeLoginTerm",
-        "/login-terminal",
-        "/login-close",
-        "ProviderLoginModal",
-        "loginFor",
-    ):
+    for gone in ("makeLoginTerm", "ProviderLoginModal", "loginFor"):
         assert gone not in js, "leftover login-flow reference: %s" % gone
+    owners = [
+        str(p.relative_to(FRONTEND_SRC))
+        for p in FRONTEND_SRC.rglob("*.ts*")
+        if "/login-terminal" in p.read_text(encoding="utf-8")
+        and "__tests__" not in p.parts
+    ]
+    assert owners == ["components/dialogs/AgentSignIn.tsx"], owners
     # makeTerm's connect() no longer branches on absolutePath — the instance
     # terminal path is built unconditionally from /api/instances/.
     assert 'absolutePath ?? "/api/instances/"' not in js
@@ -392,9 +397,14 @@ def test_providers_screen_has_no_login_controls():
     # Install command + installed status still render.
     assert "install_hint" in js
     assert "not installed" in js
-    # No login affordance survives on this screen.
+    # No login affordance survives on this screen (sign-in lives in Setup
+    # and the doctor, not here).
     assert "ProviderLoginModal" not in js
-    assert "login-terminal" not in js
+    providers = (FRONTEND_SRC / "components/settings/screens/Providers.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "login-terminal" not in providers
+    assert "<AgentSignIn" not in providers
 
 
 def test_new_session_ctrl_enter_submits_at_dialog_level():
