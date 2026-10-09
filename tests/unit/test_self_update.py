@@ -521,3 +521,272 @@ def test_installed_version_never_raises_when_the_import_itself_fails(monkeypatch
 
     monkeypatch.setattr(builtins, "__import__", boom)
     assert self_update.installed_version() == ""
+
+
+# --------------------------------------------------------------------------- #
+# A dead installer is "interrupted", not "running" (PID-checked)
+# --------------------------------------------------------------------------- #
+def _dead_pid() -> int:
+    """A PID that is certainly not running: a child we started and reaped."""
+    proc = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+    proc.wait()
+    return proc.pid
+
+
+def test_a_started_marker_whose_installer_died_reads_as_interrupted(statedir):
+    import time as _time
+
+    self_update.write_state(
+        state="started", ref="v9.9.9", started_at=_time.time(), pid=_dead_pid()
+    )
+    assert self_update.running() is False
+    st = self_update.read_state()
+    assert st["state"] == "failed" and st["error"] == "interrupted"
+    # The ref survives, so the screen can say WHICH update was interrupted.
+    assert st["ref"] == "v9.9.9"
+
+
+def test_a_started_marker_whose_installer_still_runs_is_running(statedir):
+    import time as _time
+
+    self_update.write_state(state="started", started_at=_time.time(), pid=os.getpid())
+    assert self_update.running() is True
+    assert self_update.read_state()["state"] == "started"
+
+
+def test_a_dead_pid_never_overwrites_a_state_the_script_just_finished(
+    statedir, monkeypatch
+):
+    """The script writes its final state and THEN exits: a dead PID read
+    between the two must not turn a finished install into "interrupted"."""
+    import time as _time
+
+    started = _time.time()
+    self_update.write_state(state="started", started_at=started, pid=_dead_pid())
+    real_alive = self_update._pid_alive
+
+    def _finish_then_die(pid):
+        self_update.write_state(state="done", started_at=started, code=0)
+        return real_alive(pid)
+
+    monkeypatch.setattr(self_update, "_pid_alive", _finish_then_die)
+    assert self_update.running() is False
+    assert self_update.read_state()["state"] == "done"
+
+
+def test_start_records_the_installers_pid(statedir, monkeypatch):
+    monkeypatch.setattr(self_update, "blocked_reason", lambda: "")
+    monkeypatch.setattr(self_update, "_resolve_commit", lambda ref: "e" * 40)
+
+    class _Popen:
+        pid = 4242
+
+        def __init__(self, argv, **kw):
+            self.argv = argv
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(self_update.subprocess, "Popen", _Popen)
+    assert self_update.start_update("v9.9.9")["ok"] is True
+    st = self_update.read_state()
+    assert st["pid"] == 4242 and st["state"] == "started"
+    # No setsid(1) wrapper: it forks when its caller already leads a process
+    # group, and the PID recorded would be a parent that exits at once.
+    assert self_update._PROC.argv[0] == "/bin/sh"
+
+
+# --------------------------------------------------------------------------- #
+# Which build is running, and whether a finished update is applied here
+# --------------------------------------------------------------------------- #
+def test_installed_commit_is_read_from_direct_url(monkeypatch):
+    import importlib.metadata as md
+
+    class _Dist:
+        def __init__(self, text):
+            self.text = text
+
+        def read_text(self, name):
+            assert name == "direct_url.json"
+            return self.text
+
+    sha = "e048c6e7" * 5  # a commit id: 40 hex characters
+    doc = {
+        "url": "https://github.com/x/y",
+        "vcs_info": {"vcs": "git", "commit_id": sha},
+    }
+    monkeypatch.setattr(md, "distribution", lambda name: _Dist(json.dumps(doc)))
+    assert self_update._read_commit() == sha
+    # An editable / local install records no VCS info: "" rather than a guess.
+    monkeypatch.setattr(
+        md, "distribution", lambda name: _Dist(json.dumps({"dir_info": {}}))
+    )
+    assert self_update._read_commit() == ""
+    monkeypatch.setattr(md, "distribution", lambda name: _Dist("{not json"))
+    assert self_update._read_commit() == ""
+
+
+def test_a_process_already_running_the_installed_build_never_restarts_for_it(
+    statedir, monkeypatch
+):
+    """The installer rewrites the state after its health check — after the
+    restart. That must not read as a second update to restart for."""
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "f" * 40)
+    self_update.write_state(state="done", ref="v9.9.9", commit="f" * 40, code=0)
+    assert self_update.applied() is True
+    assert self_update.restart_pending() is False
+    _, restart_now = self_update.finish_state()
+    assert restart_now is False
+    # A different build installed: that one IS pending.
+    self_update.write_state(state="done", ref="v9.9.9", commit="0" * 40, code=0)
+    assert self_update.restart_pending() is True
+    assert self_update.finish_state()[1] is True
+
+
+def test_applied_falls_back_to_the_version_without_commits(statedir, monkeypatch):
+    monkeypatch.setattr(self_update, "installed_commit", lambda: "")
+    monkeypatch.setattr(self_update, "installed_version", lambda: "9.9.9")
+    st = {"state": "done", "version": "9.9.9", "from_version": "0.7.4"}
+    assert self_update.applied(st) is True
+    # Same version before and after (a reinstall): the version proves nothing.
+    assert self_update.applied({**st, "from_version": "9.9.9"}) is False
+
+
+# --------------------------------------------------------------------------- #
+# What another machine may ask this one to install
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref", ["main", "feature/x", "a" * 40, "v1.2.3; rm -rf ~", ""])
+async def test_only_a_release_tag_is_accepted_remotely(monkeypatch, ref):
+    async def _published(tag):
+        pytest.fail("looked up a ref that isn't a tag")
+
+    monkeypatch.setattr(self_update, "published_release", _published)
+    reason, status = await self_update.check_remote_ref(ref)
+    assert reason and status == 400
+
+
+@pytest.mark.asyncio
+async def test_a_remote_downgrade_is_refused(monkeypatch):
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    reason, status = await self_update.check_remote_ref("v0.6.1")
+    assert "older" in reason and status == 400
+
+
+@pytest.mark.asyncio
+async def test_a_published_tag_at_or_above_the_running_version_is_accepted(
+    monkeypatch,
+):
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+
+    async def _published(tag):
+        return {"tag_name": tag}
+
+    monkeypatch.setattr(self_update, "published_release", _published)
+    assert await self_update.check_remote_ref("v0.7.4") == ("", 200)
+    assert await self_update.check_remote_ref("v0.8.0") == ("", 200)
+
+
+# --------------------------------------------------------------------------- #
+# The installer's health check and rollback
+# --------------------------------------------------------------------------- #
+def _run_health_script(statedir, *, curl_bodies, relaunch=True):
+    """Run the generated script with a stub `uv` (always succeeds, logs its
+    spec) and a stub `curl` that answers ``curl_bodies`` in turn (``None`` =
+    the server is down), the last one repeating."""
+    home = statedir / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    bindir = statedir / "bin"
+    bindir.mkdir()
+    calls = statedir / "uv-calls"
+    uv = bindir / "uv"
+    uv.write_text('#!/bin/sh\necho "$*" >> %s\nexit 0\n' % calls, encoding="utf-8")
+    uv.chmod(0o755)
+    for i, body in enumerate(curl_bodies):
+        (statedir / ("curl.%d" % i)).write_text(
+            "" if body is None else json.dumps(body, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    last = len(curl_bodies) - 1
+    curl = bindir / "curl"
+    curl.write_text(
+        "#!/bin/sh\n"
+        "n=$(cat {d}/curl.n 2>/dev/null || echo 0)\n"
+        '[ "$n" -gt {last} ] && n={last}\n'
+        "echo $((n + 1)) > {d}/curl.n\n"
+        "f={d}/curl.$n\n"
+        '[ -s "$f" ] || exit 7\n'
+        'cat "$f"\n'.format(d=statedir, last=last),
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    marker = statedir / "relaunched"
+    script = statedir / "gen.sh"
+    script.write_text(
+        self_update._script(
+            "v9.9.9",
+            "a" * 40,
+            from_version="0.7.4",
+            prev_commit="b" * 40,
+            started_at=123.0,
+            health_url="http://127.0.0.1:1/api/remote/hello",
+            health_timeout=3,
+            relaunch=("touch %s" % marker) if relaunch else "",
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ, HOME=str(home), PATH="%s:/usr/bin:/bin" % bindir)
+    cp = subprocess.run(
+        ["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=60
+    )
+    uv_calls = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    return cp, json.loads(self_update.state_path().read_text()), uv_calls, marker
+
+
+_OLD = {"app": "mindflock", "version": "0.7.4", "commit": "b" * 40}
+_NEW = {"app": "mindflock", "version": "9.9.9", "commit": "a" * 40}
+
+
+def test_a_server_that_comes_back_on_the_new_build_is_healthy(statedir):
+    cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[_OLD, _NEW])
+    assert cp.returncode == 0
+    assert st["state"] == "done" and st.get("healthy") is True
+    # The fields the server needs after the restart survive the final write.
+    assert st["commit"] == "a" * 40 and st["prev_commit"] == "b" * 40
+    assert st["from_version"] == "0.7.4" and st["started_at"] == 123.0
+    assert len(uv_calls) == 1 and not marker.exists()
+
+
+def test_a_server_that_never_comes_back_is_rolled_back_and_restarted(statedir):
+    cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[_OLD, None])
+    assert st["state"] == "rolled_back"
+    assert "previous one was put back" in st["error"]
+    # The second install is the PREVIOUS commit …
+    assert len(uv_calls) == 2 and "b" * 40 in uv_calls[1]
+    # … and the server is started again with the command it ran with.
+    import time as _time
+
+    for _ in range(20):
+        if marker.exists():
+            break
+        _time.sleep(0.1)
+    assert marker.exists()
+    # Not a state the server restarts for.
+    assert self_update.finish_state()[1] is False
+
+
+def test_a_server_that_has_not_restarted_yet_is_left_alone(statedir):
+    """Still answering with the OLD build is "not restarted yet" (its watcher
+    may be holding for an install terminal), never grounds for a rollback."""
+    cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[_OLD])
+    assert cp.returncode == 0
+    assert st["state"] == "done" and "healthy" not in st
+    assert len(uv_calls) == 1 and not marker.exists()
+
+
+def test_no_health_check_when_the_hello_was_never_reachable(statedir):
+    """A server the script can't reach on loopback (bound elsewhere) is never
+    taken for one that died: no watch, no rollback."""
+    cp, st, uv_calls, marker = _run_health_script(statedir, curl_bodies=[None])
+    assert cp.returncode == 0 and st["state"] == "done"
+    assert len(uv_calls) == 1 and not marker.exists()

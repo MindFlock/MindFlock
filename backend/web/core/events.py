@@ -227,6 +227,12 @@ EVENT_NAMES = (
     # values to keep in Settings → Devices (data: {"cleared": n, "held": n,
     # "detail"}). Once per pause.
     "settings.sync_paused",
+    # A newer MindFlock release is out and this device, or another of "Your
+    # devices", runs an older one (core.update_watch; ``session`` is ""). Once
+    # per release and set of devices behind it (data: {"latest", "tag",
+    # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
+    # "count", "detail"}).
+    "update.available",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay
