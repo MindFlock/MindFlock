@@ -1415,6 +1415,16 @@ mirrors, and a remote-flagged request is never proxied onward (400) — so two
 devices paired both ways don't echo each other's sessions back as
 `a::b::title`.
 
+**Whose credential goes out.** Both proxies (`<device>::<title>` and
+`fwd/`) attach this device's credential for the target (the fleet key, or
+the token pasted for it) only when this device's own gate is on — the
+caller already signed in — or the caller is `privileged()`: this machine
+(loopback, a loopback `Host`, unproxied), the phone or a browser holding
+the fleet-key cookie, a trusted Tailscale account. An anonymous caller of a
+gate-off device is forwarded **without** a credential, so the target's own
+gate decides (a gated target answers 401); otherwise holding the fleet key
+would let a gate-off member launder strangers into gated ones.
+
 | Method | Path | Behavior |
 |---|---|---|
 | GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, shell_version, device, host, remote_control, auth, shared_link, shared_link_live, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`, read once at boot — `""` for an editable or local install), so two builds that both say the same version can be told apart; `install` is how it is installed (`uv-tool`·`editable`·`other` — whether "Update all my devices" can update it); `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none), and `shared_link_live` whether this process's `tailscale serve` for it is up (the phone-link host table in Settings → Devices). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
@@ -1422,7 +1432,7 @@ devices paired both ways don't echo each other's sessions back as
 | POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
 | POST | `/api/devices/{device}/disconnect` | Drop the pairing. **409** `{error: "<host> is one of your devices — remove it in Settings → Devices"}` for a member: the fleet key keeps it connected whatever happens to a pasted token |
-| * | `/api/devices/{device}/fwd/<path>` | Forward to that device with its stored token (502 when not connected). Allow-listed to what New Session asks: `GET /api/config`, `/api/settings`, `/api/templates`, `/api/providers`, `/api/providers/manage`, `/api/repos/suggest`, `/api/repos/search`, `/api/repos/check`, `/api/browse`; `POST /api/mkdir`, `/api/session-plan`, `/api/instances` — anything else 404s. A forwarded create refreshes that device's session list before answering, so the next `GET /api/instances` already carries `<device>::<title>` |
+| * | `/api/devices/{device}/fwd/<path>` | Forward to that device with its stored token — for a caller this device vouches for (see **Whose credential goes out** above; bare otherwise) — (502 when not connected). Allow-listed to what New Session asks: `GET /api/config`, `/api/settings`, `/api/templates`, `/api/providers`, `/api/providers/manage`, `/api/repos/suggest`, `/api/repos/search`, `/api/repos/check`, `/api/browse`; `POST /api/mkdir`, `/api/session-plan`, `/api/instances` — anything else 404s. A forwarded create refreshes that device's session list before answering, so the next `GET /api/instances` already carries `<device>::<title>` |
 
 ### Your devices (fleet)
 
