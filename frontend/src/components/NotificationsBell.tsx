@@ -32,7 +32,8 @@ import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../stat
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
-import { deviceEventNote } from "../lib/fleet";
+import { approvableRequest, deviceEventNote } from "../lib/fleet";
+import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 
 const NOTIF_CAP = 100;
@@ -72,7 +73,13 @@ interface Notif {
   device?: boolean;
   /** A peer.* row (another person): named "Collaborate", opens Work with someone. */
   peer?: boolean;
+  /** A join request: the row's own Approve button answers it from here. */
+  approve?: { id: string; via: string; code: string; host: string } | null;
 }
+
+/** How long a join request's Approve stays on its bell row (the server's
+ * request TTL: after that it has expired anyway). */
+const APPROVE_SHOWN_S = 600;
 
 /** A stage change, said as what happened. */
 const STAGE_WORDS: Record<string, string> = {
@@ -95,6 +102,7 @@ export interface NotifRow {
   rule?: string;
   device?: boolean;
   peer?: boolean;
+  approve?: { id: string; via: string; code: string; host: string } | null;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -177,7 +185,8 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "device.removed":
     case "settings.sync_paused": {
       const n = deviceEventNote(env.event, d);
-      return n ? { text: n.text, cls: n.cls, device: true } : null;
+      const approve = approvableRequest(env.event, d);
+      return n ? { text: n.text, cls: n.cls, device: true, ...(approve ? { approve } : {}) } : null;
     }
     // Another person (peer links): they joined, unlinked, left a message for
     // you, or your relay moved under the people you invited.
@@ -534,6 +543,24 @@ export function NotificationsBell() {
                           (n.session ? windowName(n.session) : "—")}
                     </span>
                     <span className="notif-text">{n.text}</span>
+                    {n.approve && Date.now() / 1000 - n.ts < APPROVE_SHOWN_S && (
+                      // Approve from the bell, after comparing the code on
+                      // the asking computer (it is in the row's text).
+                      <button
+                        type="button"
+                        className="test-btn notif-approve"
+                        data-bell-approve={n.approve.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const req = n.approve!;
+                          void approveJoinRequest(req).then((ok) => {
+                            if (ok) setNotifs((prev) => prev.map((x) => (x.approve?.id === req.id ? { ...x, approve: null } : x)));
+                          });
+                        }}
+                      >
+                        Approve
+                      </button>
+                    )}
                     <span className="notif-time">{relTime(n.ts)}</span>
                   </div>
                 ))}

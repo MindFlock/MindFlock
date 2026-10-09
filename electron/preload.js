@@ -111,6 +111,24 @@ contextBridge.exposeInMainWorld('mfengine', {
   restart: () => ipcRenderer.invoke('engine:restart'),
 })
 
+// OS notifications (frontend/src/lib/desktopNotify.ts): show() raises one
+// from the main process (only while the window isn't focused); onClick()
+// hears which screen a clicked one is about — main has already brought the
+// window forward. Returns an unsubscribe.
+contextBridge.exposeInMainWorld('mfnotify', {
+  show: (o) =>
+    ipcRenderer.invoke('notify:show', {
+      title: String((o && o.title) || ''),
+      body: String((o && o.body) || ''),
+      target: String((o && o.target) || ''),
+    }),
+  onClick: (cb) => {
+    const h = (_e, target) => cb(String(target || ''))
+    ipcRenderer.on('notify:click', h)
+    return () => ipcRenderer.removeListener('notify:click', h)
+  },
+})
+
 // Native clipboard bridge. Electron blocks navigator.clipboard.readText() in
 // the renderer by default, so terminal right-click paste reads/writes through
 // this instead (the web build falls back to navigator.clipboard).

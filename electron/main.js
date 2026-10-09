@@ -10,7 +10,7 @@
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
 // that is hand-rolled (which is what fought us under WSLg/Wayland).
 
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
@@ -1164,7 +1164,15 @@ async function checkForUpdates() {
   }
   console.log('[mindflock] update available:', latest, '(current', app.getVersion() + ')')
   pushUpdateToRenderer()
+  // Minimized or in the background: say so once per version (the in-window
+  // toast covers a focused window).
+  if (latest !== notifiedUpdate && latest !== skippedVersion && win && !win.isDestroyed() && !win.isFocused()) {
+    notifiedUpdate = latest
+    showNotification('MindFlock ' + latest + ' is available', 'Click to open MindFlock and update', 'update')
+  }
 }
+// The release the OS was last told about (one notification per version).
+let notifiedUpdate = ''
 
 function startUpdateChecks() {
   skippedVersion = readUpdateStore().skippedVersion || ''
@@ -1991,6 +1999,49 @@ ipcMain.on('win:close', () => { if (win) win.close() })
 // open until the user toggled fullscreen. A pull can't race the renderer's
 // listener registration the way a push at did-finish-load would.
 ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
+
+// OS notifications (renderer: frontend/src/lib/desktopNotify.ts). The page
+// asks only while its window isn't focused, for the few things that need the
+// person while MindFlock is minimized: a computer asking to join their
+// devices (it expires in ten minutes), someone arriving on a peer link, an
+// update. Clicking one brings the window back and tells the page which
+// screen to open (`target`: "devices" | "peer" | "update").
+const NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])
+// Kept referenced until closed: a Notification that is garbage-collected
+// stops delivering its click on some platforms.
+const liveNotifications = new Set()
+
+function focusWindow() {
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function showNotification(title, body, target) {
+  if (!Notification.isSupported()) return false
+  const n = new Notification({ title: String(title || 'MindFlock').slice(0, 120), body: String(body || '').slice(0, 300) })
+  liveNotifications.add(n)
+  const forget = () => liveNotifications.delete(n)
+  n.on('click', () => {
+    forget()
+    focusWindow()
+    if (target && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('notify:click', target)
+    }
+  })
+  n.on('close', forget)
+  n.show()
+  return true
+}
+
+ipcMain.handle('notify:show', (_e, o) => {
+  const opts = o && typeof o === 'object' ? o : {}
+  const target = NOTIFY_TARGETS.has(opts.target) ? opts.target : ''
+  // The page only asks while unfocused; re-check here (it can race a focus).
+  if (win && !win.isDestroyed() && win.isFocused()) return { ok: false }
+  return { ok: showNotification(opts.title, opts.body, target) }
+})
 
 app.whenReady().then(() => {
   // Drop Electron's default application menu: it carries devtools

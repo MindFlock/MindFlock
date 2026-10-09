@@ -576,3 +576,38 @@ async def test_match_and_phone_link(world, monkeypatch):
 def test_no_phone_link_and_no_match_outside_a_group():
     st = fleet.status(True)
     assert st["phone_link"] is None and st["match"] is None
+
+
+def test_the_phone_page_has_an_approve_card():
+    """/m shows join requests (its own and the copies it holds) with
+    Approve / Deny; a push's tap lands on /m#approve=<id>."""
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[2] / "backend" / "web" / "static"
+    html = (static / "mobile.html").read_text()
+    js = (static / "mobile.js").read_text()
+    assert 'id="approve-cards"' in html
+    assert 'fetch("/api/fleet")' in js
+    assert '"/api/fleet/requests/" + encodeURIComponent(r.id) + "/" + decision' in js
+    # The member it waits on and the code shown go along (relayed approve).
+    assert 'JSON.stringify({ via: r.via || "", code: r.code || "" })' in js
+    assert "approve=([0-9a-f]{16})" in js
+
+
+def test_the_desktop_app_raises_os_notifications():
+    """electron: a native Notification for what needs you while minimized
+    (the page asks through window.mfnotify); its click focuses the window
+    and names the screen; the shell's own update check notifies once per
+    version."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "electron"
+    main = (root / "main.js").read_text()
+    pre = (root / "preload.js").read_text()
+    assert "Notification } = require('electron')" in main
+    assert "ipcMain.handle('notify:show'" in main
+    assert "win.webContents.send('notify:click', target)" in main
+    assert "NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])" in main
+    assert "notifiedUpdate = latest" in main
+    assert "exposeInMainWorld('mfnotify'" in pre
+    assert "ipcRenderer.invoke('notify:show'" in pre

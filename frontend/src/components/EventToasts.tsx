@@ -29,6 +29,7 @@ import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { deviceEventNote } from "../lib/fleet";
+import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -441,10 +442,20 @@ export function EventToasts() {
     // stops all syncing until it's answered there. Never for a replayed
     // backlog: a request from an hour ago has expired, and the bell keeps the
     // record.
+    // The desktop app also raises an OS notification for the ones that need
+    // you while it's minimized (lib/desktopNotify): a join request, someone
+    // arriving on a peer link, an update.
+    unsubs.push(installDesktopNotifyClicks());
+    unsubs.push(
+      ev.subscribe("update.available", (env) => {
+        if (!isReplay(env)) desktopNotify(env.event, env.data);
+      })
+    );
     for (const name of ["device.join_requested", "device.joined", "settings.sync_paused"]) {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;
+          desktopNotify(env.event, env.data);
           const n = deviceEventNote(env.event, env.data);
           if (!n?.toast) return;
           notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
@@ -461,6 +472,7 @@ export function EventToasts() {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;
+          desktopNotify(env.event, env.data);
           const n = peerEventNote(env.event, env.data);
           if (!n?.toast) return;
           notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {

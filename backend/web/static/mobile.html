@@ -40,6 +40,13 @@
       <button type="button" id="new-btn" aria-label="New session">+</button>
     </header>
 
+    <!-- A computer asking to join your devices: approve it from the phone
+         (after checking the asking screen shows the same code). Filled by
+         mobile.js from GET /api/fleet — the requests waiting on this device
+         and the copies it holds for your other devices. A push's tap lands
+         here as /m#approve=<id>. -->
+    <div id="approve-cards" class="hidden" aria-live="polite"></div>
+
     <!-- Git workflow bar: the same guided flow the desktop pane header offers
          (Commit → Push → PR → Merge). The step recommended for the selected
          session's stage is highlighted; every button stays tappable so you can

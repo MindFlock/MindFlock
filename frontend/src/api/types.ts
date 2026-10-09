@@ -730,6 +730,11 @@ export interface Device {
   /** One of "Your devices": it stays connected through the shared device
    * key, so Disconnect doesn't apply — remove it in Settings → Devices. */
   member?: boolean;
+  /** The "Your devices" join protocol it speaks (0 = too old to join). */
+  fleet_proto?: number;
+  /** It belongs to some group of devices; to this one's. */
+  in_fleet?: boolean;
+  same_fleet?: boolean;
   /** Paired, permitted and answering: sessions can be driven AND started there. */
   connected: boolean;
   error?: string;
@@ -765,6 +770,11 @@ export interface FleetMember {
   /** Same group id and epoch but a different key (two halves set up apart);
    * also said in `error`. Missing from an older MindFlock. */
   key_conflict?: boolean;
+  /** Why it can't be reached right now ("connection refused on :8765 — …",
+   * "asleep — Tailscale last saw it 2 h ago"), "" when it can or nobody knows. */
+  reason?: string;
+  /** When MindFlock last answered there (epoch s, 0 = never seen). */
+  last_seen?: number;
 }
 
 /** A tombstone: a device taken out of the group, and who took it out —
@@ -799,6 +809,8 @@ export interface FleetInvite {
   expires_at: number;
   /** `mindflock devices join <this device> <code>` — runs on the new one. */
   command: string;
+  /** "local_only": made, but no other computer can reach this one to use it. */
+  warning?: string;
 }
 
 /** Another device asking to join; both screens show `code`. */
@@ -809,6 +821,10 @@ export interface FleetRequest {
   code: string;
   created_at: number;
   expires_at: number;
+  /** The member it waits on, "" for this device. Approving one with `via`
+   * sends the answer there (POST …/approve with {via, code}). */
+  via?: string;
+  via_host?: string;
 }
 
 /** This device's own outgoing join attempt (one at a time). */
@@ -819,6 +835,9 @@ export interface FleetJoin {
   code: string;
   error: string;
   id: string;
+  /** Set once joined: false = this device is local-only, so the others can't
+   * reach it (Make reachable). */
+  self_reachable?: boolean;
 }
 
 /** A MindFlock on the tailnet that is not one of your devices (yet). */
@@ -837,11 +856,51 @@ export interface FleetCandidate {
   has_token: boolean;
 }
 
+/** A tailnet device that isn't (reachably) a MindFlock, and why. */
+export interface FleetPeer {
+  device: string;
+  host: string;
+  os?: string;
+  online: boolean;
+  tagged: boolean;
+  /** ok | refused | timeout | tls | not_mindflock | http_<n> | asleep | unreachable */
+  outcome: string;
+  /** Tailscale's last contact (epoch s, 0 unknown). */
+  last_seen: number;
+  reason: string;
+}
+
+/** A device this one let in lately, and whether it can reach it. */
+export interface FleetAdmit {
+  device: string;
+  host: string;
+  at: number;
+  state: "checking" | "reachable" | "unreachable_joiner";
+  reason: string;
+}
+
+/** Who answers the shared phone link, per device. */
+export interface FleetPhoneLink {
+  name: string;
+  hosts: { key: string; host: string; self: boolean; state: "hosting" | "waiting" | "off" | "unknown" }[];
+}
+
 export interface FleetStatus {
   in_fleet: boolean;
   id: string;
   epoch: number;
-  self: { key: string; host: string };
+  self: { key: string; host: string; ip?: string; port?: number };
+  /** The other devices can reach this one (false = bound to 127.0.0.1). */
+  self_reachable?: boolean;
+  listening?: "local" | "tailnet" | "";
+  gate_on?: boolean;
+  admitted?: FleetAdmit[];
+  tailnet_peers?: FleetPeer[];
+  /** The tailnet policy lines that open this port between your devices. */
+  policy_grant?: string;
+  /** What "Match my other devices" would change here (null: nothing). */
+  match?: { reachable: boolean; shared_link: string } | null;
+  phone_link?: FleetPhoneLink | null;
   members: FleetMember[];
   invites: FleetInvite[];
   requests: FleetRequest[];
