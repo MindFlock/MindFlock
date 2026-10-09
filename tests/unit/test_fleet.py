@@ -1045,9 +1045,11 @@ async def test_request_and_approve_end_to_end(world, events):
     assert world.fleet_state("rig")["key"] == world.fleet_state("laptop")["key"]
     asked = [e for e in events if e["event"] == "device.join_requested"]
     assert asked and asked[0]["data"]["detail"] == "Rig · code %s" % code
-    # Polling used the public route without credentials.
+    # The joiner polled the device it asked, on the public route. (Which
+    # device the harness labels as the CALLER is unreliable here: rig's
+    # background poll can fire while the test is "on" laptop.)
     polls = [c for c in world.calls if c[3].startswith("/api/fleet/requests/")]
-    assert polls and all(c[0] == "rig" for c in polls)
+    assert polls and all(c[1] == "laptop" and c[2] == "GET" for c in polls)
 
 
 @pytest.mark.parametrize("how", ["code", "approve"])
