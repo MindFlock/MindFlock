@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -409,7 +410,7 @@ def setup_git_credential() -> dict:
             "helper": "",
             "error": "the mindflock command isn't on PATH",
         }
-    helper = "!%s git-credential" % __import__("shlex").quote(exe)
+    helper = "!%s git-credential" % shlex.quote(exe)
     rc, _out, err = _git(
         "config", "--global", "credential.https://github.com.helper", helper
     )

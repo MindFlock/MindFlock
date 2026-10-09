@@ -149,6 +149,8 @@ def test_invite_book_mints_relay_codes_and_checks_them():
 
 
 _label = st.from_regex(r"[a-z0-9](?:[a-z0-9-]{0,20}[a-z0-9])?", fullmatch=True)
+
+
 def _reachable(host: str) -> bool:
     # Dotted digit labels can spell 0.0.0.0, which codes rightly refuse.
     try:
