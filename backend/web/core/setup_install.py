@@ -11,12 +11,19 @@ with one difference that matters: closing the window must not kill an install
 halfway through an ``apt-get``, so the session records its exit status in a
 marker file and is only torn down (or replaced by a fresh run) once that file
 exists.
+
+Without tmux — the very dependency a fresh machine is most likely to be
+missing — the script runs under a plain PTY instead
+(:mod:`backend.web.core.pty_run`), which keeps the same contract: it survives
+the window closing, a reopen replays its output, and the exit-status file is
+what the UI watches.
 """
 
 from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 from typing import Optional, Tuple
 
@@ -47,8 +54,25 @@ def _tmux(*args: str) -> int:
         return 1
 
 
+def _have_tmux() -> bool:
+    return shutil.which("tmux") is not None
+
+
 def _session_exists() -> bool:
-    return _tmux("has-session", "-t=" + SESSION) == 0
+    from backend.web.core import pty_run
+
+    run = pty_run.get(SESSION)
+    if run is not None and run.alive():
+        return True
+    return _have_tmux() and _tmux("has-session", "-t=" + SESSION) == 0
+
+
+def _kill_session() -> None:
+    from backend.web.core import pty_run
+
+    pty_run.kill(SESSION)
+    if _have_tmux():
+        _tmux("kill-session", "-t=" + SESSION)
 
 
 def exit_code() -> Optional[int]:
@@ -77,7 +101,8 @@ def _write_script(script: str) -> str:
 
 
 def ensure_session() -> Tuple[str, Optional[str]]:
-    """Ensure a tmux session running the install script exists.
+    """Ensure a tmux session (or, without tmux, a plain-PTY run) of the install
+    script exists — :func:`backend.web.core.pty_run.serve` attaches to either.
 
     Returns ``(session_name, error_or_None)``. A run still in progress is
     reattached, never restarted; a finished one is replaced by a fresh run
@@ -88,7 +113,7 @@ def ensure_session() -> Tuple[str, Optional[str]]:
     if _session_exists():
         if exit_code() is None:
             return SESSION, None
-        _tmux("kill-session", "-t=" + SESSION)
+        _kill_session()
     # Forget the previous run's result FIRST — the probe below takes seconds,
     # and a UI polling in that window must not read the old exit status as
     # this run's.
@@ -112,9 +137,20 @@ def ensure_session() -> Tuple[str, Optional[str]]:
     # what says "safe to close" and what the UI watches to re-run the doctor.
     wrapped = (
         "sh %s; echo $? > %s; echo; "
-        "echo '[mindflock] done — you can close this window'; "
-        "exec ${SHELL:-/bin/sh}" % (shlex.quote(script), status)
+        "echo '[mindflock] done — you can close this window'"
+        % (shlex.quote(script), status)
     )
+    if not _have_tmux():
+        # No shell after it: nothing would ever close a plain PTY's leftover
+        # shell, and the finished run's transcript stays on screen anyway.
+        from backend.web.core import pty_run
+
+        try:
+            pty_run.start(SESSION, ["sh", "-c", wrapped], os.path.expanduser("~"))
+        except Exception as err:  # noqa: BLE001 — surfaced in the terminal
+            return SESSION, "could not start the install terminal: %s" % err
+        return SESSION, None
+    wrapped += "; exec ${SHELL:-/bin/sh}"
     try:
         created = subprocess.run(
             [
@@ -156,8 +192,11 @@ def close() -> bool:
     was closed — a run still in progress keeps going in the background (the
     next "Install" reattaches to it)."""
     if not _session_exists():
+        from backend.web.core import pty_run
+
+        pty_run.kill(SESSION)  # forget a finished plain-PTY run
         return True
     if exit_code() is None:
         return False
-    _tmux("kill-session", "-t=" + SESSION)
+    _kill_session()
     return True

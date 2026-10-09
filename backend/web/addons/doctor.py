@@ -42,6 +42,8 @@ class DoctorAddon(Addon):
         super().__init__(ctx)
         self._cached_payload: Optional[dict] = None
         self._cached_at: float = 0.0
+        #: The install result PATH was last refreshed for (see install-state).
+        self._refreshed_for: Optional[dict] = None
         self._router = self._build_router()
 
     def _payload(self, refresh: bool = False) -> dict:
@@ -52,6 +54,13 @@ class DoctorAddon(Addon):
             and now - self._cached_at < _CACHE_TTL_S
         ):
             return self._cached_payload
+        if refresh:
+            # A re-probe is asked for after installing something: re-read the
+            # PATH first, or a tool in a directory created since boot (Homebrew,
+            # ~/.opencode/bin) still reads as missing until a restart.
+            from backend import pathenv
+
+            pathenv.refresh()
         payload = doctor.to_payload(doctor.run_checks())
         self._cached_payload = payload
         self._cached_at = now
@@ -85,33 +94,54 @@ class DoctorAddon(Addon):
         async def install_terminal(ws: WebSocket) -> None:
             """A browser terminal running the one-shot install script (rebuilt
             server-side from a fresh doctor run — the client sends no command).
-            Reattaches to a run still in progress."""
+            Reattaches to a run still in progress. Works without tmux (a plain
+            PTY — tmux is usually one of the things being installed).
+
+            Only for the person at this device (:func:`privileged`): it runs
+            installers and sudo, so an anonymous caller of an exposed gate-off
+            server, or another MindFlock relaying, is refused."""
             import json
 
-            from backend.web.core import setup_install
-            from backend.web.core.terminal import pump_pty, spawn_tmux_attach
+            from backend.web.core import auth, pty_run, setup_install
 
             await ws.accept()
+            if not await auth.privileged(ws.scope):
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "installing is only allowed from this "
+                            "computer or a signed-in device",
+                        }
+                    )
+                )
+                await ws.close(code=4403)
+                return
             session, err = await asyncio.to_thread(setup_install.ensure_session)
             if err is not None:
                 await ws.send_text(json.dumps({"type": "error", "message": err}))
                 await ws.close(code=4500)
                 return
             self._cached_payload = None  # whatever it installs, re-probe after
-            try:
-                proc = spawn_tmux_attach(session)
-            except Exception as exc:  # noqa: BLE001
-                await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
-                await ws.close(code=4500)
-                return
-            await pump_pty(ws, proc, allow_input=True)
+            await pty_run.serve(ws, session)
 
         @router.get("/doctor/install-state")
-        def install_state() -> JSONResponse:
+        async def install_state() -> JSONResponse:
             """``{running, exit_code}`` of the install terminal's script."""
             from backend.web.core import setup_install
 
-            return JSONResponse(setup_install.state())
+            st = await asyncio.to_thread(setup_install.state)
+            if st["exit_code"] is not None and self._refreshed_for != st:
+                # The script just finished: pick up whatever it put on disk
+                # (once per result — the UI polls this every second).
+                self._refreshed_for = st
+                from backend import pathenv
+
+                await asyncio.to_thread(pathenv.refresh)
+                self._cached_payload = None
+            elif st["exit_code"] is None:
+                self._refreshed_for = None
+            return JSONResponse(st)
 
         @router.post("/doctor/install-close")
         def install_close() -> JSONResponse:

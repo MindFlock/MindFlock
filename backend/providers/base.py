@@ -704,6 +704,12 @@ class BaseProvider:
         package-manager hint keyed on the program name). Default: none."""
         return ""
 
+    def version_args(self) -> tuple:
+        """Arguments that make this CLI print its version and exit (the doctor
+        shows it next to the path), or ``()`` for no probe. Default: none — a
+        CLI is never run with a guessed flag."""
+        return ()
+
     def login_command(self) -> Optional[str]:
         """The command the one-click "Log in" terminal runs so the user can
         authenticate the CLI *through the CLI itself*. Default: run the program
