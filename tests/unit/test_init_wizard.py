@@ -38,6 +38,13 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
 
 
+@pytest.fixture(autouse=True)
+def no_plan(monkeypatch):
+    """The first-run plan reads fleet, Tailscale and gh state from the machine:
+    off by default here (TestFirstRunPlan turns a canned one on)."""
+    monkeypatch.setattr(init_wizard, "_plan", lambda checks: None)
+
+
 @pytest.fixture()
 def no_prompts(monkeypatch):
     """Any call to input() fails the test: the paths that use this fixture claim
@@ -812,3 +819,105 @@ class TestFirstRunBanner:
         out = capsys.readouterr().out
         assert "Three steps" not in out
         assert "click" not in out
+
+
+def _canned_plan(choice=""):
+    from backend import onboarding
+
+    return onboarding.build_plan(
+        {
+            "checks": [
+                {"id": "tmux", "status": "ok"},
+                {
+                    "id": "agent-auth",
+                    "status": "warn",
+                    "provider": "claude",
+                    "cmd": "claude",
+                },
+            ],
+            "devices": {"choice": choice},
+            "tailscale": {},
+            "github": {
+                "connected": False,
+                "token_url": "https://github.com/settings/tokens/new",
+            },
+            "repo": {},
+        }
+    )
+
+
+class TestFirstRunPlan:
+    """`mindflock init` renders the same plan Setup shows, and asks the devices
+    question BEFORE the agent sign-in (joining brings the default agent)."""
+
+    def test_asks_first_or_join_before_the_fix_loop(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from backend import onboarding
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(doctor, "run_checks", lambda: [_GIT_OK])
+        answers = {"choice": ""}
+        monkeypatch.setattr(
+            init_wizard, "_plan", lambda checks: _canned_plan(answers["choice"])
+        )
+
+        def _set(choice):
+            answers["choice"] = choice
+            return choice
+
+        monkeypatch.setattr(onboarding, "set_choice", _set)
+        order = []
+
+        def _fix(checks):
+            order.append(("fix", [c.id for c in checks]))
+            return checks
+
+        monkeypatch.setattr(cli, "_fix_checks", _fix)
+        _candidates(monkeypatch, _entry(tmp_path))
+        it = iter(["j", ""])
+
+        def _input(prompt=""):
+            order.append(("ask", prompt.strip()[:6]))
+            return next(it)
+
+        monkeypatch.setattr("builtins.input", _input)
+        assert init_wizard.run() == 0
+        assert order[0] == ("ask", "[F]irs")
+        assert order[1][0] == "fix"
+        out = capsys.readouterr().out
+        assert "mindflock devices join DEVICE CODE" in out
+        assert "Your setup, in order:" in out
+        # The plan lines, in the shared order.
+        idx = [
+            out.index(t)
+            for t in (
+                "Dependencies",
+                "First computer",
+                "Sign in to your agent",
+                "Connect GitHub",
+            )
+        ]
+        assert idx == sorted(idx)
+        assert "sign-ins stay on each computer" in out
+
+    def test_joining_holds_the_agent_sign_in_back(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        auth = Check("agent-auth", "agent auth", "warn", "no login", cmd="claude")
+        monkeypatch.setattr(doctor, "run_checks", lambda: [_TMUX_MISSING, auth])
+        monkeypatch.setattr(init_wizard, "_plan", lambda checks: _canned_plan("join"))
+        seen = []
+        monkeypatch.setattr(
+            cli, "_fix_checks", lambda cs: seen.append([c.id for c in cs]) or cs
+        )
+        _candidates(monkeypatch, _entry(tmp_path))
+        _answers(monkeypatch, "")
+        init_wizard.run()
+        assert seen == [["tmux"]]
+
+    def test_assume_yes_never_asks(self, monkeypatch, tmp_path, no_prompts, capsys):
+        monkeypatch.setattr(doctor, "run_checks", lambda: [_GIT_OK])
+        monkeypatch.setattr(init_wizard, "_plan", lambda checks: _canned_plan())
+        _candidates(monkeypatch, _entry(tmp_path))
+        assert init_wizard.run(assume_yes=True) == 0
+        assert "Your setup, in order:" in capsys.readouterr().out

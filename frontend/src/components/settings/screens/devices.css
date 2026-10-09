@@ -353,3 +353,20 @@
 .set-row .devices-actions:has(> select) {
   align-items: stretch;
 }
+
+/* A brand-new computer in one line (DeviceReadiness.tsx). */
+.devices-bootstrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.devices-bootstrap-open {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.devices-readiness {
+  font-size: 11px;
+}

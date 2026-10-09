@@ -54,6 +54,7 @@ import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { TailscaleCard } from "./TailscaleCard";
+import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
 const POLL_MS = 3000;
@@ -172,6 +173,9 @@ export function Devices(p: ScreenProps) {
       void loadAll();
     } else if (j.state === "denied" || j.state === "expired") toast(joinLine(j));
   }, [st?.join, loadAll]);
+
+  // Each member's own "ready to work?" summary (read-only; fixes run there).
+  const readiness = useFleetReadiness(!!p.active && !!st?.in_fleet, (st?.members || []).map((m) => m.key));
 
   /** Run one action: busy while it runs, its error as a toast, then refetch. */
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
@@ -381,6 +385,7 @@ export function Devices(p: ScreenProps) {
                       )}
                     </span>
                     <span className={"devices-note" + (warn ? " warn" : "")}>{status}</span>
+                    <ReadinessLine r={readiness[m.key]} self={m.self} />
                   </span>
                   <button
                     type="button"
@@ -572,6 +577,7 @@ export function Devices(p: ScreenProps) {
             command). Works once · expires in{" "}
             <span id="devices-invite-countdown">{fmtCountdown(invite.expires_at, now)}</span>.
           </span>
+          <NewComputerLine code={invite.code} />
           <button
             type="button"
             className="test-btn devices-self-start"
@@ -1005,6 +1011,7 @@ function SettingsSyncRows(props: {
             ))}
           </ul>
           <span className="set-hint">Install it here and the next sync applies it.</span>
+          <SyncedAgentInstall onDone={() => void reload()} />
         </div>
       )}
 

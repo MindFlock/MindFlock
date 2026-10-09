@@ -788,6 +788,13 @@ class GithubSettings:
     #: lowest key runs them (``settings_hooks.automation_here``); a lone
     #: device always does. Admitting a device fills it in.
     automation_device: str = ""
+    #: A GitHub OAuth App's client id (public, not a secret), turning Setup's
+    #: "Connect GitHub" into GitHub's device flow: a code to type at
+    #: github.com/login/device, no token to copy. ``""`` = none registered;
+    #: Setup then drives ``gh auth login --web``, or links to a pre-filled
+    #: token page (:mod:`backend.web.core.github_auth`). ``MINDFLOCK_GITHUB_
+    #: CLIENT_ID`` wins over it. SYNCED, like the token it produces.
+    oauth_client_id: str = ""
 
     def repo_list(self) -> List[str]:
         """Effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -835,6 +842,8 @@ class GithubSettings:
             }
         if self.automation_device:
             d["automation_device"] = self.automation_device
+        if self.oauth_client_id:
+            d["oauth_client_id"] = self.oauth_client_id
         return d
 
     @classmethod
@@ -864,6 +873,7 @@ class GithubSettings:
             },
             # (A device-local ``run_here`` from a pre-release build is ignored.)
             automation_device=str(d.get("automation_device", "") or "").strip(),
+            oauth_client_id=str(d.get("oauth_client_id", "") or "").strip(),
         )
 
 
@@ -1042,6 +1052,12 @@ class GeneralSettings:
     to where the user left it; ``None`` (never toggled) / ``False`` = stay
     stopped.
 
+    ``setup_devices``: the answer to Setup's "First computer, or join one you
+    already have?" (``"first"`` | ``"join"``; ``""`` = not asked yet). It
+    orders the first-run plan (:mod:`backend.onboarding`): joining brings the
+    default agent, the GitHub token and ticket sources, so those steps wait
+    for it. Per device — every computer answers it for itself.
+
     ``resume_on_usage_reset``: whether a session parked on a usage-limit screen
     is nudged to carry on once the window reopens. The prompt queue has always
     done this for sessions with something queued (``wait_for_limit``); this
@@ -1082,6 +1098,7 @@ class GeneralSettings:
     serve_mode: str = ""  # "" / "local" | "tailscale"
     shared_link: str = ""  # "" = off | a Tailscale Service name, e.g. "mindflock"
     ingestion_autostart: Optional[bool] = None
+    setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
@@ -1113,6 +1130,8 @@ class GeneralSettings:
             d["shared_link"] = self.shared_link
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
+        if self.setup_devices:
+            d["setup_devices"] = self.setup_devices
         if self.resume_on_usage_reset is not None:
             d["resume_on_usage_reset"] = self.resume_on_usage_reset
         if self.agent_mcp is not None:
@@ -1139,6 +1158,7 @@ class GeneralSettings:
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             shared_link=str(d.get("shared_link", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
+            setup_devices=_setup_devices(d.get("setup_devices")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
@@ -1653,6 +1673,12 @@ def _agent_mcp_scope(v: Any) -> str:
     """A known ``agent_mcp_scope`` value, lower-cased, else ``""`` (default)."""
     s = str(v or "").strip().lower()
     return s if s in AGENT_MCP_SCOPES else ""
+
+
+def _setup_devices(v: Any) -> str:
+    """``"first"`` / ``"join"`` (Setup's devices question), else ``""``."""
+    s = str(v or "").strip().lower()
+    return s if s in ("first", "join") else ""
 
 
 def _login_list(v: Any) -> List[str]:

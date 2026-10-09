@@ -284,3 +284,72 @@ button.linklike {
 .setup-acct-row .agent-signin-btn {
   margin-left: 8px;
 }
+
+/* The first-run plan (GET /api/onboarding): each step's one-line status, and
+ * Connect GitHub (ConnectGitHub.tsx). */
+.setup-reason {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-reason.st-ok {
+  color: var(--ok, var(--muted));
+}
+
+.setup-reason.st-skip {
+  opacity: 0.8;
+}
+
+.connect-github {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.connect-github .gh-connected {
+  margin: 0;
+  font-size: 12px;
+}
+
+.gh-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.gh-user-code {
+  font-size: 16px;
+  letter-spacing: 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.gh-token-row input,
+.gh-identity input {
+  min-width: 0;
+  flex: 1 1 140px;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.gh-token-fold summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gh-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connect-github .setup-acct-row {
+  flex-wrap: wrap;
+}

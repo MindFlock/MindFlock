@@ -49,7 +49,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-__all__ = ["Plan", "Report", "build_plan", "execute", "home_dirs"]
+__all__ = ["Plan", "Report", "build_plan", "execute", "home_dirs", "leave_devices"]
 
 #: Timeout for every git call we make. Uninstall must not hang on a wedged repo.
 _GIT_TIMEOUT_S = 60
@@ -451,6 +451,80 @@ def _purge_dir(path: str, report: Report, dry_run: bool = False) -> None:
         report.did("deleted %s" % path)
     except OSError as err:
         report.failed("could not delete %s: %s" % (path, err))
+
+
+# --------------------------------------------------------------------------- #
+# Your devices
+# --------------------------------------------------------------------------- #
+#: Cap on finding the other devices and telling them (offline ones never answer).
+LEAVE_TIMEOUT_S = 25.0
+
+
+async def _leave_async() -> List[str]:
+    """Find the other devices on the tailnet, then leave the group the way
+    Settings → Devices → Leave does (:func:`backend.web.core.fleet
+    .leave_fleet`: a tombstone for this device goes to every member that
+    answers). Returns the members that were reachable to be told."""
+    from backend.web.core import fleet, remote
+
+    try:
+        await remote.discover_now()
+        told = [d["key"] for d in fleet._visible_members()]
+        await fleet.leave_fleet()
+        return told
+    finally:
+        await remote.shutdown()
+
+
+def leave_devices(dry_run: bool = False, timeout: float = LEAVE_TIMEOUT_S) -> dict:
+    """Leave "Your devices" before uninstalling, best-effort.
+
+    Without it the other devices keep an offline row for this computer
+    forever, and ``github.automation_device`` (who runs PR review) can stay
+    pinned to a computer that no longer exists. ``leave_fleet`` hands PR
+    review to another member first.
+
+    ``{"state": "none"|"would"|"left"|"partial"|"failed", "others": [hosts],
+    "missed": [hosts], "self": <this device's name>, "error"}`` — ``partial``
+    when some members were offline (they keep this computer until it is
+    removed from one of them); ``failed`` when nothing could be told (this
+    computer still forgets the group locally). Never raises."""
+    out = {"state": "none", "others": [], "missed": [], "self": "", "error": ""}
+    try:
+        from backend.web.core import fleet
+
+        if not fleet.in_fleet():
+            return out
+        me = fleet._self_key()
+        members = fleet.live_members()
+    except Exception:  # noqa: BLE001 — no web extras / unreadable store
+        return out
+    others = {k: (m.get("host") or k) for k, m in members.items() if k != me}
+    out.update(others=sorted(others.values()), self=me)
+    if dry_run:
+        out["state"] = "would"
+        return out
+    import asyncio
+
+    try:
+        told = asyncio.run(asyncio.wait_for(_leave_async(), timeout))
+    except Exception as err:  # noqa: BLE001 — offline, timeout, anything
+        out.update(
+            state="failed",
+            missed=sorted(others.values()),
+            error=str(err) or type(err).__name__,
+        )
+        try:  # still forget the group here, as leaving would have
+            from backend.web.core import fleet, settings_sync
+
+            fleet.leave()
+            settings_sync.disable()
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+    missed = sorted(h for k, h in others.items() if k not in told)
+    out.update(state="partial" if missed else "left", missed=missed)
+    return out
 
 
 def server_is_running(host: Optional[str] = None, port: Optional[int] = None) -> bool:

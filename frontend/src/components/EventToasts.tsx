@@ -29,6 +29,7 @@ import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { deviceEventNote } from "../lib/fleet";
+import { pushFailedNote } from "../lib/onboarding";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -268,6 +269,19 @@ export function EventToasts() {
         if (isReplay(env) || env.new === "ok") return;
         notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), {
           onClick: () => selectSession(env.session),
+        });
+      })
+    );
+    unsubs.push(
+      // The Push button's push failed for want of a sign-in or a git
+      // identity: say so (the shell pane only shows git's wall of text) and
+      // point at the fix — Setup's Connect GitHub step for those two.
+      ev.subscribe("session.push_failed", (env) => {
+        if (isReplay(env)) return;
+        const n = pushFailedNote(namedSlot(env.session), env.data as Record<string, string>);
+        notifyOnce(env.session, "pushfail", n.text, {
+          onClick: () => (n.setup ? useUi.getState().openDialogFor("setup") : selectSession(env.session)),
+          duration: 10000,
         });
       })
     );
