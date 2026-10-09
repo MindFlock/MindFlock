@@ -31,11 +31,12 @@ import threading
 import time
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from backend.config import settings as settings_store
 from backend.web.core import aliases as _aliases
+from backend.web.core import auth as _web_auth
 from backend.web.core import events as _events
 from backend.web.core import mobile_access, mobile_announce, ntfy
 
@@ -603,6 +604,11 @@ class NotifyAddon(Addon):
             cfg = ntfy.load()
             if not cfg.active:
                 return
+            data = envelope.get("data") or {}
+            if envelope.get("event") == "device.join_requested" and data.get("via"):
+                # A copy of a request waiting on another member (shown here
+                # so it can be approved here): that member already pushed it.
+                return
             for rule in _enabled_rules():
                 if not _matches(rule, envelope):
                     continue
@@ -617,6 +623,9 @@ class NotifyAddon(Addon):
                 # the emitting thread. Empty when there's no tailnet — and then
                 # publish() falls back to the user's own configured click URL.
                 click = mobile_announce.click_for(str(envelope.get("session") or ""))
+                if click and rule["id"] == "device_join" and data.get("id"):
+                    # Straight to the phone's Approve card for this request.
+                    click += "#approve=" + str(data["id"])
                 message = _fill(rule.get("body", ""), envelope)
                 if click:
                     # Also in the text: a notification you have to go find the
@@ -648,10 +657,18 @@ class NotifyAddon(Addon):
             return JSONResponse({"rules": _rules_with_state()})
 
         @router.post("/rules/{rule_id}")
-        def set_rule(rule_id: str, payload: dict) -> JSONResponse:
+        def set_rule(
+            rule_id: str,
+            payload: dict,
+            allowed: bool = Depends(_web_auth.configure_allowed),
+        ) -> JSONResponse:
             """Turn one rule on/off (for BOTH channels). Default-on rules persist
             as an opt-out (``muted_rules``); default-off rules persist as an
-            opt-in (``enabled_rules``). Unknown ids are rejected."""
+            opt-in (``enabled_rules``). Unknown ids are rejected. Owner only
+            (``auth.may_configure``): the rules are synced, and muting
+            ``device_join`` everywhere would hide a stranger's join request."""
+            if not allowed:
+                return _web_auth.configure_refused()
             rule = next((r for r in NOTIFY_RULES if r["id"] == rule_id), None)
             if rule is None:
                 return JSONResponse(
@@ -693,7 +710,9 @@ class NotifyAddon(Addon):
             return JSONResponse(_ntfy_view())
 
         @router.post("/ntfy")
-        def set_ntfy(payload: dict) -> JSONResponse:
+        def set_ntfy(
+            payload: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
             """Save the ntfy channel config; returns the same view as ``GET``.
 
             Only the keys present are touched. The token follows the store's
@@ -710,7 +729,12 @@ class NotifyAddon(Addon):
             ``{"clear_token": true}`` is that escape hatch, and it wins over any
             ``token`` in the same payload: it is the destructive intent, and the
             only way to send both is to mean it.
+
+            Owner only (``auth.may_configure``): the channel is synced, and
+            a server/topic of someone else's would get every device's pushes.
             """
+            if not allowed:
+                return _web_auth.configure_refused()
             payload = payload or {}
             stored = settings_store.load_settings().notifications
             patch: dict = {}

@@ -963,3 +963,97 @@ class TestAutomationShown:
         cli.main(["devices"])
         out = capsys.readouterr().out
         assert "none of your devices" not in out and "all run" not in out
+
+
+# --------------------------------------------------------------------------- #
+# `mindflock join CODE` — one command for every code; reasons in `devices`
+# --------------------------------------------------------------------------- #
+class TestJoinAnyCode:
+    def test_a_peer_invite_goes_to_peer_join(self, srv, capsys):
+        srv.posts["/api/peer/join"] = {"peer_name": "Ana", "sas": "12-34"}
+        assert cli.main(["join", "Join me: mfp1:abcdefgh-wxyz"]) == 0
+        assert srv.sent("POST") == [("/api/peer/join", {"code": "mfp1:abcdefgh-wxyz"})]
+        assert "paired with Ana" in capsys.readouterr().out
+
+    def test_a_device_command_goes_to_devices_join(self, srv):
+        srv.posts["/api/fleet/join"] = {"state": "joined", "host": "Work-PC"}
+        argv = ["join", "mindflock", "devices", "join", "work-pc", "abcd-efgh", "--yes"]
+        assert cli.main(argv) == 0
+        assert srv.sent("POST") == [
+            ("/api/fleet/join", {"device": "work-pc", "code": "ABCD-EFGH"})
+        ]
+
+    def test_a_bare_code_goes_to_the_one_joinable_computer(self, monkeypatch):
+        st = _status()
+        st["candidates"] = [c for c in st["candidates"] if c["device"] != "spare"]
+        srv = FakeServer(monkeypatch, st)
+        srv.posts["/api/fleet/join"] = {"state": "joined", "host": "Work-PC"}
+        assert cli.main(["join", "ABCD", "EFGH", "-y"]) == 0
+        assert srv.sent("POST") == [
+            ("/api/fleet/join", {"device": "work-pc", "code": "ABCD-EFGH"})
+        ]
+
+    def test_a_bare_code_with_several_computers_asks_which(self, srv, capsys):
+        assert cli.main(["join", "ABCDEFGH", "-y"]) == 1
+        err = capsys.readouterr().err
+        assert "which computer showed that code" in err and "work-pc" in err
+        assert srv.sent("POST") == []
+
+    def test_anything_else_is_refused(self, srv, capsys):
+        assert cli.main(["join", "hello"]) == 1
+        assert "mfp1:" in capsys.readouterr().err
+
+
+def test_devices_list_says_why(monkeypatch, capsys):
+    st = _status(
+        self_reachable=False,
+        admitted=[
+            {
+                "device": "rig",
+                "host": "Rig",
+                "state": "unreachable_joiner",
+                "reason": "connection refused on :8765",
+            }
+        ],
+        tailnet_peers=[
+            {
+                "device": "nas",
+                "host": "nas",
+                "outcome": "timeout",
+                "reason": "timed out on :8765 — your Tailscale policy may block tcp:8765",
+            }
+        ],
+        policy_grant='"grants": [\n],',
+    )
+    st["members"][2]["reason"] = "asleep — Tailscale last saw it 2 h ago"
+    FakeServer(monkeypatch, st)
+    assert cli.main(["devices"]) == 0
+    out = capsys.readouterr().out
+    assert "asleep — Tailscale last saw it 2 h ago" in out
+    assert "can't reach this one" in out
+    assert "joined, but Rig isn't reachable from here" in out
+    assert "nas" in out and "policy may block" in out and '"grants"' in out
+
+
+def test_devices_add_warns_on_a_local_only_computer(srv, capsys):
+    srv.posts["/api/fleet/invite"] = {
+        "code": "ABCD-EFGH",
+        "device": "laptop",
+        "expires_at": time.time() + 600,
+        "warning": "local_only",
+    }
+    assert cli.main(["devices", "add"]) == 0
+    assert "local-only" in capsys.readouterr().err
+
+
+def test_approving_a_request_waiting_on_another_device_relays_it(monkeypatch, capsys):
+    st = _status()
+    st["requests"][0].update(via="mac-mini", via_host="Mac-Mini")
+    srv = FakeServer(monkeypatch, st)
+    assert cli.main(["devices", "approve", "desktop", "--yes"]) == 0
+    assert srv.sent("POST") == [
+        (
+            "/api/fleet/requests/a1b2c3d4e5f60718/approve",  # pragma: allowlist secret
+            {"via": "mac-mini", "code": "123 456"},
+        )
+    ]

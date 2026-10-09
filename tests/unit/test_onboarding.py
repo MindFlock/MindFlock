@@ -545,7 +545,12 @@ def test_install_sh_takes_join_and_stays_posix():
         if subprocess.run(["which", sh], capture_output=True).returncode == 0:
             assert subprocess.run([sh, "-n", script]).returncode == 0
     text = open(script, encoding="utf-8").read()
-    assert 'mindflock devices bootstrap --join "$JOIN"' in text
+    assert '"$MF" devices bootstrap --join "$JOIN"' in text
+    # Re-running the installer restarts a running server and stops there —
+    # except with --join, which still has to join afterwards.
+    restart = text[text.index("# --- 5. a server already running here") :]
+    restart = restart[: restart.index("# --- 6. join")]
+    assert 'if [ -z "$JOIN" ]; then' in restart and "exit 0" in restart
     assert "UV_INSTALLER_SHA256=" in text  # the pinned bits stay
 
 
@@ -761,3 +766,77 @@ def test_cli_bootstrap_join_stops_without_tailscale(monkeypatch, capsys):
     monkeypatch.setattr(client, "post", lambda *a, **k: pytest.fail("must not join"))
     assert cli.main(["devices", "bootstrap", "--join", "laptop ABCD-EFGH"]) == 1
     assert "run the same line again" in capsys.readouterr().out
+
+
+def test_bootstrap_join_makes_the_new_computer_reachable_first(monkeypatch, capsys):
+    """A fresh install listens on 127.0.0.1: before joining it saves what Make
+    reachable saves (tailnet bind AND the gate, together)."""
+    from backend import cli, client
+
+    monkeypatch.setattr(client, "discover", lambda h, p: "http://x")
+    order = []
+
+    def get(base, path, timeout=0):
+        if path.startswith("/api/tailscale/health"):
+            return {"installed": True, "backend_state": "Running"}
+        if path == "/api/fleet":
+            return {"self_reachable": False}
+        return {}
+
+    def post(base, path, body=None, timeout=0):
+        order.append((path, body))
+        if path == "/api/fleet/join":
+            return {"state": "joined", "host": "Laptop"}
+        return {}
+
+    monkeypatch.setattr(client, "get", get)
+    monkeypatch.setattr(client, "post", post)
+    assert cli.main(["devices", "bootstrap", "--join", "laptop ABCD-EFGH"]) == 0
+    assert order[0] == (
+        "/api/settings",
+        {"general": {"serve_mode": "tailscale", "auth_mode": "on"}},
+    )
+    assert [p for p, _ in order].index("/api/settings") < [p for p, _ in order].index(
+        "/api/fleet/join"
+    )
+    assert "mindflock token" in capsys.readouterr().out
+
+
+def test_the_desktop_paste_goes_through_the_paste_a_code_router():
+    from backend.web.core import fleet
+
+    paste = bootstrap.lines({"device": "laptop", "code": "ABCD-EFGH"}, version="0.7.4")[
+        "desktop"
+    ]["paste"]
+    assert fleet.classify_code(paste) == {
+        "kind": "device",
+        "code": "ABCD-EFGH",
+        "device": "laptop",
+    }
+
+
+def test_setup_choice_saves_from_this_machine_on_the_real_app(tmp_path, monkeypatch):
+    """Setup writes general.setup_devices through its own privileged route
+    (not POST /api/settings, whose allow-list refuses remote callers): from
+    loopback it saves; an anonymous tailnet caller of an exposed gate-off
+    server is refused."""
+    from backend.config import settings as S
+    from backend.web.core import tailnet_trust
+    from backend.web.server import app
+
+    async def _no(scope):
+        return False
+
+    monkeypatch.setattr(tailnet_trust, "request_trusted", _no)
+    monkeypatch.setattr(onboarding, "collect", lambda **kw: {})
+    with TestClient(app):
+        monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+        monkeypatch.setenv("MINDFLOCK_AUTH", "0")
+        remote = TestClient(app, client=("100.64.0.5", 41000))
+        r = remote.post("/api/onboarding/choice", json={"choice": "join"})
+        assert r.status_code == 403
+        local = TestClient(app, client=("127.0.0.1", 41000))
+        r = local.post("/api/onboarding/choice", json={"choice": "join"})
+        assert r.status_code == 200, r.text
+    S.invalidate()
+    assert S.load_settings().general.setup_devices == "join"

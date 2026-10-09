@@ -80,7 +80,7 @@ export function NewComputerLine({ code }: { code: string }) {
         <a href={b.desktop.download} target="_blank" rel="noopener noreferrer">
           download it
         </a>
-        , then Settings → Devices → Join another computer → paste <code>{b.desktop.paste}</code>. If
+        , then Settings → Devices → Paste a code: <code>{b.desktop.paste}</code>. If
         setting up takes longer than the code lives, the new computer asks this one to approve instead.
       </span>
     </div>

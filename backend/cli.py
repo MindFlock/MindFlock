@@ -37,6 +37,11 @@ Installed via ``[project.scripts]``::
     mindflock devices approve DEV # …let a computer that asked join (deny DEV refuses)
     mindflock devices remove DEV  # …take one out (the rest get a new key); leave = this one
     mindflock devices bootstrap   # …one line that installs + joins a brand-new computer
+    mindflock devices update      # …update every one of them, one at a time (this one last)
+
+    mindflock update              # update this MindFlock to the newest release and restart
+    mindflock update --check      # …only say whether there is a newer one
+    mindflock restart             # restart the running server (onto what is installed)
 
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
@@ -113,7 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         choices=("local", "tailscale"),
-        help="local = bind 127.0.0.1 (default); tailscale = bind 0.0.0.0 (phone/tailnet access, auth gate on)",
+        help="local = bind 127.0.0.1 (default); tailscale = also bind this node's Tailscale IPs (phone/tailnet access, auth gate on; MINDFLOCK_BIND_ALL=1 for every interface)",
     )
     serve.add_argument("--port", type=int, default=None, help="port (default 8765)")
     serve.add_argument(
@@ -451,6 +456,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "address", metavar="ADDRESS", help="host:port or wss://host/path"
     )
 
+    join_any = sub.add_parser(
+        "join",
+        parents=[server_opts],
+        help="paste any code: one of your devices' (XXXX-XXXX) or someone's peer invite (mfp…)",
+        description=(
+            "One place for every code MindFlock hands out. An 8-character code "
+            "(or the whole `mindflock devices join DEVICE CODE` command) joins "
+            "your devices — the same as `devices join`; an mfp1:/mfp2: invite "
+            "pairs with another person — the same as `peer join`. Needs a "
+            "running server."
+        ),
+    )
+    join_any.add_argument("text", nargs="+", metavar="CODE")
+    join_any.add_argument(
+        "--yes", "-y", action="store_true", help="don't ask first (devices codes)"
+    )
+
     devices = sub.add_parser(
         "devices",
         parents=[server_opts],
@@ -570,6 +592,57 @@ def _build_parser() -> argparse.ArgumentParser:
         help="take THIS computer out of your devices (settings sync stops)",
     )
     d_leave.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+    d_upd = dev_sub.add_parser(
+        "update",
+        parents=[server_opts_nested],
+        help=(
+            "update MindFlock on every one of your devices, one at a time "
+            "(this one last); stops at the first that fails"
+        ),
+    )
+    d_upd.add_argument(
+        "--tag",
+        default=None,
+        metavar="vX.Y.Z",
+        help="a published release at or above what each device runs (default: the newest)",
+    )
+    d_upd.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+
+    upd = sub.add_parser(
+        "update",
+        parents=[server_opts],
+        help="update this MindFlock to the newest release and restart the server",
+        description=(
+            "Install the newest MindFlock release (or --ref) over this one and "
+            "wait until the running server answers on it — it restarts itself "
+            "once the install is done; sessions keep running. With no server "
+            "running it installs in place. A development checkout is refused "
+            "(git pull there instead)."
+        ),
+    )
+    upd.add_argument(
+        "--ref",
+        default=None,
+        metavar="REF",
+        help="what to install (default: the newest release)",
+    )
+    upd.add_argument(
+        "--check",
+        action="store_true",
+        help="only print the installed and newest versions",
+    )
+    upd.add_argument(
+        "--all-devices",
+        action="store_true",
+        dest="all_devices",
+        help="update every one of your devices (same as `mindflock devices update`)",
+    )
+    upd.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+    sub.add_parser(
+        "restart",
+        parents=[server_opts],
+        help="restart the running server (onto whatever is installed now)",
+    )
 
     mcp = sub.add_parser(
         "mcp",
@@ -1957,7 +2030,7 @@ def _print_devices(st: dict) -> None:
             if m.get("self"):
                 glyph, state = "✓", "this device"
             elif not m.get("reachable"):
-                glyph, state = "-", "offline"
+                glyph, state = "-", m.get("reason") or "offline"
             elif m.get("same_fleet") is False:
                 # Reachable but its hello names another (or no) group: it left
                 # or never got the roster. Sync skips it until it re-joins.
@@ -1979,6 +2052,18 @@ def _print_devices(st: dict) -> None:
             )
     else:
         print("This computer isn't joined with your other devices yet.")
+    if st.get("self_reachable") is False:
+        print(
+            "! your other devices can't reach this one (it only listens on "
+            "127.0.0.1) — Settings → Devices → Make reachable, or `mindflock "
+            "serve tailscale` with the access gate on"
+        )
+    for a in st.get("admitted") or []:
+        if a.get("state") == "unreachable_joiner":
+            print(
+                "! joined, but %s isn't reachable from here: %s"
+                % (a.get("host") or a.get("device"), a.get("reason") or "")
+            )
     if st.get("gate_warning"):
         print(
             "! the access-token gate is off while serving beyond localhost — "
@@ -1986,9 +2071,10 @@ def _print_devices(st: dict) -> None:
         )
     for r in st.get("requests") or []:
         print(
-            "Asking to join: %s · code %s — check %s shows the same code, then: "
+            "Asking to join%s: %s · code %s — check %s shows the same code, then: "
             "mindflock devices approve %s"
             % (
+                " %s" % (r.get("via_host") or r["via"]) if r.get("via") else "",
                 r.get("host") or r.get("device"),
                 r.get("code") or "?",
                 r.get("host") or r.get("device"),
@@ -2030,6 +2116,21 @@ def _print_devices(st: dict) -> None:
             else:
                 hint = "mindflock devices join %s" % c.get("device")
             print("  %-20s %s" % (name, hint))
+    peers = [p for p in st.get("tailnet_peers") or [] if isinstance(p, dict)]
+    if peers:
+        print("Not answering as a MindFlock you can join:")
+        for p in peers:
+            print(
+                "  %-20s %s"
+                % (p.get("host") or p.get("device"), p.get("reason") or "unreachable")
+            )
+        if any(p.get("outcome") == "timeout" for p in peers) and st.get("policy_grant"):
+            print(
+                "  (a Tailscale policy that blocks the port needs these lines — "
+                "admin console → Access controls:)"
+            )
+            for line in str(st["policy_grant"]).splitlines():
+                print("    " + line)
     if not st.get("in_fleet") and not others:
         print(
             "Make a code here with `mindflock devices add`, or run MindFlock on your "
@@ -2263,7 +2364,55 @@ def _bootstrap_tailscale(base: str) -> bool:
     return False
 
 
-def _bootstrap_join(base: str, pair: str) -> int:
+#: What Settings → Devices → Make reachable saves (useMakeReachable.ts): the
+#: tailnet bind AND the access gate, together — never one without the other.
+_REACHABLE = {"serve_mode": "tailscale", "auth_mode": "on"}
+
+
+def _bootstrap_reachable(base: str, args: argparse.Namespace) -> str:
+    """A fresh install listens on 127.0.0.1 only, so the device it joins
+    couldn't reach it back. Do what Make reachable does — before the join, so
+    the admitting device's re-probe finds it — wait out the restart that
+    save triggers, and return the server's base URL."""
+    try:
+        st = _fleet_status(base)
+    except client.ClientError:
+        return base
+    if st.get("self_reachable") is not False:
+        return base
+    print(
+        "Making this computer reachable from your other devices "
+        "(Tailscale mode + access gate on)…"
+    )
+    try:
+        r = client.post(
+            base, "/api/settings", {"general": dict(_REACHABLE)}, timeout=30.0
+        )
+    except client.ClientError as err:
+        print(
+            "! couldn't (%s) — afterwards: Settings → Devices → Make reachable" % err,
+            file=sys.stderr,
+        )
+        return base
+    if isinstance(r, dict) and r.get("restarting"):
+        time.sleep(2.0)
+        client.reset_auth_token()  # the gate's token, made at boot
+        deadline = time.monotonic() + _BOOT_SERVER_WAIT_S
+        while time.monotonic() < deadline:
+            try:
+                base = client.discover(args.host, args.port)
+                break
+            except client.ServerNotFound:
+                time.sleep(1.0)
+                client.reset_auth_token()
+    print(
+        "✓ reachable on your tailnet, with the access gate on — this computer's "
+        "access token (for its sign-in page or your phone): mindflock token"
+    )
+    return base
+
+
+def _bootstrap_join(base: str, pair: str, args: argparse.Namespace) -> int:
     """``devices bootstrap --join 'DEVICE CODE'`` on a brand-new computer."""
     tokens = (pair or "").split()
     if len(tokens) < 2:
@@ -2271,6 +2420,7 @@ def _bootstrap_join(base: str, pair: str) -> int:
     device, code = tokens[0].lower(), "".join(tokens[1:])
     if not _bootstrap_tailscale(base):
         return 1
+    base = _bootstrap_reachable(base, args)
     try:
         client.post(base, "/api/devices/refresh", timeout=30.0)
     except client.ClientError:
@@ -2319,9 +2469,9 @@ def _print_bootstrap(b: dict) -> None:
     desk = b.get("desktop") or {}
     print(
         "Run that on the new computer (macOS, Linux or WSL): it installs MindFlock "
-        "(%s), signs in to Tailscale if needed, and joins your devices.\n"
+        "(%s), signs in to Tailscale if needed, makes itself reachable, and joins your devices.\n"
         "Desktop app instead: install it from %s, then Settings → Devices → "
-        "Join another computer → paste:  %s\n"
+        "Paste a code:  %s\n"
         "Single-use code, expires in %s — if it runs out, the new computer asks "
         "this one to approve instead."
         % (
@@ -2334,6 +2484,64 @@ def _print_bootstrap(b: dict) -> None:
     )
 
 
+def _cmd_join(args: argparse.Namespace) -> int:
+    """``mindflock join CODE`` — route any pasted code by its format
+    (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
+    ``peer join``, one of your devices' codes to ``devices join``."""
+    from backend.web.core.fleet import classify_code
+
+    text = " ".join(args.text)
+    hit = classify_code(text)
+    if hit["kind"] == "peer":
+        return _cmd_peer(
+            argparse.Namespace(
+                host=args.host, port=args.port, peer_command="join", code=hit["code"]
+            )
+        )
+    if hit["kind"] != "device":
+        raise client.ClientError(
+            "that isn't a code MindFlock knows — your devices' codes look like "
+            "ABCD-EFGH, someone's invite starts with mfp1: or mfp2:"
+        )
+    device = hit["device"]
+    if not device:
+        base = client.discover(args.host, args.port)
+        st = _fleet_status(base)
+        joinable = [
+            c
+            for c in st.get("candidates") or []
+            if isinstance(c, dict)
+            and c.get("reachable")
+            and not c.get("member")
+            and int(c.get("fleet_proto") or 0) >= 1
+        ]
+        if len(joinable) != 1:
+            raise client.ClientError(
+                "which computer showed that code? run: mindflock devices join "
+                "DEVICE %s%s"
+                % (
+                    hit["code"],
+                    (
+                        " (one of: %s)"
+                        % ", ".join(str(c.get("device")) for c in joinable)
+                        if joinable
+                        else " — no other MindFlock can be joined right now"
+                    ),
+                )
+            )
+        device = str(joinable[0].get("device"))
+    return _cmd_devices(
+        argparse.Namespace(
+            host=args.host,
+            port=args.port,
+            devices_command="join",
+            device=device,
+            code=[hit["code"]],
+            yes=args.yes,
+        )
+    )
+
+
 def _cmd_devices(args: argparse.Namespace) -> int:
     """``mindflock devices …`` — thin client over ``/api/fleet`` (Settings →
     Devices in the UI). The server does the device-to-device talking; the CLI
@@ -2341,7 +2549,7 @@ def _cmd_devices(args: argparse.Namespace) -> int:
     cmd = args.devices_command or "list"
     if cmd == "bootstrap" and getattr(args, "join", None):
         # The new computer: there may be no server yet — start one.
-        return _bootstrap_join(_ensure_server(args), args.join)
+        return _bootstrap_join(_ensure_server(args), args.join, args)
     base = client.discover(args.host, args.port)
     if cmd == "bootstrap":
         _print_bootstrap(client.post(base, "/api/fleet/bootstrap") or {})
@@ -2382,6 +2590,14 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             return 0
         inv = client.post(base, "/api/fleet/invite") or {}
         code = str(inv.get("code") or "")
+        if inv.get("warning") == "local_only":
+            print(
+                "! this computer is local-only (bound to 127.0.0.1): the new one "
+                "can't reach it to use this code. Make it reachable first — "
+                "Settings → Devices → Make reachable, or `mindflock serve "
+                "tailscale` with the access gate on.",
+                file=sys.stderr,
+            )
         # The code alone on stdout (scriptable); the instructions on stderr.
         print(code)
         print(
@@ -2486,9 +2702,16 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             urllib.parse.quote(str(req.get("id") or ""), safe=""),
             cmd,
         )
+        # A request waiting on another of your devices: the answer goes
+        # there (``via``), with the code shown here.
+        body = (
+            {"via": req["via"], "code": req.get("code") or ""}
+            if req.get("via")
+            else None
+        )
         # Approving also starts settings sync here (after_admit): allow for
         # that, not just one round-trip.
-        res = client.post(base, path, timeout=60.0)
+        res = client.post(base, path, body, timeout=60.0)
         print(
             "approved %s — it joins your devices now" % who
             if cmd == "approve"
@@ -2574,6 +2797,10 @@ def _cmd_devices(args: argparse.Namespace) -> int:
         return 0
     if cmd == "leave":
         return _leave_devices(base, args, "/api/fleet/leave")
+    if cmd == "update":
+        from backend import cli_update
+
+        return cli_update.cmd_devices_update(args)
     print("error: unknown devices command %r" % cmd, file=sys.stderr)
     return 2
 
@@ -2589,7 +2816,16 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inbox": _cmd_inbox,
     "peer": _cmd_peer,
     "devices": _cmd_devices,
+    "join": _cmd_join,
+    "update": lambda args: _cli_update().cmd_update(args),
+    "restart": lambda args: _cli_update().cmd_restart(args),
 }
+
+
+def _cli_update():
+    from backend import cli_update
+
+    return cli_update
 
 
 def main(argv: Optional[List[str]] = None) -> int:

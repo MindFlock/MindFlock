@@ -33,8 +33,8 @@ repos:
     # --- pre-push -----------------------------------------------------------
     # Nothing on GitHub gates a push to main (the `Safe-main` ruleset only
     # blocks deletion and non-fast-forward; there are no required status
-    # checks), and install.sh installs from `main` by default — so these two
-    # run before the push instead of three minutes later, in CI.
+    # checks), and `MINDFLOCK_INSTALL_REF=main` installs straight from `main`
+    # — so these two run before the push instead of three minutes later, in CI.
     -   id: versions-agree
         name: Version manifests agree
         # pyproject.toml / electron / frontend package.json / uv.lock all carry

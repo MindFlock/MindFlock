@@ -2,8 +2,8 @@
  * focused (and, when given, prefilled). Kept apart from lib/peer.ts, which
  * stays free of the store so its wording tests run without one.
  *
- * Named for reuse: a future "paste any code" router sends an mfp1:/mfp2: code
- * here and a device code to Settings → Devices. */
+ * Reused by the "Paste a code" router (lib/deviceActions.ts): an mfp1:/mfp2:
+ * invite whose join failed reopens here, prefilled. */
 
 import { useUi } from "../state/store";
 import { PEER_SCREEN } from "./peer";

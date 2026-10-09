@@ -12,7 +12,7 @@ created from either shows up in both.
 
 ```bash
 mindflock serve             # start the web UI (localhost only, port 8765)
-mindflock serve tailscale   # bind 0.0.0.0 for phone/tailnet access (URL + QR + token)
+mindflock serve tailscale   # also bind this node's Tailscale IPs for phone/tailnet access (URL + QR + token)
 mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
 mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
@@ -22,14 +22,47 @@ mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
 mindflock token             # print this machine's access token (for sign-in / pairing)
+mindflock update            # install the newest release and restart the server onto it
+mindflock update --check    # …only print the installed and newest versions
+mindflock restart           # restart the running server (onto whatever is installed)
 mindflock --version         # print the installed version
 ```
 
-`serve tailscale` binds all interfaces (0.0.0.0) — the port is reachable from
-your LAN as well as your tailnet — and auto-enables the access-token gate:
+`serve tailscale` binds 127.0.0.1 plus this node's Tailscale addresses — the
+port is on your tailnet but not your LAN. When Tailscale isn't running at boot
+it binds every interface (0.0.0.0) with a warning and restarts itself onto the
+narrow bind once Tailscale is up; it also binds 0.0.0.0 when the Tailscale
+addresses can't be bound on this machine (userspace networking, or WSL with
+Tailscale on the Windows side). `MINDFLOCK_BIND_ALL=1` asks for every interface
+on purpose (a phone on your LAN without Tailscale). It auto-enables the
+access-token gate:
 unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. `mindflock token` prints the same token later (it reads the
 settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.
+
+### `mindflock update [--ref REF] [--check] [--all-devices] [--yes]`
+
+Updates this MindFlock to the newest release (`--ref` picks another: from this
+machine any tag or branch; the server refuses a branch or an older release
+when the request comes from anywhere else). It prints the installed version
+(and commit) and the newest release, asks once (`--yes` skips the question),
+then asks the running server to install it (`POST /api/update/start`) and
+follows the install. The server restarts itself onto the new version when the
+install is done; the command waits until the server's own hello answers with
+the new commit — the only proof the update took — and exits 0. It exits 1 with
+the installer's last lines when the install failed, was interrupted, or was
+rolled back (the new version didn't come back up, so the previous one was put
+back). A development checkout is refused (`git pull` there instead). With no
+server running it installs in place and tells you to start the server.
+`--check` only prints the two versions. `--all-devices` is `mindflock devices
+update`.
+
+### `mindflock restart`
+
+Restarts the running server (`POST /api/server/restart`) and waits until it
+answers again — use it after installing a new engine underneath a running
+server (install.sh does this for you). `mindflock serve` on a port where an
+older build is still running says so and points here.
 
 ### `mindflock uninstall [--purge] [--keep-worktrees] [--dry-run] [--yes]`
 
@@ -302,7 +335,17 @@ and `join` turn peer links on):
 
 `LINK` is a link id or a unique prefix of one.
 
-### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|bootstrap]`
+### `mindflock join CODE`
+
+Paste any code MindFlock hands out; it is routed by its format. One of your
+devices' codes (`XXXX-XXXX`, `DEVICE CODE`, or the whole `mindflock devices
+join DEVICE CODE` line) runs `devices join` — a bare code goes to the one
+computer on your tailnet that can be joined, and with several it asks which
+(`--yes` skips the settings question as there). Someone's peer invite
+(`mfp1:`/`mfp2:`, also inside a pasted message) runs `peer join`. Anything
+else exits 1 saying what the two formats look like.
+
+### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update|bootstrap]`
 
 "Your devices" (Settings → Devices in the app) over `/api/fleet`: group the
 computers **you** own, found over Tailscale, so settings follow you between
@@ -313,17 +356,18 @@ MindFlock is refused.
 
 | Command | Does |
 |---|---|
-| `devices` / `devices list [--json]` | your devices (`✓` this device / reachable, `-` offline, `!` reachable but in another group; `runs PR review & issues` marks the one that does — a `!` line warns when none or several do), computers asking to join and their codes, live invite codes, an outgoing request still waiting, and the other computers on your tailnet with the command that adds each. A `!` line also says when this device's key is out of date (re-join) and when the access-token gate is off while serving beyond localhost: anyone who can reach this computer could then control your other devices through it |
-| `devices add` | prints a one-time code (`XXXX-XXXX`, 10 min, single use) on stdout, and on stderr the command to run on the new computer: `mindflock devices join <this device> <code>` |
+| `devices` / `devices list [--json]` | your devices (`✓` this device / reachable, `-` offline, `!` reachable but in another group; `runs PR review & issues` marks the one that does — a `!` line warns when none or several do), computers asking to join and their codes, live invite codes, an outgoing request still waiting, and the other computers on your tailnet with the command that adds each. A `!` line also says when this device's key is out of date (re-join), when the access-token gate is off while serving beyond localhost (anyone who can reach this computer could then control your other devices through it), when your other devices can't reach this one (it only listens on 127.0.0.1), and when a device you just let in can't be reached from here. An offline member says why (what discovery found: connection refused, timed out, asleep with when Tailscale last saw it), and every other tailnet device that isn't a MindFlock you can join gets its own line with the reason — after a time-out, the tailnet policy lines that open the port are printed too |
+| `devices add` | prints a one-time code (`XXXX-XXXX`, 10 min, single use) on stdout, and on stderr the command to run on the new computer: `mindflock devices join <this device> <code>`. On a local-only computer a `!` line on stderr says the new one can't reach it to use the code — make it reachable first |
 | `devices add DEVICE [--yes]` | adds a device this one already holds an access token for (pasted under Remote control). No code needed. It first asks you to confirm, because it's the other way round from joining: DEVICE takes **this** computer's shared settings where this one has them (its own stay where this one has none); `--yes` skips the question, and answering no prints `not added` and exits 1. Refused for a device that is already one of yours. A `! settings sync:` line on stderr means the device was added but settings sync didn't start here |
-| `devices bootstrap` | makes a fresh code and prints, on stdout, one line for a brand-new computer that has nothing installed: `curl -LsSf …/<ref>/install.sh \| MINDFLOCK_INSTALL_REF=<ref> sh -s -- --join '<this device> <code>'`, where `<ref>` is `v<this device's version>` (`main` from a source checkout) — so the new computer runs the same version and settings sync works at once. On stderr: the desktop-app twin (download the app, paste `<device> <code>` into Settings → Devices → Join another computer) and how long the code lives |
-| `devices bootstrap --join 'DEVICE CODE'` | the new computer's half (`install.sh --join` runs it): starts the server in the background when none is running (output in `~/.mindflock/logs/serve.log`), signs this computer in to Tailscale when it isn't (prints the sign-in link and waits up to 10 min), sweeps the tailnet, and joins DEVICE with CODE. When the code expired while the computer was being set up, it asks DEVICE instead and waits for the approval there (compare the 6-digit code) |
+| `devices bootstrap` | makes a fresh code and prints, on stdout, one line for a brand-new computer that has nothing installed: `curl -LsSf …/<ref>/install.sh \| MINDFLOCK_INSTALL_REF=<ref> sh -s -- --join '<this device> <code>'`, where `<ref>` is `v<this device's version>` (`main` from a source checkout) — so the new computer runs the same version and settings sync works at once. On stderr: the desktop-app twin (download the app, paste `<device> <code>` into Settings → Devices → Paste a code) and how long the code lives |
+| `devices bootstrap --join 'DEVICE CODE'` | the new computer's half (`install.sh --join` runs it): starts the server in the background when none is running (output in `~/.mindflock/logs/serve.log`), signs this computer in to Tailscale when it isn't (prints the sign-in link and waits up to 10 min), makes it reachable when it only listens on 127.0.0.1 (what Settings → Devices → Make reachable saves: Tailscale mode and the access gate on together, then the server's own restart; `mindflock token` shows the access token), sweeps the tailnet, and joins DEVICE with CODE. When the code expired while the computer was being set up, it asks DEVICE instead and waits for the approval there (compare the 6-digit code) |
 | `devices join DEVICE CODE [--yes]` | joins DEVICE's group with a code made there. It first asks you to confirm, because this computer takes DEVICE's shared settings wherever DEVICE has them (your own stay where it has none); `--yes` skips the question |
 | `devices join DEVICE [--yes]` | asks DEVICE (after the same confirmation), prints `Approve on <host>; check it shows code 123 456`, then waits up to 10 min for an answer (it polls every 2 s). Ctrl-C withdraws the request, on DEVICE too. Run it again while the request is still out and it picks the wait back up |
 | `devices cancel` | stops asking to join, and withdraws the request on the other device. Once that device has approved and the join is under way it's too late; the command says so and exits 1 |
-| `devices approve DEVICE\|ID [--yes]` | lets a computer that asked join. First it shows the 6-digit code and asks you to confirm that the other screen shows the same one. A `! settings sync:` line on stderr means it joined but settings sync didn't start here |
+| `devices approve DEVICE\|ID [--yes]` | lets a computer that asked join — one that asked this computer, or another of your devices (the list says which it asked; the answer goes there, with the code). First it shows the 6-digit code and asks you to confirm that the other screen shows the same one. A `! settings sync:` line on stderr means it joined but settings sync didn't start here |
 | `devices deny DEVICE\|ID` | refuses it |
 | `devices remove DEVICE [--yes] [--keep-tokens]` | takes a device out. The rest get a new key; any that were offline get it automatically when they're back (they are listed). By default every device's own access token is replaced too, so tokens the removed device collected stop working: phones signed in before scan the QR again, and other places that hold a token need the new one. A device whose token couldn't be replaced (an offline one included) is listed on stderr — replace it there in Settings → Security. `--keep-tokens` only re-keys the group. If DEVICE ran PR review and issue handling, they move to this computer. The question and the output also say: if the device was lost or stolen, remove it from your tailnet in the Tailscale admin console too — that cuts it off everywhere at once, even from devices that are offline now. Naming **this** computer is `devices leave` |
+| `devices update [--tag vX.Y.Z] [--yes]` | updates MindFlock on every one of your devices to the newest release (or `--tag`, a published release), **one at a time, this computer last** (`POST /api/fleet/update`). It prints each device's progress as it goes and moves to the next device only once that one's own server answers on the new version; it stops at the first device that fails, rolls back or doesn't come back (exit 1, with why). Devices that are offline, already current, a development checkout, not installed by install.sh, or too old to be updated remotely are skipped with the reason. A desktop app on a device updates itself on its next launch |
 | `devices leave [--yes]` | takes **this** computer out. If it ran PR review and issue handling for your devices, they move first to the remaining device with the lowest device key. Settings sync stops here, and on its own this computer runs PR review and issue handling itself again. Leaving changes neither your devices' shared key nor any access token — remove this computer from another of your devices for that. A computer that left can join again through any of your devices |
 
 `DEVICE` is the device name (its MagicDNS label) or the host name shown in the

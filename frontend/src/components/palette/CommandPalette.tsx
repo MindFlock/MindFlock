@@ -32,7 +32,8 @@ import {
 } from "../../lib/sessionActions";
 import { orderedInstances } from "../sidebar/ordering";
 import { sessionLabel } from "../../lib/sessionLabel";
-import { openJoinWithCode } from "../../lib/peerActions";
+import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
+import { routeCode } from "../../lib/fleet";
 
 interface PaletteAction {
   label: string;
@@ -135,12 +136,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "peer links: invite someone, or join with their code",
       run: () => ui.openDialogFor("settings", "peer"),
     });
-    // Opens Work with someone with the paste box focused. The peer half of a
-    // future "paste any code" router (lib/peerActions.ts).
+    // ONE place for every code (lib/deviceActions.ts): Settings → Devices'
+    // paste box, which sends one of your devices' codes to Devices and
+    // someone's mfp1:/mfp2: invite to Work with someone. (A code typed
+    // straight into this box gets its own entry at the top, below.)
     acts.push({
-      label: "Join with a code…",
-      hint: "paste an invite someone sent you",
-      run: () => openJoinWithCode(),
+      label: "Paste a code…",
+      hint: "join with a code from your other computer, or someone's invite",
+      run: () => openDevicesFor({ focusPaste: true }),
     });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
@@ -250,7 +253,17 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       .map((a, i) => ({ a, i, s: fuzzyScore(query, a.label) }))
       .filter((x) => x.s >= 0);
     scored.sort((x, y) => x.s - y.s || x.i - y.i);
-    return scored.map((x) => x.a);
+    const out = scored.map((x) => x.a);
+    // The query IS a code (pasted straight into the palette): joining with
+    // it is the first thing offered, routed by its format.
+    const code = routeCode(query);
+    if (code.kind)
+      out.unshift({
+        label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+        hint: code.kind === "peer" ? "another person · Work with someone" : "your devices",
+        run: () => void routePastedCode(query),
+      });
+    return out;
   }, [actions, query]);
 
   useEffect(() => {

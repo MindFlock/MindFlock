@@ -21,7 +21,11 @@ routes and who may call them. Three audiences, three rules:
   Withdrawing a request (``requests/<id>/cancel``) is public the same way:
   it needs that request's secret.
 
-* **Another member** (``roster``, ``rekey``, ``rotate-token``) —
+* **Another member** (``roster``, ``rekey``, ``rotate-token``,
+  ``update/apply``, ``update/state``, and the two that let a join be
+  approved from wherever you are: ``pending`` — a member hands over the
+  requests waiting on it — and ``member-approve`` — the answer given on
+  another member, carrying the 6-digit code it showed) —
   authenticated with the fleet key, checked HERE against the key (not the
   device token), so a paired non-member can't read the roster. The auth
   middleware lets these through to the route whatever the bearer (see
@@ -35,14 +39,16 @@ routes and who may call them. Three audiences, three rules:
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from backend.web.core import auth as web_auth
 from backend.web.core import fleet
+from backend.web.core import fleet_update
 
 from .base import Addon, AppContext
 
@@ -80,6 +86,36 @@ def _client_ip(request: Request) -> str:
 
 
 _NOT_TAILNET = {"error": "join from one of your devices on the tailnet"}
+#: The caller came through a local ``tailscale serve`` proxy this machine
+#: can't vouch for (macOS/Windows): its address says nothing about which
+#: device it is — the fix is on THIS device, not the joiner's.
+_PROXIED = {
+    "error": "this device is only reachable through tailscale serve, which hides "
+    "who is asking — on it, open Settings → Devices and choose Make reachable"
+}
+#: How long a route waits on the members while it hands them the requests
+#: waiting here (they only show a copy; a slow one just misses it).
+FAN_OUT_TIMEOUT = 5.0
+
+
+def _not_tailnet(request: Request) -> JSONResponse:
+    try:
+        from backend.web.core import tailnet_trust as _tt
+
+        peer = request.scope.get("mf_peer") or request.scope.get("client") or ("", 0)
+        if _tt.is_loopback(peer[0]) and _tt.has_forward_headers(request.scope):
+            return JSONResponse(_PROXIED, status_code=403)
+    except Exception:  # noqa: BLE001
+        pass
+    return JSONResponse(_NOT_TAILNET, status_code=403)
+
+
+async def _fan_out(exclude: Tuple[str, ...] = ()) -> None:
+    """Hand the members the requests waiting here (bounded; never raises)."""
+    try:
+        await asyncio.wait_for(fleet.fan_out_requests(exclude), FAN_OUT_TIMEOUT)
+    except Exception:  # noqa: BLE001 — a copy elsewhere is a convenience
+        pass
 
 
 def _join_caller_ok(request: Request) -> bool:
@@ -130,6 +166,41 @@ def _device_arg(body: Optional[dict]) -> str:
     return dev if fleet.DEVICE_RE.match(dev) else ""
 
 
+def _via_arg(body: dict) -> str:
+    """The member a request waits on (body ``via``), "" for one here."""
+    via = str(body.get("via") or "").strip().lower()
+    if not fleet.DEVICE_RE.match(via) or via == fleet._self_key():
+        return ""
+    return via
+
+
+async def _admitted(out: dict) -> dict:
+    """After an approve here: start what admitting needs on this side
+    (fleet.after_admit — before the asker's next poll collects the bundle,
+    since it pulls settings from here at once), and drop the request from
+    the other members' copies."""
+    runs = bool(out.pop("runs_automation", False))
+    sync_error = await fleet.after_admit(runs, out["device"])
+    await _fan_out((out["device"],))
+    return {**out, "sync_error": sync_error}
+
+
+async def _answer_relayed(
+    via: str, rid: str, decision: str, body: dict
+) -> JSONResponse:
+    try:
+        out = await fleet.answer_relayed(
+            via, rid, decision, str(body.get("code") or "")[:16]
+        )
+    except KeyError:
+        return _bad("that request is gone (expired or answered)", 404)
+    except PermissionError as err:
+        return _bad(str(err), 403)
+    except RuntimeError as err:
+        return _bad(str(err), 502)
+    return JSONResponse(out)
+
+
 def _join_response(join: dict) -> JSONResponse:
     return JSONResponse(join, status_code=400 if join.get("state") == "error" else 200)
 
@@ -161,7 +232,31 @@ class FleetAddon(Addon):
                 await fleet.refresh_exposure()  # for gate_warning
             except Exception:  # noqa: BLE001
                 pass
-            return JSONResponse(fleet.status(privileged=await _privileged(request)))
+            return JSONResponse(
+                {
+                    **fleet.status(privileged=await _privileged(request)),
+                    # "Update all my devices": the last (or running) rollout.
+                    "update": fleet_update.status(),
+                }
+            )
+
+        @router.post("/fleet/update")
+        async def post_fleet_update(request: Request) -> JSONResponse:
+            """Update every member, one at a time, then this device — see
+            :mod:`backend.web.core.fleet_update`. Body ``{"tag"?}`` (default:
+            the newest release)."""
+            if not await _privileged(request):
+                return JSONResponse(_FORBIDDEN, status_code=403)
+            body = await _json(request) or {}
+            tag = body.get("tag")
+            out, status = await fleet_update.start(
+                tag[:64] if isinstance(tag, str) else ""
+            )
+            return JSONResponse(out, status_code=status)
+
+        @router.get("/fleet/update")
+        async def get_fleet_update(request: Request) -> JSONResponse:
+            return JSONResponse(fleet_update.status())
 
         @router.post("/fleet/invite")
         async def post_invite(request: Request) -> JSONResponse:
@@ -220,27 +315,39 @@ class FleetAddon(Addon):
 
         @router.post("/fleet/requests/{rid}/approve")
         async def approve_request(rid: str, request: Request) -> JSONResponse:
+            """Approve a join. ``via`` (body): the request waits on that
+            member, not here — the answer goes there under the fleet key
+            (fleet.answer_relayed); ``code``: the 6-digit code the person
+            looked at, checked against the request's."""
             if not await _privileged(request):
                 return JSONResponse(_FORBIDDEN, status_code=403)
+            body = await _json(request) or {}
+            via = _via_arg(body)
+            if via:
+                return await _answer_relayed(via, rid, "approve", body)
+            if body.get("code") and not fleet._code_matches(
+                (fleet._REQUESTS.get(rid) or {}).get("code", ""), str(body["code"])
+            ):
+                return _bad("that code doesn't match the request", 403)
             try:
                 out = fleet.approve(rid)
             except KeyError:
                 return _bad("that request is gone (expired or answered)", 404)
-            runs = bool(out.pop("runs_automation", False))
-            # Before the asker's next poll collects the bundle: it pulls
-            # settings from here at once (see fleet.after_admit).
-            return JSONResponse(
-                {**out, "sync_error": await fleet.after_admit(runs, out["device"])}
-            )
+            return JSONResponse(await _admitted(out))
 
         @router.post("/fleet/requests/{rid}/deny")
         async def deny_request(rid: str, request: Request) -> JSONResponse:
             if not await _privileged(request):
                 return JSONResponse(_FORBIDDEN, status_code=403)
+            via = _via_arg(await _json(request) or {})
+            if via:
+                return await _answer_relayed(via, rid, "deny", {})
             try:
-                return JSONResponse(fleet.deny(rid))
+                out = fleet.deny(rid)
             except KeyError:
                 return _bad("that request is gone (expired or answered)", 404)
+            await _fan_out()
+            return JSONResponse(out)
 
         @router.post("/fleet/add-paired")
         async def post_add_paired(request: Request) -> JSONResponse:
@@ -299,7 +406,7 @@ class FleetAddon(Addon):
         @router.post("/fleet/redeem")
         async def post_redeem(request: Request) -> JSONResponse:
             if not _join_caller_ok(request):
-                return JSONResponse(_NOT_TAILNET, status_code=403)
+                return _not_tailnet(request)
             if not fleet.allow_public(_client_ip(request)):
                 return _bad("too many attempts — wait a minute", 429)
             body = await _json(request) or {}
@@ -334,7 +441,7 @@ class FleetAddon(Addon):
         @router.post("/fleet/requests")
         async def post_requests(request: Request) -> JSONResponse:
             if not _join_caller_ok(request):
-                return JSONResponse(_NOT_TAILNET, status_code=403)
+                return _not_tailnet(request)
             if not fleet.allow_public(_client_ip(request)):
                 return _bad("too many attempts — wait a minute", 429)
             body = await _json(request) or {}
@@ -350,25 +457,26 @@ class FleetAddon(Addon):
             ):
                 return _bad("bad request")
             try:
-                return JSONResponse(
-                    fleet.open_request(
-                        device,
-                        host,
-                        secret_hash,
-                        ip=_client_ip(request),
-                        dns=_dns_arg(body),
-                        runs_automation=body.get("runs_automation") is True,
-                    )
+                out = fleet.open_request(
+                    device,
+                    host,
+                    secret_hash,
+                    ip=_client_ip(request),
+                    dns=_dns_arg(body),
+                    runs_automation=body.get("runs_automation") is True,
                 )
             except PermissionError as err:
                 return _bad(str(err), 403)
             except ValueError as err:
                 return _bad(str(err))
+            # Approvable from any of your devices, not only this one.
+            await _fan_out((device,))
+            return JSONResponse(out)
 
         @router.get("/fleet/requests/{rid}")
         async def get_requests(rid: str, request: Request) -> JSONResponse:
             if not _join_caller_ok(request):
-                return JSONResponse(_NOT_TAILNET, status_code=403)
+                return _not_tailnet(request)
             if not fleet.allow_public(_client_ip(request), "poll"):
                 return _bad("too many attempts — wait a minute", 429)
             if not _REQ_ID.match(rid):
@@ -387,20 +495,20 @@ class FleetAddon(Addon):
             """The asker withdraws its own pending request (Cancel, Ctrl-C):
             nobody can approve it afterwards. Needs the request's secret."""
             if not _join_caller_ok(request):
-                return JSONResponse(_NOT_TAILNET, status_code=403)
+                return _not_tailnet(request)
             if not fleet.allow_public(_client_ip(request), "poll"):
                 return _bad("too many attempts — wait a minute", 429)
             if not _REQ_ID.match(rid):
                 return _bad("no such request", 404)
             body = await _json(request) or {}
             try:
-                return JSONResponse(
-                    fleet.withdraw_request(rid, str(body.get("secret") or ""))
-                )
+                out = fleet.withdraw_request(rid, str(body.get("secret") or ""))
             except KeyError:
                 return _bad("no such request", 404)
             except PermissionError:
                 return _bad("wrong secret", 403)
+            await _fan_out()
+            return JSONResponse(out)
 
         # ---------------------------------------------------------------- #
         # member to member
@@ -441,6 +549,64 @@ class FleetAddon(Addon):
                     {"ok": False, "error": "couldn't save a new token: %s" % err}
                 )
             return JSONResponse({"ok": True})
+
+        @router.post("/fleet/pending")
+        async def post_pending(request: Request) -> JSONResponse:
+            """A member hands over the join requests waiting on it (a
+            snapshot), so the person can approve one from this device —
+            fleet.hold_relayed. Fleet key only."""
+            if not fleet.key_valid(_bearer(request)):
+                return JSONResponse(_NOT_MEMBER, status_code=403)
+            try:
+                return JSONResponse(
+                    {"ok": True, "held": fleet.hold_relayed(await _json(request) or {})}
+                )
+            except ValueError as err:
+                return _bad(str(err))
+
+        @router.post("/fleet/member-approve")
+        async def post_member_approve(request: Request) -> JSONResponse:
+            """The person answered a request waiting HERE on another member
+            (its privileged approve/deny route sent it on). Fleet key only —
+            never a relayed request that merely got past remote control, and
+            never this device's own token — and the 6-digit code the other
+            member showed must be this request's."""
+            if not fleet.key_valid(_bearer(request)):
+                return JSONResponse(_NOT_MEMBER, status_code=403)
+            body = await _json(request) or {}
+            rid = str(body.get("id") or "")
+            if not _REQ_ID.match(rid):
+                return _bad("no such request", 404)
+            decision = str(body.get("decision") or "approve")
+            try:
+                out = fleet.decide_as_member(rid, str(body.get("code") or ""), decision)
+            except KeyError:
+                return _bad("that request is gone (expired or answered)", 404)
+            except PermissionError as err:
+                return _bad(str(err), 403)
+            except ValueError as err:
+                return _bad(str(err))
+            if decision == "approve":
+                return JSONResponse(await _admitted(out))
+            await _fan_out()
+            return JSONResponse(out)
+
+        @router.post("/fleet/update/apply")
+        async def post_update_apply(request: Request) -> JSONResponse:
+            """Another member asks this device to update its engine — fleet
+            key ONLY (not this device's token: a paired non-member must not
+            be able to reinstall it), and only to a published release at or
+            above what runs here (see :func:`fleet_update.apply`)."""
+            if not fleet.key_valid(_bearer(request)):
+                return _not_member()
+            out, status = await fleet_update.apply(await _json(request) or {})
+            return JSONResponse(out, status_code=status)
+
+        @router.get("/fleet/update/state")
+        async def get_update_state(request: Request) -> JSONResponse:
+            if not fleet.key_valid(_bearer(request)):
+                return _not_member()
+            return JSONResponse(fleet_update.member_state())
 
         @router.post("/fleet/adopt")
         async def post_adopt(request: Request) -> JSONResponse:

@@ -46,6 +46,8 @@ import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
 import { Hint } from "../onboarding/Hint";
+import { sidebarDeviceNote } from "../../lib/fleet";
+import { openDevicesFor } from "../../lib/deviceActions";
 
 /** No folds (while a search filter is on). */
 const NO_FOLDS: ReadonlySet<string> = new Set();
@@ -519,16 +521,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                       }
                       const label =
                         dev.host && hostCounts.get(dev.host) === 1 ? dev.host : dkey;
-                      let note = "",
-                        connectBtn = false;
-                      if (!d.reachable) note = "MindFlock not reachable on that device";
-                      else if (!d.remote_control)
-                        note = "remote control is off on that device";
-                      else if (d.needs_token) {
-                        note = "needs that device's access token";
-                        connectBtn = true;
-                      } else if (d.error) note = String(d.error);
-                      else if (d.connected && devRows.length === 0) note = "no sessions";
+                      // A MindFlock that can join is offered as one of
+                      // your devices; pasting a token is only for one that
+                      // can't (lib/fleet.ts sidebarDeviceNote).
+                      const { note, action } = sidebarDeviceNote(dev, devRows.length);
                       return (
                         <DeviceSection
                           key={dkey}
@@ -548,7 +544,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                           showForget={canDisconnect(dev)}
                           member={!!d.member}
                           note={note}
-                          connectBtn={connectBtn}
+                          action={action}
                           onToggle={() => ui.toggleDeviceCollapsed(dkey)}
                         >
                           {!collapsed && renderRail(devRails[di].rail)}
@@ -694,7 +690,9 @@ function DeviceSection(props: {
   showForget: boolean;
   member?: boolean;
   note: string;
-  connectBtn: boolean;
+  /** "add": Add to my devices… (Settings → Devices on it); "connect": the
+   * token-paste dialog, for a MindFlock too old to join. */
+  action: "add" | "connect" | null;
   onToggle(): void;
   children: React.ReactNode;
 }) {
@@ -705,7 +703,19 @@ function DeviceSection(props: {
       {!props.collapsed && props.note && (
         <li className="device-note muted">
           <span className="dev-note-text">{props.note}</span>
-          {props.connectBtn && (
+          {props.action === "add" && (
+            <button
+              className="dev-connect"
+              data-add-device={props.devKey}
+              onClick={(e) => {
+                e.stopPropagation();
+                openDevicesFor({ device: props.devKey });
+              }}
+            >
+              Add to my devices…
+            </button>
+          )}
+          {props.action === "connect" && (
             <button
               className="dev-connect"
               onClick={(e) => {

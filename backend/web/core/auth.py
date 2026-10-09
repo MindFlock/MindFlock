@@ -49,7 +49,10 @@ for the phone.
 * **Privileged actions.** Some routes (approving a device into the fleet,
   showing a join code) must be done by the person AT this device, never
   relayed by another MindFlock nor reached by an anonymous tailnet caller of a
-  gate-off server: :func:`privileged`.
+  gate-off server: :func:`privileged`. Changing what runs on the owner's
+  devices (launch flags, accounts, templates, custom agents, the gate itself
+  — anything settings sync would spread) needs the same, unless the server
+  can't be reached from beyond this machine at all: :func:`may_configure`.
 
 Comparisons use ``hmac.compare_digest`` (constant-time). The token is a
 capability, not a password — treat the URL+token like an SSH key. A
@@ -73,6 +76,7 @@ import secrets
 from typing import Iterable, List, Optional
 from urllib.parse import parse_qs
 
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "mf_auth"
@@ -122,6 +126,14 @@ _MEMBER_FLEET_ROUTES = frozenset(
         ("POST", "/api/fleet/roster"),
         ("POST", "/api/fleet/rekey"),
         ("POST", "/api/fleet/rotate-token"),
+        # Approve from wherever you are: a member hands over the requests
+        # waiting on it, and sends back the answer given there.
+        ("POST", "/api/fleet/pending"),
+        ("POST", "/api/fleet/member-approve"),
+        # "Update all my devices": another member asks this one to update
+        # (backend.web.core.fleet_update), and follows its progress.
+        ("POST", "/api/fleet/update/apply"),
+        ("GET", "/api/fleet/update/state"),
         ("POST", "/api/settings/sync/nudge"),
         ("GET", "/api/settings/sync/export"),
     }
@@ -413,8 +425,11 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
     (Settings → Security's reveal, Settings → Mobile's QR, the answer to a
     rotate): the request presents that own token (cookie or bearer), or it
     comes straight from this machine and isn't relayed by another MindFlock.
-    ``open_gate``: also yes while the gate is off and the request isn't
-    relayed (the whole server is open then anyway).
+    ``open_gate``: also yes while the gate is off and nothing beyond this
+    machine can be the caller (:func:`_unexposed_direct`). NOT for an
+    anonymous tailnet caller of a gate-off, reachable server: the token would
+    make it :func:`privileged` — and :func:`may_configure` — on its next
+    request, reopening the settings laundering path that check closes.
 
     NOT a caller that got past the gate with the fleet key — a member, or a
     phone signed in with the devices' key, must not be able to collect every
@@ -431,9 +446,27 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
             return False
         if _from_this_machine(scope):
             return True
-        return bool(open_gate) and not auth_enabled()
+        return bool(open_gate) and not auth_enabled() and _unexposed_direct(scope)
     except Exception:  # noqa: BLE001
         return False
+
+
+def _unexposed_direct(scope) -> bool:
+    """Whether nothing beyond this machine can be this request's caller: not
+    relayed, no proxy forwarding header (``tailscale serve`` fronting a
+    local-mode server), a transport peer recorded, and the server not started
+    beyond localhost — the gate-off localhost run (and the test suite's
+    in-process client), where every direct caller already is this machine."""
+    headers = scope.get("headers") or []
+    if any(k == _REMOTE_HEADER for k, _ in headers):
+        return False
+    from backend.web.core import tailnet_trust as _tailnet_trust
+
+    if _tailnet_trust.has_forward_headers(scope):
+        return False
+    if not (scope.get("mf_peer") or scope.get("client")):
+        return False
+    return not _exposed_mode()
 
 
 async def privileged(scope) -> bool:
@@ -467,6 +500,52 @@ async def privileged(scope) -> bool:
         return bool(await _tailnet_trust.request_trusted(scope))
     except Exception:  # noqa: BLE001 — refuse rather than 500
         return False
+
+
+#: What a refused :func:`may_configure` caller is told (the routes' 403).
+CONFIGURE_REFUSED = (
+    "this changes how your devices run agents, so it needs this device's "
+    "sign-in: change it on the device itself, or sign in with its access "
+    "token (Settings → Security there)"
+)
+
+
+async def may_configure(scope) -> bool:
+    """Whether this request may change what runs on the owner's devices —
+    agent launch flags and binaries, accounts, ticket sources, templates,
+    custom agents, red zones, the access gate and bind, notification
+    channels. A synced one of those spreads to every device that holds the
+    fleet key, stamped as THIS device's edit, so an anonymous tailnet caller
+    of a gate-off device would otherwise launder it into the gated ones.
+
+    * Yes when :func:`privileged` (a credential, this machine, a trusted
+      Tailscale account — never relayed by another MindFlock).
+    * Otherwise only while nothing beyond this machine can be the caller:
+      not relayed, no proxy forwarding header (``tailscale serve`` fronting a
+      local-mode server), and the server not started beyond localhost. That
+      is the gate-off localhost run (and the test suite), where every direct
+      caller already is this machine.
+
+    With the gate ON every caller that reached a route passed it with one of
+    :func:`privileged`'s credentials, so this refuses only relayed requests
+    then. Never raises (fails closed)."""
+    try:
+        if await privileged(scope):
+            return True
+        return _unexposed_direct(scope)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def configure_allowed(request: Request) -> bool:
+    """:func:`may_configure` as a FastAPI dependency, so a plain ``def``
+    route can ask it (``allowed: bool = Depends(auth.configure_allowed)``)."""
+    return await may_configure(request.scope)
+
+
+def configure_refused() -> JSONResponse:
+    """The 403 a :func:`may_configure` refusal answers with."""
+    return JSONResponse({"error": CONFIGURE_REFUSED}, status_code=403)
 
 
 def _query_tokens(query_string: bytes) -> List[str]:

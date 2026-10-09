@@ -132,6 +132,7 @@ def test_event_names_vocabulary_is_complete():
         "peer.progress",
         "peer.message",
         "peer.relay_changed",
+        "update.available",
     }
 
 

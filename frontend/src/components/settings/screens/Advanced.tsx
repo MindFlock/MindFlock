@@ -144,8 +144,18 @@ type UpdateCheck = {
   kind?: string;
   blocked?: string;
   repo?: string;
+  /** The last update's state: idle · started · done · failed · rolled_back. */
+  state?: string;
+  /** Installed, but this server isn't running it yet (it restarts itself
+   * onto it within seconds, or once Setup's install terminal finishes). */
+  restart_pending?: boolean;
+  /** The last update's outcome (`error: "interrupted"` = its installer died). */
+  last?: { ref?: string; version?: string; from_version?: string; error?: string; code?: number };
 };
-type UpdateState = { state?: string; code?: number; log?: string[]; restarting?: boolean };
+type UpdateState = { state?: string; code?: number; error?: string; log?: string[]; restarting?: boolean };
+
+/** How long to wait for the server to come back on a finished install. */
+const NEW_BUILD_WAIT_MS = 180000;
 
 function ServerEngineUpdate() {
   const [info, setInfo] = useState<UpdateCheck | null>(null);
@@ -153,7 +163,9 @@ function ServerEngineUpdate() {
   const [error, setError] = useState("");
   const [lines, setLines] = useState<string[]>([]);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const { restarting, timedOut, restart } = useServerRestart();
+  /** The install finished: waiting for the server to answer on it. */
+  const [waiting, setWaiting] = useState(false);
+  const [waitTimedOut, setWaitTimedOut] = useState(false);
 
   const check = useCallback(async (refresh: boolean) => {
     try {
@@ -169,6 +181,33 @@ function ServerEngineUpdate() {
       if (timer.current) clearInterval(timer.current);
     };
   }, [check]);
+
+  // Installed but not running yet — on this screen's first look, or after the
+  // install below: the server restarts itself onto it (no request from here),
+  // so wait until it answers without `restart_pending`, then reload onto the
+  // new bundle. Gaps while it restarts are expected.
+  const pending = !!info?.restart_pending;
+  useEffect(() => {
+    if (!pending && !waiting) return;
+    const t0 = Date.now();
+    const t = setInterval(async () => {
+      if (Date.now() - t0 > NEW_BUILD_WAIT_MS) {
+        clearInterval(t);
+        setWaitTimedOut(true);
+        return;
+      }
+      try {
+        const c = await api<UpdateCheck>("/api/update/check");
+        if (!c.restart_pending && c.state !== "started") {
+          clearInterval(t);
+          window.location.reload();
+        }
+      } catch {
+        /* restarting */
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [pending, waiting]);
 
   const update = async () => {
     setBusy(true);
@@ -193,24 +232,46 @@ function ServerEngineUpdate() {
         return;
       }
       setLines(st.log || []);
-      if (st.restarting) {
+      if (st.restarting || st.state === "done") {
         if (timer.current) clearInterval(timer.current);
         timer.current = null;
-        // The route already re-execed the server, so don't ask for a second
-        // restart — just wait for it to answer again and reload onto the new
-        // bundle.
-        restart({ alreadyRequested: true, reload: true });
-      } else if (st.state === "failed") {
+        // The server restarts itself onto the install (its own watcher, or
+        // this very poll) — don't ask for a second restart, wait for the new
+        // build to answer and reload onto its bundle.
+        setWaiting(true);
+      } else if (st.state === "failed" || st.state === "rolled_back") {
         if (timer.current) clearInterval(timer.current);
         timer.current = null;
         setBusy(false);
-        setError("The update didn’t finish (exit " + (st.code ?? "?") + ").");
+        setError(
+          st.state === "rolled_back"
+            ? "The new version didn’t start, so the previous one was put back — see the installer output."
+            : st.error === "interrupted"
+              ? "The update was interrupted — try again."
+              : "The update didn’t finish (exit " + (st.code ?? "?") + ")."
+        );
+        void check(false);
       }
     }, 2000);
   };
 
   const blocked = info?.blocked || "";
   const version = info?.current ? "v" + info.current : "unknown";
+  const last = info?.last || {};
+  const installing = info?.state === "started";
+  // What happened last time, when it didn't end well (and isn't on screen as
+  // this visit's own error already).
+  const lastNote =
+    error || pending || waiting
+      ? ""
+      : info?.state === "rolled_back"
+        ? "v" + (last.version || "?") + " didn’t start, so v" + (last.from_version || "?") +
+          " was put back (Settings → System logs has the installer output)."
+        : info?.state === "failed" && last.error === "interrupted"
+          ? "The last update was interrupted — try again."
+          : info?.state === "failed"
+            ? "The last update failed — Settings → System logs has the installer output."
+            : "";
   return (
     <>
       <h3 className="set-section-title">Version &amp; updates</h3>
@@ -236,7 +297,16 @@ function ServerEngineUpdate() {
         ) : null}
         .
       </p>
-      {blocked ? (
+      {pending || waiting ? (
+        <p className="set-hint" id="upd-restarting">
+          Installed{last.version ? " v" + last.version : ""} — restarting onto it… This window
+          reloads on its own once the server answers again.
+        </p>
+      ) : installing ? (
+        <p className="set-hint" id="upd-installing">
+          An update{last.version ? " to v" + last.version : ""} is installing…
+        </p>
+      ) : blocked ? (
         <p className="set-hint">{blocked}</p>
       ) : info?.available ? (
         <p className="set-hint">
@@ -247,30 +317,31 @@ function ServerEngineUpdate() {
       ) : info?.checked ? (
         <p className="set-hint">You’re on the newest release.</p>
       ) : null}
+      {lastNote && (
+        <p className="set-hint" id="upd-last">
+          {lastNote}
+        </p>
+      )}
       <div className="upd-btn-row">
-        {!blocked && info?.available && (
-          <button type="button" className="test-btn" disabled={busy || restarting} onClick={update}>
-            {restarting
-              ? "Restarting…"
-              : busy
-                ? "Updating…"
-                : "Update to v" + info.latest}
+        {!blocked && info?.available && !pending && !waiting && !installing && (
+          <button type="button" className="test-btn" disabled={busy} onClick={update}>
+            {busy ? "Updating…" : "Update to v" + info.latest}
           </button>
         )}
         <button
           type="button"
           className="test-btn"
-          disabled={busy || restarting}
+          disabled={busy || waiting}
           onClick={() => check(true)}
         >
           Check again
         </button>
       </div>
       {error && <p className="error">{error}</p>}
-      {timedOut && (
+      {waitTimedOut && (
         <p className="error">
-          The update finished, but the server didn’t come back within 30s. Check Settings →
-          System logs, or restart it from the terminal.
+          The update finished, but the server didn’t come back on it. Check Settings → System
+          logs, or run <code>mindflock restart</code> on that machine.
         </p>
       )}
       {lines.length > 0 && (

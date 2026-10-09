@@ -28,7 +28,8 @@ import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
-import { deviceEventNote } from "../lib/fleet";
+import { deviceEventNote, updateNote } from "../lib/fleet";
+import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
 
 const BASE_TITLE = document.title || "MindFlock";
@@ -455,10 +456,15 @@ export function EventToasts() {
     // stops all syncing until it's answered there. Never for a replayed
     // backlog: a request from an hour ago has expired, and the bell keeps the
     // record.
+    // The desktop app also raises an OS notification for the ones that need
+    // you while it's minimized (lib/desktopNotify): a join request, someone
+    // arriving on a peer link, an update (below, with the update toast).
+    unsubs.push(installDesktopNotifyClicks());
     for (const name of ["device.join_requested", "device.joined", "settings.sync_paused"]) {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;
+          desktopNotify(env.event, env.data);
           const n = deviceEventNote(env.event, env.data);
           if (!n?.toast) return;
           notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
@@ -475,6 +481,7 @@ export function EventToasts() {
       unsubs.push(
         ev.subscribe(name, (env) => {
           if (isReplay(env)) return;
+          desktopNotify(env.event, env.data);
           const n = peerEventNote(env.event, env.data);
           if (!n?.toast) return;
           notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {
@@ -484,6 +491,27 @@ export function EventToasts() {
         })
       );
     }
+    // A newer release: one toast per answer, never in the desktop app (its
+    // own update toast says the same, with its own button) and never for a
+    // replayed backlog — the bell keeps the record. In the desktop app the
+    // one extra is an OS notification while the window isn't focused, and
+    // the shell shows it at most once per release — not again when its own
+    // update toast already announced that version (electron/main.js).
+    unsubs.push(
+      ev.subscribe("update.available", (env) => {
+        if (isReplay(env)) return;
+        if ((window as unknown as { mfengine?: unknown }).mfengine) {
+          desktopNotify(env.event, env.data);
+          return;
+        }
+        const n = updateNote(env.data);
+        if (!n) return;
+        notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
+          onClick: () => useUi.getState().openDialogFor("settings", n.screen),
+          duration: 8000,
+        });
+      })
+    );
     unsubs.push(
       ev.subscribe("session.deleted", (env) => {
         dropActivity(env.session);

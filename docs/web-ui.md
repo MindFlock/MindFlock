@@ -2867,10 +2867,25 @@ A few screens got quieter:
   that is a **refusal, not a failure** — reinstalling over an editable install
   would swap a contributor's working tree for a release build. Otherwise
   **Update to vY** starts the install, **Installer output** folds open a live log
-  tail, and the screen polls `/api/update/state` until it reports the restart,
-  then waits out the re-exec and reloads onto the new bundle. Your sessions are
-  tmux sessions, so nothing running is lost; if the server doesn't answer within
-  30 s the screen says so and points at System logs rather than spinning.
+  tail, and the screen polls `/api/update/state` until the install is done. The
+  server restarts itself onto it (no tab needed — closing this one doesn't stop
+  it), so the screen shows *Installed — restarting…* — also on a later visit
+  that finds an install the server hasn't picked up yet, never a second
+  **Update** offer — and reloads onto the new bundle once the new build
+  answers. Your sessions are tmux sessions, so nothing running is lost. When
+  the last update didn't end well the screen says how: *interrupted — try
+  again* (its installer died), *failed* (System logs has the output), or *vY
+  didn't start, so vX was put back* (the installer's health check rolled it
+  back). If the server doesn't come back within 3 minutes the screen says so
+  and points at System logs / `mindflock restart` rather than spinning.
+- **Update notices.** When a newer release is out and this device — or
+  another of "Your devices" — runs an older one, the bell gets one **Updates**
+  row per release ("MindFlock vY is out — 2 of your devices are behind"; the
+  click opens Settings → Devices when other devices are behind, else
+  Advanced), a browser tab gets one toast (the desktop app has its own), and
+  `/m` shows a one-line banner with **Update** / **Update all**. Settings →
+  Devices offers **Update all my devices to vY** and follows the rollout one
+  line per device.
 - **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
   **default on**) — where ingested tickets land. On: each one becomes a MindFlock
   session with its own worktree, branch, seeded agent, stage badge and guided git
@@ -2999,6 +3014,56 @@ A few screens got quieter:
   card explains why that isn't reachable and gives the tested path (a second
   Tailscale inside WSL) and the alternative (mirrored networking). Mobile
   shows the same card when Tailscale is missing.
+
+  Below it, **This device** says where MindFlock listens ("listens on your
+  tailnet (100.x:8765) · access gate on"). A device bound to 127.0.0.1 can
+  still make a code nobody can use and still join, then sit "offline" on
+  every other screen — so then the line turns into a warning ("Your other
+  devices can't reach this one") with **Make reachable**: one save that turns
+  Tailscale mode AND the access gate on together (never a tailnet bind with
+  the gate off — that would open the machine to the LAN too), after trading
+  this browser's token for its sign-in cookie so it stays signed in, and then
+  waits out the server's own restart. The same fix appears where it matters:
+  **Add a device** is blocked inline on a local-only device (no code to type
+  into a computer that can't reach this one), the toast after joining says
+  "Joined X — but your other devices can't reach this one yet" and its click
+  opens the confirm, and on the device that let someone in, a joiner it can't
+  reach after the join reads "Joined, but rig isn't reachable from here —
+  connection refused on :8765 … On rig: Settings → Devices → Make reachable".
+
+  When the other members do something this one doesn't, **Match my other
+  devices** offers one confirm ("reachable on Tailscale + phone link
+  “mindflock”"): it saves the same reachable settings plus
+  `general.shared_link`, then lists any phone-link checklist step still
+  failing here (tag, operator — see Mobile). The **phone link** row shows
+  who answers the shared link across your devices ("hosted by mac-mini ✓,
+  rig ✓ · laptop ⚠ awaiting approval") with **Host here** for this one.
+
+  "No other MindFlock found" is gone: each tailnet device that isn't a
+  member or a joinable MindFlock gets its own row with what discovery found —
+  "connection refused on :8765 → MindFlock isn't running there, or it's
+  local-only", "timed out on :8765 → your Tailscale policy may block
+  tcp:8765" (with **Copy grant**: the policy lines that open it), "asleep —
+  Tailscale last saw it 2 h ago" — tagged devices first; member rows use the
+  same words instead of "offline".
+
+  A join request shows here whichever of your devices it asked: the asked
+  device copies it to every member, so **Approve** works from any of them
+  (the answer goes back to the asked one under the devices' key, carrying the
+  6-digit code shown — "It asked rig; approving here answers there"), from the
+  bell's own **Approve** on the request's row, and from the phone's approve
+  card on `/m` (an ntfy tap opens `/m#approve=<id>`). The desktop app also
+  raises an OS notification for a join request, someone arriving on a peer
+  link and an update while its window isn't focused; clicking one brings the
+  window forward on the right screen.
+
+  **Paste a code** is ONE box for every code: one of your devices' codes
+  (bare, `<device> <code>`, or the whole `mindflock devices join` command)
+  joins here; someone's `mfp1:`/`mfp2:` invite is joined as a peer link and
+  Work with someone opens on it, with the safety number to compare. The
+  palette's **Paste a code…** focuses it, and a code typed straight into the
+  palette is offered as "Join with code …" at the top.
+
   Under each of your devices, a read-only line says whether it is **ready to
   work** or what's missing there (*missing tmux · codex not signed in · can't
   push · Tailscale key expires in 4d*) — each member's own summary of itself
@@ -3007,14 +3072,16 @@ A few screens got quieter:
   installed yet?** shows one copyable line for a brand-new Mac, Linux box or
   WSL distro: it installs MindFlock at **this** device's version
   (`MINDFLOCK_INSTALL_REF=v<version>`), signs in to Tailscale if needed, and
-  joins with the code — asking for approval instead if setting up took
+  makes itself reachable (Tailscale mode + the access gate, as **Make reachable** does), and joins with the code — asking for approval instead if setting up took
   longer than the code lives. Desktop users get the app's download link and
-  the `<device> <code>` to paste into **Join another computer**. When settings
+  the `<device> <code>` to paste into **Paste a code**. When settings
   sync is holding a synced default agent back because its CLI isn't installed
   here (*Not applied here*), an **Install …** button runs the doctor's install
   terminal for it, then syncs so the setting applies.
 - **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`), plus the
-  **tailscale mode** toggle. Setup reads in order: first Tailscale on the
+  **Reachable from your other devices and phone (over Tailscale)** toggle
+  (Tailscale mode; turning it on saves the access gate on with it, the same
+  save as Devices' Make reachable). Setup reads in order: first Tailscale on the
   phone, signed in as this computer's account (with a QR to the app
   download), then the MindFlock QR. Which interface uvicorn binds is fixed at process
   start, so that toggle only means something after a restart — and turning it
@@ -3139,7 +3206,12 @@ A few screens got quieter:
 - **Remote devices** — when `general.remote_control` is on, other MindFlock
   servers on your tailnet appear as sidebar device groups
   (sessions namespaced `<device>::<title>`); pair/unpair via
-  `/api/devices/{device}/connect|disconnect`. A remote session's pane head
+  `/api/devices/{device}/connect|disconnect`. A MindFlock that can join your
+  devices reads "Not one of your devices yet" under its group with **Add to
+  my devices…** (Settings → Devices, its row highlighted — joining turns
+  remote control on, no token to paste); pasting an access token
+  (**Connect…**) is left for one too old to join, and lives in Security →
+  **Pair a device you don't own**. A remote session's pane head
   carries its device's name as a small tag. New Session gains a **Runs on**
   picker once another device is connected: the folder suggestions, Browse…,
   the agent list and the create all answer from the chosen device, and the

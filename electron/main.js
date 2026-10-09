@@ -10,7 +10,7 @@
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
 // that is hand-rolled (which is what fought us under WSLg/Wayland).
 
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
@@ -635,7 +635,14 @@ function startInstall(ref, opts) {
   //   MINDFLOCK_NONINTERACTIVE  there is no controlling terminal behind a GUI
   //     app, so force `mindflock doctor`'s read-only report; its --fix mode
   //     would sit waiting on y/n prompts nobody can answer.
-  const envAdds = { MINDFLOCK_INSTALL_REF: ref, MINDFLOCK_NONINTERACTIVE: '1' }
+  //   MINDFLOCK_INSTALL_NO_RESTART  this app restarts the server itself after
+  //     an engine update (restartServer); install.sh restarting it first
+  //     would be a second restart racing that one.
+  const envAdds = {
+    MINDFLOCK_INSTALL_REF: ref,
+    MINDFLOCK_NONINTERACTIVE: '1',
+    MINDFLOCK_INSTALL_NO_RESTART: '1',
+  }
 
   if (process.platform !== 'win32') {
     if (process.platform === 'darwin' && !hasXcodeCLT()) {
@@ -685,7 +692,8 @@ function startInstall(ref, opts) {
     'L="$(wslpath -a ' + shq(winLog) + ')";'
     + ' S="$(wslpath -a ' + shq(INSTALL_SCRIPT) + ')";'
     + ' T="$(mktemp)"; tr -d "\\r" < "$S" > "$T";'
-    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$T";'
+    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1'
+    + ' MINDFLOCK_INSTALL_NO_RESTART=1 sh "$T";'
     + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1;'
     + ' rm -f "$T"'
   try {
@@ -1164,6 +1172,13 @@ async function checkForUpdates() {
   }
   console.log('[mindflock] update available:', latest, '(current', app.getVersion() + ')')
   pushUpdateToRenderer()
+  // The in-window toast now announces `latest`; minimized or in the
+  // background, an OS notification says so too — once per version, and the
+  // page's update.available for the same release adds nothing more.
+  const unfocused = win && !win.isDestroyed() && !win.isFocused()
+  if (claimUpdateNotice(latest) && unfocused) {
+    showNotification('MindFlock ' + latest + ' is available', 'Click to open MindFlock and update', 'update')
+  }
 }
 
 function startUpdateChecks() {
@@ -1401,7 +1416,13 @@ function fetchLocalJSON(pathname, timeoutMs, token) {
       req = http.get(
         {
           host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
-          headers: token ? { Authorization: 'Bearer ' + token } : {},
+          // X-MindFlock-Shell: this desktop app's version. The engine reports
+          // it in its hello (shell_version), so "Update all my devices" on
+          // another machine can say this app updates on its next launch.
+          headers: Object.assign(
+            { 'X-MindFlock-Shell': app.getVersion() },
+            token ? { Authorization: 'Bearer ' + token } : {}
+          ),
         },
         (res) => {
           if (res.statusCode !== 200) { res.resume(); return finish(null) }
@@ -1991,6 +2012,67 @@ ipcMain.on('win:close', () => { if (win) win.close() })
 // open until the user toggled fullscreen. A pull can't race the renderer's
 // listener registration the way a push at did-finish-load would.
 ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
+
+// OS notifications (renderer: frontend/src/lib/desktopNotify.ts). The page
+// asks only while its window isn't focused, for the few things that need the
+// person while MindFlock is minimized: a computer asking to join their
+// devices (it expires in ten minutes), someone arriving on a peer link, an
+// update. Clicking one brings the window back and tells the page which
+// screen to open (`target`: "devices" | "peer" | "update").
+const NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])
+// Kept referenced until closed: a Notification that is garbage-collected
+// stops delivering its click on some platforms.
+const liveNotifications = new Set()
+
+function focusWindow() {
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function showNotification(title, body, target) {
+  if (!Notification.isSupported()) return false
+  const n = new Notification({ title: String(title || 'MindFlock').slice(0, 120), body: String(body || '').slice(0, 300) })
+  liveNotifications.add(n)
+  const forget = () => liveNotifications.delete(n)
+  n.on('click', () => {
+    forget()
+    focusWindow()
+    if (target && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('notify:click', target)
+    }
+  })
+  n.on('close', forget)
+  n.show()
+  return true
+}
+
+ipcMain.handle('notify:show', (_e, o) => {
+  const opts = o && typeof o === 'object' ? o : {}
+  const target = NOTIFY_TARGETS.has(opts.target) ? opts.target : ''
+  // The page only asks while unfocused; re-check here (it can race a focus).
+  if (win && !win.isDestroyed() && win.isFocused()) return { ok: false }
+  // An update (the engine's update.available, from the page): one notice per
+  // release — none when this shell already announced that version (its own
+  // update toast, or its own notification below).
+  const version = String(opts.version || '').replace(/^v/i, '')
+  if (version) {
+    if (!claimUpdateNotice(version)) return { ok: false }
+  }
+  return { ok: showNotification(opts.title, opts.body, target) }
+})
+
+// The release this shell last announced (its own update toast, or an OS
+// notification for it): one notice per version, whichever path saw it first.
+let notifiedUpdate = ''
+
+// True (and the version recorded) when nothing has announced `version` yet.
+function claimUpdateNotice(version) {
+  if (!version || version === notifiedUpdate || version === skippedVersion) return false
+  notifiedUpdate = version
+  return true
+}
 
 app.whenReady().then(() => {
   // Drop Electron's default application menu: it carries devtools
