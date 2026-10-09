@@ -583,6 +583,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_CONFIG` | — | Overrides the `config.toml` search path (engine/web) |
 | `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
 | `MINDFLOCK_PIPELINE_AUTOMATION` | set by the server | `1` / `0`: whether this device runs PR review and issue handling (see `github.automation_device`), passed by the web server to the pipeline it starts — the pipeline can't tell which of your devices it is on, and is restarted when the answer changes. Unset (a pipeline started by hand) → decided from `settings.json` |
+| `MINDFLOCK_GITHUB_CLIENT_ID` | unset | A GitHub OAuth App client id (device flow enabled) for Setup's **Connect GitHub** — wins over `github.oauth_client_id`. Unset: `gh auth login --web`, or a pre-filled token page |
 | `MINDFLOCK_PIPELINE_FLEET` | set by the server | `1` / `0`: whether this device is in a group of "Your devices" with another live member, passed by the web server to the pipeline it starts. When `1`, a PR review / issue handling loop that has never run on this device seeds its ledger with what is open before its first scan (see [ingestion-pipeline.md](ingestion-pipeline.md#state-and-files)). Unset (a pipeline started by hand) → read from the fleet store |
 | `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
 | `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
@@ -798,6 +799,18 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   next to the pipeline's `state.json`), so nothing the other device reviewed is
   reviewed again. Intake says *runs on <device>* where this device doesn't
   (`GET /api/mindflock/status` → `automation_here`, `automation_device`).
+- **Setup's devices answer** (`general.setup_devices`: `first` · `join` ·
+  unset; per device, never synced): the answer to Setup's "First computer, or
+  join one you already have?". It orders the first-run plan (`GET
+  /api/onboarding`, `mindflock init`): while a join is still to come, the
+  agent and GitHub steps wait for it, and Tailscale becomes a step.
+- **GitHub sign-in app** (`github.oauth_client_id`; synced, not a secret —
+  `$MINDFLOCK_GITHUB_CLIENT_ID` wins over it): the client id of a GitHub
+  OAuth App with the device flow enabled. When set, Setup's **Connect
+  GitHub** signs in with a code typed at github.com/login/device. Unset (the
+  default — MindFlock registers no app), Setup uses `gh auth login --web`
+  when gh is installed, else a pre-filled token page and a paste box. Either
+  way the token lands in `github.token`.
 - **Settings sync** (Settings → Devices → **Settings sync**; state in
   `settings_sync.json` beside `settings.json`, not a setting itself): keeps the
   shareable settings identical on every one of "Your devices" — two-way, last

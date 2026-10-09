@@ -583,7 +583,7 @@ bare program) and `auth_evidence()` (a human string when the CLI *looks* logged
 in, else `""`, reported as "login status unknown" rather than "logged out" so a
 version-fragile credential probe never false-negatives) feed the doctor's
 `agent-auth` row. When that row says no login was found and the provider
-declares a login flow, Setup ② and the doctor row offer **Sign in to <agent>**,
+declares a login flow, Setup's *Sign in to your agent* step and the doctor row offer **Sign in to <agent>**,
 which opens `WS /api/providers/{name}/login-terminal` (`web/core/provider_login.py`
 — tmux, or a plain PTY when tmux is missing) in a window; closing it calls
 `POST …/login-close` and re-runs the agent test and the doctor. This reverses

@@ -1678,17 +1678,58 @@ persisted in `localStorage`):
   any time from **Settings → General** (`openTour`). Finishing or skipping sets
   `tourDone`.
 - **Get set up** — with no sessions the grid shows a card headed *Get set up*,
-  *Three steps to a running agent.*: ① the dependency checklist with
-  **Re-check**, ② **Test agent CLI** (plus **Sign in to <agent>** while the
-  doctor finds no login for a CLI that declares a login flow), with **Test GitHub** and the Shortcut
-  token test folded under *Optional: test GitHub or a Shortcut token*, and ③
-  **+ New session**. A line under ② says where tokens live: *Ticket and GitHub
-  tokens are set up in Intake · agent logins in Settings → Accounts*, each half
-  a link. The **Setup** modal shows the same checklist, so on a machine not yet
+  *Three steps to a running agent.*, holding the first-run plan. Its order and
+  every step's status come from the server (`GET /api/onboarding`,
+  `backend/onboarding.py` — the same plan `mindflock init` prints):
+  ① **Dependencies** (the checklist with **Re-check**), ② **First computer, or
+  join one you already have?** (**This is my first computer** / **Join one I
+  already have**; the answer is per device, `general.setup_devices`, with a
+  **Change** link), ③ **Sign in to your agent** (**Test agent CLI**, plus
+  **Sign in to <agent>** while no login was found for a CLI that declares a
+  login flow), ④ **Tailscale** — only while joining or joined (its one fix,
+  and a link to the Tailscale card in Settings → Devices), ⑤ **Connect
+  GitHub**, ⑥ **+ New session**. Each step shows a ✓/•/– line with its
+  reason. The devices question comes *before* the agent and GitHub steps
+  because joining brings the default agent, the GitHub token and the ticket
+  sources (settings sync); while a join is still to come those two steps say
+  so instead of asking. Agent sign-ins never come along — accounts stay on
+  each computer — so after joining the agent step asks here. **Test GitHub**
+  and the Shortcut token test sit folded under *Optional: test GitHub or a
+  Shortcut token*; a line under ⑤ links *Intake* (ticket sources) and
+  *Settings → Accounts* (agent accounts). The **Setup** modal shows the same
+  checklist, so on a machine not yet
   onboarded it only opens by itself when a check fails *and* sessions already
   exist (the card is gone then); with zero sessions the card is the one
   welcome. The desktop app's first run opens the app with `?setup=install`,
   which opens the Setup modal straight away (once; the parameter is stripped).
+- **Connect GitHub** (`dialogs/ConnectGitHub.tsx`, `/api/github/*`) — one
+  sign-in for opening PRs and pushing, stored as `github.token` (which
+  settings sync shares with your other devices). It offers the best way this
+  computer has: **Sign in with GitHub** (GitHub's device flow — a code to type
+  at github.com/login/device — when an OAuth App client id is configured,
+  `github.oauth_client_id` or `$MINDFLOCK_GITHUB_CLIENT_ID`), else **Sign in
+  to GitHub** (`gh auth login --web` then `gh auth setup-git`, in a terminal
+  window, when gh is installed — its token is copied in when the window
+  closes), else **Make a token on GitHub** (a pre-filled classic-token page:
+  `repo`, `read:org`) and a paste box, which is also always offered folded as
+  *Or paste a token*. A pasted token is checked with GitHub before it is saved.
+  Below it: *Your name and email for commits* when git has none (pre-filled
+  from the account, with its private `@users.noreply.github.com` address;
+  **Use these** writes the global git config — nothing writes it on its own),
+  and **Check I can push**, which asks the remembered repo's origin for real
+  (a `push --dry-run` with prompts off). When that fails for want of an HTTPS
+  credential, **Let git push with this sign-in** runs `gh auth setup-git`, or
+  — only when git has no credential helper for GitHub — registers
+  `mindflock git-credential` for https://github.com. Every one of these
+  routes is for the person at this computer (`privileged()`), never a relayed
+  or anonymous caller.
+- **Push failed** — the Push button types `GIT_TERMINAL_PROMPT=0 git push …`
+  into the session's shell, so a missing credential fails at once instead of
+  waiting on a Username prompt. When the push's output (kept in the
+  worktree's private git dir) shows a missing sign-in, SSH key or git identity,
+  a toast says so — *Push failed on [1] api: git has no GitHub sign-in on this
+  computer for an HTTPS remote — Connect GitHub in Setup* — and clicking it
+  opens Setup (`session.push_failed`).
 - **Install …** — above the dependency checklist (the card, the Setup modal and
   Settings → Doctor) whenever something this machine needs is missing. The
   button names what it installs when that's short (*Install tmux + claude*,
@@ -2958,6 +2999,20 @@ A few screens got quieter:
   card explains why that isn't reachable and gives the tested path (a second
   Tailscale inside WSL) and the alternative (mirrored networking). Mobile
   shows the same card when Tailscale is missing.
+  Under each of your devices, a read-only line says whether it is **ready to
+  work** or what's missing there (*missing tmux · codex not signed in · can't
+  push · Tailscale key expires in 4d*) — each member's own summary of itself
+  (`GET /api/fleet/readiness`); hover for the fixes, which always run on that
+  device. Beside a live **Add a device** code, **New computer with nothing
+  installed yet?** shows one copyable line for a brand-new Mac, Linux box or
+  WSL distro: it installs MindFlock at **this** device's version
+  (`MINDFLOCK_INSTALL_REF=v<version>`), signs in to Tailscale if needed, and
+  joins with the code — asking for approval instead if setting up took
+  longer than the code lives. Desktop users get the app's download link and
+  the `<device> <code>` to paste into **Join another computer**. When settings
+  sync is holding a synced default agent back because its CLI isn't installed
+  here (*Not applied here*), an **Install …** button runs the doctor's install
+  terminal for it, then syncs so the setting applies.
 - **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`), plus the
   **tailscale mode** toggle. Setup reads in order: first Tailscale on the
   phone, signed in as this computer's account (with a QR to the app
