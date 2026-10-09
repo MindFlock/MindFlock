@@ -84,6 +84,85 @@ def set_loop(loop) -> None:
     _MAIN_LOOP = loop
 
 
+#: The push the Push button types (``POST /push-branch``), before its log.
+PUSH_BASE = "GIT_TERMINAL_PROMPT=0 git push --no-verify -u origin HEAD"
+_PUSH_LOG = "mindflock_push.log"
+
+
+def push_log_path(wt: str) -> str:
+    """Where the shell push keeps its output: the worktree's PRIVATE git dir
+    (never staged, never swept), beside the commit lock. ``""`` when that
+    can't be resolved — the push then runs without a log."""
+    try:
+        lock = _server()._precommit_lock_path(wt)
+    except Exception:  # noqa: BLE001
+        return ""
+    if os.path.basename(lock) != "mindflock_precommit.lock":
+        return ""  # the legacy worktree-root fallback: no git dir to write in
+    return os.path.join(os.path.dirname(lock), _PUSH_LOG)
+
+
+def push_command(wt: str) -> str:
+    """The shell line for a push of ``wt``: prompts off, and the output
+    tee'd to :func:`push_log_path` (cleared first, so the watcher reads only
+    this push) for :func:`_push_failure` to read."""
+    import shlex
+
+    path = push_log_path(wt)
+    if not path:
+        return PUSH_BASE
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return "%s 2>&1 | tee %s" % (PUSH_BASE, shlex.quote(path))
+
+
+def _push_failure(rec: dict) -> Optional[dict]:
+    """A finished push's auth-shaped failure (:func:`backend.git_auth_hints
+    .classify`), read from its log — or None (still running, pushed, or a
+    failure that isn't about credentials: git's own text says it best)."""
+    if rec.get("push_log") is None:
+        rec["push_log"] = push_log_path(rec["wt"])
+    path = rec["push_log"]
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read(64 * 1024).decode("utf-8", "replace")
+    except OSError:
+        return None
+    from backend import git_auth_hints
+
+    hint = git_auth_hints.classify(text)
+    if hint is None:
+        return None
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return {**hint, "detail": "\n".join(lines[-4:])[:600]}
+
+
+def _announce_push_failed(title: str, rec: dict, hint: dict) -> None:
+    """Emit ``session.push_failed`` once: the push the Push button typed
+    failed for want of a credential or a git identity. The toast names the
+    fix ("Push failed — Connect GitHub")."""
+    if rec.get("failed_emitted"):
+        return
+    rec["failed_emitted"] = True
+    try:
+        _events().BUS.emit(
+            "session.push_failed",
+            session=title,
+            data={
+                "reason": hint.get("id", ""),
+                "message": hint.get("message", ""),
+                "fix": hint.get("fix", ""),
+                "detail": hint.get("detail", ""),
+            },
+        )
+    except Exception:  # noqa: BLE001 — the watcher must never surface an error
+        pass
+
+
 def _alive(rec: dict) -> bool:
     """Whether a watcher record has a live task. Tolerates a missing/None task so
     a malformed entry can never wedge the module."""
@@ -124,6 +203,8 @@ def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -
             live["until"] = max(live["until"], now + seconds)
             live["reason"] = reason
             live["settle_since"] = None
+            if reason == "push":  # a new push: its own verdict
+                live["failed_emitted"] = False
             return
         if len([w for w in _WATCH.values() if _alive(w)]) >= _MAX_WATCHERS:
             return
@@ -141,6 +222,12 @@ def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -
             # one place. Re-watching a live record keeps the latch set, which is
             # what makes the announcement at-most-once per watcher.
             "pushed_emitted": False,
+            # The push's own output (push_command), and the latch for its
+            # "push failed — here's the fix" announcement.
+            # (None = not resolved yet: resolving shells out to git, so it
+            # happens in the worker thread that reads it.)
+            "push_log": None,
+            "failed_emitted": False,
             "task": None,
         }
         # Create the task FIRST: a record without one is a landmine for every
@@ -292,6 +379,11 @@ async def _loop(title: str, rec: dict) -> None:
                     await asyncio.to_thread(_server()._republish_session, title)
                 except Exception:  # noqa: BLE001
                     pass
+            if rec["reason"] == "push" and not rec.get("failed_emitted"):
+                hint = await asyncio.to_thread(_push_failure, rec)
+                if hint is not None:
+                    _announce_push_failed(title, rec, hint)
+                    return
             if sig is not None and _satisfied(rec, sig):
                 # The watcher is about to exit, and for a push this is the last
                 # moment anything holds the evidence that the sha reached

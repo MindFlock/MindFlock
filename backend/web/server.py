@@ -11254,7 +11254,11 @@ async def instance_push_branch(
             return err
         # --no-verify: skip the repo's pre-push hook (which re-runs the whole
         # pre-commit stack). The commit step already ran the hooks.
-        _send_to_shell(name, "git push --no-verify -u origin HEAD")
+        # GIT_TERMINAL_PROMPT=0: a missing HTTPS credential fails at once
+        # instead of waiting on a Username prompt nobody may be watching; the
+        # output is kept in the private git dir, where the push watcher reads
+        # an auth failure and says how to fix it (session.push_failed).
+        _send_to_shell(name, _live_stage.push_command(wt))
         # The push is fire-and-forget into the shell — the branch is NOT on
         # origin yet when we return here. A one-shot cache pop would just let the
         # next poll re-cache the stale/None SHA for ~10s, stalling the Make PR

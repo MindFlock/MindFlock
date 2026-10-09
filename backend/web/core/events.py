@@ -102,6 +102,12 @@ EVENT_NAMES = (
     # (``POST /push-branch`` types a shell one-liner into tmux and returns), so
     # this event is the only "that sha is on origin now", delivered once.
     "session.pushed",
+    # The push the Push button typed FAILED for want of a credential or a git
+    # identity — read from the push's own output by the live_stage push
+    # watcher (data: {"reason": "https_auth"|"ssh_auth"|"identity"|…,
+    # "message", "fix", "detail"}). Once per push. Other failures (a rejected
+    # non-fast-forward) are git's to explain in the shell, and emit nothing.
+    "session.push_failed",
     # A test plan finished generating and has steps worth showing
     # (data: {"plan": str, "steps": int}).
     "session.test_plan_ready",
