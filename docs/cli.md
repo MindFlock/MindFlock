@@ -20,6 +20,9 @@ mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
 mindflock token             # print this machine's access token (for sign-in / pairing)
+mindflock update            # install the newest release and restart the server onto it
+mindflock update --check    # …only print the installed and newest versions
+mindflock restart           # restart the running server (onto whatever is installed)
 mindflock --version         # print the installed version
 ```
 
@@ -28,6 +31,30 @@ your LAN as well as your tailnet — and auto-enables the access-token gate:
 unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. `mindflock token` prints the same token later (it reads the
 settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.
+
+### `mindflock update [--ref REF] [--check] [--all-devices] [--yes]`
+
+Updates this MindFlock to the newest release (`--ref` picks another: from this
+machine any tag or branch; the server refuses a branch or an older release
+when the request comes from anywhere else). It prints the installed version
+(and commit) and the newest release, asks once (`--yes` skips the question),
+then asks the running server to install it (`POST /api/update/start`) and
+follows the install. The server restarts itself onto the new version when the
+install is done; the command waits until the server's own hello answers with
+the new commit — the only proof the update took — and exits 0. It exits 1 with
+the installer's last lines when the install failed, was interrupted, or was
+rolled back (the new version didn't come back up, so the previous one was put
+back). A development checkout is refused (`git pull` there instead). With no
+server running it installs in place and tells you to start the server.
+`--check` only prints the two versions. `--all-devices` is `mindflock devices
+update`.
+
+### `mindflock restart`
+
+Restarts the running server (`POST /api/server/restart`) and waits until it
+answers again — use it after installing a new engine underneath a running
+server (install.sh does this for you). `mindflock serve` on a port where an
+older build is still running says so and points here.
 
 ### `mindflock uninstall [--purge] [--keep-worktrees] [--dry-run] [--yes]`
 
@@ -289,7 +316,7 @@ Prefix matching works like `attach`.
 
 `LINK` is a link id or a unique prefix of one.
 
-### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave]`
+### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update]`
 
 "Your devices" (Settings → Devices in the app) over `/api/fleet`: group the
 computers **you** own, found over Tailscale, so settings follow you between
@@ -309,6 +336,7 @@ MindFlock is refused.
 | `devices approve DEVICE\|ID [--yes]` | lets a computer that asked join. First it shows the 6-digit code and asks you to confirm that the other screen shows the same one. A `! settings sync:` line on stderr means it joined but settings sync didn't start here |
 | `devices deny DEVICE\|ID` | refuses it |
 | `devices remove DEVICE [--yes] [--keep-tokens]` | takes a device out. The rest get a new key; any that were offline get it automatically when they're back (they are listed). By default every device's own access token is replaced too, so tokens the removed device collected stop working: phones signed in before scan the QR again, and other places that hold a token need the new one. A device whose token couldn't be replaced (an offline one included) is listed on stderr — replace it there in Settings → Security. `--keep-tokens` only re-keys the group. If DEVICE ran PR review and issue handling, they move to this computer. The question and the output also say: if the device was lost or stolen, remove it from your tailnet in the Tailscale admin console too — that cuts it off everywhere at once, even from devices that are offline now. Naming **this** computer is `devices leave` |
+| `devices update [--tag vX.Y.Z] [--yes]` | updates MindFlock on every one of your devices to the newest release (or `--tag`, a published release), **one at a time, this computer last** (`POST /api/fleet/update`). It prints each device's progress as it goes and moves to the next device only once that one's own server answers on the new version; it stops at the first device that fails, rolls back or doesn't come back (exit 1, with why). Devices that are offline, already current, a development checkout, not installed by install.sh, or too old to be updated remotely are skipped with the reason. A desktop app on a device updates itself on its next launch |
 | `devices leave [--yes]` | takes **this** computer out. If it ran PR review and issue handling for your devices, they move first to the remaining device with the lowest device key. Settings sync stops here, and on its own this computer runs PR review and issue handling itself again. Leaving changes neither your devices' shared key nor any access token — remove this computer from another of your devices for that. A computer that left can join again through any of your devices |
 
 `DEVICE` is the device name (its MagicDNS label) or the host name shown in the

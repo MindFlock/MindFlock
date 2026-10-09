@@ -774,6 +774,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   reachable beyond localhost) lets anyone who can reach it control your other
   devices through it, and Settings → Devices warns about that. See
   [web-api.md](web-api.md#your-devices-fleet).
+  **Update all my devices** (Settings → Devices, `mindflock devices update`)
+  updates every member to the newest release one at a time, this device last,
+  and stops at the first that fails or doesn't come back; a member row shows
+  when it is behind, can't be updated from here (a dev checkout), or has a
+  desktop app that updates on its next launch.
 - **Where PR review and issue handling run** (`github.automation_device`;
   Settings → Devices → **PR review and issue handling** → **Run here**): the
   key of the one device of "Your devices" that runs them. It is synced, so

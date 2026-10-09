@@ -1417,7 +1417,7 @@ devices paired both ways don't echo each other's sessions back as
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, device, host, remote_control, auth, shared_link, fleet, fleet_proto, automation}`. `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
+| GET | `/api/remote/hello` | Identity/permission handshake target for other devices: `{app, version, commit, install, shell_version, device, host, remote_control, auth, shared_link, fleet, fleet_proto, automation}`. `commit` is the commit the engine was installed from (its dist-info's `direct_url.json`, read once at boot — `""` for an editable or local install), so two builds that both say the same version can be told apart; `install` is how it is installed (`uv-tool`·`editable`·`other` — whether "Update all my devices" can update it); `shell_version` the desktop app version this machine's shell last reported (its local engine check sends `X-MindFlock-Shell`, honored only from this machine; `""` when none). `fleet` is the id of the "Your devices" group this device belongs to (`""` for none — the id names the group, it admits nothing), `fleet_proto` the join protocol it speaks (0 = a MindFlock from before fleets) and `automation` whether this device is the one that runs PR review and issue handling (`settings_hooks.automation_here`: always true on a lone device; in a group, the device `github.automation_device` names, else the lowest-keyed live member — see [configuration.md](configuration.md#web-exposed-settings)). `shared_link` is the Tailscale Service name this device answers the shared phone link on (`""` for none). `/api/devices` echoes it per device, and `/m` reads `device` to resolve `<device>::<title>` deep links |
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state: `{self: {device, host, os}, remote_control, devices: [{device, host, os, ip, version, shared_link, reachable, remote_control, auth, has_token, needs_token, connected, error, sessions, member, fleet_proto, in_fleet, same_fleet}]}`. `member` = on this device's "Your devices" roster, `in_fleet` = in any group, `same_fleet` = in this one; a member never `needs_token` (the fleet key opens it) |
 | POST | `/api/devices/refresh` | Sweep the tailnet now instead of on the next 20 s tick (Settings → Devices' Refresh); returns the `GET /api/devices` payload |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
@@ -1535,6 +1535,39 @@ can tell "I missed a key change" from "it did" from "we hold different keys".
 `POST /api/fleet/adopt {bundle, from: {key, host, dns}}` (one-click add) takes
 only this device's OWN access token, never the fleet key → `{ok,
 runs_automation}`; 401 without it, 409 when this device is in another group.
+
+**Update all my devices** (`web/core/fleet_update.py`):
+
+- `POST /api/fleet/update {tag?}` — the owner's browser or CLI (`privileged()`,
+  never relayed; 403 otherwise). Starts a rollout to `tag` (a published
+  release at or above this device's version; default the newest release):
+  every other live member **one at a time**, then this device last. Each
+  member is asked through its `update/apply`, then the rollout waits until
+  that member's own hello reports the new commit (or, without one, the new
+  version) and only then moves on; the first member that fails, rolls back
+  (its installer's health check) or doesn't come back halts the rollout.
+  Members that are offline, already current, a dev checkout or not installed
+  by install.sh (hello `install`), or too old for the route (404) are skipped
+  with the reason. → the rollout; 409 while one runs, 400 outside a group or
+  for a refused tag, 502 when GitHub can't name the newest release.
+- `GET /api/fleet/update` → `{state: idle·running·done·halted, tag, version,
+  error, started_at, finished_at, members: [{key, host, self, step, detail,
+  shell_version}]}` — `step` is `queued·updating·restarting·done·current·
+  skipped·failed·not_started`; a member whose desktop app lags says "desktop
+  app on X (vY) updates on its next launch" in `detail`. Progress persists in
+  `<config dir>/fleet_update.json`; a rollout this device's restart cut off
+  reads as `halted`. `GET /api/fleet` carries the same object as `update`, and
+  each member row adds `commit`, `install` and `shell_version` from its hello.
+- Member to member, **fleet key only** (never this device's own token, never
+  the browser `fwd/` relay — `/api/update/*` stays off `_FWD_ALLOWED`):
+  `POST /api/fleet/update/apply {tag?}` installs `tag` (default the newest
+  release) through the same detached installer as `/api/update/start` → `{ok,
+  ref, commit}` or `{ok: true, current: true}` when already on it; 400 for
+  anything but a published release tag at or above its own version, 409
+  `{blocked: true, install, error}` for a dev checkout / non-install.sh engine
+  (or an install already running). `GET /api/fleet/update/state` → `{version,
+  commit, install, blocked, state, ref, error, restart_pending}`. Both answer
+  401 `{error, id, epoch, kfp}` to anything but the current fleet key.
 
 ## Config, providers, usage, settings
 
@@ -2082,15 +2115,26 @@ Implementation and the reasoning live in `web/core/self_update.py`.
 
 | Method | Path | Returns / accepts |
 |---|---|---|
-| GET | `/api/update/check` | `{current, latest, tag, release_url, notes, checked, available, kind, blocked, repo, state}`. `?refresh=1` bypasses the 15-minute `RELEASE_TTL_S` cache (the **Check again** button) — the releases endpoint is polled by every open settings screen and GitHub's unauthenticated limit is 60/hour. An unreachable GitHub answers an empty `latest` with `checked: false`, and is **never** reported as up-to-date: "couldn't tell" and "you're current" are different answers. `kind` is how this engine is installed (`uv-tool` \| `editable` \| `other`) and `blocked` is the human sentence for why it can't update here (empty = it can) |
-| POST | `/api/update/start` | Body `{}` (or `{"ref": "v0.3.2"}`). The newest tag is resolved **server-side** by default — the button says "update to the newest version", and a stale settings screen doesn't get to decide what that is — then resolved to a commit and handed to `uv tool install --force`. → `{ok: true, ref, commit}`. **400** is a refusal with a reason: a dev/editable checkout, an engine not installed by `uv tool`, no `uv` on PATH, an install already running, a ref that resolves to nothing. **502** = GitHub unreachable, so there is no newest release to install |
-| GET | `/api/update/state` | The progress file plus `restarting` (and a `log` tail for the UI's detail fold). **This route is also what re-execs the server** — exactly once, on the first poll that sees a finished install. The installer deliberately doesn't do it itself: calling back into the API would mean teaching a shell script the port and the auth token for a request the UI is already making |
+| GET | `/api/update/check` | `{current, commit, latest, tag, release_url, notes, checked, available, kind, blocked, repo, state, restart_pending, last}`. `state` is the last update's (`idle·started·done·failed·rolled_back`); `restart_pending` = installed but this process doesn't run it yet (the server restarts itself onto it within seconds — the screen says "Installed — restarting…" instead of offering the install again); `last` = `{ref, version, from_version, error, code, healthy}` of the last update (`error: "interrupted"` when its installer died). `?refresh=1` bypasses the 15-minute `RELEASE_TTL_S` cache (the **Check again** button) — the releases endpoint is polled by every open settings screen and GitHub's unauthenticated limit is 60/hour. An unreachable GitHub answers an empty `latest` with `checked: false`, and is **never** reported as up-to-date: "couldn't tell" and "you're current" are different answers. `kind` is how this engine is installed (`uv-tool` \| `editable` \| `other`) and `blocked` is the human sentence for why it can't update here (empty = it can) |
+| POST | `/api/update/start` | Body `{}` (or `{"ref": "v0.3.2"}`). **Owner only** (`privileged()`: a credential, this machine, or a trusted Tailscale account — never a request another MindFlock relays): **403** otherwise, so a gate-off device's tailnet neighbours can't reinstall it. The newest tag is resolved **server-side** by default — the button says "update to the newest version", and a stale settings screen doesn't get to decide what that is — then resolved to a commit and handed to `uv tool install --force`. An explicit `ref` from anywhere but this machine must be a **published release tag at or above the running version** (400 for a branch, a commit, an unpublished tag or a downgrade); from this machine any ref still goes, for developers. → `{ok: true, ref, commit}`. **400** is a refusal with a reason: a dev/editable checkout, an engine not installed by `uv tool`, no `uv` on PATH, an install already running, a ref that resolves to nothing. **502** = GitHub unreachable, so there is no newest release to install |
+| GET | `/api/update/state` | The progress file plus `restarting` (and a `log` tail for the UI's detail fold). The server's own watcher (`web/core/update_watch.py`, every 5 s) re-execs onto a finished install with no client involved; this route does the same on the first poll that sees one first — once either way, and never in a process that already runs the installed build |
 
 The operational contract behind them:
 
-- The installer runs **detached** (its own session via `setsid` where there is
-  one), so it survives the restart that ends the update rather than being killed
-  halfway through replacing its own venv.
+- The installer runs **detached** (its own session, `start_new_session`), so it
+  survives the restart that ends the update rather than being killed halfway
+  through replacing its own venv. Its PID is recorded: a `started` marker whose
+  installer is gone reads as `failed` / `error: "interrupted"` at once.
+- The restart needs **no browser**: a lifespan watcher re-execs once the state
+  is `done` (held while Setup's install terminal runs). The ingestion pipeline
+  records its build in its lock file and is restarted at boot when it is a
+  server-started pipeline on an older build.
+- After a good install the installer watches the server's public hello on
+  loopback for 90 s (only when it answered just before): back on the new
+  commit = `healthy`; still the old build = not restarted yet, left alone;
+  gone and never back = the new engine can't boot, so it reinstalls the
+  previous commit (`prev_commit`, from `direct_url.json`), starts the server
+  again with the command line it ran with, and writes `rolled_back`.
 - Progress lives in a **file**, `<config dir>/update.json`, not this process's
   memory — so a client polling *across* the restart still learns how the update
   ended. Full installer output goes to `<config dir>/update.log` (Settings →

@@ -549,9 +549,11 @@ curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh
 ```
 
 No repo clone, no Python setup needed — the installer brings
-[uv](https://docs.astral.sh/uv/) (no root), installs the `mindflock` command,
-and finishes with `mindflock doctor` so anything still missing (git, tmux,
-`claude`) is listed with the exact install command for your platform.
+[uv](https://docs.astral.sh/uv/) (no root), installs the newest **release**
+of the `mindflock` command (`MINDFLOCK_INSTALL_REF=main` installs unreleased
+code instead), and finishes with `mindflock doctor` so anything still missing
+(git, tmux, `claude`) is listed with the exact install command for your
+platform.
 
 > **Note on `curl | sh`:** it isn't a blind one — the uv installer it fetches
 > is version-pinned and sha256-verified before it runs, and the requested
@@ -559,10 +561,14 @@ and finishes with `mindflock doctor` so anything still missing (git, tmux,
 > the install, an audit trail for what actually ran. Threat model and
 > disclosure contact: [SECURITY.md](SECURITY.md).
 
-**Updating** is the same command again — `install.sh` upgrades in place — or the
-**Update** button in Settings → Advanced, which has the server reinstall itself
-and restart. Your sessions are tmux sessions, so nothing running is lost. A
-contributor's editable install is refused there rather than replaced.
+**Updating** is `mindflock update`, the same command again (`install.sh`
+upgrades in place and restarts a server already running), or the **Update**
+button in Settings → Advanced: the server reinstalls itself and restarts onto
+the new version on its own, and if the new version doesn't come back up the
+previous one is put back. **Settings → Devices → Update all my devices** (or
+`mindflock devices update`) updates every one of your computers, one at a
+time. Your sessions are tmux sessions, so nothing running is lost. A
+contributor's editable install is refused rather than replaced.
 
 <details>
 <summary>Prefer your own tooling? (uv / pipx / from source)</summary>
