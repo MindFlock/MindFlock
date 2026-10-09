@@ -457,13 +457,16 @@ accounts** (untagged devices only; rotating the token does not revoke them).
 
 | | What you get | Anything else? |
 |---|---|---|
-| **Windows** | `MindFlock-Setup.exe` — the app **and** the engine (which runs inside WSL2). | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, the installer does the rest. |
-| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing. First launch offers **Install the engine** — one click, no terminal. |
-| **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch installs the engine for you. |
+| **Windows** | `MindFlock-Setup.exe` — the app. Its engine runs inside WSL2 and is installed there on first launch. | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, first launch does the rest. |
+| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing to do beforehand. First launch offers **Set up MindFlock on this computer** — one click, no terminal. Apple's developer tools (git) and Homebrew are installed along the way if missing (your password, once). |
+| **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch sets everything up for you. |
 
-The app auto-starts the engine every time after that — no terminal, no manual
-steps. If the engine is missing, the app's waiting page says so and shows the
-exact command.
+First launch is one flow: the engine installs under your home folder (no admin
+rights), then the app opens on **Setup → Dependencies** with one **Install**
+button for tmux and your coding agent (it may ask for your password once), then
+**Sign in to Claude** (or your agent) in the same window. The app auto-starts
+the engine every time after that. If the engine is missing, the app's waiting
+page says so and shows the exact command.
 
 <details>
 <summary><b>⚠️ Windows: finish setting up WSL2 <i>before</i> you run the installer</b></summary>
@@ -536,8 +539,9 @@ Most people want the [download buttons above](#download). This section is the
 same thing spelled out, plus every other way in.
 
 Two pieces: the **server/CLI** (runs the engine) and the **desktop app**
-(the one client, Electron — [electron/README.md](electron/README.md)). On
-Windows the `.exe` installs both; elsewhere it's two commands.
+(the one client, Electron — [electron/README.md](electron/README.md)). The
+desktop app installs the server itself on first launch; without it, it's two
+commands.
 
 ### 1. Server + CLI
 
@@ -549,9 +553,27 @@ curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh
 ```
 
 No repo clone, no Python setup needed — the installer brings
-[uv](https://docs.astral.sh/uv/) (no root), installs the `mindflock` command,
-and finishes with `mindflock doctor` so anything still missing (git, tmux,
-`claude`) is listed with the exact install command for your platform.
+[uv](https://docs.astral.sh/uv/) (no root), installs the newest **release**
+of the `mindflock` command (`MINDFLOCK_INSTALL_REF=main` installs unreleased
+code instead), and finishes with `mindflock doctor` so anything still missing
+(git, tmux, `claude`) is listed with the exact install command for your
+platform.
+
+**A second computer?** On the first one, Settings → Devices → **Add a
+device** → *New computer with nothing installed yet?* (or `mindflock devices
+bootstrap`) gives one line to paste on the new one. It installs the same
+MindFlock version, signs in to Tailscale, and joins your devices, so your
+settings, GitHub token and ticket sources come along:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/v<version>/install.sh \
+  | MINDFLOCK_INSTALL_REF=v<version> sh -s -- --join '<device> <CODE>'
+```
+
+Then open the app's **Setup** (or run `mindflock init`): one ordered list —
+dependencies, "first computer or join one?", your agent's sign-in, Tailscale
+when you have more than one computer, **Connect GitHub** (a browser sign-in,
+no token to copy when gh is installed), and your first repo.
 
 > **Note on `curl | sh`:** it isn't a blind one — the uv installer it fetches
 > is version-pinned and sha256-verified before it runs, and the requested
@@ -559,10 +581,14 @@ and finishes with `mindflock doctor` so anything still missing (git, tmux,
 > the install, an audit trail for what actually ran. Threat model and
 > disclosure contact: [SECURITY.md](SECURITY.md).
 
-**Updating** is the same command again — `install.sh` upgrades in place — or the
-**Update** button in Settings → Advanced, which has the server reinstall itself
-and restart. Your sessions are tmux sessions, so nothing running is lost. A
-contributor's editable install is refused there rather than replaced.
+**Updating** is `mindflock update`, the same command again (`install.sh`
+upgrades in place and restarts a server already running), or the **Update**
+button in Settings → Advanced: the server reinstalls itself and restarts onto
+the new version on its own, and if the new version doesn't come back up the
+previous one is put back. **Settings → Devices → Update all my devices** (or
+`mindflock devices update`) updates every one of your computers, one at a
+time. Your sessions are tmux sessions, so nothing running is lost. A
+contributor's editable install is refused rather than replaced.
 
 <details>
 <summary>Prefer your own tooling? (uv / pipx / from source)</summary>
@@ -603,7 +629,7 @@ It finds — and auto-starts — the server by itself.
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |
 | Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Intake → Pull requests), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
-| Optional — everything else | `cursor` (IDE integration), `tailscale` (phone access) |
+| Optional — everything else | `cursor` (IDE integration), `tailscale` (multiple devices + phone) |
 
 ## How It Works
 

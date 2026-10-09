@@ -49,7 +49,10 @@ for the phone.
 * **Privileged actions.** Some routes (approving a device into the fleet,
   showing a join code) must be done by the person AT this device, never
   relayed by another MindFlock nor reached by an anonymous tailnet caller of a
-  gate-off server: :func:`privileged`.
+  gate-off server: :func:`privileged`. Changing what runs on the owner's
+  devices (launch flags, accounts, templates, custom agents, the gate itself
+  — anything settings sync would spread) needs the same, unless the server
+  can't be reached from beyond this machine at all: :func:`may_configure`.
 
 Comparisons use ``hmac.compare_digest`` (constant-time). The token is a
 capability, not a password — treat the URL+token like an SSH key. A
@@ -59,20 +62,28 @@ which invalidates every issued cookie/QR/paired device at once.
 Independent of the token gate — enforced even when it's off — the middleware
 refuses browser cross-origin requests (:func:`origin_ok`; WebSocket handshakes
 ignore CORS, so this is what stops a malicious webpage from driving the agent
-terminals on 127.0.0.1) and DNS-rebinding ``Host`` headers in local mode
-(:func:`host_ok`).
+terminals on 127.0.0.1) and DNS-rebinding ``Host`` headers (:func:`host_ok`):
+in local mode only loopback names pass; in an exposed mode, loopback plus this
+node's own tailnet addresses and names (and, bound to every interface, its
+LAN addresses).
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import secrets
+import socket
+import threading
+import time
 from typing import Iterable, List, Optional
 from urllib.parse import parse_qs
 
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 COOKIE_NAME = "mf_auth"
@@ -122,6 +133,14 @@ _MEMBER_FLEET_ROUTES = frozenset(
         ("POST", "/api/fleet/roster"),
         ("POST", "/api/fleet/rekey"),
         ("POST", "/api/fleet/rotate-token"),
+        # Approve from wherever you are: a member hands over the requests
+        # waiting on it, and sends back the answer given there.
+        ("POST", "/api/fleet/pending"),
+        ("POST", "/api/fleet/member-approve"),
+        # "Update all my devices": another member asks this one to update
+        # (backend.web.core.fleet_update), and follows its progress.
+        ("POST", "/api/fleet/update/apply"),
+        ("GET", "/api/fleet/update/state"),
         ("POST", "/api/settings/sync/nudge"),
         ("GET", "/api/settings/sync/export"),
     }
@@ -405,7 +424,16 @@ def _from_this_machine(scope) -> bool:
     if not peer:
         return False
     loopback = _tailnet_trust.is_loopback(peer[0])
-    return loopback and not _tailnet_trust.has_forward_headers(scope)
+    # The Host must name this machine as well: a page whose name re-resolves
+    # to 127.0.0.1 (DNS rebinding) arrives from a loopback peer too, and in
+    # an exposed mode host_ok can't refuse every such name — this is what
+    # keeps it from counting as the person at this machine.
+    host = _hostname(_header_value(scope.get("headers") or [], b"host"))
+    return (
+        loopback
+        and _loopback_host(host)
+        and not _tailnet_trust.has_forward_headers(scope)
+    )
 
 
 def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
@@ -413,8 +441,11 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
     (Settings → Security's reveal, Settings → Mobile's QR, the answer to a
     rotate): the request presents that own token (cookie or bearer), or it
     comes straight from this machine and isn't relayed by another MindFlock.
-    ``open_gate``: also yes while the gate is off and the request isn't
-    relayed (the whole server is open then anyway).
+    ``open_gate``: also yes while the gate is off and nothing beyond this
+    machine can be the caller (:func:`_unexposed_direct`). NOT for an
+    anonymous tailnet caller of a gate-off, reachable server: the token would
+    make it :func:`privileged` — and :func:`may_configure` — on its next
+    request, reopening the settings laundering path that check closes.
 
     NOT a caller that got past the gate with the fleet key — a member, or a
     phone signed in with the devices' key, must not be able to collect every
@@ -431,9 +462,27 @@ def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
             return False
         if _from_this_machine(scope):
             return True
-        return bool(open_gate) and not auth_enabled()
+        return bool(open_gate) and not auth_enabled() and _unexposed_direct(scope)
     except Exception:  # noqa: BLE001
         return False
+
+
+def _unexposed_direct(scope) -> bool:
+    """Whether nothing beyond this machine can be this request's caller: not
+    relayed, no proxy forwarding header (``tailscale serve`` fronting a
+    local-mode server), a transport peer recorded, and the server not started
+    beyond localhost — the gate-off localhost run (and the test suite's
+    in-process client), where every direct caller already is this machine."""
+    headers = scope.get("headers") or []
+    if any(k == _REMOTE_HEADER for k, _ in headers):
+        return False
+    from backend.web.core import tailnet_trust as _tailnet_trust
+
+    if _tailnet_trust.has_forward_headers(scope):
+        return False
+    if not (scope.get("mf_peer") or scope.get("client")):
+        return False
+    return not _exposed_mode()
 
 
 async def privileged(scope) -> bool:
@@ -467,6 +516,57 @@ async def privileged(scope) -> bool:
         return bool(await _tailnet_trust.request_trusted(scope))
     except Exception:  # noqa: BLE001 — refuse rather than 500
         return False
+
+
+#: What a refused :func:`may_configure` caller is told (the routes' 403).
+#: The caller is usually a browser that reached a gate-off device from
+#: elsewhere, where there is no sign-in prompt to answer — so it names what
+#: works: that computer itself, one of the owner's devices (they hold the
+#: devices' key), or the token from that computer's Settings → Security.
+CONFIGURE_REFUSED = (
+    "this changes how your devices run agents, so that device only takes it "
+    "from you: make the change on that computer itself or from one of your "
+    "devices, or sign in with the access token shown there (Settings → "
+    "Security)"
+)
+
+
+async def may_configure(scope) -> bool:
+    """Whether this request may change what runs on the owner's devices —
+    agent launch flags and binaries, accounts, ticket sources, templates,
+    custom agents, red zones, the access gate and bind, notification
+    channels. A synced one of those spreads to every device that holds the
+    fleet key, stamped as THIS device's edit, so an anonymous tailnet caller
+    of a gate-off device would otherwise launder it into the gated ones.
+
+    * Yes when :func:`privileged` (a credential, this machine, a trusted
+      Tailscale account — never relayed by another MindFlock).
+    * Otherwise only while nothing beyond this machine can be the caller:
+      not relayed, no proxy forwarding header (``tailscale serve`` fronting a
+      local-mode server), and the server not started beyond localhost. That
+      is the gate-off localhost run (and the test suite), where every direct
+      caller already is this machine.
+
+    With the gate ON every caller that reached a route passed it with one of
+    :func:`privileged`'s credentials, so this refuses only relayed requests
+    then. Never raises (fails closed)."""
+    try:
+        if await privileged(scope):
+            return True
+        return _unexposed_direct(scope)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def configure_allowed(request: Request) -> bool:
+    """:func:`may_configure` as a FastAPI dependency, so a plain ``def``
+    route can ask it (``allowed: bool = Depends(auth.configure_allowed)``)."""
+    return await may_configure(request.scope)
+
+
+def configure_refused() -> JSONResponse:
+    """The 403 a :func:`may_configure` refusal answers with."""
+    return JSONResponse({"error": CONFIGURE_REFUSED}, status_code=403)
 
 
 def _query_tokens(query_string: bytes) -> List[str]:
@@ -597,6 +697,155 @@ def _hostname(value: str) -> str:
     return v
 
 
+def _loopback_host(host: str) -> bool:
+    """Whether a parsed ``Host`` (:func:`_hostname`) names this machine's
+    loopback: ``localhost`` or a loopback address."""
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+#: This node's own names and addresses for :func:`host_ok` in an exposed
+#: mode, from the shared ``tailscale status`` snapshot: ``hosts`` (tailnet
+#: IPs, MagicDNS name and its short form, OS hostname, cert domains),
+#: ``lan`` (this machine's own hostname, for a server on every interface),
+#: ``unbindable`` (none of those IPs can be bound here — tailscale mode fell
+#: back to every interface) and when it was read. Refreshed off the request
+#: path (:func:`_ensure_node_hosts`); a failed read keeps the last good set.
+_NODE = {
+    "hosts": frozenset(),
+    "lan": frozenset(),
+    "unbindable": False,
+    "at": 0.0,
+    "pending": False,
+}
+_NODE_LOCK = threading.Lock()
+#: Seconds a :data:`_NODE` read is used before a background re-read.
+NODE_HOSTS_TTL = 30.0
+#: IP literal -> whether it is an address of this machine (a bind test).
+_LOCAL_IPS: dict = {}
+_BACKGROUND: set = set()
+
+
+def _ip_text(raw) -> str:
+    try:
+        return str(ipaddress.ip_address(str(raw).strip().strip("[]")))
+    except ValueError:
+        return ""
+
+
+def read_node_hosts() -> None:
+    """Re-read :data:`_NODE` from ``tailscale status`` (blocking: run it off
+    the event loop). Never raises."""
+    hosts = set()
+    unbindable = False
+    ok = False
+    try:
+        from backend import tailscale_cli
+        from backend.web.core import tailnet_bind
+
+        data = tailscale_cli.status_json()
+        if isinstance(data, dict):
+            ok = True
+            node = data.get("Self") if isinstance(data.get("Self"), dict) else {}
+            ips = [
+                t for t in (_ip_text(a) for a in node.get("TailscaleIPs") or []) if t
+            ]
+            hosts.update(ips)
+            dns = str(node.get("DNSName") or "").strip().rstrip(".").lower()
+            if dns:
+                hosts.add(dns)
+                hosts.add(dns.split(".", 1)[0])
+            name = str(node.get("HostName") or "").strip().lower()
+            if name:
+                hosts.add(name)
+            for cert in data.get("CertDomains") or []:
+                if cert:
+                    hosts.add(str(cert).strip().rstrip(".").lower())
+            unbindable = bool(ips) and not any(tailnet_bind.bindable(ip) for ip in ips)
+    except Exception:  # noqa: BLE001 — keep the last good set
+        ok = False
+    try:
+        me = socket.gethostname().strip().lower()
+    except Exception:  # noqa: BLE001
+        me = ""
+    short = me.split(".", 1)[0]
+    lan = frozenset(h for h in (me, short, short + ".local" if short else "") if h)
+    with _NODE_LOCK:
+        _NODE["lan"] = lan
+        if ok or not _NODE["hosts"]:
+            _NODE["hosts"] = frozenset(h for h in hosts if h)
+            _NODE["unbindable"] = unbindable
+        _NODE["at"] = time.monotonic()
+        _NODE["pending"] = False
+
+
+async def _ensure_node_hosts() -> None:
+    """Make :data:`_NODE` current enough for :func:`host_ok` in an exposed
+    mode: the first request waits for a read; after that a stale set is used
+    while a background thread re-reads it. Never raises."""
+    if not _exposed_mode():
+        return
+    try:
+        with _NODE_LOCK:
+            at, pending = _NODE["at"], _NODE["pending"]
+            stale = not at or time.monotonic() - at > NODE_HOSTS_TTL
+            if stale and not pending:
+                _NODE["pending"] = True
+        if not at:
+            await asyncio.to_thread(read_node_hosts)
+        elif stale and not pending:
+            task = asyncio.ensure_future(asyncio.to_thread(read_node_hosts))
+            _BACKGROUND.add(task)
+            task.add_done_callback(_BACKGROUND.discard)
+    except Exception:  # noqa: BLE001
+        with _NODE_LOCK:
+            _NODE["pending"] = False
+
+
+def _all_interfaces() -> bool:
+    """Whether this tailscale-mode server listens on every interface (the
+    LAN too): asked for (``MINDFLOCK_BIND_ALL``), or a fallback — tailscaled
+    wasn't up at boot, or its addresses can't be bound here."""
+    try:
+        from backend.web.core import tailnet_bind
+
+        if tailnet_bind.bind_all_requested():
+            return True
+        if os.environ.get(tailnet_bind.FALLBACK_ENV) == "1":
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return bool(_NODE["unbindable"])
+
+
+def _local_ip(host: str) -> bool:
+    """Whether ``host`` is an IP literal that is an address of this machine
+    (cached bind test)."""
+    ip = _ip_text(host)
+    if not ip:
+        return False
+    hit = _LOCAL_IPS.get(ip)
+    if hit is None:
+        try:
+            from backend.web.core import tailnet_bind
+
+            hit = tailnet_bind.bindable(ip)
+        except Exception:  # noqa: BLE001
+            hit = False
+        if len(_LOCAL_IPS) < 256:
+            _LOCAL_IPS[ip] = hit
+    return hit
+
+
 def origin_ok(scope) -> bool:
     """False for a browser request from a FOREIGN origin.
 
@@ -620,25 +869,37 @@ def origin_ok(scope) -> bool:
 
 
 def host_ok(scope) -> bool:
-    """False for a DNS-rebinding request in local mode.
+    """False for a DNS-rebinding request: a ``Host`` that isn't one of this
+    server's own names means a page the browser thinks is some other domain
+    has been pointed at this machine, so cross-origin protections no longer
+    apply — refused outright, gate on or off.
 
-    A server bound to 127.0.0.1 (``CS_WEB_MODE=local``) is only legitimately
-    reachable as a loopback name — a request whose ``Host`` is some public
-    domain means a page the browser thinks is that domain has been pointed at
-    127.0.0.1 (rebinding), so cross-origin protections no longer apply and we
-    refuse it outright. Not enforced for exposed modes (real tailnet/LAN
-    hostnames can't be enumerated here — the token gate covers those) or when
-    the mode is unset (bare uvicorn, the test suite).
+    * Local mode (``CS_WEB_MODE=local``, bound to 127.0.0.1): loopback names
+      only.
+    * An exposed mode (tailscale): loopback, plus this node's own tailnet
+      addresses and MagicDNS names (the phone, ``tailscale serve``, another
+      member calling by IP or by name — :data:`_NODE`), plus — only while
+      bound to every interface (``MINDFLOCK_BIND_ALL``, or a fallback) —
+      this machine's LAN addresses and hostname.
+    * Mode unset (bare uvicorn, the test suite): not enforced.
 
-    A name in :data:`_FRONTED_HOSTS` passes too: that is the shared phone
-    link's ``tailscale serve`` hostname, a ``*.ts.net`` name only the tailnet
-    resolves — no page can be rebound onto it.
+    A name in :data:`_FRONTED_HOSTS` passes in every mode: that is the shared
+    phone link's ``tailscale serve`` hostname, a ``*.ts.net`` name only the
+    tailnet resolves — no page can be rebound onto it.
     """
     mode = (os.environ.get("CS_WEB_MODE") or "").strip().lower()
-    if mode not in ("local", "localhost"):
+    if not mode:
         return True
     host = _hostname(_header_value(scope.get("headers") or [], b"host"))
-    return host in _LOOPBACK_HOSTS or host in _FRONTED_HOSTS
+    if _loopback_host(host) or host in _FRONTED_HOSTS:
+        return True
+    if mode in ("local", "localhost"):
+        return False
+    if host and host in _NODE["hosts"]:
+        return True
+    if not _all_interfaces():
+        return False
+    return bool(host) and (host in _NODE["lan"] or _local_ip(host))
 
 
 async def _deny(scope, receive, send, *, status, message, ws_code) -> None:
@@ -698,6 +959,7 @@ class AuthMiddleware:
         # DNS-rebinding hosts are refused before ANY other handling — public
         # paths and the token gate included (a cross-site POST /api/auth is
         # still a cross-site request).
+        await _ensure_node_hosts()
         if not origin_ok(scope) or not host_ok(scope):
             await _deny(
                 scope,

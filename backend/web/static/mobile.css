@@ -172,6 +172,37 @@ html, body {
 .act.is-next:active { background: rgba(var(--accent-rgb), 0.75); }
 .act[disabled] { opacity: 0.4; }
 
+/* --- join-request approve cards (your devices) --- */
+#approve-cards {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#approve-cards.hidden { display: none; }
+.approve-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 13px;
+}
+.approve-card.flash { border-color: var(--accent); }
+.approve-card .approve-code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 18px;
+  letter-spacing: 2px;
+}
+.approve-card .approve-note { color: var(--muted); font-size: 12px; }
+.approve-card .approve-btns { display: flex; gap: 6px; }
+.approve-card .approve-btns .act { flex: 1 1 0; }
+
 /* --- commit-message sheet (bottom sheet over the whole app) --- */
 .sheet {
   position: absolute;
@@ -554,3 +585,27 @@ html, body {
   font-size: 14px;
   text-decoration: underline;
 }
+
+/* Update banner (a newer release): one line under the bar, hidden otherwise. */
+#upd-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+#upd-text { flex: 1 1 auto; min-width: 0; }
+#upd-btn {
+  flex: 0 0 auto;
+  font: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: var(--bg);
+}
+#upd-btn[disabled] { opacity: 0.6; }

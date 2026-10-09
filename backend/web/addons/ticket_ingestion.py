@@ -109,6 +109,18 @@ def _record_desired_running(on: bool) -> None:
         pass
 
 
+def _may_restart_found_pipeline() -> bool:
+    """Whether boot may restart a pipeline it finds running on an older
+    build. Never under pytest: the repo root resolves to the developer's real
+    checkout there, and its pipeline is theirs (tests patch this)."""
+    return "pytest" not in sys.modules
+
+
+#: Marks the pipeline child as the server's (``backend.ticket_ingestion.__main__``
+#: records it in the lock file as ``owner``; same literal there).
+PIPELINE_OWNER_ENV = "MINDFLOCK_PIPELINE_OWNER"
+
+
 #: Seconds between re-checks of which device runs PR review / issue handling:
 #: the answer follows the group's roster, which can change by gossip with no
 #: event here (a device removed elsewhere), and the pipeline is wired with it
@@ -269,27 +281,73 @@ class TicketIngestionController:
         standalone run, or an orphan surviving a backend.web restart) — not just our
         own child.
         """
+        return self._lock_holder()[0]
+
+    def _lock_holder(self) -> "tuple[Optional[int], Optional[dict]]":
+        """``(pid, meta)`` of the pipeline holding the lock — see
+        :meth:`_external_lock_pid` for the PID; ``meta`` is the build it
+        recorded on line 2 (``{version, commit, owner}``), None for a lock
+        written by a pipeline from before it recorded one."""
         p = self._lock_path()
         if not p.exists():
-            return None
+            return None, None
         try:
             fh = open(p, "a+")
         except OSError:
-            return None
+            return None, None
         try:
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 try:
                     fh.seek(0)
-                    return int((fh.read() or "").strip() or 0) or -1
-                except (ValueError, OSError):
-                    return -1
+                    lines = (fh.read() or "").splitlines()
+                except OSError:
+                    return -1, None
+                try:
+                    pid = int((lines[0] if lines else "").strip() or 0) or -1
+                except ValueError:
+                    pid = -1
+                meta = None
+                if len(lines) > 1:
+                    try:
+                        meta = json.loads(lines[1])
+                    except ValueError:
+                        meta = None
+                return pid, meta if isinstance(meta, dict) else None
             else:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)  # nobody holds it -> stale
-                return None
+                return None, None
         finally:
             fh.close()
+
+    def stale_build(self) -> bool:
+        """Whether the running pipeline is one this server started on an
+        OLDER engine build than the one serving now (or one from before the
+        lock recorded its build at all), so it must be restarted: the server
+        re-execs onto an update, but the child is its own process group and
+        keeps the previous code until someone stops it. A standalone run
+        (started outside the server) is never touched. A lock with no
+        metadata (a pipeline from before the lock recorded its build) is
+        owner-unknown: stale here, but :meth:`IngestionAddon._boot_reconcile`
+        restarts it only when the pipeline is wanted anyway."""
+        pid, meta = self._lock_holder()
+        if pid is None:
+            return False
+        if meta is None:
+            return True  # an older pipeline: necessarily an older build
+        if meta.get("owner") != "server":
+            return False
+        try:
+            from backend.web.core import self_update as _su
+
+            mine_v, mine_c = _su.installed_version(), _su.installed_commit()
+        except Exception:  # noqa: BLE001
+            return False
+        theirs_c = str(meta.get("commit") or "")
+        if mine_c and theirs_c:
+            return mine_c != theirs_c
+        return bool(mine_v) and str(meta.get("version") or "") != mine_v
 
     def is_running(self) -> bool:
         return self._own_running() or (self._external_lock_pid() is not None)
@@ -318,6 +376,9 @@ class TicketIngestionController:
         child started without the server's env has no ``UVICORN_PORT`` (its
         ``PORT``, from an agent shell, is a session dev port)."""
         env = dict(os.environ)
+        # This child is the server's: restarted after an engine update when
+        # its recorded build is older (see stale_build).
+        env[PIPELINE_OWNER_ENV] = "server"
         extra = [str(self._repo_root / "src")]
         if env.get("PYTHONPATH"):
             extra.append(env["PYTHONPATH"])
@@ -505,9 +566,14 @@ class TicketIngestionController:
             local = _pending.provisioning_kinds()
         except Exception:  # noqa: BLE001 — status must never fail on this
             local = set()
+        meta = self._lock_holder()[1] if running else None
         return {
             "running": running,
             "pid": pid,
+            # The engine version the running pipeline was started on ("" =
+            # not running, or too old to say) — "ingestion runs vX" when it
+            # differs from the server's.
+            "version": str((meta or {}).get("version") or ""),
             "since": (
                 _datetime.datetime.fromtimestamp(self._started_at)
                 .astimezone()
@@ -597,12 +663,11 @@ class TicketIngestionAddon(Addon):
         An operator's independently-started standalone run is never touched."""
         import threading
 
-        if self._process_wanted():
-            threading.Thread(
-                target=self.ctrl.start,
-                name="mindflock-ingestion-autostart",
-                daemon=True,
-            ).start()
+        threading.Thread(
+            target=self._boot_reconcile,
+            name="mindflock-ingestion-autostart",
+            daemon=True,
+        ).start()
 
         def _on_toggle(_envelope: dict) -> None:
             import threading
@@ -646,6 +711,32 @@ class TicketIngestionAddon(Addon):
                         log.ErrorLog.Printf("automation recheck failed: %v", err)
 
         self._recheck_task = asyncio.get_running_loop().create_task(_recheck())
+
+    def _boot_reconcile(self) -> None:
+        """At server start: a pipeline still running on an older engine build
+        (this server just re-execed onto an update) is restarted onto the new
+        one; otherwise the persisted toggle is restored (``start()`` no-ops
+        when a pipeline already runs).
+
+        Only while the pipeline is wanted (:meth:`_process_wanted`): a restart
+        is a stop AND a start, and with every toggle off that start would turn
+        on what the user left off. That is also what keeps an owner-unknown
+        pipeline (a lock with no metadata — perhaps a standalone run) alone
+        unless the toggle is on."""
+        wanted = self._process_wanted()
+        try:
+            if wanted and _may_restart_found_pipeline() and self.ctrl.stale_build():
+                if log.ErrorLog is not None:
+                    log.ErrorLog.Printf(
+                        "ingestion: the running pipeline is an older build — restarting it"
+                    )
+                self.ctrl.restart()
+                return
+        except Exception as err:  # noqa: BLE001 — never block the autostart
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("ingestion stale-build check failed: %v", err)
+        if wanted:
+            self.ctrl.start()
 
     # --- toggle → process reconciliation ----------------------------------- #
     @staticmethod

@@ -1078,6 +1078,29 @@ def parse_join_string(s: str) -> Tuple[str, str]:
     return "", normalize_code("".join(tokens))
 
 
+#: A peer-link invite code (another PERSON's computer — backend.peer):
+#: ``mfp1:``/``mfp2:`` + base32. Recognized only to route a pasted code to
+#: the right place (:func:`classify_code`).
+_PEER_CODE_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.IGNORECASE)
+
+
+def classify_code(text: str) -> dict:
+    """What a pasted code is, so ONE "Paste a code" box (and ``mindflock
+    join``) can send it to the right place: ``{"kind": "peer", "code"}`` for
+    a peer-link invite (``mfp1:``/``mfp2:`` anywhere in the text — the bare
+    code, the whole invite message), ``{"kind": "device", "code", "device"}``
+    for one of your devices' 8-character codes (``device`` "" when the text
+    names none), else ``{"kind": ""}``."""
+    t = str(text or "").strip()[:2048]
+    m = _PEER_CODE_RE.search(t)
+    if m:
+        return {"kind": "peer", "code": m.group(0).lower(), "device": ""}
+    device, code = parse_join_string(t)
+    if len(code) == _CODE_LEN and all(ch in ALPHABET for ch in code):
+        return {"kind": "device", "code": _format_code(code), "device": device}
+    return {"kind": "", "code": "", "device": ""}
+
+
 # --------------------------------------------------------------------------- #
 # invites (a code made here, typed on the new device)
 # --------------------------------------------------------------------------- #
@@ -1103,7 +1126,12 @@ def _invite_row(inv: dict) -> dict:
 
 
 def create_invite() -> dict:
-    """A fresh single-use code (starts the fleet when there is none)."""
+    """A fresh single-use code (starts the fleet when there is none).
+
+    On a device none of the others can reach (local-only: bound to
+    127.0.0.1) the code is still made, but the answer carries ``warning:
+    "local_only"`` — the new computer can't redeem it until this one is
+    reachable, which the UI fixes inline first (Make reachable)."""
     if not in_fleet():
         create()
     with _LOCK:
@@ -1113,7 +1141,10 @@ def create_invite() -> dict:
         inv = {"code": code, "created_at": now, "expires_at": now + INVITE_TTL}
         _INVITES.append(inv)
         del _INVITES[:-MAX_INVITES]  # oldest dropped
-        return _invite_row(inv)
+        row = _invite_row(inv)
+    if not self_reachable():
+        row["warning"] = "local_only"
+    return row
 
 
 def invites() -> List[dict]:
@@ -1125,6 +1156,96 @@ def invites() -> List[dict]:
 def cancel_invites() -> None:
     with _LOCK:
         _INVITES.clear()
+
+
+# --------------------------------------------------------------------------- #
+# reachability (can the other devices reach THIS one?)
+# --------------------------------------------------------------------------- #
+def listening() -> str:
+    """``"local"`` (bound to 127.0.0.1: no other device can reach this one),
+    ``"tailnet"``, or ``""`` (unknown — nothing exported the mode)."""
+    try:
+        from backend.web.core import remote as _remote
+
+        return _remote.listening()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def self_reachable() -> bool:
+    """Whether the other devices can reach this one's server: not bound to
+    127.0.0.1. A device that only answers the shared phone link does NOT
+    count — members probe ``ip:port`` and the node's own MagicDNS name, never
+    ``svc:<name>``. Unknown (a bare run) counts as reachable: nothing to fix
+    that this process can see."""
+    return listening() != "local"
+
+
+def gate_on() -> bool:
+    try:
+        from backend.web.core import auth as _auth
+
+        return bool(_auth.auth_enabled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _server_port() -> int:
+    try:
+        from backend.web.core import mobile_access as _ma
+
+        return int(_ma._server_port())
+    except Exception:  # noqa: BLE001
+        return 8765
+
+
+def _ago(ts: float, now: Optional[float] = None) -> str:
+    """ "5 min ago" / "3 h ago" / "2 days ago" for an epoch time."""
+    d = max(0.0, (time.time() if now is None else now) - float(ts))
+    if d < 90:
+        return "just now"
+    if d < 3600:
+        return "%d min ago" % round(d / 60)
+    if d < 2 * 86400:
+        return "%d h ago" % round(d / 3600)
+    return "%d days ago" % round(d / 86400)
+
+
+def probe_reason(
+    outcome: str,
+    host: str,
+    port: int = 8765,
+    ts_last_seen: float = 0.0,
+    now: Optional[float] = None,
+) -> str:
+    """Why ``host`` isn't one this device can talk to, as one line — what
+    discovery's probe found (:func:`backend.web.core.remote._probe_peer`).
+    Settings → Devices and ``mindflock devices list`` both print it, so the
+    wording lives here once. "" when it answered."""
+    outcome = str(outcome or "")
+    if outcome in ("", "ok"):
+        return ""
+    if outcome == "asleep":
+        if ts_last_seen:
+            return "asleep — Tailscale last saw it %s" % _ago(ts_last_seen, now)
+        return "offline in Tailscale"
+    if outcome == "refused":
+        return (
+            "connection refused on :%d — MindFlock isn't running there, or it's "
+            "local-only (Settings → Devices → Make reachable, on %s)" % (port, host)
+        )
+    if outcome == "timeout":
+        return (
+            "timed out on :%d — your Tailscale policy may block tcp:%d between "
+            "your devices" % (port, port)
+        )
+    if outcome == "tls":
+        return "its HTTPS front (tailscale serve) didn't complete a connection"
+    if outcome == "not_mindflock":
+        return "something other than MindFlock answers on :%d" % port
+    if outcome.startswith("http_"):
+        return "answered HTTP %s — not a MindFlock this one can talk to" % outcome[5:]
+    return "unreachable from here"
 
 
 def _claim_matches_peer(device: str, ip: str) -> bool:
@@ -1416,6 +1537,205 @@ def pending_requests() -> List[dict]:
             for r in sorted(_REQUESTS.values(), key=lambda r: r["created_at"])
             if r["state"] == "pending"
         ]
+
+
+_CODE6_RE = re.compile(r"^[0-9]{3} [0-9]{3}$")
+
+
+def _code_matches(want: str, got: str) -> bool:
+    """The 6-digit request code, compared digits-only in constant time."""
+    a = re.sub(r"[^0-9]", "", str(want or ""))
+    b = re.sub(r"[^0-9]", "", str(got or ""))[:12]
+    return len(a) == 6 and hmac.compare_digest(a.encode(), b.encode())
+
+
+def decide_as_member(rid: str, code: str, decision: str) -> dict:
+    """Another member's answer to a request waiting HERE (the person
+    approved or denied it on that device, which holds a copy — see
+    :func:`hold_relayed`). The caller has proved it holds the fleet key; the
+    6-digit code it saw must match this request's, so an answer meant for one
+    request can't land on another. Raises ``KeyError`` (gone) or
+    ``PermissionError`` (code mismatch)."""
+    if decision not in ("approve", "deny"):
+        raise ValueError("decision must be approve or deny")
+    with _LOCK:
+        req = _pending(rid)
+        if not _code_matches(req["code"], code):
+            raise PermissionError("that code doesn't match the request")
+    return approve(rid) if decision == "approve" else deny(rid)
+
+
+# --------------------------------------------------------------------------- #
+# requests held for another member (approve from wherever you are)
+# --------------------------------------------------------------------------- #
+#: Join requests waiting on ANOTHER member, copied here so the person can
+#: approve from this device too (its bell, Settings → Devices, the phone):
+#: ``(held by, asked device, request id) -> row``. ``held by`` is this
+#: device's own key when the copy arrived (one process may play several
+#: devices in tests). Memory only, like the requests themselves.
+_RELAYED: Dict[Tuple[str, str, str], dict] = {}
+#: How long a copy is kept at most, whatever its ``expires_at`` claims.
+_RELAY_TTL = REQUEST_TTL
+
+
+def _request_rows() -> List[dict]:
+    """This device's pending requests as they go to the other members: no
+    caller IP, no secret hash."""
+    return [
+        {k: r[k] for k in ("id", "device", "host", "code", "created_at", "expires_at")}
+        for r in pending_requests()
+    ]
+
+
+async def fan_out_requests(exclude: Tuple[str, ...] = ()) -> None:
+    """Hand every reachable member the CURRENT list of requests waiting here
+    (a snapshot: an answered, withdrawn or expired one disappears from their
+    copies too). Under the fleet key, to members only; best-effort — a member
+    that misses it just doesn't show the request. ``exclude``: the asking
+    device itself (a member asking to rejoin)."""
+    from backend.web.core import remote as _remote
+
+    if not in_fleet():
+        return
+    body = {"from": _self_key(), "host": _self_host(), "requests": _request_rows()}
+    key = fleet_key()
+
+    async def one(dev):
+        try:
+            await _remote.post_json(dev, "/api/fleet/pending", body, bearer=key)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    targets = _visible_members(exclude)
+    if targets:
+        await asyncio.gather(*(one(d) for d in targets))
+
+
+def _prune_relayed(now: float) -> None:
+    for k, r in list(_RELAYED.items()):
+        if r["expires_at"] <= now:
+            del _RELAYED[k]
+
+
+def hold_relayed(body: dict) -> int:
+    """Take member ``body["from"]``'s snapshot of the requests waiting there
+    (:func:`fan_out_requests`; the route checked the fleet key). Replaces
+    every copy held for it; each request not seen before is announced here
+    as ``device.join_requested`` with ``via`` (the bell, a toast, the desktop
+    notification). Returns how many are held. Raises ``ValueError`` on a
+    malformed body or a sender that isn't a live member."""
+    if not isinstance(body, dict):
+        raise ValueError("bad body")
+    frm = str(body.get("from") or "")
+    me = _self_key()
+    if not DEVICE_RE.match(frm) or frm == me or not is_member(frm):
+        raise ValueError("not one of this device's devices")
+    via_host = str(body.get("host") or frm)[:_MAX_HOST]
+    raw = body.get("requests")
+    if not isinstance(raw, list):
+        raise ValueError("requests must be a list")
+    now = _now()
+    rows = []
+    for r in raw[:MAX_REQUESTS]:
+        if not isinstance(r, dict):
+            continue
+        rid, device = str(r.get("id") or ""), str(r.get("device") or "")
+        code = str(r.get("code") or "")
+        if not (
+            _ID_RE.match(rid) and DEVICE_RE.match(device) and _CODE6_RE.match(code)
+        ):
+            continue
+        exp = _ts(r.get("expires_at"), clamp=False) or now
+        rows.append(
+            {
+                "id": rid,
+                "device": device,
+                "host": str(r.get("host") or device)[:_MAX_HOST],
+                "code": code,
+                "created_at": _ts(r.get("created_at"), clamp=False) or now,
+                "expires_at": min(exp, now + _RELAY_TTL),
+                "via": frm,
+                "via_host": via_host,
+            }
+        )
+    fresh = []
+    with _LOCK:
+        _prune_relayed(now)
+        old = {k[2] for k in _RELAYED if k[0] == me and k[1] == frm}
+        for k in [k for k in _RELAYED if k[0] == me and k[1] == frm]:
+            del _RELAYED[k]
+        for r in rows:
+            if r["expires_at"] > now:
+                _RELAYED[(me, frm, r["id"])] = r
+                if r["id"] not in old:
+                    fresh.append(r)
+    for r in fresh:
+        _emit(
+            "device.join_requested",
+            device=r["device"],
+            host=r["host"],
+            code=r["code"],
+            id=r["id"],
+            via=frm,
+            via_host=via_host,
+            detail="%s · code %s (asked %s)" % (r["host"], r["code"], via_host),
+        )
+    return len(rows)
+
+
+def relayed_requests() -> List[dict]:
+    """The requests held here for other members, oldest first."""
+    me = _self_key()
+    with _LOCK:
+        _prune_relayed(_now())
+        return [
+            dict(r)
+            for k, r in sorted(_RELAYED.items(), key=lambda kv: kv[1]["created_at"])
+            if k[0] == me
+        ]
+
+
+async def answer_relayed(via: str, rid: str, decision: str, code: str = "") -> dict:
+    """The person answered, HERE, a request waiting on member ``via``: send
+    the answer there under the fleet key (``POST /api/fleet/member-approve``),
+    carrying the 6-digit code this device showed (``code`` — what the person
+    looked at, when the caller passes it — must be that one). The route that
+    calls this is privileged, like a local approve. Raises ``KeyError`` (no
+    such request here, or gone there), ``PermissionError`` (code mismatch),
+    ``RuntimeError`` (``via`` can't be reached / refused)."""
+    from backend.web.core import remote as _remote
+
+    me = _self_key()
+    with _LOCK:
+        _prune_relayed(_now())
+        rec = _RELAYED.get((me, via, rid))
+    if rec is None:
+        raise KeyError(rid)
+    if code and not _code_matches(rec["code"], code):
+        raise PermissionError("that code doesn't match the request")
+    dev = _device(via)
+    if not dev or not dev.get("reachable") or not member_device(dev):
+        raise RuntimeError("%s isn't reachable right now" % rec["via_host"])
+    try:
+        status, body = await _remote.post_json(
+            dev,
+            "/api/fleet/member-approve",
+            {"id": rid, "code": rec["code"], "decision": decision, "by": me},
+            bearer=fleet_key(),
+        )
+    except Exception:  # noqa: BLE001
+        status, body = 0, None
+    if status == 200 and isinstance(body, dict):
+        with _LOCK:
+            _RELAYED.pop((me, via, rid), None)
+        return dict(body, via=via)
+    if status == 404:
+        with _LOCK:
+            _RELAYED.pop((me, via, rid), None)
+        raise KeyError(rid)
+    if status == 403 and isinstance(body, dict) and "code" in str(body.get("error")):
+        raise PermissionError(str(body["error"]))
+    raise RuntimeError(_err_text(status, body, dev))
 
 
 # --------------------------------------------------------------------------- #
@@ -1731,7 +2051,91 @@ async def after_admit(joiner_runs: Optional[bool] = False, joiner: str = "") -> 
     # After sync is on: the choice is stamped as an edit and spreads.
     if joiner_runs is not None and DEVICE_RE.match(joiner or ""):
         _settle_automation(joiner, bool(joiner_runs), _self_key())
+    if DEVICE_RE.match(joiner or ""):
+        _note_admitted(joiner)
     return sync_error
+
+
+# --------------------------------------------------------------------------- #
+# after an admit: can THIS device reach the one it just let in?
+# --------------------------------------------------------------------------- #
+#: Devices this one let in lately: key -> {"device", "host", "at", "state":
+#: "checking" | "reachable" | "unreachable_joiner", "reason"}. A joiner that
+#: is local-only there (bound to 127.0.0.1) still joins — but the others
+#: then list it offline forever and its settings edits never spread, so the
+#: person who approved it hears about it here, with the fix.
+_ADMITTED: Dict[str, dict] = {}
+#: Seconds after an admit at which the joiner is re-probed (it needs a moment
+#: to adopt the key and finish its own side). Empty: no automatic probe.
+ADMIT_PROBE_DELAYS: Tuple[float, ...] = (4.0, 15.0, 45.0)
+#: How long an admit stays on the screen.
+ADMIT_SHOWN = 3600.0
+
+
+def _note_admitted(device: str) -> None:
+    dev = _device(device)
+    with _LOCK:
+        _ADMITTED[device] = {
+            "device": device,
+            "host": _label(dev, device),
+            "at": _now(),
+            "state": "checking",
+            "reason": "",
+        }
+    if not ADMIT_PROBE_DELAYS:
+        return
+    try:
+        _spawn(_probe_joiner(device, ADMIT_PROBE_DELAYS))
+    except RuntimeError:  # no running loop (a sync caller)
+        pass
+
+
+async def probe_joiner(device: str) -> dict:
+    """Re-probe ``device``'s hello once from here and record the answer on
+    its admit (``reachable`` / ``unreachable_joiner`` with the probe's
+    reason). Returns the record (``{}`` when it isn't one admitted here)."""
+    from backend.web.core import remote as _remote
+
+    if device not in _ADMITTED:
+        return {}
+    snap = await _refresh(device)
+    if snap is None:
+        try:
+            await _remote.discover_now()
+        except Exception:  # noqa: BLE001
+            pass
+        snap = _device(device)
+    snap = snap or {}
+    rec = _ADMITTED.get(device)
+    if rec is None:
+        return {}
+    if snap.get("reachable"):
+        rec.update(state="reachable", reason="", host=_label(snap, device))
+    else:
+        outcome = str(snap.get("probe") or "")
+        rec.update(
+            state="unreachable_joiner",
+            reason=probe_reason(outcome or "refused", rec["host"], _server_port()),
+        )
+    return dict(rec)
+
+
+async def _probe_joiner(device: str, delays: Tuple[float, ...]) -> None:
+    for delay in delays:
+        await asyncio.sleep(delay)
+        rec = await probe_joiner(device)
+        if not rec or rec.get("state") == "reachable":
+            return
+
+
+def admitted() -> List[dict]:
+    """Recent admits made here, newest first (see :data:`_ADMITTED`)."""
+    now = _now()
+    with _LOCK:
+        for k, r in list(_ADMITTED.items()):
+            if r["at"] + ADMIT_SHOWN <= now:
+                del _ADMITTED[k]
+        return sorted((dict(r) for r in _ADMITTED.values()), key=lambda r: -r["at"])
 
 
 # --------------------------------------------------------------------------- #
@@ -2016,7 +2420,9 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     # After ``dev``'s settings arrived: a choice the group already made
     # stands (what ``dev`` decides in after_admit too).
     _settle_automation(_self_key(), bool(runs), dev["key"])
-    _set_join(state="joined", error=sync_error)
+    # Joined — but a local-only device is a member the others can't reach:
+    # the join screen offers Make reachable right away (self_reachable).
+    _set_join(state="joined", error=sync_error, self_reachable=self_reachable())
     _emit(
         "device.joined",
         device=_self_key(),
@@ -2621,6 +3027,8 @@ def status(privileged: bool) -> dict:
     my_id = doc["id"]
     known = {d["key"]: d for d in _known_devices()}
     runner = _automation_runner()
+    port = _server_port()
+    probes = {p["device"]: p for p in _remote.probes()}
     members = []
     for key, m in sorted(doc["members"].items()):
         if not _live(doc, key):
@@ -2635,10 +3043,22 @@ def status(privileged: bool) -> dict:
                 "self": mine,
                 "reachable": True if mine else bool(dev.get("reachable")),
                 "version": __version__ if mine else str(dev.get("version") or ""),
+                # Update all my devices: the build it runs, whether it can be
+                # updated from here (``editable``/``other`` can't), and its
+                # desktop app's version ("" when none reported).
+                **_update_facts(mine, dev),
                 "same_fleet": (
                     True if mine else bool(my_id and dev.get("fleet") == my_id)
                 ),
                 "error": "" if mine else (_PEERS.get(key) or {}).get("error", ""),
+                # Why it can't be reached (what discovery's probe found) and
+                # when MindFlock last answered there — instead of "offline".
+                "reason": (
+                    ""
+                    if mine or dev.get("reachable")
+                    else _probe_line(probes.get(key), m["host"] or key, port)
+                ),
+                "last_seen": 0.0 if mine else _remote.last_seen(key),
                 # Same group and epoch, a different key: one of the two has
                 # to rejoin the other (see gossip_once).
                 "key_conflict": False if mine else peer_conflict(key),
@@ -2679,6 +3099,12 @@ def status(privileged: bool) -> dict:
                 "in_fleet": bool(their),
                 "same_fleet": same,
                 "has_token": bool(_remote.token_for(key)),
+                # Answered once, not now: why (what the last probe found).
+                "reason": (
+                    ""
+                    if dev.get("reachable")
+                    else _probe_line(probes.get(key), dev.get("host") or key, port)
+                ),
             }
         )
     removed = []
@@ -2712,14 +3138,32 @@ def status(privileged: bool) -> dict:
     join = join_status()
     if not privileged:
         join["code"] = ""
+    reachable_here = self_reachable()
+    requests = []
+    if privileged:
+        requests = [dict(r, via="", via_host="") for r in pending_requests()]
+        requests += relayed_requests()
     return {
         "in_fleet": bool(doc["id"] and doc["key"]),
         "id": my_id,
         "epoch": doc["epoch"],
-        "self": {"key": me, "host": _self_host()},
+        "self": {
+            "key": me,
+            "host": _self_host(),
+            "ip": str(_self_ident().get("ip") or ""),
+            "port": port,
+        },
+        # Can the other devices reach this one? "local" = bound to
+        # 127.0.0.1 (Make reachable fixes it: tailscale serve mode + the
+        # gate, together); the gate as it is now.
+        "self_reachable": reachable_here,
+        "listening": listening(),
+        "gate_on": gate_on(),
         "members": members,
         "invites": invites() if privileged else [],
-        "requests": pending_requests() if privileged else [],
+        # Waiting here (via "") and waiting on another member (via its key —
+        # approving one here sends the answer there under the fleet key).
+        "requests": requests,
         "join": join,
         "stale_key": stale_key(),
         "gate_warning": _gate_warning(),
@@ -2730,7 +3174,176 @@ def status(privileged: bool) -> dict:
         # Removed here, but another member let it back in: the person
         # decides here (POST /api/fleet/members/<key>/allow).
         "readmitted_elsewhere": readmitted,
+        # Devices let in here lately, and whether this one can reach them
+        # ("unreachable_joiner": joined, but local-only over there).
+        "admitted": admitted(),
+        # Tailnet devices that aren't (reachable) MindFlocks, each with why:
+        # what replaces "No other MindFlock found".
+        "tailnet_peers": _tailnet_peers(doc, known, probes, port),
+        # The tailnet policy lines that open this port between your devices
+        # (the fix a "timed out" peer points at).
+        # Scoped to the owner's login, named only for a privileged caller.
+        "policy_grant": _policy_grant(port, privileged),
+        # "Match my other devices": what the others do that this one doesn't.
+        "match": _match(doc, known, reachable_here) if doc["id"] else None,
+        # Who answers the shared phone link (one name, several hosts).
+        "phone_link": _phone_link(doc, known),
     }
+
+
+def _probe_line(probe: Optional[dict], host: str, port: int) -> str:
+    if not probe:
+        return ""
+    return probe_reason(
+        probe.get("outcome", ""), host, port, probe.get("ts_last_seen", 0.0)
+    )
+
+
+def _tailnet_peers(
+    doc: dict, known: Dict[str, dict], probes: Dict[str, dict], port: int
+) -> List[dict]:
+    """Every non-mobile tailnet peer that isn't listed as a member or a
+    joinable MindFlock, with what discovery found (tagged ones first)."""
+    me = _self_key()
+    out = []
+    for key, p in probes.items():
+        dev = known.get(key) or {}
+        # Members and candidates (it answered as a MindFlock at some point)
+        # carry their own reason on their own rows.
+        if key == me or _live(doc, key) or dev.get("reachable") or dev.get("last_seen"):
+            continue
+        out.append(
+            {
+                "device": key,
+                "host": p.get("host") or key,
+                "os": p.get("os") or "",
+                "online": bool(p.get("online")),
+                "tagged": bool(p.get("tags")),
+                "outcome": p.get("outcome") or "",
+                "last_seen": float(p.get("ts_last_seen") or 0.0),
+                "reason": _probe_line(p, p.get("host") or key, port),
+            }
+        )
+    return out
+
+
+def _policy_grant(port: int, privileged: bool = False) -> str:
+    try:
+        from backend.web.core import remote as _remote
+        from backend.web.core import shared_link as _sl
+
+        tags = list((_remote._SELF or {}).get("tags") or [])
+        login = _sl.owner_login() if privileged else ""
+        return _sl.device_grants(_sl._host_tag(tags), port, login)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _local_shared_link() -> Tuple[str, bool]:
+    """``(name, live)`` — this device's ``general.shared_link`` and whether
+    this process answers it. Never raises."""
+    try:
+        from backend.web.core import shared_link as _sl
+
+        return _sl.configured_name(), bool(_sl.advertised_url())
+    except Exception:  # noqa: BLE001
+        return "", False
+
+
+def _members_link_names(doc: dict, known: Dict[str, dict]) -> List[str]:
+    """The shared-link names the other members' hellos announce, most common
+    first."""
+    me = _self_key()
+    counts: Dict[str, int] = {}
+    for key in doc["members"]:
+        if key == me or not _live(doc, key):
+            continue
+        name = str((known.get(key) or {}).get("shared_link") or "")
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return sorted(counts, key=lambda n: (-counts[n], n))
+
+
+def _match(doc: dict, known: Dict[str, dict], reachable_here: bool) -> Optional[dict]:
+    """What "Match my other devices" would change here: become reachable
+    (when another member is — the group works over the tailnet) and answer
+    the phone link the others answer. None when nothing differs."""
+    me = _self_key()
+    others = [k for k in doc["members"] if k != me and _live(doc, k)]
+    if not others:
+        return None
+    mine, _ = _local_shared_link()
+    names = _members_link_names(doc, known)
+    want_link = names[0] if names and not mine else ""
+    need_reach = not reachable_here
+    if not need_reach and not want_link:
+        return None
+    return {"reachable": need_reach, "shared_link": want_link}
+
+
+def _phone_link(doc: dict, known: Dict[str, dict]) -> Optional[dict]:
+    """The shared phone link across your devices: its name (this device's,
+    else the one the others use) and, per member, whether it answers it —
+    ``hosting`` (live), ``waiting`` (named, not live yet: awaiting Tailscale
+    approval, or the serve didn't take), ``off`` (not set up there), or
+    ``unknown`` (offline). None when no device names one."""
+    me = _self_key()
+    mine, live = _local_shared_link()
+    names = _members_link_names(doc, known)
+    name = mine or (names[0] if names else "")
+    if not name:
+        return None
+    hosts = [
+        {
+            "key": me,
+            "host": _self_host(),
+            "self": True,
+            "state": ("hosting" if live else "waiting") if mine == name else "off",
+        }
+    ]
+    for key in sorted(doc["members"]):
+        if key == me or not _live(doc, key):
+            continue
+        dev = known.get(key) or {}
+        if not dev.get("reachable"):
+            state = "unknown"
+        elif str(dev.get("shared_link") or "") != name:
+            state = "off"
+        elif dev.get("shared_link_live") is None:
+            state = "unknown"  # an older MindFlock: it doesn't say
+        else:
+            state = "hosting" if dev.get("shared_link_live") else "waiting"
+        hosts.append(
+            {
+                "key": key,
+                "host": dev.get("host") or doc["members"][key].get("host") or key,
+                "self": False,
+                "state": state,
+            }
+        )
+    return {"name": name, "hosts": hosts}
+
+
+def _update_facts(mine: bool, dev: dict) -> dict:
+    """``{commit, install, shell_version}`` for a member row: this device's
+    own, or what the member's hello reported. Never raises."""
+    if not mine:
+        return {
+            "commit": str(dev.get("commit") or ""),
+            "install": str(dev.get("install") or ""),
+            "shell_version": str(dev.get("shell_version") or ""),
+        }
+    try:
+        from backend.web.core import remote as _remote
+        from backend.web.core import self_update as _su
+
+        return {
+            "commit": _su.installed_commit(),
+            "install": _su.install_kind(),
+            "shell_version": _remote._SHELL["version"],
+        }
+    except Exception:  # noqa: BLE001
+        return {"commit": "", "install": "", "shell_version": ""}
 
 
 def _host_of(doc: dict, known: Dict[str, dict], key: str) -> str:

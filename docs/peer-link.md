@@ -11,17 +11,24 @@ two people's agents code together.
 You and a collaborator each run MindFlock. One of you **invites**, the other
 **joins**; then each of you may **share one folder** with that link.
 
-1. **Invite.** Settings → Peer links (or the command palette's *Peer
-   links…*) → **Create invite**, or `mindflock peer invite`. There is nothing
-   to turn on or configure first: inviting turns peer links on. Press **Copy
-   invite** and send the message over any channel you trust — it carries the
-   code (`mfp1:…` or `mfp2:…`) and says what to do with it. A code is single
-   use and expires after 10 minutes; the listener only runs while an invite or
-   a link that you accepted exists.
+1. **Invite.** Settings → Work with someone (or the command palette's *Work
+   with someone…*) → **Create invite**, or `mindflock peer invite`. There is
+   nothing to turn on or configure first: inviting turns peer links on. Without
+   cloudflared the screen first asks where the other person is — *on my
+   network or tailnet* (a direct invite now) or *somewhere else* (install
+   cloudflared from right there, then invite). Press **Copy invite** and send
+   the message over any channel you trust — it carries the code (`mfp1:…` or
+   `mfp2:…`) and says what to do with it. A code is single use and expires
+   after 10 minutes; the screen counts it down, lists unused invites with
+   **Cancel**, and turns into "*B* joined — read them your safety number" the
+   moment they join. The listener only runs while an invite or a link that you
+   accepted exists.
 2. **Join.** The other person pastes the message — all of it, or just the
-   code — into Settings → Peer links → **Join a peer**, or runs
-   `mindflock peer join <code>`. Joining turns peer links on too, and needs
-   nothing installed.
+   code — into Work with someone → **Join**, the palette's *Join with a
+   code…*, or `mindflock peer join <code>`. Joining turns peer links on too,
+   and needs nothing installed. A relay join can take up to a minute (a new
+   tunnel's name has to appear in DNS); the screen shows each stage, and a
+   failure says what to do next.
 3. **How the joiner reaches you** is chosen for you (`peer.relay = "auto"`,
    the default): with [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
    installed, invites go through a Cloudflare quick tunnel, so your peer can be
@@ -32,14 +39,26 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    **8799**, TLS, not the web UI's port), which only works on a shared network
    or tailnet. Peer links offers to install cloudflared (one click, with
    everything else missing) when it's absent; `relay = "off"` pins direct
-   dialing, `relay = "url"` uses your own relay.
+   dialing, `relay = "url"` uses your own relay. Per invite, *Make a direct
+   invite* (`reach: "direct"`, `peer invite --reach direct`) names this
+   machine even with a relay on — the better path when you share a tailnet.
+   If the tunnel won't start in `auto` mode (Cloudflare rate-limiting, a
+   firewall), you still get an invite: a direct one, labelled "Relay
+   unavailable (…). This invite only works for someone on your network or
+   tailnet."
 4. **Shared sessions** need Linux with
    [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`); Peer links
    and `mindflock doctor` say whether the sandbox works here and install it if
-   it's missing. Pairing and messaging work without it.
-5. **Verify the SAS.** Both sides show a safety number like `482-019-337-5`
-   (Settings → Peer links, `mindflock peer links`). Read it to each other by
-   voice or chat. If it differs, someone is in the middle: **unlink now**.
+   it's missing. Without it — on a Mac, say — you can still pair, message and
+   view their work: each link has **Messages** (a box to write to them, and
+   everything either side's agent or person sent) and **Their changes** (the
+   other side's shared-folder diff, read-only). A message that arrives while
+   no shared session exists here waits in Messages, and is handed to the
+   shared session once you share a folder.
+5. **Verify the safety number.** Both sides show one like `482-019-337-5`
+   (Work with someone, `mindflock peer links`). Read it to each other by
+   voice or chat and press **It matches**. If it differs, someone is in the
+   middle: **unlink now**.
 6. **Share a folder.** On the link: repo path, optional branch, the agent
    CLI (any installed one that can run sandboxed — claude, codex, opencode,
    cline, goose, antigravity; not aider, which has no MCP client) → *Share a folder* (or `mindflock peer share <link> <repo> [--branch
@@ -51,7 +70,9 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    `whoami`); the peer's messages are typed in as `[MindFlock PEER message …]`
    and framed as untrusted input. Steer it from its terminal like any session.
    Its shell pane, IDE, ship / push / PR buttons, autopilot, spawning, rename
-   and team runs are switched off.
+   and team runs are switched off. The sidebar row says **Shared with
+   *B*** (with their connection state), the actions it refuses aren't
+   offered, and the link card's **Open session** jumps to it.
 7. **Choose what the peer may do to you.** Per link: *send messages*, *see my
    diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
 8. **Bring the work home.** *Export* (or `mindflock peer export <link>
@@ -61,6 +82,13 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
 9. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
    *delete*); *Unlink* also forgets the peer's key and closes the connection.
    Either side can unlink at any time.
+10. **Reconnect.** If a link you joined stays offline (the inviter restarted
+    and their quick tunnel got a new address — they get a bell item saying
+    so), paste a fresh invite from them into the link's **Reconnect** box (or
+    **Join**, or `peer join`). Pairing again with someone you're already
+    linked to keeps the link — its id, permissions and shared folder — and
+    gives you both a new safety number to compare. The box also takes a bare
+    `wss://…` or `host:port` address.
 
 > Status: design spec + implementation contract. Sections marked **CONTRACT**
 > are the interfaces the modules must implement exactly; the rest explains why.
@@ -90,7 +118,7 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Eavesdrop / MITM / tamper | TLS 1.3 only; both sides pin each other's Ed25519 public key. The pairing code carries the inviter's key fingerprint, so even the first connection cannot be MITM'd. |
 | Brute-forcing the code | 160-bit secret, 10-minute expiry, single use, 5 failed proofs destroy the invite, global pairing rate limit, invites live in memory only. |
 | Replaying a handshake | Server-chosen 32-byte nonce signed by the client; TLS 1.3 itself rejects replayed records. |
-| Peer calling arbitrary functionality | Peer protocol is a separate TLS listener, never the HTTP API. A fixed allow-list of 5 request ops, each with a strict schema; anything else closes the connection. |
+| Peer calling arbitrary functionality | Peer protocol is a separate TLS listener, never the HTTP API. A fixed allow-list of 5 request ops, each with a strict schema. A well-formed request for any other op gets `err: "unsupported"` (it reaches no handler); keys outside the schema are dropped before anything reads the frame; anything malformed closes the connection. |
 | Peer reading files outside the folder | `read_file` walks `work/` with `openat(O_NOFOLLOW)` per component, regular files only, no `.git`, size cap. Diff and file listing use the trusted git dir with a hardened environment. |
 | Peer prompt-injecting our agent → escape | Our shared-folder agent runs under **bubblewrap**: its own mount, PID, IPC, UTS and network namespaces, all capabilities dropped, a tmpfs `/home` and `/tmp`, only `work/` and its own `home/` writable, and no tmux socket, D-Bus, SSH agent or host loopback. Network goes only through an allow-listed CONNECT proxy on a unix socket. |
 | Escaped agent driving MindFlock | The sandbox cannot reach `127.0.0.1:8765` (separate netns) or read the settings/auth token (hidden). Its MCP runs in **peer mode**: only peer tools, talking to a per-share unix socket that accepts only peer ops for that one share. |
@@ -212,6 +240,15 @@ S→C  {"t":"welcome","link_id":<hex32>,"name":<str>,"sas":<str>}   or
   - At most 10 pair attempts per minute globally.
   - A link has one live connection: a new authenticated connection for a link
     replaces the old one.
+- **Pairing again.** A `pair` whose client key is already pinned on a
+  listener-role link (the same person, with a fresh invite) reuses that link:
+  same `link_id`, perms and share, a new SAS (`sas_verified` resets). The
+  invite, its proof and the signature are checked exactly as for a new link,
+  so this needs a live invite *and* the pinned private key. On the joining
+  side, a welcome naming a link we already hold is accepted only for the same
+  pinned key and role; if their side minted a new link instead (they had lost
+  ours), the old link's share and perms move onto the new one and the old
+  link is forgotten.
 
 ### Frames — CONTRACT (`wire.py`)
 
@@ -233,7 +270,8 @@ After the handshake:
 ```
 
 **Request ops** (the full allow-list; `wire.validate_request(op, p)` rejects
-unknown ops, unknown keys, wrong types and over-long values):
+unknown ops, wrong types and over-long values — and, for what *we* send,
+unknown keys):
 
 | op | p | response p |
 |---|---|---|
@@ -252,6 +290,26 @@ Inbound limits per link: 30 `msg`/min and 120 requests/min. At most 8 requests
 in flight, each with a 60 s deadline. A ping every 30 s; 90 s without traffic
 closes the connection. Text is never logged, only lengths.
 
+### Evolving the wire — CONTRACT (`wire.py`)
+
+So a newer MindFlock can talk to an older one without dropping the link:
+
+- **Tolerant inbound.** Keys a frame or payload carries beyond its schema are
+  dropped before anything reads it (`strict=False`); a `req` for an op this
+  version doesn't have, with a sane name (`[a-z][a-z0-9_]{0,31}`) and a valid
+  id, raises `wire.UnsupportedOp` and is answered
+  `{"t":"res","id":…,"ok":false,"err":"unsupported"}` — the connection stays
+  up and the request counts against the link's rate. Frame types and the
+  protocol version `v` stay strict.
+- **Strict outbound.** Everything we send is checked against the exact
+  schema (`strict=True`): a peer one release older still rejects extra keys.
+- **Capabilities.** `hello`, `pair`, `auth` and `welcome` may carry optional
+  `app` (the sender's MindFlock version, ≤ 64 chars) and `caps` (≤ 32 names
+  matching `[a-z0-9][a-z0-9_.-]{0,31}`), validated when present and kept per
+  link (`peer_app` in the link view). This release only *reads* them; a
+  later one sends them, and sends new ops or fields only to peers that
+  advertise the matching cap.
+
 ## Persistence — CONTRACT (`store.py`)
 
 `LinkStore(path=links_file())` keeps a JSON document in a 0600 file. Writes are
@@ -265,6 +323,14 @@ empty and is backed up to `links.json.corrupt-<ts>`.
   in canonical form), `created`, `last_seen`, `sas`
 - `perms` (default `{"messages":true,"diff":true,"read_file":true}`)
 - `share_id` (str|None), `session_title` (str|None)
+- `carrier` (`""` | `tcp` | `relay`): how the peer reaches a listener link
+  (updated on every pair/auth) or how a dialer link dials. `""` — a link from
+  before this field — counts as both until it connects.
+- `sas_verified` (bool): the user pressed *It matches*; a re-pair resets it.
+
+A field this version doesn't know (written by a newer MindFlock) is dropped
+on load rather than condemning the file, so a downgrade keeps every link.
+`find_by_pub(peer_pub, role)` lists the links pinned to one key (re-pairing).
 
 Methods: `list()`, `get(link_id)`, `add(link)`, `update(link_id, **fields)`,
 `remove(link_id)`. `peer_name` is sanitized to `[A-Za-z0-9 ._-]{1,32}`, and an
@@ -478,8 +544,14 @@ the peer toolset. It talks to `MINDFLOCK_PEER_SOCKET` with
 All of them are auto-approved: the sandbox is the boundary. A peer-mode server
 whose socket env is missing refuses every call.
 
-**Inbound peer messages** reach the bound session via
-`mailbox.post(to=session_title, sender="peer:<peer_name>", text=…, data={"peer_msg_id":…,"link_id":…})`.
+**Inbound peer messages** are always accepted (when `perms.messages` allows)
+and logged on the link (`inbox.py`, `~/.mindflock/peer/messages/<link_id>.json`,
+0600, last 200 messages, both directions — sends by the shared agent and by
+you are logged too). With a bound shared session they also reach it via
+`mailbox.post(to=session_title, sender="peer:<peer_name>", text=…, data={"peer_msg_id":…,"link_id":…})`;
+without one they wait (`delivered_to: null`) and are posted to the session
+when a folder is shared. `peer.message` fires either way (`stored: true` when
+nothing took it).
 `render_delivery` frames a `peer:` sender as:
 
 ```
@@ -511,7 +583,10 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   transport, the `InviteBook`, the `LinkStore`, and one `EgressProxy` +
   `AgentApi` per bound share.
 - Routes: all under `/api/peer`, and all refused with 403 when the request
-  carries `X-MindFlock-Remote`:
+  carries `X-MindFlock-Remote`. Every write is also refused (403) for an
+  anonymous tailnet caller of a gate-off, reachable server — it needs this
+  device's token, the fleet key, this machine or a trusted Tailscale account
+  (`auth.may_configure`, see web-api.md):
 
   | Method | Path | Notes |
   |---|---|---|
@@ -525,6 +600,19 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `DELETE` | `/api/peer/links/{id}/share` | `?delete_files=1` |
   | `POST` | `/api/peer/links/{id}/export` | `{target_repo, branch_name}` |
   | `POST` | `/api/peer/links/{id}/address` | `{address}`: re-point a link we joined (`host:port` or `wss://…`) |
+  | `POST` | `/api/peer/enable` | turn peer links on without an invite (the "somewhere else" step, so the doctor offers cloudflared) |
+  | `POST` | `/api/peer/links/{id}/verified` | `{verified: bool}` — *It matches* |
+  | `GET` | `/api/peer/links/{id}/messages` | the link's message log `{messages: [{id, dir, by, text, ts, delivered_to, read}], unread}` |
+  | `POST` | `/api/peer/links/{id}/messages/read` | mark them read |
+  | `POST` | `/api/peer/links/{id}/message` | `{text}`: you, messaging the peer (no shared session needed) |
+  | `GET` | `/api/peer/links/{id}/diff` | their shared-folder changes, read-only (their perms decide) |
+
+  `POST /api/peer/invites` also takes `reach` (`auto` | `tunnel` | `direct`)
+  and `op_id`; `POST /api/peer/join` takes `op_id` and answers
+  `reconnected`. With an `op_id`, slow steps emit `peer.progress`. Events:
+  `peer.link_added`, `peer.link_removed`, `peer.state`, `peer.progress`,
+  `peer.message`, `peer.relay_changed` (docs/extensions.md); none carries a
+  key, code or relay token.
 - Settings (`peer` group):
   - `enabled` (false)
   - `listen_host` (`0.0.0.0`)
@@ -535,7 +623,7 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   - `egress_allow` ([])
   - `relay` (`auto` (default) | `off` | `cloudflare` | `url`), `relay_url`, `relay_port` — see
     [Connecting across networks](#connecting-across-networks)
-- CLI: `mindflock peer status | invite | join <code> | links | unlink <id> |
+- CLI: `mindflock peer status | invite [--reach] | revoke <invite> | join <code> | links | unlink <id> |
   share <link> <repo> [--branch] | unshare <link> | export <link> <repo>
   <peer/branch> | address <link> <address>`.
 
@@ -766,22 +854,30 @@ people use Tailscale, node sharing is still the better choice.
   waits up to 75 s, retrying every 5 s, for the relay's name to resolve
   before dialing. The invite is untouched by that, and a name that never
   resolves gets a clear error.
-- **Lifecycle.** The relay follows the listener rule: up while an invite or
-  a listener-role link exists, down otherwise (`cloudflared` gets SIGTERM,
-  then SIGKILL). With a relay on, the direct TCP listener stays closed, so
-  links that joined directly can't reconnect until the relay is turned off
-  again or they re-pair. If `cloudflared` dies on its own, a new tunnel comes
-  up with backoff (2 s → 120 s). It has a **new hostname**, shown in
-  Settings and `mindflock peer status`. The joiner applies it with
-  `mindflock peer address <link> <wss://…>` (`POST
+- **Lifecycle.** The relay follows the listener rule: up while a relay
+  invite or a listener-role link that comes by relay (`carrier`) exists, down
+  otherwise (`cloudflared` gets SIGTERM, then SIGKILL). The direct TCP
+  listener runs alongside it for whatever is direct — a direct invite or a
+  link with `carrier == "tcp"` — so installing cloudflared never strands a
+  tailnet/LAN link, and closes when nothing direct is left. If `cloudflared`
+  dies on its own, a new tunnel comes up with backoff (2 s → 120 s). It has a
+  **new hostname**, shown in Settings and `mindflock peer status`; the last
+  one is kept in `relay/host` (0600), so a change across restarts is noticed
+  too and raises `peer.relay_changed` (a bell item naming who needs a fresh
+  invite). The joiner pastes a fresh invite (re-pairing keeps the link), or
+  applies the address with `mindflock peer address <link> <wss://…>` (`POST
   /api/peer/links/{id}/address`). That is safe: an address only says where
   to dial; the peer's key stays pinned.
 - **Joining needs no setting.** Any instance can dial an `mfp2:` code;
   `peer.relay` only controls whether *this* instance exposes a relay
   endpoint.
 - **Failures are explicit.** No `cloudflared`: 409 with install
-  instructions. The tunnel won't start: 502. Either way the half-started
-  relay is torn down and no invite exists.
+  instructions. The tunnel won't start: 502, with the reason classified
+  against a fixed set of output patterns (`tunnel.classify_failure`:
+  rate-limited / can't reach Cloudflare / didn't start) — cloudflared's own
+  lines are never shown. Either way the half-started relay is torn down and
+  no relay invite exists. In `auto` mode (and `reach` auto) the invite falls
+  back to a direct one instead, with `fallback: {reason, text}`.
 
 ### Threat-model deltas
 
@@ -801,8 +897,9 @@ people use Tailscale, node sharing is still the better choice.
   node sharing (both on Tailscale) if that matters.
 - **Availability.** Quick tunnels have no SLA and are meant for testing.
   Cloudflare can rate-limit or end them, and a restart changes the hostname
-  (re-address with `peer address`, or use `url` mode with a named tunnel or
-  Funnel for a stable name).
+  (send a fresh invite — joining it reconnects the same link — or re-address
+  with `peer address`, or use `url` mode with a named tunnel or Funnel for a
+  stable name).
 - **The token holder.** Anyone who saw a code (or the joiner's
   `links.json`) can reach the TLS handshake and use up the pre-auth budgets
   (DoS only). The one-time secret and the pinned keys still protect the

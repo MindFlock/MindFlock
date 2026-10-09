@@ -443,6 +443,43 @@ def test_delete_and_waive(sess, repo):
     assert client.delete(f"/api/instances/rzt/red-zones/{z['id']}").status_code == 404
 
 
+def test_session_zone_routes_keep_repo_zones_the_owners(
+    sess, repo, monkeypatch, tmp_path
+):
+    """An anonymous tailnet caller of a gate-off device may drive the
+    session's OWN worktree zones, but not add a repo-wide zone (it reaches
+    every worktree, and sync spreads it) nor remove one that isn't this
+    worktree's."""
+    from backend.web.core import tailnet_trust
+
+    async def _no(scope):
+        return False
+
+    monkeypatch.setattr(tailnet_trust, "request_trusted", _no)
+    monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+    monkeypatch.setenv("MINDFLOCK_AUTH", "0")
+    anon = TestClient(server.app, client=("100.64.0.5", 41000))
+    owner = TestClient(
+        server.app, client=("127.0.0.1", 41000), headers={"host": "127.0.0.1"}
+    )
+    url = "/api/instances/rzt/red-zones"
+
+    r = anon.post(url, json={"pattern": "config/"})  # repo scope by default
+    assert r.status_code == 403
+    assert red_zones.repo_zones(_rid(repo)) == []
+    mine = anon.post(url, json={"pattern": "lib.py", "scope": "worktree"})
+    assert mine.status_code == 200, mine.text
+    repo_zone = owner.post(url, json={"pattern": "config/"}).json()["zone"]
+    other = red_zones.add_zone("worktree", str(tmp_path / "elsewhere"), "x.py")
+
+    assert anon.delete(url + "/" + repo_zone["id"]).status_code == 403
+    assert anon.delete(url + "/" + other["id"]).status_code == 403
+    assert red_zones.find_zone(repo_zone["id"]) and red_zones.find_zone(other["id"])
+    assert anon.delete(url + "/" + mine.json()["zone"]["id"]).status_code == 200
+    assert anon.delete(url + "/rz_nope").status_code == 404
+    assert owner.delete(url + "/" + repo_zone["id"]).status_code == 200
+
+
 def test_get_session_red_zones(sess, repo):
     red_zones.set_plan_first(_rid(repo), True)
     red_zones.add_zone("repo", _rid(repo), "config/")

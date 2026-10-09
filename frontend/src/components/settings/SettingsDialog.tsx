@@ -68,7 +68,9 @@ const SCREENS: Array<{
   { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
   { key: "mobile", label: "Mobile", group: "This device", el: (p) => <Mobile {...p} /> },
-  { key: "peer", label: "Peer links", group: "This device", el: (p) => <PeerLinks {...p} /> },
+  // Person-to-person work (peer links), named for what it does. The key stays
+  // "peer" so old deep links and the palette keep routing.
+  { key: "peer", label: "Work with someone", group: "This device", el: (p) => <PeerLinks {...p} /> },
   { key: "doctor", label: "Doctor", group: "Troubleshooting", el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", group: "Troubleshooting", el: (p) => <SystemLogs {...p} /> },
   { key: "advanced", label: "Advanced", group: "Troubleshooting", el: (p) => <Advanced {...p} /> },

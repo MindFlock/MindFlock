@@ -186,6 +186,7 @@ def rows(engine=None) -> list:
                 "spawned": bool(meta.get("spawned")),
                 "playbook": "",
                 "peer_share": False,
+                "peer_with": None,
                 "created_at": None,  # no session record exists yet
                 "diff_stat": None,
                 "workspace_missing": False,

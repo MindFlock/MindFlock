@@ -331,6 +331,29 @@ def _live_parent(inst: session.Instance) -> str:
         return ""
 
 
+def _peer_with(inst: session.Instance) -> Optional[dict]:
+    """For a shared-folder (peer-link) session: who it is shared with —
+    ``{"link_id", "name", "connected"}`` — for the rail's "Shared with"
+    chip. None for every other session, or when the link is gone."""
+    share_id = getattr(inst, "PeerShare", "") or ""
+    if not share_id:
+        return None
+    try:
+        from backend.peer import service as _peer
+
+        svc = _peer.get_service()
+        for link in svc.store.list():
+            if getattr(link, "share_id", None) == share_id:
+                return {
+                    "link_id": link.link_id,
+                    "name": link.peer_name or "peer",
+                    "connected": svc.is_connected(link.link_id),
+                }
+    except Exception:  # noqa: BLE001 — the chip is decoration; never fail a snapshot
+        pass
+    return None
+
+
 def _created_epoch(inst: session.Instance):
     """``inst.CreatedAt`` as epoch seconds, or None when unknown."""
     created = getattr(inst, "CreatedAt", None)
@@ -416,6 +439,8 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # A shared-folder (peer-link) session: sandboxed, and the host-side
         # features (ship, shell, IDE, spawn, rename, …) are refused for it.
         "peer_share": bool(getattr(inst, "PeerShare", "") or ""),
+        # …and with whom: {"link_id", "name", "connected"} | None.
+        "peer_with": _peer_with(inst),
         # When this session record was created (epoch seconds, or None): a
         # title can be reused once its session is gone, and anything keyed by
         # title (a stored report FROM it, say) must not be credited to the

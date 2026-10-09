@@ -4,7 +4,7 @@
  * What is pinned: every step renders its server-given state as ✓ / ✗ / ? —
  * an unknown approval is never drawn as a tick; a failing step shows its
  * exact fix (the operator command, the named machine with the -1 note, the
- * prefilled policy and grant snippets, the admin console links); a passing
+ * one prefilled policy block, the admin console links); a passing
  * step folds its fix away; the phone step carries the QR; and the token is
  * masked until Show. The vitest environment is node, so views are checked
  * through react-dom/server. */
@@ -21,14 +21,13 @@ vi.mock("../components/settings/useServerRestart", () => ({
   useServerRestart: () => ({ restarting: false, restart: vi.fn() }),
 }));
 
-const { SetupChecklist, TokenField, UrlList, TOKEN_MASK } = await import(
+const { PhoneSteps, SetupChecklist, TokenField, UrlList, TOKEN_MASK } = await import(
   "../components/settings/screens/Mobile"
 );
 type Shared = import("../components/settings/screens/Mobile").SharedLinkState;
 type Step = import("../components/settings/screens/Mobile").SetupStep;
 
-const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"]\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"]\n  }\n}`;
-const GRANTS = `"grants": [\n  {"src": ["autogroup:member"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]}\n]`;
+const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"],\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"],\n  },\n},\n"grants": [\n  {"src": ["tag:mindflock"], "dst": ["tag:mindflock"], "ip": ["tcp:8765", "tcp:443"]},\n  {"src": ["me@example.com"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]},\n],\n"tests": [\n  {"src": "tag:mindflock", "accept": ["tag:mindflock:8765"]},\n],`;
 
 function shared(steps: Partial<Record<string, Step["state"]>>, extra: Partial<Shared> = {}): Shared {
   const ids = ["operator", "tag", "define", "policy", "approval", "phone"];
@@ -41,7 +40,6 @@ function shared(steps: Partial<Record<string, Step["state"]>>, extra: Partial<Sh
     machine: { hostname: "Box", dns: "box-1.tail0000.ts.net", ip: "100.64.0.10", duplicate_of: "box" },
     operator_fix: "sudo tailscale set --operator=$USER",
     policy: POLICY,
-    grants: GRANTS,
     admin: {
       machines: "https://login.tailscale.com/admin/machines",
       services: "https://login.tailscale.com/admin/services",
@@ -117,12 +115,22 @@ describe("SetupChecklist", () => {
     expect(s).toContain('href="https://login.tailscale.com/admin/services"');
   });
 
-  it("prefills the policy and grant snippets with copy buttons", () => {
+  it("prefills ONE merge-safe policy block with a single copy button", () => {
     const s = step(render(shared({ policy: "unknown" })), "policy");
     expect(s).toContain("autoApprovers");
     expect(s).toContain("&quot;svc:mindflock&quot;: [&quot;tag:mindflock&quot;]");
     expect(s).toContain("&quot;dst&quot;: [&quot;svc:mindflock&quot;]");
-    expect(s.match(/>Copy</g)?.length).toBe(2);
+    // Device to device on the server port, and a tests stanza.
+    expect(s).toContain("&quot;tcp:8765&quot;");
+    expect(s).toContain("&quot;tests&quot;");
+    expect(s.match(/>Copy</g)?.length).toBe(1);
+    expect(s).toContain("can&#x27;t appear twice");
+  });
+
+  it("tells the tag step to disable key expiry too", () => {
+    const s = step(render(shared({ tag: "fail" })), "tag");
+    expect(s).toContain("Disable key expiry");
+    expect(s).toContain("keeps its key expiry");
   });
 
   it("folds a passing step's fix away", () => {
@@ -172,5 +180,28 @@ describe("UrlList", () => {
 
   it("renders nothing for no URLs", () => {
     expect(renderToStaticMarkup(createElement(UrlList, { urls: [] }))).toBe("");
+  });
+});
+
+describe("PhoneSteps", () => {
+  it("puts Tailscale on the phone first, signed in as this account, with its QR", () => {
+    const html = renderToStaticMarkup(
+      createElement(PhoneSteps, {
+        app: { url: "https://tailscale.com/download", qr_svg: "<svg id='app'></svg>", login: "me@example.com" },
+      })
+    );
+    const first = html.indexOf('data-phone-step="tailscale"');
+    const second = html.indexOf('data-phone-step="mindflock"');
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    expect(html).toContain("<strong>me@example.com</strong>");
+    expect(html).toContain("<svg id='app'></svg>");
+    expect(html).toContain('href="https://tailscale.com/download"');
+  });
+
+  it("says 'the same account' when the login isn't known", () => {
+    const html = renderToStaticMarkup(createElement(PhoneSteps, { app: undefined }));
+    expect(html).toContain("same account as this computer");
+    expect(html).toContain("tailscale.com/download");
   });
 });

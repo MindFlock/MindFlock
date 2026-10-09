@@ -583,6 +583,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_CONFIG` | — | Overrides the `config.toml` search path (engine/web) |
 | `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
 | `MINDFLOCK_PIPELINE_AUTOMATION` | set by the server | `1` / `0`: whether this device runs PR review and issue handling (see `github.automation_device`), passed by the web server to the pipeline it starts — the pipeline can't tell which of your devices it is on, and is restarted when the answer changes. Unset (a pipeline started by hand) → decided from `settings.json` |
+| `MINDFLOCK_GITHUB_CLIENT_ID` | unset | A GitHub OAuth App client id (device flow enabled) for Setup's **Connect GitHub** — wins over `github.oauth_client_id`. Unset: `gh auth login --web`, or a pre-filled token page |
 | `MINDFLOCK_PIPELINE_FLEET` | set by the server | `1` / `0`: whether this device is in a group of "Your devices" with another live member, passed by the web server to the pipeline it starts. When `1`, a PR review / issue handling loop that has never run on this device seeds its ledger with what is open before its first scan (see [ingestion-pipeline.md](ingestion-pipeline.md#state-and-files)). Unset (a pipeline started by hand) → read from the fleet store |
 | `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
 | `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
@@ -600,8 +601,10 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_EXIT_MARKER_DIR` | `$MINDFLOCK_ASSISTANT_DIR/.exit-markers` | Exit markers |
 | `MINDFLOCK_NO_PATH_ENRICH` | unset | Set (any non-empty value) to **disable** the startup `PATH` enrichment (`backend.pathenv`) — the login-shell probe + well-known-bin-dir union that lets a GUI-launched backend find user CLIs. Left unset, enrichment runs once before serving; it only *adds* directories, so a tool already on `PATH` resolves exactly as before. See [architecture.md](architecture.md) |
 | `MINDFLOCK_PATH_PROBE` | — | **Internal** reentrancy sentinel set on the shell subprocess the `PATH` probe spawns, so the probed shell doesn't recursively re-enrich. Not meant to be set by hand |
-| `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 0.0.0.0 and auto-enables the auth-token gate |
+| `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 127.0.0.1 + this node's Tailscale IPs (0.0.0.0 while Tailscale is down or its IPs can't be bound here) and auto-enables the auth-token gate |
 | `PORT` / `UVICORN_PORT` | `8765` | Web server port |
+| `MINDFLOCK_BIND_ALL` | unset | `1` makes tailscale mode bind every interface (`0.0.0.0`, your LAN included) instead of 127.0.0.1 + this node's Tailscale IPs — for a phone reaching the server over the LAN without Tailscale. `run.py`'s positional mode word `all` (`python -m backend.web.run all`) sets it too |
+| `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
@@ -657,10 +660,11 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
 | `MINDFLOCK_CLAUDE_JSON` | `~/.claude.json` | Path of the `.claude.json` used for pre-trust seeding of workspaces |
 | `MINDFLOCK_SEED_PROMPT_DIR` | `~/.mindflock-assistant/.seed-prompts` | Where generated seed prompts are written |
-| `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — device discovery reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
+| `MINDFLOCK_TAILSCALE_STATUS_FILE` | — | Tests and sandboxes only — every Tailscale status reader (device discovery, phone URLs, the shared link, trusted accounts, the health card) reads this `tailscale status --json` document instead of running the `tailscale` CLI (the fleet end-to-end test gives each server a fake tailnet this way) |
+| `MINDFLOCK_TAILSCALE_BIN` | — | The `tailscale` CLI to use (a path, or a name on `PATH`), ahead of discovery. Without it MindFlock looks on `PATH`, then (macOS) the app's own CLI at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. On WSL, a Windows-side `tailscale.exe` is reported (Settings → Devices, the doctor) but never used — it is a different tailnet device (`backend/tailscale_cli.py`) |
 | `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
 | `MINDFLOCK_NONINTERACTIVE` | — | `install.sh` only — set to `1` to force the read-only `mindflock doctor` report instead of the guided `--fix` prompts. The desktop app sets it for its in-window install (a GUI process has no terminal to answer prompts on) |
-| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
+| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the offline page's **Set up MindFlock on this computer** button runs. Point it at a stub to exercise that flow without reinstalling anything |
 
 > Naming note: launcher variables kept their historical `CS_` prefix
 
@@ -774,6 +778,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   reachable beyond localhost) lets anyone who can reach it control your other
   devices through it, and Settings → Devices warns about that. See
   [web-api.md](web-api.md#your-devices-fleet).
+  **Update all my devices** (Settings → Devices, `mindflock devices update`)
+  updates every member to the newest release one at a time, this device last,
+  and stops at the first that fails or doesn't come back; a member row shows
+  when it is behind, can't be updated from here (a dev checkout), or has a
+  desktop app that updates on its next launch.
 - **Where PR review and issue handling run** (`github.automation_device`;
   Settings → Devices → **PR review and issue handling** → **Run here**): the
   key of the one device of "Your devices" that runs them. It is synced, so
@@ -797,6 +806,18 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   next to the pipeline's `state.json`), so nothing the other device reviewed is
   reviewed again. Intake says *runs on <device>* where this device doesn't
   (`GET /api/mindflock/status` → `automation_here`, `automation_device`).
+- **Setup's devices answer** (`general.setup_devices`: `first` · `join` ·
+  unset; per device, never synced): the answer to Setup's "First computer, or
+  join one you already have?". It orders the first-run plan (`GET
+  /api/onboarding`, `mindflock init`): while a join is still to come, the
+  agent and GitHub steps wait for it, and Tailscale becomes a step.
+- **GitHub sign-in app** (`github.oauth_client_id`; synced, not a secret —
+  `$MINDFLOCK_GITHUB_CLIENT_ID` wins over it): the client id of a GitHub
+  OAuth App with the device flow enabled. When set, Setup's **Connect
+  GitHub** signs in with a code typed at github.com/login/device. Unset (the
+  default — MindFlock registers no app), Setup uses `gh auth login --web`
+  when gh is installed, else a pre-filled token page and a paste box. Either
+  way the token lands in `github.token`.
 - **Settings sync** (Settings → Devices → **Settings sync**; state in
   `settings_sync.json` beside `settings.json`, not a setting itself): keeps the
   shareable settings identical on every one of "Your devices" — two-way, last

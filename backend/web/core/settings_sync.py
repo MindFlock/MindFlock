@@ -154,6 +154,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "repo_settings",
         "issue_repo_settings",
         "automation_device",
+        "oauth_client_id",
     ),
     "engine": ("skip_permissions", "agent"),
     "ui": ("scroll_speed", "accent"),
@@ -213,6 +214,7 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "serve_mode",
         "shared_link",
         "ingestion_autostart",
+        "setup_devices",
     ),
     "notifications": ("ntfy_click_url",),
     "peer": (
@@ -347,6 +349,7 @@ LABELS: Dict[str, str] = {
     "github.repo_settings": "PR review: per-repo settings",
     "github.issue_repo_settings": "Issues: per-repo settings",
     "github.automation_device": "Device that runs PR review and issues",
+    "github.oauth_client_id": "GitHub sign-in app (OAuth client id)",
     "engine.skip_permissions": "Skip permission prompts",
     "engine.agent": "Ticket agent",
     "ui.scroll_speed": "Terminal scroll speed",
@@ -1455,6 +1458,17 @@ def _defer(unit: str, value: object) -> bool:
         "reason": "%s isn't installed on this device" % value.strip(),
     }
     return True
+
+
+def deferred_providers() -> Set[str]:
+    """The agent CLIs synced settings name that aren't installed here (what
+    :func:`_defer` held back) — the doctor puts them in its install plan, so
+    Settings → Devices can install them in one click."""
+    return {
+        str(v.get("value") or "").strip()
+        for v in list(_deferred.values())
+        if str(v.get("value") or "").strip()
+    }
 
 
 def _payload_ok(remote: object) -> bool:

@@ -201,13 +201,19 @@ class ClaudeProvider(BaseProvider):
 
     # --- connection: install + login -------------------------------------- #
     def install_hint(self) -> str:
-        """Prefer npm when it's already on PATH (no separate installer step);
-        otherwise the native install script, which needs no Node."""
-        import shutil
+        """Anthropic's native installer, always — never npm.
 
-        if shutil.which("npm"):
-            return "npm install -g @anthropic-ai/claude-code"
-        return "curl -fsSL https://claude.ai/install.sh | sh"
+        Piped to ``bash``, not ``sh``: the script is bash-only (``[[ =~ ]]``),
+        so under dash — ``/bin/sh`` on Debian, Ubuntu and every WSL distro —
+        ``| sh`` died with a parse error and the default agent could not be
+        installed on the most common engine host. npm was preferred when it
+        was on PATH, which with a distro Node means ``npm install -g`` into a
+        root-owned prefix (EACCES), and gives up the native build's
+        auto-update either way."""
+        return "curl -fsSL https://claude.ai/install.sh | bash"
+
+    def version_args(self) -> tuple:
+        return ("--version",)  # "2.1.295 (Claude Code)"
 
     def login_command(self) -> Optional[str]:
         # `claude` prompts to sign in on first run — no separate login command.

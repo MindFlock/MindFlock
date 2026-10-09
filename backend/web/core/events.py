@@ -102,6 +102,12 @@ EVENT_NAMES = (
     # (``POST /push-branch`` types a shell one-liner into tmux and returns), so
     # this event is the only "that sha is on origin now", delivered once.
     "session.pushed",
+    # The push the Push button typed FAILED for want of a credential or a git
+    # identity — read from the push's own output by the live_stage push
+    # watcher (data: {"reason": "https_auth"|"ssh_auth"|"identity"|…,
+    # "message", "fix", "detail"}). Once per push. Other failures (a rejected
+    # non-fast-forward) are git's to explain in the shell, and emit nothing.
+    "session.push_failed",
     # A test plan finished generating and has steps worth showing
     # (data: {"plan": str, "steps": int}).
     "session.test_plan_ready",
@@ -206,7 +212,9 @@ EVENT_NAMES = (
     # A computer asked to join and waits for approval HERE (data: {"device",
     # "host", "code", "id", "detail": "<host> · code 123 456"} — the same
     # 6-digit code shows on the asking computer, which is how the user tells
-    # it's the right one).
+    # it's the right one). Also emitted on every OTHER member that holds a
+    # copy (approve from wherever you are), with "via" (the asked device's
+    # key) and "via_host" added — the asked device alone pushes it to ntfy.
     "device.join_requested",
     # A computer became one of the user's devices — by code, approval, or
     # one-click add (data: {"device", "host", ...}).
@@ -227,6 +235,39 @@ EVENT_NAMES = (
     # values to keep in Settings → Devices (data: {"cleared": n, "held": n,
     # "detail"}). Once per pause.
     "settings.sync_paused",
+    # Peer links (backend.peer.service is their one emitter; ``session`` is
+    # always ""). None carries a key, an invite code or a relay token.
+    #
+    # Someone paired with this computer — or re-paired an existing link,
+    # which keeps its link id and shared folder (data: {"link_id",
+    # "peer_name", "sas" — the safety number both people compare, "role":
+    # "listener" (they joined our invite) | "dialer" (we joined theirs),
+    # "repaired": bool}).
+    "peer.link_added",
+    # A link is gone (data: {"link_id", "peer_name", "by": "peer" — they
+    # unlinked | "you" — unlinked here}).
+    "peer.link_removed",
+    # A link's connection came up or dropped (data: {"link_id", "peer_name",
+    # "connected": bool}). For UI refetch only; no rule notifies on it.
+    "peer.state",
+    # A slow invite or join moved on a stage (data: {"op_id" — the id the
+    # request carried, "op": "invite"|"join", "stage", "text" — the line to
+    # show}). For the screen that asked; no rule notifies on it.
+    "peer.progress",
+    # A message from the peer arrived (data: {"link_id", "peer_name",
+    # "text" — first 200 chars, one line, "stored": bool — true when no
+    # shared session took it, so it waits in the link's messages for you}).
+    "peer.message",
+    # This computer's relay got a new public address while people who joined
+    # through the old one still exist — they need a fresh invite to
+    # reconnect (data: {"host", "peers": [names]}; never the ingress token).
+    "peer.relay_changed",
+    # A newer MindFlock release is out and this device, or another of "Your
+    # devices", runs an older one (core.update_watch; ``session`` is ""). Once
+    # per release and set of devices behind it (data: {"latest", "tag",
+    # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
+    # "count", "detail"}).
+    "update.available",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

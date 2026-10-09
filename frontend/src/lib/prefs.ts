@@ -349,17 +349,86 @@ let beacon: (body: Partial<Prefs>) => Promise<unknown> = (body) =>
     keepalive: true,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then((r) => {
-    if (!r.ok) throw new PrefPostError(r.status);
-    return r;
+  }).then(async (r) => {
+    let parsed: unknown = null;
+    try {
+      parsed = await r.json();
+    } catch {
+      /* no JSON body */
+    }
+    if (!r.ok) throw new PrefPostError(r.status, parsed);
+    return parsed;
   });
 
 class PrefPostError extends Error {
   status: number;
-  constructor(status: number) {
+  body: unknown;
+  constructor(status: number, body: unknown = null) {
     super("/api/prefs -> " + status);
     this.status = status;
+    this.body = body;
   }
+}
+
+// --- Refused fields ---------------------------------------------------------
+//
+// A device whose gate is off takes keyboard shortcuts and saved prompts only
+// from the person at it (or a signed-in device): they are what a key or a
+// click sends to an agent. The server saves the rest of a batch and names
+// these in `refused` (a 403 when nothing else was asked for). They stay
+// dirty here — this browser keeps the edit as its own, a pull never puts the
+// server's value over it — and the person is told, once per field per page.
+
+/** The fields a POST /api/prefs answer, or the error it threw, says the
+ * server refused; null when it says nothing of the kind. */
+export function refusedFields(resOrErr: unknown): PrefField[] | null {
+  const o = resOrErr as { refused?: unknown; body?: { refused?: unknown } } | null;
+  const list = o && (Array.isArray(o.refused) ? o.refused : o.body?.refused);
+  if (!Array.isArray(list)) return null;
+  return list.filter((f): f is PrefField => FIELDS.has(f));
+}
+
+/** The server's reason, from the answer or the error. */
+function refusalReason(resOrErr: unknown): string {
+  const o = resOrErr as { error?: unknown; body?: { error?: unknown } } | null;
+  const why = o && (typeof o.error === "string" ? o.error : o.body?.error);
+  return typeof why === "string" ? why : "";
+}
+
+const FIELD_WORDS: Partial<Record<PrefField, string>> = {
+  keymap: "keyboard shortcuts",
+  prompt_presets: "saved prompts",
+};
+
+export type RefusedListener = (fields: PrefField[], message: string) => void;
+
+let onRefused: RefusedListener = () => {};
+const told = new Set<PrefField>();
+
+/** Who says so (lib/prefsSync.ts: a toast); returns the previous listener. */
+export function setRefusedListener(fn: RefusedListener): RefusedListener {
+  const prev = onRefused;
+  onRefused = fn;
+  return prev;
+}
+
+/** Tell the person about refused fields not mentioned yet on this page. */
+export function noteRefused(fields: PrefField[], resOrErr: unknown = null): void {
+  const fresh = fields.filter((f) => !told.has(f));
+  if (!fresh.length) return;
+  for (const f of fresh) told.add(f);
+  const what = fresh.map((f) => FIELD_WORDS[f] || f).join(" and ");
+  const why = refusalReason(resOrErr);
+  onRefused(
+    fresh,
+    "Your " + what + " are kept in this browser only — this device didn't save them" +
+      (why ? ": " + why : ".")
+  );
+}
+
+/** Tests: forget what was already said. */
+export function resetRefusedNotes(): void {
+  told.clear();
 }
 
 /** Tests swap the POST; returns the previous one. */
@@ -500,9 +569,16 @@ export async function flushPrefWrites(kv: KV | null = storage()): Promise<void> 
   pending.clear();
   if (!fields.size) return;
   const sentGen = writeGens(fields);
+  let res: unknown;
   try {
-    await sender(bodyFor(fields, kv));
+    res = await sender(bodyFor(fields, kv));
   } catch (e) {
+    const refused = refusedFields(e);
+    if (refused) {
+      // Not worth a retry (it would be refused again): kept dirty, said so.
+      settleExcept(fields, refused, sentGen, kv, e);
+      return;
+    }
     if (permanent(e)) {
       settleFields(fields, sentGen, kv);
       return;
@@ -514,7 +590,21 @@ export async function flushPrefWrites(kv: KV | null = storage()): Promise<void> 
     return;
   }
   retryMs = 0;
-  settleFields(fields, sentGen, kv);
+  settleExcept(fields, refusedFields(res) || [], sentGen, kv, res);
+}
+
+/** Settle what the server took; keep `refused` dirty and say so. */
+function settleExcept(
+  fields: Set<PrefField>,
+  refused: PrefField[],
+  sentGen: Map<PrefField, number>,
+  kv: KV | null,
+  resOrErr: unknown
+) {
+  const keep = new Set(refused);
+  settleFields([...fields].filter((f) => !keep.has(f)), sentGen, kv);
+  const mine = refused.filter((f) => fields.has(f));
+  if (mine.length) noteRefused(mine, resOrErr);
 }
 
 /** The page is going away (reload, tab closed, desktop window closed) or
@@ -529,9 +619,11 @@ export function flushPrefsOnHide(kv: KV | null = storage()): void {
   if (!fields.size) return;
   const sentGen = writeGens(fields);
   beacon(bodyFor(fields, kv)).then(
-    () => settleFields(fields, sentGen, kv),
+    (res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res),
     (e) => {
-      if (permanent(e)) settleFields(fields, sentGen, kv);
+      const refused = refusedFields(e);
+      if (refused) settleExcept(fields, refused, sentGen, kv, e);
+      else if (permanent(e)) settleFields(fields, sentGen, kv);
     }
   );
 }

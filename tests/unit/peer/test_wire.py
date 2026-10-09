@@ -339,17 +339,14 @@ def test_valid_messages(obj, t):
         {"t": "req", "id": "1", "op": "status", "p": {}},
         {"t": "req", "id": 1.0, "op": "status", "p": {}},
         {"t": "req", "id": 1, "op": "exec", "p": {}},
-        {"t": "req", "id": 1, "op": "status", "p": {}, "x": 1},
         {"t": "req", "id": 1, "op": "status"},
         {"t": "req", "id": 1, "op": "diff", "p": {"max_chars": True}},
         {"t": "res", "id": 1, "ok": 1, "p": {}},
         {"t": "res", "id": 1, "ok": True},
         {"t": "res", "id": 1, "ok": True, "p": []},
-        {"t": "res", "id": 1, "ok": True, "p": {}, "err": "x"},
         {"t": "res", "id": 1, "ok": False, "err": "x" * 301},
         {"t": "res", "id": 1, "ok": False, "err": "\x1b[2J"},
         {"t": "res", "id": 1, "ok": False},
-        {"t": "ping", "x": 1},
         {"t": "bye"},
         {"t": "bye", "reason": "x" * 201},
         {"t": "hello", "v": 1},
@@ -394,7 +391,9 @@ def test_hello():
         },  # non-canonical bits
         {"t": "hello", "v": 1, "nonce": NONCE, "name": ""},
         {"t": "hello", "v": 1, "nonce": NONCE, "name": "\x1b"},
-        {"t": "hello", "v": 1, "nonce": NONCE, "name": "a", "x": 1},
+        {"t": "hello", "v": 1, "nonce": NONCE, "name": "a", "app": ""},
+        {"t": "hello", "v": 1, "nonce": NONCE, "name": "a", "caps": "x"},
+        {"t": "hello", "v": 1, "nonce": NONCE, "name": "a", "caps": ["BAD CAP"]},
         {"t": "welcome", "v": 1, "nonce": NONCE, "name": "a"},
     ):
         with pytest.raises(ProtocolError):
@@ -425,8 +424,10 @@ def test_pair():
     ):
         with pytest.raises(ProtocolError):
             wire.validate_pair({**PAIR, key: val})
+    # A newer peer's extra keys are ignored; its app/caps are checked.
+    wire.validate_pair({**PAIR, "extra": 1, "app": "0.8.0", "caps": ["rooms"]})
     with pytest.raises(ProtocolError):
-        wire.validate_pair({**PAIR, "extra": 1})
+        wire.validate_pair({**PAIR, "caps": ["x"] * 33})
 
 
 def test_auth_welcome_denied():
@@ -515,3 +516,63 @@ def test_fuzz_validate_message(obj):
     except ProtocolError:
         return
     assert t in ("req", "res", "ping", "pong", "bye")
+
+
+# -- tolerant inbound, strict outbound (docs/peer-link.md "Evolving the wire")
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {"t": "req", "id": 1, "op": "status", "p": {}, "x": 1},
+        {"t": "res", "id": 1, "ok": True, "p": {}, "err": "x"},
+        {"t": "ping", "x": 1},
+    ],
+)
+def test_unknown_frame_keys_are_ignored(obj):
+    assert wire.validate_message(obj) == obj["t"]
+
+
+def test_unknown_payload_keys_are_dropped_inbound_but_refused_outbound():
+    obj = {
+        "t": "req",
+        "id": 7,
+        "op": "msg",
+        "p": {"msg_id": "a1", "text": "hi", "reply_to": None, "priority": "high"},
+    }
+    assert wire.validate_message(obj) == "req"
+    assert obj["p"] == {"msg_id": "a1", "text": "hi", "reply_to": None}
+    with pytest.raises(ProtocolError):
+        wire.validate_request("msg", {"msg_id": "a1", "text": "hi", "x": 1})
+    res = {"shared": True, "agent": "none", "name": "b", "grants": {"diff": True}}
+    assert wire.validate_response("status", dict(res), strict=False) == {
+        "shared": True,
+        "agent": "none",
+        "name": "b",
+    }
+    with pytest.raises(ProtocolError):
+        wire.validate_response("status", dict(res))
+
+
+def test_unknown_op_is_unsupported_not_fatal():
+    with pytest.raises(wire.UnsupportedOp) as exc:
+        wire.validate_message({"t": "req", "id": 9, "op": "room_join", "p": {"a": 1}})
+    assert exc.value.rid == 9 and exc.value.op == "room_join"
+    # Still malformed (a ProtocolError that closes) when it isn't a sane op name
+    # or the id is bad.
+    for bad in (
+        {"t": "req", "id": 9, "op": "x" * 40, "p": {}},
+        {"t": "req", "id": 9, "op": "Room Join", "p": {}},
+        {"t": "req", "id": 0, "op": "room_join", "p": {}},
+    ):
+        with pytest.raises(ProtocolError) as exc:
+            wire.validate_message(bad)
+        assert not isinstance(exc.value, wire.UnsupportedOp)
+
+
+def test_peer_info_reads_optional_app_and_caps():
+    hello = {"t": "hello", "v": 1, "nonce": NONCE, "name": "a"}
+    assert wire.peer_info(hello) == {"app": None, "caps": []}
+    newer = {**hello, "app": "0.8.0", "caps": ["rooms", "grants"], "zz": 1}
+    wire.validate_hello(newer)
+    assert wire.peer_info(newer) == {"app": "0.8.0", "caps": ["rooms", "grants"]}

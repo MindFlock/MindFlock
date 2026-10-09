@@ -222,11 +222,39 @@ def _no_tailnet_side_effects(monkeypatch):
     Tests that exercise either path re-patch these themselves — see
     tests/unit/test_mobile_announce.py.
     """
+    from backend import tailscale_cli
     from backend.web import server
-    from backend.web.core import mobile_announce
+    from backend.web.core import mobile_access, mobile_announce
+
+    # The shared ``status --json`` snapshot is cached for seconds: start every
+    # test without one, so a fake (or real) status never leaks across tests.
+    tailscale_cli.invalidate()
+    from backend.web.core import tailnet_bind
 
     monkeypatch.setattr(server, "_tailscale_info", lambda: (None, None))
+    # run.main's tailscale-mode bind plan: no tailnet (the 0.0.0.0 fallback),
+    # and the fallback flag it exports never outlives the test.
+    monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: [])
+    monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
     monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
+    monkeypatch.setattr(mobile_access, "_tailscale_login", lambda: "")
+    # auth.host_ok's own names in an exposed mode: never read from the real
+    # tailscale. The test node answers as TestClient's default Host
+    # (``testserver``) and a tailnet IP of its own; tests that pin the
+    # rebinding guard re-patch this.
+    from backend.web.core import auth as _auth
+
+    monkeypatch.setattr(
+        _auth,
+        "_NODE",
+        {
+            "hosts": frozenset({"testserver", "100.64.0.1"}),
+            "lan": frozenset(),
+            "unbindable": False,
+            "at": float("inf"),
+            "pending": False,
+        },
+    )
     monkeypatch.setattr(mobile_announce, "announce_soon", lambda reason: None)
     monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)
     monkeypatch.setattr(mobile_announce, "_CACHED_URL", None)

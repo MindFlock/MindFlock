@@ -32,6 +32,8 @@ import {
 } from "../../lib/sessionActions";
 import { orderedInstances } from "../sidebar/ordering";
 import { sessionLabel } from "../../lib/sessionLabel";
+import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
+import { routeCode } from "../../lib/fleet";
 
 interface PaletteAction {
   label: string;
@@ -130,9 +132,18 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.openDialogFor("settings", "devices"),
     });
     acts.push({
-      label: "Peer links…",
-      hint: "invite someone, or join with their code",
+      label: "Work with someone…",
+      hint: "peer links: invite someone, or join with their code",
       run: () => ui.openDialogFor("settings", "peer"),
+    });
+    // ONE place for every code (lib/deviceActions.ts): Settings → Devices'
+    // paste box, which sends one of your devices' codes to Devices and
+    // someone's mfp1:/mfp2: invite to Work with someone. (A code typed
+    // straight into this box gets its own entry at the top, below.)
+    acts.push({
+      label: "Paste a code…",
+      hint: "join with a code from your other computer, or someone's invite",
+      run: () => openDevicesFor({ focusPaste: true }),
     });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
@@ -142,7 +153,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const { rows } = orderedInstances(instances(), ui.order);
     const t = ui.focused;
     if (t) {
-      acts.push({ label: `Rename… — ${t}`, run: () => ui.openDialogFor("rename", t) });
+      // A shared-folder (peer) session runs sandboxed: the server refuses
+      // rename, ship, the IDE, copies and the rest, so they aren't offered.
+      const shared = !!rows.find((r) => r.title === t)?.peer_share;
+      if (!shared) acts.push({ label: `Rename… — ${t}`, run: () => ui.openDialogFor("rename", t) });
       // Both used to ask for the text with window.prompt, which the desktop
       // app never implements — the entries did nothing there. They now open
       // the place the text is typed: the Thread composer (as you, Ctrl+Enter
@@ -161,14 +175,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       // is listed only when it can run: an entry that only explains why not
       // is noise in a launcher.
       const inst = rows.find((r) => r.title === t);
-      if (inst && !inst.pending && fastTrackStep(inst)) {
+      if (inst && !shared && !inst.pending && fastTrackStep(inst)) {
         acts.push({
           label: `Fast-track… — ${t}`,
           hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
           run: () => openFastTrackMenu(t),
         });
       }
-      if (inst && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) {
+      if (inst && !shared && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) {
         acts.push({
           label: `Split into parallel pieces… — ${t}`,
           hint: "starts a split",
@@ -181,13 +195,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         });
       }
       acts.push({ label: `Thread — ${t}`, hint: "Ctrl+K T", run: () => ui.threadOpen(t) });
-      if (caps.git) {
+      if (caps.git && !shared) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
         acts.push({ label: `Make PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
       }
-      acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
-      acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
+      if (!shared) {
+        acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
+        acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
+      }
       acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
       if (caps.git)
         acts.push({
@@ -200,7 +216,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         });
       // Merge is deliberately unbound (most consequential action) — palette or
       // sidebar menu only, and mergeSession() itself confirms.
-      if (caps.git)
+      if (caps.git && !shared)
         acts.push({
           label: `Merge PR — ${t}`,
           hint: prHint ? prHint.replace(" · ", "") : undefined,
@@ -237,7 +253,17 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       .map((a, i) => ({ a, i, s: fuzzyScore(query, a.label) }))
       .filter((x) => x.s >= 0);
     scored.sort((x, y) => x.s - y.s || x.i - y.i);
-    return scored.map((x) => x.a);
+    const out = scored.map((x) => x.a);
+    // The query IS a code (pasted straight into the palette): joining with
+    // it is the first thing offered, routed by its format.
+    const code = routeCode(query);
+    if (code.kind)
+      out.unshift({
+        label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+        hint: code.kind === "peer" ? "another person · Work with someone" : "your devices",
+        run: () => void routePastedCode(query),
+      });
+    return out;
   }, [actions, query]);
 
   useEffect(() => {

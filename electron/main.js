@@ -10,7 +10,7 @@
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
 // that is hand-rolled (which is what fought us under WSLg/Wayland).
 
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
@@ -530,9 +530,20 @@ const INSTALL_SENTINEL = 'MINDFLOCK_INSTALL_EXIT='
 const INSTALL_TIMEOUT_MS = 30 * 60 * 1000
 const ANSI_RE = /\x1b\[[0-9;]*m/g
 
-// state: idle | running | done | failed
-let install = { state: 'idle', code: null, lines: [] }
+// state: idle | running | done | failed. `waiting` names what a running install
+// is waiting on before the script itself starts ('xcode': Apple's Command Line
+// Tools installer), so the offline page can say so.
+let install = { state: 'idle', code: null, lines: [], waiting: '' }
 let installTicker = null
+
+// FIRST-RUN CONTINUATION. The engine install above runs the read-only doctor
+// (there is no terminal behind a GUI), so tmux and the agent CLI are still
+// missing when it finishes. When the install was the offline page's first-run
+// one (not an update), the app opens with `?setup=install`: the Setup dialog
+// comes up on its Dependencies step, with the one "Install …" button that
+// installs them all (one password prompt) — instead of dropping the user on an
+// empty grid to go and find it. Cleared once the app page has loaded with it.
+let firstRunDeps = false
 
 function toLines(s) {
   return String(s).replace(ANSI_RE, '').replace(/\r/g, '\n').split('\n')
@@ -559,6 +570,7 @@ function installFinish(code) {
   // the next successful load re-checks (until the server restarts it still
   // reports the OLD version, which is what the toast already told the user).
   engineNotice = null
+  if (code === 0 && install.firstRun) firstRunDeps = true
   if (code === 0) startServerIfNeeded()
 }
 
@@ -570,10 +582,46 @@ function hasXcodeCLT() {
   catch (e) { return false }
 }
 
-function startInstall(ref) {
+// Linux / macOS: run the bundled install.sh. --login so ~/.local/bin (where uv
+// and the CLI land) is on PATH for the doctor step at the end of the script.
+function runUnixInstaller(envAdds) {
+  try {
+    const child = spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
+      env: Object.assign({}, process.env, envAdds),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    child.stdout.on('data', installLog)
+    child.stderr.on('data', installLog)
+    child.on('error', (e) => {
+      installLog('could not run the installer: ' + (e && e.message))
+      installFinish(1)
+    })
+    child.on('exit', (code) => installFinish(code == null ? 1 : code))
+    const killAt = setTimeout(() => {
+      if (install.state !== 'running') return
+      installLog('installer timed out after ' + (INSTALL_TIMEOUT_MS / 60000) + ' minutes.')
+      try { child.kill() } catch (e) {}
+      installFinish(1)
+    }, INSTALL_TIMEOUT_MS)
+    child.on('close', () => clearTimeout(killAt))
+  } catch (e) {
+    installLog('could not run the installer: ' + (e && e.message))
+    installFinish(1)
+  }
+}
+
+// Apple's CLT installer takes 5-20 minutes and says nothing when it is done.
+const XCODE_POLL_MS = 5000
+const XCODE_WAIT_MS = 30 * 60 * 1000
+
+// `opts.firstRun`: the offline page's first-run install (see firstRunDeps).
+function startInstall(ref, opts) {
   ref = ref || INSTALL_REF   // default: this app's pinned version (first install)
   if (install.state === 'running') return { started: false }
-  install = { state: 'running', code: null, lines: [] }
+  install = {
+    state: 'running', code: null, lines: [], waiting: '',
+    firstRun: !!(opts && opts.firstRun),
+  }
   installLog('=== installing the MindFlock engine (' + ref + ') ===')
 
   if (!fs.existsSync(INSTALL_SCRIPT)) {
@@ -587,44 +635,44 @@ function startInstall(ref) {
   //   MINDFLOCK_NONINTERACTIVE  there is no controlling terminal behind a GUI
   //     app, so force `mindflock doctor`'s read-only report; its --fix mode
   //     would sit waiting on y/n prompts nobody can answer.
-  const envAdds = { MINDFLOCK_INSTALL_REF: ref, MINDFLOCK_NONINTERACTIVE: '1' }
+  //   MINDFLOCK_INSTALL_NO_RESTART  this app restarts the server itself after
+  //     an engine update (restartServer); install.sh restarting it first
+  //     would be a second restart racing that one.
+  const envAdds = {
+    MINDFLOCK_INSTALL_REF: ref,
+    MINDFLOCK_NONINTERACTIVE: '1',
+    MINDFLOCK_INSTALL_NO_RESTART: '1',
+  }
 
   if (process.platform !== 'win32') {
     if (process.platform === 'darwin' && !hasXcodeCLT()) {
-      installLog('The Xcode Command Line Tools (which provide git) are not installed,')
-      installLog('and the engine cannot be fetched without git.')
-      installLog('Opening Apple’s installer now — finish it, then press Install again.')
+      // Wait for Apple's installer instead of failing: the user would
+      // otherwise come back 15 minutes later to a red transcript and a second
+      // button to press. The install stays 'running' throughout.
+      installLog('Apple is installing developer tools (git) — finish its window.')
+      installLog('MindFlock will continue on its own when it’s done.')
       try {
         spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
       } catch (e) { installLog('could not open it: run  xcode-select --install') }
-      installFinish(1)
+      install.waiting = 'xcode'
+      const since = Date.now()
+      installTicker = setInterval(() => {
+        if (install.state !== 'running') return
+        if (hasXcodeCLT()) {
+          clearInterval(installTicker); installTicker = null
+          install.waiting = ''
+          installLog('Developer tools installed — continuing.')
+          runUnixInstaller(envAdds)
+        } else if (Date.now() - since > XCODE_WAIT_MS) {
+          installLog('Still no developer tools after ' + (XCODE_WAIT_MS / 60000)
+            + ' minutes. Finish Apple’s installer (or run  xcode-select --install ),')
+          installLog('then press Try again.')
+          installFinish(1)
+        }
+      }, XCODE_POLL_MS)
       return { started: true }
     }
-    // --login so ~/.local/bin (where uv and the CLI land) is on PATH for the
-    // doctor step at the end of the script.
-    try {
-      const child = spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
-        env: Object.assign({}, process.env, envAdds),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      child.stdout.on('data', installLog)
-      child.stderr.on('data', installLog)
-      child.on('error', (e) => {
-        installLog('could not run the installer: ' + (e && e.message))
-        installFinish(1)
-      })
-      child.on('exit', (code) => installFinish(code == null ? 1 : code))
-      const killAt = setTimeout(() => {
-        if (install.state !== 'running') return
-        installLog('installer timed out after ' + (INSTALL_TIMEOUT_MS / 60000) + ' minutes.')
-        try { child.kill() } catch (e) {}
-        installFinish(1)
-      }, INSTALL_TIMEOUT_MS)
-      child.on('close', () => clearTimeout(killAt))
-    } catch (e) {
-      installLog('could not run the installer: ' + (e && e.message))
-      installFinish(1)
-    }
+    runUnixInstaller(envAdds)
     return { started: true }
   }
 
@@ -644,7 +692,8 @@ function startInstall(ref) {
     'L="$(wslpath -a ' + shq(winLog) + ')";'
     + ' S="$(wslpath -a ' + shq(INSTALL_SCRIPT) + ')";'
     + ' T="$(mktemp)"; tr -d "\\r" < "$S" > "$T";'
-    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$T";'
+    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1'
+    + ' MINDFLOCK_INSTALL_NO_RESTART=1 sh "$T";'
     + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1;'
     + ' rm -f "$T"'
   try {
@@ -686,11 +735,12 @@ function startInstall(ref) {
   return { started: true }
 }
 
-ipcMain.handle('install:start', () => startInstall())
+ipcMain.handle('install:start', () => startInstall(null, { firstRun: true }))
 ipcMain.handle('install:state', () => ({
   state: install.state,
   code: install.code,
   lines: install.lines,
+  waiting: install.waiting || '',
   // The manual escape hatch the offline page shows when an install fails.
   command: 'curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/'
     + INSTALL_REF + '/install.sh | sh',
@@ -848,10 +898,8 @@ async function autoSignIn() {
     }
     signInLast = { token: tok, at: Date.now() }
     if (!win || win.isDestroyed()) return
-    const target = new URL(APP_URL)
-    target.searchParams.set('token', tok)
     console.log('[mindflock] sign-in page shown; signing in with the local access token')
-    win.loadURL(target.toString()).catch(() => {})
+    win.loadURL(appUrl({ token: tok })).catch(() => {})
   } finally {
     signInInFlight = false
   }
@@ -1124,6 +1172,13 @@ async function checkForUpdates() {
   }
   console.log('[mindflock] update available:', latest, '(current', app.getVersion() + ')')
   pushUpdateToRenderer()
+  // The in-window toast now announces `latest`; minimized or in the
+  // background, an OS notification says so too — once per version, and the
+  // page's update.available for the same release adds nothing more.
+  const unfocused = win && !win.isDestroyed() && !win.isFocused()
+  if (claimUpdateNotice(latest) && unfocused) {
+    showNotification('MindFlock ' + latest + ' is available', 'Click to open MindFlock and update', 'update')
+  }
 }
 
 function startUpdateChecks() {
@@ -1252,7 +1307,7 @@ async function updateEverything() {
       if (install.state !== 'done') {
         updateRun = {
           state: 'failed', step: 'engine',
-          message: 'The engine update failed (exit ' + install.code + ') — nothing was changed in the app.',
+          message: 'The engine update failed (exit ' + install.code + ') — MindFlock’s engine may be partially updated. Retry to finish it.',
         }
         return updateRun
       }
@@ -1361,7 +1416,13 @@ function fetchLocalJSON(pathname, timeoutMs, token) {
       req = http.get(
         {
           host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
-          headers: token ? { Authorization: 'Bearer ' + token } : {},
+          // X-MindFlock-Shell: this desktop app's version. The engine reports
+          // it in its hello (shell_version), so "Update all my devices" on
+          // another machine can say this app updates on its next launch.
+          headers: Object.assign(
+            { 'X-MindFlock-Shell': app.getVersion() },
+            token ? { Authorization: 'Bearer ' + token } : {}
+          ),
         },
         (res) => {
           if (res.statusCode !== 200) { res.resume(); return finish(null) }
@@ -1670,9 +1731,18 @@ function scheduleRetry() {
   retryDelay = Math.min(RETRY_MS, retryDelay * 2)
 }
 
+// The app URL to load: carries `?setup=install` while the first-run
+// dependency step is still owed (see firstRunDeps).
+function appUrl(extra) {
+  const u = new URL(APP_URL)
+  if (firstRunDeps) u.searchParams.set('setup', 'install')
+  for (const k of Object.keys(extra || {})) u.searchParams.set(k, extra[k])
+  return u.toString()
+}
+
 function loadApp() {
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
-  win.loadURL(APP_URL).catch(() => {})
+  win.loadURL(appUrl()).catch(() => {})
 }
 
 const OFFLINE_FILE = path.join(__dirname, 'offline.html')
@@ -1757,6 +1827,8 @@ function createWindow() {
       pushEngineNotice()
       // The server's own sign-in page (access-token gate on) -> sign in.
       autoSignIn().catch(() => {})
+      // The app itself (not its sign-in page) took the first-run hand-off.
+      if (win.webContents.getTitle() !== SIGN_IN_TITLE) firstRunDeps = false
     }
     // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
     console.log('[mindflock] loaded:', win.webContents.getURL().split('?')[0])
@@ -1940,6 +2012,67 @@ ipcMain.on('win:close', () => { if (win) win.close() })
 // open until the user toggled fullscreen. A pull can't race the renderer's
 // listener registration the way a push at did-finish-load would.
 ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
+
+// OS notifications (renderer: frontend/src/lib/desktopNotify.ts). The page
+// asks only while its window isn't focused, for the few things that need the
+// person while MindFlock is minimized: a computer asking to join their
+// devices (it expires in ten minutes), someone arriving on a peer link, an
+// update. Clicking one brings the window back and tells the page which
+// screen to open (`target`: "devices" | "peer" | "update").
+const NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])
+// Kept referenced until closed: a Notification that is garbage-collected
+// stops delivering its click on some platforms.
+const liveNotifications = new Set()
+
+function focusWindow() {
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function showNotification(title, body, target) {
+  if (!Notification.isSupported()) return false
+  const n = new Notification({ title: String(title || 'MindFlock').slice(0, 120), body: String(body || '').slice(0, 300) })
+  liveNotifications.add(n)
+  const forget = () => liveNotifications.delete(n)
+  n.on('click', () => {
+    forget()
+    focusWindow()
+    if (target && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('notify:click', target)
+    }
+  })
+  n.on('close', forget)
+  n.show()
+  return true
+}
+
+ipcMain.handle('notify:show', (_e, o) => {
+  const opts = o && typeof o === 'object' ? o : {}
+  const target = NOTIFY_TARGETS.has(opts.target) ? opts.target : ''
+  // The page only asks while unfocused; re-check here (it can race a focus).
+  if (win && !win.isDestroyed() && win.isFocused()) return { ok: false }
+  // An update (the engine's update.available, from the page): one notice per
+  // release — none when this shell already announced that version (its own
+  // update toast, or its own notification below).
+  const version = String(opts.version || '').replace(/^v/i, '')
+  if (version) {
+    if (!claimUpdateNotice(version)) return { ok: false }
+  }
+  return { ok: showNotification(opts.title, opts.body, target) }
+})
+
+// The release this shell last announced (its own update toast, or an OS
+// notification for it): one notice per version, whichever path saw it first.
+let notifiedUpdate = ''
+
+// True (and the version recorded) when nothing has announced `version` yet.
+function claimUpdateNotice(version) {
+  if (!version || version === notifiedUpdate || version === skippedVersion) return false
+  notifiedUpdate = version
+  return true
+}
 
 app.whenReady().then(() => {
   // Drop Electron's default application menu: it carries devtools

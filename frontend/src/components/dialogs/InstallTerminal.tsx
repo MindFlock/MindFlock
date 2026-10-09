@@ -33,6 +33,39 @@ export function installSummary(steps: InstallStep[]): string {
   return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
 }
 
+/** The short names of what the plan installs: package names, the agent CLI's
+ * own name ("agent CLI (claude)" → "claude"), "Homebrew"… */
+function stepNames(steps: InstallStep[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    if (s.id === "packages") {
+      out.push(...s.label.replace(/^system packages: /, "").split(", "));
+    } else if (s.id === "homebrew") {
+      out.push("Homebrew");
+    } else {
+      const m = /\(([^)]+)\)\s*$/.exec(s.label);
+      out.push(m && /-cli$/.test(s.id) ? m[1] : s.label);
+    }
+  }
+  return out.filter(Boolean);
+}
+
+/** The button's text: names what one click installs ("Install tmux + claude")
+ * when that fits, rather than a generic "everything missing". */
+export function installButtonLabel(steps: InstallStep[]): string {
+  const names = stepNames(steps);
+  if (!names.length || names.length > 3) return "Install everything missing";
+  return "Install " + names.join(" + ");
+}
+
+/** Whether the run will ask for a password (a package-manager or Homebrew step
+ * — sudo, once, in the terminal), so the button can say so up front. */
+export function asksForPassword(steps: InstallStep[]): boolean {
+  return steps.some(
+    (s) => s.id === "packages" || s.id === "homebrew" || /(^|[\s;&|(])sudo\s/.test(s.cmd || "")
+  );
+}
+
 function InstallWindow({ onClose, onDone }: { onClose(): void; onDone(): void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const state = useWsTerm(hostRef, "/api/doctor/install-terminal", true);
@@ -143,9 +176,13 @@ export function InstallMissing({
   return (
     <div className="doctor-install" id="doctor-install">
       <button type="button" className="test-btn" id="doctor-install-btn" onClick={() => setOpen(true)}>
-        Install everything missing
+        {installButtonLabel(steps)}
       </button>
-      <span className="set-hint"> {installSummary(steps)}</span>
+      <span className="set-hint">
+        {" "}
+        {installSummary(steps)}
+        {asksForPassword(steps) ? " — asks for your password once" : ""}
+      </span>
       {window_}
     </div>
   );

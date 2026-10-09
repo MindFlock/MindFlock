@@ -12,6 +12,14 @@
  * Settings sync lives here too (it used to sit under Security): it only ever
  * runs between these devices, so turning it on belongs next to adding them.
  *
+ * Reachability comes first: a device the others can't reach (bound to
+ * 127.0.0.1) can still make a code nobody can use and still join, then sit
+ * "offline" on every other screen — so "This device" says where it listens,
+ * and Make reachable (Tailscale mode + the access gate, one save) fixes it
+ * wherever it matters: before a code is made, after a join, and in "Match my
+ * other devices". When no other MindFlock shows, each tailnet device says
+ * why (refused, timed out, asleep …) instead of one sentence for all.
+ *
  * Everything is /api/fleet* and /api/settings/sync*. Polls every 3 s while
  * open and refetches on device.* / settings.synced / settings.sync_paused
  * events. No native
@@ -25,7 +33,9 @@ import { toast } from "../../../lib/toast";
 import {
   ROTATE_TOKENS_LABEL,
   SYNC_RESUME,
+  MAKE_REACHABLE_TEXT,
   addPairedNote,
+  admitLine,
   admitToast,
   automationLine,
   candidateBlocker,
@@ -35,24 +45,41 @@ import {
   joinLine,
   joinSettingsNote,
   joinableCandidates,
+  joinedToast,
   keyConflicts,
   leftLines,
   liveInvite,
+  matchText,
   memberStatus,
+  memberUpdateChips,
   pasteJoinBody,
+  phoneLinkLine,
   pinChoices,
   plausibleCode,
   readmittedLines,
   removalLines,
   removeConfirmText,
   removedToast,
+  requestNote,
+  routeCode,
+  rolloutLine,
+  rolloutRowText,
   syncDeviceLine,
+  thisDeviceLine,
   syncLabel,
   unpinReplaces,
+  updateAllLine,
 } from "../../../lib/fleet";
+import { DEVICES_FOCUS_EVENT, joinPeerInvite, takePendingDevicesFocus } from "../../../lib/deviceActions";
+import type { DevicesFocus } from "../../../lib/deviceActions";
+import { GATE_ON_NOTE, turnGateOn } from "../../../lib/gateOn";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
+import { useMakeReachable } from "../useMakeReachable";
+import type { MakeReachableResult } from "../useMakeReachable";
 import type { ScreenProps } from "../SettingsDialog";
+import { TailscaleCard } from "./TailscaleCard";
+import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
 const POLL_MS = 3000;
@@ -78,6 +105,20 @@ export function Devices(p: ScreenProps) {
   /** Remove's "also replace every device's access token" — on by default. */
   const [rotateTokens, setRotateTokens] = useState(true);
   const [now, setNow] = useState(() => Date.now() / 1000);
+  /** Make reachable's confirm is open (the This-device row, Add a device,
+   * or the joined toast's click). */
+  const [reachAsk, setReachAsk] = useState(false);
+  /** "Match my other devices": its confirm, and the shared-link checklist
+   * steps still failing after it ran. */
+  const [matchAsk, setMatchAsk] = useState(false);
+  const [matchLeft, setMatchLeft] = useState<{ id: string; title: string; reason: string }[]>([]);
+  /** A candidate the sidebar's "Add to my devices…" pointed at. */
+  const [focusDevice, setFocusDevice] = useState("");
+  const pasteRef = useRef<HTMLInputElement | null>(null);
+  const thisRef = useRef<HTMLDivElement | null>(null);
+  /** The newest released version ("" until known / GitHub unreachable) —
+   * what "Update all my devices" offers. */
+  const [latest, setLatest] = useState("");
 
   const loadFleet = useCallback(async () => {
     try {
@@ -98,6 +139,34 @@ export function Devices(p: ScreenProps) {
     void loadFleet();
     void loadSync();
   }, [loadFleet, loadSync]);
+  const reach = useMakeReachable(loadAll);
+
+  // Opened aimed at something (lib/deviceActions): a candidate's row, or a
+  // code for the paste box.
+  useEffect(() => {
+    const apply = (f: DevicesFocus | null) => {
+      if (!f) return;
+      if (f.device) setFocusDevice(f.device);
+      if (f.paste) setPasted(f.paste);
+      if (f.paste || f.focusPaste) setTimeout(() => pasteRef.current?.focus(), 0);
+    };
+    apply(takePendingDevicesFocus());
+    const on = (e: Event) => {
+      takePendingDevicesFocus();
+      apply((e as CustomEvent<DevicesFocus | null>).detail || null);
+    };
+    document.addEventListener(DEVICES_FOCUS_EVENT, on);
+    return () => document.removeEventListener(DEVICES_FOCUS_EVENT, on);
+  }, []);
+  // Scroll to it once, when its row first exists (not on every poll).
+  const scrolledTo = useRef("");
+  useEffect(() => {
+    if (!focusDevice || !st || scrolledTo.current === focusDevice) return;
+    const el = document.querySelector('[data-candidate="' + CSS.escape(focusDevice) + '"]');
+    if (!el) return;
+    scrolledTo.current = focusDevice;
+    el.scrollIntoView({ block: "center" });
+  }, [focusDevice, st]);
 
   // Poll while the screen is open (it is only mounted while active); the
   // sync status is the slower half, so it rides every other tick.
@@ -113,6 +182,14 @@ export function Devices(p: ScreenProps) {
     }, POLL_MS);
     return () => clearInterval(t);
   }, [p.active, loadAll, loadFleet, loadSync]);
+
+  // The newest release, once per visit (the server caches it 15 minutes).
+  useEffect(() => {
+    if (!p.active) return;
+    api<{ latest?: string }>("/api/update/check")
+      .then((c) => setLatest(String(c?.latest || "")))
+      .catch(() => {});
+  }, [p.active]);
 
   // A request arriving, a device joining or leaving, or a sync pass that
   // adopted something: refetch now instead of on the next tick.
@@ -162,15 +239,30 @@ export function Devices(p: ScreenProps) {
     lastJoin.current = j;
     if (!j || !was || was === j.state) return;
     if (j.state === "joined") {
-      toast("Joined " + (j.host || j.device) + " — your settings now follow your other devices", {
-        duration: 6000,
-      });
+      // A local-only joiner is a member the others can't reach: the toast
+      // says so, and its click opens Make reachable's confirm right here.
+      const t = joinedToast(j);
+      toast(
+        t.text,
+        t.offerReach
+          ? {
+              duration: 12000,
+              onClick: () => {
+                setReachAsk(true);
+                thisRef.current?.scrollIntoView({ block: "center" });
+              },
+            }
+          : { duration: 6000 }
+      );
       // The joined device's settings were just adopted here.
       void fetchSettingsDoc().catch(() => {});
       void refreshConfig();
       void loadAll();
     } else if (j.state === "denied" || j.state === "expired") toast(joinLine(j));
   }, [st?.join, loadAll]);
+
+  // Each member's own "ready to work?" summary (read-only; fixes run there).
+  const readiness = useFleetReadiness(!!p.active && !!st?.in_fleet, (st?.members || []).map((m) => m.key));
 
   /** Run one action: busy while it runs, its error as a toast, then refetch. */
   const run = async (key: string, fn: () => Promise<unknown>, ok?: string) => {
@@ -198,6 +290,22 @@ export function Devices(p: ScreenProps) {
   const self = st.members.find((m) => m.self);
   const selfHost = st.self.host || st.self.key;
   const selfVersion = self?.version || "";
+  const selfCommit = self?.commit || "";
+  // A finished rollout stays on screen for a day, then only its effect does.
+  const rollout =
+    st.update &&
+    (st.update.state === "running" ||
+      (st.update.state !== "idle" && now - (st.update.finished_at || 0) < 86400))
+      ? st.update
+      : null;
+  const rolloutRunning = rollout?.state === "running";
+  const behindLine = st.in_fleet ? updateAllLine(st.members, latest) : "";
+  const updateAll = () =>
+    run(
+      "update-all",
+      () => api("/api/fleet/update", { json: latest ? { tag: "v" + latest } : {} }),
+      "Updating your devices one at a time — this one last"
+    );
   const others = st.members.filter((m) => !m.self);
   // A member whose hello lags the group still comes back as a candidate:
   // it is already yours, so it gets no join buttons.
@@ -223,8 +331,15 @@ export function Devices(p: ScreenProps) {
       }
     );
   const joinWithText = () => {
+    // ONE paste box for every code: someone's peer-link invite (mfp1:/mfp2:)
+    // is joined as a link to that person, not sent here.
+    if (routeCode(pasted).kind === "peer") {
+      const code = routeCode(pasted).code;
+      setPasted("");
+      return void joinPeerInvite(code);
+    }
     // A bare code names no device: send it to the one it can be for, or ask.
-    const { body, error } = pasteJoinBody(pasted, candidates, codeFor);
+    const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
     if (!body) {
       if (error) toast(error);
       return;
@@ -245,19 +360,95 @@ export function Devices(p: ScreenProps) {
       "PR review and issue handling run on this device now"
     );
   const auto = st.in_fleet ? automationLine(st.members) : null;
+  const local = st.self_reachable === false;
+  const here = thisDeviceLine(st);
+  const unreachable = (st.admitted || []).filter((a) => a.state === "unreachable_joiner");
+  const match = matchText(st.match);
+  const phone = phoneLinkLine(st.phone_link);
+  const peers = st.tailnet_peers || [];
+  const makeReachable = () =>
+    void (async () => {
+      try {
+        await reach.apply({ reach: true });
+        setReachAsk(false);
+      } catch (e) {
+        toast(errText(e));
+      }
+    })();
+  const reachConfirm = reachAsk && (
+    <InlineConfirm
+      id="devices-reach-confirm"
+      title="Make this device reachable?"
+      body={MAKE_REACHABLE_TEXT}
+      confirmLabel={reach.busy ? (reach.restarting ? "Restarting…" : "Saving…") : "Make reachable"}
+      busy={reach.busy}
+      onConfirm={makeReachable}
+      onCancel={() => setReachAsk(false)}
+    />
+  );
 
   return (
     <>
+      <TailscaleCard active={p.active} />
+      {/* 0. This device: where it listens, and the fix when the others
+          can't reach it. */}
+      {here && (
+        <div
+          className={local ? "devices-warn" : "devices-this"}
+          id="devices-this-device"
+          ref={thisRef}
+          role={local ? "alert" : undefined}
+        >
+          {local && st.in_fleet && <p className="devices-this-title">Your other devices can't reach this one</p>}
+          <p>{here}</p>
+          {local && !reachAsk && (
+            <button
+              type="button"
+              className="test-btn devices-primary"
+              id="devices-make-reachable"
+              disabled={reach.busy}
+              onClick={() => setReachAsk(true)}
+            >
+              Make reachable
+            </button>
+          )}
+          {reachConfirm}
+          {reach.timedOut && (
+            <p className="devices-note warn">MindFlock hasn't come back yet — reload in a moment.</p>
+          )}
+        </div>
+      )}
+      {unreachable.length > 0 && (
+        <div className="devices-warn" id="devices-unreachable-joiners" role="alert">
+          {unreachable.map((a) => (
+            <p key={a.device} data-unreachable={a.device}>
+              {admitLine(a)}
+            </p>
+          ))}
+        </div>
+      )}
       {/* 1. What needs fixing first. */}
       {st.gate_warning && (
         <div className="devices-warn" id="devices-gate-warning" role="alert">
           <p>
             This device's access gate is off and it's reachable on your tailnet — anyone there can
-            control it, and through it your other devices. Turn the gate on in Security.
+            control it, and through it your other devices. With the gate on, your other devices
+            keep working (they use your devices' key); a phone signs in again with the QR in Mobile.
           </p>
-          <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
-            Open Security
-          </button>
+          <div className="devices-actions">
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-gate-on"
+              disabled={!!busy}
+              onClick={() => void run("gate-on", () => turnGateOn(), GATE_ON_NOTE)}
+            >
+              {busy === "gate-on" ? "Turning on…" : "Turn the gate on"}
+            </button>
+            <button type="button" className="test-btn" onClick={() => p.gotoScreen("security")}>
+              Open Security
+            </button>
+          </div>
         </div>
       )}
       {st.stale_key && (
@@ -356,7 +547,8 @@ export function Devices(p: ScreenProps) {
       {st.in_fleet ? (
         <ul className="devices-list" id="devices-members">
           {st.members.map((m) => {
-            const status = memberStatus(m, selfVersion);
+            const status = memberStatus(m, selfVersion, selfCommit);
+            const chips = memberUpdateChips(m, latest);
             const warn = !m.self && (!!m.error || (m.reachable && !!selfVersion && !!m.version && m.version !== selfVersion));
             return (
               <li key={m.key} data-member={m.key} className={m.self ? "is-self" : ""}>
@@ -377,8 +569,18 @@ export function Devices(p: ScreenProps) {
                           runs PR review &amp; issues
                         </span>
                       )}
+                      {chips.map((c) => (
+                        <span
+                          key={c.text}
+                          className={"devices-badge" + (c.warn ? " warn" : "")}
+                          data-update-chip={m.key}
+                        >
+                          {c.text}
+                        </span>
+                      ))}
                     </span>
                     <span className={"devices-note" + (warn ? " warn" : "")}>{status}</span>
+                    <ReadinessLine r={readiness[m.key]} self={m.self} />
                   </span>
                   <button
                     type="button"
@@ -469,6 +671,45 @@ export function Devices(p: ScreenProps) {
           Your devices share settings, sign-in and ticket claims. Add a computer you own:
         </p>
       )}
+      {st.in_fleet && (behindLine || rollout) && (
+        <div className="devices-update" id="devices-update" data-rollout={rollout?.state || "idle"}>
+          {rollout && (
+            <p className={"set-hint" + (rollout.state === "halted" ? " devices-hint-warn" : "")} id="devices-rollout-line">
+              {rolloutLine(rollout)}
+            </p>
+          )}
+          {behindLine && !rolloutRunning && (
+            <p className="set-hint" id="devices-update-line">
+              {behindLine}
+            </p>
+          )}
+          {rollout && (
+            <ul className="devices-update-rows" id="devices-update-rows">
+              {rollout.members.map((r) => (
+                <li
+                  key={r.key}
+                  data-rollout-row={r.key}
+                  data-step={r.step}
+                  className={"devices-note" + (r.step === "failed" ? " warn" : "")}
+                >
+                  {rolloutRowText(r)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {behindLine && !rolloutRunning && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-update-all"
+              disabled={!!busy}
+              onClick={() => void updateAll()}
+            >
+              {busy === "update-all" ? "Starting…" : "Update all my devices to v" + latest}
+            </button>
+          )}
+        </div>
+      )}
       {auto && (
         <div className="set-row set-switch-row" id="devices-run-here" data-runs-here={auto.here ? "1" : "0"}>
           <span className="devices-run-here-text">
@@ -491,6 +732,87 @@ export function Devices(p: ScreenProps) {
         </div>
       )}
 
+      {match && (
+        <div className="set-row set-switch-row" id="devices-match">
+          <span className="devices-run-here-text">
+            <span className="set-label">{match}</span>
+            {matchLeft.length > 0 && (
+              <span className="set-hint devices-hint-warn" id="devices-match-left">
+                Still to do here for the phone link:{" "}
+                {matchLeft.map((m) => m.title + (m.reason ? " (" + m.reason + ")" : "")).join("; ")} — see
+                Settings → Mobile.
+              </span>
+            )}
+          </span>
+          {!matchAsk && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-match-btn"
+              disabled={reach.busy}
+              onClick={() => setMatchAsk(true)}
+            >
+              Match my other devices
+            </button>
+          )}
+        </div>
+      )}
+      {match && matchAsk && (
+        <InlineConfirm
+          id="devices-match-confirm"
+          title={match + "?"}
+          body={
+            (st.match?.reachable ? MAKE_REACHABLE_TEXT + " " : "") +
+            (st.match?.shared_link
+              ? "This device also answers your phone link “" + st.match.shared_link + "”, so your phone reaches whichever of your devices is awake."
+              : "")
+          }
+          confirmLabel={reach.busy ? "Applying…" : "Match"}
+          busy={reach.busy}
+          onConfirm={() =>
+            void (async () => {
+              try {
+                const res: MakeReachableResult | null = await reach.apply({
+                  reach: !!st.match?.reachable,
+                  sharedLink: st.match?.shared_link || "",
+                });
+                setMatchAsk(false);
+                setMatchLeft(
+                  (res?.shared_link?.steps || [])
+                    .filter((x) => x.state === "fail")
+                    .map((x) => ({ id: x.id, title: x.title, reason: x.reason }))
+                );
+              } catch (e) {
+                toast(errText(e));
+              }
+            })()
+          }
+          onCancel={() => setMatchAsk(false)}
+        />
+      )}
+      {phone && st.in_fleet && (
+        <div className="set-row" id="devices-phone-link">
+          <span className="set-hint">{phone.text}</span>
+          {phone.hostHere && (
+            <button
+              type="button"
+              className="test-btn"
+              id="devices-phone-host-here"
+              disabled={!!busy}
+              onClick={() =>
+                void run(
+                  "host-here",
+                  () => api("/api/settings", { json: { general: { shared_link: st.phone_link?.name || "" } } }),
+                  "This device answers your phone link too — Settings → Mobile shows what's left"
+                )
+              }
+            >
+              Host here
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 3. Someone asking to join. */}
       {st.requests.length > 0 && (
         <div className="devices-requests" id="devices-requests">
@@ -504,7 +826,7 @@ export function Devices(p: ScreenProps) {
                   <span className="devices-pin" aria-label={"code " + r.code}>
                     {r.code}
                   </span>
-                  <span className="devices-note">Check the same code shows on {r.host || r.device}.</span>
+                  <span className="devices-note">{requestNote(r)}</span>
                 </span>
                 <button
                   type="button"
@@ -513,9 +835,11 @@ export function Devices(p: ScreenProps) {
                   disabled={!!busy}
                   onClick={() =>
                     void run("approve:" + r.id, async () => {
+                      // One waiting on another member: the answer goes
+                      // there, with the code this screen showed.
                       const res = await api<{ sync_error?: string }>(
                         "/api/fleet/requests/" + encodeURIComponent(r.id) + "/approve",
-                        { method: "POST" }
+                        { json: { via: r.via || "", code: r.code } }
                       );
                       toast(
                         admitToast(r.host || r.device, (r.host || r.device) + " is joining your devices", res?.sync_error),
@@ -533,7 +857,9 @@ export function Devices(p: ScreenProps) {
                   disabled={!!busy}
                   onClick={() =>
                     void run("deny:" + r.id, () =>
-                      api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/deny", { method: "POST" })
+                      api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/deny", {
+                        json: { via: r.via || "" },
+                      })
                     )
                   }
                 >
@@ -547,7 +873,27 @@ export function Devices(p: ScreenProps) {
 
       {/* 4. Add a device: a code for the new computer to type. */}
       <h4 className="set-subtitle">Add a device</h4>
-      {invite ? (
+      {local && !invite ? (
+        <div className="devices-warn" id="devices-invite-blocked">
+          <p>
+            A new computer couldn't use a code made here yet: this one only listens on 127.0.0.1,
+            so nothing else can reach it. Make it reachable first, then add the device.
+          </p>
+          {!reachAsk && (
+            <button
+              type="button"
+              className="test-btn devices-primary"
+              disabled={reach.busy}
+              onClick={() => {
+                setReachAsk(true);
+                thisRef.current?.scrollIntoView({ block: "center" });
+              }}
+            >
+              Make reachable
+            </button>
+          )}
+        </div>
+      ) : invite ? (
         <div className="devices-invite" id="devices-invite">
           <div className="devices-code" id="devices-invite-code">
             {invite.code}
@@ -570,6 +916,7 @@ export function Devices(p: ScreenProps) {
             command). Works once · expires in{" "}
             <span id="devices-invite-countdown">{fmtCountdown(invite.expires_at, now)}</span>.
           </span>
+          <NewComputerLine code={invite.code} />
           <button
             type="button"
             className="test-btn devices-self-start"
@@ -589,8 +936,9 @@ export function Devices(p: ScreenProps) {
             disabled={!!busy}
             onClick={() =>
               void run("invite", async () => {
-                await api("/api/fleet/invite", { json: {} });
+                const inv = await api<{ warning?: string }>("/api/fleet/invite", { json: {} });
                 setNow(Date.now() / 1000);
+                if (inv?.warning === "local_only") setReachAsk(true);
               })
             }
           >
@@ -638,7 +986,11 @@ export function Devices(p: ScreenProps) {
             const name = c.host || c.device;
             const note = blocker || candidateNote(c);
             return (
-              <li key={c.device} data-candidate={c.device}>
+              <li
+                key={c.device}
+                data-candidate={c.device}
+                className={focusDevice === c.device ? "devices-focus" : ""}
+              >
                 <div className="devices-row">
                   <span className={"devices-dot" + (c.reachable ? " on" : "")} aria-hidden="true" />
                   <span className="devices-name">
@@ -747,16 +1099,52 @@ export function Devices(p: ScreenProps) {
             );
           })}
         </ul>
-      ) : (
+      ) : peers.length === 0 ? (
         <p className="set-hint" id="devices-no-candidates">
-          No other MindFlock found on your tailnet. Make sure it's running and signed in to the
-          same Tailscale, then Refresh.
+          No other device shows on your tailnet. Make sure the other computer is signed in to the
+          same Tailscale (Tailscale on this device, above), then Refresh.
         </p>
+      ) : null}
+      {/* Why each other tailnet device isn't listed above. */}
+      {peers.length > 0 && (
+        <ul className="devices-list" id="devices-tailnet-peers">
+          {peers.map((t) => (
+            <li key={t.device} data-peer={t.device} data-outcome={t.outcome}>
+              <div className="devices-row">
+                <span className="devices-dot" aria-hidden="true" />
+                <span className="devices-name">
+                  <strong>{t.host || t.device}</strong>
+                  <span className="devices-note">{t.reason || "not answering"}</span>
+                </span>
+                {t.outcome === "timeout" && st.policy_grant && (
+                  <button
+                    type="button"
+                    className="test-btn"
+                    data-copy-grant={t.device}
+                    onClick={() =>
+                      copyText(st.policy_grant || "").then((ok) =>
+                        toast(
+                          ok
+                            ? "Policy lines copied — paste them into Tailscale's admin console → Access controls (replace the login placeholder if they have one)"
+                            : "Copy failed",
+                          { duration: 6000 }
+                        )
+                      )
+                    }
+                  >
+                    Copy grant
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
       <div className="set-row devices-paste-row">
         <input
           id="devices-paste"
-          placeholder="…or paste the code or command from the other computer"
+          ref={pasteRef}
+          placeholder="Paste a code — from your other computer, or an invite someone sent you"
           autoComplete="off"
           spellCheck={false}
           value={pasted}
@@ -776,7 +1164,9 @@ export function Devices(p: ScreenProps) {
         </button>
         {pasted.trim() && (
           <span className="set-hint devices-join-note" id="devices-paste-note">
-            {joinSettingsNote("")}
+            {routeCode(pasted).kind === "peer"
+              ? "That's an invite from another person — Join links you to them (Work with someone), not to your devices."
+              : joinSettingsNote("")}
           </span>
         )}
       </div>
@@ -1003,6 +1393,7 @@ function SettingsSyncRows(props: {
             ))}
           </ul>
           <span className="set-hint">Install it here and the next sync applies it.</span>
+          <SyncedAgentInstall onDone={() => void reload()} />
         </div>
       )}
 

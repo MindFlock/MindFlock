@@ -124,6 +124,35 @@ describe("pullPrefs", () => {
     expect(kv.data.mf_prefs_dirty).toBe('["theme"]');
   });
 
+  it("an upload the device partly refuses keeps the refused field dirty, settles the rest, and says so", async () => {
+    // A keymap edit on a gate-off device reached from elsewhere: the server
+    // saves the theme and names the keymap in `refused`.
+    const keymap = JSON.stringify({ keys: { palette: "Ctrl+K" } });
+    const kv = memKV({
+      mf_prefs_seeded: "1",
+      cs_theme: "light",
+      mf_keymap: keymap,
+      mf_prefs_dirty: '["keymap","theme"]',
+    });
+    g.localStorage = kv;
+    routes = {
+      "GET /api/prefs": () => ({ theme: "dark", keymap: {} }),
+      "POST /api/prefs": () => ({ theme: "light", keymap: {}, refused: ["keymap"], error: "not here" }),
+      "GET /api/settings": () => ({ settings: {} }),
+    };
+    const prefs = await import("../lib/prefs");
+    const said: string[] = [];
+    prefs.setRefusedListener((_f, m) => said.push(m));
+    const { pullPrefs } = await import("../lib/prefsSync");
+    await pullPrefs();
+    expect(kv.data.mf_prefs_dirty).toBe('["keymap"]');
+    expect(kv.data.mf_keymap).toBe(keymap); // kept, not reverted to the server's
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("keyboard shortcuts");
+    // The pull went on as a success (the accent reconcile ran).
+    expect(calls.map((c) => c.path)).toContain("GET /api/settings");
+  });
+
   it("an unseeded browser's saved prompts are merged with the server's, not replaced", async () => {
     const kv = memKV({ "mindflock.prompt_presets": JSON.stringify([{ name: "A", prompt: "a" }]) });
     g.localStorage = kv;

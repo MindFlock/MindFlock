@@ -100,7 +100,7 @@ import weakref
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -110,6 +110,7 @@ import ptyprocess
 from backend import config, log
 from backend import providers
 from backend import session
+from backend import tailscale_cli as _tailscale_cli
 from backend.providers import config as provider_config
 from backend.providers import effort as _provider_effort
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
@@ -128,6 +129,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import peer_guard as _peer_guard
 from backend.web.core import auth as _auth
+from backend.web.core import tailnet_bind as _tailnet_bind
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import settings_sync as _settings_sync
@@ -325,6 +327,7 @@ from backend.web.core.engine import (
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
 from backend.web.core import self_update as _self_update
+from backend.web.core import update_watch as _update_watch
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -526,10 +529,18 @@ async def lifespan(app: FastAPI):
     _register_task(_remote.instances_loop())
     # Settings sync across the paired devices (a no-op tick while it's off).
     _register_task(_settings_sync.sync_loop())
+    # Engine updates: re-exec onto a finished install with no browser tab
+    # open (core.update_watch), and announce a newer release (update.available).
+    _register_task(_update_watch.watch_loop())
     # Shared phone link: keep the Tailscale Service advertisement applied —
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
     _register_task(_shared_link.recheck_loop(_server_port))
+    # Tailscale mode came up bound to every interface because tailscaled
+    # wasn't running yet (run.py's fallback): narrow the bind once it is
+    # (core.tailnet_bind). Never registered otherwise — nor in tests.
+    if _tailnet_bind.fell_back():
+        _register_task(_tailnet_bind.rebind_loop())
     # Peer links: a no-op unless enabled in settings (no identity, no socket).
     try:
         await _peer_service().start()
@@ -5804,8 +5815,15 @@ def list_instances(request: Request) -> JSONResponse:
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #
 @app.get("/api/remote/hello")
-def remote_hello() -> JSONResponse:
-    """Public identity ping other MindFlock devices use for discovery."""
+def remote_hello(request: Request) -> JSONResponse:
+    """Public identity ping other MindFlock devices use for discovery.
+
+    The desktop shell's own engine check sends ``X-MindFlock-Shell: <its
+    version>`` from this machine; that is remembered and reported here as
+    ``shell_version`` (see :func:`backend.web.core.remote.note_shell_version`)."""
+    shell = request.headers.get(_remote.SHELL_HEADER)
+    if shell and _auth._from_this_machine(request.scope):
+        _remote.note_shell_version(shell)
     return JSONResponse(_remote.hello_json())
 
 
@@ -6133,7 +6151,7 @@ def recheck_shared_link(request: Request) -> JSONResponse:
 
 
 @app.post("/api/server/restart")
-def post_server_restart() -> JSONResponse:
+def post_server_restart(payload: Optional[dict] = None) -> JSONResponse:
     """Re-exec the server process so a changed serve mode (Settings → Mobile
     toggle) takes effect without the user finding the right terminal.
 
@@ -6141,15 +6159,22 @@ def post_server_restart() -> JSONResponse:
     are tmux sessions, ingestion is its own process, and state is on disk.
     Clients (desktop app, /m) already retry until the server answers again.
 
-    The re-exec deliberately drops the mode from both places it could linger —
-    ``CS_WEB_MODE`` (exported by run.py at boot) and any mode token in argv —
-    so the fresh process falls through to the *persisted* general.serve_mode
-    instead of resurrecting the mode this process happened to boot with.
+    By default the re-exec deliberately drops the mode from both places it
+    could linger — ``CS_WEB_MODE`` (exported by run.py at boot) and any mode
+    token in argv — so the fresh process falls through to the *persisted*
+    general.serve_mode instead of resurrecting the mode this process happened
+    to boot with. ``{"keep_mode": true}`` (``mindflock restart``, install.sh)
+    comes back in the mode it runs in instead: that restart is about picking
+    up a new engine, not about a changed setting.
     """
+    keep_mode = bool((payload or {}).get("keep_mode"))
     # An explicit restart is a fresh intent: whatever the automatic
     # tailscale-mode retries (core.restart) already spent, this one starts over.
     _restart.reset_tailscale_attempts()
-    _restart.reexec_soon()
+    if keep_mode:
+        _restart.reexec_soon(keep_mode=True)
+    else:
+        _restart.reexec_soon()
     return JSONResponse({"ok": True, "restarting": True})
 
 
@@ -6179,9 +6204,13 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
         release = None
     latest = (release or {}).get("version", "")
     blocked = _self_update.blocked_reason()
+    # Settles a dead installer as interrupted before the state is read.
+    await asyncio.to_thread(_self_update.running)
+    st = _self_update.read_state()
     return JSONResponse(
         {
             "current": current,
+            "commit": _self_update.installed_commit(),
             "latest": latest,
             "tag": (release or {}).get("tag", ""),
             "release_url": (release or {}).get("url", ""),
@@ -6191,20 +6220,56 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
             "kind": _self_update.install_kind(),
             "blocked": blocked,
             "repo": _self_update.UPDATE_REPO,
-            "state": _self_update.read_state().get("state", "idle"),
+            "state": st.get("state", "idle"),
+            # The install finished but this process isn't running it yet: the
+            # screen says "Installed — restarting…", never "Update to vX" again.
+            "restart_pending": _self_update.restart_pending(st),
+            # The last update's outcome, for "was interrupted — Try again" and
+            # "rolled back to vX (see log)".
+            "last": {
+                k: st[k]
+                for k in ("ref", "version", "from_version", "error", "code", "healthy")
+                if k in st
+            },
         }
     )
 
 
 @app.post("/api/update/start")
-async def post_update_start(payload: Optional[dict] = None) -> JSONResponse:
+async def post_update_start(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Install the newest release (or an explicit ``ref``) and report back.
 
     The ref is resolved server-side by default rather than taken from the
     client: the button says "update to the newest version", and the newest
     version is not something a stale settings screen should get to decide.
+
+    Only the owner may start one (:func:`backend.web.core.auth.privileged` —
+    a credential, this machine, or a trusted tailnet account; never a request
+    another MindFlock relays): with the gate off, any tailnet node could
+    otherwise reinstall this engine. And an explicit ``ref`` from anywhere
+    but this machine must be a published release tag at or above the running
+    version (:func:`~backend.web.core.self_update.check_remote_ref`) — a
+    branch or a downgrade is a developer's move, made at this keyboard.
     """
+    try:
+        allowed = bool(await _auth.privileged(request.scope))
+    except Exception:  # noqa: BLE001 — fail closed
+        allowed = False
+    if not allowed:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "updates can only be started by this device's owner",
+            },
+            status_code=403,
+        )
     ref = str((payload or {}).get("ref", "") or "").strip()
+    if ref and not _auth._from_this_machine(request.scope):
+        reason, status = await _self_update.check_remote_ref(ref)
+        if reason:
+            return JSONResponse({"ok": False, "error": reason}, status_code=status)
     if not ref:
         try:
             release = await _self_update.latest_release()
@@ -6238,7 +6303,8 @@ def get_update_state() -> JSONResponse:
     state, restart_now = _self_update.finish_state()
     if restart_now:
         _restart.reset_tailscale_attempts()
-        _restart.reexec_soon()
+        # Same mode as now (see core.update_watch).
+        _restart.reexec_soon(keep_mode=True)
     return JSONResponse({**state, "restarting": restart_now})
 
 
@@ -6424,7 +6490,9 @@ def _capabilities() -> dict:
     """
     return {
         "git": git_available(),
-        "tailscale": shutil.which("tailscale") is not None,
+        # A CLI this machine can use (PATH, the macOS app bundle, or
+        # $MINDFLOCK_TAILSCALE_BIN) — not Windows Tailscale seen from WSL.
+        "tailscale": _tailscale_cli.available(),
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
         "agent_mcp": _agent_mcp_caps(),
@@ -8547,7 +8615,7 @@ def _sessions_on_worktree(wt: str) -> int:
 
 @app.post("/api/instances/{title}/red-zones")
 async def instance_red_zones_add(
-    title: str, payload: Optional[dict] = None
+    title: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
     """Add a zone from a session: ``{"pattern", "name", "note", "kind":
     "red"|"green", "scope": "repo"|"worktree", "tell_agent", "exempt"}``.
@@ -8562,7 +8630,12 @@ async def instance_red_zones_add(
     new scope is EXEMPT by default (``"exempt": false`` = treat them as
     breaches) — ``exempt`` / ``committed_outside`` in the answer. The same
     pattern as both kinds → 409. ``tell_agent`` sends the notice (queued
-    mid-turn); a green notice never says "revert"."""
+    mid-turn); a green notice never says "revert".
+
+    A REPO-scope zone reaches every worktree of the repo (and settings sync
+    spreads it), so it is the owner's only (``auth.may_configure``, 403) —
+    as on ``POST /api/red-zones``; a worktree zone is part of driving this
+    session."""
     if not git_available():
         return _no_git_response()
     inst, wt, err = _wt_or_409(title)
@@ -8578,6 +8651,8 @@ async def instance_red_zones_add(
         return JSONResponse(
             {"error": "scope must be 'repo' or 'worktree'"}, status_code=400
         )
+    if scope == "repo" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     if kind == "green" and scope != "worktree":
         return JSONResponse(
             {
@@ -8871,17 +8946,29 @@ def _green_preview(inst, wt: str, pattern: str, base: dict) -> dict:
 
 @app.delete("/api/instances/{title}/red-zones/{zone_id}")
 async def instance_red_zones_delete(
-    title: str, zone_id: str, tell_agent: Optional[bool] = None
+    title: str, zone_id: str, request: Request, tell_agent: Optional[bool] = None
 ) -> JSONResponse:
     """Remove a zone (whatever its scope) and re-sync the guards it reached.
     Removing a GREEN zone narrows the scope: work already done inside it is
     exempted (it was legitimate), and the agent is told (``?tell_agent=0``
-    to skip). A red removal never messages the agent (as in v2)."""
+    to skip). A red removal never messages the agent (as in v2).
+
+    Only a zone scoped to THIS session's worktree is part of driving the
+    session; any other (a repo zone, another worktree's) is the owner's only
+    (``auth.may_configure``, 403)."""
     if not git_available():
         return _no_git_response()
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
+    where = await asyncio.to_thread(_red_zones.find_zone, zone_id)
+    if where is None:
+        return JSONResponse({"error": "unknown zone: %s" % zone_id}, status_code=404)
+    own = where["scope"] == "worktree" and os.path.realpath(
+        where["owner"]
+    ) == os.path.realpath(wt)
+    if not own and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
 
     def _del():
         repo_id, _repo = _rz_repo(wt)
@@ -8968,9 +9055,18 @@ async def red_zones_all() -> JSONResponse:
 
 
 @app.post("/api/red-zones")
-async def red_zones_add(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_add(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Add a REPO zone by repo id (``{"repo_id", "pattern", "name", "note",
-    "label"}``) and re-sync every live worktree of that repo."""
+    "label"}``) and re-sync every live worktree of that repo.
+
+    The repo-scope routes here change what agents may edit in every worktree
+    of the repo, and settings sync spreads them: the owner's only
+    (``auth.may_configure``). A session's own zones (``/api/instances/…``)
+    are part of driving that session."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9025,10 +9121,14 @@ async def red_zones_companions(repo_id: str = "") -> JSONResponse:
 
 
 @app.put("/api/red-zones/companions")
-async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_companions_set(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Replace a repo's companion patterns: ``{"repo_id", "patterns": [...],
     "label"?}``. 400 on a missing repo id or any invalid pattern (nothing is
     saved). Live worktrees of the repo are re-synced at once."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     rid = str(p.get("repo_id") or "").strip()
     pats = p.get("patterns")
@@ -9060,9 +9160,13 @@ async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONRespon
 
 
 @app.post("/api/red-zones/plan-first")
-async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
+async def red_zones_plan_first(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Turn a repo's Plan-first flag on/off: its intake sessions (tickets,
     issues, PR reviews) open with the plan-first instruction."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     p = payload or {}
     repo_id = str(p.get("repo_id") or "").strip()
     if not repo_id:
@@ -9079,8 +9183,10 @@ async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
 
 
 @app.delete("/api/red-zones/{zone_id}")
-async def red_zones_delete(zone_id: str) -> JSONResponse:
+async def red_zones_delete(zone_id: str, request: Request) -> JSONResponse:
     """Remove a zone by id (any scope) and re-sync the guards it reached."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
 
     def _del():
         with _red_zone_monitor.route_write():
@@ -11251,7 +11357,11 @@ async def instance_push_branch(
             return err
         # --no-verify: skip the repo's pre-push hook (which re-runs the whole
         # pre-commit stack). The commit step already ran the hooks.
-        _send_to_shell(name, "git push --no-verify -u origin HEAD")
+        # GIT_TERMINAL_PROMPT=0: a missing HTTPS credential fails at once
+        # instead of waiting on a Username prompt nobody may be watching; the
+        # output is kept in the private git dir, where the push watcher reads
+        # an auth failure and says how to fix it (session.push_failed).
+        _send_to_shell(name, _live_stage.push_command(wt))
         # The push is fire-and-forget into the shell — the branch is NOT on
         # origin yet when we return here. A one-shot cache pop would just let the
         # next poll re-cache the stale/None SHA for ~10s, stalling the Make PR
@@ -14538,8 +14648,14 @@ def cursor_autoadopt_status() -> JSONResponse:
 
 
 @app.post("/api/cursor/autoadopt")
-def cursor_autoadopt_set(payload: dict) -> JSONResponse:
-    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``."""
+def cursor_autoadopt_set(
+    payload: dict, allowed: bool = Depends(_auth.configure_allowed)
+) -> JSONResponse:
+    """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``. Owner
+    only (``auth.may_configure``): on, it launches an agent in every folder
+    opened in the IDE."""
+    if not allowed:
+        return _auth.configure_refused()
     global _CURSOR_AUTOADOPT_ENABLED
     _CURSOR_AUTOADOPT_ENABLED = bool((payload or {}).get("enabled"))
     try:
@@ -14715,17 +14831,24 @@ def _peer_service():
     return _svc.get_service()
 
 
-def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    """Another MindFlock relaying never manages peer links here; and a change
+    (an invite, a join, sharing a folder with someone, its perms) needs the
+    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
+    gate-off device, who could otherwise share its folders with a peer of
+    their own."""
     if _remote.from_remote(request):
         return JSONResponse(
             {"error": "peer links can only be managed on this device"},
             status_code=403,
         )
+    if request.method != "GET" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
     return None
 
 
 async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
-    refused = _peer_remote_refusal(request)
+    refused = await _peer_remote_refusal(request)
     if refused is not None:
         return refused
     from backend.peer.service import PeerServiceError
@@ -14760,11 +14883,22 @@ async def peer_status(request: Request) -> JSONResponse:
     return await _peer_call(request, lambda: _peer_service().status())
 
 
+@app.post("/api/peer/enable")
+async def peer_enable(request: Request) -> JSONResponse:
+    """Turn peer links on without minting an invite (the "they're somewhere
+    else" step: the doctor then offers cloudflared before the first invite)."""
+    return await _peer_call(request, _peer_service().enable)
+
+
 @app.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
-    """``{ttl_s?, advertise_host?}`` → ``{invite_id, code, expires_in, host,
-    port}``. ``advertise_host`` overrides the address the code carries (setting
-    ``peer.advertise_host``, else Tailscale, else LAN). The only response that
+    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
+    message, expires_in, host, port, direct, relay?, fallback?}``.
+    ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
+    ``advertise_host`` overrides the address a direct code carries (setting
+    ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
+    ``peer.progress`` events. ``fallback: {reason, text}`` marks a direct
+    invite made because the tunnel wouldn't start. The only response that
     ever contains an invite code; starts the listener."""
     body = await _peer_body(request)
     return await _peer_call(
@@ -14772,6 +14906,8 @@ async def peer_create_invite(request: Request) -> JSONResponse:
         _peer_service().create_invite,
         body.get("ttl_s"),
         str(body.get("advertise_host") or body.get("host") or ""),
+        str(body.get("reach") or "auto"),
+        str(body.get("op_id") or ""),
         status=201,
     )
 
@@ -14783,10 +14919,16 @@ async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
 
 @app.post("/api/peer/join")
 async def peer_join(request: Request) -> JSONResponse:
-    """``{code}`` → the new link (with its SAS to compare out of band)."""
+    """``{code, op_id?}`` → the link (with its safety number to compare out
+    of band) and ``reconnected`` — true when the code re-paired someone
+    already linked (same link, share kept)."""
     body = await _peer_body(request)
     return await _peer_call(
-        request, _peer_service().join, str(body.get("code") or ""), status=201
+        request,
+        _peer_service().join,
+        str(body.get("code") or ""),
+        str(body.get("op_id") or ""),
+        status=201,
     )
 
 
@@ -14813,6 +14955,48 @@ async def peer_set_address(link_id: str, request: Request) -> JSONResponse:
         link_id,
         str(body.get("address") or ""),
     )
+
+
+@app.post("/api/peer/links/{link_id}/verified")
+async def peer_set_verified(link_id: str, request: Request) -> JSONResponse:
+    """``{verified: bool}`` — "It matches": the safety number was compared."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _peer_service().set_verified, link_id, body.get("verified")
+    )
+
+
+@app.get("/api/peer/links/{link_id}/messages")
+async def peer_messages(link_id: str, request: Request) -> JSONResponse:
+    """The link's message log, both directions → ``{messages: [{id, dir,
+    by, text, ts, delivered_to, read}], unread}``. Read-only."""
+    try:
+        limit = int(request.query_params.get("limit") or 100)
+    except ValueError:
+        limit = 100
+    return await _peer_call(request, _peer_service().messages, link_id, limit)
+
+
+@app.post("/api/peer/links/{link_id}/messages/read")
+async def peer_messages_read(link_id: str, request: Request) -> JSONResponse:
+    return await _peer_call(request, _peer_service().mark_messages_read, link_id)
+
+
+@app.post("/api/peer/links/{link_id}/message")
+async def peer_send_message(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — you, messaging the peer directly (no shared session
+    needed on either side) → ``{msg_id, delivered}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _peer_service().human_message, link_id, body.get("text")
+    )
+
+
+@app.get("/api/peer/links/{link_id}/diff")
+async def peer_their_changes(link_id: str, request: Request) -> JSONResponse:
+    """The peer's shared-folder changes, read-only (their ``diff``; their
+    permissions decide) → ``{stat, diff, truncated}``."""
+    return await _peer_call(request, _peer_service().their_changes, link_id)
 
 
 @app.post("/api/peer/links/{link_id}/perms")

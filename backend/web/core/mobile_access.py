@@ -23,13 +23,12 @@ the routes reference them through the server namespace).
 
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import subprocess
 import sys
 from typing import Optional, Tuple
 
+from backend import tailscale_cli as _tailscale_cli
 from backend.web.core import auth as _auth
 from backend.web.core import shared_link as _shared_link
 
@@ -65,38 +64,26 @@ def _server_port() -> int:
 
 
 def _tailscale_info() -> tuple:
-    """``(magicdns_name | None, ipv4 | None)`` for this node if Tailscale is up."""
-    if shutil.which("tailscale") is None:
+    """``(magicdns_name | None, ipv4 | None)`` for this node if Tailscale is up.
+
+    No name while the tailnet has MagicDNS switched off: the name wouldn't
+    resolve on a phone, so the QR and URLs lead with the IP instead."""
+    data = _tailscale_cli.status_json()
+    if data is None:
         return None, None
-    name = ip = None
-    try:
-        cp = subprocess.run(
-            ["tailscale", "status", "--json"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if cp.returncode == 0:
-            data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
-            self_ = data.get("Self") or {}
-            dns = (self_.get("DNSName") or "").rstrip(".")
-            if dns:
-                name = dns
-            for a in self_.get("TailscaleIPs") or []:
-                if ":" not in a:  # first IPv4
-                    ip = a
-                    break
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        pass
-    return name, ip
+    self_ = data.get("Self") or {}
+    name = (self_.get("DNSName") or "").rstrip(".") or None
+    if (data.get("CurrentTailnet") or {}).get("MagicDNSEnabled") is False:
+        name = None
+    return name, _tailscale_cli.self_ipv4(data) or None
 
 
 def _tailscale_serves_port(port: int) -> bool:
     """True if ``tailscale serve`` is proxying HTTPS to this server's port."""
-    if shutil.which("tailscale") is None:
+    if _tailscale_cli.tailscale_bin() is None:
         return False
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             ["tailscale", "serve", "status"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -279,7 +266,8 @@ def _mobile_banner(*, for_log: bool = False) -> str:
         qr_url = "https://%s/m" % name
         lines.append("  │  Tailscale:  %s   (via `tailscale serve`)" % qr_url)
     elif name or ip:
-        # Direct access — requires uvicorn bound to 0.0.0.0 (not 127.0.0.1).
+        # Direct access — requires tailscale mode (uvicorn bound to this
+        # node's Tailscale addresses too, not just 127.0.0.1).
         if name:
             qr_url = "http://%s:%d/m" % (name, port)
             lines.append("  │  Tailscale:  %s" % qr_url)
@@ -405,7 +393,9 @@ def _mobile_info(include_tokens: bool = True) -> dict:
     note = None
     qr_url = None
     serve_mode = _serve_mode_setting()
-    shared = _shared_link.status()
+    # The owner's login goes into the policy snippet only for a caller that
+    # may see it (the same rule as the phone-app step's login).
+    shared = _shared_link.status(_shared_link.owner_login() if include_tokens else "")
     shared_url = _shared_link.advertised_url()
     if shared.get("enabled"):
         shared["devices"] = _shared_link_devices(shared["name"])
@@ -458,6 +448,42 @@ def _mobile_info(include_tokens: bool = True) -> dict:
         "serve_mode": serve_mode,
         "note": note,
         "shared": shared,
+        "phone_app": _phone_app(bool(include_tokens)),
+    }
+
+
+#: Where a phone gets Tailscale (the page sends iOS/Android to their store).
+PHONE_APP_URL = "https://tailscale.com/download"
+
+
+def _tailscale_login() -> str:
+    """The Tailscale account the phone should sign in as: this device's own
+    login, else — on a tagged device, which belongs to no login — the one
+    person owning the tailnet's untagged devices. ``""`` when unclear."""
+    try:
+        from backend.web.core import tailnet_trust as _trust
+
+        h = _tailscale_cli.health()
+        if h.get("user"):
+            return h["user"]
+        logins = _trust.status().get("logins") or []
+        return logins[0] if len(logins) == 1 else ""
+    except Exception:  # noqa: BLE001 — copy only
+        return ""
+
+
+_PHONE_APP_QR: list = []
+
+
+def _phone_app(include_login: bool) -> dict:
+    """Step 1 of phone setup: Tailscale on the phone, signed in to the same
+    account — without it the MindFlock QR opens a URL that just hangs."""
+    if not _PHONE_APP_QR:
+        _PHONE_APP_QR.append(_server()._mobile_svg(PHONE_APP_URL) or "")
+    return {
+        "url": PHONE_APP_URL,
+        "qr_svg": _PHONE_APP_QR[0],
+        "login": _tailscale_login() if include_login else "",
     }
 
 

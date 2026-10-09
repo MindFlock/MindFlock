@@ -14,6 +14,16 @@ import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { InstallMissing, type InstallStep } from "./InstallTerminal";
+import { AgentSignIn, signInTarget } from "./AgentSignIn";
+import { ConnectGitHub } from "./ConnectGitHub";
+import {
+  STATUS_GLYPH,
+  stepNumber,
+  visibleSteps,
+  type OnboardingPlan,
+  type OnboardingStep,
+  type StepId,
+} from "../../lib/onboarding";
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -23,6 +33,10 @@ export interface DoctorCheckItem {
   status?: "ok" | "info" | "warn" | "fail" | string;
   detail?: string;
   fix?: string;
+  /** The runnable fix (an agent-auth row's declared login command). */
+  cmd?: string;
+  /** The agent provider an agent row is about (drives "Sign in to …"). */
+  provider?: string;
 }
 
 export interface DoctorPayload {
@@ -58,6 +72,27 @@ export function useDoctorWarn() {
 }
 
 let setupAutoShown = false; // auto-open the setup dialog at most once per load
+
+/** The desktop app's first-run hand-off: after installing the engine it opens
+ * the app with `?setup=install`, asking for the Setup dialog on its
+ * Dependencies step (tmux and the agent CLI are still missing — the engine
+ * install can't do them without a terminal). Returns whether it was asked for,
+ * and strips the parameter so a reload doesn't ask again. */
+export function consumeSetupIntent(
+  loc: { search: string; pathname: string; hash: string } = window.location,
+  hist: { replaceState(data: unknown, unused: string, url?: string): void } = window.history
+): boolean {
+  const params = new URLSearchParams(loc.search);
+  if (params.get("setup") !== "install") return false;
+  params.delete("setup");
+  const q = params.toString();
+  try {
+    hist.replaceState(null, "", loc.pathname + (q ? "?" + q : "") + loc.hash);
+  } catch {
+    /* a URL we can't rewrite still opened the dialog */
+  }
+  return true;
+}
 
 /** Should a failing doctor probe pop the first-run checklist at this user?
  *
@@ -109,6 +144,12 @@ export function useDoctorAutoShow() {
   const failing = useDoctorWarnStore((s) => s.failing);
 
   useEffect(() => {
+    // Asked for by the desktop app's first run: open now, whatever the probe
+    // says, and spend the once-per-load latch on it.
+    if (consumeSetupIntent()) {
+      setupAutoShown = true;
+      useUi.getState().openDialogFor("setup");
+    }
     const check = async () => {
       try {
         const d = await api<DoctorPayload>("/api/doctor");
@@ -185,6 +226,13 @@ export function DoctorList({ reprobeKey }: { reprobeKey?: number }) {
             <span className="doctor-detail">
               {c.detail || ""}
               {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
+              {signInTarget(c) && (
+                <AgentSignIn
+                  provider={signInTarget(c) as string}
+                  className="doctor-signin"
+                  onDone={() => setInstalled((n) => n + 1)}
+                />
+              )}
             </span>
           </li>
         ))}
@@ -242,7 +290,25 @@ export async function runGithubTest(): Promise<TestState> {
   }
 }
 
-/** The ①②③ checklist (empty-state card + the Setup dialog).
+/** One plan step's status line: its glyph and the server's reason. */
+function StepReason({ step }: { step?: OnboardingStep }) {
+  if (!step || !step.reason) return null;
+  return (
+    <p className={"setup-reason st-" + step.status} data-step-status={step.status}>
+      {(STATUS_GLYPH[step.status] || "•") + " " + step.reason}
+    </p>
+  );
+}
+
+/** The first-run plan, step by step (empty-state card + the Setup dialog).
+ *
+ * The order and every step's status come from the server's plan (GET
+ * /api/onboarding — the same one `mindflock init` prints): Dependencies →
+ * "First computer, or join one you already have?" → agent sign-in →
+ * Tailscale (only when going multi-device) → Connect GitHub → first session.
+ * The devices question comes before the agent and GitHub steps because
+ * joining brings the default agent, the GitHub token and ticket sources —
+ * never the agent's sign-in, which stays on each computer.
  *
  * `standalone` is the grid's first-run card identifying itself, and nothing
  * renders differently for it: it used to switch on a self-dismissal that could
@@ -255,10 +321,57 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
   const [gh, setGh] = useState<TestState>(idleTest);
   const [sc, setSc] = useState<TestState>(idleTest);
   const [agent, setAgent] = useState<TestState>(idleTest);
+  // The default agent's provider when it has no login yet (from the doctor's
+  // agent-auth row, then from each agent test) — offers "Sign in to …".
+  const [signIn, setSignIn] = useState<string | null>(null);
   const [scToken, setScToken] = useState("");
+  const [plan, setPlan] = useState<OnboardingPlan | null>(null);
+  const [choosing, setChoosing] = useState(false);
+
+  const loadPlan = useCallback(async (refresh = false) => {
+    try {
+      setPlan(await api<OnboardingPlan>("/api/onboarding" + (refresh ? "?refresh=1" : "")));
+    } catch {
+      /* the steps still work from their own probes */
+    }
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    void loadPlan();
+    api<DoctorPayload>("/api/doctor")
+      .then((d) => {
+        if (live) setSignIn(signInTarget((d.checks || []).find((c) => c.id === "agent-auth")));
+      })
+      .catch(() => {
+        /* the checklist above reports an unreachable doctor */
+      });
+    return () => {
+      live = false;
+    };
+  }, [loadPlan]);
+
+  const step = (id: StepId) => plan?.steps.find((x) => x.id === id);
+  const shown = visibleSteps(plan);
+  const num = (id: StepId) => stepNumber(id, shown);
 
   const closeSetup = () => {
     if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
+  };
+  const openDevices = () => {
+    closeSetup();
+    useUi.getState().openDialogFor("settings", "devices");
+  };
+
+  const choose = async (choice: "first" | "join" | "") => {
+    setChoosing(true);
+    try {
+      setPlan(await api<OnboardingPlan>("/api/onboarding/choice", { json: { choice } }));
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setChoosing(false);
+    }
   };
 
   const testGithub = useCallback(async () => {
@@ -300,10 +413,11 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
   const testAgent = useCallback(async () => {
     setAgent({ testing: true });
     try {
-      const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: { detail?: string } }>(
+      const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: DoctorCheckItem }>(
         "/api/settings/test/agent",
         { method: "POST" }
       );
+      setSignIn(signInTarget(r?.auth));
       const bits: string[] = [];
       if (r?.cli?.detail) bits.push(r.cli.detail);
       if (r?.auth?.detail) bits.push(r.auth.detail);
@@ -315,36 +429,183 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
     } catch (e) {
       setAgent({ testing: false, ok: false, msg: (e as Error).message });
     }
-  }, []);
+    void loadPlan(true);
+  }, [loadPlan]);
+
+  const devices = step("devices");
+  const agentStep = step("agent");
+  const tsStep = step("tailscale");
+  const ghStep = step("github");
 
   return (
     <>
-      <div className="setup-step">
+      <div className="setup-step" data-step="deps">
         <h3>
-          <span className="setup-num">①</span> Dependencies
+          <span className="setup-num">{num("deps")}</span> Dependencies
         </h3>
         <div className="setup-doctor">
           <DoctorList reprobeKey={reprobeKey} />
         </div>
         <div className="setup-actions">
-          <button type="button" className="setup-recheck" onClick={(e) => { e.stopPropagation(); setReprobeKey((k) => k + 1); }}>
+          <button
+            type="button"
+            className="setup-recheck"
+            onClick={(e) => {
+              e.stopPropagation();
+              setReprobeKey((k) => k + 1);
+              void loadPlan(true);
+            }}
+          >
             Re-check
           </button>
         </div>
       </div>
-      <div className="setup-step">
+
+      <div className="setup-step setup-devices" data-step="devices">
         <h3>
-          <span className="setup-num">②</span> Accounts
+          <span className="setup-num">{num("devices")}</span> First computer, or join one you already
+          have?
         </h3>
-        <div className="setup-acct-row">
-          <button type="button" className="setup-test-agent" onClick={(e) => { e.stopPropagation(); testAgent(); }}>
-            Test agent CLI
-          </button>
-          <TestResult state={agent} />
+        {!plan ? (
+          <p className="muted setup-hint">Checking…</p>
+        ) : devices?.ask ? (
+          <>
+            <p className="muted setup-hint">
+              Already use MindFlock on another computer? Join it first: your settings, GitHub token
+              and ticket sources come along. (Agent sign-ins stay on each computer, so you sign in
+              here after.)
+            </p>
+            <div className="setup-actions">
+              <button
+                type="button"
+                className="setup-first-computer"
+                disabled={choosing}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void choose("first");
+                }}
+              >
+                This is my first computer
+              </button>
+              <button
+                type="button"
+                className="setup-join-computer"
+                disabled={choosing}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void choose("join");
+                }}
+              >
+                Join one I already have
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <StepReason step={devices} />
+            <div className="setup-actions">
+              {devices?.choice === "join" && devices.status !== "ok" && (
+                <button
+                  type="button"
+                  className="setup-open-devices"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openDevices();
+                  }}
+                >
+                  Join it in Settings → Devices
+                </button>
+              )}
+              {devices?.status !== "ok" || devices?.choice === "first" ? (
+                <button
+                  type="button"
+                  className="linklike setup-devices-change"
+                  disabled={choosing}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void choose("");
+                  }}
+                >
+                  Change
+                </button>
+              ) : null}
+            </div>
+            {devices?.choice === "join" && devices.status !== "ok" && (
+              <p className="muted setup-hint">
+                On your other computer: Settings → Devices → Add a device shows a code to paste
+                here — and, for a computer with nothing installed yet, one line that installs
+                MindFlock and joins in one go.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="setup-step" data-step="agent">
+        <h3>
+          <span className="setup-num">{num("agent")}</span> Sign in to your agent
+        </h3>
+        {agentStep?.status === "skip" ? (
+          <StepReason step={agentStep} />
+        ) : (
+          <>
+            <StepReason step={agentStep} />
+            <div className="setup-acct-row">
+              <button
+                type="button"
+                className="setup-test-agent"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  testAgent();
+                }}
+              >
+                Test agent CLI
+              </button>
+              <TestResult state={agent} />
+              {signIn && <AgentSignIn provider={signIn} onDone={() => void testAgent()} />}
+            </div>
+          </>
+        )}
+      </div>
+
+      {shown.includes("tailscale") && (
+        <div className="setup-step" data-step="tailscale">
+          <h3>
+            <span className="setup-num">{num("tailscale")}</span> Tailscale
+          </h3>
+          <StepReason step={tsStep} />
+          {tsStep?.status === "todo" && tsStep.fix && (
+            <p className="setup-hint">
+              fix: <code>{tsStep.fix}</code>
+            </p>
+          )}
+          {tsStep?.status === "todo" && (
+            <div className="setup-actions">
+              <button
+                type="button"
+                className="setup-open-tailscale"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openDevices();
+                }}
+              >
+                Sign in in Settings → Devices
+              </button>
+            </div>
+          )}
         </div>
-        {/* The agent CLI is the one account a first session needs. GitHub and
-            Shortcut matter only once you push or pull tickets, so their tests
-            sit folded rather than reading like two more required steps. */}
+      )}
+
+      <div className="setup-step" data-step="github">
+        <h3>
+          <span className="setup-num">{num("github")}</span> Connect GitHub
+        </h3>
+        {ghStep?.status === "skip" ? (
+          <StepReason step={ghStep} />
+        ) : (
+          <ConnectGitHub onChange={() => void loadPlan()} />
+        )}
+        {/* The account tests and a Shortcut token: handy, never a step. */}
         <details className="setup-optional" onClick={(e) => e.stopPropagation()}>
           <summary>Optional: test GitHub or a Shortcut token</summary>
           <div className="setup-acct-row">
@@ -354,18 +615,28 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
               // What the welcome tour's old PR-review slide used to say: the
               // token is what onboarding asks for, never a gh login.
               title={
-                "Checks that a GitHub token resolves (Intake → Pull requests, $GH_TOKEN / $GITHUB_TOKEN, " +
+                "Checks that a GitHub token resolves (Connect GitHub above, $GH_TOKEN / $GITHUB_TOKEN, " +
                 "or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI " +
                 "is optional, and pushing is plain git push over your own remote."
               }
-              onClick={(e) => { e.stopPropagation(); testGithub(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                testGithub();
+              }}
             >
               Test GitHub
             </button>
             <TestResult state={gh} />
           </div>
           <div className="setup-acct-row setup-shortcut-row">
-            <button type="button" className="setup-test-shortcut" onClick={(e) => { e.stopPropagation(); testShortcut(); }}>
+            <button
+              type="button"
+              className="setup-test-shortcut"
+              onClick={(e) => {
+                e.stopPropagation();
+                testShortcut();
+              }}
+            >
               Test Shortcut
             </button>
             <input
@@ -382,7 +653,7 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           </div>
         </details>
         <p className="muted setup-hint">
-          Ticket and GitHub tokens are set up in{" "}
+          Ticket sources are set up in{" "}
           <button
             type="button"
             className="setup-open-intake linklike"
@@ -394,7 +665,7 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           >
             Intake
           </button>
-          {" · agent logins in "}
+          {" · agent accounts in "}
           <button
             type="button"
             className="setup-open-settings linklike"
@@ -408,10 +679,12 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           </button>
         </p>
       </div>
-      <div className="setup-step">
+
+      <div className="setup-step" data-step="repo">
         <h3>
-          <span className="setup-num">③</span> Create your first session
+          <span className="setup-num">{num("repo")}</span> Create your first session
         </h3>
+        <StepReason step={step("repo")} />
         <div className="setup-actions">
           <button
             type="button"
@@ -426,22 +699,6 @@ export function SetupChecklist(_props: { standalone?: boolean }) {
           </button>
         </div>
       </div>
-      {/* Not a step: a second computer skips most of the above by joining the
-          first one — its settings, sign-in and ticket claims come along. */}
-      <p className="muted setup-hint setup-optional setup-devices">
-        Already use MindFlock on another computer?{" "}
-        <button
-          type="button"
-          className="setup-open-devices linklike"
-          onClick={(e) => {
-            e.stopPropagation();
-            closeSetup();
-            useUi.getState().openDialogFor("settings", "devices");
-          }}
-        >
-          Connect it
-        </button>
-      </p>
     </>
   );
 }

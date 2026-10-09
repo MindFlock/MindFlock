@@ -6,17 +6,22 @@ instance's identity, the persisted :class:`LinkStore`, the in-memory
 one :class:`EgressProxy` (``run/egress.sock``) and one :class:`AgentApi`
 (``run/agent.sock``, a fresh random token each time it starts).
 
-It is also the transport's handler: an inbound ``msg`` lands in the bound
-session's mailbox as ``peer:<name>``; ``diff`` / ``read_file`` /
+It is also the transport's handler: an inbound ``msg`` is logged per link
+(:mod:`backend.peer.inbox`) and lands in the bound session's mailbox as
+``peer:<name>`` — or, with no shared session, waits in the link's messages
+for the people (and for a share bound later); ``diff`` / ``read_file`` /
 ``list_files`` / ``status`` read OUR share, after OUR ``link.perms`` say yes.
 
 The TLS listener runs only while peer links are enabled AND an invite or a
 listener-role link exists (:meth:`sync_listener`). With ``peer.relay`` on
-(``cloudflare`` or ``url``) the same rule governs the relay instead: the
+(``cloudflare`` or ``url``) the same rule governs the relay too: the
 loopback relay ingress (:mod:`backend.peer.relay`) plus, for ``cloudflare``,
-a ``cloudflared`` quick tunnel (:mod:`backend.peer.tunnel`); the direct TCP
-listener then stays closed. The relay only ever forwards to that ingress —
-never to the HTTP API.
+a ``cloudflared`` quick tunnel (:mod:`backend.peer.tunnel`). The direct TCP
+listener then runs only for what still needs it — a direct invite (the
+user's choice, or the fallback when the tunnel won't start) or a link whose
+peer reaches us directly (``carrier == "tcp"``) — so installing cloudflared
+never strands a tailnet/LAN link. The relay only ever forwards to that
+ingress — never to the HTTP API.
 
 Nothing here returns a secret except :meth:`create_invite`, whose code is the
 one value the user has to pass on.
@@ -58,6 +63,26 @@ _SHARE_OPS = ("diff", "read_file", "list_files")
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
 _TITLE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+#: How an invite should reach its person: ``auto`` (the relay when one is on,
+#: else direct; in ``peer.relay = "auto"`` a tunnel that won't start falls
+#: back to direct, labelled), ``tunnel`` (the relay or nothing), ``direct``
+#: (this machine's tailnet/LAN address, whatever the relay setting).
+REACH_MODES = ("auto", "tunnel", "direct")
+_OP_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+# What the wire refuses in message text (it allows tab, newline, CR).
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ud800-\udfff]")
+
+#: The line ``peer.progress`` carries for each stage of a slow invite/join.
+PROGRESS_TEXT = {
+    "relay": "Starting the relay — this can take up to a minute…",
+    "fallback": "The relay isn't available — making a direct invite instead…",
+    "ready": "Invite ready.",
+    "waiting_relay": "Waiting for their relay to come online (up to a minute)…",
+    "connecting": "Connecting…",
+    "verifying": "Checking it's really them…",
+    "done": "Connected.",
+}
 
 INVITE_TTL_DEFAULT_S = 600
 INVITE_TTL_MIN_S = 60
@@ -217,6 +242,10 @@ class PeerService:
         self._relay_lock = asyncio.Lock()
         self._relay_restart: Optional[asyncio.Task] = None
         self._relay_backoff = RELAY_RESTART_INITIAL_S
+        # Invites minted to this machine's direct address while a relay is on
+        # (the user chose direct, or the tunnel failed): they need the TCP
+        # listener. Pruned against the book's live invites.
+        self._direct_invites: set = set()
 
     # ------------------------------------------------------------------ #
     # Collaborators (lazy)
@@ -357,9 +386,35 @@ class PeerService:
             pass
         return any(_get(l, "role") == "listener" for l in self.store.list())
 
+    def _active_invite_ids(self) -> set:
+        try:
+            return {
+                str(_get(i, "invite_id") or "") for i in list(self.invites.active())
+            }
+        except Exception:  # noqa: BLE001
+            return set()
+
+    def _carriers_needed(self) -> tuple:
+        """``(direct, relay)``: what the invites and listener-role links need
+        while a relay is on. A link whose carrier isn't known yet (paired
+        before carriers were recorded) counts for both until it connects."""
+        live = self._active_invite_ids()
+        self._direct_invites &= live
+        direct = bool(self._direct_invites)
+        relay = bool(live - self._direct_invites)
+        for link in self.store.list():
+            if _get(link, "role") != "listener":
+                continue
+            carrier = _get(link, "carrier") or ""
+            direct = direct or carrier in ("tcp", "")
+            relay = relay or carrier in ("relay", "")
+        return direct, relay
+
     async def sync_listener(self) -> None:
-        """Run the TLS listener — or, with ``peer.relay`` on, the relay —
-        exactly while it is needed."""
+        """Run the TLS listener and/or the relay exactly while needed: with
+        ``peer.relay`` off, the listener for every invite and listener link;
+        with it on, the relay for relayed ones and the listener only for
+        direct ones (:meth:`_carriers_needed`)."""
         needed = self._listener_needed()
         if self._transport is None and not needed:
             await self._stop_relay()
@@ -367,17 +422,20 @@ class PeerService:
         t = self.transport
         listening = bool(getattr(t, "listening", False))
         relay_on = self.relay_mode() != "off"
-        if needed and not relay_on:
-            await self._stop_relay()
-            if not listening:
-                s = self.settings()
-                await _maybe_await(
-                    t.start_listener(s["listen_host"], int(s["listen_port"]))
-                )
-            return
-        if listening:
-            await _maybe_await(t.stop_listener())
+        want_direct, want_relay = False, False
         if needed:
+            if relay_on:
+                want_direct, want_relay = self._carriers_needed()
+            else:
+                want_direct = True
+        if want_direct and not listening:
+            s = self.settings()
+            await _maybe_await(
+                t.start_listener(s["listen_host"], int(s["listen_port"]))
+            )
+        elif listening and not want_direct:
+            await _maybe_await(t.stop_listener())
+        if want_relay:
             try:
                 await self._ensure_relay()
             except PeerServiceError as err:
@@ -542,21 +600,70 @@ class PeerService:
                 try:
                     host = await tun.start()
                 except Exception as err:  # noqa: BLE001 — TunnelError and friends
-                    self._relay_error = str(err)[:200]
-                    raise PeerServiceError(
-                        "could not start the Cloudflare tunnel: %s" % err, 502
-                    ) from err
-                self._tunnel = tun
-                old = self._relay_addr
-                self._relay_addr = PeerAddr("wss", host, 443, path)
-                if old is not None and old.host != host:
-                    _log.warning(
-                        "peer: relay address changed; peers who joined through "
-                        "the old one must be given the new address"
+                    from backend.peer.tunnel import FAILURE_TEXT
+
+                    reason = getattr(err, "reason", "failed")
+                    if reason not in FAILURE_TEXT:
+                        reason = "failed"
+                    self._relay_error = FAILURE_TEXT[reason]
+                    exc = PeerServiceError(
+                        "could not start the Cloudflare tunnel: %s"
+                        % FAILURE_TEXT[reason],
+                        502,
                     )
+                    exc.reason = reason
+                    raise exc from err
+                self._tunnel = tun
+                self._relay_addr = PeerAddr("wss", host, 443, path)
+                self._note_relay_host(host)
             self._relay_error = ""
             self._relay_backoff = RELAY_RESTART_INITIAL_S
             return self._relay_addr
+
+    def _note_relay_host(self, host: str) -> None:
+        """Remember the relay's public host (0600, survives restarts) and,
+        when it changed while people who joined through the old one exist,
+        say so: they need a fresh invite, which reconnects the same link."""
+        d = paths.ensure_dir(os.path.join(paths.peer_root(), "relay"))
+        path = os.path.join(d, "host")
+        old = ""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                old = f.read(300).strip()
+        except OSError:
+            pass
+        if old == host:
+            return
+        try:
+            tmp = path + ".tmp"
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            fd = os.open(
+                tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+            )
+            with os.fdopen(fd, "w") as f:
+                f.write(host + "\n")
+            os.replace(tmp, path)
+        except OSError as err:
+            _log.warning("peer: relay host not recorded: %s", err)
+        if not old:
+            return
+        try:
+            peers = [
+                str(_get(l, "peer_name") or "peer")
+                for l in self.store.list()
+                if _get(l, "role") == "listener"
+                and (_get(l, "carrier") or "") in ("relay", "")
+            ]
+        except Exception:  # noqa: BLE001
+            peers = []
+        if peers:
+            _log.warning(
+                "peer: relay address changed; %d peer(s) need a fresh invite",
+                len(peers),
+            )
+            self._emit("peer.relay_changed", {"host": host, "peers": peers[:20]})
 
     def _on_tunnel_exit(self) -> None:
         """cloudflared died on its own: its hostname is gone for good. Bring
@@ -723,27 +830,28 @@ class PeerService:
         cfut.add_done_callback(release)
         return await asyncio.wrap_future(cfut)
 
-    def _inbound_msg(self, link, p: dict) -> dict:
+    def _share_session(self, link) -> str:
+        """The title of ``link``'s bound shared session, or ``""``. Never an
+        ordinary session, nor another link's shared one (a stale
+        session_title must not route to whoever holds that title now)."""
         title = _get(link, "session_title") or ""
-        srv = self.server
-        if not title or title not in srv.ENGINE.instances:
-            return {"accepted": False}
-        inst = srv.ENGINE.instances.get(title)
         share_id = _get(link, "share_id") or ""
-        if not share_id or getattr(inst, "PeerShare", "") != share_id:
-            # Never into an ordinary session, nor another link's shared one
-            # (a stale session_title must not route to whoever holds it now).
-            return {"accepted": False}
+        if not title or not share_id:
+            return ""
+        inst = self.server.ENGINE.instances.get(title)
+        if inst is None or getattr(inst, "PeerShare", "") != share_id:
+            return ""
+        return title
+
+    def _post_to_session(self, link, title: str, text: str, msg_id: str, reply_to):
+        """One peer message into the shared session's mailbox (typed into
+        its agent as an untrusted PEER message)."""
         from backend.web.core import mailbox
 
         name = mailbox.peer_display_name("peer:" + str(_get(link, "peer_name") or ""))
-        text = str(p.get("text") or "")
-        data = {
-            "peer_msg_id": str(p.get("msg_id") or ""),
-            "link_id": _get(link, "link_id"),
-        }
-        if p.get("reply_to"):
-            data["peer_reply_to"] = str(p.get("reply_to"))
+        data = {"peer_msg_id": str(msg_id or ""), "link_id": _get(link, "link_id")}
+        if reply_to:
+            data["peer_reply_to"] = str(reply_to)
         msg = mailbox.post(
             title, text, sender="peer:" + name, data=data, delivery="auto"
         )
@@ -763,7 +871,65 @@ class PeerService:
             )
         except Exception:  # noqa: BLE001 — the event is enrichment only
             pass
+
+    def _inbound_msg(self, link, p: dict) -> dict:
+        """Log the message on the link; hand it to the shared session when
+        one is bound, else keep it there for the people (and for a share
+        bound later). Accepted either way: nothing a peer sends is dropped."""
+        from backend.peer import inbox
+
+        text = str(p.get("text") or "")
+        title = self._share_session(link)
+        if title:
+            self._post_to_session(link, title, text, p.get("msg_id"), p.get("reply_to"))
+        lid = str(_get(link, "link_id") or "")
+        inbox.record(
+            lid,
+            "in",
+            text,
+            by="peer",
+            msg_id=str(p.get("msg_id") or ""),
+            reply_to=p.get("reply_to"),
+            delivered_to=title or None,
+        )
+        try:
+            from backend.web.core import mailbox
+
+            preview = mailbox.sanitize(text)[:200]
+        except Exception:  # noqa: BLE001
+            preview = ""
+        self._emit(
+            "peer.message",
+            {
+                "link_id": lid,
+                "peer_name": str(_get(link, "peer_name") or "peer"),
+                "text": preview,
+                "stored": not title,
+            },
+        )
         return {"accepted": True}
+
+    def _deliver_backlog(self, link_id: str) -> int:
+        """Hand the messages that waited for a shared session to the one now
+        bound (oldest first; the mailbox's own rate rules still apply)."""
+        from backend.peer import inbox
+
+        link = self.store.get(link_id)
+        title = self._share_session(link) if link is not None else ""
+        if not title:
+            return 0
+        waiting = inbox.undelivered(link_id)
+        for m in waiting:
+            self._post_to_session(
+                link,
+                title,
+                str(m.get("text") or ""),
+                m.get("msg_id"),
+                m.get("reply_to"),
+            )
+        if waiting:
+            inbox.mark_delivered(link_id, [m.get("id") for m in waiting], title)
+        return len(waiting)
 
     def _agent_state(self, title: str) -> str:
         srv = self.server
@@ -784,14 +950,42 @@ class PeerService:
             "name": str(self.settings().get("display_name") or "peer")[:32],
         }
 
+    def _link_event(self, link, repaired: bool) -> dict:
+        return {
+            "link_id": _get(link, "link_id"),
+            "peer_name": str(_get(link, "peer_name") or "peer"),
+            "sas": str(_get(link, "sas") or ""),
+            "role": _get(link, "role"),
+            "repaired": bool(repaired),
+        }
+
     def on_link_added(self, link) -> None:
-        self._emit("peer.link_added", {"link_id": _get(link, "link_id")})
+        self._emit("peer.link_added", self._link_event(link, False))
+        self._schedule(self.sync_listener())
+
+    def on_link_repaired(self, link) -> None:
+        """The same person paired again: same link (share and perms kept),
+        new safety number to compare."""
+        self._emit("peer.link_added", self._link_event(link, True))
         self._schedule(self.sync_listener())
 
     async def on_link_removed(self, link) -> None:
         """The peer unlinked (the transport already forgot its key): stop the
         shared session and its runtime like ``unshare``, keeping the folder."""
-        self._emit("peer.link_removed", {"link_id": _get(link, "link_id")})
+        self._emit(
+            "peer.link_removed",
+            {
+                "link_id": _get(link, "link_id"),
+                "peer_name": str(_get(link, "peer_name") or "peer"),
+                "by": "peer",
+            },
+        )
+        try:
+            from backend.peer import inbox
+
+            inbox.drop(str(_get(link, "link_id") or ""))
+        except Exception:  # noqa: BLE001
+            pass
         share_id = _get(link, "share_id")
         if share_id:
             async with self._lock:
@@ -810,7 +1004,14 @@ class PeerService:
             _log.warning("peer: listener sync failed: %s", err)
 
     def on_state(self, link_id: str, connected: bool) -> None:
-        self._emit("peer.state", {"link_id": link_id, "connected": bool(connected)})
+        try:
+            name = self.peer_name(link_id)
+        except Exception:  # noqa: BLE001
+            name = "peer"
+        self._emit(
+            "peer.state",
+            {"link_id": link_id, "peer_name": name, "connected": bool(connected)},
+        )
 
     def _emit(self, event: str, data: dict) -> None:
         try:
@@ -844,24 +1045,130 @@ class PeerService:
         except Exception:  # noqa: BLE001
             return False
 
-    async def request(self, link_id: str, op: str, p: dict, timeout: float = 60.0):
+    async def request(
+        self, link_id: str, op: str, p: dict, timeout: float = 60.0, by: str = "agent"
+    ):
         """Send one request to the peer (``msg``, ``diff``, ``read_file``,
-        ``list_files``, ``status``) and return its response ``p``."""
+        ``list_files``, ``status``) and return its response ``p``. A sent
+        ``msg`` is logged on the link (``by``: the shared agent, or you)."""
         t = await self._ensure_transport()
-        return await _maybe_await(t.request(link_id, op, p, timeout))
+        res = await _maybe_await(t.request(link_id, op, p, timeout))
+        if op == "msg":
+            try:
+                from backend.peer import inbox
 
-    async def send_message(self, link_id: str, text: str, reply_to=None) -> dict:
+                inbox.record(
+                    link_id,
+                    "out",
+                    str(p.get("text") or ""),
+                    by=by,
+                    msg_id=str(p.get("msg_id") or ""),
+                    reply_to=p.get("reply_to"),
+                )
+            except Exception as err:  # noqa: BLE001 — the log is a convenience
+                _log.warning("peer: message not logged: %s", err)
+        return res
+
+    async def send_message(
+        self, link_id: str, text: str, reply_to=None, by: str = "agent"
+    ) -> dict:
         msg_id = secrets.token_hex(8)
         res = await self.request(
-            link_id, "msg", {"msg_id": msg_id, "text": text, "reply_to": reply_to}
+            link_id,
+            "msg",
+            {"msg_id": msg_id, "text": text, "reply_to": reply_to},
+            by=by,
         )
         return {"msg_id": msg_id, "delivered": bool(_get(res or {}, "accepted", False))}
 
     # ------------------------------------------------------------------ #
+    # The people's side of a link (no shared session needed)
+    # ------------------------------------------------------------------ #
+    def _peer_error(self, link, err: BaseException) -> PeerServiceError:
+        """A failed request to the peer, in words that say what to do."""
+        name = str(_get(link, "peer_name") or "they")
+        text = str(err)
+        if "not permitted" in text:
+            return PeerServiceError("%s doesn't allow that on this link" % name, 403)
+        if "no shared folder" in text:
+            return PeerServiceError("%s hasn't shared a folder yet" % name, 409)
+        if "not connected" in text or "connection" in text or "timed out" in text:
+            return PeerServiceError(
+                "%s isn't connected right now — their MindFlock may be off, or "
+                "their address changed (paste a fresh invite from them to "
+                "reconnect)" % name,
+                502,
+            )
+        return PeerServiceError("%s couldn't answer that: %s" % (name, text[:200]), 502)
+
+    async def human_message(self, link_id: str, text) -> dict:
+        """You, typing to the peer from Peer links (not through an agent)."""
+        link = self._link_or_404(link_id)
+        text = str(text or "").strip()
+        if not text:
+            raise PeerServiceError("type a message first")
+        if len(text) > 20000:
+            raise PeerServiceError(
+                "that message is too long (20,000 characters at most)"
+            )
+        if _CTRL_RE.search(text):
+            raise PeerServiceError("the message has control characters in it")
+        try:
+            return await self.send_message(link_id, text, by="you")
+        except PeerServiceError:
+            raise
+        except Exception as err:  # noqa: BLE001 — PeerUnavailable, PeerOpError
+            raise self._peer_error(link, err) from err
+
+    def messages(self, link_id: str, limit: int = 100) -> dict:
+        """The link's message log, both directions (no side effects)."""
+        self._link_or_404(link_id)
+        from backend.peer import inbox
+
+        return inbox.entries(link_id, limit)
+
+    def mark_messages_read(self, link_id: str) -> dict:
+        self._link_or_404(link_id)
+        from backend.peer import inbox
+
+        inbox.mark_read(link_id)
+        return {"unread": 0}
+
+    async def their_changes(self, link_id: str) -> dict:
+        """The peer's shared-folder diff, read-only (their ``diff`` op —
+        their permissions decide)."""
+        link = self._link_or_404(link_id)
+        try:
+            return await self.request(link_id, "diff", {"max_chars": 100000})
+        except Exception as err:  # noqa: BLE001
+            raise self._peer_error(link, err) from err
+
+    # ------------------------------------------------------------------ #
     # Views (no keys, no secrets)
     # ------------------------------------------------------------------ #
+    def _carrier_of(self, link) -> str:
+        carrier = _get(link, "carrier") or ""
+        if not carrier and _get(link, "role") == "dialer":
+            carrier = (
+                "relay"
+                if str(_get(link, "peer_addr") or "").startswith("wss://")
+                else "tcp"
+            )
+        return carrier
+
     def link_view(self, link) -> dict:
         perms = _get(link, "perms") or {}
+        lid = _get(link, "link_id")
+        try:
+            from backend.peer import inbox
+
+            unread = inbox.unread_count(lid)
+        except Exception:  # noqa: BLE001
+            unread = 0
+        info = {}
+        if self._transport is not None:
+            with contextlib.suppress(Exception):
+                info = self._transport.peer_info(lid) or {}
         return {
             "link_id": _get(link, "link_id"),
             "peer_name": _get(link, "peer_name") or "peer",
@@ -874,7 +1181,12 @@ class PeerService:
             "shared": bool(_get(link, "share_id")),
             "share_id": _get(link, "share_id") or None,
             "session_title": _get(link, "session_title") or None,
-            "connected": self.is_connected(_get(link, "link_id")),
+            "connected": self.is_connected(lid),
+            "carrier": self._carrier_of(link),
+            "sas_verified": _get(link, "sas_verified") is True,
+            "unread": unread,
+            # What the peer said it runs (newer peers only; else None).
+            "peer_app": info.get("app") or None,
         }
 
     @staticmethod
@@ -888,6 +1200,16 @@ class PeerService:
             now = time.time() if exp > 1e9 else time.monotonic()
             expires_in = max(0, int(exp - now))
         return {"invite_id": str(iid), "expires_in": expires_in}
+
+    def invite_views(self) -> list:
+        out = []
+        for inv in self.invites.active():
+            v = self._invite_view(inv)
+            v["direct"] = (
+                self.relay_mode() == "off" or v["invite_id"] in self._direct_invites
+            )
+            out.append(v)
+        return out
 
     def status(self) -> dict:
         s = self.settings()
@@ -928,7 +1250,7 @@ class PeerService:
         except Exception:  # noqa: BLE001
             out["links"] = []
         try:
-            out["invites"] = [self._invite_view(i) for i in self.invites.active()]
+            out["invites"] = self.invite_views()
         except Exception:  # noqa: BLE001
             out["invites"] = []
         return out
@@ -1026,9 +1348,9 @@ class PeerService:
             if host:
                 return host
         try:
-            from backend.web.core import mobile_access
+            from backend import tailscale_cli
 
-            _name, ip = mobile_access._tailscale_info()
+            ip = tailscale_cli.self_ipv4()
             if ip:
                 return ip
         except Exception:  # noqa: BLE001
@@ -1040,15 +1362,63 @@ class PeerService:
         except OSError:
             return "127.0.0.1"
 
-    async def create_invite(self, ttl_s=None, host: str = "") -> dict:
+    def _progress(self, op_id: str, op: str, stage: str) -> None:
+        """``peer.progress`` for the screen waiting on ``op_id`` (silent
+        without one)."""
+        if op_id:
+            self._emit(
+                "peer.progress",
+                {
+                    "op_id": op_id,
+                    "op": op,
+                    "stage": stage,
+                    "text": PROGRESS_TEXT[stage],
+                },
+            )
+
+    @staticmethod
+    def _op_id(op_id) -> str:
+        op_id = str(op_id or "")
+        return op_id if _OP_ID_RE.match(op_id) else ""
+
+    def enable(self) -> dict:
+        """Turn peer links on without minting anything — the first step of
+        "they're somewhere else" (so the doctor offers cloudflared)."""
+        self._turn_on()
+        return {"enabled": True}
+
+    async def create_invite(
+        self, ttl_s=None, host: str = "", reach: str = "auto", op_id: str = ""
+    ) -> dict:
+        """A single-use invite. ``reach`` (:data:`REACH_MODES`) picks how it
+        reaches the other person; see :meth:`_create_relay_invite` for the
+        labelled fallback to a direct invite."""
+        reach = str(reach or "auto").strip().lower()
+        if reach not in REACH_MODES:
+            raise PeerServiceError("reach must be auto, tunnel or direct")
+        op_id = self._op_id(op_id)
         self._turn_on()
         try:
             ttl = int(ttl_s) if ttl_s is not None else INVITE_TTL_DEFAULT_S
         except (TypeError, ValueError):
             raise PeerServiceError("ttl_s must be a number of seconds")
         ttl = max(INVITE_TTL_MIN_S, min(INVITE_TTL_MAX_S, ttl))
-        if self.relay_mode() != "off":
-            return await self._create_relay_invite(ttl)
+        if reach == "tunnel" and self.relay_mode() == "off":
+            raise PeerServiceError(
+                "a relay invite needs cloudflared on this computer (MindFlock "
+                "never downloads it): install it, or make a direct invite for "
+                "someone on your network or tailnet",
+                409,
+            )
+        if reach != "direct" and self.relay_mode() != "off":
+            return await self._create_relay_invite(ttl, host, reach, op_id)
+        return await self._create_direct_invite(ttl, host, op_id)
+
+    async def _create_direct_invite(
+        self, ttl: int, host: str = "", op_id: str = "", fallback: Optional[dict] = None
+    ) -> dict:
+        """An ``mfp1:`` invite naming this machine (Tailscale IP, else LAN):
+        it only reaches someone on the same network or tailnet."""
         adv = self.advertise_host(host)
         port = int(self.settings()["listen_port"])
         await self._ensure_transport()
@@ -1058,29 +1428,46 @@ class PeerService:
             raise PeerServiceError(
                 "could not create the invite: %s" % err, 409
             ) from err
+        iid = _get(inv, "invite_id")
+        self._direct_invites.add(iid)
         try:
             await self.sync_listener()
         except Exception as err:  # noqa: BLE001
             try:
-                self.invites.revoke(_get(inv, "invite_id"))
+                self.invites.revoke(iid)
             except Exception:  # noqa: BLE001
                 pass
+            self._direct_invites.discard(iid)
             raise PeerServiceError(
                 "could not listen on port %d: %s" % (port, err), 409
             ) from err
-        return {
-            "invite_id": _get(inv, "invite_id"),
+        self._progress(op_id, "invite", "ready")
+        out = {
+            "invite_id": iid,
             "code": _get(inv, "code"),
             "message": invite_message(_get(inv, "code"), ttl),
             "expires_in": ttl,
             "host": adv,
             "port": port,
+            "direct": True,
         }
+        if fallback:
+            out["fallback"] = fallback
+        return out
 
-    async def _create_relay_invite(self, ttl: int) -> dict:
+    async def _create_relay_invite(
+        self, ttl: int, host: str = "", reach: str = "auto", op_id: str = ""
+    ) -> dict:
         """An ``mfp2:`` invite whose code carries the relay address. The
         relay comes up first (a quick tunnel needs a few seconds for its
-        hostname); if the invite can't be made, the relay goes back down."""
+        hostname); if the invite can't be made, the relay goes back down.
+
+        In ``peer.relay = "auto"`` (and ``reach`` auto) a tunnel that won't
+        start doesn't block inviting: a direct invite is made instead, with
+        ``fallback: {reason, text}`` saying why and that it only reaches the
+        same network or tailnet."""
+        if self._relay_addr is None:
+            self._progress(op_id, "invite", "relay")
         try:
             addr = await self._ensure_relay()
             inv = self.invites.create(addr.host, addr.port, ttl, relay_path=addr.path)
@@ -1089,10 +1476,22 @@ class PeerService:
             raise PeerServiceError(
                 "could not create the invite: %s" % err, 409
             ) from err
-        except PeerServiceError:
+        except PeerServiceError as err:
+            reason = getattr(err, "reason", "")
+            if reason and reach == "auto" and self.relay_setting() == "auto":
+                from backend.peer.tunnel import FAILURE_TEXT
+
+                self._progress(op_id, "invite", "fallback")
+                fallback = {
+                    "reason": reason,
+                    "text": "Relay unavailable (%s). This invite only works for "
+                    "someone on your network or tailnet." % FAILURE_TEXT[reason],
+                }
+                return await self._create_direct_invite(ttl, host, op_id, fallback)
             await self.sync_listener()
             raise
         await self.sync_listener()
+        self._progress(op_id, "invite", "ready")
         return {
             "invite_id": _get(inv, "invite_id"),
             "code": _get(inv, "code"),
@@ -1101,6 +1500,7 @@ class PeerService:
             "host": addr.host,
             "port": addr.port,
             "relay": self.relay_mode(),
+            "direct": False,
         }
 
     async def revoke_invite(self, invite_id: str) -> None:
@@ -1112,9 +1512,40 @@ class PeerService:
             self.invites.revoke(invite_id)
         except Exception:  # noqa: BLE001
             pass
+        self._direct_invites.discard(invite_id)
         await self.sync_listener()
 
-    async def join(self, code: str) -> dict:
+    @staticmethod
+    def _join_error(err: BaseException, relayed: bool) -> str:
+        """A failed join, as what to do next (never the raw socket error)."""
+        names = {c.__name__ for c in type(err).__mro__}
+        text = str(err)
+        if "IdentityMismatch" in names or "safety number" in text:
+            return (
+                "The computer that answered isn't the one that made this invite "
+                "— someone may be in the middle. Don't retry; tell the person who "
+                "sent it."
+            )
+        if "used or expired" in text:
+            return (
+                "That invite was already used or has expired — ask for a new one "
+                "(each invite works once, for 10 minutes)."
+            )
+        if relayed:
+            return (
+                "Their relay isn't answering — is their MindFlock running? If "
+                "they restarted it, ask them for a new invite."
+            )
+        return (
+            "Couldn't reach them. This invite only works on their network or "
+            "tailnet — ask them to install cloudflared and send a new invite, "
+            "or to add you to their tailnet."
+        )
+
+    async def join(self, code: str, op_id: str = "") -> dict:
+        """Pair using someone's invite. Pairing again with someone already
+        linked reconnects that link — same id, share and permissions, a new
+        safety number — and the result says ``reconnected: true``."""
         if not isinstance(code, str) or not code.strip() or len(code) > 4096:
             raise PeerServiceError("paste the invite code")
         found = self._extract_code(code)
@@ -1122,17 +1553,94 @@ class PeerService:
             raise PeerServiceError(
                 "that doesn't contain an invite code (it starts with mfp1: or mfp2:)"
             )
+        from backend.peer.invite import parse_code
+
+        try:
+            relayed = parse_code(found).addr.is_relay
+        except ValueError:
+            relayed = False  # the transport refuses it below, the same way
+        op_id = self._op_id(op_id)
         self._turn_on()
         t = await self._ensure_transport()
+        before = {str(_get(l, "link_id")) for l in self.store.list()}
+
+        def stage(name: str) -> None:
+            self._progress(op_id, "join", name)
+
         try:
-            link = await _maybe_await(t.pair(found))
+            if "progress" in inspect.signature(t.pair).parameters:
+                link = await _maybe_await(t.pair(found, progress=stage))
+            else:  # a transport without stages (tests' fakes)
+                link = await _maybe_await(t.pair(found))
         except ValueError as err:
-            raise PeerServiceError("invalid invite code: %s" % err) from err
+            raise PeerServiceError(
+                "That invite code is damaged — copy the whole message again."
+            ) from err
         except Exception as err:  # noqa: BLE001
             raise PeerServiceError(
-                "pairing failed: %s" % err, _transport_error_status(err)
+                self._join_error(err, relayed), _transport_error_status(err)
             ) from err
-        return self.link_view(link)
+        lid = str(_get(link, "link_id"))
+        reconnected = lid in before
+        if await self._adopt_old_links(link):
+            reconnected = True
+            link = self.store.get(lid) or link
+        stage("done")
+        out = self.link_view(link)
+        out["reconnected"] = reconnected
+        return out
+
+    async def _adopt_old_links(self, link) -> bool:
+        """The peer's side minted a new link for someone we already joined
+        (they had lost theirs): move the old link's shared folder and
+        permissions onto the new one, then forget the old one. True when
+        something was carried over."""
+        lid = str(_get(link, "link_id"))
+        try:
+            olds = [
+                o
+                for o in self.store.find_by_pub(
+                    str(_get(link, "peer_pub") or ""), "dialer"
+                )
+                if _get(o, "link_id") != lid
+            ]
+        except Exception:  # noqa: BLE001
+            return False
+        moved = False
+        for old in olds:
+            old_id = _get(old, "link_id")
+            share_id = _get(old, "share_id")
+            fields = {"perms": dict(_get(old, "perms") or {})}
+            if share_id and not _get(self.store.get(lid), "share_id"):
+                fields.update(
+                    share_id=share_id, session_title=_get(old, "session_title")
+                )
+                self.store.update(old_id, share_id=None, session_title=None)
+                rt = self._runtimes.get(share_id)
+                if rt is not None and getattr(rt.agent_api, "link_id", None) == old_id:
+                    rt.agent_api.link_id = lid  # the running agent keeps going
+            self.store.update(lid, **fields)
+            try:
+                from backend.peer import inbox
+
+                inbox.drop(old_id)
+            except Exception:  # noqa: BLE001
+                pass
+            if self._transport is not None:
+                with contextlib.suppress(Exception):
+                    await _maybe_await(self._transport.unlink(old_id))
+            if self.store.get(old_id) is not None:
+                self.store.remove(old_id)
+            moved = True
+        return moved
+
+    def set_verified(self, link_id: str, verified) -> dict:
+        """ "It matches": the user compared the safety number with the peer."""
+        self._link_or_404(link_id)
+        if not isinstance(verified, bool):
+            raise PeerServiceError("verified must be true or false")
+        self.store.update(link_id, sas_verified=verified)
+        return self.link_view(self.store.get(link_id))
 
     async def set_address(self, link_id: str, address) -> dict:
         """Point a dialer link at a new address (``host:port`` or a relay
@@ -1150,7 +1658,9 @@ class PeerService:
             addr = parse_addr(str(address or "").strip())
         except ValueError as err:
             raise PeerServiceError("invalid address: %s" % err) from err
-        self.store.update(link_id, peer_addr=str(addr))
+        self.store.update(
+            link_id, peer_addr=str(addr), carrier="relay" if addr.is_relay else "tcp"
+        )
         if self._transport is not None:
             redial = getattr(self._transport, "redial", None)
             if redial is not None:
@@ -1183,6 +1693,20 @@ class PeerService:
                 _log.warning("peer: transport unlink failed: %s", err)
         if self.store.get(link_id) is not None:
             self.store.remove(link_id)
+        try:
+            from backend.peer import inbox
+
+            inbox.drop(link_id)
+        except Exception:  # noqa: BLE001
+            pass
+        self._emit(
+            "peer.link_removed",
+            {
+                "link_id": link_id,
+                "peer_name": str(_get(link, "peer_name") or "peer"),
+                "by": "you",
+            },
+        )
         await self.sync_listener()
 
     # ------------------------------------------------------------------ #
@@ -1374,6 +1898,11 @@ class PeerService:
                 except Exception:  # noqa: BLE001
                     pass
                 raise
+            try:
+                # Messages that arrived before there was a session to take them.
+                self._deliver_backlog(link_id)
+            except Exception as err:  # noqa: BLE001
+                _log.warning("peer: waiting messages not delivered: %s", err)
             return {"link": self.link_view(self.store.get(link_id)), "session": body}
 
     def _share_session_running(self, title: str) -> bool:

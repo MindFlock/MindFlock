@@ -82,6 +82,162 @@
 .hint.hint-footer {
   margin: 0 0 8px;
 }
+/* "Tailscale on this device" (TailscaleCard.tsx). Reuses .sl-snippet,
+   .sl-admin-link and .qr-card from mobileLogs.css. */
+.ts-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.ts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ts-head .set-section-title {
+  margin: 0;
+}
+
+.ts-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ts-state.ts-ok {
+  color: var(--green);
+}
+
+.ts-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.ts-facts > div {
+  display: contents;
+}
+
+.ts-facts dt {
+  color: var(--muted);
+}
+
+.ts-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ts-ip {
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+.ts-signin,
+.ts-auth,
+.ts-login-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ts-signin > .test-btn {
+  align-self: flex-start;
+}
+
+.ts-auth-link {
+  color: var(--accent);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ts-qr {
+  margin: 0;
+}
+
+.ts-qr svg {
+  width: 160px;
+  height: 160px;
+}
+
+.ts-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ts-issue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+}
+
+.ts-issue p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.ts-issue.ts-warn {
+  border-color: color-mix(in srgb, var(--gold) 50%, var(--border));
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+
+.ts-issue.ts-fail {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.ts-issue code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ts-wsl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ts-wsl .set-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Settings → Mobile: phone setup in order (Mobile.tsx PhoneSteps). */
+.mobile-phone-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.ts-app-qr {
+  margin: 6px 0 0;
+}
+
+.ts-app-qr svg {
+  width: 120px;
+  height: 120px;
+}
 /* Settings → Devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */
@@ -436,6 +592,75 @@
 
 .set-row .devices-actions:has(> select) {
   align-items: stretch;
+}
+
+/* A brand-new computer in one line (DeviceReadiness.tsx). */
+.devices-bootstrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.devices-bootstrap-open {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.devices-readiness {
+  font-size: 11px;
+}
+
+/* "This device": where it listens. A plain line while the others can reach
+   it; a .devices-warn (with Make reachable) while they can't. */
+.devices-this {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.devices-this p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.devices-warn .devices-this-title {
+  font-weight: 600;
+}
+
+/* The candidate the sidebar's "Add to my devices…" pointed at. */
+.devices-list li.devices-focus {
+  outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 6px;
+}
+
+/* "Update all my devices": an update chip that wants attention (behind the
+   newest release), and the rollout's per-device lines. */
+.devices-badge.warn {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--border));
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
+}
+.devices-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+.devices-update-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Update chips can be a sentence ("desktop app v0.7.4 updates on its next
+   launch"): let them wrap on a phone instead of pushing the row wide. */
+.devices-badge[data-update-chip] {
+  white-space: normal;
 }
 /* The welcome walkthrough card. Rides the shared .modal overlay. */
 
@@ -2779,6 +3004,71 @@ p.set-hint {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+.peer-action > .linklike {
+  align-self: flex-start;
+  font-size: 12px;
+}
+/* A labelled same-network invite (the relay failed in automatic mode). */
+.peer-warn {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 3px solid var(--warn, #d9a441);
+  font-size: 12px;
+}
+.peer-stage {
+  font-style: italic;
+}
+.peer-invites {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-link-card .peer-on {
+  color: var(--green, inherit);
+}
+.peer-link-card .peer-off {
+  color: var(--muted, inherit);
+}
+.peer-link-card .peer-reconnect input,
+.peer-msgs textarea {
+  flex: 1;
+  min-width: 0;
+}
+.peer-msgs-toggle .queue-tab-badge {
+  margin-left: 6px;
+}
+.peer-msg-log {
+  list-style: none;
+  margin: 6px 0;
+  padding: 6px 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.peer-msg {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 2px 0;
+}
+.peer-diff pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 4px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 11px ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.peer-addr {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
 .peer-advanced {
   margin-top: 16px;
 }
@@ -4496,6 +4786,43 @@ p.set-hint {
   opacity: 1;
   color: rgba(var(--accent-rgb), 0.95);
 }
+
+/* "Shared with <name>" — a shared-folder (peer-link) session's rail chip.
+   On the rail row only: a pane-head chip renders 0x0. */
+.stagechip.peerchip {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  flex: none !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+.stagechip.peerchip .peerchip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+.stagechip.peerchip.peer-offline .peerchip-dot {
+  background: var(--muted);
+}
+.stagechip.peerchip:hover {
+  filter: brightness(1.15);
+}
+.stagechip.peerchip:focus-visible {
+  outline: 1px solid var(--accent);
+}
 }
 
 /* 080 */
@@ -5579,6 +5906,18 @@ p.set-hint {
 .notif-attn .ob-item .ob-kv {
   grid-template-columns: 62px minmax(0, 1fr);
   font-size: 11.5px;
+}
+
+
+/* A join request's Approve, right on its row (the code to compare is in the
+   row's text). */
+.notif-item .notif-approve {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+  align-self: start;
+  padding: 1px 8px;
+  font-size: 11px;
 }
 }
 
@@ -15731,18 +16070,97 @@ button.linklike {
   gap: 6px;
   margin: 0 0 8px;
 }
-#install-dialog .ws-head {
+#install-dialog .ws-head,
+#signin-dialog .ws-head {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-#install-dialog .ws-head h2 {
+#install-dialog .ws-head h2,
+#signin-dialog .ws-head h2 {
   margin: 0;
   font-size: 15px;
 }
-#install-status {
+#install-status,
+#signin-status {
   flex: 1;
   font-size: 12px;
+}
+
+/* "Sign in to <agent>": on the doctor's agent-auth row (Setup ① and Settings →
+   Doctor) and beside Setup ②'s agent test. */
+.doctor-detail .agent-signin-btn,
+.setup-acct-row .agent-signin-btn {
+  margin-left: 8px;
+}
+
+/* The first-run plan (GET /api/onboarding): each step's one-line status, and
+ * Connect GitHub (ConnectGitHub.tsx). */
+.setup-reason {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-reason.st-ok {
+  color: var(--ok, var(--muted));
+}
+
+.setup-reason.st-skip {
+  opacity: 0.8;
+}
+
+.connect-github {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.connect-github .gh-connected {
+  margin: 0;
+  font-size: 12px;
+}
+
+.gh-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.gh-user-code {
+  font-size: 16px;
+  letter-spacing: 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.gh-token-row input,
+.gh-identity input {
+  min-width: 0;
+  flex: 1 1 140px;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.gh-token-fold summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gh-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connect-github .setup-acct-row {
+  flex-wrap: wrap;
 }
 }
 

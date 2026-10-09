@@ -2408,6 +2408,13 @@ def test_github_open_prs_stale_hit_annotates_without_touching_the_cache(
 # --------------------------------------------------------------------------- #
 # engine updates (Settings → Advanced)                                         #
 # --------------------------------------------------------------------------- #
+# Starting an update is privileged (core.auth.privileged): these drive it from
+# this machine itself, where the default TestClient peer ("testclient") isn't.
+local_client = TestClient(
+    app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
+)
+
+
 def test_update_check_reports_a_newer_release(monkeypatch):
     async def _latest(force=False):
         return {"tag": "v9.9.9", "version": "9.9.9", "url": "https://x/y", "notes": ""}
@@ -2461,7 +2468,7 @@ def test_update_start_resolves_the_newest_ref_itself(monkeypatch):
 
     monkeypatch.setattr(server._self_update, "latest_release", _latest)
     monkeypatch.setattr(server._self_update, "start_update", _start)
-    r = client.post("/api/update/start", json={})
+    r = local_client.post("/api/update/start", json={})
     assert r.status_code == 200
     assert seen["ref"] == "v9.9.9"
 
@@ -2474,7 +2481,7 @@ def test_update_start_reports_a_refusal_as_400(monkeypatch):
     monkeypatch.setattr(
         server._self_update, "start_update", lambda ref: {"ok": False, "error": "nope"}
     )
-    r = client.post("/api/update/start", json={})
+    r = local_client.post("/api/update/start", json={})
     assert r.status_code == 400 and r.json()["error"] == "nope"
 
 
@@ -2488,9 +2495,14 @@ def test_update_state_restarts_the_server_once_the_install_is_done(monkeypatch):
     monkeypatch.setattr(
         server._restart, "reset_tailscale_attempts", lambda: calls.append("reset")
     )
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart,
+        "reexec_soon",
+        lambda **kw: calls.append("reexec" if kw == {"keep_mode": True} else kw),
+    )
     body = client.get("/api/update/state").json()
     assert body["restarting"] is True
+    # keep_mode: an update never drops a tailscale-mode rig back to loopback.
     assert calls == ["reset", "reexec"]
 
 
@@ -2501,7 +2513,9 @@ def test_update_state_does_not_restart_while_the_install_is_running(monkeypatch)
         "finish_state",
         lambda: ({"state": "started", "log": []}, False),
     )
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart, "reexec_soon", lambda **kw: calls.append("reexec")
+    )
     body = client.get("/api/update/state").json()
     assert body["restarting"] is False and calls == []
 
@@ -2519,10 +2533,14 @@ def test_update_state_re_execs_exactly_once_across_repeated_polls(
     that the route forwards a boolean.
     """
     monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(server._self_update, "_RESTARTING", {"key": ""})
+    monkeypatch.setattr(server._self_update, "_install_terminal_busy", lambda: False)
     server._self_update.write_state(state="done", ref="v9.9.9", code=0)
     calls = []
     monkeypatch.setattr(server._restart, "reset_tailscale_attempts", lambda: None)
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    monkeypatch.setattr(
+        server._restart, "reexec_soon", lambda **kw: calls.append("reexec")
+    )
 
     first = client.get("/api/update/state").json()
     second = client.get("/api/update/state").json()
@@ -2542,7 +2560,7 @@ def test_update_state_carries_the_installer_log_tail(monkeypatch, tmp_path):
     monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
     server._self_update.write_state(state="failed", ref="v9.9.9", code=7)
     server._self_update.log_path().write_text("line one\nline two\n", encoding="utf-8")
-    monkeypatch.setattr(server._restart, "reexec_soon", lambda: None)
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda **kw: None)
 
     body = client.get("/api/update/state").json()
     assert body["state"] == "failed" and body["restarting"] is False
@@ -2563,9 +2581,146 @@ def test_update_start_reports_an_unreachable_github_as_502(monkeypatch):
         "start_update",
         lambda ref: pytest.fail("started an update with no release to install"),
     )
-    r = client.post("/api/update/start", json={})
+    r = local_client.post("/api/update/start", json={})
     assert r.status_code == 502
     assert "could not reach GitHub" in r.json()["error"]
+
+
+def test_update_start_refuses_an_anonymous_remote_caller(monkeypatch):
+    """Gate off and exposed: any tailnet node reaches the route, so the route
+    itself must refuse anyone who isn't the owner — and before anything is
+    resolved or spawned."""
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: pytest.fail("an anonymous caller started an update"),
+    )
+    r = client.post("/api/update/start", json={})  # peer "testclient": remote
+    assert r.status_code == 403
+
+
+def test_update_start_refuses_a_relayed_request_even_from_loopback(monkeypatch):
+    """Another MindFlock relaying the call is never the owner (privileged()),
+    even when its hop arrives on loopback."""
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: pytest.fail("a relayed caller started an update"),
+    )
+    r = local_client.post(
+        "/api/update/start", json={}, headers={"X-MindFlock-Remote": "rig"}
+    )
+    assert r.status_code == 403
+
+
+def _privileged_remote(monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(server._auth, "privileged", _yes)
+
+
+def test_update_start_refuses_a_branch_ref_from_another_machine(monkeypatch):
+    _privileged_remote(monkeypatch)
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: pytest.fail("a branch was installed from another machine"),
+    )
+    r = client.post("/api/update/start", json={"ref": "main"})
+    assert r.status_code == 400
+    assert "release tag" in r.json()["error"]
+
+
+def test_update_start_refuses_a_downgrade_from_another_machine(monkeypatch):
+    _privileged_remote(monkeypatch)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.7.4")
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: pytest.fail("a downgrade was installed from another machine"),
+    )
+    r = client.post("/api/update/start", json={"ref": "v0.6.1"})
+    assert r.status_code == 400
+    assert "older" in r.json()["error"]
+
+
+def test_update_start_takes_only_a_published_release_from_another_machine(
+    monkeypatch,
+):
+    _privileged_remote(monkeypatch)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.7.4")
+    published = {"v0.8.0"}
+
+    async def _published(tag):
+        return {"tag_name": tag} if tag in published else None
+
+    monkeypatch.setattr(server._self_update, "published_release", _published)
+    seen = []
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: seen.append(ref) or {"ok": True},
+    )
+    # A tag nobody published (a draft, a stray push) is refused …
+    r = client.post("/api/update/start", json={"ref": "v0.9.0"})
+    assert r.status_code == 400 and seen == []
+    # … a published one at or above the running version goes through.
+    r = client.post("/api/update/start", json={"ref": "v0.8.0"})
+    assert r.status_code == 200 and seen == ["v0.8.0"]
+
+
+def test_update_start_from_this_machine_still_takes_any_ref(monkeypatch):
+    """The developer's escape hatch stays: at this machine's own keyboard a
+    branch (or an older tag) can still be installed."""
+    seen = []
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: seen.append(ref) or {"ok": True},
+    )
+    r = local_client.post("/api/update/start", json={"ref": "main"})
+    assert r.status_code == 200 and seen == ["main"]
+
+
+def test_update_check_says_a_finished_install_is_waiting_for_its_restart(
+    monkeypatch, tmp_path
+):
+    """The screen must say "Installed — restarting…", not offer the same
+    install again, while the new build isn't the one running yet."""
+
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    monkeypatch.setattr(server._self_update, "installed_commit", lambda: "a" * 40)
+    server._self_update.write_state(
+        state="done", ref="v9.9.9", version="9.9.9", commit="b" * 40, code=0
+    )
+    body = client.get("/api/update/check").json()
+    assert body["state"] == "done" and body["restart_pending"] is True
+    assert body["last"]["version"] == "9.9.9"
+
+
+def test_hello_reports_the_desktop_shell_version_only_from_this_machine(
+    monkeypatch,
+):
+    """The desktop app's engine check sends its version; the hello reports it
+    (shell_version) so another device can say "updates on next launch". Only
+    this machine may set it — a tailnet caller can't make a device claim a
+    shell it doesn't have."""
+    monkeypatch.setattr(server._remote, "_SHELL", {"version": ""})
+    client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "6.6.6"})
+    assert client.get("/api/remote/hello").json()["shell_version"] == ""
+    local_client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "0.7.4"})
+    body = local_client.get("/api/remote/hello").json()
+    assert body["shell_version"] == "0.7.4"
+    # The build it runs and how it is installed ride along.
+    assert "commit" in body and body["install"] in {"uv-tool", "editable", "other"}
+    local_client.get("/api/remote/hello", headers={"X-MindFlock-Shell": "<script>"})
+    assert local_client.get("/api/remote/hello").json()["shell_version"] == "0.7.4"
 
 
 def test_pane_find_prepare_is_a_noop_in_tmux_mode(registered, monkeypatch):

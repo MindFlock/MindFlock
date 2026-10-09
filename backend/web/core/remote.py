@@ -60,9 +60,7 @@ import asyncio
 import json
 import os
 import re
-import shutil
 import socket
-import subprocess
 import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -70,6 +68,7 @@ from urllib.parse import quote
 from starlette.responses import JSONResponse
 
 from backend import log
+from backend import tailscale_cli as _tailscale_cli
 from backend.config import config
 
 try:
@@ -233,41 +232,36 @@ def _node_entry(node: dict) -> dict:
         "ip": ip4,
         "os": node.get("OS") or "",
         "online": bool(node.get("Online")),
+        # ACL tags ("tag:mindflock") — tagged peers are listed first when
+        # discovery says why one didn't answer.
+        "tags": [str(t) for t in node.get("Tags") or [] if t],
+        # When Tailscale last heard from it (epoch s, 0.0 unknown): "asleep,
+        # Tailscale last saw it 2 h ago" for a peer that is offline.
+        "ts_last_seen": _ts_time(node.get("LastSeen")),
     }
+
+
+def _ts_time(raw) -> float:
+    """A ``tailscale status`` RFC 3339 time as epoch seconds (0.0 unknown)."""
+    try:
+        t = _tailscale_cli._parse_time(raw)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return t.timestamp() if t is not None else 0.0
 
 
 #: Test/sandbox hook: when set, :func:`tailscale_nodes` reads this file (a
 #: ``tailscale status --json`` document) instead of running the CLI — how an
 #: end-to-end test stands up several servers on one machine and lets them
-#: discover each other as "devices" without a real tailnet.
-STATUS_FILE_ENV = "MINDFLOCK_TAILSCALE_STATUS_FILE"
+#: discover each other as "devices" without a real tailnet. Owned by
+#: :mod:`backend.tailscale_cli` (every status reader honors it).
+STATUS_FILE_ENV = _tailscale_cli.STATUS_FILE_ENV
 
 
 def _tailscale_status() -> Optional[dict]:
-    """The parsed ``tailscale status --json`` document, or None."""
-    fake = (os.environ.get(STATUS_FILE_ENV) or "").strip()
-    if fake:
-        try:
-            with open(fake, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            return None
-        return data if isinstance(data, dict) else None
-    if shutil.which("tailscale") is None:
-        return None
-    try:
-        cp = subprocess.run(
-            ["tailscale", "status", "--json"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if cp.returncode != 0:
-            return None
-        data = json.loads(cp.stdout.decode("utf-8", "replace") or "{}")
-    except (subprocess.TimeoutExpired, OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    """The parsed ``tailscale status --json`` document, or None (the shared,
+    briefly cached snapshot — :func:`backend.tailscale_cli.status_json`)."""
+    return _tailscale_cli.status_json()
 
 
 def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:
@@ -279,18 +273,32 @@ def tailscale_nodes() -> Tuple[Optional[dict], List[dict]]:
     """
     data = _tailscale_status()
     if data is None:
+        _OFFLINE.clear()
         return None, []
     self_node = data.get("Self") or None
     self_entry = _node_entry(self_node) if self_node else None
     peers = []
+    offline = {}
     for node in (data.get("Peer") or {}).values():
         entry = _node_entry(node)
-        if not entry["online"] or not entry["ip"]:
-            continue
         if entry["os"].strip().lower() in _MOBILE_OS:
             continue
+        if not entry["online"] or not entry["ip"]:
+            # Kept aside (not probed): "asleep, last seen …" when Settings →
+            # Devices explains why a device doesn't show.
+            if entry["key"]:
+                offline[entry["key"]] = entry
+            continue
         peers.append(entry)
+    _OFFLINE.clear()
+    _OFFLINE.update(offline)
     return self_entry, peers
+
+
+#: The non-mobile peers the last :func:`tailscale_nodes` read found OFFLINE
+#: (key -> node entry). Never probed; only ever used to say why a device
+#: isn't answering.
+_OFFLINE: Dict[str, dict] = {}
 
 
 def self_identity() -> dict:
@@ -309,6 +317,38 @@ def self_identity() -> dict:
     }
 
 
+#: Header the desktop shell's engine check sends to the local hello with its
+#: own version (``electron/main.js`` ``fetchLocalJSON``).
+SHELL_HEADER = "x-mindflock-shell"
+
+#: The desktop app version last seen on this machine ("" = none seen): a
+#: member's engine and its desktop shell update separately, so "Update all my
+#: devices" says when the shell on one lags (it updates on its next launch).
+_SHELL = {"version": ""}
+
+_SHELL_VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z.+-]{0,31}$")
+
+
+def note_shell_version(version: str) -> None:
+    """Remember the desktop app version this machine's shell reported."""
+    v = str(version or "").strip()
+    if _SHELL_VERSION_RE.match(v):
+        _SHELL["version"] = v
+
+
+def _update_facts() -> dict:
+    """``{commit, install}`` for the hello — the installed commit (so two
+    builds that both say 0.7.4 can be told apart) and how this engine is
+    installed (``uv-tool`` · ``editable`` · ``other``: whether "Update all my
+    devices" can update it). Never raises."""
+    try:
+        from backend.web.core import self_update as _su
+
+        return {"commit": _su.installed_commit(), "install": _su.install_kind()}
+    except Exception:  # noqa: BLE001 — the hello must never fail
+        return {"commit": "", "install": ""}
+
+
 def hello_json() -> dict:
     """The identity + capability payload served at ``/api/remote/hello`` — what
     a probing gateway reads to decide this node is a controllable MindFlock."""
@@ -318,11 +358,19 @@ def hello_json() -> dict:
     return {
         "app": "mindflock",
         "version": __version__,
+        **_update_facts(),
+        # The desktop app version on this machine, when its shell reported
+        # one ("" otherwise — a headless server, or a browser-only setup).
+        "shell_version": _SHELL["version"],
         "device": ident["key"],
         "host": ident["host"],
         "remote_control": remote_control_enabled(),
         "auth": _auth_enabled(),
         "shared_link": _shared_link_name(),
+        # Whether THIS process answers the shared link right now (its
+        # `tailscale serve` for it is up) — the phone-link host table on
+        # Settings → Devices ("hosted by mac-mini ✓, rig ✓ · laptop ⚠").
+        "shared_link_live": _shared_link_live(),
         # "Your devices": which group this device belongs to ("" = none) and
         # the join protocol it speaks (0 = a MindFlock from before fleets — the
         # UI says "update MindFlock there" instead of offering to join it). The
@@ -411,6 +459,26 @@ def _shared_link_name() -> str:
     return _shared_link.configured_name()
 
 
+def _shared_link_live() -> bool:
+    try:
+        from backend.web.core import shared_link as _shared_link
+
+        return bool(_shared_link.advertised_url())
+    except Exception:  # noqa: BLE001 — the hello must never fail
+        return False
+
+
+def listening() -> str:
+    """Where this server listens, as far as other devices are concerned:
+    ``"local"`` (bound to 127.0.0.1 — none of them can reach it), ``"tailnet"``
+    (any other mode the launcher exported), ``""`` when unknown (a bare
+    uvicorn run or a test, which export nothing)."""
+    mode = (os.environ.get("CS_WEB_MODE") or "").strip().lower()
+    if not mode:
+        return ""
+    return "local" if mode in ("local", "localhost") else "tailnet"
+
+
 def _auth_enabled() -> bool:
     from backend.web.core import auth as _auth
 
@@ -462,9 +530,81 @@ def _candidate_bases(peer: dict) -> List[str]:
     return bases
 
 
+#: What one probe of a peer found (``probe_outcome``), most telling first:
+#: a peer that answered something beats one we couldn't reach at all.
+_OUTCOME_RANK = {"ok": 9, "not_mindflock": 3, "tls": 2, "refused": 1, "timeout": 1}
+
+#: Plain words for a connection error (remote errors shown to people used to
+#: be raw aiohttp strings: "Cannot connect to host 100.x:8765 ssl:default
+#: [Connect call failed ('100.x', 8765)]").
+OUTCOME_TEXT = {
+    "refused": "connection refused",
+    "timeout": "timed out",
+    "tls": "the HTTPS connection failed",
+    "not_mindflock": "something else answers there",
+    "unreachable": "unreachable",
+}
+
+
+def probe_outcome(err: BaseException) -> str:
+    """Classify a failed request to another device: ``refused`` (nothing
+    listens on that address — MindFlock isn't running, or it is local-only
+    there), ``timeout`` (packets dropped — usually a tailnet policy that
+    doesn't open the port), ``tls`` (the HTTPS front failed), or
+    ``unreachable``. Never raises."""
+    import errno as _errno
+    import ssl as _ssl
+
+    try:
+        if aiohttp is not None:
+            if isinstance(err, aiohttp.ClientSSLError):
+                return "tls"
+            if isinstance(err, aiohttp.ContentTypeError):
+                return "not_mindflock"
+        if isinstance(err, _ssl.SSLError):
+            return "tls"
+        if isinstance(err, (asyncio.TimeoutError, TimeoutError, socket.timeout)):
+            return "timeout"
+        os_err = getattr(err, "os_error", None) or err
+        if isinstance(os_err, ConnectionRefusedError):
+            return "refused"
+        code = getattr(os_err, "errno", None)
+        if code == _errno.ECONNREFUSED:
+            return "refused"
+        if code == _errno.ETIMEDOUT or isinstance(os_err, TimeoutError):
+            return "timeout"
+        if isinstance(err, ValueError):  # not JSON
+            return "not_mindflock"
+    except Exception:  # noqa: BLE001
+        pass
+    return "unreachable"
+
+
+def plain_error(err: BaseException) -> str:
+    """A request error as a few plain words (see :data:`OUTCOME_TEXT`)."""
+    return OUTCOME_TEXT.get(probe_outcome(err), "unreachable")
+
+
+def _better(cur: str, new: str) -> str:
+    """Keep the first candidate's outcome (the tailnet IP and port — the
+    address that says the most) unless a later one is more telling."""
+    if not cur:
+        return new
+
+    def rank(o):
+        return 3 if o.startswith("http_") else _OUTCOME_RANK.get(o, 0)
+
+    return new if rank(new) > rank(cur) else cur
+
+
 async def _probe_peer(peer: dict) -> Optional[Tuple[str, dict]]:
-    """``(base_url, hello_dict)`` for the first candidate that answers, else None."""
+    """``(base_url, hello_dict)`` for the first candidate that answers, else
+    None. What every candidate found is left on ``peer["probe"]`` (``ok``,
+    ``refused``, ``timeout``, ``tls``, ``not_mindflock``, ``http_<n>``,
+    ``unreachable``) — how Settings → Devices says why a device isn't
+    listed."""
     session = await _http_session()
+    outcome = ""
     for base in _candidate_bases(peer):
         try:
             async with session.get(
@@ -472,12 +612,17 @@ async def _probe_peer(peer: dict) -> Optional[Tuple[str, dict]]:
                 timeout=aiohttp.ClientTimeout(total=_PROBE_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
+                    outcome = _better(outcome, "http_%d" % resp.status)
                     continue
                 hello = await resp.json(content_type=None)
                 if isinstance(hello, dict) and hello.get("app") == "mindflock":
+                    peer["probe"] = "ok"
                     return base, hello
-        except Exception:  # noqa: BLE001 — closed port, timeout, TLS, not-JSON …
+                outcome = _better(outcome, "not_mindflock")
+        except Exception as err:  # noqa: BLE001 — closed port, timeout, TLS, not-JSON …
+            outcome = _better(outcome, probe_outcome(err))
             continue
+    peer["probe"] = outcome or "unreachable"
     return None
 
 
@@ -495,7 +640,17 @@ def _device_state(key: str) -> dict:
             "remote_control": False,
             "auth": False,
             "version": "",
+            # Its installed commit, install kind and desktop app version
+            # (hello; "" from a MindFlock too old to say).
+            "commit": "",
+            "install": "",
+            "shell_version": "",
             "shared_link": "",
+            "shared_link_live": None,
+            # What the last probe found ("ok", "refused", "timeout", … — see
+            # _probe_peer) and its ACL tags.
+            "probe": "",
+            "tags": [],
             # Its hello's fleet id ("" = in none) and join protocol (0 = too
             # old to join) — what "Your devices" lists it by.
             "fleet": "",
@@ -519,6 +674,7 @@ def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None
         dev["reachable"] = False
         return
     base, hello = hit
+    dev["probe"] = "ok"
     try:
         proto = int(hello.get("fleet_proto") or 0)
     except (TypeError, ValueError):
@@ -530,7 +686,16 @@ def _apply_probe(dev: dict, hit: Optional[Tuple[str, dict]], now: float) -> None
         remote_control=bool(hello.get("remote_control")),
         auth=bool(hello.get("auth")),
         version=str(hello.get("version") or ""),
+        commit=str(hello.get("commit") or "")[:64],
+        install=str(hello.get("install") or "")[:16],
+        shell_version=str(hello.get("shell_version") or "")[:32],
         shared_link=str(hello.get("shared_link") or ""),
+        # None: a MindFlock too old to say.
+        shared_link_live=(
+            hello["shared_link_live"]
+            if isinstance(hello.get("shared_link_live"), bool)
+            else None
+        ),
         fleet=str(hello.get("fleet") or ""),
         fleet_proto=proto,
         automation=(
@@ -559,13 +724,64 @@ async def _discover_once() -> None:
             ip=peer["ip"],
             dns=peer.get("dns", ""),
             ips=list(peer.get("ips") or []),
+            tags=list(peer.get("tags") or []),
         )
         _apply_probe(dev, hit, now)
+        if not hit:
+            dev["probe"] = str(peer.get("probe") or "unreachable")
+        _note_probe(peer, dev["probe"], now)
+    for key, peer in list(_OFFLINE.items()):
+        if key != self_identity()["key"]:
+            _note_probe(peer, "asleep", now)
     # Drop devices that left the tailnet / stopped answering for a while.
     for key in list(_DEVICES):
         dev = _DEVICES[key]
         if key not in seen and now - dev.get("last_seen", 0) > _STALE_AFTER:
+            _SEEN[key] = max(_SEEN.get(key, 0.0), float(dev.get("last_seen") or 0.0))
             del _DEVICES[key]
+    for key in list(_PROBES):
+        if key not in seen and key not in _OFFLINE:
+            del _PROBES[key]  # left the tailnet
+
+
+#: Every non-mobile tailnet peer the last sweep looked at (online and
+#: offline), with what its probe found — the "why isn't it listed" answer
+#: Settings → Devices and ``mindflock devices list`` give per peer.
+_PROBES: Dict[str, dict] = {}
+#: When MindFlock last answered on a device that discovery has since dropped
+#: (key -> epoch s): kept so a member row can still say "last seen 3 h ago".
+_SEEN: Dict[str, float] = {}
+
+
+def _note_probe(peer: dict, outcome: str, now: float) -> None:
+    key = peer.get("key") or ""
+    if not key:
+        return
+    _PROBES[key] = {
+        "device": key,
+        "host": peer.get("host") or key,
+        "dns": peer.get("dns") or "",
+        "os": peer.get("os") or "",
+        "online": bool(peer.get("online")),
+        "tags": list(peer.get("tags") or []),
+        "ts_last_seen": float(peer.get("ts_last_seen") or 0.0),
+        "outcome": outcome,
+        "at": now,
+    }
+
+
+def probes() -> List[dict]:
+    """Snapshots of :data:`_PROBES`, tagged peers first, then by name."""
+    return sorted(
+        (dict(p) for p in _PROBES.values()),
+        key=lambda p: (not p["tags"], p["host"].lower()),
+    )
+
+
+def last_seen(key: str) -> float:
+    """When MindFlock last answered on ``key`` (epoch s, 0.0 never)."""
+    dev = _DEVICES.get(key) or {}
+    return max(float(dev.get("last_seen") or 0.0), _SEEN.get(key, 0.0))
 
 
 def _connected(dev: dict) -> bool:
@@ -686,8 +902,11 @@ async def refresh_device(key: str) -> Optional[dict]:
     if dev is None:
         return None
     if aiohttp is not None and (dev.get("ip") or dev.get("dns")):
-        hit = await _probe_peer({"ip": dev.get("ip", ""), "dns": dev.get("dns", "")})
+        peer = {"ip": dev.get("ip", ""), "dns": dev.get("dns", "")}
+        hit = await _probe_peer(peer)
         _apply_probe(dev, hit, time.time())
+        if not hit and peer.get("probe"):
+            dev["probe"] = peer["probe"]
     return dict(dev)
 
 
@@ -720,7 +939,7 @@ async def _fetch_instances(dev: dict) -> None:
             if isinstance(data, list):
                 dev.update(instances=data, instances_ok=True, error="")
     except Exception as err:  # noqa: BLE001
-        dev.update(instances_ok=False, error=str(err) or "unreachable")
+        dev.update(instances_ok=False, error=plain_error(err))
 
 
 async def discovery_loop(server_port: int) -> None:
@@ -891,7 +1110,7 @@ async def connect_device(device: str, token: str) -> Tuple[bool, str]:
                 return False, "device answered HTTP %d" % resp.status
             data = await resp.json(content_type=None)
     except Exception as err:  # noqa: BLE001
-        return False, str(err) or "unreachable"
+        return False, plain_error(err)
     if token:
         set_token(device, token)
     if isinstance(data, list):
@@ -1022,10 +1241,31 @@ def _refresh_before_done(send, dev: dict):
     return wrapped
 
 
+async def _may_lend_credential(scope) -> bool:
+    """Whether a proxied request may carry THIS device's credential for the
+    target (the fleet key, or the token pasted for it): when this device's
+    own gate is on (the caller already proved itself to get here), or the
+    caller is :func:`~backend.web.core.auth.privileged` — this machine, a
+    credential holder such as the phone with the fleet-key cookie, a trusted
+    Tailscale account. Otherwise — an anonymous caller of a gate-off device —
+    the request goes out bare, and the target's own gate decides: holding
+    the fleet key must not let this device launder a stranger into a gated
+    one. Never raises (fails closed)."""
+    try:
+        from backend.web.core import auth as _auth
+
+        if _auth.auth_enabled():
+            return True
+        return bool(await _auth.privileged(scope))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class RemoteProxyMiddleware:
     """Forward ``/api/instances/<device>::<title>/…`` (HTTP + websocket) to the
     device that owns the session. Mounted INSIDE the auth gate, so the local
-    token is checked first; the target's token is attached on the way out."""
+    token is checked first; the target's token is attached on the way out —
+    only for a caller this device vouches for (:func:`_may_lend_credential`)."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -1075,6 +1315,7 @@ class RemoteProxyMiddleware:
             return
         qs = (scope.get("query_string") or b"").decode("latin-1")
         url = dev["base_url"] + target_path + (("?" + qs) if qs else "")
+        lend = await _may_lend_credential(scope)
         if scope["type"] == "http":
             await self._proxy_http(
                 scope,
@@ -1085,9 +1326,10 @@ class RemoteProxyMiddleware:
                 timeout=_SLOW_FWD_TIMEOUT.get(
                     (scope.get("method", "GET"), target_path), _HTTP_TIMEOUT
                 ),
+                lend=lend,
             )
         else:
-            await self._proxy_ws(receive, send, dev, url)
+            await self._proxy_ws(receive, send, dev, url, lend=lend)
 
     async def _reject_not_connected(self, scope, receive, send, device: str) -> None:
         """Tell the caller the target device isn't reachable/paired."""
@@ -1120,6 +1362,7 @@ class RemoteProxyMiddleware:
         dev: dict,
         url: str,
         timeout: float = _HTTP_TIMEOUT,
+        lend: bool = False,
     ) -> None:
         body = b""
         while True:
@@ -1129,7 +1372,7 @@ class RemoteProxyMiddleware:
             body += msg.get("body", b"")
             if not msg.get("more_body"):
                 break
-        headers = _headers_for(dev["key"])
+        headers = _headers_for(dev["key"], auth=lend)
         for k, v in scope.get("headers") or []:
             if k == b"content-type":
                 headers["Content-Type"] = v.decode("latin-1")
@@ -1173,7 +1416,9 @@ class RemoteProxyMiddleware:
                     status_code=502,
                 )(scope, receive, send)
 
-    async def _proxy_ws(self, receive, send, dev: dict, url: str) -> None:
+    async def _proxy_ws(
+        self, receive, send, dev: dict, url: str, lend: bool = False
+    ) -> None:
         msg = await receive()
         if msg["type"] != "websocket.connect":
             return
@@ -1183,7 +1428,7 @@ class RemoteProxyMiddleware:
         try:
             async with session.ws_connect(
                 ws_url,
-                headers=_headers_for(dev["key"]),
+                headers=_headers_for(dev["key"], auth=lend),
                 heartbeat=30,
             ) as peer:
                 await send({"type": "websocket.accept"})

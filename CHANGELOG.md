@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tailscale on this device.** Settings → Devices opens with a card that says
+  who this computer is signed in to Tailscale as, on which tailnet, and what's
+  wrong if anything is: signed out (a **Sign in** button shows the sign-in link
+  and a QR), MagicDNS or HTTPS off, or a device key about to expire (tagged
+  devices included, with how to turn expiry off). MindFlock now finds the
+  Tailscale app on macOS (the App Store and standalone builds keep their
+  command inside the app) and recognises a Windows-side Tailscale under WSL,
+  with steps for the setup that works there, instead of saying "install
+  Tailscale" when it's already installed.
+
+- **Joining makes a computer reachable.** A computer that only listens on
+  itself can't be reached by your other devices, so Devices now says so and
+  offers **Make reachable** (Tailscale mode with the access gate on, in one
+  step), refuses to make a code nobody could use, and tells the device that
+  let a new one in when it can't reach it back. When no other MindFlock shows
+  up, each device on your tailnet gets a reason (not running there, only
+  listening on itself, a Tailscale access rule blocking port 8765, asleep since
+  …) with the fix next to it. **Match my other devices** copies the phone-link
+  setup after a join.
+
+- **Approve a new device from wherever you are.** A join request shows on every
+  one of your devices, in the bell, on the phone page and, in the desktop app
+  while it's in the background, as a system notification. The 6-digit code is
+  still compared. **Paste a code** (Devices, the command palette, `mindflock
+  join CODE`) takes either kind of code: one for your own devices or one from
+  someone you work with.
+
+- **Update all my devices.** Settings → Devices (and `mindflock devices
+  update`) updates your other devices one at a time to the newest release,
+  waits for each to come back on it, stops at the first that doesn't, and
+  skips (with the reason) any it can't update, such as a development checkout.
+  The bell, the browser and the phone page say when a release is out and which
+  of your devices are behind. Also new: `mindflock update` and `mindflock
+  restart`.
+
+- **A new computer in one line.** **Add a device** also shows a single command
+  for a computer with nothing installed yet. It installs your version of
+  MindFlock, signs in to Tailscale, makes the computer reachable and asks to
+  join (`mindflock devices bootstrap`, `install.sh --join`). The desktop app
+  gets a "download, then paste this code" version. Devices also shows each
+  device's readiness (version, tools, agent sign-in, push access, Tailscale key
+  expiry), and offers **Install** when a device lacks the agent your devices
+  share.
+
+- **First run is one flow.** Setup follows one plan, also shown by `mindflock
+  init`: tools → "first computer, or join one you already have?" → agent
+  sign-in → Tailscale (only when you use more than one computer) → GitHub →
+  first repo. **Sign in to <agent>** is back, in Setup and on the doctor's
+  sign-in row. **Connect GitHub** signs in through GitHub's device flow when a
+  client id is configured (`github.oauth_client_id`), else through `gh auth
+  login --web`, else through a pre-filled token page. Setup also fills in git's
+  name and email and checks that you can push. A push that fails for want of
+  credentials now says so and how to fix it, instead of hanging on a password
+  prompt.
+
+- **Work with someone (peer links).** The inviter's screen updates as it
+  happens ("B joined — read them your safety number", a countdown, Cancel), and
+  the bell says when someone joins or leaves. A shared session is marked
+  *Shared with <name>* in the sidebar. Pairing again with the same person
+  reconnects the existing link and keeps its shared folder. You choose how
+  they'll reach you before the first invite, and a failed tunnel falls back to
+  a direct invite, labelled as such. Messages that arrive while no folder is
+  shared wait in the link's inbox, and you can read and send messages and see
+  their changes from Settings, so someone without a sandbox (a Mac) can take
+  part.
+
+### Changed
+
+- **Updates finish themselves.** An engine update now restarts the server on
+  its own (no open browser tab needed), keeps the mode it was started in,
+  restarts the ticket pipeline onto the new build, and rolls back to the
+  previous version if the new one never comes up. `install.sh` installs the
+  newest release by default (`MINDFLOCK_INSTALL_REF=main` still works) and
+  restarts a server that's already running.
+
+- **Dependency installs actually install.** Agent CLIs install with their
+  vendors' own installers (never pip or `sudo npm`). The install and sign-in
+  terminals work without tmux. On a Mac without Homebrew, Homebrew is installed
+  first. A first run waits for the Xcode command-line tools instead of failing.
+  The desktop app goes straight from installing MindFlock into installing what
+  it needs. The doctor shows each agent CLI's version.
+
+- **Tailscale mode listens on Tailscale only.** It binds this machine plus its
+  Tailscale addresses, not every network it's on (`MINDFLOCK_BIND_ALL=1` keeps
+  the old behaviour), and answers only to its own names.
+
+- **The suggested Tailscale access policy** is one block, safe to merge,
+  covering device-to-device and the shared phone link. It names your own login
+  instead of every user on the tailnet.
+
+### Security
+
+- On a computer whose access gate is off but which is reachable from the
+  tailnet, a caller that isn't you can no longer:
+  - change settings that reach your other devices (agent launch arguments,
+    custom agents, templates, ticket sources, sync, peer links, red zones);
+  - read this device's access token;
+  - rotate the token;
+  - start an update or choose its version (only a published release, never a
+    downgrade or a branch);
+  - drive your other devices through this one.
+- A web page that re-resolves its name to 127.0.0.1 no longer counts as "this
+  computer".
+- `/api/github/push-check` is a POST and only runs in folders MindFlock
+  already knows.
+
 ## [0.7.4] - 2026-10-08
 
 ### Added

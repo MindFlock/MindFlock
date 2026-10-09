@@ -207,6 +207,19 @@ def test_the_toggle_hands_back_a_spent_budget(armed, execs, monkeypatch):
     assert execs == [0.5]
 
 
+def test_the_restart_endpoint_keeps_the_mode_only_when_asked(monkeypatch):
+    """`mindflock restart` / install.sh pass keep_mode (a server started with
+    `serve tailscale` stays on the tailnet); the Settings toggle path doesn't,
+    so a changed serve mode takes effect."""
+    calls: list = []
+    monkeypatch.setattr(restart, "reexec_soon", lambda **kw: calls.append(kw))
+    assert client.post("/api/server/restart", json={"keep_mode": True}).json()[
+        "restarting"
+    ]
+    assert client.post("/api/server/restart").json()["restarting"]
+    assert calls == [{"keep_mode": True}, {}]
+
+
 def test_the_manual_restart_endpoint_still_re_execs(execs, monkeypatch):
     monkeypatch.setenv(restart._ATTEMPT_ENV, "2")
     r = client.post("/api/server/restart")

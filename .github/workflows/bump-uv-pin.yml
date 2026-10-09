@@ -1,4 +1,5 @@
-# Keeps the uv installer pin in install.sh fresh: weekly, check Astral's
+# Keeps the uv installer pin in install.sh (and its twin in backend/_pins.py,
+# the doctor's uv fix) fresh: weekly, check Astral's
 # latest uv release; if it's newer than UV_PINNED_VERSION, download that
 # version's installer, compute its sha256, rewrite the pin + checksum pair
 # (the two lines install.sh says to bump together), and open a PR.
@@ -54,6 +55,13 @@ jobs:
           grep -q "^UV_PINNED_VERSION=\"$latest\"" install.sh
           grep -q "^UV_INSTALLER_SHA256=\"$sha\"" install.sh
           grep -q "pragma: allowlist secret" install.sh
+          # The doctor's uv fix carries the same pair (backend/_pins.py);
+          # tests/unit/test_pins.py fails if the two ever disagree.
+          sed -i "s|^UV_PINNED_VERSION = \"$current\"|UV_PINNED_VERSION = \"$latest\"|" backend/_pins.py
+          sed -i "s|^\(UV_INSTALLER_SHA256 = \"\)[0-9a-f]\{64\}\"|\1$sha\"|" backend/_pins.py
+          grep -q "^UV_PINNED_VERSION = \"$latest\"" backend/_pins.py
+          grep -q "^UV_INSTALLER_SHA256 = \"$sha\"" backend/_pins.py
+          grep -q "pragma: allowlist secret" backend/_pins.py
 
           # Prove the updated pin actually installs before proposing it.
           sh /tmp/uv-install.sh
@@ -71,7 +79,7 @@ jobs:
           title: "Bump pinned uv ${{ steps.bump.outputs.current }} → ${{ steps.bump.outputs.latest }}"
           commit-message: "Bump pinned uv ${{ steps.bump.outputs.current }} → ${{ steps.bump.outputs.latest }}"
           body: |
-            Automated bump of the uv installer pin in `install.sh`.
+            Automated bump of the uv installer pin in `install.sh` and `backend/_pins.py`.
 
             - `UV_PINNED_VERSION`: `${{ steps.bump.outputs.current }}` → `${{ steps.bump.outputs.latest }}`
             - `UV_INSTALLER_SHA256`: recomputed from `https://astral.sh/uv/${{ steps.bump.outputs.latest }}/install.sh`

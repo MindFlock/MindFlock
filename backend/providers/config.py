@@ -202,9 +202,13 @@ class ProviderConfig:
     #: authenticate on first launch).
     login_command: str = ""
     #: A copy-paste command that installs this CLI (e.g.
-    #: ``"npm install -g @openai/codex"``). Empty = fall back to the platform
+    #: ``"curl -fsSL https://chatgpt.com/codex/install.sh | sh"``). Empty = fall back to the platform
     #: package-manager hint (``brew``/``apt``) keyed on the program name.
     install_hint: str = ""
+    #: Arguments that print the CLI's version and exit, shown by the doctor
+    #: next to its path. Every built-in answers ``--version``; a custom TOML
+    #: gets no probe unless it declares ``[connect] version_args``.
+    version_args: Tuple[str, ...] = ("--version",)
     # --- peer shared sessions (backend/peer, docs/peer-link.md) ----------- #
     #: Hosts the CLI must reach on 443 inside the peer sandbox (its API, its
     #: auth refresh). Empty = this CLI can't run a peer shared session.
@@ -466,7 +470,13 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         auth_files=("~/.codex/auth.json",),
         auth_env=("OPENAI_API_KEY",),
         login_command="codex login",
-        install_hint="npm install -g @openai/codex",
+        # OpenAI's native installer (POSIX sh, no Node, lands in ~/.local/bin).
+        # Non-interactive so it never asks "Start Codex now?" inside the
+        # one-shot install script.
+        install_hint=(
+            "curl -fsSL https://chatgpt.com/codex/install.sh"
+            " | CODEX_NON_INTERACTIVE=1 sh"
+        ),
         # Peer shared sessions: the API + ChatGPT-login hosts, CODEX_HOME
         # pointed into the sandbox home with only auth.json copied in. The MCP
         # attach is CodexProvider.peer_mcp_args (a -c inline table).
@@ -539,6 +549,9 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # agy authenticates through a Google sign-in on first run; there is no
         # separate login subcommand, so the one-click terminal just runs `agy`.
         login_command="agy",
+        # agy is the Antigravity app's launcher; whether it answers --version
+        # without opening a window is unverified, so it is never probed.
+        version_args=(),
         # Peer shared sessions. agy has no MCP flag or env var: it reads
         # ~/.gemini/config/mcp_config.json, so ours is written into the
         # sandbox home at launch. Its login is a file once the keyring is
@@ -598,7 +611,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # No oneshot_args on purpose: aider's non-interactive `--message` is an
         # EDITING run (it applies changes and auto-commits by default), so asking
         # it to write a commit message risks it writing the commit instead.
-        install_hint="python -m pip install aider-chat",
+        # Aider's own installer (POSIX sh): it brings a private uv and installs
+        # aider-chat as a uv tool, so neither PEP 668 nor a missing `python`
+        # can stop it — where `python -m pip install` hit both.
+        install_hint="curl -LsSf https://aider.chat/install.sh | sh",
     ),
     ProviderConfig(
         name="opencode",
@@ -630,7 +646,9 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         usage_window_note="Bring-your-own provider keys/plans; no MindFlock-managed window.",
         auth_files=("~/.local/share/opencode/auth.json",),
         login_command="opencode auth login",
-        install_hint="npm install -g opencode-ai",
+        # The official installer is bash (arrays, [[ ]]), so `| bash`; it puts
+        # the binary in ~/.opencode/bin, which pathenv knows about.
+        install_hint="curl -fsSL https://opencode.ai/install | bash",
         # Peer shared sessions. The MCP goes in through OPENCODE_CONFIG_CONTENT
         # (schema key `environment`, not `env`), and DISABLE_PROJECT_CONFIG
         # keeps a planted opencode.json / .opencode/ plugin in the shared folder
@@ -692,6 +710,11 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         oneshot_args=("--auto-approve", "false", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Cline account or bring-your-own key; no MindFlock-managed window.",
+        # npm is the only channel Cline publishes. A user prefix (no sudo, no
+        # EACCES against a distro Node's root-owned one) whose bin dir is
+        # ~/.local/bin; the doctor adds Node.js to the install plan first when
+        # npm is missing (backend.doctor.check_node).
+        install_hint="npm install -g --prefix ~/.local cline",
         # Peer shared sessions: CLINE_MCP_SETTINGS_PATH replaces its MCP
         # settings file with ours (read-only in the run dir); only the provider
         # login (providers.json) is copied in.
@@ -744,6 +767,12 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         usage_window_note="Bring-your-own provider keys; no MindFlock-managed window.",
         # `goose configure` sets up the provider + key interactively.
         login_command="goose configure",
+        # Block's installer is bash; CONFIGURE=false skips its interactive
+        # `goose configure` (that is the login step, offered on its own).
+        install_hint=(
+            "curl -fsSL https://github.com/block/goose/releases/download/stable/"
+            "download_cli.sh | CONFIGURE=false bash"
+        ),
         # Peer shared sessions: --no-profile drops every configured extension
         # (so only ours loads), --with-builtin developer puts its shell/edit
         # tools back. The extension's env goes through env(1): goose filters
@@ -869,6 +898,7 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         auth_env=tuple(str(x) for x in (connect.get("auth_env", ()) or ())),
         login_command=str(connect.get("login_command", "") or ""),
         install_hint=str(connect.get("install_hint", "") or ""),
+        version_args=tuple(str(x) for x in (connect.get("version_args", ()) or ())),
         # [peer] — opt-in peer shared sessions (see the field docs above; the
         # sandbox validates every value again before use).
         sandbox_egress=tuple(str(x) for x in (peer.get("egress", ()) or ())),

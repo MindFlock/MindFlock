@@ -540,48 +540,69 @@ recognized without any extra configuration. The prompt queue uses a looser
 test, since it types the user's own text: anything but a bare shell in the
 foreground.
 
-## Connection: install detection
+## Connection: install detection and sign-in
 
 Settings → **Agent providers** surfaces a **connection** view for every
 registered provider (built-in and custom): whether its binary is installed
 (with the resolved path) and, when it's missing, a copy-paste install command
-(see [web-ui.md](web-ui.md)). MindFlock does **not** drive sign-in — each CLI
-prompts you to authenticate on its own the first time a session launches it —
-MindFlock never drives sign-in and never stores credentials. It does read Claude
-Code's *existing* OAuth token read-only, solely to display live plan usage (see
-**Live usage & limit state** below). Install detection is the same
+(see [web-ui.md](web-ui.md)). MindFlock never stores credentials. It does read
+Claude Code's *existing* OAuth token read-only, solely to display live plan
+usage (see **Live usage & limit state** below). Install detection is the same
 `shutil.which` / explicit-path check the backend uses to gate the default
 provider (below).
 
-`BaseProvider.install_hint()` backs the install command, best-effort and wrapped
-so one provider can never break the list: a copy-paste command that installs
-this CLI, or `""` to fall back to a platform package-manager hint keyed on the
-program name. `ClaudeProvider` overrides it **npm-vs-native**:
-`npm install -g @anthropic-ai/claude-code` when `npm` is on `PATH`, else the
-native `curl … | sh` installer (no Node). `GenericProvider` reads it straight
-from the TOML's `[connect]` table.
+`BaseProvider.install_hint()` backs the install command the doctor RUNS (in the
+one-shot install script and `doctor --fix`), best-effort and wrapped so one
+provider can never break the list: a command that installs this CLI, or `""` to
+fall back to a platform package-manager hint keyed on the program name. Each
+built-in uses its vendor's own installer, never `pip` or `sudo npm`:
 
-> **Legacy / backend-only.** Two further `BaseProvider` methods —
-> `login_command()` (the command a login terminal would run; default: the bare
-> program) and `auth_evidence()` (a human string when the CLI *looks* logged in,
-> else `""`, reported as "login status unknown" rather than "logged out" so a
-> version-fragile credential probe never false-negatives) — and the
-> `WS /api/providers/{name}/login-terminal` + `POST …/login-close` endpoints
-> (`web/core/provider_login.py`) still exist but are **no longer surfaced in the
-> UI** now that sign-in is delegated to each CLI. `GET /api/providers/status`
-> still returns their `authenticated` / `auth_detail` / `login_command` fields;
-> nothing in the frontend reads them. The `[connect]` table's `auth_files`,
-> `auth_env`, and `login_command` keys feed only these legacy paths.
+| CLI | install_hint |
+|---|---|
+| claude | `curl -fsSL https://claude.ai/install.sh \| bash` — always, even with npm on PATH (npm meant EACCES with a distro Node, and no auto-update) |
+| codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| CODEX_NON_INTERACTIVE=1 sh` |
+| aider | `curl -LsSf https://aider.chat/install.sh \| sh` (brings its own uv; no PEP 668 failure) |
+| opencode | `curl -fsSL https://opencode.ai/install \| bash` (lands in `~/.opencode/bin`) |
+| goose | `curl -fsSL …/block/goose/releases/download/stable/download_cli.sh \| CONFIGURE=false bash` |
+| cline | `npm install -g --prefix ~/.local cline` — npm is Cline's only channel; the doctor adds Node.js to the install plan first when npm is missing (`check_node`; a Windows npm under `/mnt/` on WSL doesn't count) |
+| antigravity | none — `agy` ships with the Antigravity app |
 
-Custom providers configure the install hint (and the legacy connect fields) with
+A bash script is piped to `bash`, never `sh`: `/bin/sh` is dash on Debian,
+Ubuntu and WSL, and dies parsing one. `tests/unit/test_install_hints.py` lints
+every provider's hint for these rules (no pip, no sudo, the right shell per
+installer, npm only into a user prefix with the Node check).
+`GenericProvider` reads the hint straight from the TOML's `[connect]` table.
+
+`BaseProvider.version_args()` (default `()` — never run with a guessed flag)
+names the arguments that print the CLI's version; the doctor shows the answer
+next to the path. Every built-in but antigravity declares `--version`; a custom
+TOML opts in with `[connect] version_args = ["--version"]`.
+
+**Sign-in.** `login_command()` (the command a login terminal runs; default: the
+bare program) and `auth_evidence()` (a human string when the CLI *looks* logged
+in, else `""`, reported as "login status unknown" rather than "logged out" so a
+version-fragile credential probe never false-negatives) feed the doctor's
+`agent-auth` row. When that row says no login was found and the provider
+declares a login flow, Setup's *Sign in to your agent* step and the doctor row offer **Sign in to <agent>**,
+which opens `WS /api/providers/{name}/login-terminal` (`web/core/provider_login.py`
+— tmux, or a plain PTY when tmux is missing) in a window; closing it calls
+`POST …/login-close` and re-runs the agent test and the doctor. This reverses
+an earlier decision to leave sign-in to each CLI's first session: sign-in was
+the last onboarding step that still needed a terminal. `doctor --fix` runs the
+same command, and for a bare program (`claude`) first says how to get back
+(`/exit`). The `[connect]` table's `auth_files`, `auth_env`, and
+`login_command` keys configure these for a custom provider.
+
+Custom providers configure the install hint (and the other connect fields) with
 an optional `[connect]` table in their TOML (all keys optional):
 
 ```toml
 [connect]
-install_hint = "npm install -g @openai/codex"  # "" -> platform package hint
-auth_files = ["~/.codex/auth.json"]   # legacy: first existing file = "looks logged in"
-auth_env = ["OPENAI_API_KEY"]         # legacy: or a set API-key env var
-login_command = "codex login"         # legacy: "" -> run the CLI bare
+install_hint = "curl -fsSL https://example.com/install.sh | bash"  # "" -> platform package hint
+version_args = ["--version"]          # the doctor shows the version ("" = no probe)
+auth_files = ["~/.codex/auth.json"]   # first existing file = "looks logged in"
+auth_env = ["OPENAI_API_KEY"]         # or a set API-key env var
+login_command = "codex login"         # "" -> run the CLI bare
 ```
 
 ## Pricing (`pricing.py`)

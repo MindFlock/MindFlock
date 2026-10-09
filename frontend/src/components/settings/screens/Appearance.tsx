@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { api } from "../../../api/client";
 import { rethemeAll } from "../../../lib/terminals";
+import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
 
 /* The aviary, in the order theme.css defines it: the three quiet neutrals, then
@@ -133,8 +134,15 @@ function apply(dim: Dim, name: string) {
   } catch {
     /* storage unavailable */
   }
-  // Cosmetic — a failed save just stays per-browser.
-  api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch(() => {});
+  // Cosmetic: a failed save stays per-browser — and says so, rather than
+  // the next sync quietly putting the old one back.
+  api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch((e) =>
+    toast(
+      "Couldn't save the " + dim.field + " for your other devices — " +
+        ((e as Error)?.message || "the server refused it"),
+      { duration: 8000 }
+    )
+  );
   rethemeAll(); // open terminals pick up the new canvas/cursor colors
 }
 

@@ -553,3 +553,142 @@ class TestEndpoints:
         r = client.post("/api/mindflock/start")
         assert r.status_code == 400
         assert "No repo to ingest into" in r.json()["error"]
+
+
+# --------------------------------------------------------------------------- #
+# After an engine update: a pipeline still on the old build is restarted
+# --------------------------------------------------------------------------- #
+class TestStaleBuild:
+    def _hold(self, ctrl, text):
+        p = ctrl._lock_path()
+        p.write_text(text)
+        fh = open(p, "a+")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        return fh
+
+    def _release(self, fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+    def _build(self, monkeypatch, version="9.9.9", commit=""):
+        from backend.web.core import self_update
+
+        monkeypatch.setattr(self_update, "installed_version", lambda: version)
+        monkeypatch.setattr(self_update, "installed_commit", lambda: commit)
+
+    def test_the_lock_records_the_build_and_the_pid_still_parses(
+        self, ctrl, monkeypatch
+    ):
+        import json as _json
+
+        self._build(monkeypatch)
+        fh = self._hold(
+            ctrl,
+            "321\n"
+            + _json.dumps({"version": "0.7.4", "commit": "", "owner": "server"}),
+        )
+        try:
+            assert ctrl._external_lock_pid() == 321
+            assert ctrl._lock_holder()[1]["version"] == "0.7.4"
+            assert ctrl.stale_build() is True
+        finally:
+            self._release(fh)
+
+    def test_the_same_build_is_not_stale(self, ctrl, monkeypatch):
+        import json as _json
+
+        self._build(monkeypatch, commit="a" * 40)
+        fh = self._hold(
+            ctrl,
+            "321\n"
+            + _json.dumps({"version": "0.7.4", "commit": "a" * 40, "owner": "server"}),
+        )
+        try:
+            # Same commit wins over a version string that disagrees.
+            assert ctrl.stale_build() is False
+        finally:
+            self._release(fh)
+
+    def test_a_lock_from_before_builds_were_recorded_is_stale(self, ctrl, monkeypatch):
+        self._build(monkeypatch)
+        fh = self._hold(ctrl, "321")
+        try:
+            assert ctrl.stale_build() is True
+        finally:
+            self._release(fh)
+
+    def test_a_standalone_run_is_never_touched(self, ctrl, monkeypatch):
+        import json as _json
+
+        self._build(monkeypatch)
+        fh = self._hold(ctrl, "321\n" + _json.dumps({"version": "0.1.0", "owner": ""}))
+        try:
+            assert ctrl.stale_build() is False
+        finally:
+            self._release(fh)
+
+    def test_nothing_running_is_not_stale(self, ctrl):
+        assert ctrl.stale_build() is False
+
+    def test_boot_restarts_a_stale_pipeline_instead_of_leaving_it(self, monkeypatch):
+        addon = ti.TicketIngestionAddon()
+        calls = []
+        monkeypatch.setattr(ti, "_may_restart_found_pipeline", lambda: True)
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: True)
+        )
+        monkeypatch.setattr(addon.ctrl, "stale_build", lambda: True)
+        monkeypatch.setattr(addon.ctrl, "restart", lambda: calls.append("restart"))
+        monkeypatch.setattr(addon.ctrl, "start", lambda: calls.append("start"))
+        addon._boot_reconcile()
+        assert calls == ["restart"]
+
+    def test_boot_leaves_a_stale_pipeline_alone_with_every_toggle_off(
+        self, monkeypatch
+    ):
+        """A restart is a stop AND a start: with the toggles off it would turn
+        on what the user left off — and an owner-unknown lock (no metadata,
+        maybe a standalone run) is only touched while the pipeline is wanted."""
+        addon = ti.TicketIngestionAddon()
+        calls = []
+        monkeypatch.setattr(ti, "_may_restart_found_pipeline", lambda: True)
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: False)
+        )
+        monkeypatch.setattr(addon.ctrl, "stale_build", lambda: True)
+        monkeypatch.setattr(addon.ctrl, "restart", lambda: calls.append("restart"))
+        monkeypatch.setattr(addon.ctrl, "start", lambda: calls.append("start"))
+        monkeypatch.setattr(addon.ctrl, "stop", lambda: calls.append("stop"))
+        addon._boot_reconcile()
+        assert calls == []
+
+    def test_boot_never_restarts_a_found_pipeline_under_pytest(self, monkeypatch):
+        addon = ti.TicketIngestionAddon()
+        monkeypatch.setattr(
+            addon.ctrl, "stale_build", lambda: pytest.fail("probed the real lock")
+        )
+        monkeypatch.setattr(
+            ti.TicketIngestionAddon, "_process_wanted", staticmethod(lambda: False)
+        )
+        addon._boot_reconcile()
+
+    def test_the_child_is_marked_as_the_servers(self, ctrl):
+        assert ctrl._env()[ti.PIPELINE_OWNER_ENV] == "server"
+
+    def test_the_pipeline_writes_pid_then_build(self, tmp_path, monkeypatch):
+        import json as _json
+
+        from backend.ticket_ingestion import __main__ as pipeline_main
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(pipeline_main.OWNER_ENV, "server")
+        monkeypatch.setattr(pipeline_main, "_LOCK_HANDLE", None)
+        assert pipeline_main._acquire_singleton_lock() is True
+        try:
+            lines = (tmp_path / ".mindflock-pipeline.lock").read_text().splitlines()
+            assert int(lines[0]) == os.getpid()
+            meta = _json.loads(lines[1])
+            assert meta["owner"] == "server" and "version" in meta and "commit" in meta
+            assert pipeline_main.OWNER_ENV == ti.PIPELINE_OWNER_ENV
+        finally:
+            pipeline_main._LOCK_HANDLE.close()

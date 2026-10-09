@@ -2,8 +2,22 @@
  * countdown formatting, and the one-line status texts the screen shows. No
  * DOM and no fetches, so the wording is tested in node (fleet.test.ts). */
 
-import type { FleetCandidate, FleetJoin, FleetMember, FleetRemoved, FleetStatus, SyncStatus } from "../api/types";
+import type {
+  Device,
+  FleetAdmit,
+  FleetCandidate,
+  FleetJoin,
+  FleetMember,
+  FleetPhoneLink,
+  FleetRemoved,
+  FleetRequest,
+  FleetRollout,
+  FleetRolloutRow,
+  FleetStatus,
+  SyncStatus,
+} from "../api/types";
 import { relTime } from "./format";
+import { extractPeerCode } from "./peer";
 
 /** Crockford base32 — what the server's invite codes are drawn from. */
 // Digits + letters without I L O U, kept as two literals: one 32-symbol
@@ -49,21 +63,150 @@ export function liveInvite(st: FleetStatus | null, nowSec = Date.now() / 1000) {
 }
 
 /** The member row's status line. A version mismatch is said as what to do
- * about it, because settings two versions apart may not mean the same thing. */
-export function memberStatus(m: FleetMember, selfVersion: string): string {
+ * about it, because settings two versions apart may not mean the same thing.
+ * Two builds that both call themselves the same version (one installed from
+ * `main`) differ by commit, when both report one. */
+export function memberStatus(m: FleetMember, selfVersion: string, selfCommit = ""): string {
   if (m.self) return "this device";
   if (m.error) return m.error;
-  if (!m.reachable) return "offline";
+  // What discovery found ("connection refused on :8765 — …", "asleep — …")
+  // says more than "offline"; else when MindFlock last answered there.
+  if (!m.reachable) return m.reason || (m.last_seen ? "offline · last seen " + relTime(m.last_seen) : "offline");
   if (!m.same_fleet) return "hasn't picked up the change yet";
   if (selfVersion && m.version && m.version !== selfVersion)
     return "runs " + m.version + " — this one runs " + selfVersion + "; update both to the same version";
+  if (selfCommit && m.commit && m.commit !== selfCommit)
+    return "runs a different build of " + (m.version || "MindFlock") + "; update both to the same release";
   return "online";
+}
+
+/** Compare two "0.7.4"-style versions (a leading v is ignored): <0, 0, >0.
+ * Mirrors the server's parse_version — non-numeric junk counts as 0. */
+export function cmpVersion(a: string, b: string): number {
+  const parse = (v: string) =>
+    String(v || "")
+      .trim()
+      .replace(/^v/i, "")
+      .split(".")
+      .map((x) => parseInt(x, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+/** Why a member's engine can't be updated from here ("" when it can). */
+export function memberUpdateBlocker(m: FleetMember): string {
+  if (m.install === "editable") return "dev checkout — updates come from git there";
+  if (m.install === "other") return "not installed by install.sh — update it there";
+  return "";
+}
+
+/** The small chips next to a member's name about updating it: behind the
+ * newest release, can't be updated from here, or its desktop app lagging
+ * its engine (the app updates itself on its next launch). */
+export function memberUpdateChips(m: FleetMember, latest: string): { text: string; warn: boolean }[] {
+  const chips: { text: string; warn: boolean }[] = [];
+  const blocker = memberUpdateBlocker(m);
+  if (blocker) chips.push({ text: blocker, warn: false });
+  else if (latest && m.version && (m.self || m.reachable) && cmpVersion(latest, m.version) > 0)
+    chips.push({ text: "v" + latest + " available", warn: true });
+  if (m.shell_version && m.version && cmpVersion(m.version, m.shell_version) > 0)
+    chips.push({ text: "desktop app v" + m.shell_version + " updates on its next launch", warn: false });
+  return chips;
+}
+
+/** Members (this device included) running an older version than `latest`,
+ * reachable or not counted: what "N of your devices are behind" counts. */
+export function devicesBehind(members: FleetMember[] | null | undefined, latest: string): FleetMember[] {
+  if (!latest) return [];
+  return (members || []).filter(
+    (m) => (m.self || m.reachable) && !!m.version && cmpVersion(latest, m.version) > 0
+  );
+}
+
+/** The line above "Update all my devices": what is behind, or "" when
+ * nothing is. */
+export function updateAllLine(members: FleetMember[] | null | undefined, latest: string): string {
+  const behind = devicesBehind(members, latest);
+  if (!behind.length) return "";
+  const updatable = behind.filter((m) => !memberUpdateBlocker(m));
+  const n = behind.length;
+  let line = "MindFlock v" + latest + " is out — " + n + " of your devices " + (n === 1 ? "is" : "are") + " behind.";
+  if (updatable.length < n)
+    line += " " + (n - updatable.length) + " can't be updated from here (see " + (n - updatable.length === 1 ? "its row" : "their rows") + ").";
+  return line;
+}
+
+const ROLLOUT_STEP_WORDS: Record<FleetRolloutRow["step"], string> = {
+  queued: "waiting",
+  updating: "updating…",
+  restarting: "restarting…",
+  done: "updated",
+  current: "up to date",
+  skipped: "skipped",
+  failed: "failed",
+  not_started: "not started",
+};
+
+/** One device's line in a rollout ("Mac mini: skipped — dev checkout …"). */
+export function rolloutRowText(r: FleetRolloutRow): string {
+  const name = (r.host || r.key) + (r.self ? " (this device)" : "");
+  const word = ROLLOUT_STEP_WORDS[r.step] || r.step;
+  return name + ": " + word + (r.detail ? " — " + r.detail : "");
+}
+
+/** The rollout as one sentence ("" when there never was one). */
+export function rolloutLine(u: FleetRollout | null | undefined): string {
+  if (!u || u.state === "idle") return "";
+  const v = "v" + (u.version || u.tag.replace(/^v/i, ""));
+  if (u.state === "running") return "Updating your devices to " + v + ", one at a time…";
+  if (u.state === "halted") return "Stopped updating your devices: " + (u.error || "a device failed") + ".";
+  const skipped = (u.members || []).filter((r) => r.step === "skipped").length;
+  return (
+    "Your devices are on " + v + (skipped ? " — " + skipped + " skipped (see below)." : ".")
+  );
+}
+
+/** `update.available` (server core.update_watch) as the bell row / toast:
+ * which Settings screen its click opens (Devices when other devices are
+ * behind, else Advanced), and the toast's wording. */
+/** Whether `update.available` earns an in-app toast. Always in a browser;
+ * in the desktop app only when OTHER devices are behind (`behind` non-empty):
+ * the shell's own update toast covers this device alone. */
+export function updateToastWanted(
+  data: Record<string, unknown> | null | undefined,
+  desktop: boolean
+): boolean {
+  if (!desktop) return true;
+  const behind = (data || {}).behind;
+  return Array.isArray(behind) && behind.length > 0;
+}
+
+export function updateNote(data: Record<string, unknown> | null | undefined): {
+  text: string;
+  screen: "devices" | "advanced";
+  toast: string;
+} | null {
+  const d = data || {};
+  const latest = String(d.latest || "");
+  if (!latest) return null;
+  const behind = Array.isArray(d.behind) ? d.behind : [];
+  const count = Number(d.count) || behind.length + (d.here ? 1 : 0);
+  const text =
+    String(d.detail || "") ||
+    "MindFlock v" + latest + " is out" + (behind.length ? " — " + count + " of your devices are behind" : "");
+  if (behind.length) return { text, screen: "devices", toast: text + " — Update them in Settings → Devices" };
+  return { text, screen: "advanced", toast: text + " — Update in Settings → Advanced" };
 }
 
 /** What blocks a candidate from joining (shown instead of its buttons), or
  * "" when it can. */
 export function candidateBlocker(c: FleetCandidate): string {
-  if (!c.reachable) return "offline";
+  if (!c.reachable) return c.reason || "offline";
   if (!c.fleet_proto) return "update MindFlock on " + (c.host || c.device) + " to add it";
   return "";
 }
@@ -157,12 +300,16 @@ export function deviceEventNote(
   const host = String(d.host || d.device || "A device");
   const code = String(d.code || "");
   switch (event) {
-    case "device.join_requested":
+    case "device.join_requested": {
+      // A copy of a request waiting on another member (`via`): approvable
+      // here too, so it is said the same way, with where it asked.
+      const via = d.via ? String(d.via_host || d.via) : "";
       return {
         text: String(d.detail || "") || host + " wants to join" + (code ? " · code " + code : ""),
         cls: "n-warn",
-        toast: host + " wants to join your devices" + (code ? " — code " + code : ""),
+        toast: host + " wants to join your devices" + (via ? " (asked " + via + ")" : "") + (code ? " — code " + code : ""),
       };
+    }
     case "device.joined": {
       // `via` is set only on the copy THIS device emits about its own join
       // (it joined someone, or someone added it): its detail is worded from
@@ -561,4 +708,150 @@ export function unpinReplaces(path: string, sync: SyncStatus | null | undefined)
     (leader ? leader + "'s" : "the one your other devices have under that id") +
     ". To keep both, give one of them a different id in Settings → Tickets instead."
   );
+}
+
+/** What a pasted code is — the browser's twin of the server's
+ * fleet.classify_code, so ONE "Paste a code" box (Devices, the palette)
+ * routes it: a peer-link invite (`mfp1:`/`mfp2:` anywhere in the text) to
+ * Work with someone, one of your devices' 8-character codes — bare, as
+ * "<device> <code>", or the whole `mindflock devices join` command — to
+ * Devices. `device` is "" when the text names none. */
+export function routeCode(text: string): { kind: "peer" | "device" | ""; code: string; device: string } {
+  const t = (text || "").trim().slice(0, 2048);
+  const peer = extractPeerCode(t);
+  if (peer) return { kind: "peer", code: peer, device: "" };
+  let tokens = t.split(/\s+/).filter(Boolean);
+  if (tokens.slice(0, 3).map((x) => x.toLowerCase()).join(" ") === "mindflock devices join") tokens = tokens.slice(3);
+  if (tokens.length >= 2 && /^[a-z0-9][a-z0-9-]{0,62}$/.test(tokens[0].toLowerCase())) {
+    const rest = tokens.slice(1).join("");
+    if (plausibleCode(rest)) return { kind: "device", code: formatCode(rest), device: tokens[0].toLowerCase() };
+  }
+  const bare = tokens.join("");
+  if (plausibleCode(bare)) return { kind: "device", code: formatCode(bare), device: "" };
+  return { kind: "", code: "", device: "" };
+}
+
+/** "This device" — where it listens and whether the others can reach it,
+ * as one line ("" while the server doesn't say). */
+export function thisDeviceLine(st: Pick<FleetStatus, "self" | "self_reachable" | "listening" | "gate_on">): string {
+  if (st.listening === undefined || st.listening === "") return "";
+  const name = st.self.host || st.self.key;
+  const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+  if (st.self_reachable === false)
+    return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
+  return (
+    name +
+    " listens on your tailnet (" +
+    where +
+    ") · access gate " +
+    (st.gate_on ? "on" : "off")
+  );
+}
+
+/** The one confirm "Make reachable" asks: what it changes, said once. */
+export const MAKE_REACHABLE_TEXT =
+  "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
+
+/** "Match my other devices": the one sentence its confirm shows, from the
+ * server's `match` ({reachable, shared_link}); "" when nothing differs. */
+export function matchText(match: FleetStatus["match"]): string {
+  if (!match) return "";
+  const bits: string[] = [];
+  if (match.reachable) bits.push("reachable on Tailscale");
+  if (match.shared_link) bits.push("phone link \u201c" + match.shared_link + "\u201d");
+  return bits.length ? "Match your other devices: " + bits.join(" + ") : "";
+}
+
+/** The phone-link host row: 'Phone link "mindflock": hosted by mac-mini ✓,
+ * rig ✓ · laptop ⚠ awaiting approval'. `here` is true when THIS device
+ * doesn't host it yet (the row offers Host here). */
+export function phoneLinkLine(pl: FleetPhoneLink | null | undefined): { text: string; hostHere: boolean } | null {
+  if (!pl || !pl.name) return null;
+  const hosting = pl.hosts.filter((h) => h.state === "hosting").map((h) => (h.host || h.key) + " \u2713");
+  const waiting = pl.hosts.filter((h) => h.state === "waiting").map((h) => (h.host || h.key) + " \u26a0 awaiting approval");
+  const off = pl.hosts.filter((h) => h.state === "off").map((h) => (h.host || h.key) + " not hosting");
+  const unknown = pl.hosts.filter((h) => h.state === "unknown").map((h) => (h.host || h.key) + " ?");
+  const parts = [hosting.length ? "hosted by " + hosting.join(", ") : "no device hosts it yet", ...waiting, ...off, ...unknown];
+  const self = pl.hosts.find((h) => h.self);
+  return {
+    text: "Phone link \u201c" + pl.name + "\u201d: " + parts.join(" \u00b7 "),
+    hostHere: !!self && self.state === "off",
+  };
+}
+
+/** An admit whose joiner this device can't reach: "Joined, but rig isn't
+ * reachable from here — <why>. On rig: Settings → Devices → Make reachable."
+ * "" for any other state. */
+export function admitLine(a: FleetAdmit): string {
+  if (a.state !== "unreachable_joiner") return "";
+  const h = a.host || a.device;
+  return (
+    "Joined, but " +
+    h +
+    " isn't reachable from here" +
+    (a.reason ? " — " + a.reason : "") +
+    ". On " +
+    h +
+    ": Settings \u2192 Devices \u2192 Make reachable."
+  );
+}
+
+/** The toast when THIS device finished joining. A local-only one is a
+ * member the others can't reach — said, with the click that fixes it. */
+export function joinedToast(j: FleetJoin): { text: string; offerReach: boolean } {
+  const host = j.host || j.device;
+  if (j.self_reachable === false)
+    return {
+      text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",
+      offerReach: true,
+    };
+  return { text: "Joined " + host + " — your settings now follow your other devices", offerReach: false };
+}
+
+/** A request row's second line: where it waits when that isn't here. */
+export function requestNote(r: FleetRequest): string {
+  const who = r.host || r.device;
+  const asked = r.via ? " It asked " + (r.via_host || r.via) + "; approving here answers there." : "";
+  return "Check the same code shows on " + who + "." + asked;
+}
+
+/** The sidebar note under another computer's device group, and the one
+ * action it offers. A MindFlock that can join is offered as one of your
+ * devices ("Add to my devices…", which opens Settings → Devices on it) —
+ * joining turns remote control on and needs no token. Pasting an access
+ * token ("Connect…") is only for one that can't join (an older MindFlock). */
+export function sidebarDeviceNote(
+  d: Pick<Device, "reachable" | "remote_control" | "needs_token" | "error" | "connected" | "member" | "fleet_proto">,
+  sessions: number
+): { note: string; action: "add" | "connect" | null } {
+  if (!d.reachable) return { note: "MindFlock not reachable on that device", action: null };
+  const canJoin = !d.member && (d.fleet_proto || 0) >= 1;
+  if (canJoin)
+    return {
+      note: "Not one of your devices yet" + (!d.remote_control ? " — joining turns remote control on" : ""),
+      action: "add",
+    };
+  if (!d.remote_control) return { note: "remote control is off on that device", action: null };
+  if (d.needs_token) return { note: "needs that device's access token", action: "connect" };
+  if (d.error) return { note: String(d.error), action: null };
+  if (d.connected && sessions === 0) return { note: "no sessions", action: null };
+  return { note: "", action: null };
+}
+
+/** What a device.join_requested event lets the bell's Approve button do:
+ * the request (id, the member it waits on — "" for this device — and the
+ * 6-digit code to send with it), or null for anything else. */
+export function approvableRequest(
+  event: string,
+  data: Record<string, unknown> | null | undefined
+): { id: string; via: string; code: string; host: string } | null {
+  if (event !== "device.join_requested" || !data) return null;
+  const id = String(data.id || "");
+  if (!/^[0-9a-f]{16}$/.test(id)) return null;
+  return {
+    id,
+    via: String(data.via || ""),
+    code: String(data.code || ""),
+    host: String(data.host || data.device || "A device"),
+  };
 }

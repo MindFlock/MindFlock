@@ -55,6 +55,7 @@ from .dbclient import DbClientAddon
 from .doctor import DoctorAddon
 from .fleet import FleetAddon
 from .notify import NotifyAddon
+from .onboarding import OnboardingAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
@@ -114,6 +115,8 @@ RESERVED_EXTENSION_IDS = frozenset(
         "traffic",
         "dbclient",
         "fleet",
+        "onboarding",
+        "github",
     }
 )
 
@@ -132,6 +135,8 @@ def build_addons(ctx: AppContext) -> List[Addon]:
         TrafficAddon(ctx),
         # "Your devices": the fleet roster, joins and member gossip.
         FleetAddon(ctx),
+        # First-run plan, Connect GitHub, new-computer bootstrap, readiness.
+        OnboardingAddon(ctx),
         # The first Addon API v3 extension (sidebar bar + dialog/pane surfaces).
         DbClientAddon(ctx),
     ]

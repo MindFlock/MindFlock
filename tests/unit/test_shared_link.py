@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def fake_ts(monkeypatch):
             state["serve"].get("Services", {}).pop(args[3], None)
         return 0, ""
 
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(shared_link, "_run", run)
     monkeypatch.setattr(shared_link, "_tailscale_status", lambda: state["status"])
     monkeypatch.setattr(shared_link, "_serve_status", lambda: state["serve"])
@@ -295,7 +296,8 @@ def test_checklist_from_captured_states(fake_ts, captured):
     # Prefilled with this device's own tag and the service name.
     assert '"tag:mindflock": ["autogroup:admin"]' in st["policy"]
     assert '"svc:mindflock": ["tag:mindflock"]' in st["policy"]
-    assert '"dst": ["svc:mindflock"], "ip": ["tcp:443"]' in st["grants"]
+    assert '"dst": ["svc:mindflock"], "ip": ["tcp:443"]' in st["policy"]
+    assert "grants" not in st  # one block now, not two colliding snippets
     assert st["machine"]["duplicate_of"] == "box"
 
     fake_ts["status"] = copy.deepcopy(captured["status_approved"])
@@ -429,7 +431,7 @@ def test_recheck_loop_reconciles_only_while_on(monkeypatch):
 
 
 def test_reconcile_never_raises_without_tailscale(monkeypatch):
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     S.update_settings(general={"shared_link": "mindflock"})
     st = shared_link.reconcile(8765)
     assert st["advertised"] is False
@@ -652,7 +654,6 @@ def test_mobile_route_payload_carries_the_checklist(
         "machine",
         "tag",
         "policy",
-        "grants",
         "operator_fix",
         "admin",
         "approved",
@@ -661,3 +662,107 @@ def test_mobile_route_payload_carries_the_checklist(
     ):
         assert key in shared, key
     assert all(s["state"] in ("ok", "fail", "unknown") for s in shared["steps"])
+
+
+# --------------------------------------------------------------------------- #
+# the policy block
+# --------------------------------------------------------------------------- #
+def _hujson(text: str):
+    """The block as the policy editor would parse it (HuJSON: comments and
+    trailing commas allowed), wrapped in braces."""
+    import re
+
+    body = re.sub(r"//[^\n]*", "", text)
+    body = re.sub(r",(\s*[}\]])", r"\1", "{" + body + "}")
+    body = re.sub(r",\s*}$", "}", body)
+    return json.loads(body)
+
+
+def test_policy_block_is_one_complete_parseable_block():
+    doc = _hujson(
+        shared_link.policy_block("mindflock", "tag:mindflock", 9000, "me@example.com")
+    )
+    assert set(doc) == {"tagOwners", "autoApprovers", "grants", "tests"}
+    assert doc["tagOwners"] == {"tag:mindflock": ["autogroup:admin"]}
+    assert doc["autoApprovers"] == {"services": {"svc:mindflock": ["tag:mindflock"]}}
+    grants = {(g["src"][0], g["dst"][0]): g["ip"] for g in doc["grants"]}
+    # Device to device on the REAL server port, and 443 for the shared link.
+    assert grants[("tag:mindflock", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
+    # Untagged devices: their own owner only.
+    assert grants[("autogroup:member", "autogroup:self")] == ["tcp:9000"]
+    # Tagged devices and the shared link: the owner's login, both ways.
+    assert grants[("me@example.com", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
+    assert grants[("tag:mindflock", "me@example.com")] == ["tcp:9000"]
+    assert grants[("me@example.com", "svc:mindflock")] == ["tcp:443"]
+    assert doc["tests"] == [
+        {"src": "tag:mindflock", "accept": ["tag:mindflock:9000"]},
+        {
+            "src": "me@example.com",
+            "accept": ["tag:mindflock:9000", "tag:mindflock:443"],
+        },
+    ]
+
+
+def _opens_to_everyone(doc) -> list:
+    """Grants that let EVERY tailnet user in: autogroup:member as the source
+    of anything but autogroup:self, or as a destination at all."""
+    return [
+        g
+        for g in doc["grants"]
+        if ("autogroup:member" in g["src"] and g["dst"] != ["autogroup:self"])
+        or "autogroup:member" in g["dst"]
+    ]
+
+
+@pytest.mark.parametrize("login", ["me@example.com", ""])
+def test_policy_never_opens_mindflock_to_every_tailnet_user(login):
+    # Regression: autogroup:member <-> autogroup:member (and <-> the tag) on
+    # the server port opened every device's MindFlock to every PERSON on a
+    # shared tailnet, not just its owner.
+    block = _hujson(shared_link.policy_block("mindflock", "tag:mindflock", 8765, login))
+    grants = _hujson(shared_link.device_grants("tag:mindflock", 8765, login))
+    assert _opens_to_everyone(block) == []
+    assert _opens_to_everyone(grants) == []
+
+
+def test_policy_without_a_login_is_a_marked_placeholder():
+    text = shared_link.device_grants("tag:mindflock", 8765)
+    assert "REPLACE %s" % shared_link.LOGIN_PLACEHOLDER in text
+    doc = _hujson(text)
+    srcs = {g["src"][0] for g in doc["grants"]}
+    assert shared_link.LOGIN_PLACEHOLDER in srcs
+    # Known login: no placeholder, no REPLACE note.
+    text = shared_link.device_grants("tag:mindflock", 8765, "me@github")
+    assert "REPLACE" not in text and shared_link.LOGIN_PLACEHOLDER not in text
+    # Something that isn't a login never lands in a policy file.
+    text = shared_link.policy_block("x", "tag:mindflock", 8765, 'a"], "dst": ["*')
+    assert shared_link.LOGIN_PLACEHOLDER in text and '"*' not in text
+
+
+@pytest.mark.parametrize("may_see", [True, False])
+def test_mobile_names_the_owner_only_for_a_caller_that_may_see_it(
+    fake_ts, captured, monkeypatch, no_device_probes, may_see
+):
+    monkeypatch.setattr(shared_link, "owner_login", lambda: "me@example.com")
+    S.update_settings(general={"shared_link": "mindflock"})
+    fake_ts["status"] = copy.deepcopy(captured["status_pending"])
+    shared_link.apply(8765)
+    policy = mobile_access._mobile_info(include_tokens=may_see)["shared"]["policy"]
+    assert ("me@example.com" in policy) is may_see
+    assert (shared_link.LOGIN_PLACEHOLDER in policy) is not may_see
+
+
+def test_policy_block_lines_move_into_an_existing_key():
+    # Merge-safe: every entry line inside a key ends in a comma, so moving it
+    # into a tagOwners the policy already has needs no editing.
+    text = shared_link.policy_block("mindflock", "tag:mindflock")
+    assert '  "tag:mindflock": ["autogroup:admin"],\n' in text
+    assert "can't appear twice" in text
+
+
+def test_status_policy_uses_the_server_port(fake_ts, captured, monkeypatch):
+    S.update_settings(general={"shared_link": "mindflock"})
+    monkeypatch.setattr(mobile_access, "_server_port", lambda: 9123)
+    fake_ts["status"] = copy.deepcopy(captured["status_pending"])
+    st = shared_link.apply(9123)
+    assert '"tcp:9123"' in st["policy"]

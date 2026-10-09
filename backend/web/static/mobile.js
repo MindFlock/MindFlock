@@ -626,6 +626,7 @@
         // sheet is selected the tick it shows up, and both of those read the
         // selection.
         claimPending();
+        pollApprovals();
         // ...and after claimPending, because the session it just selected is
         // exactly the one that is still provisioning.
         attachWhenReady();
@@ -634,6 +635,107 @@
       })
       .catch(function () { /* transient; next tick retries */ });
   }
+
+  // --- your devices: approve a join from the phone --------------------------
+  // GET /api/fleet lists the requests waiting on this device and the copies
+  // it holds for your other devices (`via`): approving one here answers it
+  // there (the server relays it under the devices' key, with the code shown
+  // here). Only a phone signed in to this device sees them — the server
+  // leaves them out for anyone else. A push's tap opens /m#approve=<id>,
+  // which flashes that card (or says it's gone).
+  var approveEl = document.getElementById("approve-cards");
+  var approveWanted = (/(?:^|[#&])approve=([0-9a-f]{16})/.exec(location.hash) || [])[1] || "";
+  var approveSig = "";
+  var approveBusy = false;
+  function renderApprovals(reqs) {
+    if (!approveEl || approveBusy) return;
+    var sig = reqs.map(function (r) { return r.id; }).join(",") + "|" + approveWanted;
+    if (sig === approveSig) return;
+    approveSig = sig;
+    approveEl.innerHTML = "";
+    var missing = approveWanted && !reqs.some(function (r) { return r.id === approveWanted; });
+    if (!reqs.length && !missing) {
+      approveEl.classList.add("hidden");
+      fitSoon();
+      return;
+    }
+    reqs.forEach(function (r) {
+      var card = document.createElement("div");
+      card.className = "approve-card" + (r.id === approveWanted ? " flash" : "");
+      card.setAttribute("data-approve", r.id);
+      var who = r.host || r.device;
+      var line = document.createElement("div");
+      line.textContent = who + " wants to join your devices";
+      var code = document.createElement("div");
+      code.className = "approve-code";
+      code.textContent = r.code || "";
+      var note = document.createElement("div");
+      note.className = "approve-note";
+      note.textContent = "Check " + who + " shows the same code." +
+        (r.via ? " It asked " + (r.via_host || r.via) + "." : "");
+      var btns = document.createElement("div");
+      btns.className = "approve-btns";
+      [["approve", "Approve"], ["deny", "Deny"]].forEach(function (b) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "act" + (b[0] === "approve" ? " is-next" : "");
+        btn.textContent = b[1];
+        btn.addEventListener("click", function () { answerRequest(r, b[0]); });
+        btns.appendChild(btn);
+      });
+      card.appendChild(line);
+      card.appendChild(code);
+      card.appendChild(note);
+      card.appendChild(btns);
+      approveEl.appendChild(card);
+    });
+    if (missing) {
+      var gone = document.createElement("div");
+      gone.className = "approve-card approve-note";
+      gone.textContent = "That join request is gone — it was answered, or it expired.";
+      approveEl.appendChild(gone);
+    }
+    approveEl.classList.remove("hidden");
+    fitSoon();
+  }
+  function answerRequest(r, decision) {
+    approveBusy = true;
+    fetch("/api/fleet/requests/" + encodeURIComponent(r.id) + "/" + decision, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ via: r.via || "", code: r.code || "" }),
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (j) {
+          setStatus(res.ok
+            ? (decision === "approve" ? (r.host || r.device) + " is joining your devices" : "Denied " + (r.host || r.device))
+            : (j && j.error) || "Couldn't answer (HTTP " + res.status + ")");
+          setTimeout(function () { setStatus(""); }, 4000);
+        });
+      })
+      .catch(function () { setStatus("Couldn't reach MindFlock"); })
+      .then(function () {
+        approveBusy = false;
+        if (r.id === approveWanted) approveWanted = "";
+        approveSig = "";
+        pollApprovals();
+      });
+  }
+  function pollApprovals() {
+    if (!approveEl) return;
+    fetch("/api/fleet")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var reqs = (j && Array.isArray(j.requests)) ? j.requests : [];
+        renderApprovals(reqs.filter(function (r) { return r && r.id; }));
+      })
+      .catch(function () { /* transient */ });
+  }
+  window.addEventListener("hashchange", function () {
+    approveWanted = (/(?:^|[#&])approve=([0-9a-f]{16})/.exec(location.hash) || [])[1] || "";
+    approveSig = "";
+    pollApprovals();
+  });
 
   // --- touch scrollback ------------------------------------------------------
   // The agent TUI runs on tmux's alt screen, so xterm's local scrollback is
@@ -1688,6 +1790,102 @@
   var meta0 = document.querySelector('meta[name="theme-color"]');
   if (meta0) meta0.setAttribute("content", cssVar("--bg", "#0f1117"));
   syncAppearance();
+
+  // ---- Update banner: a newer release, here or on your other devices ----
+  // The same facts Settings shows (/api/update/check, /api/fleet), checked on
+  // load and every 30 minutes (the server caches the release lookup). Your
+  // other devices behind → "Update all" (the fleet rollout, one at a time,
+  // this device last); only this one → "Update". Either answers 403 to a
+  // caller who isn't this device's owner, which the banner says.
+  var updBanner = document.getElementById("upd-banner");
+  var updText = document.getElementById("upd-text");
+  var updBtn = document.getElementById("upd-btn");
+  var updAction = null;
+  function cmpVer(a, b) {
+    var pa = String(a || "").replace(/^v/i, "").split(".");
+    var pb = String(b || "").replace(/^v/i, "").split(".");
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var d = (parseInt(pa[i], 10) || 0) - (parseInt(pb[i], 10) || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+  function getJSON(url) {
+    return fetch(url, { credentials: "same-origin" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    });
+  }
+  function showUpdate(text, label, action) {
+    updText.textContent = text;
+    updBtn.textContent = label;
+    updBtn.disabled = !action;
+    updBtn.classList.toggle("hidden", !label);
+    updAction = action;
+    updBanner.classList.remove("hidden");
+  }
+  function waitForNewBuild() {
+    var t0 = Date.now();
+    var t = setInterval(function () {
+      if (Date.now() - t0 > 180000) { clearInterval(t); return; }
+      getJSON("/api/update/check").then(function (c) {
+        if (c && !c.restart_pending && c.state !== "started") { clearInterval(t); location.reload(); }
+      }).catch(function () { /* restarting */ });
+    }, 2500);
+  }
+  function startUpdate(url, body, busyText) {
+    updBtn.disabled = true;
+    fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 403) throw new Error("only this device's owner can update it — sign in with its token");
+        if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+        showUpdate(busyText, "", null);
+        if (url === "/api/update/start") waitForNewBuild();
+      });
+    }).catch(function (err) {
+      showUpdate("Couldn't update: " + err.message, "Update", updAction);
+    });
+  }
+  function checkUpdate() {
+    getJSON("/api/update/check").then(function (c) {
+      if (!c) return;
+      if (c.restart_pending) {
+        showUpdate("Installed — restarting onto it…", "", null);
+        waitForNewBuild();
+        return;
+      }
+      if (!c.latest) return;
+      return getJSON("/api/fleet").catch(function () { return null; }).then(function (f) {
+        var behind = ((f && f.in_fleet && f.members) || []).filter(function (m) {
+          return !m.self && m.reachable && m.version && cmpVer(c.latest, m.version) > 0;
+        });
+        var here = !!c.available;
+        if (f && f.update && f.update.state === "running") {
+          showUpdate("Updating your devices to v" + c.latest + "…", "", null);
+        } else if (behind.length) {
+          var n = behind.length + (here ? 1 : 0);
+          showUpdate(
+            "MindFlock v" + c.latest + " is out — " + n + " of your devices " + (n === 1 ? "is" : "are") + " behind",
+            "Update all",
+            function () { startUpdate("/api/fleet/update", { tag: "v" + c.latest }, "Updating your devices one at a time…"); }
+          );
+        } else if (here && !c.blocked) {
+          showUpdate("MindFlock v" + c.latest + " is out", "Update", function () {
+            startUpdate("/api/update/start", {}, "Updating — this page reloads when it's back…");
+          });
+        } else {
+          updBanner.classList.add("hidden");
+        }
+      });
+    }).catch(function () { /* offline: try again later */ });
+  }
+  updBtn.addEventListener("click", function () { if (updAction) updAction(); });
+  checkUpdate();
+  setInterval(checkUpdate, 30 * 60 * 1000);
 
   applyViewport();
   poll();

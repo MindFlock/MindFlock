@@ -19,7 +19,7 @@ import subprocess
 import webbrowser
 from typing import List
 
-from backend import log
+from backend import git_auth_hints, log
 from backend.session.git.remote_url import branch_url, is_local_path
 from backend.session.git.util import _exit_error, _trim_prefix, gh_available
 
@@ -254,6 +254,8 @@ class GitWorktreeGitMixin:
         # Publish the branch. `-u` sets upstream tracking so the branch exists
         # on the remote and later pushes need no arguments.
         # NOTE: bare `git push` (no -C); cwd is the worktree path.
+        # GIT_TERMINAL_PROMPT=0: no credential = fail now, never a prompt that
+        # hangs until the timeout (there is no terminal behind this call).
         try:
             git_push_cmd = subprocess.run(
                 ["git", "push", "-u", "origin", self.branchName],
@@ -261,6 +263,7 @@ class GitWorktreeGitMixin:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # CombinedOutput()
                 timeout=_NET_TIMEOUT,
+                env={**os.environ, **git_auth_hints.NO_PROMPT_ENV},
             )
         except subprocess.TimeoutExpired as err:
             push_err = "timed out after {:g}s".format(_NET_TIMEOUT)
@@ -275,10 +278,13 @@ class GitWorktreeGitMixin:
             push_err = _exit_error(git_push_cmd.returncode)
             if log.ErrorLog is not None:
                 log.ErrorLog.Print(push_err)
+            output = _decode(git_push_cmd.stdout)
+            hint = git_auth_hints.classify(output)
+            if hint is not None:
+                # Name the cause and the fix ahead of git's own wall of text.
+                push_err += "; {} — {}".format(hint["message"], hint["fix"])
             raise RuntimeError(
-                "failed to push branch: {} ({})".format(
-                    _decode(git_push_cmd.stdout), push_err
-                )
+                "failed to push branch: {} ({})".format(output, push_err)
             )
 
         # Open the branch in the browser.
