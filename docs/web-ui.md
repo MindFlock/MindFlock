@@ -2826,10 +2826,25 @@ A few screens got quieter:
   that is a **refusal, not a failure** — reinstalling over an editable install
   would swap a contributor's working tree for a release build. Otherwise
   **Update to vY** starts the install, **Installer output** folds open a live log
-  tail, and the screen polls `/api/update/state` until it reports the restart,
-  then waits out the re-exec and reloads onto the new bundle. Your sessions are
-  tmux sessions, so nothing running is lost; if the server doesn't answer within
-  30 s the screen says so and points at System logs rather than spinning.
+  tail, and the screen polls `/api/update/state` until the install is done. The
+  server restarts itself onto it (no tab needed — closing this one doesn't stop
+  it), so the screen shows *Installed — restarting…* — also on a later visit
+  that finds an install the server hasn't picked up yet, never a second
+  **Update** offer — and reloads onto the new bundle once the new build
+  answers. Your sessions are tmux sessions, so nothing running is lost. When
+  the last update didn't end well the screen says how: *interrupted — try
+  again* (its installer died), *failed* (System logs has the output), or *vY
+  didn't start, so vX was put back* (the installer's health check rolled it
+  back). If the server doesn't come back within 3 minutes the screen says so
+  and points at System logs / `mindflock restart` rather than spinning.
+- **Update notices.** When a newer release is out and this device — or
+  another of "Your devices" — runs an older one, the bell gets one **Updates**
+  row per release ("MindFlock vY is out — 2 of your devices are behind"; the
+  click opens Settings → Devices when other devices are behind, else
+  Advanced), a browser tab gets one toast (the desktop app has its own), and
+  `/m` shows a one-line banner with **Update** / **Update all**. Settings →
+  Devices offers **Update all my devices to vY** and follows the rollout one
+  line per device.
 - **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
   **default on**) — where ingested tickets land. On: each one becomes a MindFlock
   session with its own worktree, branch, seeded agent, stage badge and guided git

@@ -326,6 +326,7 @@ from backend.web.core.engine import (
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
 from backend.web.core import self_update as _self_update
+from backend.web.core import update_watch as _update_watch
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -527,6 +528,9 @@ async def lifespan(app: FastAPI):
     _register_task(_remote.instances_loop())
     # Settings sync across the paired devices (a no-op tick while it's off).
     _register_task(_settings_sync.sync_loop())
+    # Engine updates: re-exec onto a finished install with no browser tab
+    # open (core.update_watch), and announce a newer release (update.available).
+    _register_task(_update_watch.watch_loop())
     # Shared phone link: keep the Tailscale Service advertisement applied —
     # re-serve when its serve config vanished or this device's tags changed
     # (a no-op tick while general.shared_link is off).
@@ -5805,8 +5809,15 @@ def list_instances(request: Request) -> JSONResponse:
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #
 @app.get("/api/remote/hello")
-def remote_hello() -> JSONResponse:
-    """Public identity ping other MindFlock devices use for discovery."""
+def remote_hello(request: Request) -> JSONResponse:
+    """Public identity ping other MindFlock devices use for discovery.
+
+    The desktop shell's own engine check sends ``X-MindFlock-Shell: <its
+    version>`` from this machine; that is remembered and reported here as
+    ``shell_version`` (see :func:`backend.web.core.remote.note_shell_version`)."""
+    shell = request.headers.get(_remote.SHELL_HEADER)
+    if shell and _auth._from_this_machine(request.scope):
+        _remote.note_shell_version(shell)
     return JSONResponse(_remote.hello_json())
 
 
@@ -6180,9 +6191,13 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
         release = None
     latest = (release or {}).get("version", "")
     blocked = _self_update.blocked_reason()
+    # Settles a dead installer as interrupted before the state is read.
+    await asyncio.to_thread(_self_update.running)
+    st = _self_update.read_state()
     return JSONResponse(
         {
             "current": current,
+            "commit": _self_update.installed_commit(),
             "latest": latest,
             "tag": (release or {}).get("tag", ""),
             "release_url": (release or {}).get("url", ""),
@@ -6192,20 +6207,56 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
             "kind": _self_update.install_kind(),
             "blocked": blocked,
             "repo": _self_update.UPDATE_REPO,
-            "state": _self_update.read_state().get("state", "idle"),
+            "state": st.get("state", "idle"),
+            # The install finished but this process isn't running it yet: the
+            # screen says "Installed — restarting…", never "Update to vX" again.
+            "restart_pending": _self_update.restart_pending(st),
+            # The last update's outcome, for "was interrupted — Try again" and
+            # "rolled back to vX (see log)".
+            "last": {
+                k: st[k]
+                for k in ("ref", "version", "from_version", "error", "code", "healthy")
+                if k in st
+            },
         }
     )
 
 
 @app.post("/api/update/start")
-async def post_update_start(payload: Optional[dict] = None) -> JSONResponse:
+async def post_update_start(
+    request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
     """Install the newest release (or an explicit ``ref``) and report back.
 
     The ref is resolved server-side by default rather than taken from the
     client: the button says "update to the newest version", and the newest
     version is not something a stale settings screen should get to decide.
+
+    Only the owner may start one (:func:`backend.web.core.auth.privileged` —
+    a credential, this machine, or a trusted tailnet account; never a request
+    another MindFlock relays): with the gate off, any tailnet node could
+    otherwise reinstall this engine. And an explicit ``ref`` from anywhere
+    but this machine must be a published release tag at or above the running
+    version (:func:`~backend.web.core.self_update.check_remote_ref`) — a
+    branch or a downgrade is a developer's move, made at this keyboard.
     """
+    try:
+        allowed = bool(await _auth.privileged(request.scope))
+    except Exception:  # noqa: BLE001 — fail closed
+        allowed = False
+    if not allowed:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "updates can only be started by this device's owner",
+            },
+            status_code=403,
+        )
     ref = str((payload or {}).get("ref", "") or "").strip()
+    if ref and not _auth._from_this_machine(request.scope):
+        reason, status = await _self_update.check_remote_ref(ref)
+        if reason:
+            return JSONResponse({"ok": False, "error": reason}, status_code=status)
     if not ref:
         try:
             release = await _self_update.latest_release()

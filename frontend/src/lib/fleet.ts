@@ -2,7 +2,16 @@
  * countdown formatting, and the one-line status texts the screen shows. No
  * DOM and no fetches, so the wording is tested in node (fleet.test.ts). */
 
-import type { FleetCandidate, FleetJoin, FleetMember, FleetRemoved, FleetStatus, SyncStatus } from "../api/types";
+import type {
+  FleetCandidate,
+  FleetJoin,
+  FleetMember,
+  FleetRemoved,
+  FleetRollout,
+  FleetRolloutRow,
+  FleetStatus,
+  SyncStatus,
+} from "../api/types";
 import { relTime } from "./format";
 
 /** Crockford base32 — what the server's invite codes are drawn from. */
@@ -49,15 +58,130 @@ export function liveInvite(st: FleetStatus | null, nowSec = Date.now() / 1000) {
 }
 
 /** The member row's status line. A version mismatch is said as what to do
- * about it, because settings two versions apart may not mean the same thing. */
-export function memberStatus(m: FleetMember, selfVersion: string): string {
+ * about it, because settings two versions apart may not mean the same thing.
+ * Two builds that both call themselves the same version (one installed from
+ * `main`) differ by commit, when both report one. */
+export function memberStatus(m: FleetMember, selfVersion: string, selfCommit = ""): string {
   if (m.self) return "this device";
   if (m.error) return m.error;
   if (!m.reachable) return "offline";
   if (!m.same_fleet) return "hasn't picked up the change yet";
   if (selfVersion && m.version && m.version !== selfVersion)
     return "runs " + m.version + " — this one runs " + selfVersion + "; update both to the same version";
+  if (selfCommit && m.commit && m.commit !== selfCommit)
+    return "runs a different build of " + (m.version || "MindFlock") + "; update both to the same release";
   return "online";
+}
+
+/** Compare two "0.7.4"-style versions (a leading v is ignored): <0, 0, >0.
+ * Mirrors the server's parse_version — non-numeric junk counts as 0. */
+export function cmpVersion(a: string, b: string): number {
+  const parse = (v: string) =>
+    String(v || "")
+      .trim()
+      .replace(/^v/i, "")
+      .split(".")
+      .map((x) => parseInt(x, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+/** Why a member's engine can't be updated from here ("" when it can). */
+export function memberUpdateBlocker(m: FleetMember): string {
+  if (m.install === "editable") return "dev checkout — updates come from git there";
+  if (m.install === "other") return "not installed by install.sh — update it there";
+  return "";
+}
+
+/** The small chips next to a member's name about updating it: behind the
+ * newest release, can't be updated from here, or its desktop app lagging
+ * its engine (the app updates itself on its next launch). */
+export function memberUpdateChips(m: FleetMember, latest: string): { text: string; warn: boolean }[] {
+  const chips: { text: string; warn: boolean }[] = [];
+  const blocker = memberUpdateBlocker(m);
+  if (blocker) chips.push({ text: blocker, warn: false });
+  else if (latest && m.version && (m.self || m.reachable) && cmpVersion(latest, m.version) > 0)
+    chips.push({ text: "v" + latest + " available", warn: true });
+  if (m.shell_version && m.version && cmpVersion(m.version, m.shell_version) > 0)
+    chips.push({ text: "desktop app v" + m.shell_version + " updates on its next launch", warn: false });
+  return chips;
+}
+
+/** Members (this device included) running an older version than `latest`,
+ * reachable or not counted: what "N of your devices are behind" counts. */
+export function devicesBehind(members: FleetMember[] | null | undefined, latest: string): FleetMember[] {
+  if (!latest) return [];
+  return (members || []).filter(
+    (m) => (m.self || m.reachable) && !!m.version && cmpVersion(latest, m.version) > 0
+  );
+}
+
+/** The line above "Update all my devices": what is behind, or "" when
+ * nothing is. */
+export function updateAllLine(members: FleetMember[] | null | undefined, latest: string): string {
+  const behind = devicesBehind(members, latest);
+  if (!behind.length) return "";
+  const updatable = behind.filter((m) => !memberUpdateBlocker(m));
+  const n = behind.length;
+  let line = "MindFlock v" + latest + " is out — " + n + " of your devices " + (n === 1 ? "is" : "are") + " behind.";
+  if (updatable.length < n)
+    line += " " + (n - updatable.length) + " can't be updated from here (see " + (n - updatable.length === 1 ? "its row" : "their rows") + ").";
+  return line;
+}
+
+const ROLLOUT_STEP_WORDS: Record<FleetRolloutRow["step"], string> = {
+  queued: "waiting",
+  updating: "updating…",
+  restarting: "restarting…",
+  done: "updated",
+  current: "up to date",
+  skipped: "skipped",
+  failed: "failed",
+  not_started: "not started",
+};
+
+/** One device's line in a rollout ("Mac mini: skipped — dev checkout …"). */
+export function rolloutRowText(r: FleetRolloutRow): string {
+  const name = (r.host || r.key) + (r.self ? " (this device)" : "");
+  const word = ROLLOUT_STEP_WORDS[r.step] || r.step;
+  return name + ": " + word + (r.detail ? " — " + r.detail : "");
+}
+
+/** The rollout as one sentence ("" when there never was one). */
+export function rolloutLine(u: FleetRollout | null | undefined): string {
+  if (!u || u.state === "idle") return "";
+  const v = "v" + (u.version || u.tag.replace(/^v/i, ""));
+  if (u.state === "running") return "Updating your devices to " + v + ", one at a time…";
+  if (u.state === "halted") return "Stopped updating your devices: " + (u.error || "a device failed") + ".";
+  const skipped = (u.members || []).filter((r) => r.step === "skipped").length;
+  return (
+    "Your devices are on " + v + (skipped ? " — " + skipped + " skipped (see below)." : ".")
+  );
+}
+
+/** `update.available` (server core.update_watch) as the bell row / toast:
+ * which Settings screen its click opens (Devices when other devices are
+ * behind, else Advanced), and the toast's wording. */
+export function updateNote(data: Record<string, unknown> | null | undefined): {
+  text: string;
+  screen: "devices" | "advanced";
+  toast: string;
+} | null {
+  const d = data || {};
+  const latest = String(d.latest || "");
+  if (!latest) return null;
+  const behind = Array.isArray(d.behind) ? d.behind : [];
+  const count = Number(d.count) || behind.length + (d.here ? 1 : 0);
+  const text =
+    String(d.detail || "") ||
+    "MindFlock v" + latest + " is out" + (behind.length ? " — " + count + " of your devices are behind" : "");
+  if (behind.length) return { text, screen: "devices", toast: text + " — Update them in Settings → Devices" };
+  return { text, screen: "advanced", toast: text + " — Update in Settings → Advanced" };
 }
 
 /** What blocks a candidate from joining (shown instead of its buttons), or

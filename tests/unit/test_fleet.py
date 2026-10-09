@@ -1429,6 +1429,8 @@ async def test_status_payload(world, monkeypatch):
         "candidates",
         "removed",
         "readmitted_elsewhere",
+        # "Update all my devices": the last (or running) rollout.
+        "update",
     }
     assert st["in_fleet"] is True and st["self"] == {"key": "laptop", "host": "Laptop"}
     members = {m["key"]: m for m in st["members"]}
@@ -1445,6 +1447,10 @@ async def test_status_payload(world, monkeypatch):
         "error": "",
         "automation": False,
         "key_conflict": False,
+        # What its hello says about updating it (nothing, from this fake).
+        "commit": "",
+        "install": "",
+        "shell_version": "",
     }
     [cand] = st["candidates"]
     assert cand == {

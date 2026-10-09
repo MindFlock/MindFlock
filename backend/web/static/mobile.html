@@ -40,6 +40,13 @@
       <button type="button" id="new-btn" aria-label="New session">+</button>
     </header>
 
+    <!-- A newer MindFlock release (this device, or others of "Your devices"
+         behind it): one line and one button, hidden otherwise. -->
+    <div id="upd-banner" class="hidden" role="status">
+      <span id="upd-text"></span>
+      <button type="button" id="upd-btn">Update</button>
+    </div>
+
     <!-- Git workflow bar: the same guided flow the desktop pane header offers
          (Commit → Push → PR → Merge). The step recommended for the selected
          session's stage is highlighted; every button stays tappable so you can

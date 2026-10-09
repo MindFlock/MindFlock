@@ -635,7 +635,14 @@ function startInstall(ref, opts) {
   //   MINDFLOCK_NONINTERACTIVE  there is no controlling terminal behind a GUI
   //     app, so force `mindflock doctor`'s read-only report; its --fix mode
   //     would sit waiting on y/n prompts nobody can answer.
-  const envAdds = { MINDFLOCK_INSTALL_REF: ref, MINDFLOCK_NONINTERACTIVE: '1' }
+  //   MINDFLOCK_INSTALL_NO_RESTART  this app restarts the server itself after
+  //     an engine update (restartServer); install.sh restarting it first
+  //     would be a second restart racing that one.
+  const envAdds = {
+    MINDFLOCK_INSTALL_REF: ref,
+    MINDFLOCK_NONINTERACTIVE: '1',
+    MINDFLOCK_INSTALL_NO_RESTART: '1',
+  }
 
   if (process.platform !== 'win32') {
     if (process.platform === 'darwin' && !hasXcodeCLT()) {
@@ -685,7 +692,8 @@ function startInstall(ref, opts) {
     'L="$(wslpath -a ' + shq(winLog) + ')";'
     + ' S="$(wslpath -a ' + shq(INSTALL_SCRIPT) + ')";'
     + ' T="$(mktemp)"; tr -d "\\r" < "$S" > "$T";'
-    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$T";'
+    + ' { MINDFLOCK_INSTALL_REF=' + shq(ref) + ' MINDFLOCK_NONINTERACTIVE=1'
+    + ' MINDFLOCK_INSTALL_NO_RESTART=1 sh "$T";'
     + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1;'
     + ' rm -f "$T"'
   try {
@@ -1401,7 +1409,13 @@ function fetchLocalJSON(pathname, timeoutMs, token) {
       req = http.get(
         {
           host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000,
-          headers: token ? { Authorization: 'Bearer ' + token } : {},
+          // X-MindFlock-Shell: this desktop app's version. The engine reports
+          // it in its hello (shell_version), so "Update all my devices" on
+          // another machine can say this app updates on its next launch.
+          headers: Object.assign(
+            { 'X-MindFlock-Shell': app.getVersion() },
+            token ? { Authorization: 'Bearer ' + token } : {}
+          ),
         },
         (res) => {
           if (res.statusCode !== 200) { res.resume(); return finish(null) }

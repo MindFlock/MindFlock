@@ -57,6 +57,20 @@ def mark_serving() -> None:
     _SERVING = True
 
 
+def serving() -> bool:
+    """Whether this process is the real server (see :func:`mark_serving`)."""
+    return _SERVING
+
+
+def relaunch_argv() -> list:
+    """The command line a re-exec runs: this interpreter and argv, minus any
+    positional mode word (see :data:`_MODE_TOKENS`). Also what the updater's
+    rollback starts the server with (:mod:`backend.web.core.self_update`)."""
+    return [sys.executable] + [
+        a for a in sys.argv if a.strip().lower() not in _MODE_TOKENS
+    ]
+
+
 def _under_pytest() -> bool:
     """True inside a test run. ``execv`` there would replace the test runner
     with a server — a guard worth having in front of every call, because the
@@ -74,11 +88,11 @@ def reexec_soon(delay: float = 0.5) -> None:
     if _under_pytest():
         return
     os.environ.pop("CS_WEB_MODE", None)
-    argv = [a for a in sys.argv if a.strip().lower() not in _MODE_TOKENS]
+    argv = relaunch_argv()
 
     def _reexec() -> None:
         time.sleep(delay)
-        os.execv(sys.executable, [sys.executable] + argv)
+        os.execv(argv[0], argv)
 
     threading.Thread(target=_reexec, daemon=True).start()
 

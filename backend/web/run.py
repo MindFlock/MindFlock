@@ -75,6 +75,35 @@ def _port_squatter(host: str, port: int) -> str:
         return "other"
 
 
+def _stale_server_note(host: str, port: int) -> str:
+    """When the server already running there is NOT the build installed now
+    (install.sh or an update replaced it underneath), the line saying so and
+    how to switch over; "" otherwise. Never raises."""
+    import json
+    import urllib.request
+
+    try:
+        from backend import __version__
+        from backend.web.core.self_update import installed_commit
+
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/api/remote/hello", timeout=1.5
+        ) as resp:
+            hello = json.loads(resp.read().decode("utf-8", "replace"))
+        mine_c, theirs_c = installed_commit(), str(hello.get("commit") or "")
+        theirs_v = str(hello.get("version") or "")
+        if (mine_c and theirs_c and mine_c != theirs_c) or (
+            theirs_v and theirs_v != __version__
+        ):
+            return (
+                f"It runs v{theirs_v or '?'}, but v{__version__} is installed — "
+                "`mindflock restart` switches it over."
+            )
+    except Exception:  # noqa: BLE001 — advisory only
+        pass
+    return ""
+
+
 def _is_onboarded() -> bool:
     """Whether a session has ever been created (the web UI's first-run flag).
     Never raises — an unreadable settings store just means 'show the hint'."""
@@ -177,6 +206,9 @@ def main(argv: Optional[List[str]] = None) -> None:
             f"A MindFlock server is already running at http://127.0.0.1:{port} "
             "— nothing to start. (Want a second one? mindflock serve --port 9000)"
         )
+        stale = _stale_server_note("127.0.0.1", port)
+        if stale:
+            print(stale)
         raise SystemExit(0)
     if squatter == "other":
         print(

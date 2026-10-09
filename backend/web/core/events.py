@@ -254,6 +254,12 @@ EVENT_NAMES = (
     # through the old one still exist — they need a fresh invite to
     # reconnect (data: {"host", "peers": [names]}; never the ingress token).
     "peer.relay_changed",
+    # A newer MindFlock release is out and this device, or another of "Your
+    # devices", runs an older one (core.update_watch; ``session`` is ""). Once
+    # per release and set of devices behind it (data: {"latest", "tag",
+    # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
+    # "count", "detail"}).
+    "update.available",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

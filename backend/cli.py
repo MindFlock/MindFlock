@@ -36,6 +36,11 @@ Installed via ``[project.scripts]``::
     mindflock devices cancel      # …stop asking to join
     mindflock devices approve DEV # …let a computer that asked join (deny DEV refuses)
     mindflock devices remove DEV  # …take one out (the rest get a new key); leave = this one
+    mindflock devices update      # …update every one of them, one at a time (this one last)
+
+    mindflock update              # update this MindFlock to the newest release and restart
+    mindflock update --check      # …only say whether there is a newer one
+    mindflock restart             # restart the running server (onto what is installed)
 
     mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
     mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
@@ -551,6 +556,57 @@ def _build_parser() -> argparse.ArgumentParser:
         help="take THIS computer out of your devices (settings sync stops)",
     )
     d_leave.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+    d_upd = dev_sub.add_parser(
+        "update",
+        parents=[server_opts_nested],
+        help=(
+            "update MindFlock on every one of your devices, one at a time "
+            "(this one last); stops at the first that fails"
+        ),
+    )
+    d_upd.add_argument(
+        "--tag",
+        default=None,
+        metavar="vX.Y.Z",
+        help="a published release at or above what each device runs (default: the newest)",
+    )
+    d_upd.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+
+    upd = sub.add_parser(
+        "update",
+        parents=[server_opts],
+        help="update this MindFlock to the newest release and restart the server",
+        description=(
+            "Install the newest MindFlock release (or --ref) over this one and "
+            "wait until the running server answers on it — it restarts itself "
+            "once the install is done; sessions keep running. With no server "
+            "running it installs in place. A development checkout is refused "
+            "(git pull there instead)."
+        ),
+    )
+    upd.add_argument(
+        "--ref",
+        default=None,
+        metavar="REF",
+        help="what to install (default: the newest release)",
+    )
+    upd.add_argument(
+        "--check",
+        action="store_true",
+        help="only print the installed and newest versions",
+    )
+    upd.add_argument(
+        "--all-devices",
+        action="store_true",
+        dest="all_devices",
+        help="update every one of your devices (same as `mindflock devices update`)",
+    )
+    upd.add_argument("--yes", "-y", action="store_true", help="don't ask first")
+    sub.add_parser(
+        "restart",
+        parents=[server_opts],
+        help="restart the running server (onto whatever is installed now)",
+    )
 
     mcp = sub.add_parser(
         "mcp",
@@ -2342,6 +2398,10 @@ def _cmd_devices(args: argparse.Namespace) -> int:
         return 0
     if cmd == "leave":
         return _leave_devices(base, args, "/api/fleet/leave")
+    if cmd == "update":
+        from backend import cli_update
+
+        return cli_update.cmd_devices_update(args)
     print("error: unknown devices command %r" % cmd, file=sys.stderr)
     return 2
 
@@ -2357,7 +2417,15 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inbox": _cmd_inbox,
     "peer": _cmd_peer,
     "devices": _cmd_devices,
+    "update": lambda args: _cli_update().cmd_update(args),
+    "restart": lambda args: _cli_update().cmd_restart(args),
 }
+
+
+def _cli_update():
+    from backend import cli_update
+
+    return cli_update
 
 
 def main(argv: Optional[List[str]] = None) -> int:
