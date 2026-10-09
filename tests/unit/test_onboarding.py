@@ -280,6 +280,23 @@ def test_readiness_self_wants_the_fleet_key(client, monkeypatch):
     assert r.status_code == 200 and r.json() == {"ready": True}
 
 
+@pytest.mark.parametrize("named", [True, False])  # git identity set, or still todo
+def test_plan_never_names_the_github_login_to_a_non_privileged_caller(
+    client, monkeypatch, named
+):
+    ident = {"name": "Octo", "email": "o@x"} if named else {"name": "", "email": ""}
+    facts = {
+        "checks": [],
+        "github": {"connected": True, "login": "zq-octo", "identity": ident},
+    }
+    monkeypatch.setattr(onboarding, "collect", lambda **kw: dict(facts))
+    monkeypatch.setattr(OnboardingAddon, "_doctor_checks", lambda self, refresh: [])
+    text = client.get("/api/onboarding").text
+    assert "zq-octo" not in text  # the todo step ("connected as @… — now…") too
+    client.state["privileged"] = True
+    assert "@zq-octo" in client.get("/api/onboarding").text
+
+
 def test_gh_login_terminal_refuses_a_non_privileged_caller(client):
     with client.websocket_connect("/api/github/gh-login-terminal") as ws:
         msg = ws.receive_json()

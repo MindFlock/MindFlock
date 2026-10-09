@@ -129,12 +129,16 @@ class OnboardingAddon(Addon):
             self._checks_at = now
         return list(self._checks)
 
-    def _plan(self, refresh: bool) -> dict:
+    def _plan(self, refresh: bool, privileged: bool = True) -> dict:
+        """The plan. Without ``privileged``, who you are on GitHub stays out
+        of every step — it's yours only (an anonymous tailnet caller of a
+        gate-off device reaches this route)."""
         from backend import onboarding
 
-        return onboarding.build_plan(
-            onboarding.collect(checks=self._doctor_checks(refresh))
-        )
+        facts = onboarding.collect(checks=self._doctor_checks(refresh))
+        if not privileged and isinstance(facts.get("github"), dict):
+            facts["github"] = dict(facts["github"], login="")
+        return onboarding.build_plan(facts)
 
     def _build_router(self) -> APIRouter:  # noqa: C901 — one flat route table
         router = APIRouter(prefix="/api")
@@ -146,8 +150,9 @@ class OnboardingAddon(Addon):
         async def get_onboarding(
             request: Request, refresh: bool = False
         ) -> JSONResponse:
-            plan = await asyncio.to_thread(self._plan, refresh)
-            if not await _privileged(request.scope):
+            mine = await _privileged(request.scope)
+            plan = await asyncio.to_thread(self._plan, refresh, mine)
+            if not mine:
                 for step in plan["steps"]:  # who you are on GitHub: yours only
                     if step["id"] == "github" and step["status"] == "ok":
                         step["reason"] = "connected"
