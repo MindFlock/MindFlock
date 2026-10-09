@@ -110,6 +110,7 @@ import ptyprocess
 from backend import config, log
 from backend import providers
 from backend import session
+from backend import tailscale_cli as _tailscale_cli
 from backend.providers import config as provider_config
 from backend.providers import effort as _provider_effort
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
@@ -6424,7 +6425,9 @@ def _capabilities() -> dict:
     """
     return {
         "git": git_available(),
-        "tailscale": shutil.which("tailscale") is not None,
+        # A CLI this machine can use (PATH, the macOS app bundle, or
+        # $MINDFLOCK_TAILSCALE_BIN) — not Windows Tailscale seen from WSL.
+        "tailscale": _tailscale_cli.available(),
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
         "agent_mcp": _agent_mcp_caps(),

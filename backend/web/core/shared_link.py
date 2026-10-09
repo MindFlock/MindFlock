@@ -69,11 +69,11 @@ import asyncio
 import ipaddress
 import json
 import re
-import shutil
 import subprocess
 import threading
 from typing import Callable, Optional, Tuple
 
+from backend import tailscale_cli as _tailscale_cli
 from backend.web.core import auth as _auth
 
 #: The port the service answers on. 443 so the phone URL carries no port.
@@ -131,9 +131,10 @@ def configured_name() -> str:
 
 
 def _run(args: list) -> Tuple[int, str]:
-    """``(returncode, combined output)``; ``(-1, reason)`` when it couldn't run."""
+    """``(returncode, combined output)``; ``(-1, reason)`` when it couldn't run.
+    ``args`` start with ``"tailscale"``, resolved by :mod:`backend.tailscale_cli`."""
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -149,10 +150,10 @@ def _run(args: list) -> Tuple[int, str]:
 def _json_cmd(args: list) -> Optional[dict]:
     """A ``tailscale … --json`` command's object; None when it couldn't be run,
     failed, or didn't print JSON (so callers can tell "unknown" from "empty")."""
-    if shutil.which("tailscale") is None:
+    if _tailscale_cli.tailscale_bin() is None:
         return None
     try:
-        cp = subprocess.run(
+        cp = _tailscale_cli.run(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -167,8 +168,9 @@ def _json_cmd(args: list) -> Optional[dict]:
 
 
 def _tailscale_status() -> dict:
-    """``tailscale status --json`` (``{}`` when unavailable)."""
-    return _json_cmd(["tailscale", "status", "--json"]) or {}
+    """``tailscale status --json`` (``{}`` when unavailable) — the shared,
+    briefly cached snapshot."""
+    return _tailscale_cli.status_json() or {}
 
 
 def _serve_status() -> Optional[dict]:
@@ -355,29 +357,58 @@ def _host_tag(tags: list) -> str:
     return tags[0] if tags else DEFAULT_TAG
 
 
-def policy_snippet(name: str, tag: str) -> str:
-    """The policy-file lines that let ``tag`` host ``svc:<name>`` without a
-    click: who may apply the tag, and the services auto-approver."""
+#: The MindFlock server port the policy block opens between devices when
+#: this process can't tell its own (see :func:`_server_port`).
+DEFAULT_PORT = 8765
+
+
+def _server_port() -> int:
+    try:
+        from backend.web.core import mobile_access
+
+        return int(mobile_access._server_port())
+    except Exception:  # noqa: BLE001
+        return DEFAULT_PORT
+
+
+def policy_block(name: str, tag: str, port: int = DEFAULT_PORT) -> str:
+    """Everything MindFlock needs in the tailnet policy file, as ONE block
+    to copy: who may apply ``tag``, the services auto-approver for
+    ``svc:<name>``, grants so tagged devices and your own devices reach each
+    other's MindFlock on ``port`` (and 443, the shared link) — which a custom
+    policy such as the common ``autogroup:self`` rule otherwise blocks,
+    silently — plus a ``tests`` stanza the policy editor checks on save.
+
+    Merge-safe: a policy file can't hold the same key twice, and any tailnet
+    with a tagged device already has ``tagOwners``. The block says so, in
+    comments (the policy file is HuJSON), and every line inside a key ends in
+    a comma so it can be moved into an existing key as-is."""
+    svc = service_id(name)
     return (
+        "// MindFlock. Policy has none of these keys yet? Paste the whole block.\n"
+        '// Already has one (e.g. "tagOwners")? Move the lines inside it into\n'
+        "// your existing key instead: a key can't appear twice.\n"
         '"tagOwners": {\n'
-        '  "%(tag)s": ["autogroup:admin"]\n'
+        '  "%(tag)s": ["autogroup:admin"],\n'
         "},\n"
         '"autoApprovers": {\n'
         '  "services": {\n'
-        '    "%(svc)s": ["%(tag)s"]\n'
-        "  }\n"
-        "}"
-    ) % {"tag": tag, "svc": service_id(name)}
-
-
-def grants_snippet(name: str) -> str:
-    """The grant clients need under a custom policy to reach the service (the
-    default allow-all policy already covers it)."""
-    return (
+        '    "%(svc)s": ["%(tag)s"],\n'
+        "  },\n"
+        "},\n"
         '"grants": [\n'
-        '  {"src": ["autogroup:member"], "dst": ["%s"], "ip": ["tcp:%d"]}\n'
-        "]"
-    ) % (service_id(name), SERVICE_PORT)
+        "  // Your MindFlock devices reach each other (and the shared link).\n"
+        '  {"src": ["%(tag)s"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        '  {"src": ["%(tag)s"], "dst": ["autogroup:member"], "ip": ["tcp:%(port)d"]},\n'
+        "  // Your own phone and computers reach them.\n"
+        '  {"src": ["autogroup:member"], "dst": ["%(tag)s"], "ip": ["tcp:%(port)d", "tcp:443"]},\n'
+        "  // The shared phone link.\n"
+        '  {"src": ["autogroup:member"], "dst": ["%(svc)s"], "ip": ["tcp:443"]},\n'
+        "],\n"
+        '"tests": [\n'
+        '  {"src": "%(tag)s", "accept": ["%(tag)s:%(port)d"]},\n'
+        "],"
+    ) % {"tag": tag, "svc": svc, "port": port}
 
 
 def _explain(output: str) -> Tuple[str, str]:
@@ -421,7 +452,7 @@ def apply(port: int) -> dict:
         if not want:
             _STATE.update(error="", kind="")
             return status()
-        if shutil.which("tailscale") is None:
+        if _tailscale_cli.tailscale_bin() is None:
             _STATE.update(
                 name="", host="", error="Tailscale is not installed.", kind="missing"
             )
@@ -610,8 +641,8 @@ def _steps(st: dict) -> list:
             "policy",
             "Approve hosts automatically",
             "unknown",
-            "The policy file can't be read from here; add these lines once per "
-            "tailnet (or approve each host on the Services page).",
+            "The policy file can't be read from here; add the block below once "
+            "per tailnet (or approve each host on the Services page).",
         )
 
     if approved is None:
@@ -690,7 +721,8 @@ def status() -> dict:
     device a host and ``routed`` whether the service's address reaches it.
     The tri-state ones are ``None`` when this device can't tell — shown as
     "unknown", never as ✓. ``steps`` is the setup checklist built from them;
-    ``machine``, ``tag``, ``policy`` and ``grants`` fill in its fixes.
+    ``machine``, ``tag`` and ``policy`` (:func:`policy_block`) fill in its
+    fixes.
     """
     name = configured_name()
     if not name:
@@ -723,8 +755,8 @@ def status() -> dict:
         "error": error,
         "error_kind": kind,
         "operator_fix": OPERATOR_FIX,
-        "policy": policy_snippet(name, tag),
-        "grants": grants_snippet(name),
+        # One block for the whole policy file, with this server's real port.
+        "policy": policy_block(name, tag, _server_port()),
         "admin": {
             "machines": ADMIN_MACHINES,
             "services": ADMIN_SERVICES,

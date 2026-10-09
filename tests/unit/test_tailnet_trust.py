@@ -8,6 +8,8 @@ other local OS users — still meets the gate. ``tailscale whois`` and the
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -349,7 +351,7 @@ def test_status_lists_owners_of_untagged_devices(monkeypatch):
         returncode = 0
         stdout = __import__("json").dumps(status_json).encode()
 
-    monkeypatch.setattr(tailnet_trust.shutil, "which", lambda b: "/usr/bin/tailscale")
+    monkeypatch.setattr(shutil, "which", lambda b: "/usr/bin/tailscale")
     monkeypatch.setattr(tailnet_trust.subprocess, "run", lambda *a, **k: CP())
     st = tailnet_trust.status()
     assert st["available"] is True

@@ -53,6 +53,7 @@ import {
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
 import { InlineConfirm } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { TailscaleCard } from "./TailscaleCard";
 import "./devices.css";
 
 const POLL_MS = 3000;
@@ -248,6 +249,7 @@ export function Devices(p: ScreenProps) {
 
   return (
     <>
+      <TailscaleCard active={p.active} />
       {/* 1. What needs fixing first. */}
       {st.gate_warning && (
         <div className="devices-warn" id="devices-gate-warning" role="alert">

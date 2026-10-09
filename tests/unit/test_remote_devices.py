@@ -119,13 +119,14 @@ _TS_STATUS = {
 
 def test_peer_filter_excludes_mobile_and_offline(monkeypatch):
     import json as _json
+    import shutil as _shutil
     import subprocess as _sub
 
     class _CP:
         returncode = 0
         stdout = _json.dumps(_TS_STATUS).encode()
 
-    monkeypatch.setattr(remote.shutil, "which", lambda _: "/usr/bin/tailscale")
+    monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/tailscale")
     monkeypatch.setattr(_sub, "run", lambda *a, **kw: _CP())
     self_entry, peers = remote.tailscale_nodes()
     assert self_entry["key"] == "mybox"

@@ -591,8 +591,11 @@ def test_status_file_replaces_the_tailscale_cli(monkeypatch, tmp_path):
     def _no_cli(*a, **kw):
         raise AssertionError("must not shell out to tailscale")
 
-    monkeypatch.setattr(remote.subprocess, "run", _no_cli)
-    monkeypatch.setattr(remote.shutil, "which", lambda _: None)  # no CLI at all
+    import shutil
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", _no_cli)
+    monkeypatch.setattr(shutil, "which", lambda _: None)  # no CLI at all
     self_entry, peers = remote.tailscale_nodes()
     assert self_entry["key"] == "alpha" and self_entry["ip"] == "127.0.0.2"
     assert [p["key"] for p in peers] == ["beta"]  # the phone is filtered

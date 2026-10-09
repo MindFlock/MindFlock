@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def fake_ts(monkeypatch):
             state["serve"].get("Services", {}).pop(args[3], None)
         return 0, ""
 
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(shared_link, "_run", run)
     monkeypatch.setattr(shared_link, "_tailscale_status", lambda: state["status"])
     monkeypatch.setattr(shared_link, "_serve_status", lambda: state["serve"])
@@ -295,7 +296,8 @@ def test_checklist_from_captured_states(fake_ts, captured):
     # Prefilled with this device's own tag and the service name.
     assert '"tag:mindflock": ["autogroup:admin"]' in st["policy"]
     assert '"svc:mindflock": ["tag:mindflock"]' in st["policy"]
-    assert '"dst": ["svc:mindflock"], "ip": ["tcp:443"]' in st["grants"]
+    assert '"dst": ["svc:mindflock"], "ip": ["tcp:443"]' in st["policy"]
+    assert "grants" not in st  # one block now, not two colliding snippets
     assert st["machine"]["duplicate_of"] == "box"
 
     fake_ts["status"] = copy.deepcopy(captured["status_approved"])
@@ -429,7 +431,7 @@ def test_recheck_loop_reconciles_only_while_on(monkeypatch):
 
 
 def test_reconcile_never_raises_without_tailscale(monkeypatch):
-    monkeypatch.setattr(shared_link.shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
     S.update_settings(general={"shared_link": "mindflock"})
     st = shared_link.reconcile(8765)
     assert st["advertised"] is False
@@ -652,7 +654,6 @@ def test_mobile_route_payload_carries_the_checklist(
         "machine",
         "tag",
         "policy",
-        "grants",
         "operator_fix",
         "admin",
         "approved",
@@ -661,3 +662,46 @@ def test_mobile_route_payload_carries_the_checklist(
     ):
         assert key in shared, key
     assert all(s["state"] in ("ok", "fail", "unknown") for s in shared["steps"])
+
+
+# --------------------------------------------------------------------------- #
+# the policy block
+# --------------------------------------------------------------------------- #
+def _hujson(text: str):
+    """The block as the policy editor would parse it (HuJSON: comments and
+    trailing commas allowed), wrapped in braces."""
+    import re
+
+    body = re.sub(r"//[^\n]*", "", text)
+    body = re.sub(r",(\s*[}\]])", r"\1", "{" + body + "}")
+    body = re.sub(r",\s*}$", "}", body)
+    return json.loads(body)
+
+
+def test_policy_block_is_one_complete_parseable_block():
+    doc = _hujson(shared_link.policy_block("mindflock", "tag:mindflock", 9000))
+    assert set(doc) == {"tagOwners", "autoApprovers", "grants", "tests"}
+    assert doc["tagOwners"] == {"tag:mindflock": ["autogroup:admin"]}
+    assert doc["autoApprovers"] == {"services": {"svc:mindflock": ["tag:mindflock"]}}
+    grants = {(g["src"][0], g["dst"][0]): g["ip"] for g in doc["grants"]}
+    # Device to device on the REAL server port, and 443 for the shared link.
+    assert grants[("tag:mindflock", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
+    assert grants[("autogroup:member", "tag:mindflock")] == ["tcp:9000", "tcp:443"]
+    assert grants[("autogroup:member", "svc:mindflock")] == ["tcp:443"]
+    assert doc["tests"] == [{"src": "tag:mindflock", "accept": ["tag:mindflock:9000"]}]
+
+
+def test_policy_block_lines_move_into_an_existing_key():
+    # Merge-safe: every entry line inside a key ends in a comma, so moving it
+    # into a tagOwners the policy already has needs no editing.
+    text = shared_link.policy_block("mindflock", "tag:mindflock")
+    assert '  "tag:mindflock": ["autogroup:admin"],\n' in text
+    assert "can't appear twice" in text
+
+
+def test_status_policy_uses_the_server_port(fake_ts, captured, monkeypatch):
+    S.update_settings(general={"shared_link": "mindflock"})
+    monkeypatch.setattr(mobile_access, "_server_port", lambda: 9123)
+    fake_ts["status"] = copy.deepcopy(captured["status_pending"])
+    st = shared_link.apply(9123)
+    assert '"tcp:9123"' in st["policy"]

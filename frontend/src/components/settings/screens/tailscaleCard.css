@@ -1,0 +1,156 @@
+/* "Tailscale on this device" (TailscaleCard.tsx). Reuses .sl-snippet,
+   .sl-admin-link and .qr-card from mobileLogs.css. */
+.ts-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.ts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ts-head .set-section-title {
+  margin: 0;
+}
+
+.ts-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ts-state.ts-ok {
+  color: var(--green);
+}
+
+.ts-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.ts-facts > div {
+  display: contents;
+}
+
+.ts-facts dt {
+  color: var(--muted);
+}
+
+.ts-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ts-ip {
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+.ts-signin,
+.ts-auth,
+.ts-login-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ts-signin > .test-btn {
+  align-self: flex-start;
+}
+
+.ts-auth-link {
+  color: var(--accent);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ts-qr {
+  margin: 0;
+}
+
+.ts-qr svg {
+  width: 160px;
+  height: 160px;
+}
+
+.ts-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ts-issue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+}
+
+.ts-issue p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.ts-issue.ts-warn {
+  border-color: color-mix(in srgb, var(--gold) 50%, var(--border));
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+
+.ts-issue.ts-fail {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.ts-issue code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ts-wsl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ts-wsl .set-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Settings → Mobile: phone setup in order (Mobile.tsx PhoneSteps). */
+.mobile-phone-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.ts-app-qr {
+  margin: 6px 0 0;
+}
+
+.ts-app-qr svg {
+  width: 120px;
+  height: 120px;
+}
