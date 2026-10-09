@@ -25877,7 +25877,7 @@ var DEBOUNCE_MS = 500;
 var RETRY_MIN_MS = 5e3;
 var RETRY_MAX_MS$1 = 12e4;
 var DIRTY_KEY = "mf_prefs_dirty";
-var pending = /* @__PURE__ */ new Set();
+var pending$2 = /* @__PURE__ */ new Set();
 var gen = /* @__PURE__ */ new Map();
 var timer = null;
 var retryMs = 0;
@@ -25929,7 +25929,7 @@ function settleFields(fields, sentGen = null, kv = storage()) {
 	let changed = false;
 	for (const f of fields) {
 		if (sentGen && (gen.get(f) || 0) !== (sentGen.get(f) || 0)) continue;
-		if (pending.has(f)) continue;
+		if (pending$2.has(f)) continue;
 		if (d.delete(f)) changed = true;
 	}
 	if (changed) saveDirty(d, kv);
@@ -25949,13 +25949,13 @@ function withoutEcho(fn) {
 }
 function pendingFields(kv = storage()) {
 	const out = dirtyFields(kv);
-	for (const f of pending) out.add(f);
+	for (const f of pending$2) out.add(f);
 	return out;
 }
 function notePrefWrite(lsKey, kv = storage()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
-	pending.add(field);
+	pending$2.add(field);
 	gen.set(field, (gen.get(field) || 0) + 1);
 	markDirty(field, kv);
 	retryMs = 0;
@@ -25977,8 +25977,8 @@ function bodyFor(fields, kv) {
 async function flushPrefWrites(kv = storage()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending, ...dirtyFields(kv)]);
-	pending.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$2, ...dirtyFields(kv)]);
+	pending$2.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	try {
@@ -25998,8 +25998,8 @@ async function flushPrefWrites(kv = storage()) {
 function flushPrefsOnHide(kv = storage()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending, ...dirtyFields(kv)]);
-	pending.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$2, ...dirtyFields(kv)]);
+	pending$2.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	beacon(bodyFor(fields, kv)).then(() => settleFields(fields, sentGen, kv), (e) => {
@@ -28736,6 +28736,7 @@ function fastTrackStep(inst) {
 	const caps = queryClient.getQueryData(["config"])?.caps;
 	if (caps && !caps.git) return null;
 	if (!title || inst.workspace_missing) return null;
+	if (inst.peer_share) return null;
 	const { lane, askFirst } = laneChoice(inst);
 	const run = inst.autopilot;
 	const running = !!(run && run.depth && run.state === "running");
@@ -28770,6 +28771,7 @@ function nextStep(inst) {
 	if (caps && !caps.git) return null;
 	if (!title || inst.status === "loading" || inst.status === "paused") return null;
 	if (inst.workspace_missing) return null;
+	if (inst.peer_share) return null;
 	switch (guidedStage(inst)) {
 		case "agent": return {
 			label: "Commit…",
@@ -30339,7 +30341,7 @@ function extError(extId, msg, err) {
 	if (err !== void 0) console.error("[extension " + extId + "] " + msg, err);
 	else console.error("[extension " + extId + "] " + msg);
 }
-function errText$1(err) {
+function errText$2(err) {
 	return String(err?.message || err);
 }
 function getRecord(ext) {
@@ -30402,7 +30404,7 @@ function activateExtension(ext) {
 			bump();
 		} catch (err) {
 			rec.status = "error";
-			rec.error = errText$1(err);
+			rec.error = errText$2(err);
 			extError(ext.id, "activation failed", err);
 			toast("Extension " + (ext.label || ext.id) + " failed: " + rec.error);
 			drainRegistrations(rec);
@@ -30680,7 +30682,7 @@ async function startRuntime(rec, key, runtime) {
 	try {
 		runtime.cleanup = renderer(makeSurfaceHost(liveRec, key, runtime));
 	} catch (err) {
-		runtime.error = errText$1(err);
+		runtime.error = errText$2(err);
 		extError(rec.ext.id, "surface " + runtime.surfaceId + " failed to render", err);
 	}
 	bump();
@@ -32519,6 +32521,106 @@ function showGroup(runId) {
 	else selectSession(to.row);
 }
 //#endregion
+//#region src/lib/peer.ts
+var CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
+function isPeerCode(text) {
+	return CODE_RE.test(text || "");
+}
+function extractPeerCode(text) {
+	const m = CODE_RE.exec(text || "");
+	return m ? m[0].toLowerCase() : "";
+}
+function reconnectKind(text) {
+	const t = (text || "").trim();
+	if (!t) return null;
+	if (isPeerCode(t)) return "invite";
+	if (/^wss:\/\/[^\s]+$/i.test(t)) return "address";
+	if (/^(\[[0-9a-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}$/.test(t)) return "address";
+	return null;
+}
+function newOpId() {
+	return "op" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+}
+function joinPeerCode(code, opId) {
+	return api("/api/peer/join", { json: {
+		code: (code || "").trim(),
+		...opId ? { op_id: opId } : {}
+	} });
+}
+function fmtSecondsLeft(seconds) {
+	const s = Math.max(0, Math.floor(seconds));
+	return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function inviteExpiryText(secondsLeft) {
+	return secondsLeft > 0 ? "Expires in " + fmtSecondsLeft(secondsLeft) : "Expired — create a new one";
+}
+function roleText(role) {
+	return role === "listener" ? "You invited them" : "You joined them";
+}
+function carrierText(carrier) {
+	if (carrier === "relay") return "through the relay";
+	if (carrier === "tcp") return "directly (same network or tailnet)";
+	return "";
+}
+var PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in Work with someone";
+var PEER_SCREEN = "peer";
+function peerChip(inst) {
+	if (!inst.peer_share) return null;
+	const w = inst.peer_with || null;
+	const name = String(w?.name || "").trim();
+	const connected = w ? !!w.connected : null;
+	const label = name ? "Shared with " + name : "Shared";
+	const state = connected === null ? "" : connected ? " — connected" : " — offline";
+	return {
+		label,
+		connected,
+		title: (name ? "A shared folder with " + name : "A shared folder") + state + ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in Work with someone."
+	};
+}
+function peerEventNote(event, data) {
+	const d = data || {};
+	const name = String(d.peer_name || "").trim() || "Your peer";
+	switch (event) {
+		case "peer.link_added": {
+			const sas = String(d.sas || "");
+			const tail = sas ? " — compare safety number " + sas : "";
+			const text = (d.repaired ? name + " reconnected" : name + " joined") + tail;
+			return {
+				text,
+				cls: "n-done",
+				toast: d.role === "dialer" ? "" : text
+			};
+		}
+		case "peer.link_removed":
+			if (d.by !== "peer") return null;
+			return {
+				text: name + " unlinked",
+				cls: "n-info",
+				toast: name + " unlinked"
+			};
+		case "peer.message": {
+			if (!d.stored) return null;
+			const text = name + " sent you a message";
+			const preview = String(d.text || "").trim();
+			return {
+				text: preview ? text + ": " + preview : text,
+				cls: "n-info",
+				toast: text
+			};
+		}
+		case "peer.relay_changed": {
+			const peers = Array.isArray(d.peers) ? d.peers.map(String).filter(Boolean) : [];
+			const text = "Your relay address changed — send " + (peers.length ? peers.join(", ") : "the people you invited") + " a fresh invite to reconnect";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
+		default: return null;
+	}
+}
+//#endregion
 //#region src/lib/fleet.ts
 var CODE_ALPHABET = ["0123456789", "ABCDEFGHJKMNPQRSTVWXYZ"].join("");
 function normalizeCode(s) {
@@ -32540,16 +32642,103 @@ function liveInvite(st, nowSec = Date.now() / 1e3) {
 	const live = (st?.invites || []).filter((i) => i.expires_at > nowSec);
 	return live.length ? live.reduce((a, b) => b.expires_at > a.expires_at ? b : a) : null;
 }
-function memberStatus(m, selfVersion) {
+function memberStatus(m, selfVersion, selfCommit = "") {
 	if (m.self) return "this device";
 	if (m.error) return m.error;
-	if (!m.reachable) return "offline";
+	if (!m.reachable) return m.reason || (m.last_seen ? "offline · last seen " + relTime(m.last_seen) : "offline");
 	if (!m.same_fleet) return "hasn't picked up the change yet";
 	if (selfVersion && m.version && m.version !== selfVersion) return "runs " + m.version + " — this one runs " + selfVersion + "; update both to the same version";
+	if (selfCommit && m.commit && m.commit !== selfCommit) return "runs a different build of " + (m.version || "MindFlock") + "; update both to the same release";
 	return "online";
 }
+function cmpVersion(a, b) {
+	const parse = (v) => String(v || "").trim().replace(/^v/i, "").split(".").map((x) => parseInt(x, 10) || 0);
+	const pa = parse(a);
+	const pb = parse(b);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const d = (pa[i] || 0) - (pb[i] || 0);
+		if (d) return d;
+	}
+	return 0;
+}
+function memberUpdateBlocker(m) {
+	if (m.install === "editable") return "dev checkout — updates come from git there";
+	if (m.install === "other") return "not installed by install.sh — update it there";
+	return "";
+}
+function memberUpdateChips(m, latest) {
+	const chips = [];
+	const blocker = memberUpdateBlocker(m);
+	if (blocker) chips.push({
+		text: blocker,
+		warn: false
+	});
+	else if (latest && m.version && (m.self || m.reachable) && cmpVersion(latest, m.version) > 0) chips.push({
+		text: "v" + latest + " available",
+		warn: true
+	});
+	if (m.shell_version && m.version && cmpVersion(m.version, m.shell_version) > 0) chips.push({
+		text: "desktop app v" + m.shell_version + " updates on its next launch",
+		warn: false
+	});
+	return chips;
+}
+function devicesBehind(members, latest) {
+	if (!latest) return [];
+	return (members || []).filter((m) => (m.self || m.reachable) && !!m.version && cmpVersion(latest, m.version) > 0);
+}
+function updateAllLine(members, latest) {
+	const behind = devicesBehind(members, latest);
+	if (!behind.length) return "";
+	const updatable = behind.filter((m) => !memberUpdateBlocker(m));
+	const n = behind.length;
+	let line = "MindFlock v" + latest + " is out — " + n + " of your devices " + (n === 1 ? "is" : "are") + " behind.";
+	if (updatable.length < n) line += " " + (n - updatable.length) + " can't be updated from here (see " + (n - updatable.length === 1 ? "its row" : "their rows") + ").";
+	return line;
+}
+var ROLLOUT_STEP_WORDS = {
+	queued: "waiting",
+	updating: "updating…",
+	restarting: "restarting…",
+	done: "updated",
+	current: "up to date",
+	skipped: "skipped",
+	failed: "failed",
+	not_started: "not started"
+};
+function rolloutRowText(r) {
+	const name = (r.host || r.key) + (r.self ? " (this device)" : "");
+	const word = ROLLOUT_STEP_WORDS[r.step] || r.step;
+	return name + ": " + word + (r.detail ? " — " + r.detail : "");
+}
+function rolloutLine(u) {
+	if (!u || u.state === "idle") return "";
+	const v = "v" + (u.version || u.tag.replace(/^v/i, ""));
+	if (u.state === "running") return "Updating your devices to " + v + ", one at a time…";
+	if (u.state === "halted") return "Stopped updating your devices: " + (u.error || "a device failed") + ".";
+	const skipped = (u.members || []).filter((r) => r.step === "skipped").length;
+	return "Your devices are on " + v + (skipped ? " — " + skipped + " skipped (see below)." : ".");
+}
+function updateNote(data) {
+	const d = data || {};
+	const latest = String(d.latest || "");
+	if (!latest) return null;
+	const behind = Array.isArray(d.behind) ? d.behind : [];
+	const count = Number(d.count) || behind.length + (d.here ? 1 : 0);
+	const text = String(d.detail || "") || "MindFlock v" + latest + " is out" + (behind.length ? " — " + count + " of your devices are behind" : "");
+	if (behind.length) return {
+		text,
+		screen: "devices",
+		toast: text + " — Update them in Settings → Devices"
+	};
+	return {
+		text,
+		screen: "advanced",
+		toast: text + " — Update in Settings → Advanced"
+	};
+}
 function candidateBlocker(c) {
-	if (!c.reachable) return "offline";
+	if (!c.reachable) return c.reason || "offline";
 	if (!c.fleet_proto) return "update MindFlock on " + (c.host || c.device) + " to add it";
 	return "";
 }
@@ -32616,11 +32805,14 @@ function deviceEventNote(event, data) {
 	const host = String(d.host || d.device || "A device");
 	const code = String(d.code || "");
 	switch (event) {
-		case "device.join_requested": return {
-			text: String(d.detail || "") || host + " wants to join" + (code ? " · code " + code : ""),
-			cls: "n-warn",
-			toast: host + " wants to join your devices" + (code ? " — code " + code : "")
-		};
+		case "device.join_requested": {
+			const via = d.via ? String(d.via_host || d.via) : "";
+			return {
+				text: String(d.detail || "") || host + " wants to join" + (code ? " · code " + code : ""),
+				cls: "n-warn",
+				toast: host + " wants to join your devices" + (via ? " (asked " + via + ")" : "") + (code ? " — code " + code : "")
+			};
+		}
 		case "device.joined": {
 			const detail = String(d.detail || "");
 			if (d.via) {
@@ -32846,6 +33038,197 @@ function unpinReplaces(path, sync) {
 	const leader = sync?.separate?.[path] || (from ? sync?.devices?.find((d) => d.key === from)?.label || from : "");
 	return "This replaces this device's “" + id + "” (and its token) with " + (leader ? leader + "'s" : "the one your other devices have under that id") + ". To keep both, give one of them a different id in Settings → Tickets instead.";
 }
+function routeCode(text) {
+	const t = (text || "").trim().slice(0, 2048);
+	const peer = extractPeerCode(t);
+	if (peer) return {
+		kind: "peer",
+		code: peer,
+		device: ""
+	};
+	let tokens = t.split(/\s+/).filter(Boolean);
+	if (tokens.slice(0, 3).map((x) => x.toLowerCase()).join(" ") === "mindflock devices join") tokens = tokens.slice(3);
+	if (tokens.length >= 2 && /^[a-z0-9][a-z0-9-]{0,62}$/.test(tokens[0].toLowerCase())) {
+		const rest = tokens.slice(1).join("");
+		if (plausibleCode(rest)) return {
+			kind: "device",
+			code: formatCode(rest),
+			device: tokens[0].toLowerCase()
+		};
+	}
+	const bare = tokens.join("");
+	if (plausibleCode(bare)) return {
+		kind: "device",
+		code: formatCode(bare),
+		device: ""
+	};
+	return {
+		kind: "",
+		code: "",
+		device: ""
+	};
+}
+function thisDeviceLine(st) {
+	if (st.listening === void 0 || st.listening === "") return "";
+	const name = st.self.host || st.self.key;
+	const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+	if (st.self_reachable === false) return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
+	return name + " listens on your tailnet (" + where + ") · access gate " + (st.gate_on ? "on" : "off");
+}
+var MAKE_REACHABLE_TEXT = "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
+function matchText(match) {
+	if (!match) return "";
+	const bits = [];
+	if (match.reachable) bits.push("reachable on Tailscale");
+	if (match.shared_link) bits.push("phone link “" + match.shared_link + "”");
+	return bits.length ? "Match your other devices: " + bits.join(" + ") : "";
+}
+function phoneLinkLine(pl) {
+	if (!pl || !pl.name) return null;
+	const hosting = pl.hosts.filter((h) => h.state === "hosting").map((h) => (h.host || h.key) + " ✓");
+	const waiting = pl.hosts.filter((h) => h.state === "waiting").map((h) => (h.host || h.key) + " ⚠ awaiting approval");
+	const off = pl.hosts.filter((h) => h.state === "off").map((h) => (h.host || h.key) + " not hosting");
+	const unknown = pl.hosts.filter((h) => h.state === "unknown").map((h) => (h.host || h.key) + " ?");
+	const parts = [
+		hosting.length ? "hosted by " + hosting.join(", ") : "no device hosts it yet",
+		...waiting,
+		...off,
+		...unknown
+	];
+	const self = pl.hosts.find((h) => h.self);
+	return {
+		text: "Phone link “" + pl.name + "”: " + parts.join(" · "),
+		hostHere: !!self && self.state === "off"
+	};
+}
+function admitLine(a) {
+	if (a.state !== "unreachable_joiner") return "";
+	const h = a.host || a.device;
+	return "Joined, but " + h + " isn't reachable from here" + (a.reason ? " — " + a.reason : "") + ". On " + h + ": Settings → Devices → Make reachable.";
+}
+function joinedToast(j) {
+	const host = j.host || j.device;
+	if (j.self_reachable === false) return {
+		text: "Joined " + host + " — but your other devices can't reach this one yet. Click to make it reachable.",
+		offerReach: true
+	};
+	return {
+		text: "Joined " + host + " — your settings now follow your other devices",
+		offerReach: false
+	};
+}
+function requestNote(r) {
+	const who = r.host || r.device;
+	const asked = r.via ? " It asked " + (r.via_host || r.via) + "; approving here answers there." : "";
+	return "Check the same code shows on " + who + "." + asked;
+}
+function sidebarDeviceNote(d, sessions) {
+	if (!d.reachable) return {
+		note: "MindFlock not reachable on that device",
+		action: null
+	};
+	if (!d.member && (d.fleet_proto || 0) >= 1) return {
+		note: "Not one of your devices yet" + (!d.remote_control ? " — joining turns remote control on" : ""),
+		action: "add"
+	};
+	if (!d.remote_control) return {
+		note: "remote control is off on that device",
+		action: null
+	};
+	if (d.needs_token) return {
+		note: "needs that device's access token",
+		action: "connect"
+	};
+	if (d.error) return {
+		note: String(d.error),
+		action: null
+	};
+	if (d.connected && sessions === 0) return {
+		note: "no sessions",
+		action: null
+	};
+	return {
+		note: "",
+		action: null
+	};
+}
+function approvableRequest(event, data) {
+	if (event !== "device.join_requested" || !data) return null;
+	const id = String(data.id || "");
+	if (!/^[0-9a-f]{16}$/.test(id)) return null;
+	return {
+		id,
+		via: String(data.via || ""),
+		code: String(data.code || ""),
+		host: String(data.host || data.device || "A device")
+	};
+}
+//#endregion
+//#region src/lib/peerActions.ts
+var PEER_JOIN_EVENT = "mf-peer-join";
+var pending$1 = null;
+function takePendingPeerJoin() {
+	const p = pending$1;
+	pending$1 = null;
+	return p;
+}
+function openJoinWithCode(code = "") {
+	pending$1 = { code };
+	useUi.getState().openDialogFor("settings", PEER_SCREEN);
+	document.dispatchEvent(new CustomEvent(PEER_JOIN_EVENT, { detail: { code } }));
+}
+//#endregion
+//#region src/lib/deviceActions.ts
+var DEVICES_FOCUS_EVENT = "mf-devices-focus";
+var pending = null;
+function takePendingDevicesFocus() {
+	const p = pending;
+	pending = null;
+	return p;
+}
+function openDevicesFor(focus = {}) {
+	pending = focus;
+	useUi.getState().openDialogFor("settings", "devices");
+	document.dispatchEvent(new CustomEvent(DEVICES_FOCUS_EVENT, { detail: focus }));
+}
+async function joinPeerInvite(code) {
+	toast("Joining…", { duration: 4e3 });
+	try {
+		const link = await joinPeerCode(code);
+		toast((link.reconnected ? "Reconnected to " : "Paired with ") + (link.peer_name || "your peer") + (link.sas ? " — compare the safety number " + link.sas + " with them" : ""), { duration: 1e4 });
+		useUi.getState().openDialogFor("settings", PEER_SCREEN);
+		return true;
+	} catch (e) {
+		toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
+		openJoinWithCode(code);
+		return false;
+	}
+}
+function routePastedCode(text) {
+	const r = routeCode(text);
+	if (r.kind === "peer") {
+		joinPeerInvite(r.code);
+		return "peer";
+	}
+	if (r.kind === "device") {
+		openDevicesFor({ paste: text.trim() });
+		return "device";
+	}
+	return "";
+}
+async function approveJoinRequest(r) {
+	try {
+		const res = await api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/approve", { json: {
+			via: r.via || "",
+			code: r.code || ""
+		} });
+		toast((r.host || "The device") + " is joining your devices" + (res?.sync_error ? " — but settings sync didn't start here: " + res.sync_error : ""), { duration: 6e3 });
+		return true;
+	} catch (e) {
+		toast(e instanceof Error ? e.message : String(e), { duration: 6e3 });
+		return false;
+	}
+}
 //#endregion
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
@@ -32861,6 +33244,7 @@ function BellGlyph({ size = 15 }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 2.2a1.3 1.3 0 0 1 1.3 1.3v.6a6 6 0 0 1 4.7 5.9v3.3l1.5 2.6a1 1 0 0 1-.9 1.5H5.4a1 1 0 0 1-.9-1.5L6 13.3V10a6 6 0 0 1 4.7-5.9v-.6A1.3 1.3 0 0 1 12 2.2z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M9.6 19.2h4.8a2.4 2.4 0 0 1-4.8 0z" })]
 	});
 }
+var APPROVE_SHOWN_S = 600;
 var STAGE_WORDS = {
 	committed: "committed",
 	pushed: "pushed",
@@ -32945,11 +33329,35 @@ function notifFromEvent(env) {
 		case "device.removed":
 		case "settings.sync_paused": {
 			const n = deviceEventNote(env.event, d);
+			const approve = approvableRequest(env.event, d);
 			return n ? {
 				text: n.text,
 				cls: n.cls,
-				device: true
+				device: true,
+				...approve ? { approve } : {}
 			} : null;
+		}
+		case "peer.link_added":
+		case "peer.link_removed":
+		case "peer.message":
+		case "peer.relay_changed": {
+			const n = peerEventNote(env.event, d);
+			return n ? {
+				text: n.text,
+				cls: n.cls,
+				peer: true
+			} : null;
+		}
+		case "update.available": {
+			const n = updateNote(d);
+			if (!n) return null;
+			const dedupe = "update:" + String(d.latest || "") + ":" + String(d.count ?? "");
+			return {
+				text: n.text,
+				cls: "n-info",
+				settings: n.screen,
+				dedupe
+			};
 		}
 		default: return null;
 	}
@@ -33223,6 +33631,12 @@ function NotificationsBell() {
 						} else if (n.device) {
 							setOpen(false);
 							useUi.getState().openDialogFor("settings", "devices");
+						} else if (n.peer) {
+							setOpen(false);
+							useUi.getState().openDialogFor("settings", PEER_SCREEN);
+						} else if (n.settings) {
+							setOpen(false);
+							useUi.getState().openDialogFor("settings", n.settings);
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -33231,11 +33645,27 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
 							children: n.text
+						}),
+						n.approve && Date.now() / 1e3 - n.ts < APPROVE_SHOWN_S && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn notif-approve",
+							"data-bell-approve": n.approve.id,
+							onClick: (e) => {
+								e.stopPropagation();
+								const req = n.approve;
+								approveJoinRequest(req).then((ok) => {
+									if (ok) setNotifs((prev) => prev.map((x) => x.approve?.id === req.id ? {
+										...x,
+										approve: null
+									} : x));
+								});
+							},
+							children: "Approve"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-time",
@@ -33249,6 +33679,149 @@ function NotificationsBell() {
 			}) : null
 		]
 	}), document.body)] });
+}
+//#endregion
+//#region src/lib/desktopNotify.ts
+function bridge$1() {
+	if (typeof window === "undefined") return null;
+	const w = window;
+	return w.mfnotify && typeof w.mfnotify.show === "function" ? w.mfnotify : null;
+}
+function desktopNoteFor(event, data) {
+	const d = data || {};
+	switch (event) {
+		case "device.join_requested": {
+			const host = String(d.host || d.device || "A computer");
+			const via = d.via ? " (asked " + String(d.via_host || d.via) + ")" : "";
+			return {
+				title: host + " wants to join your devices",
+				body: (d.code ? "Code " + String(d.code) + " — check it shows the same, then Approve" : "Approve it in MindFlock") + via,
+				target: "devices"
+			};
+		}
+		case "peer.link_added": return {
+			title: String(d.peer_name || "Someone") + (d.repaired ? " reconnected" : " joined your invite"),
+			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "Work with someone",
+			target: "peer"
+		};
+		case "update.available": {
+			const v = String(d.latest || d.version || "").replace(/^v/i, "");
+			const behind = Array.isArray(d.behind) ? d.behind.length : 0;
+			return {
+				title: "MindFlock " + (v ? v + " " : "") + "is available",
+				body: String(d.detail || "") || (behind ? "Update your devices in Settings → Devices" : "Open MindFlock to update"),
+				target: behind ? "devices" : "update",
+				version: v
+			};
+		}
+		default: return null;
+	}
+}
+function desktopNotify(event, data) {
+	const b = bridge$1();
+	if (!b) return false;
+	if (typeof document !== "undefined" && document.hasFocus()) return false;
+	const n = desktopNoteFor(event, data);
+	if (!n) return false;
+	try {
+		b.show(n);
+		return true;
+	} catch {
+		return false;
+	}
+}
+function openNotifyTarget(target) {
+	const ui = useUi.getState();
+	if (target === "devices") ui.openDialogFor("settings", "devices");
+	else if (target === "peer") ui.openDialogFor("settings", PEER_SCREEN);
+	else if (target === "update") ui.openDialogFor("settings", "advanced");
+}
+function installDesktopNotifyClicks() {
+	const b = bridge$1();
+	if (!b || typeof b.onClick !== "function") return () => {};
+	const off = b.onClick((target) => openNotifyTarget(String(target || "")));
+	return typeof off === "function" ? off : () => {};
+}
+//#endregion
+//#region src/lib/onboarding.ts
+var STEP_ORDER = [
+	"deps",
+	"devices",
+	"agent",
+	"tailscale",
+	"github",
+	"repo"
+];
+function orderedSteps(plan) {
+	const by = new Map((plan?.steps || []).map((s) => [s.id, s]));
+	return STEP_ORDER.map((id) => by.get(id)).filter((s) => !!s);
+}
+function stepNumber(id, ids = STEP_ORDER) {
+	const i = ids.indexOf(id);
+	return i < 0 ? "•" : "①②③④⑤⑥".charAt(i) || "•";
+}
+function stepVisible(s) {
+	return !(s.id === "tailscale" && s.status === "skip");
+}
+function visibleSteps(plan) {
+	if (!plan) return STEP_ORDER.filter((id) => id !== "tailscale");
+	return orderedSteps(plan).filter(stepVisible).map((s) => s.id);
+}
+var STATUS_GLYPH = {
+	ok: "✓",
+	todo: "•",
+	skip: "–"
+};
+function primaryGithubMethod(st) {
+	const m = st?.methods || [];
+	if (m.includes("device")) return "device";
+	if (m.includes("gh") || st?.gh?.installed) return "gh";
+	return "token";
+}
+function needsIdentity(st) {
+	const id = st?.identity;
+	return !!st && !(id?.name && id?.email);
+}
+function flowFinished(f) {
+	return !!f && f.state !== "pending";
+}
+function pollDelay(f) {
+	return Math.max(2, Number(f?.interval || 5));
+}
+function readinessLine(r) {
+	if (!r) return null;
+	if (r.error) return {
+		text: "readiness unknown — " + r.error,
+		warn: false
+	};
+	const bits = [];
+	if (r.missing?.length) bits.push("missing " + r.missing.join(", "));
+	if (r.agent?.signed_in === false) bits.push((r.agent.provider || "agent") + " not signed in");
+	if (r.deferred?.length) bits.push(r.deferred.join(", ") + " not installed");
+	if (r.push?.ok === false) bits.push("can't push");
+	if (r.tailscale?.key_expired) bits.push("Tailscale key expired");
+	else if (r.tailscale?.key_warn && r.tailscale.key_expiry_days != null) bits.push("Tailscale key expires in " + r.tailscale.key_expiry_days + "d");
+	if (!bits.length) return {
+		text: "ready to work",
+		warn: false
+	};
+	return {
+		text: bits.join(" · "),
+		warn: true
+	};
+}
+function hasSyncedAgentStep(steps) {
+	return (steps || []).some((s) => /^synced-.+-cli$/.test(s.id));
+}
+function pushFailedNote(session, data) {
+	const reason = String(data?.reason || "");
+	const setup = reason === "https_auth" || reason === "identity";
+	const what = String(data?.message || "the push was refused");
+	const tail = setup ? reason === "identity" ? " — set your git name and email in Setup" : " — Connect GitHub in Setup" : data?.fix ? " — " + data.fix : "";
+	return {
+		text: "Push failed on " + session + ": " + what + tail,
+		setup
+	};
 }
 //#endregion
 //#region src/components/EventToasts.tsx
@@ -33416,6 +33989,14 @@ function EventToasts() {
 			if (isReplay(env) || env.new === "ok") return;
 			notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), { onClick: () => selectSession(env.session) });
 		}));
+		unsubs.push(ev.subscribe("session.push_failed", (env) => {
+			if (isReplay(env)) return;
+			const n = pushFailedNote(namedSlot(env.session), env.data);
+			notifyOnce(env.session, "pushfail", n.text, {
+				onClick: () => n.setup ? useUi.getState().openDialogFor("setup") : selectSession(env.session),
+				duration: 1e4
+			});
+		}));
 		unsubs.push(ev.subscribe("session.autopilot_changed", (env) => {
 			const d = env.data || {};
 			const depth = String(d.depth || "");
@@ -33501,17 +34082,47 @@ function EventToasts() {
 				duration: 8e3
 			});
 		}));
+		unsubs.push(installDesktopNotifyClicks());
 		for (const name of [
 			"device.join_requested",
 			"device.joined",
 			"settings.sync_paused"
 		]) unsubs.push(ev.subscribe(name, (env) => {
 			if (isReplay(env)) return;
+			desktopNotify(env.event, env.data);
 			const n = deviceEventNote(env.event, env.data);
 			if (!n?.toast) return;
 			notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
 				onClick: () => useUi.getState().openDialogFor("settings", "devices"),
 				duration: 6e3
+			});
+		}));
+		for (const name of [
+			"peer.link_added",
+			"peer.link_removed",
+			"peer.message",
+			"peer.relay_changed"
+		]) unsubs.push(ev.subscribe(name, (env) => {
+			if (isReplay(env)) return;
+			desktopNotify(env.event, env.data);
+			const n = peerEventNote(env.event, env.data);
+			if (!n?.toast) return;
+			notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {
+				onClick: () => useUi.getState().openDialogFor("settings", PEER_SCREEN),
+				duration: 7e3
+			});
+		}));
+		unsubs.push(ev.subscribe("update.available", (env) => {
+			if (isReplay(env)) return;
+			if (window.mfengine) {
+				desktopNotify(env.event, env.data);
+				return;
+			}
+			const n = updateNote(env.data);
+			if (!n) return;
+			notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
+				onClick: () => useUi.getState().openDialogFor("settings", n.screen),
+				duration: 8e3
 			});
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
@@ -34215,6 +34826,7 @@ function SessionRowItems({ inst }) {
 	if (inst.pending) return null;
 	const name = displayName(title);
 	const remote = isRemote(inst);
+	const shared = !!inst.peer_share;
 	const ft = fastTrackStep(inst);
 	const cur = laneChoice(inst);
 	const splitWhy = remote ? "" : splitBlockReason(config?.caps, inst);
@@ -34248,7 +34860,7 @@ function SessionRowItems({ inst }) {
 				children: "Ctrl+K F"
 			})]
 		}),
-		!remote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		!remote && !shared && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			"data-row": "split",
 			className: splitWhy ? "pb-row-off" : void 0,
 			"aria-disabled": splitWhy ? true : void 0,
@@ -34432,6 +35044,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		leadAsks: !!lchip || isLead && !!leadRun && RUN_DONE_STATES.has(leadRun.state)
 	});
 	const rz = extra.rz;
+	const peer = peerChip(inst);
 	const act = async (fn, e) => {
 		e?.stopPropagation();
 		await fn();
@@ -34679,6 +35292,18 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					title: extra.check.title,
 					children: extra.check.label
 				}),
+				peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "stagechip peerchip" + (peer.connected === false ? " peer-offline" : ""),
+					title: peer.title,
+					"aria-label": peer.title,
+					onClick: (e) => act(() => openDialogFor("settings", PEER_SCREEN), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: [peer.connected !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "peerchip-dot",
+						"aria-hidden": "true"
+					}), peer.label]
+				}),
 				rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "stagechip rzchip " + rz.cls,
@@ -34737,7 +35362,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							onClick: () => cleanupMissing(title),
 							children: "Clean up — remove session"
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								title: "Checkpoint the shared folder and bring it into your own repo as a peer/… branch",
+								onClick: () => openDialogFor("settings", PEER_SCREEN),
+								children: "Bring work home…"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })] }),
+							caps.git && !peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => commitSession(title),
 									children: ["Commit…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -34776,7 +35406,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 							] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionRowItems, { inst }),
-							inst.setup?.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							inst.setup?.state === "failed" && !peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: (e) => act(async () => {
 									try {
 										await instApi(title, "/setup/rerun", { method: "POST" });
@@ -34788,7 +35418,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								}, e),
 								children: "Re-run worktree setup"
 							}),
-							inst.check && inst.check.state !== "running" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							inst.check && inst.check.state !== "running" && !peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: (e) => act(async () => {
 									try {
 										await instApi(title, "/check", { method: "POST" });
@@ -34800,28 +35430,30 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								}, e),
 								children: "Run checks now"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								onClick: () => openDialogFor("rename", title),
-								children: "Rename…"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: () => copySession(title),
-								children: ["Duplicate session", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "kbd",
-									children: "Ctrl+K D"
-								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: () => ideSession(title),
-								children: [
-									"Open / focus ",
-									ideName,
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							!peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									onClick: () => openDialogFor("rename", title),
+									children: "Rename…"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => copySession(title),
+									children: ["Duplicate session", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "kbd",
-										children: "Ctrl+K O"
-									})
-								]
-							}),
+										children: "Ctrl+K D"
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => ideSession(title),
+									children: [
+										"Open / focus ",
+										ideName,
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "kbd",
+											children: "Ctrl+K O"
+										})
+									]
+								})
+							] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: () => hideSession(title),
 								children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -34837,10 +35469,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								})]
 							}) : null,
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								disabled: !!peer && !paused,
+								title: peer && !paused ? PEER_SANDBOX_HINT : void 0,
 								onClick: () => paused ? resumeSession(title) : pauseSession(title),
 								children: paused ? "Resume session" : "Pause session"
 							}),
-							caps.git && (wipeArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							caps.git && !peer && (wipeArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "wipe-confirm",
 								role: "group",
 								title: `Permanently removes the worktree directory and closes its ${ideName} window. This cannot be undone.`,
@@ -36799,6 +37433,24 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 function installSummary(steps) {
 	return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
 }
+function stepNames(steps) {
+	const out = [];
+	for (const s of steps) if (s.id === "packages") out.push(...s.label.replace(/^system packages: /, "").split(", "));
+	else if (s.id === "homebrew") out.push("Homebrew");
+	else {
+		const m = /\(([^)]+)\)\s*$/.exec(s.label);
+		out.push(m && /-cli$/.test(s.id) ? m[1] : s.label);
+	}
+	return out.filter(Boolean);
+}
+function installButtonLabel(steps) {
+	const names = stepNames(steps);
+	if (!names.length || names.length > 3) return "Install everything missing";
+	return "Install " + names.join(" + ");
+}
+function asksForPassword(steps) {
+	return steps.some((s) => s.id === "packages" || s.id === "homebrew" || /(^|[\s;&|(])sudo\s/.test(s.cmd || ""));
+}
 function InstallWindow({ onClose, onDone }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/doctor/install-terminal", true);
@@ -36893,13 +37545,453 @@ function InstallMissing({ steps, onDone }) {
 				className: "test-btn",
 				id: "doctor-install-btn",
 				onClick: () => setOpen(true),
-				children: "Install everything missing"
+				children: installButtonLabel(steps)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "set-hint",
-				children: [" ", installSummary(steps)]
+				children: [
+					" ",
+					installSummary(steps),
+					asksForPassword(steps) ? " — asks for your password once" : ""
+				]
 			}),
 			window_
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/AgentSignIn.tsx
+function signInTarget(c) {
+	if (!c || c.id !== "agent-auth" || c.status !== "warn") return null;
+	if (!c.cmd || !c.provider) return null;
+	return c.provider;
+}
+function agentDisplayName(name) {
+	return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+}
+function SignInWindow({ provider, onClose }) {
+	const hostRef = (0, import_react.useRef)(null);
+	const state = useWsTerm(hostRef, "/api/providers/" + encodeURIComponent(provider) + "/login-terminal", true);
+	const closeRef = (0, import_react.useRef)(onClose);
+	closeRef.current = onClose;
+	const close = async () => {
+		try {
+			await api("/api/providers/" + encodeURIComponent(provider) + "/login-close", { method: "POST" });
+		} catch {}
+		closeRef.current();
+	};
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	const status = state === "streaming" ? "sign in when it asks (a browser window may open) — then close this window" : state;
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "signin-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) close();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "prov-login-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["Sign in to ", agentDisplayName(provider)] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						id: "signin-status",
+						children: status
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "signin-close",
+						onClick: () => void close(),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prov-login-term",
+				ref: hostRef
+			})]
+		})
+	}), document.body);
+}
+function AgentSignIn({ provider, onDone, className }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "test-btn agent-signin-btn" + (className ? " " + className : ""),
+		onClick: (e) => {
+			e.stopPropagation();
+			setOpen(true);
+		},
+		children: ["Sign in to ", agentDisplayName(provider)]
+	}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
+		provider,
+		onClose: () => {
+			setOpen(false);
+			onDone();
+		}
+	})] });
+}
+//#endregion
+//#region src/components/dialogs/ConnectGitHub.tsx
+function errText$1(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function GhSignInWindow({ onClose }) {
+	const hostRef = (0, import_react.useRef)(null);
+	const state = useWsTerm(hostRef, "/api/github/gh-login-terminal", true);
+	const closeRef = (0, import_react.useRef)(onClose);
+	closeRef.current = onClose;
+	const close = async () => {
+		try {
+			await api("/api/github/gh-login-close", { method: "POST" });
+		} catch {}
+		closeRef.current();
+	};
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "gh-signin-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) close();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "prov-login-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Sign in to GitHub" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: state === "streaming" ? "copy the code it shows, press Enter, sign in in the browser — then close this window" : state
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-signin-close",
+						onClick: () => void close(),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prov-login-term",
+				ref: hostRef
+			})]
+		})
+	}), document.body);
+}
+function ConnectGitHub({ onChange }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [flow, setFlow] = (0, import_react.useState)(null);
+	const [ghOpen, setGhOpen] = (0, import_react.useState)(false);
+	const [token, setToken] = (0, import_react.useState)("");
+	const [name, setName] = (0, import_react.useState)("");
+	const [email, setEmail] = (0, import_react.useState)("");
+	const [push, setPush] = (0, import_react.useState)(null);
+	const changeRef = (0, import_react.useRef)(onChange);
+	changeRef.current = onChange;
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const s = await api("/api/github/status");
+			setSt(s);
+			setErr("");
+			if (s.flow && s.flow.state === "pending") setFlow(s.flow);
+			setName((v) => v || s.identity?.name || s.identity_suggested?.name || "");
+			setEmail((v) => v || s.identity?.email || s.identity_suggested?.email || "");
+		} catch (e) {
+			setErr(errText$1(e));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	const connected = (0, import_react.useCallback)(async (login) => {
+		toast(login ? "GitHub connected — @" + login : "GitHub connected");
+		await load();
+		changeRef.current?.();
+	}, [load]);
+	(0, import_react.useEffect)(() => {
+		if (!flow || flowFinished(flow)) return;
+		const t = setTimeout(async () => {
+			try {
+				const f = await api("/api/github/device/poll", { method: "POST" });
+				setFlow(f);
+				if (f.state === "done") connected(f.login);
+			} catch (e) {
+				setFlow({
+					...flow,
+					state: "error",
+					error: errText$1(e)
+				});
+			}
+		}, pollDelay(flow) * 1e3);
+		return () => clearTimeout(t);
+	}, [flow, connected]);
+	const run = async (what, fn) => {
+		setBusy(what);
+		try {
+			await fn();
+		} catch (e) {
+			toast(errText$1(e), { duration: 8e3 });
+		} finally {
+			setBusy("");
+		}
+	};
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "error",
+		children: ["GitHub status failed: ", err]
+	});
+	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted",
+		children: "Checking GitHub…"
+	});
+	const method = primaryGithubMethod(st);
+	const pasteBox = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "setup-acct-row gh-token-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+				href: st.token_url,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				className: "gh-token-link",
+				children: "Make a token on GitHub"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "password",
+				className: "gh-token-input",
+				placeholder: "…then paste it here",
+				autoComplete: "off",
+				value: token,
+				onChange: (e) => setToken(e.target.value),
+				onClick: (e) => e.stopPropagation()
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "gh-token-save",
+				disabled: !!busy || !token.trim(),
+				onClick: (e) => {
+					e.stopPropagation();
+					run("token", async () => {
+						const r = await api("/api/github/token", { json: { token: token.trim() } });
+						setToken("");
+						if (r.error) toast(r.error);
+						await connected(r.login);
+					});
+				},
+				children: busy === "token" ? "Checking…" : "Save"
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "connect-github",
+		id: "connect-github",
+		children: [
+			st.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "gh-connected",
+				id: "gh-connected",
+				children: [
+					"✓ Connected",
+					st.login ? " as @" + st.login : "",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "muted",
+						children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
+					}),
+					st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "error",
+						children: [" — ", st.user_error]
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				method === "device" && (flow && flow.state === "pending" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "gh-device",
+					id: "gh-device",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Enter this code at GitHub:" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "gh-user-code",
+							children: flow.user_code
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: (e) => {
+								e.stopPropagation();
+								copyText(flow.user_code).then((ok) => toast(ok ? "Code copied" : "Copy failed"));
+							},
+							children: "Copy"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+							href: flow.verification_uri,
+							target: "_blank",
+							rel: "noopener noreferrer",
+							children: ["Open ", flow.verification_uri.replace(/^https?:\/\//, "")]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "waiting for you to approve…"
+						})
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "setup-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-device-start",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("device", async () => {
+								const f = await api("/api/github/device/start", { method: "POST" });
+								setFlow(f);
+							});
+						},
+						children: "Sign in with GitHub"
+					}), flow && flow.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "error",
+						children: flow.error
+					})]
+				})),
+				method === "gh" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "setup-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-cli-signin",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							setGhOpen(true);
+						},
+						children: "Sign in to GitHub"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "opens GitHub in your browser (through the gh CLI)"
+					})]
+				}),
+				method === "token" ? pasteBox : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "gh-token-fold",
+					onClick: (e) => e.stopPropagation(),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or paste a token" }), pasteBox]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted setup-hint",
+					children: "Recommended, not required: other forges push over your own remote as usual."
+				})
+			] }),
+			needsIdentity(st) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "gh-identity",
+				id: "gh-identity",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Your name and email for commits"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "setup-acct-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "gh-ident-name",
+								placeholder: "Your Name",
+								value: name,
+								onChange: (e) => setName(e.target.value),
+								onClick: (e) => e.stopPropagation()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "gh-ident-email",
+								placeholder: "you@example.com",
+								value: email,
+								onChange: (e) => setEmail(e.target.value),
+								onClick: (e) => e.stopPropagation()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "gh-ident-save",
+								disabled: !!busy || !name.trim() || !email.trim(),
+								onClick: (e) => {
+									e.stopPropagation();
+									run("identity", async () => {
+										await api("/api/github/identity", { json: {
+											name: name.trim(),
+											email: email.trim()
+										} });
+										toast("git now knows who you are");
+										await load();
+										changeRef.current?.();
+									});
+								},
+								children: "Use these"
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Saved in your global git config (~/.gitconfig) when you click — the @users.noreply address keeps your real email private."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-acct-row gh-push-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-push-check",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("push", async () => setPush(await api("/api/github/push-check")));
+						},
+						children: busy === "push" ? "Checking…" : "Check I can push"
+					}),
+					push && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : ""),
+						children: [(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || ""), push.ok === false && push.fix ? " — " + push.fix : ""]
+					}),
+					push?.ok === false && push.id === "https_auth" && st.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-git-credential",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("cred", async () => {
+								toast((await api("/api/github/git-credential", { method: "POST" })).helper === "gh" ? "git pushes through gh now" : "git pushes with your GitHub sign-in now");
+								setPush(await api("/api/github/push-check"));
+							});
+						},
+						children: "Let git push with this sign-in"
+					})
+				]
+			}),
+			ghOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhSignInWindow, { onClose: () => {
+				setGhOpen(false);
+				run("gh", async () => {
+					try {
+						const r = await api("/api/github/import-gh", { method: "POST" });
+						await connected(r.login);
+					} catch {
+						await load();
+					}
+				});
+			} })
 		]
 	});
 }
@@ -36922,6 +38014,16 @@ function useDoctorWarn() {
 	return useDoctorWarnStore();
 }
 var setupAutoShown = false;
+function consumeSetupIntent(loc = window.location, hist = window.history) {
+	const params = new URLSearchParams(loc.search);
+	if (params.get("setup") !== "install") return false;
+	params.delete("setup");
+	const q = params.toString();
+	try {
+		hist.replaceState(null, "", loc.pathname + (q ? "?" + q : "") + loc.hash);
+	} catch {}
+	return true;
+}
 function shouldAutoShowSetup(opts) {
 	return opts.failing && opts.onboarded === false && opts.sessions > 0;
 }
@@ -36931,6 +38033,10 @@ function useDoctorAutoShow() {
 	const sessions = instances ? instances.length : -1;
 	const failing = useDoctorWarnStore((s) => s.failing);
 	(0, import_react.useEffect)(() => {
+		if (consumeSetupIntent()) {
+			setupAutoShown = true;
+			useUi.getState().openDialogFor("setup");
+		}
 		const check = async () => {
 			try {
 				const d = await api("/api/doctor");
@@ -37015,10 +38121,18 @@ function DoctorList({ reprobeKey }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "doctor-detail",
-					children: [c.detail || "", c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "doctor-fix",
-						children: [" fix: ", c.fix]
-					})]
+					children: [
+						c.detail || "",
+						c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "doctor-fix",
+							children: [" fix: ", c.fix]
+						}),
+						signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+							provider: signInTarget(c),
+							className: "doctor-signin",
+							onDone: () => setInstalled((n) => n + 1)
+						})
+					]
 				})
 			]
 		}, c.id || i))
@@ -37060,14 +38174,57 @@ async function runGithubTest() {
 		};
 	}
 }
+function StepReason({ step }) {
+	if (!step || !step.reason) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "setup-reason st-" + step.status,
+		"data-step-status": step.status,
+		children: (STATUS_GLYPH[step.status] || "•") + " " + step.reason
+	});
+}
 function SetupChecklist$1(_props) {
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
 	const [gh, setGh] = (0, import_react.useState)(idleTest);
 	const [sc, setSc] = (0, import_react.useState)(idleTest);
 	const [agent, setAgent] = (0, import_react.useState)(idleTest);
+	const [signIn, setSignIn] = (0, import_react.useState)(null);
 	const [scToken, setScToken] = (0, import_react.useState)("");
+	const [plan, setPlan] = (0, import_react.useState)(null);
+	const [choosing, setChoosing] = (0, import_react.useState)(false);
+	const loadPlan = (0, import_react.useCallback)(async (refresh = false) => {
+		try {
+			setPlan(await api("/api/onboarding" + (refresh ? "?refresh=1" : "")));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		loadPlan();
+		api("/api/doctor").then((d) => {
+			if (live) setSignIn(signInTarget((d.checks || []).find((c) => c.id === "agent-auth")));
+		}).catch(() => {});
+		return () => {
+			live = false;
+		};
+	}, [loadPlan]);
+	const step = (id) => plan?.steps.find((x) => x.id === id);
+	const shown = visibleSteps(plan);
+	const num = (id) => stepNumber(id, shown);
 	const closeSetup = () => {
 		if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
+	};
+	const openDevices = () => {
+		closeSetup();
+		useUi.getState().openDialogFor("settings", "devices");
+	};
+	const choose = async (choice) => {
+		setChoosing(true);
+		try {
+			setPlan(await api("/api/onboarding/choice", { json: { choice } }));
+		} catch (e) {
+			toast(e.message);
+		} finally {
+			setChoosing(false);
+		}
 	};
 	const testGithub = (0, import_react.useCallback)(async () => {
 		setGh({ testing: true });
@@ -37110,6 +38267,7 @@ function SetupChecklist$1(_props) {
 		setAgent({ testing: true });
 		try {
 			const r = await api("/api/settings/test/agent", { method: "POST" });
+			setSignIn(signInTarget(r?.auth));
 			const bits = [];
 			if (r?.cli?.detail) bits.push(r.cli.detail);
 			if (r?.auth?.detail) bits.push(r.auth.detail);
@@ -37125,14 +38283,20 @@ function SetupChecklist$1(_props) {
 				msg: e.message
 			});
 		}
-	}, []);
+		loadPlan(true);
+	}, [loadPlan]);
+	const devices = step("devices");
+	const agentStep = step("agent");
+	const tsStep = step("tailscale");
+	const ghStep = step("github");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "setup-step",
+			"data-step": "deps",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "setup-num",
-					children: "①"
+					children: num("deps")
 				}), " Dependencies"] }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "setup-doctor",
@@ -37146,6 +38310,7 @@ function SetupChecklist$1(_props) {
 						onClick: (e) => {
 							e.stopPropagation();
 							setReprobeKey((k) => k + 1);
+							loadPlan(true);
 						},
 						children: "Re-check"
 					})
@@ -37153,15 +38318,77 @@ function SetupChecklist$1(_props) {
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "setup-num",
-					children: "②"
-				}), " Accounts"] }),
+			className: "setup-step setup-devices",
+			"data-step": "devices",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "setup-num",
+				children: num("devices")
+			}), " First computer, or join one you already have?"] }), !plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted setup-hint",
+				children: "Checking…"
+			}) : devices?.ask ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted setup-hint",
+				children: "Already use MindFlock on another computer? Join it first: your settings, GitHub token and ticket sources come along. (Agent sign-ins stay on each computer, so you sign in here after.)"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "setup-first-computer",
+					disabled: choosing,
+					onClick: (e) => {
+						e.stopPropagation();
+						choose("first");
+					},
+					children: "This is my first computer"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "setup-join-computer",
+					disabled: choosing,
+					onClick: (e) => {
+						e.stopPropagation();
+						choose("join");
+					},
+					children: "Join one I already have"
+				})]
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: devices }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-acct-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "setup-actions",
+					children: [devices?.choice === "join" && devices.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "setup-open-devices",
+						onClick: (e) => {
+							e.stopPropagation();
+							openDevices();
+						},
+						children: "Join it in Settings → Devices"
+					}), devices?.status !== "ok" || devices?.choice === "first" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike setup-devices-change",
+						disabled: choosing,
+						onClick: (e) => {
+							e.stopPropagation();
+							choose("");
+						},
+						children: "Change"
+					}) : null]
+				}),
+				devices?.choice === "join" && devices.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted setup-hint",
+					children: "On your other computer: Settings → Devices → Add a device shows a code to paste here — and, for a computer with nothing installed yet, one line that installs MindFlock and joins in one go."
+				})
+			] })]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "setup-step",
+			"data-step": "agent",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "setup-num",
+				children: num("agent")
+			}), " Sign in to your agent"] }), agentStep?.status === "skip" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: agentStep }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: agentStep }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-acct-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "setup-test-agent",
 						onClick: (e) => {
@@ -37169,8 +38396,51 @@ function SetupChecklist$1(_props) {
 							testAgent();
 						},
 						children: "Test agent CLI"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: agent })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: agent }),
+					signIn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+						provider: signIn,
+						onDone: () => void testAgent()
+					})
+				]
+			})] })]
+		}),
+		shown.includes("tailscale") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "setup-step",
+			"data-step": "tailscale",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "setup-num",
+					children: num("tailscale")
+				}), " Tailscale"] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: tsStep }),
+				tsStep?.status === "todo" && tsStep.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "setup-hint",
+					children: ["fix: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tsStep.fix })]
 				}),
+				tsStep?.status === "todo" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "setup-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "setup-open-tailscale",
+						onClick: (e) => {
+							e.stopPropagation();
+							openDevices();
+						},
+						children: "Sign in in Settings → Devices"
+					})
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "setup-step",
+			"data-step": "github",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "setup-num",
+					children: num("github")
+				}), " Connect GitHub"] }),
+				ghStep?.status === "skip" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: ghStep }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, { onChange: () => void loadPlan() }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "setup-optional",
 					onClick: (e) => e.stopPropagation(),
@@ -37181,7 +38451,7 @@ function SetupChecklist$1(_props) {
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "setup-test-github",
-								title: "Checks that a GitHub token resolves (Intake → Pull requests, $GH_TOKEN / $GITHUB_TOKEN, or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
+								title: "Checks that a GitHub token resolves (Connect GitHub above, $GH_TOKEN / $GITHUB_TOKEN, or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
 								onClick: (e) => {
 									e.stopPropagation();
 									testGithub();
@@ -37219,7 +38489,7 @@ function SetupChecklist$1(_props) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "muted setup-hint",
 					children: [
-						"Ticket and GitHub tokens are set up in",
+						"Ticket sources are set up in",
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -37231,7 +38501,7 @@ function SetupChecklist$1(_props) {
 							},
 							children: "Intake"
 						}),
-						" · agent logins in ",
+						" · agent accounts in ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "setup-open-settings linklike",
@@ -37248,37 +38518,25 @@ function SetupChecklist$1(_props) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "setup-step",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "setup-num",
-				children: "③"
-			}), " Create your first session"] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "setup-actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "setup-new",
-					onClick: (e) => {
-						e.stopPropagation();
-						closeSetup();
-						useUi.getState().openDialogFor("new-session");
-					},
-					children: "+ New session"
-				})
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "muted setup-hint setup-optional setup-devices",
+			"data-step": "repo",
 			children: [
-				"Already use MindFlock on another computer?",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "setup-open-devices linklike",
-					onClick: (e) => {
-						e.stopPropagation();
-						closeSetup();
-						useUi.getState().openDialogFor("settings", "devices");
-					},
-					children: "Connect it"
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "setup-num",
+					children: num("repo")
+				}), " Create your first session"] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: step("repo") }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "setup-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "setup-new",
+						onClick: (e) => {
+							e.stopPropagation();
+							closeSetup();
+							useUi.getState().openDialogFor("new-session");
+						},
+						children: "+ New session"
+					})
 				})
 			]
 		})
@@ -37684,14 +38942,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										badgeOff = true;
 									}
 									const label = dev.host && hostCounts.get(dev.host) === 1 ? dev.host : dkey;
-									let note = "", connectBtn = false;
-									if (!d.reachable) note = "MindFlock not reachable on that device";
-									else if (!d.remote_control) note = "remote control is off on that device";
-									else if (d.needs_token) {
-										note = "needs that device's access token";
-										connectBtn = true;
-									} else if (d.error) note = String(d.error);
-									else if (d.connected && devRows.length === 0) note = "no sessions";
+									const { note, action } = sidebarDeviceNote(dev, devRows.length);
 									return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceSection, {
 										devKey: dkey,
 										label,
@@ -37702,7 +38953,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										showForget: canDisconnect(dev),
 										member: !!d.member,
 										note,
-										connectBtn,
+										action,
 										onToggle: () => ui.toggleDeviceCollapsed(dkey),
 										children: !collapsed && renderRail(devRails[di].rail)
 									}, dkey);
@@ -37847,17 +39098,29 @@ function DeviceSection(props) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceHeader, { ...props }),
 		!props.collapsed && props.note && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "device-note muted",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "dev-note-text",
-				children: props.note
-			}), props.connectBtn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				className: "dev-connect",
-				onClick: (e) => {
-					e.stopPropagation();
-					openDialogFor("device", props.devKey);
-				},
-				children: "Connect…"
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-note-text",
+					children: props.note
+				}),
+				props.action === "add" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "dev-connect",
+					"data-add-device": props.devKey,
+					onClick: (e) => {
+						e.stopPropagation();
+						openDevicesFor({ device: props.devKey });
+					},
+					children: "Add to my devices…"
+				}),
+				props.action === "connect" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "dev-connect",
+					onClick: (e) => {
+						e.stopPropagation();
+						openDialogFor("device", props.devKey);
+					},
+					children: "Connect…"
+				})
+			]
 		}),
 		props.children
 	] });
@@ -55507,7 +56770,7 @@ function SessionPanel({ m, a }) {
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
-var POLL_MS$1 = 2e3;
+var POLL_MS$2 = 2e3;
 var NULL_FP_REFRESH_MS = 2e4;
 var PARTIAL_REFRESH_MS = 3e3;
 function entryFor(title) {
@@ -55734,7 +56997,7 @@ function CodeMap({ title, active }) {
 		if (!entryFor(title).snap) loadSnap();
 		const t = setInterval(() => {
 			if (!document.hidden) poll();
-		}, POLL_MS$1);
+		}, POLL_MS$2);
 		const onVis = () => {
 			if (!document.hidden) poll();
 		};
@@ -57180,7 +58443,7 @@ function Pane({ inst, drag, dragging }) {
 	};
 	const missing = !!inst.workspace_missing;
 	const loading = inst.status === "loading";
-	const savedTab = lastTab || "agent";
+	const savedTab = (inst.peer_share && lastTab === "shell" ? "agent" : lastTab) || "agent";
 	const [tab, setTab] = (0, import_react.useState)(paneTab(savedTab, caps.git));
 	const [booted, setBooted] = (0, import_react.useState)(false);
 	const [wsState, setWsState] = (0, import_react.useState)("connecting");
@@ -57537,6 +58800,7 @@ function Pane({ inst, drag, dragging }) {
 		})]
 	});
 	const chip = chipState(inst);
+	const sharedFolder = !!inst.peer_share;
 	const ns = nextStep(inst);
 	const ft = fastTrackStep(inst);
 	const rs = resetStep(inst);
@@ -57589,7 +58853,7 @@ function Pane({ inst, drag, dragging }) {
 								},
 								children: "Agent"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							!sharedFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								"data-tab": "shell",
 								className: tab === "shell" ? "active" : "",
 								onClick: (e) => {
@@ -58671,9 +59935,14 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("settings", "devices")
 		});
 		acts.push({
-			label: "Peer links…",
-			hint: "invite someone, or join with their code",
+			label: "Work with someone…",
+			hint: "peer links: invite someone, or join with their code",
 			run: () => ui.openDialogFor("settings", "peer")
+		});
+		acts.push({
+			label: "Paste a code…",
+			hint: "join with a code from your other computer, or someone's invite",
+			run: () => openDevicesFor({ focusPaste: true })
 		});
 		acts.push({
 			label: "Open Setup checklist",
@@ -58692,7 +59961,8 @@ function CommandPalette({ host }) {
 		const { rows } = orderedInstances(instances$1(), ui.order);
 		const t = ui.focused;
 		if (t) {
-			acts.push({
+			const shared = !!rows.find((r) => r.title === t)?.peer_share;
+			if (!shared) acts.push({
 				label: `Rename… — ${t}`,
 				run: () => ui.openDialogFor("rename", t)
 			});
@@ -58707,12 +59977,12 @@ function CommandPalette({ host }) {
 				run: () => focusQueueInput(t)
 			});
 			const inst = rows.find((r) => r.title === t);
-			if (inst && !inst.pending && fastTrackStep(inst)) acts.push({
+			if (inst && !shared && !inst.pending && fastTrackStep(inst)) acts.push({
 				label: `Fast-track… — ${t}`,
 				hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
 				run: () => openFastTrackMenu(t)
 			});
-			if (inst && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) acts.push({
+			if (inst && !shared && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) acts.push({
 				label: `Split into parallel pieces… — ${t}`,
 				hint: "starts a split",
 				run: () => {
@@ -58725,7 +59995,7 @@ function CommandPalette({ host }) {
 				hint: "Ctrl+K T",
 				run: () => ui.threadOpen(t)
 			});
-			if (caps.git) {
+			if (caps.git && !shared) {
 				acts.push({
 					label: `Commit… — ${t}`,
 					hint: "Ctrl+K C",
@@ -58742,16 +60012,18 @@ function CommandPalette({ host }) {
 					run: () => makePrSession(t)
 				});
 			}
-			acts.push({
-				label: `Open in ${ideName} — ${t}`,
-				hint: "Ctrl+K O",
-				run: () => ideSession(t)
-			});
-			acts.push({
-				label: `Duplicate session — ${t}`,
-				hint: "Ctrl+K D",
-				run: () => copySession(t)
-			});
+			if (!shared) {
+				acts.push({
+					label: `Open in ${ideName} — ${t}`,
+					hint: "Ctrl+K O",
+					run: () => ideSession(t)
+				});
+				acts.push({
+					label: `Duplicate session — ${t}`,
+					hint: "Ctrl+K D",
+					run: () => copySession(t)
+				});
+			}
 			acts.push({
 				label: `Hide window — ${t}`,
 				hint: "Ctrl+K H",
@@ -58765,7 +60037,7 @@ function CommandPalette({ host }) {
 					ui.setLastTab(t, "map");
 				}
 			});
-			if (caps.git) acts.push({
+			if (caps.git && !shared) acts.push({
 				label: `Merge PR — ${t}`,
 				hint: prHint ? prHint.replace(" · ", "") : void 0,
 				run: () => mergeSession(t)
@@ -58801,7 +60073,14 @@ function CommandPalette({ host }) {
 			s: fuzzyScore(query, a.label)
 		})).filter((x) => x.s >= 0);
 		scored.sort((x, y) => x.s - y.s || x.i - y.i);
-		return scored.map((x) => x.a);
+		const out = scored.map((x) => x.a);
+		const code = routeCode(query);
+		if (code.kind) out.unshift({
+			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+			hint: code.kind === "peer" ? "another person · Work with someone" : "your devices",
+			run: () => void routePastedCode(query)
+		});
+		return out;
 	}, [actions, query]);
 	(0, import_react.useEffect)(() => {
 		if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
@@ -66610,6 +67889,279 @@ function useServerRestart() {
 	};
 }
 //#endregion
+//#region src/components/settings/useMakeReachable.ts
+function reachableFields(opts) {
+	const g = {};
+	if (opts.reach) {
+		g.serve_mode = "tailscale";
+		g.auth_mode = "on";
+	}
+	if (opts.sharedLink) g.shared_link = opts.sharedLink;
+	return g;
+}
+async function keepSignedIn() {
+	try {
+		const r = await api("/api/settings/auth-token");
+		if (r?.token) await api("/api/auth", { json: { token: r.token } });
+	} catch {}
+}
+function useMakeReachable(onBack) {
+	const { restarting, timedOut, restart } = useServerRestart();
+	const [saving, setSaving] = (0, import_react.useState)(false);
+	const apply = (0, import_react.useCallback)(async (opts) => {
+		const general = reachableFields(opts);
+		if (!Object.keys(general).length) return null;
+		setSaving(true);
+		try {
+			if (opts.reach) await keepSignedIn();
+			const res = await api("/api/settings", { json: { general } });
+			if (res?.restarting) restart({
+				alreadyRequested: true,
+				onBack
+			});
+			else onBack?.();
+			return res;
+		} finally {
+			setSaving(false);
+		}
+	}, [restart, onBack]);
+	return {
+		busy: saving || restarting,
+		restarting,
+		timedOut,
+		apply
+	};
+}
+//#endregion
+//#region src/components/settings/screens/TailscaleCard.tsx
+var POLL_MS$1 = 3e3;
+function signedInAs(h) {
+	if (h.tagged) return "a tagged device (" + (h.tags || []).join(", ") + ")";
+	return h.user || "";
+}
+function stateLabel(h) {
+	if (!h.installed) return h.kind === "wsl-windows-host" ? "On Windows only" : "Not installed";
+	switch (h.backend_state) {
+		case "Running": return "Connected";
+		case "NeedsLogin":
+		case "NoState": return "Not signed in";
+		case "Stopped": return "Turned off";
+		case "NeedsMachineAuth": return "Waiting for approval";
+		case "":
+		case void 0: return "Not answering";
+		default: return h.backend_state;
+	}
+}
+function canSignIn(h) {
+	return h.installed && (h.backend_state === "NeedsLogin" || h.backend_state === "NoState" || h.backend_state === "Stopped");
+}
+function CopyRow({ text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-snippet",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn",
+			onClick: () => copyText(text).then((ok) => toast(ok ? "Command copied" : "Copy failed")),
+			children: "Copy"
+		})]
+	});
+}
+function Issue({ issue }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "ts-issue ts-" + issue.level,
+		"data-issue": issue.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: issue.message }),
+			issue.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyRow, { text: issue.fix }),
+			issue.id === "wsl_windows_only" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WslOptions, {}),
+			issue.docs && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+				className: "sl-admin-link",
+				href: issue.docs,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				children: [
+					issue.docs.includes("login.tailscale.com/admin") ? "Open the admin console" : "Tailscale's guide",
+					" ",
+					"↗"
+				]
+			})
+		]
+	});
+}
+function WslOptions() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ts-wsl",
+		"data-wsl-options": true,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Recommended:" }),
+				" run Tailscale inside WSL too (the command above). It needs systemd on in ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/etc/wsl.conf" }),
+				" (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "[boot] systemd=true" }),
+				", then",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "wsl --shutdown" }),
+				"). It joins your tailnet as its own device, named after this computer with ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "-wsl" }),
+				"; sign in as the same account."
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Alternative:" }),
+				" WSL's mirrored networking (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "networkingMode=mirrored" }),
+				" in ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ".wslconfig" }),
+				") can let the Windows node's address reach MindFlock, with one device instead of two. Tailscale itself recommends installing only on Windows, but MindFlock hasn't been tested that way: other devices may not reach it, and joining Your devices checks the caller's tailnet address."
+			]
+		})]
+	});
+}
+function TailscaleCardView({ health, login, busy, onSignIn }) {
+	if (!health) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ts-card",
+		id: "tailscale-card",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Tailscale on this device"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Checking Tailscale…"
+		})]
+	});
+	const h = health;
+	const who = signedInAs(h);
+	const dev = h.device;
+	const ipv4 = (dev?.ips || []).find((a) => !a.includes(":"));
+	const authUrl = login?.auth_url || h.auth_url || "";
+	const authQr = login?.auth_qr_svg || h.auth_qr_svg || "";
+	const label = stateLabel(h);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ts-card",
+		id: "tailscale-card",
+		"data-state": h.backend_state || "",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ts-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					className: "set-section-title",
+					children: "Tailscale on this device"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ts-state" + (h.running ? " ts-ok" : ""),
+					children: label
+				})]
+			}),
+			h.installed && h.running && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
+				className: "ts-facts",
+				children: [
+					who && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Signed in as" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: who })] }),
+					h.tailnet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Tailnet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: h.tailnet })] }),
+					dev && (dev.dns || dev.name) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "This device" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { children: [dev.dns || dev.name, ipv4 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "ts-ip",
+						children: ipv4
+					}) : null] })] })
+				]
+			}),
+			h.installed && h.kind === "app-bundle" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "Using the Tailscale app's built-in command line."
+			}),
+			canSignIn(h) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ts-signin",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: onSignIn,
+						children: busy ? "Starting…" : h.backend_state === "Stopped" ? "Turn on Tailscale" : "Sign in to Tailscale"
+					}),
+					authUrl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ts-auth",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "set-hint",
+								children: "Open this link to sign in (or scan it with a phone that is signed in to Tailscale). This card updates once you finish:"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+								href: authUrl,
+								target: "_blank",
+								rel: "noopener noreferrer",
+								className: "ts-auth-link",
+								children: authUrl
+							}),
+							authQr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "qr-card ts-qr",
+								dangerouslySetInnerHTML: { __html: authQr }
+							})
+						]
+					}),
+					login && !login.ok && login.error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ts-login-error",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "error",
+							children: login.error
+						}), login.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyRow, { text: login.fix })]
+					})
+				]
+			}),
+			h.issues.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ts-issues",
+				children: h.issues.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Issue, { issue: i }, i.id))
+			})
+		]
+	});
+}
+function TailscaleCard({ active = true }) {
+	const [health, setHealth] = (0, import_react.useState)(null);
+	const [login, setLogin] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async (refresh = false) => {
+		try {
+			setHealth(await api("/api/tailscale/health" + (refresh ? "?refresh=1" : "")));
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [active, load]);
+	const pending = !!(login?.ok && health && !health.running);
+	(0, import_react.useEffect)(() => {
+		if (!active || !pending) return;
+		const t = setInterval(() => {
+			if (!document.hidden) load(true);
+		}, POLL_MS$1);
+		return () => clearInterval(t);
+	}, [
+		active,
+		pending,
+		load
+	]);
+	const signIn = async () => {
+		setBusy(true);
+		try {
+			setLogin(await api("/api/tailscale/login", { method: "POST" }));
+		} catch (e) {
+			const body = e.body;
+			setLogin(body && typeof body === "object" ? body : {
+				ok: false,
+				error: e.message
+			});
+		} finally {
+			setBusy(false);
+			load(true);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCardView, {
+		health,
+		login,
+		busy,
+		onSignIn: signIn
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Mobile.tsx
 var TOKEN_MASK = "••••••••••••••••";
 function Mobile(_) {
@@ -66635,7 +68187,8 @@ function Mobile(_) {
 		setModeBusy(true);
 		let restarting = false;
 		try {
-			restarting = !!(await api("/api/settings", { json: { general: { serve_mode: on ? "tailscale" : "local" } } }))?.restarting;
+			if (on) await keepSignedIn();
+			restarting = !!(await api("/api/settings", { json: { general: on ? reachableFields({ reach: true }) : { serve_mode: "local" } } }))?.restarting;
 		} catch {}
 		setModeBusy(false);
 		if (restarting) restart({
@@ -66656,27 +68209,17 @@ function Mobile(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "tailscale",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-				"Install ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Tailscale" }),
-				" to get access to these features — it puts your phone and this machine on a private network, so you can drive your sessions from anywhere."
-			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-				"Get it at",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-					href: "https://tailscale.com/download",
-					target: "_blank",
-					rel: "noopener noreferrer",
-					children: "tailscale.com/download"
-				}),
-				" ",
-				"(sign in on both devices), then reopen this screen — the QR code and phone URLs appear here."
-			] })]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+					"Install ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Tailscale" }),
+					" to get access to these features — it puts your phone and this machine on a private network, so you can drive your sessions from anywhere."
+				] }),
+				!tailscale && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Then reopen this screen — the QR code and phone URLs appear here." })
+			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Open MindFlock on your phone. Scan the QR from a device on your Tailscale network, or use one of the URLs below."
-		}),
+		tailscale && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneSteps, { app: data?.phone_app }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "mobile-body",
 			className: "mobile-body",
@@ -66689,10 +68232,10 @@ function Mobile(_) {
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "set-row set-switch-row",
-					title: "Bind the server to all interfaces so phones on your tailnet can reach it",
+					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Tailscale mode"
+						children: "Reachable from your other devices and phone (over Tailscale)"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 						className: "ca-switch",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -66729,6 +68272,41 @@ function Mobile(_) {
 			] })
 		})
 	] });
+}
+function PhoneSteps({ app }) {
+	const url = app?.url || "https://tailscale.com/download";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+		className: "mobile-phone-steps set-hint",
+		id: "mobile-phone-steps",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			"data-phone-step": "tailscale",
+			children: [
+				"Install Tailscale on your phone and sign in",
+				app?.login ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					" ",
+					"as ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: app.login })
+				] }) : " with the same account as this computer",
+				". Scan to get the app, or open",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+					href: url,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: url.replace(/^https:\/\//, "")
+				}),
+				" ",
+				"on the phone.",
+				app?.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "qr-card ts-app-qr",
+					dangerouslySetInnerHTML: { __html: app.qr_svg }
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+			"data-phone-step": "mindflock",
+			children: "Open MindFlock on the phone: scan the QR below, or use one of the URLs."
+		})]
+	});
 }
 function UrlList({ urls }) {
 	if (!urls.length) return null;
@@ -66910,7 +68488,7 @@ function SharedLink({ shared, qrSvg, onChanged, onData }) {
 				children: [
 					others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine.",
 					" ",
-					"Sign-in carries across devices paired under Remote control: the QR carries their access tokens too."
+					"Signing in once covers Your devices (Settings → Devices) and devices paired under Remote control: the QR carries their keys too."
 				]
 			})
 		] })
@@ -67036,7 +68614,9 @@ function StepFix({ step, shared, qrSvg }) {
 					" ",
 					"→ ⋯ → Edit ACL tags → add ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
-					"."
+					". Then ⋯ → ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Disable key expiry" }),
+					": tagging a device after it signed in keeps its key expiry, and when the key expires the device silently drops off the link."
 				]
 			}),
 			m?.duplicate_of && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -67073,31 +68653,27 @@ function StepFix({ step, shared, qrSvg }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"Add to your access policy so every ",
+					"One block for your access policy: every ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
-					" device is approved as a host of",
-					" ",
+					" device is approved as a host of ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-					" without a click:"
+					" without a click, and your devices and phone may reach each other's MindFlock (needed under any custom policy, such as ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autogroup:self" }),
+					"). No ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tagOwners" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autoApprovers" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "grants" }),
+					" or",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tests" }),
+					" in your policy yet? Paste it whole. Already have one? Move the lines inside it into yours: a key can't appear twice."
 				]
 			}),
 			shared.policy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
 				text: shared.policy,
 				what: "Policy"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Using a custom policy rather than the default allow-all? Phones must also be allowed to reach ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-					" on ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
-					":"
-				]
-			}),
-			shared.grants && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
-				text: shared.grants,
-				what: "Grant"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
 				href: admin?.policy,
@@ -67143,15 +68719,15 @@ function StepFix({ step, shared, qrSvg }) {
 var RELAY_OPTIONS = [
 	{
 		value: "auto",
-		label: "Automatic — Cloudflare relay when cloudflared is installed"
+		label: "Automatic — through Cloudflare when cloudflared is installed"
 	},
 	{
 		value: "off",
-		label: "Off — peers dial me directly (Tailscale / LAN)"
+		label: "Off — they connect to this computer directly (same network or tailnet)"
 	},
 	{
 		value: "cloudflare",
-		label: "Cloudflare quick tunnel (needs cloudflared)"
+		label: "Always through Cloudflare (needs cloudflared)"
 	},
 	{
 		value: "url",
@@ -67159,26 +68735,53 @@ var RELAY_OPTIONS = [
 	}
 ];
 var PERM_LABELS = [
-	["messages", "send messages"],
-	["diff", "see my diff"],
+	["messages", "message me"],
+	["diff", "see my changes"],
 	["read_file", "read my files"]
+];
+var PEER_EVENTS = [
+	"peer.link_added",
+	"peer.link_removed",
+	"peer.state",
+	"peer.message",
+	"peer.relay_changed"
 ];
 function peerErrText(e) {
 	return e instanceof Error ? e.message : String(e);
+}
+function nowSec() {
+	return Date.now() / 1e3;
 }
 function PeerLinks(_) {
 	const s = useSettings();
 	const stored = s.get("peer", "enabled");
 	const on = stored === true || stored === "true";
 	const [st, setSt] = (0, import_react.useState)(null);
+	const [loadedAt, setLoadedAt] = (0, import_react.useState)(nowSec());
+	const [tick, setTick] = (0, import_react.useState)(0);
 	const [error, setError] = (0, import_react.useState)("");
-	const [invite, setInvite] = (0, import_react.useState)(null);
-	const [code, setCode] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [now, setNow] = (0, import_react.useState)(nowSec());
 	const [install, setInstall] = (0, import_react.useState)([]);
+	const [doctorTick, setDoctorTick] = (0, import_react.useState)(0);
+	const [invite, setInvite] = (0, import_react.useState)(null);
+	const [joined, setJoined] = (0, import_react.useState)(null);
+	const [inviteBusy, setInviteBusy] = (0, import_react.useState)(false);
+	const [inviteErr, setInviteErr] = (0, import_react.useState)("");
+	const [inviteStage, setInviteStage] = (0, import_react.useState)("");
+	const [remoteChosen, setRemoteChosen] = (0, import_react.useState)(false);
+	const inviteOp = (0, import_react.useRef)("");
+	const [code, setCode] = (0, import_react.useState)("");
+	const [joinBusy, setJoinBusy] = (0, import_react.useState)(false);
+	const [joinErr, setJoinErr] = (0, import_react.useState)("");
+	const [joinStage, setJoinStage] = (0, import_react.useState)("");
+	const [joinNote, setJoinNote] = (0, import_react.useState)("");
+	const joinOp = (0, import_react.useRef)("");
+	const joinInput = (0, import_react.useRef)(null);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			setSt(await api("/api/peer"));
+			setLoadedAt(nowSec());
+			setTick((t) => t + 1);
 			setError("");
 		} catch (e) {
 			setError(peerErrText(e));
@@ -67187,7 +68790,54 @@ function PeerLinks(_) {
 	(0, import_react.useEffect)(() => {
 		load();
 	}, [load, on]);
-	const needsInstall = !!st && (!st.sandbox.available || st.relay?.setting === "auto" && st.relay.cloudflared === false);
+	const inviteRef = (0, import_react.useRef)(invite);
+	inviteRef.current = invite;
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		const offs = PEER_EVENTS.map((name) => ev.subscribe(name, (env) => {
+			if (name === "peer.link_added") {
+				const d = env.data || {};
+				if (d.role === "listener" && inviteRef.current) setJoined({
+					link_id: String(d.link_id || ""),
+					name: String(d.peer_name || "Your peer"),
+					sas: String(d.sas || ""),
+					repaired: !!d.repaired
+				});
+			}
+			load();
+		}));
+		offs.push(ev.subscribe("peer.progress", (env) => {
+			const d = env.data || {};
+			const op = String(d.op_id || "");
+			const text = String(d.text || "");
+			if (op && op === inviteOp.current) setInviteStage(text);
+			if (op && op === joinOp.current) setJoinStage(text);
+		}));
+		return () => offs.forEach((off) => off());
+	}, [load]);
+	(0, import_react.useEffect)(() => {
+		const focus = (prefill) => {
+			if (prefill) setCode(prefill);
+			setTimeout(() => joinInput.current?.focus(), 0);
+		};
+		const pending = takePendingPeerJoin();
+		if (pending) focus(pending.code);
+		const onJoin = (e) => {
+			takePendingPeerJoin();
+			focus(String(e.detail?.code || ""));
+		};
+		document.addEventListener(PEER_JOIN_EVENT, onJoin);
+		return () => document.removeEventListener(PEER_JOIN_EVENT, onJoin);
+	}, []);
+	const counting = !!invite || (st?.invites.length || 0) > 0;
+	(0, import_react.useEffect)(() => {
+		if (!counting) return;
+		const t = setInterval(() => setNow(nowSec()), 1e3);
+		return () => clearInterval(t);
+	}, [counting]);
+	const cloudflaredMissing = st?.relay?.setting === "auto" && st.relay.cloudflared === false;
+	const needsInstall = !!st && (!st.sandbox.available || cloudflaredMissing);
 	(0, import_react.useEffect)(() => {
 		if (!needsInstall) {
 			setInstall([]);
@@ -67198,42 +68848,102 @@ function PeerLinks(_) {
 		return () => {
 			live = false;
 		};
-	}, [needsInstall, on]);
-	const run = async (fn, ok) => {
-		setBusy(true);
+	}, [
+		needsInstall,
+		on,
+		doctorTick
+	]);
+	const afterPair = () => void s.reload();
+	const createInvite = async (reach) => {
+		const op = newOpId();
+		inviteOp.current = op;
+		setInviteBusy(true);
+		setInviteErr("");
+		setInviteStage("");
+		setJoined(null);
 		try {
-			await fn();
-			if (ok) toast(ok);
+			const inv = await api("/api/peer/invites", { json: {
+				reach,
+				op_id: op
+			} });
+			setInvite({
+				...inv,
+				at: nowSec()
+			});
+			afterPair();
+		} catch (e) {
+			setInviteErr(peerErrText(e));
+		}
+		inviteOp.current = "";
+		setInviteStage("");
+		setInviteBusy(false);
+		load();
+	};
+	const chooseRemote = async () => {
+		setRemoteChosen(true);
+		setInviteErr("");
+		try {
+			await api("/api/peer/enable", { json: {} });
+			afterPair();
+			setDoctorTick((t) => t + 1);
+		} catch (e) {
+			setInviteErr(peerErrText(e));
+		}
+	};
+	const cancelInvite = async (id) => {
+		try {
+			await api("/api/peer/invites/" + encodeURIComponent(id), { method: "DELETE" });
+			if (invite?.invite_id === id) setInvite(null);
 		} catch (e) {
 			toast(peerErrText(e));
 		}
-		setBusy(false);
 		load();
 	};
-	const afterPair = () => void s.reload();
-	const createInvite = () => run(async () => {
-		setInvite(await api("/api/peer/invites", { json: {} }));
-		afterPair();
-	});
-	const join = () => run(async () => {
-		const link = await api("/api/peer/join", { json: { code: code.trim() } });
-		setCode("");
-		afterPair();
-		toast(`Connected to ${link.peer_name} — check the safety number ${link.sas} with them`);
-	});
-	const relayed = !!invite?.relay;
-	const cloudflaredMissing = st?.relay?.setting === "auto" && st.relay.cloudflared === false;
+	const join = async () => {
+		const op = newOpId();
+		joinOp.current = op;
+		setJoinBusy(true);
+		setJoinErr("");
+		setJoinStage("");
+		setJoinNote("");
+		try {
+			const link = await joinPeerCode(code, op);
+			setCode("");
+			afterPair();
+			setJoinNote(link.reconnected ? `Reconnected to ${link.peer_name} — same link, your shared folder is kept.` : `Connected to ${link.peer_name}. Read each other your safety number ${link.sas} — if it differs, unlink.`);
+		} catch (e) {
+			setJoinErr(peerErrText(e));
+		}
+		joinOp.current = "";
+		setJoinStage("");
+		setJoinBusy(false);
+		load();
+	};
+	const markVerified = async (linkId) => {
+		try {
+			await api("/api/peer/links/" + encodeURIComponent(linkId) + "/verified", { json: { verified: true } });
+			setJoined(null);
+			setInvite(null);
+		} catch (e) {
+			toast(peerErrText(e));
+		}
+		load();
+	};
+	const inviteLeft = invite ? invite.expires_in - (now - invite.at) : 0;
+	const otherInvites = (st?.invites || []).filter((i) => i.invite_id !== invite?.invite_id);
+	const relayAddr = st?.relay?.address || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
-			children: "Peer links"
+			children: "Work with someone"
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
 				"Work together with someone else's MindFlock. Send them an invite, they paste it, and you're connected. Then either of you can share ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "one folder" }),
-				": an agent works in it inside a sandbox and talks to the other person's agent. Nothing else on your machine is exposed — see ",
+				": an agent works in it inside a sandbox and talks to the other person's agent. You can also message them and look at their changes. Nothing else on your machine is exposed — see",
+				" ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/peer-link.md" }),
 				"."
 			]
@@ -67248,43 +68958,182 @@ function PeerLinks(_) {
 						className: "set-subtitle",
 						children: "Invite someone"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						id: "peer-invite",
-						disabled: busy,
-						onClick: createInvite,
-						children: busy && !invite ? "Creating…" : "Create invite"
-					}),
-					invite && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					joined ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "peer-joined",
+						className: "peer-invite",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: joined.name }),
+							" ",
+							joined.repaired ? "reconnected" : "joined",
+							" — read them your safety number ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+								className: "peer-sas",
+								children: joined.sas
+							}),
+							". If theirs is different, unlink now."
+						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "set-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-joined-match",
+								onClick: () => markVerified(joined.link_id),
+								children: "It matches"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								onClick: () => {
+									setJoined(null);
+									setInvite(null);
+								},
+								children: "Later"
+							})]
+						})]
+					}) : invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "peer-invite-code",
 						className: "peer-invite",
 						children: [
+							invite.fallback && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "peer-warn",
+								id: "peer-invite-fallback",
+								children: invite.fallback.text
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 								readOnly: true,
 								rows: 5,
 								value: invite.message || invite.code,
 								onClick: (e) => e.target.select()
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "test-btn",
-								id: "peer-invite-copy",
-								onClick: () => copyText(invite.message || invite.code).then((ok) => toast(ok ? "Invite copied — send it to them" : "Copy failed")),
-								children: "Copy invite"
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "set-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									id: "peer-invite-copy",
+									disabled: inviteLeft <= 0,
+									onClick: () => copyText(invite.message || invite.code).then((ok) => toast(ok ? "Invite copied — send it to them" : "Copy failed")),
+									children: "Copy invite"
+								}), inviteLeft > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									onClick: () => cancelInvite(invite.invite_id),
+									children: "Cancel invite"
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									onClick: () => setInvite(null),
+									children: "Dismiss"
+								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "set-hint",
+								id: "peer-invite-expiry",
 								children: [
-									"Send it over any chat. It works once and expires in",
-									" ",
-									Math.round(invite.expires_in / 60),
-									" min.",
-									" ",
-									relayed ? "They can be anywhere — it connects through a relay that can't read your traffic." : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`
+									inviteExpiryText(inviteLeft),
+									inviteLeft > 0 && " · works once. ",
+									inviteLeft > 0 && (invite.relay && !invite.direct ? "They can be anywhere — it connects through a relay that can't read your traffic." : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or tailnet.`)
 								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Waiting for them to join — this updates by itself."
 							})
 						]
+					}) : cloudflaredMissing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "peer-reach",
+						className: "peer-invite",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Where is the person you're inviting?"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-reach-direct",
+								disabled: inviteBusy,
+								onClick: () => createInvite("direct"),
+								children: "They're on my network or tailnet"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-reach-remote",
+								disabled: inviteBusy,
+								onClick: chooseRemote,
+								children: "They're somewhere else"
+							}),
+							remoteChosen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "set-hint",
+									children: [
+										"To reach someone on another network this computer needs ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
+										" (free, no account; MindFlock never downloads it for you). Install it, then create the invite."
+									]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+									steps: install,
+									onDone: () => load()
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									id: "peer-invite",
+									disabled: inviteBusy,
+									onClick: () => createInvite("tunnel"),
+									children: inviteBusy ? "Creating…" : "Create invite"
+								})
+							] })
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "peer-invite",
+						disabled: inviteBusy,
+						onClick: () => createInvite("auto"),
+						children: inviteBusy ? "Creating…" : "Create invite"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						id: "peer-invite-direct",
+						disabled: inviteBusy,
+						onClick: () => createInvite("direct"),
+						children: "Same network or tailnet? Make a direct invite"
+					})] }),
+					inviteBusy && inviteStage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint peer-stage",
+						id: "peer-invite-stage",
+						children: inviteStage
+					}),
+					inviteErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "error",
+						id: "peer-invite-error",
+						children: inviteErr
+					}),
+					otherInvites.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "peer-invites",
+						id: "peer-invites",
+						children: otherInvites.map((i) => {
+							const left = (i.expires_in ?? 0) - (now - loadedAt);
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "set-hint",
+									children: [
+										i.direct ? "Same-network invite" : "Invite",
+										" waiting · ",
+										inviteExpiryText(left)
+									]
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									onClick: () => cancelInvite(i.invite_id),
+									children: "Cancel"
+								})
+							] }, i.invite_id);
+						})
 					})
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -67292,30 +69141,45 @@ function PeerLinks(_) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 						className: "set-subtitle",
-						children: "Join a peer"
+						children: "Join with a code"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "set-row",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							id: "peer-join-code",
+							ref: joinInput,
 							placeholder: "paste the invite you were sent",
 							value: code,
 							onChange: (e) => setCode(e.target.value),
 							onKeyDown: (e) => {
-								if (e.key === "Enter" && code.trim() && !busy) join();
+								if (e.key === "Enter" && code.trim() && !joinBusy) join();
 							}
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "test-btn",
 							id: "peer-join",
-							disabled: busy || !code.trim(),
+							disabled: joinBusy || !code.trim(),
 							onClick: join,
-							children: "Join"
+							children: joinBusy ? "Joining…" : "Join"
 						})]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					joinBusy ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint peer-stage",
+						id: "peer-join-stage",
+						children: joinStage || "Connecting…"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "Paste the whole message or just the code — either works."
+						children: "Paste the whole message or just the code — either works. A fresh invite from someone you're already linked with reconnects that link."
+					}),
+					joinErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "error",
+						id: "peer-join-error",
+						children: joinErr
+					}),
+					joinNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						id: "peer-join-note",
+						children: joinNote
 					})
 				]
 			})]
@@ -67324,44 +69188,52 @@ function PeerLinks(_) {
 			className: "error",
 			children: error
 		}),
-		st && (cloudflaredMissing || !st.sandbox.available) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		st && !st.sandbox.available && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "peer-needs",
 			id: "peer-needs",
-			children: [
-				cloudflaredMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "set-hint",
-					children: [
-						"Your invites only reach people on your own network or tailnet until",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
-						" is installed."
-					]
-				}),
-				!st.sandbox.available && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "set-hint",
-					children: [
-						"Sharing a folder needs the sandbox here: ",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"On this computer you can pair, message and view their work; running an agent in a shared folder needs Linux",
+					st.sandbox.reason ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" (",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "error",
 							children: st.sandbox.reason
 						}),
-						". Joining and messaging work without it."
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
-					steps: install,
-					onDone: () => load()
-				})
-			]
+						")"
+					] }) : null,
+					"."
+				]
+			}), !cloudflaredMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+				steps: install,
+				onDone: () => load()
+			})]
+		}),
+		st && cloudflaredMissing && !remoteChosen && (st.links.length > 0 || st.invites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "peer-needs",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Your invites only reach people on your own network or tailnet until ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
+					" is installed. Links that already connect directly keep working after you install it."
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+				steps: install,
+				onDone: () => load()
+			})]
 		}),
 		st && st.links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 			className: "set-subtitle",
-			children: "Connected peers"
+			children: "People you work with"
 		}), st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
 			link: l,
-			busy,
-			run,
-			agents: st.agents || []
+			agents: st.agents || [],
+			sandbox: st.sandbox.available,
+			tick,
+			reload: load,
+			onVerified: () => markVerified(l.link_id)
 		}, l.link_id))] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "peer-advanced",
@@ -67373,7 +69245,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Peer links"
+							children: "Work with someone"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 							className: "ca-switch",
@@ -67386,7 +69258,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Turned on by your first invite or join. Off: no listener, no dialing."
+							children: "Turned on by your first invite or join. Off: nobody can connect, and this computer connects to nobody."
 						})
 					]
 				}),
@@ -67404,7 +69276,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "What your peer sees."
+							children: "What the other person sees."
 						})
 					]
 				}),
@@ -67413,7 +69285,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Relay"
+							children: "How they reach you"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 							group: "peer",
@@ -67422,7 +69294,31 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "How people on other networks reach your invites. Through a relay the connection keeps its end-to-end, key-pinned encryption: the relay can block it but never read or change it. Your peer needs nothing extra."
+							children: "How people on other networks reach your invites. Through a relay the connection stays end-to-end encrypted: the relay can block it but never read or change it. The other person needs nothing extra."
+						})
+					]
+				}),
+				relayAddr && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					id: "peer-relay-address",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Relay address"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "peer-addr",
+							children: relayAddr
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => copyText(relayAddr).then((ok) => toast(ok ? "Relay address copied" : "Copy failed")),
+							children: "Copy"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Someone who joined you through an older address can paste this into Reconnect on their side."
 						})
 					]
 				}),
@@ -67431,7 +69327,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Listen port"
+							children: "Port"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 							group: "peer",
@@ -67440,7 +69336,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Direct invites only: your peer dials this port, so it must be reachable from their machine (Tailscale recommended)."
+							children: "Same-network invites only: the other person connects to this port, so it must be reachable from their machine (Tailscale recommended)."
 						})
 					]
 				}),
@@ -67449,7 +69345,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Advertise address"
+							children: "Address in invites"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 							group: "peer",
@@ -67458,7 +69354,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Direct invites only: the address written into the code."
+							children: "Same-network invites only: the address written into the code."
 						})
 					]
 				}),
@@ -67476,7 +69372,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Relay \"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
+							children: "\"My own HTTPS relay\" only: forwards (path unchanged) to the relay port."
 						})
 					]
 				}),
@@ -67494,7 +69390,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Loopback port your relay forwards to (blank = any free port)."
+							children: "Port on this computer your relay forwards to (blank = any free port)."
 						})
 					]
 				}),
@@ -67503,7 +69399,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Extra egress hosts"
+							children: "Extra hosts the shared agent may reach"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 							group: "peer",
@@ -67512,7 +69408,7 @@ function PeerLinks(_) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-hint",
-							children: "Hosts the sandboxed agent may reach on 443, besides its own API. A leading dot allows subdomains."
+							children: "Websites the sandboxed agent may reach (HTTPS), besides its own AI service. A leading dot allows subdomains."
 						})
 					]
 				}),
@@ -67524,16 +69420,16 @@ function PeerLinks(_) {
 						" ",
 						st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "error",
-							children: "unavailable"
+							children: "not available here"
 						}),
 						st.fingerprint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 							" · ",
-							"identity ",
+							"this computer's key ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.fingerprint })
 						] }),
 						" · ",
-						"listener ",
-						st.listen.listening ? "on" : "off",
+						"direct connections ",
+						st.listen.listening ? "open" : "closed",
 						" (",
 						st.listen.host,
 						":",
@@ -67563,8 +69459,10 @@ function PeerLinks(_) {
 	] });
 }
 function PeerLinkCard(props) {
-	const { link, busy, run, agents } = props;
+	const { link, agents, sandbox, tick, reload, onVerified } = props;
 	const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
 	const [repo, setRepo] = (0, import_react.useState)("");
 	const [branch, setBranch] = (0, import_react.useState)("");
 	const [program, setProgram] = (0, import_react.useState)("");
@@ -67573,55 +69471,173 @@ function PeerLinkCard(props) {
 	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
 	const [confirm, setConfirm] = (0, import_react.useState)("");
 	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
+	const [reconnect, setReconnect] = (0, import_react.useState)("");
+	const [msgsOpen, setMsgsOpen] = (0, import_react.useState)(false);
+	const [msgs, setMsgs] = (0, import_react.useState)([]);
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [diff, setDiff] = (0, import_react.useState)(null);
+	const act = async (what, fn, ok) => {
+		setBusy(what);
+		setErr("");
+		try {
+			await fn();
+			if (ok) toast(ok);
+		} catch (e) {
+			setErr(peerErrText(e));
+		}
+		setBusy("");
+		reload();
+	};
+	(0, import_react.useEffect)(() => {
+		if (!msgsOpen) return;
+		let live = true;
+		api(base + "/messages").then((r) => {
+			if (!live) return;
+			setMsgs(r.messages || []);
+			if (r.unread) api(base + "/messages/read", { json: {} }).catch(() => void 0);
+		}).catch((e) => live && setErr(peerErrText(e)));
+		return () => {
+			live = false;
+		};
+	}, [
+		msgsOpen,
+		tick,
+		base
+	]);
+	const send = () => act("send", async () => {
+		const r = await api(base + "/message", { json: { text: draft.trim() } });
+		setDraft("");
+		if (!r.delivered) toast(`${link.peer_name} isn't taking messages right now — it's in your log`);
+	});
+	const showDiff = () => act("diff", async () => {
+		setDiff(await api(base + "/diff"));
+	});
+	const doReconnect = () => {
+		const kind = reconnectKind(reconnect);
+		if (!kind) {
+			setErr("Paste a fresh invite from them, or their relay address (wss://…) or host:port.");
+			return;
+		}
+		act("reconnect", async () => {
+			if (kind === "invite") await joinPeerCode(reconnect, newOpId());
+			else await api(base + "/address", { json: { address: reconnect.trim() } });
+			setReconnect("");
+		}, "Reconnecting to " + link.peer_name + "…");
+	};
+	const openSession = () => {
+		if (!link.session_title) return;
+		selectSession(link.session_title);
+		useUi.getState().closeDialog();
+	};
+	const how = carrierText(link.carrier);
+	const unread = link.unread || 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "peer-link-card",
 		"data-link-id": link.link_id,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.peer_name }),
-				" (",
-				link.role,
-				", ",
-				link.connected ? "connected" : "offline",
-				") · SAS ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-					className: "peer-sas",
-					children: link.sas
-				})
+				" · ",
+				roleText(link.role),
+				" ·",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: link.connected ? "peer-on" : "peer-off",
+					children: link.connected ? "connected" : "offline"
+				}),
+				how && link.connected ? " " + how : "",
+				link.peer_app ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					children: [" · MindFlock ", link.peer_app]
+				}) : null
 			] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			link.sas_verified ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
-				children: "Compare the SAS with your peer by voice or chat. If it differs, unlink now."
+				children: [
+					"Safety number ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "peer-sas",
+						children: link.sas
+					}),
+					" ✓ checked with them."
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [
+						"Safety number ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "peer-sas",
+							children: link.sas
+						}),
+						" — read it to each other. If it differs, unlink now."
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: onVerified,
+					children: "It matches"
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
-					children: "Peer may"
+					children: "They may"
 				}), PERM_LABELS.map(([key, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "check",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "checkbox",
 						checked: !!link.perms[key],
-						disabled: busy,
-						onChange: (e) => run(() => api(base + "/perms", { json: { [key]: e.target.checked } }))
+						disabled: !!busy,
+						onChange: (e) => act("perms", () => api(base + "/perms", { json: { [key]: e.target.checked } }))
 					}), label]
 				}, key))]
 			}),
+			link.role === "dialer" && !link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row peer-reconnect",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					placeholder: "paste a fresh invite from them (or their relay address)",
+					value: reconnect,
+					onChange: (e) => setReconnect(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && reconnect.trim() && !busy) doReconnect();
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !!busy || !reconnect.trim(),
+					onClick: doReconnect,
+					children: busy === "reconnect" ? "Reconnecting…" : "Reconnect"
+				})]
+			}),
 			link.shared ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "set-hint",
-					children: [
-						"Shared folder in session ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.session_title || "?" }),
-						"."
-					]
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [
+							"Shared folder in session ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.session_title || "?" }),
+							"."
+						]
+					}), link.session_title && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: openSession,
+						children: "Open session"
+					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "set-row",
 					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Bring work home"
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							placeholder: "your repo to export into",
+							placeholder: "your repo to bring it into",
 							value: target,
 							onChange: (e) => setTarget(e.target.value)
 						}),
@@ -67633,11 +69649,11 @@ function PeerLinkCard(props) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "test-btn",
-							disabled: busy || !target.trim() || !exportBranch.startsWith("peer/"),
-							onClick: () => run(() => api(base + "/export", { json: {
+							disabled: !!busy || !target.trim() || !exportBranch.startsWith("peer/"),
+							onClick: () => act("export", () => api(base + "/export", { json: {
 								target_repo: target.trim(),
 								branch_name: exportBranch
-							} }), "Exported to " + exportBranch),
+							} }), "Brought home as " + exportBranch),
 							children: "Export"
 						})
 					]
@@ -67645,11 +69661,11 @@ function PeerLinkCard(props) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
-					disabled: busy,
+					disabled: !!busy,
 					onClick: () => setConfirm("unshare"),
-					children: "Unshare…"
+					children: "Stop sharing…"
 				})
-			] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -67677,22 +69693,132 @@ function PeerLinkCard(props) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "test-btn",
-						disabled: busy || !repo.trim() || !chosen,
-						onClick: () => run(() => api(base + "/share", { json: {
+						disabled: !!busy || !repo.trim() || !chosen,
+						onClick: () => act("share", () => api(base + "/share", { json: {
 							repo_path: repo.trim(),
 							branch: branch.trim() || void 0,
 							program: chosen
 						} }), "Shared — the sandboxed session is starting"),
-						children: "Share a folder"
+						children: busy === "share" ? "Sharing…" : "Share a folder"
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Here you can message ",
+					link.peer_name,
+					" and look at their changes; sharing a folder needs Linux."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "test-btn peer-msgs-toggle",
+						"aria-expanded": msgsOpen,
+						onClick: () => setMsgsOpen((o) => !o),
+						children: ["Messages", unread > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "queue-tab-badge",
+							children: unread > 99 ? "99+" : unread
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy || !link.connected,
+						onClick: showDiff,
+						children: busy === "diff" ? "Loading…" : "Their changes"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: () => setConfirm("unlink"),
+						children: "Unlink…"
 					})
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy,
-				onClick: () => setConfirm("unlink"),
-				children: "Unlink…"
+			msgsOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-msgs",
+				children: [
+					msgs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "peer-msg-log",
+						children: msgs.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: "peer-msg peer-msg-" + m.dir,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: [
+										m.dir === "in" ? link.peer_name : m.by === "agent" ? "your agent" : "you",
+										m.dir === "in" && m.delivered_to ? " → " + m.delivered_to : "",
+										":"
+									]
+								}),
+								" ",
+								m.text
+							]
+						}, m.id))
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						children: "No messages yet."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+							rows: 2,
+							placeholder: `message ${link.peer_name}`,
+							value: draft,
+							onChange: (e) => setDraft(e.target.value),
+							onKeyDown: (e) => {
+								if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim() && !busy) send();
+							}
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: !!busy || !draft.trim() || !link.connected,
+							onClick: send,
+							children: busy === "send" ? "Sending…" : "Send"
+						})]
+					}),
+					!link.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [link.peer_name, " is offline — send once they're back."]
+					})
+				]
+			}),
+			diff && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-diff",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								link.peer_name,
+								"'s changes (read only)",
+								diff.truncated ? " — cut short" : ""
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => setDiff(null),
+							children: "Close"
+						})]
+					}),
+					diff.stat?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "peer-diff-stat",
+						children: diff.stat.map((x) => typeof x === "string" ? x : Object.values(x).join(" ")).join("\n")
+					}) : null,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "peer-diff-body",
+						children: diff.diff || "No changes."
+					})
+				]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: err
 			}),
 			confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 				title: confirm === "unlink" ? `Unlink ${link.peer_name}?` : "Stop sharing this folder?",
@@ -67704,14 +69830,15 @@ function PeerLinkCard(props) {
 						onChange: (e) => setDeleteFiles(e.target.checked)
 					}), "also delete the shared folder"]
 				}),
-				confirmLabel: confirm === "unlink" ? "Unlink" : "Unshare",
-				busy,
+				confirmLabel: confirm === "unlink" ? "Unlink" : "Stop sharing",
+				busy: !!busy,
 				onCancel: () => setConfirm(""),
 				onConfirm: () => {
 					const q = deleteFiles ? "?delete_files=1" : "";
 					const path = confirm === "unlink" ? base + q : base + "/share" + q;
+					const unlinking = confirm === "unlink";
 					setConfirm("");
-					run(() => api(path, { method: "DELETE" }), confirm === "unlink" ? "Unlinked" : "Unshared");
+					act(unlinking ? "unlink" : "unshare", () => api(path, { method: "DELETE" }), unlinking ? "Unlinked" : "Stopped sharing");
 				}
 			})
 		]
@@ -70224,7 +72351,7 @@ function Security(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Enter this on another MindFlock device (its sidebar's \"Connect…\" button next to this device's name) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices (Settings → Devices) move to a new shared key."
+					children: "Enter this on another MindFlock device (\"Pair a device you don't own\", below, on that one) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices (Settings → Devices) move to a new shared key."
 				})
 			]
 		}),
@@ -70260,8 +72387,179 @@ function Security(_) {
 					children: "Other MindFlock devices you paired by token. Your devices (Settings → Devices) can always reach each other. With this on, a MindFlock that holds this device's access token shows its sessions in its sidebar and drives them (terminal, prompts, commits). To cut off one of your own devices, remove it in Settings → Devices."
 				})
 			]
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PairByToken, {})
 	] });
+}
+function PairByToken() {
+	const { data } = useDevices();
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const rows = (data?.devices || []).filter((d) => d.reachable && !d.member && d.needs_token);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "pair-by-token",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Pair a device you don't own"
+			}),
+			rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "devices-actions",
+				children: rows.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "test-btn",
+					"data-pair": d.device,
+					onClick: () => openDialogFor("device", d.device),
+					children: [
+						"Pair ",
+						d.host || d.device,
+						"…"
+					]
+				}, d.device))
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Someone else's MindFlock on your tailnet: paste its access token to see and drive its sessions (it needs Allow remote control on). For your own computers use Settings → Devices instead — they share settings and need no token."
+			})
+		]
+	});
+}
+//#endregion
+//#region src/lib/gateOn.ts
+var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Mobile.";
+async function turnGateOn(call = api) {
+	const t = await call("/api/settings/auth-token");
+	if (t?.token) await call("/api/auth", { json: { token: t.token } });
+	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
+}
+//#endregion
+//#region src/components/settings/screens/DeviceReadiness.tsx
+function NewComputerLine({ code }) {
+	const [b, setB] = (0, import_react.useState)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!open || !code) return;
+		let live = true;
+		api("/api/fleet/bootstrap", { json: { code } }).then((r) => live && setB(r)).catch((e) => live && toast(e.message));
+		return () => {
+			live = false;
+		};
+	}, [open, code]);
+	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "linklike devices-bootstrap-open",
+		id: "devices-bootstrap-open",
+		onClick: () => setOpen(true),
+		children: "New computer with nothing installed yet?"
+	});
+	if (!b) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "set-hint",
+		children: "Making the line…"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "devices-bootstrap",
+		id: "devices-bootstrap",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"On the new computer (macOS, Linux or WSL), paste this into a terminal — it installs MindFlock",
+					" ",
+					b.pinned ? b.ref + " (this computer's version)" : "(main — this is a development build)",
+					", signs in to Tailscale if needed, and joins:"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-command",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+					id: "devices-bootstrap-line",
+					children: b.line
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-bootstrap-copy",
+					onClick: () => copyText(b.line).then((ok) => toast(ok ? "Line copied" : "Copy failed")),
+					children: "Copy"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"Desktop app instead:",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						href: b.desktop.download,
+						target: "_blank",
+						rel: "noopener noreferrer",
+						children: "download it"
+					}),
+					", then Settings → Devices → Paste a code: ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: b.desktop.paste }),
+					". If setting up takes longer than the code lives, the new computer asks this one to approve instead."
+				]
+			})
+		]
+	});
+}
+function useFleetReadiness(active, members) {
+	const [byKey, setByKey] = (0, import_react.useState)({});
+	const sig = members.join(",");
+	(0, import_react.useEffect)(() => {
+		if (!active || !sig) return;
+		let live = true;
+		const load = async () => {
+			try {
+				const r = await api("/api/fleet/readiness");
+				if (live) setByKey(r.members || {});
+			} catch {}
+		};
+		load();
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, 6e4);
+		return () => {
+			live = false;
+			clearInterval(t);
+		};
+	}, [active, sig]);
+	return byKey;
+}
+function ReadinessLine({ r, self }) {
+	const line = readinessLine(r);
+	if (!line) return null;
+	const fixes = r?.fixes || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "devices-note devices-readiness" + (line.warn ? " warn" : ""),
+		title: fixes.length ? (self ? "Here: " : "On that computer: ") + fixes.join("; ") : void 0,
+		children: [line.text, line.warn && !self ? " — fix it on that computer" : ""]
+	});
+}
+function SyncedAgentInstall({ onDone }) {
+	const [steps, setSteps] = (0, import_react.useState)(null);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const d = await api("/api/doctor?refresh=1");
+			setSteps(d.install?.steps || []);
+		} catch {
+			setSteps([]);
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	if (!steps || !hasSyncedAgentStep(steps)) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+		steps,
+		onDone: () => {
+			(async () => {
+				try {
+					await api("/api/settings/sync/now", { method: "POST" });
+				} catch {}
+				await load();
+				onDone();
+			})();
+		}
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Devices.tsx
@@ -70282,6 +72580,13 @@ function Devices(p) {
 	const [pasted, setPasted] = (0, import_react.useState)("");
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
 	const [now, setNow] = (0, import_react.useState)(() => Date.now() / 1e3);
+	const [reachAsk, setReachAsk] = (0, import_react.useState)(false);
+	const [matchAsk, setMatchAsk] = (0, import_react.useState)(false);
+	const [matchLeft, setMatchLeft] = (0, import_react.useState)([]);
+	const [focusDevice, setFocusDevice] = (0, import_react.useState)("");
+	const pasteRef = (0, import_react.useRef)(null);
+	const thisRef = (0, import_react.useRef)(null);
+	const [latest, setLatest] = (0, import_react.useState)("");
 	const loadFleet = (0, import_react.useCallback)(async () => {
 		try {
 			setSt(await api("/api/fleet"));
@@ -70301,6 +72606,30 @@ function Devices(p) {
 		loadFleet();
 		loadSync();
 	}, [loadFleet, loadSync]);
+	const reach = useMakeReachable(loadAll);
+	(0, import_react.useEffect)(() => {
+		const apply = (f) => {
+			if (!f) return;
+			if (f.device) setFocusDevice(f.device);
+			if (f.paste) setPasted(f.paste);
+			if (f.paste || f.focusPaste) setTimeout(() => pasteRef.current?.focus(), 0);
+		};
+		apply(takePendingDevicesFocus());
+		const on = (e) => {
+			takePendingDevicesFocus();
+			apply(e.detail || null);
+		};
+		document.addEventListener(DEVICES_FOCUS_EVENT, on);
+		return () => document.removeEventListener(DEVICES_FOCUS_EVENT, on);
+	}, []);
+	const scrolledTo = (0, import_react.useRef)("");
+	(0, import_react.useEffect)(() => {
+		if (!focusDevice || !st || scrolledTo.current === focusDevice) return;
+		const el = document.querySelector("[data-candidate=\"" + CSS.escape(focusDevice) + "\"]");
+		if (!el) return;
+		scrolledTo.current = focusDevice;
+		el.scrollIntoView({ block: "center" });
+	}, [focusDevice, st]);
 	(0, import_react.useEffect)(() => {
 		if (!p.active) return;
 		loadAll();
@@ -70318,6 +72647,10 @@ function Devices(p) {
 		loadFleet,
 		loadSync
 	]);
+	(0, import_react.useEffect)(() => {
+		if (!p.active) return;
+		api("/api/update/check").then((c) => setLatest(String(c?.latest || ""))).catch(() => {});
+	}, [p.active]);
 	(0, import_react.useEffect)(() => {
 		const ev = window.mindflock?.events;
 		if (!ev) return;
@@ -70358,12 +72691,20 @@ function Devices(p) {
 		lastJoin.current = j;
 		if (!j || !was || was === j.state) return;
 		if (j.state === "joined") {
-			toast("Joined " + (j.host || j.device) + " — your settings now follow your other devices", { duration: 6e3 });
+			const t = joinedToast(j);
+			toast(t.text, t.offerReach ? {
+				duration: 12e3,
+				onClick: () => {
+					setReachAsk(true);
+					thisRef.current?.scrollIntoView({ block: "center" });
+				}
+			} : { duration: 6e3 });
 			fetchSettingsDoc().catch(() => {});
 			refreshConfig();
 			loadAll();
 		} else if (j.state === "denied" || j.state === "expired") toast(joinLine(j));
 	}, [st?.join, loadAll]);
+	const readiness = useFleetReadiness(!!p.active && !!st?.in_fleet, (st?.members || []).map((m) => m.key));
 	const run = async (key, fn, ok) => {
 		setBusy(key);
 		try {
@@ -70386,6 +72727,11 @@ function Devices(p) {
 	const self = st.members.find((m) => m.self);
 	const selfHost = st.self.host || st.self.key;
 	const selfVersion = self?.version || "";
+	const selfCommit = self?.commit || "";
+	const rollout = st.update && (st.update.state === "running" || st.update.state !== "idle" && now - (st.update.finished_at || 0) < 86400) ? st.update : null;
+	const rolloutRunning = rollout?.state === "running";
+	const behindLine = st.in_fleet ? updateAllLine(st.members, latest) : "";
+	const updateAll = () => run("update-all", () => api("/api/fleet/update", { json: latest ? { tag: "v" + latest } : {} }), "Updating your devices one at a time — this one last");
 	const others = st.members.filter((m) => !m.self);
 	const candidates = joinableCandidates(st.candidates);
 	const conflicts = keyConflicts(st.members);
@@ -70405,7 +72751,13 @@ function Devices(p) {
 		setCodeFor(null);
 	});
 	const joinWithText = () => {
-		const { body, error } = pasteJoinBody(pasted, candidates, codeFor);
+		if (routeCode(pasted).kind === "peer") {
+			const code = routeCode(pasted).code;
+			setPasted("");
+			joinPeerInvite(code);
+			return;
+		}
+		const { body, error } = pasteJoinBody(pasted, candidates, codeFor || focusDevice || null);
 		if (!body) {
 			if (error) toast(error);
 			return;
@@ -70417,16 +72769,85 @@ function Devices(p) {
 	};
 	const runHere = () => run("run-here", () => api("/api/settings", { json: { github: { automation_device: st.self.key } } }), "PR review and issue handling run on this device now");
 	const auto = st.in_fleet ? automationLine(st.members) : null;
+	const local = st.self_reachable === false;
+	const here = thisDeviceLine(st);
+	const unreachable = (st.admitted || []).filter((a) => a.state === "unreachable_joiner");
+	const match = matchText(st.match);
+	const phone = phoneLinkLine(st.phone_link);
+	const peers = st.tailnet_peers || [];
+	const makeReachable = () => void (async () => {
+		try {
+			await reach.apply({ reach: true });
+			setReachAsk(false);
+		} catch (e) {
+			toast(errText(e));
+		}
+	})();
+	const reachConfirm = reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+		id: "devices-reach-confirm",
+		title: "Make this device reachable?",
+		body: MAKE_REACHABLE_TEXT,
+		confirmLabel: reach.busy ? reach.restarting ? "Restarting…" : "Saving…" : "Make reachable",
+		busy: reach.busy,
+		onConfirm: makeReachable,
+		onCancel: () => setReachAsk(false)
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }),
+		here && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: local ? "devices-warn" : "devices-this",
+			id: "devices-this-device",
+			ref: thisRef,
+			role: local ? "alert" : void 0,
+			children: [
+				local && st.in_fleet && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "devices-this-title",
+					children: "Your other devices can't reach this one"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: here }),
+				local && !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn devices-primary",
+					id: "devices-make-reachable",
+					disabled: reach.busy,
+					onClick: () => setReachAsk(true),
+					children: "Make reachable"
+				}),
+				reachConfirm,
+				reach.timedOut && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "devices-note warn",
+					children: "MindFlock hasn't come back yet — reload in a moment."
+				})
+			]
+		}),
+		unreachable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "devices-warn",
+			id: "devices-unreachable-joiners",
+			role: "alert",
+			children: unreachable.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				"data-unreachable": a.device,
+				children: admitLine(a)
+			}, a.device))
+		}),
 		st.gate_warning && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-warn",
 			id: "devices-gate-warning",
 			role: "alert",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device's access gate is off and it's reachable on your tailnet — anyone there can control it, and through it your other devices. Turn the gate on in Security." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				onClick: () => p.gotoScreen("security"),
-				children: "Open Security"
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device's access gate is off and it's reachable on your tailnet — anyone there can control it, and through it your other devices. With the gate on, your other devices keep working (they use your devices' key); a phone signs in again with the QR in Mobile." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-gate-on",
+					disabled: !!busy,
+					onClick: () => void run("gate-on", () => turnGateOn(), GATE_ON_NOTE),
+					children: busy === "gate-on" ? "Turning on…" : "Turn the gate on"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => p.gotoScreen("security"),
+					children: "Open Security"
+				})]
 			})]
 		}),
 		st.stale_key && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -70511,7 +72932,8 @@ function Devices(p) {
 			className: "devices-list",
 			id: "devices-members",
 			children: st.members.map((m) => {
-				const status = memberStatus(m, selfVersion);
+				const status = memberStatus(m, selfVersion, selfCommit);
+				const chips = memberUpdateChips(m, latest);
 				const warn = !m.self && (!!m.error || m.reachable && !!selfVersion && !!m.version && m.version !== selfVersion);
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 					"data-member": m.key,
@@ -70525,18 +72947,33 @@ function Devices(p) {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "devices-name",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "devices-name-line",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m.host || m.key }), m.automation && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "devices-badge",
-										"data-automation": m.key,
-										title: "This device runs PR review and issue handling for your repos",
-										children: "runs PR review & issues"
-									})]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "devices-note" + (warn ? " warn" : ""),
-									children: status
-								})]
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "devices-name-line",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m.host || m.key }),
+											m.automation && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "devices-badge",
+												"data-automation": m.key,
+												title: "This device runs PR review and issue handling for your repos",
+												children: "runs PR review & issues"
+											}),
+											chips.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "devices-badge" + (c.warn ? " warn" : ""),
+												"data-update-chip": m.key,
+												children: c.text
+											}, c.text))
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "devices-note" + (warn ? " warn" : ""),
+										children: status
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadinessLine, {
+										r: readiness[m.key],
+										self: m.self
+									})
+								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -70604,6 +73041,41 @@ function Devices(p) {
 			id: "devices-intro",
 			children: "Your devices share settings, sign-in and ticket claims. Add a computer you own:"
 		}),
+		st.in_fleet && (behindLine || rollout) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-update",
+			id: "devices-update",
+			"data-rollout": rollout?.state || "idle",
+			children: [
+				rollout && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint" + (rollout.state === "halted" ? " devices-hint-warn" : ""),
+					id: "devices-rollout-line",
+					children: rolloutLine(rollout)
+				}),
+				behindLine && !rolloutRunning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "devices-update-line",
+					children: behindLine
+				}),
+				rollout && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "devices-update-rows",
+					id: "devices-update-rows",
+					children: rollout.members.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						"data-rollout-row": r.key,
+						"data-step": r.step,
+						className: "devices-note" + (r.step === "failed" ? " warn" : ""),
+						children: rolloutRowText(r)
+					}, r.key))
+				}),
+				behindLine && !rolloutRunning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "devices-update-all",
+					disabled: !!busy,
+					onClick: () => void updateAll(),
+					children: busy === "update-all" ? "Starting…" : "Update all my devices to v" + latest
+				})
+			]
+		}),
 		auto && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row set-switch-row",
 			id: "devices-run-here",
@@ -70627,6 +73099,72 @@ function Devices(p) {
 				children: busy === "run-here" ? "Moving…" : "Run here"
 			})]
 		}),
+		match && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "devices-match",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "devices-run-here-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: match
+				}), matchLeft.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint devices-hint-warn",
+					id: "devices-match-left",
+					children: [
+						"Still to do here for the phone link:",
+						" ",
+						matchLeft.map((m) => m.title + (m.reason ? " (" + m.reason + ")" : "")).join("; "),
+						" — see Settings → Mobile."
+					]
+				})]
+			}), !matchAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-match-btn",
+				disabled: reach.busy,
+				onClick: () => setMatchAsk(true),
+				children: "Match my other devices"
+			})]
+		}),
+		match && matchAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			id: "devices-match-confirm",
+			title: match + "?",
+			body: (st.match?.reachable ? MAKE_REACHABLE_TEXT + " " : "") + (st.match?.shared_link ? "This device also answers your phone link “" + st.match.shared_link + "”, so your phone reaches whichever of your devices is awake." : ""),
+			confirmLabel: reach.busy ? "Applying…" : "Match",
+			busy: reach.busy,
+			onConfirm: () => void (async () => {
+				try {
+					const res = await reach.apply({
+						reach: !!st.match?.reachable,
+						sharedLink: st.match?.shared_link || ""
+					});
+					setMatchAsk(false);
+					setMatchLeft((res?.shared_link?.steps || []).filter((x) => x.state === "fail").map((x) => ({
+						id: x.id,
+						title: x.title,
+						reason: x.reason
+					})));
+				} catch (e) {
+					toast(errText(e));
+				}
+			})(),
+			onCancel: () => setMatchAsk(false)
+		}),
+		phone && st.in_fleet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "devices-phone-link",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: phone.text
+			}), phone.hostHere && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				id: "devices-phone-host-here",
+				disabled: !!busy,
+				onClick: () => void run("host-here", () => api("/api/settings", { json: { general: { shared_link: st.phone_link?.name || "" } } }), "This device answers your phone link too — Settings → Mobile shows what's left"),
+				children: "Host here"
+			})]
+		}),
 		st.requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "devices-requests",
 			id: "devices-requests",
@@ -70645,13 +73183,9 @@ function Devices(p) {
 									"aria-label": "code " + r.code,
 									children: r.code
 								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "devices-note",
-									children: [
-										"Check the same code shows on ",
-										r.host || r.device,
-										"."
-									]
+									children: requestNote(r)
 								})
 							]
 						}),
@@ -70661,7 +73195,10 @@ function Devices(p) {
 							"data-approve": r.id,
 							disabled: !!busy,
 							onClick: () => void run("approve:" + r.id, async () => {
-								const res = await api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/approve", { method: "POST" });
+								const res = await api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/approve", { json: {
+									via: r.via || "",
+									code: r.code
+								} });
 								toast(admitToast(r.host || r.device, (r.host || r.device) + " is joining your devices", res?.sync_error), res?.sync_error ? { duration: 8e3 } : void 0);
 							}),
 							children: "Approve"
@@ -70671,7 +73208,7 @@ function Devices(p) {
 							className: "test-btn",
 							"data-deny": r.id,
 							disabled: !!busy,
-							onClick: () => void run("deny:" + r.id, () => api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/deny", { method: "POST" })),
+							onClick: () => void run("deny:" + r.id, () => api("/api/fleet/requests/" + encodeURIComponent(r.id) + "/deny", { json: { via: r.via || "" } })),
 							children: "Deny"
 						})
 					]
@@ -70682,7 +73219,20 @@ function Devices(p) {
 			className: "set-subtitle",
 			children: "Add a device"
 		}),
-		invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		local && !invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "devices-warn",
+			id: "devices-invite-blocked",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "A new computer couldn't use a code made here yet: this one only listens on 127.0.0.1, so nothing else can reach it. Make it reachable first, then add the device." }), !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn devices-primary",
+				disabled: reach.busy,
+				onClick: () => {
+					setReachAsk(true);
+					thisRef.current?.scrollIntoView({ block: "center" });
+				},
+				children: "Make reachable"
+			})]
+		}) : invite ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "devices-invite",
 			id: "devices-invite",
 			children: [
@@ -70718,6 +73268,7 @@ function Devices(p) {
 						"."
 					]
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewComputerLine, { code: invite.code }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn devices-self-start",
@@ -70735,8 +73286,9 @@ function Devices(p) {
 				id: "devices-invite-new",
 				disabled: !!busy,
 				onClick: () => void run("invite", async () => {
-					await api("/api/fleet/invite", { json: {} });
+					const inv = await api("/api/fleet/invite", { json: {} });
 					setNow(Date.now() / 1e3);
+					if (inv?.warning === "local_only") setReachAsk(true);
 				}),
 				children: busy === "invite" ? "Making a code…" : "Add a device"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -70780,6 +73332,7 @@ function Devices(p) {
 				const note = blocker || candidateNote(c);
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 					"data-candidate": c.device,
+					className: focusDevice === c.device ? "devices-focus" : "",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "devices-row",
@@ -70890,17 +73443,49 @@ function Devices(p) {
 					]
 				}, c.device);
 			})
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		}) : peers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			id: "devices-no-candidates",
-			children: "No other MindFlock found on your tailnet. Make sure it's running and signed in to the same Tailscale, then Refresh."
+			children: "No other device shows on your tailnet. Make sure the other computer is signed in to the same Tailscale (Tailscale on this device, above), then Refresh."
+		}) : null,
+		peers.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "devices-list",
+			id: "devices-tailnet-peers",
+			children: peers.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				"data-peer": t.device,
+				"data-outcome": t.outcome,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "devices-dot",
+							"aria-hidden": "true"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "devices-name",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: t.host || t.device }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "devices-note",
+								children: t.reason || "not answering"
+							})]
+						}),
+						t.outcome === "timeout" && st.policy_grant && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							"data-copy-grant": t.device,
+							onClick: () => copyText(st.policy_grant || "").then((ok) => toast(ok ? "Policy lines copied — paste them into Tailscale's admin console → Access controls" : "Copy failed", { duration: 6e3 })),
+							children: "Copy grant"
+						})
+					]
+				})
+			}, t.device))
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row devices-paste-row",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					id: "devices-paste",
-					placeholder: "…or paste the code or command from the other computer",
+					ref: pasteRef,
+					placeholder: "Paste a code — from your other computer, or an invite someone sent you",
 					autoComplete: "off",
 					spellCheck: false,
 					value: pasted,
@@ -70920,7 +73505,7 @@ function Devices(p) {
 				pasted.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint devices-join-note",
 					id: "devices-paste-note",
-					children: joinSettingsNote("")
+					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (Work with someone), not to your devices." : joinSettingsNote("")
 				})
 			]
 		}),
@@ -71125,7 +73710,8 @@ function SettingsSyncRows(props) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
 					children: "Install it here and the next sync applies it."
-				})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SyncedAgentInstall, { onDone: () => void reload() })
 			]
 		}),
 		(sync.enabled || sync.pinned?.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -71515,13 +74101,15 @@ function Advanced(_) {
 function EngineUpdate() {
 	return window.mfengine ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShellEngineUpdate, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ServerEngineUpdate, {});
 }
+var NEW_BUILD_WAIT_MS = 18e4;
 function ServerEngineUpdate() {
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [lines, setLines] = (0, import_react.useState)([]);
 	const timer = (0, import_react.useRef)(null);
-	const { restarting, timedOut, restart } = useServerRestart();
+	const [waiting, setWaiting] = (0, import_react.useState)(false);
+	const [waitTimedOut, setWaitTimedOut] = (0, import_react.useState)(false);
 	const check = (0, import_react.useCallback)(async (refresh) => {
 		try {
 			setInfo(await api("/api/update/check" + (refresh ? "?refresh=1" : "")));
@@ -71535,6 +74123,26 @@ function ServerEngineUpdate() {
 			if (timer.current) clearInterval(timer.current);
 		};
 	}, [check]);
+	const pending = !!info?.restart_pending;
+	(0, import_react.useEffect)(() => {
+		if (!pending && !waiting) return;
+		const t0 = Date.now();
+		const t = setInterval(async () => {
+			if (Date.now() - t0 > NEW_BUILD_WAIT_MS) {
+				clearInterval(t);
+				setWaitTimedOut(true);
+				return;
+			}
+			try {
+				const c = await api("/api/update/check");
+				if (!c.restart_pending && c.state !== "started") {
+					clearInterval(t);
+					window.location.reload();
+				}
+			} catch {}
+		}, 2e3);
+		return () => clearInterval(t);
+	}, [pending, waiting]);
 	const update = async () => {
 		setBusy(true);
 		setError("");
@@ -71558,23 +74166,24 @@ function ServerEngineUpdate() {
 				return;
 			}
 			setLines(st.log || []);
-			if (st.restarting) {
+			if (st.restarting || st.state === "done") {
 				if (timer.current) clearInterval(timer.current);
 				timer.current = null;
-				restart({
-					alreadyRequested: true,
-					reload: true
-				});
-			} else if (st.state === "failed") {
+				setWaiting(true);
+			} else if (st.state === "failed" || st.state === "rolled_back") {
 				if (timer.current) clearInterval(timer.current);
 				timer.current = null;
 				setBusy(false);
-				setError("The update didn’t finish (exit " + (st.code ?? "?") + ").");
+				setError(st.state === "rolled_back" ? "The new version didn’t start, so the previous one was put back — see the installer output." : st.error === "interrupted" ? "The update was interrupted — try again." : "The update didn’t finish (exit " + (st.code ?? "?") + ").");
+				check(false);
 			}
 		}, 2e3);
 	};
 	const blocked = info?.blocked || "";
 	const version = info?.current ? "v" + info.current : "unknown";
+	const last = info?.last || {};
+	const installing = info?.state === "started";
+	const lastNote = error || pending || waiting ? "" : info?.state === "rolled_back" ? "v" + (last.version || "?") + " didn’t start, so v" + (last.from_version || "?") + " was put back (Settings → System logs has the installer output)." : info?.state === "failed" && last.error === "interrupted" ? "The last update was interrupted — try again." : info?.state === "failed" ? "The last update failed — Settings → System logs has the installer output." : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -71604,7 +74213,23 @@ function ServerEngineUpdate() {
 				"."
 			]
 		}),
-		blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		pending || waiting ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "upd-restarting",
+			children: [
+				"Installed",
+				last.version ? " v" + last.version : "",
+				" — restarting onto it… This window reloads on its own once the server answers again."
+			]
+		}) : installing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "upd-installing",
+			children: [
+				"An update",
+				last.version ? " to v" + last.version : "",
+				" is installing…"
+			]
+		}) : blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: blocked
 		}) : info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -71614,18 +74239,23 @@ function ServerEngineUpdate() {
 			className: "set-hint",
 			children: "You’re on the newest release."
 		}) : null,
+		lastNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "upd-last",
+			children: lastNote
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "upd-btn-row",
-			children: [!blocked && info?.available && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: [!blocked && info?.available && !pending && !waiting && !installing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn",
-				disabled: busy || restarting,
+				disabled: busy,
 				onClick: update,
-				children: restarting ? "Restarting…" : busy ? "Updating…" : "Update to v" + info.latest
+				children: busy ? "Updating…" : "Update to v" + info.latest
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "test-btn",
-				disabled: busy || restarting,
+				disabled: busy || waiting,
 				onClick: () => check(true),
 				children: "Check again"
 			})]
@@ -71634,9 +74264,13 @@ function ServerEngineUpdate() {
 			className: "error",
 			children: error
 		}),
-		timedOut && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		waitTimedOut && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "error",
-			children: "The update finished, but the server didn’t come back within 30s. Check Settings → System logs, or restart it from the terminal."
+			children: [
+				"The update finished, but the server didn’t come back on it. Check Settings → System logs, or run ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock restart" }),
+				" on that machine."
+			]
 		}),
 		lines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "upd-fold",
@@ -72901,7 +75535,7 @@ var SCREENS = [
 	},
 	{
 		key: "peer",
-		label: "Peer links",
+		label: "Work with someone",
 		group: "This device",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinks, { ...p })
 	},
@@ -77402,6 +80036,18 @@ var SLIDES = [
 		] })
 	}
 ];
+var NOT_YET_SET = {
+	logo: true,
+	title: "One thing left",
+	body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		"A tool MindFlock needs is still missing on this computer — usually tmux or your coding agent. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Setup" }),
+		" installs everything missing in one go, then signs your agent in."
+	] })
+};
+function lastSlide(failing) {
+	return failing ? NOT_YET_SET : SLIDES[SLIDES.length - 1];
+}
 function Logo() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "wt-logo",
@@ -77413,6 +80059,7 @@ function WelcomeTour() {
 	const open = useUi((s) => s.tourOpen);
 	const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
 	const finishTour = useUi((s) => s.finishTour);
+	const failing = useDoctorWarn().failing;
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const [i, setI] = (0, import_react.useState)(0);
 	(0, import_react.useEffect)(() => {
@@ -77435,7 +80082,7 @@ function WelcomeTour() {
 	]);
 	if (!open || paused) return null;
 	const last = i === SLIDES.length - 1;
-	const slide = SLIDES[i];
+	const slide = last ? lastSlide(failing) : SLIDES[i];
 	const jumpTo = (screen) => {
 		const tab = LEGACY_SCREEN_TABS[screen];
 		openDialogFor(tab ? "intake" : "settings", tab || screen);
@@ -77504,7 +80151,12 @@ function WelcomeTour() {
 							children: "Back"
 						}), last ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "wt-nav-end",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							children: [failing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "wt-btn ghost",
+								onClick: () => openDialogFor("setup"),
+								children: "Open Setup"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "wt-btn ghost",
 								onClick: () => jumpTo("connections"),
