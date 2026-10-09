@@ -593,6 +593,9 @@ export function fastTrackStep(inst: Partial<Instance>): FastTrackButton | null {
   const caps = queryClient.getQueryData<Config>(["config"])?.caps;
   if (caps && !caps.git) return null;
   if (!title || inst.workspace_missing) return null;
+  // A shared-folder (peer) session runs sandboxed: the server refuses
+  // autopilot and ship for it, so there is no ⏩ to offer.
+  if (inst.peer_share) return null;
 
   const { lane, askFirst } = laneChoice(inst);
   const run = inst.autopilot;
@@ -645,6 +648,7 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
   if (caps && !caps.git) return null; // no git -> no commit/push/PR workflow
   if (!title || inst.status === "loading" || inst.status === "paused") return null;
   if (inst.workspace_missing) return null; // L7: Clean up lives in the row
+  if (inst.peer_share) return null; // sandboxed shared folder: commit/push/PR are refused
   // An armed chain deliberately does NOT take over this slot. It used to, which
   // meant arming fast-track replaced your manual Commit/Push/Make PR button with
   // a status readout and left no way to act by hand. Autopilot state lives on the

@@ -194,6 +194,14 @@ export interface Instance {
    * held until its turn, running, done or stopped — null when it was never
    * ordered or fenced. Optional: an older server doesn't send it. */
   order?: RowOrder | null;
+  /** A shared-folder (peer-link) session: it runs sandboxed, and the server
+   * refuses ship / push / PR / the shell pane / the IDE / rename / copies for
+   * it (backend core/peer_guard.py). Optional: an older server doesn't send
+   * it. */
+  peer_share?: boolean;
+  /** For a shared session: who it is shared with, and whether they are
+   * connected now. null/absent otherwise. */
+  peer_with?: { link_id: string; name: string; connected: boolean } | null;
 }
 
 /** A fence an orchestrator set on one worker: the only paths it may change

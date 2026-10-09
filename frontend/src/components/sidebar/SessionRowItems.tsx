@@ -40,6 +40,9 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
   const name = displayName(title);
   // Another device's session: its group and split routes aren't forwarded.
   const remote = isRemote(inst);
+  // A shared-folder (peer) session runs sandboxed: no split (the server
+  // refuses it; fastTrackStep already offers nothing for it).
+  const shared = !!inst.peer_share;
   const ft = fastTrackStep(inst);
   const cur = laneChoice(inst);
   const splitWhy = remote ? "" : splitBlockReason(config?.caps, inst);
@@ -81,7 +84,7 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
           <span className="kbd">Ctrl+K F</span>
         </button>
       )}
-      {!remote && (
+      {!remote && !shared && (
         <button
           data-row="split"
           className={splitWhy ? "pb-row-off" : undefined}

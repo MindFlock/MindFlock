@@ -33,6 +33,7 @@ import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
 import { deviceEventNote } from "../lib/fleet";
+import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -69,6 +70,8 @@ interface Notif {
   rule?: string;
   /** A device.* row ("Your devices"): named "Devices", opens Settings → Devices. */
   device?: boolean;
+  /** A peer.* row (another person): named "Collaborate", opens Work with someone. */
+  peer?: boolean;
 }
 
 /** A stage change, said as what happened. */
@@ -91,6 +94,7 @@ export interface NotifRow {
   dedupe?: string;
   rule?: string;
   device?: boolean;
+  peer?: boolean;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -174,6 +178,15 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "settings.sync_paused": {
       const n = deviceEventNote(env.event, d);
       return n ? { text: n.text, cls: n.cls, device: true } : null;
+    }
+    // Another person (peer links): they joined, unlinked, left a message for
+    // you, or your relay moved under the people you invited.
+    case "peer.link_added":
+    case "peer.link_removed":
+    case "peer.message":
+    case "peer.relay_changed": {
+      const n = peerEventNote(env.event, d);
+      return n ? { text: n.text, cls: n.cls, peer: true } : null;
     }
     default:
       return null;
@@ -497,6 +510,9 @@ export function NotificationsBell() {
                         // Approve / Deny, and the roster, are in Settings → Devices.
                         setOpen(false);
                         useUi.getState().openDialogFor("settings", "devices");
+                      } else if (n.peer) {
+                        setOpen(false);
+                        useUi.getState().openDialogFor("settings", PEER_SCREEN);
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
@@ -510,6 +526,8 @@ export function NotificationsBell() {
                     <span className="notif-sess">
                       {n.device && !n.session
                         ? "Devices"
+                        : n.peer && !n.session
+                        ? "Collaborate"
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Group"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +

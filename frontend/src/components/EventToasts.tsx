@@ -27,6 +27,7 @@ import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
+import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { deviceEventNote } from "../lib/fleet";
 
 const BASE_TITLE = document.title || "MindFlock";
@@ -449,6 +450,22 @@ export function EventToasts() {
           notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
             onClick: () => useUi.getState().openDialogFor("settings", "devices"),
             duration: 6000,
+          });
+        })
+      );
+    }
+    // Another person (peer links): someone you invited arrived (compare the
+    // safety number), unlinked you, left a message where no shared session
+    // takes it, or your relay moved. The click opens Work with someone.
+    for (const name of ["peer.link_added", "peer.link_removed", "peer.message", "peer.relay_changed"]) {
+      unsubs.push(
+        ev.subscribe(name, (env) => {
+          if (isReplay(env)) return;
+          const n = peerEventNote(env.event, env.data);
+          if (!n?.toast) return;
+          notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {
+            onClick: () => useUi.getState().openDialogFor("settings", PEER_SCREEN),
+            duration: 7000,
           });
         })
       );

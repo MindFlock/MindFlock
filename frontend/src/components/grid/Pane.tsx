@@ -122,7 +122,9 @@ export function Pane({
   const missing = !!inst.workspace_missing;
   const loading = inst.status === "loading";
 
-  const savedTab = lastTab || "agent";
+  // A shared-folder (peer) session has no companion shell (it would run
+  // outside the sandbox), so a saved "shell" tab opens on the agent instead.
+  const savedTab = (inst.peer_share && lastTab === "shell" ? "agent" : lastTab) || "agent";
   const [tab, setTab] = useState<Tab>(paneTab(savedTab, caps.git));
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
@@ -558,6 +560,9 @@ export function Pane({
   }
 
   const chip = chipState(inst);
+  // A shared-folder (peer) session runs sandboxed: nextStep/fastTrackStep
+  // offer nothing for it, and its companion shell is refused (no tab).
+  const sharedFolder = !!inst.peer_share;
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
   const rs = resetStep(inst);
@@ -611,9 +616,13 @@ export function Pane({
           <button data-tab="agent" className={tab === "agent" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("agent"); }}>
             Agent
           </button>
-          <button data-tab="shell" className={tab === "shell" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("shell"); }}>
-            Terminal
-          </button>
+          {/* The companion shell would run outside the sandbox: refused for
+              a shared folder (peer_guard), so no tab. */}
+          {!sharedFolder && (
+            <button data-tab="shell" className={tab === "shell" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("shell"); }}>
+              Terminal
+            </button>
+          )}
           {caps.git && (
             <button data-tab="diff" className={tab === "diff" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("diff"); }}>
               Diff
