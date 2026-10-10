@@ -172,6 +172,35 @@ def _self_underway() -> bool:
     return False
 
 
+def _caught_up(doc: dict) -> dict:
+    """``{key: version}`` for every row a halted rollout left behind, when
+    each of them now runs its version anyway (updated by hand there, or by a
+    later rollout from another device) — else ``{}``. Members by their last
+    hello, this device by what it runs; an unreachable or unreadable one
+    proves nothing, so the record stays halted."""
+    from backend.web.core import fleet as _fleet
+
+    version = str(doc.get("version") or "")
+    behind = [
+        r
+        for r in doc.get("members") or []
+        if r.get("step") in ("queued", "failed", "not_started") + _PENDING
+    ]
+    if not version or not behind:
+        return {}
+    now = {}
+    for row in behind:
+        if row.get("self"):
+            theirs = _self_update.installed_version()
+        else:
+            dev = _fleet._device(str(row.get("key") or "")) or {}
+            theirs = str(dev.get("version") or "") if dev.get("reachable") else ""
+        if not theirs or _self_update.is_newer(version, theirs):
+            return {}
+        now[row.get("key")] = theirs
+    return now
+
+
 def status() -> dict:
     """The rollout as the screen shows it. This device's own row (last, and
     the one update that restarts the process running the rollout) follows its
@@ -179,7 +208,9 @@ def status() -> dict:
     ``failed`` — and the rollout halted — when it failed or rolled back, and
     still ``running`` while it installs and restarts. Any other ``running``
     record with no task behind it was cut off by a restart of THIS device
-    mid-way — said as halted, not left spinning."""
+    mid-way — said as halted, not left spinning. A ``halted`` record reads as
+    done once every device it left behind runs the target anyway: "stopped
+    updating your devices" must not outlive the devices being behind."""
     doc = _read()
     changed = False
     me = _self_row(doc)
@@ -216,6 +247,14 @@ def status() -> dict:
             changed = True
         else:
             doc.update(state="done", finished_at=doc.get("finished_at") or time.time())
+            changed = True
+    if doc.get("state") == "halted" and not _running_here():
+        now = _caught_up(doc)
+        if now:
+            for row in doc.get("members") or []:
+                if row.get("key") in now:
+                    row.update(step="current", detail="on v%s now" % now[row["key"]])
+            doc.update(state="done", error="")
             changed = True
     if changed:
         _write(doc)
@@ -343,7 +382,7 @@ async def _update_member(doc: dict, row: dict, tag: str, version: str) -> bool:
         bearer=_fleet.fleet_key(),
     )
     resp = resp if isinstance(resp, dict) else {}
-    if status == 404:
+    if status in _fleet.TOO_OLD:
         step(
             "skipped", "its MindFlock is too old to update from here — update it there"
         )

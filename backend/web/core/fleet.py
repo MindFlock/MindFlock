@@ -1844,12 +1844,18 @@ def _visible_members(exclude: Tuple[str, ...] = ()) -> List[dict]:
     ]
 
 
+#: What a MindFlock too old to have a route answers. 404 for a GET, but 405
+#: for a POST: an unknown path falls through to the static-files mount at
+#: ``/``, which refuses every method but GET/HEAD before it looks for a file.
+TOO_OLD = (404, 405)
+
+
 def _err_text(status: int, body, dev: Optional[dict]) -> str:
     if isinstance(body, dict) and body.get("error"):
         return str(body["error"])
     if not status:
         return "%s didn't answer" % _label(dev)
-    if status == 404:
+    if status in TOO_OLD:
         return "update MindFlock on %s first" % _label(dev)
     return "%s answered HTTP %s" % (_label(dev), status)
 
