@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Updating your devices skips one that's too old, instead of stopping.**
+  A device on 0.7.4 or earlier can't be updated from another device: the
+  route arrived in 0.7.5, and an older MindFlock answers HTTP 405 (not 404)
+  to it. The rollout now marks that device "skipped — update it there" and
+  carries on, where it used to stop with "answered HTTP 405". Other
+  device-to-device requests to an older MindFlock now say "update MindFlock
+  on … first" instead of the bare 405 too.
+
+- **"Stopped updating your devices" clears once they caught up.** A stopped
+  update used to stay on Settings → Devices even after every device it left
+  behind was updated some other way (by hand there, say). It now reads as
+  done, with those devices "up to date", once each one reports the version.
+
 ## [0.7.5] - 2026-10-09
 
 ### Added
