@@ -923,3 +923,106 @@ def test_drain_rearms_after_long_idle_dud_send(drain, monkeypatch):
     clock["now"] += server._QUEUE_REARM_IDLE
     server._drain_one_queue("d1")
     assert sent == ["task"]  # re-armed and retried
+
+
+def _claude_screen(box: str) -> str:
+    """A Claude Code screen at rest: transcript, the input box between its
+    two rules (``❯`` + NBSP, as captured), and the mode footer."""
+    rule = "─" * 60
+    return (
+        "⏺ Done.\n\n✻ Cogitated for 12s\n\n"
+        + rule
+        + "\n❯\xa0"
+        + box
+        + "\n"
+        + rule
+        + "\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+
+
+def test_claude_reads_its_input_box():
+    from backend.providers import resolve
+
+    p = resolve("claude")
+    assert p.input_holds(_claude_screen(""), "/clear") is False
+    assert p.input_holds(_claude_screen("/clear"), "/clear") is True
+    assert p.input_holds(_claude_screen("[Pasted text #1 +40 lines]"), "a\nb") is True
+    # Someone else's draft proves nothing about our send.
+    assert p.input_holds(_claude_screen("fix the tests"), "/clear") is None
+    # No box on screen (a dialog, a bare shell): can't tell.
+    assert p.input_holds("$ ls\nfoo\n", "/clear") is None
+    # A provider that can't read its box never claims either way.
+    assert resolve("bash").input_holds(_claude_screen(""), "/clear") is None
+
+
+@pytest.fixture
+def claude_drain(drain, monkeypatch):
+    """The drain against a Claude session, idle and settled, on a fake clock
+    with the screen and the work evidence under the test's control."""
+    import time as _time
+
+    from backend.web.core import agent_io
+
+    server, sent = drain
+    server.ENGINE.instances["d1"].Program = "claude"
+    clock = {"now": 1_000_000.0, "screen": _claude_screen(""), "worked": None}
+    monkeypatch.setattr(_time, "time", lambda: clock["now"])
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    monkeypatch.setattr(
+        agent_io, "capture_screen", lambda name: (clock["screen"], None)
+    )
+    monkeypatch.setattr(
+        server._agent_state, "last_worked_at", lambda title: clock["worked"]
+    )
+    return server, sent, clock
+
+
+def test_drain_rearms_once_a_slash_command_left_the_input_box(
+    claude_drain, monkeypatch
+):
+    """A slash command Claude handles locally (``/clear``) fires no hook and
+    starts no turn, so the drain never reads ``working`` after it. Once idle
+    has settled and the input box is EMPTY the send was consumed: re-arm and
+    send the next item — not five minutes later."""
+    server, sent, clock = claude_drain
+    pq.enqueue("d1", "/clear")
+    pq.enqueue("d1", "next task")
+
+    server._drain_one_queue("d1")
+    assert sent == ["/clear"]
+
+    # Still in the box (the CLI hasn't taken it yet): held, disarmed.
+    clock["screen"] = _claude_screen("/clear")
+    clock["now"] += server._QUEUE_SEND_COOLDOWN + 1
+    server._drain_one_queue("d1")
+    assert sent == ["/clear"]
+    assert server._QUEUE_STATE["d1"]["armed"] is False
+
+    # The box emptied: consumed. Re-armed and the next prompt goes out.
+    clock["screen"] = _claude_screen("")
+    clock["now"] += 5
+    server._drain_one_queue("d1")
+    assert sent == ["/clear", "next task"]
+
+
+def test_drain_rearms_on_work_seen_after_the_send(claude_drain, monkeypatch):
+    """A turn that started and ended between two 5s drain polls was seen by
+    the tickers (``last_worked_at``) but never by the drain: work stamped
+    after the send re-arms; work from before it does not."""
+    server, sent, clock = claude_drain
+    clock["screen"] = "no box here\n"  # the input-box signal says nothing
+    pq.enqueue("d1", "one")
+    pq.enqueue("d1", "two")
+
+    server._drain_one_queue("d1")
+    assert sent == ["one"]
+    sent_at = server._QUEUE_STATE["d1"]["sent_at"]
+
+    clock["worked"] = sent_at - 30.0  # the previous turn's evidence
+    clock["now"] += server._QUEUE_SEND_COOLDOWN + 1
+    server._drain_one_queue("d1")
+    assert sent == ["one"]
+
+    clock["worked"] = sent_at + 2.0  # a short turn ran after our send
+    server._drain_one_queue("d1")
+    assert sent == ["one", "two"]

@@ -277,6 +277,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now says "Settings → Agent CLI", matching the screen.
 ### Fixed
 
+- **A queued prompt no longer waits five minutes behind a slash command.**
+  After each send the queue waited for a "working" reading before sending the
+  next item, so a command the CLI handles itself (`/clear`, `/model …`) left
+  the queue stuck until the 300 s fallback. It now re-arms as soon as there is
+  evidence the send was taken: the agent worked after it
+  (`agent_state.last_worked_at`, which a "turn ended" notice does not clear),
+  or the CLI's input box no longer holds the sent text (new provider method
+  `input_holds`, implemented for Claude Code).
+
 - **Your phone opens the shared link without the access token when the link
   is served from a Mac.** Trusted Tailscale accounts used to skip the token
   through the shared phone link only on Linux hosts; when Tailscale routed the

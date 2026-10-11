@@ -465,6 +465,19 @@ class BaseProvider:
         except Exception:  # noqa: BLE001 — evidence we can't read is no evidence
             return False
 
+    def input_holds(self, screen_text: str, sent: str) -> Optional[bool]:
+        """Whether the CLI's input box on ``screen_text`` still holds ``sent``,
+        the text an automated typer submitted: True (it is still sitting
+        there, unsubmitted), False (the box is EMPTY — the CLI took it), or
+        None (no box found, or it holds something else: can't tell).
+
+        The prompt-queue drain asks this after a send with the session idle
+        and settled, to learn that a send the CLI handled locally (a slash
+        command fires no hook and starts no turn) was consumed. Only False
+        acts, so a CLI that does not implement it keeps the drain's slow
+        fallback. Default: None."""
+        return None
+
     def progress_token_pattern(self) -> Optional[str]:
         """A regex with ONE capture group holding a monotonically climbing turn
         counter from the CLI's status line (e.g. the ``12.3k tokens`` figure Claude

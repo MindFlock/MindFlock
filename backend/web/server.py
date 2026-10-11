@@ -1865,8 +1865,9 @@ def _ensure_state_ticker() -> None:
 # Per-session gating avoids double-sending and reboot storms:
 #   * send only when activity is "idle" (finished a turn / at its prompt) and
 #     the session is "armed" — armed starts True, clears on send, and re-arms
-#     when we next observe "working" (the agent picked the prompt up). This
-#     tracks the real working→idle cycle instead of trusting a fixed cooldown.
+#     when we next observe "working" (the agent picked the prompt up), or on
+#     other evidence the send was consumed (_send_consumed). This tracks the
+#     real working→idle cycle instead of trusting a fixed cooldown.
 #   * "working"/"clarify" are left alone (busy, or waiting on a human decision).
 #   * "offline" for a started, non-paused session means the agent tmux died
 #     (e.g. the CLI exited when usage ran out) — reboot it (resuming the
@@ -1906,7 +1907,7 @@ _QUEUE_IDLE_SETTLE_MARKER = 4.0
 _QUEUE_BOOT_GRACE = 20.0
 _QUEUE_STATE: Dict[str, dict] = (
     {}
-)  # title -> {"armed", "sent_at", "rebooted_at", "idle_since"}
+)  # title -> {"armed", "sent_at", "sent_text", "rebooted_at", "idle_since"}
 
 # Usage-limit gate (roadmap D): when the agent pane shows a "usage limit reached"
 # screen, hold the queue until the limit resets instead of sending into a wall.
@@ -2126,6 +2127,7 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     entry = _prompt_queue.record_sent(title, nxt["id"])
     rec["armed"] = False
     rec["sent_at"] = now
+    rec["sent_text"] = nxt["text"]
     _events.BUS.emit(
         "session.prompt_sent",
         session=title,
@@ -2220,6 +2222,46 @@ def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool
         else _QUEUE_IDLE_SETTLE
     )
     return now - rec["idle_since"] >= settle
+
+
+def _send_consumed(inst, title: str, rec: dict) -> bool:
+    """Evidence that the drain's last send into ``title`` (``rec["sent_at"]``,
+    ``rec["sent_text"]``) was taken by the agent although the drain never read
+    ``working`` after it. Asked only with the session idle and SETTLED, so a
+    turn that is merely slow to start has had its chance to show. Either:
+
+    * the agent was corroborated working after the send
+      (``agent_state.last_worked_at`` — the unspent twin of ``worked_at``: a
+      turn short enough to start and end between two drain polls is still
+      seen by the 4s tickers, which may announce it and spend ``worked_at``
+      before the drain looks); or
+    * the input box no longer holds the sent text — the CLI submitted it and
+      handled it locally (``/clear``, ``/model``: no hook fires, no turn
+      starts). One screen capture, only for a provider that can read its box
+      (``BaseProvider.input_holds``); only an EMPTY box counts, since a box
+      holding other text (a human's draft, a placeholder) proves nothing.
+
+    False when neither holds; the caller's _QUEUE_REARM_IDLE fallback still
+    applies. Never raises."""
+    sent_at = float(rec.get("sent_at") or 0.0)
+    worked = _agent_state.last_worked_at(title)
+    if worked is not None and worked > sent_at:
+        return True
+    text = rec.get("sent_text")
+    if not text:
+        return False
+    try:
+        from backend.providers.base import BaseProvider
+
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        if type(provider).input_holds is BaseProvider.input_holds:
+            return False  # can't read its box: don't pay for a capture
+        screen, err = _agent_io.capture_screen(tmux.to_mindflock_tmux_name(title))
+        if err is not None or not screen:
+            return False
+        return provider.input_holds(screen, text) is False
+    except Exception:  # noqa: BLE001 — no evidence: the fallback re-arms
+        return False
 
 
 def _drain_one_queue(title: str) -> None:
@@ -2318,15 +2360,18 @@ def _drain_one_queue(title: str) -> None:
     mail_sent = (_MAIL_STATE.get(title) or {}).get("sent_at", 0.0)
     if not _idle_settled(rec, title, now, since=mail_sent):
         return
-    # A send that never started a turn (it landed while the CLI sat on a
-    # usage-limit screen, or the turn finished between two 5s polls) leaves
-    # ``armed`` False with no "working" transition ever coming — which would
-    # stall the queue forever. An agent still idle this long after our send
-    # clearly isn't going to pick it up: re-arm so the next pass (behind the
-    # usage-limit gate below) can retry.
-    if (
-        not rec.get("armed", True)
-        and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
+    # A send the drain never SAW picked up leaves ``armed`` False with no
+    # "working" reading coming. Two ways that happens while the send was in
+    # fact consumed — a turn that started and ended between two 5s polls, and
+    # a slash command the CLI handled locally (no hook, no turn) — re-arm as
+    # soon as the evidence says so (_send_consumed). The third — the send
+    # landed on a usage-limit screen and was never taken — has no evidence to
+    # offer: an agent still idle _QUEUE_REARM_IDLE after it clearly isn't
+    # going to pick it up, so re-arm then and let the next pass (behind the
+    # usage-limit gate below) retry.
+    if not rec.get("armed", True) and (
+        now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
+        or _send_consumed(inst, title, rec)
     ):
         rec["armed"] = True
     # send the next prompt if armed + past the send cooldown (which counts a
@@ -2456,6 +2501,7 @@ def _watch_one_limited(title: str) -> None:
         if _send_to_agent(name, _LIMIT_RESUME_PROMPT, submit=True):
             rec["armed"] = False
             rec["sent_at"] = now
+            rec["sent_text"] = _LIMIT_RESUME_PROMPT
             if log.ErrorLog is not None:
                 try:
                     log.ErrorLog.Printf(
@@ -10004,6 +10050,7 @@ async def post_queue_send_now(
     )
     rec["armed"] = False
     rec["sent_at"] = time.time()
+    rec["sent_text"] = it["text"]
     rec["idle_since"] = None
     _events.BUS.emit(
         "session.prompt_sent",
