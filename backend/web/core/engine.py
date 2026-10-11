@@ -21,7 +21,10 @@ other's dead sessions:
   directory is gone AND whose tmux session no longer exists, with a ~120s
   grace window from creation/last-known activity so in-flight provisioning is
   never culled. Paused sessions are exempt (their worktree is removed by
-  design; the branch lives on).
+  design; the branch lives on). A session culled this way when the engine
+  LOADS is never dropped silently: it lands in Recently closed with
+  ``reason: "workspace missing"``, ``wiped`` and ``branch_exists`` (see
+  :func:`backend.web.core.recently_closed.record_missing_workspace`).
 
 Instances the engine drops on its own (the tombstone convergence above, in
 ``Engine.save`` and ``_sync_external_instances``) never pass through a route,
@@ -159,6 +162,17 @@ def _load_disk_tombstones(state=None, now: Optional[float] = None) -> Dict[str, 
         return {}
 
 
+def _record_dropped_at_load(data) -> None:
+    """Record a session dropped at load for a missing workspace in Recently
+    closed (:func:`recently_closed.record_missing_workspace`). Never raises."""
+    try:
+        from backend.web.core import recently_closed
+
+        recently_closed.record_missing_workspace(data)
+    except Exception:  # noqa: BLE001 — recording must never break the seed
+        pass
+
+
 class Engine:
     """Holds the storage + the in-memory set of instances (keyed by title)."""
 
@@ -198,6 +212,9 @@ class Engine:
                 if _is_tombstoned(data.title, _data_last_seen(data), tombs):
                     continue
                 if _data_looks_dead(data, now):
+                    # Never silently: a Recently closed entry says why it
+                    # went and whether its branch survives (+ a log line).
+                    _record_dropped_at_load(data)
                     continue
                 try:
                     # attach=False: no server-side PTY. The web layer talks to

@@ -1,0 +1,245 @@
+/** The ONE Templates list: server-side (`/api/templates`, synced between
+ * devices as settings sync's `store:templates` unit), read through a small
+ * in-memory cache with a localStorage mirror so the surfaces that need a
+ * synchronous answer (the sidebar Prompts bar, the New dialog's "Saved
+ * prompt…" list — see lib/presets.ts) paint at once and repaint on
+ * TEMPLATES_CHANGED when the fetch lands.
+ *
+ * A template is a saved New-session setup; one that carries only a prompt is
+ * what used to be a per-browser "saved prompt". Those are migrated here once
+ * per browser (migratePresetsOnce), so the two lists that overlapped are one.
+ */
+
+import { api } from "../api/client";
+import { presetKey, writeLocal } from "./prefs";
+
+export interface Template {
+  name: string;
+  program?: string;
+  repo_path?: string;
+  prompt?: string;
+  provisioned?: boolean;
+  workspace_strategy?: string;
+  in_place?: boolean;
+  init_repo?: boolean;
+}
+
+/** Fired on document after every change to the list, cache or server. The
+ * same event name lib/presets.ts always fired, so every listener that
+ * repainted on a saved prompt keeps working unchanged. */
+export const TEMPLATES_CHANGED = "mf-presets-changed";
+
+/** The localStorage mirror of the last fetched list — an instant first paint
+ * on the next page load, never the source of truth. */
+export const TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
+/** The legacy per-browser saved-prompt list (lib/presets.ts before the
+ * server held the list) — the migration's source. */
+export const OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
+/** Set once the legacy list has been pushed to the server, so the migration
+ * runs once per browser and never re-creates a template that was deleted. */
+export const PRESETS_MIGRATED_KEY = "mf_presets_migrated";
+
+type KV = { getItem(k: string): string | null; setItem(k: string, v: string): void };
+
+function storage(): KV | null {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanList(raw: unknown): Template[] {
+  return Array.isArray(raw)
+    ? raw.filter((t) => t && typeof t.name === "string" && t.name.trim()).map((t) => ({ ...t }))
+    : [];
+}
+
+let cache: Template[] | null = null;
+let loading: Promise<Template[]> | null = null;
+
+function notify(): void {
+  if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
+}
+
+/** Replace the cache (what a POST answers with is the whole list). */
+export function setTemplates(list: Template[], kv: KV | null = storage()): Template[] {
+  cache = cleanList(list);
+  try {
+    kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache));
+  } catch {
+    /* storage unavailable */
+  }
+  notify();
+  return cache;
+}
+
+/** The list as this page knows it right now: the fetched list, else the
+ * mirror from last time, else nothing. Never waits. */
+export function templatesNow(kv: KV | null = storage()): Template[] {
+  if (cache) return cache;
+  try {
+    return cleanList(JSON.parse(kv?.getItem(TEMPLATES_MIRROR_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+/** Whether a fetch has landed on this page (vs. the mirror / nothing). */
+export function templatesLoaded(): boolean {
+  return cache !== null;
+}
+
+/** Drop what this page knows, so the next read fetches again (tests). */
+export function resetTemplatesCache(): void {
+  cache = null;
+  loading = null;
+}
+
+/** Fetch the server's list once per page (callers share one in-flight
+ * request); re-fetch with `force`. Runs the one-time saved-prompt migration
+ * first, so a browser's old local list is on the server before anything
+ * reads the answer. */
+export function ensureTemplates(force = false): Promise<Template[]> {
+  if (cache && !force) return Promise.resolve(cache);
+  if (loading) return loading;
+  loading = (async () => {
+    try {
+      const d = await api<{ templates?: Template[] }>("/api/templates");
+      let list = setTemplates(d.templates || []);
+      if (await migratePresetsOnce(list)) {
+        const again = await api<{ templates?: Template[] }>("/api/templates");
+        list = setTemplates(again.templates || []);
+      }
+      return list;
+    } finally {
+      loading = null;
+    }
+  })();
+  return loading;
+}
+
+/** Save (upsert by name, ignoring case — the server's rule). Answers the
+ * server's whole list, which becomes the cache. */
+export async function saveTemplate(t: Template): Promise<Template[]> {
+  const d = await api<{ templates?: Template[] }>("/api/templates", { json: t });
+  return setTemplates(d.templates || []);
+}
+
+export async function deleteTemplate(name: string): Promise<boolean> {
+  const d = await api<{ deleted?: boolean }>("/api/templates/" + encodeURIComponent(name), {
+    method: "DELETE",
+  });
+  setTemplates(templatesNow().filter((t) => presetKey(t.name) !== presetKey(name)));
+  return !!d.deleted;
+}
+
+/** The templates that are a prompt — what the saved-prompt surfaces list. */
+/** A template that holds ONLY a prompt — what a "saved prompt" is. A full
+ * template (agent, folder, workspace mode) that happens to carry a prompt is
+ * not one: removing a saved prompt must never delete somebody's setup. */
+export function isPromptOnly(t: Template): boolean {
+  return (
+    typeof t.prompt === "string" &&
+    !!t.prompt.trim() &&
+    !t.program &&
+    !t.repo_path &&
+    !t.provisioned &&
+    !t.in_place &&
+    !t.init_repo
+  );
+}
+
+export function promptTemplates(list: Template[]): Array<{ name: string; prompt: string }> {
+  return list.filter(isPromptOnly).map((t) => ({ name: t.name, prompt: t.prompt as string }));
+}
+
+/** What a browser's legacy saved prompts become on the server, against the
+ * list already there. One saved prompt = one template holding only a
+ * prompt. Deduped by name AND body: the same name with the same text is
+ * already there (skipped); the same name with different text is kept under
+ * "<name> (saved prompt)" rather than overwriting somebody's template or
+ * losing the prompt — unless that spelling exists too. Pure, so the rule is
+ * testable without a server. */
+export function planPresetMigration(
+  local: Array<{ name: string; prompt: string }>,
+  server: Template[]
+): { save: Template[]; skipped: string[] } {
+  const byKey = new Map<string, Template>();
+  for (const t of server) byKey.set(presetKey(t.name), t);
+  const save: Template[] = [];
+  const skipped: string[] = [];
+  for (const p of local) {
+    const name = (p.name || "").trim();
+    const prompt = typeof p.prompt === "string" ? p.prompt : "";
+    if (!name || !prompt.trim()) continue;
+    const hit = byKey.get(presetKey(name));
+    if (!hit) {
+      save.push({ name, prompt });
+      byKey.set(presetKey(name), { name, prompt });
+      continue;
+    }
+    if ((hit.prompt || "") === prompt) {
+      skipped.push(name);
+      continue;
+    }
+    const alt = name + " (saved prompt)";
+    if (byKey.has(presetKey(alt))) {
+      skipped.push(name);
+      continue;
+    }
+    save.push({ name: alt, prompt });
+    byKey.set(presetKey(alt), { name: alt, prompt });
+  }
+  return { save, skipped };
+}
+
+/** Push this browser's legacy saved prompts to the server, once. Returns how
+ * many templates were saved (0 when there was nothing, or it already ran).
+ * The marker is set only after every save succeeded, so a failed push is
+ * retried on the next load rather than lost. */
+export async function migratePresetsOnce(
+  server: Template[],
+  kv: KV | null = storage(),
+  post: (t: Template) => Promise<unknown> = (t) => api("/api/templates", { json: t })
+): Promise<number> {
+  if (!kv) return 0;
+  let done = false;
+  let local: Array<{ name: string; prompt: string }> = [];
+  try {
+    done = kv.getItem(PRESETS_MIGRATED_KEY) === "1";
+    const raw = JSON.parse(kv.getItem(OLD_PRESETS_STORAGE_KEY) || "[]");
+    local = Array.isArray(raw) ? raw : [];
+  } catch {
+    return 0;
+  }
+  if (done) return 0;
+  const { save } = planPresetMigration(local, server);
+  // One refused prompt (a browser without may_configure, a prompt over the
+  // server's limits) must not fail every read of the Templates list: skip it
+  // and try again next load; the marker lands only once nothing is left.
+  let failed = 0;
+  let saved = 0;
+  for (const t of save) {
+    try {
+      await post(t);
+      saved++;
+    } catch {
+      failed++;
+    }
+  }
+  if (!failed) {
+    try {
+      kv.setItem(PRESETS_MIGRATED_KEY, "1");
+      // The legacy list is retired: empty it here AND on the server (prefs
+      // sync pushes the write), so a fresh browser's pull has nothing left to
+      // migrate — otherwise prompts deleted since would come back.
+      if (typeof (kv as { removeItem?: unknown }).removeItem === "function")
+        writeLocal("prompt_presets", [], kv as unknown as Parameters<typeof writeLocal>[2]);
+      else kv.setItem(OLD_PRESETS_STORAGE_KEY, "[]");
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  return saved;
+}

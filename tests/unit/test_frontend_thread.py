@@ -157,7 +157,7 @@ def test_header_copy(js):
     assert "Wrap up (" in tab and " reported)" in tab
     summary = _function(js, "headerSummary")
     assert '" forked from "' in summary
-    assert '" your answer"' in summary
+    assert '" you"' in summary
 
 
 # --- The log is read-only -------------------------------------------------------------
@@ -249,12 +249,12 @@ def test_threadopen_addresses_the_composer_and_takes_the_caret(js):
 def test_ctrl_w_in_the_composer_never_ends_the_session(js):
     guard = _function(js, "threadComposerFocused")
     assert in_bundle('isEditingTarget(el) && !!el.closest?.(".thread-compose")', guard)
-    assert in_bundle(
-        "when: () => !!useUi.getState().focused && !modalOpen() && !threadComposerFocused()",
-        js,
-    )
-    # Delete is covered by the editing-target guard it already had.
-    assert in_bundle("!isEditingTarget(document.activeElement) &&", js)
+    # Both end shortcuts consult one guard (endShortcutAllowed): no overlay,
+    # no typing target, not inside the Thread tab — the composer included.
+    assert in_bundle("when: () => endShortcutAllowed() && !threadComposerFocused()", js)
+    guard_all = _function(js, "endShortcutAllowed")
+    assert "typingTarget(active)" in guard_all
+    assert "threadTabFocused()" in guard_all
     tab = _region(js, "src/components/grid/ThreadTab.tsx")
     assert 'className: "thread-compose"' in tab
 
@@ -296,7 +296,8 @@ def test_review_a_compose_request_is_handled_once(js):
 def test_review_delete_never_ends_the_session_from_the_thread_tab(js):
     keymap = _region(js, "src/lib/keymap.ts")
     assert 'closest?.(".thread-root")' in _function(js, "threadTabFocused")
-    assert in_bundle(
-        '!document.activeElement?.closest?.(".cm-root") && !threadTabFocused()', keymap
-    )
-    assert in_bundle("!threadComposerFocused() && !threadTabFocused()", keymap)
+    guard_all = _function(js, "endShortcutAllowed")
+    assert 'closest?.(".cm-root")' in guard_all and "threadTabFocused()" in guard_all
+    assert in_bundle('closest?.(".cm-root")', keymap)
+    # The Thread tab is refused inside the shared guard, the composer on top.
+    assert in_bundle("endShortcutAllowed() && !threadComposerFocused()", keymap)

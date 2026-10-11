@@ -10,14 +10,19 @@
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
 // that is hand-rolled (which is what fought us under WSLg/Wayland).
 
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification, clipboard } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
 const https = require('https')
 const fs = require('fs')
+const os = require('os')
 const { spawn, spawnSync } = require('child_process')
 const logger = require('./logger')
+// Pure first-launch helpers (log tail, start-state selection, Homebrew / CLT
+// detection, the first-launch marker) — shared with electron/test.
+const fl = require('./firstlaunch')
+const upd = require('./update')
 
 // Windows attributes toast notifications by AppUserModelID. Without setting it,
 // toasts are labeled "electron.app.MindFlock" with no icon. The packaged app
@@ -170,6 +175,31 @@ const RETRY_MS = 2500
 const SPAWN_COOLDOWN_MS = 15000
 let lastSpawnAt = 0
 
+// What we know about the server process we spawned, for the offline page: when
+// it started, whether the port has answered since, and whether it exited first
+// (a crash on boot). Only observable on Linux/macOS, where the bootstrap shell
+// is our own child and execs into the server; on Windows the hidden wscript
+// transport gives us no process to watch, so `exited` stays null there.
+let serverStart = { startedAt: 0, answered: false, exited: null }
+
+// The spawned server's log, as a path THIS machine can read ('' on Windows,
+// where it lives inside the WSL distro).
+function serverLogPath() {
+  if (process.platform === 'win32') return ''
+  const p = WSL_SERVER_LOG
+  if (p === '~') return os.homedir()
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2))
+  return p
+}
+
+// Native Linux (not WSL) or macOS: the host runs the server itself, so the
+// bootstrap can keep it in the foreground and we see it exit. Inside WSL the
+// script must background it and park a keepalive instead (see the launcher).
+const NATIVE_HOST = process.platform !== 'win32' && (() => {
+  if (process.platform !== 'linux') return true
+  try { return !/microsoft/i.test(fs.readFileSync('/proc/version', 'utf8')) } catch (e) { return true }
+})()
+
 // Auto-start the MindFlock server in WSL if it isn't already up, so the
 // installed app is self-contained (no separate launcher). Overridable by env.
 const PORT = (() => { try { return Number(new URL(APP_URL).port) || 8765 } catch (e) { return 8765 } })()
@@ -221,6 +251,7 @@ function startServerIfNeeded() {
     // it is probably still booting, and a second python would race for the port.
     if (Date.now() - lastSpawnAt < SPAWN_COOLDOWN_MS) return
     lastSpawnAt = Date.now()
+    serverStart = { startedAt: lastSpawnAt, answered: false, exited: null }
     // Redirect the server's stdout+stderr to a WSL-side log (appended, with a
     // boot banner and a 2 MB cap) so a crash before the Python log module comes
     // up -- bad venv, import error, port bind -- is still diagnosable.
@@ -251,7 +282,13 @@ function startServerIfNeeded() {
     // wherever the flock keepalive is) but NOT on macOS, whose native path has
     // no keepalive and already detaches via spawn({detached}) -- there $SETSID
     // is empty and this collapses back to the original bare exec.
-    const setsidPrefix = 'SETSID="$(command -v setsid || true)"; '
+    // On a native host (Linux outside WSL, macOS) there is no keepalive race and
+    // the bootstrap is our own child: skip setsid (spawn({detached}) already
+    // gave it a session, and `setsid` would fork-and-exit under us) and keep
+    // the server in the FOREGROUND, so the exec'd server IS the process we
+    // spawned and its exit — a crash on boot — reaches the 'exit' handler
+    // below, which is what turns "Starting…" into failed-to-start.
+    const setsidPrefix = NATIVE_HOST ? 'SETSID=""; ' : 'SETSID="$(command -v setsid || true)"; '
     const redirect = ' </dev/null >>"$MF_LOG" 2>&1'
     const launch = WSL_REPO
       ? setsidPrefix + 'cd ' + shq(WSL_REPO)
@@ -269,7 +306,8 @@ function startServerIfNeeded() {
         // manages whatever repo it is started from.
         + ' if [ -n "$MF" ]; then cd "$HOME"; exec $SETSID "$MF" serve' + redirect + ';'
         + ' else echo "mindflock is not installed ' + where + '."'
-        + ' && echo "Install it:  curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh";'
+        // Pinned to this app's version, like the offline page's escape hatch.
+        + ' && echo "Install it:  ' + fl.installCommand(INSTALL_REF) + '";'
         + ' fi'
     // Single-owner rule: NEVER kill whatever holds the port. The old `fuser -k`
     // here and the systemd unit's ExecStartPre=fuser -k SIGKILLed each other at
@@ -293,7 +331,9 @@ function startServerIfNeeded() {
       + ' if [ -e "$HOME/.config/systemd/user/default.target.wants/mindflock.service" ];'
       + ' then echo "systemd mindflock.service owns port ' + PORT + '; not launching a second server.";'
       + ' elif ' + alive + '; then echo "a server is already listening on port ' + PORT + '; not launching another.";'
-      + ' else (' + launch + ') & fi;'
+      // Native host: foreground (the exec above replaces this shell with the
+      // server, which inherits the log redirect). WSL: background + keepalive.
+      + (NATIVE_HOST ? ' else ' + launch + '; fi;' : ' else (' + launch + ') & fi;')
       + ' } >> "$MF_LOG" 2>&1;'
       // WSL detection via kernel string, not $WSL_DISTRO_NAME -- the env var is
       // only set in wsl.exe-launched sessions. macOS/native Linux exit here.
@@ -326,16 +366,31 @@ function startServerIfNeeded() {
         console.log('[mindflock] starting WSL server (hidden); server log ->', log)
       } else {
         // Linux / macOS: the server runs natively -- spawn it detached
-        // through a login shell so ~/.local/bin lands on PATH.
-        spawn('/bin/bash', ['--login', '-c', script],
-          { detached: true, stdio: 'ignore' }).unref()
+        // through a login shell so ~/.local/bin lands on PATH. unref() lets
+        // the app quit without it, but the 'exit' event still arrives while
+        // the app runs: a server that dies before the port answers is what
+        // the offline page's failed-to-start state reports.
+        const mine = serverStart
+        const child = spawn('/bin/bash', ['--login', '-c', script],
+          { detached: true, stdio: 'ignore' })
+        child.unref()
+        child.on('error', (e) => {
+          if (serverStart !== mine) return
+          mine.exited = { code: 127, signal: null, at: Date.now(), error: e && e.message }
+          console.log('[mindflock] server bootstrap could not start:', e && e.message)
+        })
+        child.on('exit', (code, signal) => {
+          if (serverStart !== mine || mine.answered) return
+          mine.exited = { code: code == null ? 1 : code, signal: signal || null, at: Date.now() }
+          if (NATIVE_HOST) console.log('[mindflock] server exited before answering: code', code, signal || '')
+        })
         console.log('[mindflock] starting local server; server log ->', log)
       }
     } catch (e) {
       console.log('[mindflock] could not start server:', e && e.message)
     }
   }
-  sock.once('connect', () => finish(true))
+  sock.once('connect', () => { serverStart.answered = true; finish(true) })
   sock.once('error', () => finish(false))
   sock.setTimeout(700, () => finish(false))
 }
@@ -439,9 +494,77 @@ function refreshDiag() {
   }
 }
 
+// The server-start view the offline page shows alongside the probe's verdict:
+// what we know about the spawned process plus the tail of its log, so
+// "Starting…" can show the log after 10 s and a boot crash reads as one.
+function startStatus() {
+  const logPath = serverLogPath()
+  const tail = logPath ? fl.readLogTail(fs, logPath, fl.TAIL_LINES) : []
+  const view = fl.resolveStartView(diag.state, serverStart)
+  return {
+    startedAt: serverStart.startedAt,
+    answered: serverStart.answered,
+    exited: serverStart.exited,
+    view: view.state,
+    showTail: view.showTail,
+    tail,
+    logPath: logPath || WSL_SERVER_LOG,
+    // "Try again" respawns the server; only meaningful where we watch it.
+    canRetry: process.platform !== 'win32',
+  }
+}
+
 ipcMain.handle('diag:get', () => {
   refreshDiag()
-  return diag
+  return Object.assign({}, diag, { start: startStatus() })
+})
+
+// Everything the offline page can copy for a bug report, in one text blob.
+function diagnosticsText() {
+  const lp = (() => { try { return logger.paths().file } catch (e) { return '' } })()
+  const s = startStatus()
+  return fl.formatDiagnostics({
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    appUrl: APP_URL,
+    diagState: diag.state,
+    diagDetail: diag.detail,
+    start: s,
+    tail: serverLogPath() ? fl.readLogTail(fs, serverLogPath(), 40) : [],
+    logPath: s.logPath,
+    mainLog: lp,
+    installLines: install.lines.slice(-40),
+  })
+}
+
+// Offline-page actions beyond the probe (the page's buttons):
+//   retry-start       failed-to-start → respawn the server now (no cooldown)
+//   copy-diagnostics  put diagnosticsText() on the clipboard
+//   brew-install      needs-homebrew → run Homebrew's installer, then continue
+//   brew-skip         needs-homebrew → continue the engine install without it
+ipcMain.handle('diag:action', (_e, name) => {
+  switch (String(name || '')) {
+    case 'retry-start':
+      lastSpawnAt = 0
+      diagAt = 0
+      serverStart = { startedAt: 0, answered: false, exited: null }
+      startServerIfNeeded()
+      refreshDiag()
+      if (win && !win.isDestroyed()) scheduleRetry()
+      return { ok: true }
+    case 'copy-diagnostics': {
+      const text = diagnosticsText()
+      try { clipboard.writeText(text) } catch (e) { return { ok: false, text } }
+      return { ok: true, text }
+    }
+    case 'brew-install':
+      return { ok: installHomebrew() }
+    case 'brew-skip':
+      return { ok: skipHomebrew() }
+    default:
+      return { ok: false, error: 'unknown action' }
+  }
 })
 
 // Reveal a file in Finder/Explorer (Settings → System logs "open in Finder").
@@ -531,18 +654,26 @@ const INSTALL_TIMEOUT_MS = 30 * 60 * 1000
 const ANSI_RE = /\x1b\[[0-9;]*m/g
 
 // state: idle | running | done | failed. `waiting` names what a running install
-// is waiting on before the script itself starts ('xcode': Apple's Command Line
-// Tools installer), so the offline page can say so.
+// is waiting on before the script itself starts, so the offline page can say so:
+//   homebrew        macOS without Homebrew: the page asks Install / Skip
+//   homebrew-run    Homebrew's installer is running in Terminal; polling for brew
+//   xcode           Apple's Command Line Tools installer is open; polling for it
 let install = { state: 'idle', code: null, lines: [], waiting: '' }
 let installTicker = null
+// The poll in flight for a `waiting` step (pollUntil promise; .stop() cancels).
+let installPoll = null
+// Set by the page's "Skip" on needs-homebrew: don't ask again this install.
+let brewSkipped = false
 
 // FIRST-RUN CONTINUATION. The engine install above runs the read-only doctor
 // (there is no terminal behind a GUI), so tmux and the agent CLI are still
 // missing when it finishes. When the install was the offline page's first-run
-// one (not an update), the app opens with `?setup=install`: the Setup dialog
-// comes up on its Dependencies step, with the one "Install …" button that
-// installs them all (one password prompt) — instead of dropping the user on an
-// empty grid to go and find it. Cleared once the app page has loaded with it.
+// one (not an update) AND this launch never reached the app before (see the
+// first-launch marker by appUrl), the app opens with `?setup=1`: the web UI
+// opens its setup checklist, whose Dependencies step has the one "Install …"
+// button that installs them all (one password prompt) — instead of dropping
+// the user on an empty grid to go and find it. Cleared once the app page has
+// loaded with it.
 let firstRunDeps = false
 
 function toLines(s) {
@@ -557,6 +688,7 @@ function installLog(chunk) {
 function installFinish(code) {
   if (install.state !== 'running') return
   if (installTicker) { clearInterval(installTicker); installTicker = null }
+  if (installPoll) { try { installPoll.stop() } catch (e) {}; installPoll = null }
   install.code = code
   install.state = code === 0 ? 'done' : 'failed'
   console.log('[mindflock] engine install finished, code', code)
@@ -578,8 +710,106 @@ function installFinish(code) {
 // Line Tools installer, so `command -v git` succeeds on a machine where git
 // cannot actually run. xcode-select -p is the honest check and pops nothing.
 function hasXcodeCLT() {
-  try { return spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status === 0 }
-  catch (e) { return false }
+  return fl.hasXcodeCLT((cmd, args) => spawnSync(cmd, args, { stdio: 'ignore' }).status)
+}
+
+// Homebrew's official install command, run in Terminal.app: its installer is
+// interactive (press RETURN, then sudo asks for the password), and a GUI app has
+// no terminal to offer it. We write it as a .command file and `open` it, which
+// Terminal runs — no AppleScript, so no Automation permission prompt.
+const BREW_INSTALL_CMD =
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+function installHomebrew() {
+  if (install.state !== 'running' || install.waiting !== 'homebrew') return false
+  const file = path.join(app.getPath('userData'), 'install-homebrew.command')
+  try {
+    fs.writeFileSync(file,
+      '#!/bin/bash\n'
+      + 'echo "MindFlock: installing Homebrew (it asks for your password)."\n'
+      + 'echo\n'
+      + BREW_INSTALL_CMD + '\n'
+      + 'echo\n'
+      + 'echo "Done — you can close this window. MindFlock carries on by itself."\n',
+      { mode: 0o755 })
+    fs.chmodSync(file, 0o755)   // writeFileSync keeps an existing file's mode
+    spawn('open', ['-a', 'Terminal', file], { stdio: 'ignore', detached: true }).unref()
+  } catch (e) {
+    installLog('could not open Terminal for the Homebrew installer: ' + (e && e.message))
+    installLog('Install it yourself from https://brew.sh, then press Install again.')
+    installFinish(1)
+    return true
+  }
+  install.waiting = 'homebrew-run'
+  installLog('Homebrew is installing in Terminal — it asks for your password there.')
+  installLog('MindFlock continues on its own once brew is in place.')
+  installPoll = fl.pollUntil(() => !!fl.findBrew(fs), { intervalMs: XCODE_POLL_MS, timeoutMs: XCODE_WAIT_MS })
+  installPoll.then((ok) => {
+    installPoll = null
+    if (install.state !== 'running' || install.waiting !== 'homebrew-run') return
+    install.waiting = ''
+    if (!ok) {
+      installLog('Still no Homebrew after ' + (XCODE_WAIT_MS / 60000) + ' minutes.')
+      installLog('Finish the Terminal window (or install it from https://brew.sh), then press Try again.')
+      return installFinish(1)
+    }
+    installLog('Homebrew installed — continuing.')
+    darwinPreflight()
+  })
+  return true
+}
+
+function skipHomebrew() {
+  if (install.state !== 'running' || install.waiting !== 'homebrew') return false
+  brewSkipped = true
+  install.waiting = ''
+  installLog('Continuing without Homebrew (tmux can be installed later from Setup).')
+  darwinPreflight()
+  return true
+}
+
+// Apple's CLT installer takes 5-20 minutes and says nothing when it is done.
+const XCODE_POLL_MS = 5000
+const XCODE_WAIT_MS = 30 * 60 * 1000
+
+// macOS, before running install.sh: Homebrew (tmux comes from it) and Apple's
+// Command Line Tools (git). Each step either continues straight away or parks
+// the install in a `waiting` state the page shows, and re-enters here when it
+// clears — so pressing one button really does finish the whole job.
+function darwinPreflight() {
+  if (install.state !== 'running') return
+  if (!brewSkipped && !fl.findBrew(fs)) {
+    install.waiting = 'homebrew'
+    installLog('Homebrew isn’t installed. MindFlock installs tmux with it.')
+    return
+  }
+  if (!hasXcodeCLT()) {
+    // Wait for Apple's installer instead of failing: the user would otherwise
+    // come back 15 minutes later to a red transcript and a second button to
+    // press. The install stays 'running' throughout.
+    installLog('Apple is installing developer tools (git) — finish its window.')
+    installLog('MindFlock will continue on its own when it’s done.')
+    try {
+      spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
+    } catch (e) { installLog('could not open it: run  xcode-select --install') }
+    install.waiting = 'xcode'
+    installPoll = fl.pollUntil(hasXcodeCLT, { intervalMs: XCODE_POLL_MS, timeoutMs: XCODE_WAIT_MS })
+    installPoll.then((ok) => {
+      installPoll = null
+      if (install.state !== 'running' || install.waiting !== 'xcode') return
+      install.waiting = ''
+      if (!ok) {
+        installLog('Still no developer tools after ' + (XCODE_WAIT_MS / 60000)
+          + ' minutes. Finish Apple’s installer (or run  xcode-select --install ),')
+        installLog('then press Try again.')
+        return installFinish(1)
+      }
+      installLog('Developer tools installed — continuing.')
+      runUnixInstaller(install.env)
+    })
+    return
+  }
+  runUnixInstaller(install.env)
 }
 
 // Linux / macOS: run the bundled install.sh. --login so ~/.local/bin (where uv
@@ -610,18 +840,15 @@ function runUnixInstaller(envAdds) {
   }
 }
 
-// Apple's CLT installer takes 5-20 minutes and says nothing when it is done.
-const XCODE_POLL_MS = 5000
-const XCODE_WAIT_MS = 30 * 60 * 1000
-
 // `opts.firstRun`: the offline page's first-run install (see firstRunDeps).
 function startInstall(ref, opts) {
   ref = ref || INSTALL_REF   // default: this app's pinned version (first install)
   if (install.state === 'running') return { started: false }
   install = {
-    state: 'running', code: null, lines: [], waiting: '',
+    state: 'running', code: null, lines: [], waiting: '', env: null,
     firstRun: !!(opts && opts.firstRun),
   }
+  brewSkipped = false
   installLog('=== installing the MindFlock engine (' + ref + ') ===')
 
   if (!fs.existsSync(INSTALL_SCRIPT)) {
@@ -645,34 +872,9 @@ function startInstall(ref, opts) {
   }
 
   if (process.platform !== 'win32') {
-    if (process.platform === 'darwin' && !hasXcodeCLT()) {
-      // Wait for Apple's installer instead of failing: the user would
-      // otherwise come back 15 minutes later to a red transcript and a second
-      // button to press. The install stays 'running' throughout.
-      installLog('Apple is installing developer tools (git) — finish its window.')
-      installLog('MindFlock will continue on its own when it’s done.')
-      try {
-        spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref()
-      } catch (e) { installLog('could not open it: run  xcode-select --install') }
-      install.waiting = 'xcode'
-      const since = Date.now()
-      installTicker = setInterval(() => {
-        if (install.state !== 'running') return
-        if (hasXcodeCLT()) {
-          clearInterval(installTicker); installTicker = null
-          install.waiting = ''
-          installLog('Developer tools installed — continuing.')
-          runUnixInstaller(envAdds)
-        } else if (Date.now() - since > XCODE_WAIT_MS) {
-          installLog('Still no developer tools after ' + (XCODE_WAIT_MS / 60000)
-            + ' minutes. Finish Apple’s installer (or run  xcode-select --install ),')
-          installLog('then press Try again.')
-          installFinish(1)
-        }
-      }, XCODE_POLL_MS)
-      return { started: true }
-    }
-    runUnixInstaller(envAdds)
+    install.env = envAdds
+    if (process.platform === 'darwin') darwinPreflight()
+    else runUnixInstaller(envAdds)
     return { started: true }
   }
 
@@ -742,8 +944,7 @@ ipcMain.handle('install:state', () => ({
   lines: install.lines,
   waiting: install.waiting || '',
   // The manual escape hatch the offline page shows when an install fails.
-  command: 'curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/'
-    + INSTALL_REF + '/install.sh | sh',
+  command: fl.installCommand(INSTALL_REF),
 }))
 
 // ---------------------------------------------------------------------------
@@ -905,22 +1106,59 @@ async function autoSignIn() {
   }
 }
 
-// Finish an engine update: stop the old server, then let the normal launcher
-// bring a FRESH `mindflock serve` up (resolving the shim -> the upgraded venv;
-// a bare re-exec can miss a relocated venv) and reconnect the window. Resetting
-// the caches makes the next probe/spawn immediate and re-checks the engine
-// version instead of serving the stale drift verdict.
-function restartServer() {
-  spawnEngineShell(KILL_SERVER)
-  setTimeout(() => {
-    lastSpawnAt = 0
-    engineNotice = null
-    startServerIfNeeded()
-    loadApp()
-  }, 1800)
+// Whether nothing answers on the engine port right now (a refused connect).
+function portFree(port) {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (free) => { if (!settled) { settled = true; sock.destroy(); resolve(free) } }
+    const sock = net.connect({ host: '127.0.0.1', port })
+    sock.setTimeout(1500)
+    sock.on('connect', () => finish(false))
+    sock.on('timeout', () => finish(false))
+    sock.on('error', () => finish(true))
+  })
 }
 
-ipcMain.handle('engine:restart', () => { restartServer(); return { ok: true } })
+// How long the old server gets to let go of the port after KILL_SERVER.
+const STOP_WAIT_MS = 15000
+
+// Stop the running engine server and WAIT until the port is released — the
+// launcher never spawns onto a port that still answers (single-owner rule in
+// startServerIfNeeded), so starting before the old process is gone just
+// probes, sees it, and does nothing: that is how Settings → Advanced used to
+// stick on "Updating…" after a finished engine install. Resolves true once
+// the port is free, false if the old server outlived the wait (one more kill
+// is sent; the launcher's own probe is the last word).
+async function stopEngineServer() {
+  spawnEngineShell(KILL_SERVER)
+  const deadline = Date.now() + STOP_WAIT_MS
+  while (Date.now() < deadline) {
+    if (await portFree(PORT)) return true
+    await sleep(300)
+  }
+  console.log('[mindflock] the old server still holds port', PORT, 'after', STOP_WAIT_MS, 'ms')
+  spawnEngineShell(KILL_SERVER)
+  await sleep(1000)
+  return portFree(PORT)
+}
+
+// Finish an engine update: stop the old server (and see the port released),
+// then let the normal launcher bring a FRESH `mindflock serve` up (resolving
+// the shim -> the upgraded venv; a bare re-exec can miss a relocated venv) and
+// reconnect the window. Resetting the caches makes the next probe/spawn
+// immediate and re-checks the engine version instead of serving the stale
+// drift verdict. Resolves once the new server has been asked to start.
+async function restartServer() {
+  const released = await stopEngineServer()
+  lastSpawnAt = 0
+  engineNotice = null
+  engineSkew = null
+  startServerIfNeeded()
+  loadApp()
+  return released
+}
+
+ipcMain.handle('engine:restart', () => { restartServer().catch(() => {}); return { ok: true } })
 
 // The teardown `mindflock uninstall` runs. NO --purge unless the user opts in:
 // ~/.mindflock[-assistant] (history + settings) is kept so a reinstall resumes.
@@ -1102,16 +1340,8 @@ function writeUpdateStore(obj) {
 }
 
 // Compare dotted numeric versions. >0 if a newer than b, <0 older, 0 equal.
-// Prerelease / non-numeric suffixes are ignored — we only nudge on a clear bump.
-function cmpVersion(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0)
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0)
-    if (d) return d > 0 ? 1 : -1
-  }
-  return 0
-}
+// Lives in electron/update.js (pure, node --test'able) with the skew verdict.
+const cmpVersion = upd.cmpVersion
 
 // Resolve the latest release JSON, or null on ANY failure (offline, non-200,
 // bad JSON). Never throws.
@@ -1151,8 +1381,19 @@ function pendingUpdate() {
   return updateAvailable
 }
 
-function pushUpdateToRenderer() {
+// What the renderer's app-update toast gets: the pending release plus, when
+// the engine has run ahead of this app, why the app update matters now.
+function updatePayload() {
   const p = pendingUpdate()
+  if (!p) return null
+  return Object.assign({}, p, {
+    auto: appUpd.state,
+    skew: engineSkew && engineSkew.appUpdate ? engineSkew.message : '',
+  })
+}
+
+function pushUpdateToRenderer() {
+  const p = updatePayload()
   if (p && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
     win.webContents.send('update:available', p)
   }
@@ -1206,11 +1447,17 @@ function startUpdateChecks() {
 //
 // Order on click: engine install (small, uv-cached) → stop the old server →
 // install the app and relaunch; the relaunched app starts the NEW server. An
-// engine-only update (app already current) just restarts the server.
+// engine-only update (app already current) stops the old server, waits for
+// the port to be released, starts the new one and reports its version.
 //
 // Where the app can't update itself (an unpackaged/dev run, a build whose
 // update metadata is missing, or macOS refusing the swap) the button still
 // updates the engine and then falls back to the download page.
+//
+// ONE path: the app toast's Update, the engine toast's Update engine and the
+// Settings → Advanced button all call updateEverything({engine, app}) and
+// poll the same run state (engineRunState) — there is no second installer
+// call site to drift from it.
 let autoUpdater = null
 // state: off | idle | downloading | ready | error
 let appUpd = { state: 'off', version: '', percent: 0, error: '' }
@@ -1281,24 +1528,48 @@ async function enginePlan(target) {
   if (WSL_REPO) return { needed: false, why: 'developer checkout (MINDFLOCK_REPO)' }
   const current = await localEngineVersion()
   if (!current || !target) return { needed: false, why: 'engine version unknown' }
-  if (cmpVersion(target, current) <= 0) return { needed: false, why: 'engine already ' + current }
+  if (cmpVersion(target, current) < 0) {
+    // Never the state.json downgrade path: a newer engine stays.
+    return { needed: false, why: 'engine ' + current + ' is newer than ' + target + ' — not downgraded' }
+  }
+  if (cmpVersion(target, current) === 0) return { needed: false, why: 'engine already ' + current }
   const token = await readEngineToken().catch(() => '')
   const chk = await fetchLocalJSON('/api/update/check', 8000, token)
   const kind = chk && chk.kind
-  if (kind && kind !== 'uv-tool') {
+  // install.sh (pinned) reinstalls a uv-tool OR a pipx engine the way it was
+  // installed (install.json); an editable checkout or an unknown install is
+  // left alone.
+  if (kind && kind !== 'uv-tool' && kind !== 'pipx') {
     return { needed: false, why: 'engine is a ' + kind + ' install — update it yourself' }
   }
   if (!kind) return { needed: false, why: "couldn't confirm the engine is a release install" }
   return { needed: true, current, ref: 'v' + target }
 }
 
-async function updateEverything() {
+// The engine's version once the restarted server answers with `target` (or
+// anything, with no target), '' when it hasn't within `timeoutMs`.
+async function waitForEngine(target, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const v = await localEngineVersion()
+    if (v && (!target || cmpVersion(v, target) >= 0)) return v
+    await sleep(1000)
+  }
+  return ''
+}
+
+// `opts.engine` / `opts.app` (default both): which halves this click may
+// touch. Each half still only runs when it is actually behind.
+async function updateEverything(opts) {
+  const want = Object.assign({ engine: true, app: true }, opts || {})
   if (updateRun.state === 'running') return updateRun
   updateRun = { state: 'running', step: 'engine', message: 'Checking the engine…' }
   try {
     const target = (appUpd.version || (updateAvailable && updateAvailable.version)
       || (engineNotice && engineNotice.latest) || '')
-    const plan = await enginePlan(target)
+    const plan = want.engine
+      ? await enginePlan(target)
+      : { needed: false, why: 'engine step not requested' }
     let engineUpdated = false
     if (plan.needed) {
       updateRun.message = 'Updating the engine to ' + target + '…'
@@ -1316,8 +1587,9 @@ async function updateEverything() {
       console.log('[mindflock] engine step skipped:', plan.why)
     }
 
-    const appNewer = (updateAvailable && cmpVersion(updateAvailable.version, app.getVersion()) > 0)
-      || (appUpd.version && cmpVersion(appUpd.version, app.getVersion()) > 0)
+    const appNewer = want.app && (
+      (updateAvailable && cmpVersion(updateAvailable.version, app.getVersion()) > 0)
+      || (appUpd.version && cmpVersion(appUpd.version, app.getVersion()) > 0))
     if (appNewer && autoUpdater && (appUpd.state === 'downloading' || appUpd.state === 'idle')) {
       if (appUpd.state === 'idle') checkAppUpdate()
       updateRun.step = 'download'
@@ -1330,16 +1602,17 @@ async function updateEverything() {
     }
     if (appNewer && appUpd.state === 'ready') {
       updateRun = { state: 'running', step: 'restart', message: 'Restarting into MindFlock ' + appUpd.version + '…' }
-      // Stop the old engine server first: quitting the app leaves it running,
-      // and the relaunched app should bring up the engine just installed.
-      if (engineUpdated) spawnEngineShell(KILL_SERVER)
-      await sleep(engineUpdated ? 1500 : 300)
+      // Stop the old engine server first (and see the port released): quitting
+      // the app leaves it running, and the relaunched app should bring up the
+      // engine just installed.
+      if (engineUpdated) await stopEngineServer()
+      else await sleep(300)
       autoUpdater.quitAndInstall(true, true)   // silent install, relaunch after
       return updateRun
     }
     if (appNewer) {
       // The app can't swap itself here — finish the engine, then the page.
-      if (engineUpdated) restartServer()
+      if (engineUpdated) await restartServer()
       shell.openExternal((updateAvailable && updateAvailable.url) || UPDATE_RELEASES_URL).catch(() => {})
       updateRun = {
         state: 'idle', step: 'manual',
@@ -1349,10 +1622,19 @@ async function updateEverything() {
       }
       return updateRun
     }
-    // Engine-only: the app is current.
+    // Engine-only: the app is current. Stop the old server, start the new
+    // one once the port is free, and report the version it answers with —
+    // the run is not "done" until the new engine is up.
     if (engineUpdated) {
       updateRun = { state: 'running', step: 'restart', message: 'Restarting the engine…' }
-      restartServer()
+      await restartServer()
+      const v = await waitForEngine(target, 90 * 1000)
+      updateRun = v
+        ? { state: 'idle', step: 'done', message: 'Engine ' + v + ' is running.' }
+        : {
+            state: 'failed', step: 'restart',
+            message: 'The engine was installed, but the server didn\u2019t come back within 90 s \u2014 check Settings \u2192 System logs.',
+          }
     } else {
       updateRun = { state: 'idle', step: 'done', message: 'Already up to date (' + plan.why + ').' }
     }
@@ -1365,11 +1647,8 @@ async function updateEverything() {
 
 // Renderer bridge (see preload's `mfupdate`). `get` lets a freshly-loaded page
 // pull the current state even if the push fired before its listener existed.
-ipcMain.handle('update:get', () => {
-  const p = pendingUpdate()
-  return p ? Object.assign({}, p, { auto: appUpd.state }) : null
-})
-ipcMain.handle('update:install', () => updateEverything())
+ipcMain.handle('update:get', () => updatePayload())
+ipcMain.handle('update:install', () => updateEverything({ engine: true, app: true }))
 ipcMain.handle('update:state', () => ({ app: appUpd, run: updateRun }))
 ipcMain.on('update:open', (_e, url) => {
   const dest = typeof url === 'string' && url ? url : UPDATE_RELEASES_URL
@@ -1397,10 +1676,17 @@ ipcMain.on('update:skip', (_e, version) => {
 // Windows/WSL identically (no wsl.exe transport, no stdout parsing).
 // Engine-update state: set when the INSTALLED engine is older than the latest
 // RELEASED engine. Release-anchored (not app-anchored): the engine tracks the
-// latest release independently of whether the desktop shell was updated, which
-// is what lets an engine-only version bump reach users who never update the
-// (unsigned, no-auto-update) shell. null = up to date / unknown.
+// latest release independently of whether the desktop shell was updated, so an
+// engine-only version bump still reaches a user who hasn't taken the app
+// update yet (the shell updates itself too — electron-updater, same signed
+// identity on macOS — but only when its button is pressed). null = up to date
+// / unknown.
 let engineNotice = null      // { current, latest, ref } | null
+// Version-skew state: the engine has run AHEAD of this app (install.sh re-run
+// by hand, `mindflock update` with the app behind). See upd.skewNotice: with
+// an app release out the app toast says so; otherwise a one-line notice. The
+// engine is never downgraded to match.
+let engineSkew = null        // { kind: 'skew', engine, app, appUpdate, message } | null
 // What the last check actually learned, so Settings can tell "up to date"
 // apart from "couldn't tell" (which it used to report as up to date).
 let engineCheck = { checked: false, current: '' }
@@ -1467,6 +1753,20 @@ async function checkEngineVersion() {
   const rel = await fetchLatestRelease()
   const latest = rel && rel.tag_name ? String(rel.tag_name).replace(/^v/i, '').trim() : ''
   engineCheck = { checked: !!latest, current }
+  // Engine newer than the app? Say so (never silently), and never downgrade.
+  const skew = upd.skewNotice(current, app.getVersion(), latest, skippedVersion)
+  const skewChanged = JSON.stringify(skew) !== JSON.stringify(engineSkew)
+  engineSkew = skew
+  if (skew) {
+    console.log('[mindflock] engine', current, 'is newer than this app', app.getVersion(),
+      skew.appUpdate ? '— an app update is out' : '— no app update available')
+    engineNotice = null                // an older engine is not the problem here
+    if (skew.appUpdate) { pushUpdateToRenderer(); return }
+    if (skewChanged) pushEngineNotice()
+    // No app update to offer (none out, or the person skipped it): the engine
+    // can still be behind the newest release — fall through so that toast is
+    // not lost behind the skew note.
+  }
   if (!latest || cmpVersion(latest, current) <= 0) {
     engineNotice = null                // up to date (or couldn't tell) — no nag
     return
@@ -1480,28 +1780,31 @@ function pushEngineNotice() {
   // With an app update pending, its one "Update" button updates the engine too
   // (see updateEverything) — a second toast would be two buttons for one job.
   if (pendingUpdate()) return
-  if (engineNotice && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-    win.webContents.send('engine:notice', engineNotice)
+  const notice = engineNotice || engineSkew
+  if (notice && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send('engine:notice', notice)
   }
 }
 
-ipcMain.handle('engine:get', () => (pendingUpdate() ? null : engineNotice))
+ipcMain.handle('engine:get', () => (pendingUpdate() ? null : (engineNotice || engineSkew)))
 // What Settings → Advanced polls to show/hide its engine-update control.
 // `checked` is false when the last check couldn't read the engine's version
 // or the latest release (offline, server booting) -- not "up to date".
-ipcMain.handle('engine:update-info', () => (engineNotice
-  ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
-  : { available: false, checked: engineCheck.checked, current: engineCheck.current }))
-ipcMain.handle('engine:install', () => {
-  // Install the LATEST released engine when an update is pending; fall back to
-  // this app's pinned version otherwise (e.g. a manual reinstall with no notice
-  // set). Same installer the offline page uses, just a different pinned ref.
-  return startInstall(engineNotice ? engineNotice.ref : INSTALL_REF)
-})
-ipcMain.handle('engine:install-state', () => ({
-  state: install.state, code: install.code, lines: install.lines,
-}))
-ipcMain.on('engine:dismiss', () => { engineNotice = null })
+ipcMain.handle('engine:update-info', () => Object.assign(
+  engineNotice
+    ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
+    : { available: false, checked: engineCheck.checked, current: engineCheck.current },
+  // The app-update toast is the one button when the app is behind too.
+  { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' }
+))
+// The engine toast and Settings → Advanced: the SAME run as the app toast's
+// Update (engine first, then the app if one is downloaded), so an engine-only
+// click still stops the old server, starts the new one and reports it.
+ipcMain.handle('engine:install', () => updateEverything({ engine: true, app: false }))
+// One state for every button: the run's phase + the installer's log.
+function engineRunState() { return upd.runState(updateRun, install) }
+ipcMain.handle('engine:install-state', () => engineRunState())
+ipcMain.on('engine:dismiss', () => { engineNotice = null; engineSkew = null })
 
 // Bottom-right "update available" toast. Injected into whatever page is loaded
 // (same mechanism as the title-bar buttons), styled to match the app's dark
@@ -1516,7 +1819,7 @@ const UPDATE_CSS = `
   align-items: flex-end; pointer-events: none;
 }
 #mf-toast-stack > * { pointer-events: auto; }
-#mf-update-toast, #mf-engine-toast {
+#mf-update-toast, #mf-engine-toast, #mf-skew-note {
   position: relative;
   width: 300px; max-width: calc(100vw - 36px);
   background: #171b24; color: #d7dae3;
@@ -1526,7 +1829,9 @@ const UPDATE_CSS = `
   animation: mf-up-in .18s ease-out;
 }
 /* Drift is a "your install is inconsistent" state, not a new-release nudge. */
-#mf-engine-toast { border-left: 3px solid #d6a53c; }
+#mf-engine-toast, #mf-skew-note { border-left: 3px solid #d6a53c; }
+#mf-skew-note { padding-right: 34px; }
+#mf-skew-note .mf-up-body { margin-bottom: 0; }
 #mf-engine-toast .mf-up-title { color: #e2b658; }
 #mf-engine-toast .mf-up-log {
   margin: 0 0 10px; padding: 8px 10px; max-height: 120px; overflow-y: auto;
@@ -1624,7 +1929,7 @@ const UPDATE_JS = `
             upd.disabled = false; later.disabled = false; upd.textContent = 'Retry';
           } else if (run.state === 'idle' && run.step) {
             stopPolling();
-            later.disabled = false; upd.textContent = 'Done';
+            later.disabled = false; upd.textContent = run.step === 'done' ? 'Done' : 'Update';
           }
         }).catch(function () {});
       }, 1000);
@@ -1640,8 +1945,11 @@ const UPDATE_JS = `
     // updates on its own), so without this a user whose engine already reads
     // 0.1.2 sees "0.1.2 is available" and thinks it’s nagging about the
     // version they’re already running — it’s the desktop app that’s behind.
+    // An engine that ran ahead of this app (install.sh by hand, mindflock
+    // update) makes this the fix, not just a nudge: say so first.
     c.appendChild(el('div', 'mf-up-body',
-      'MindFlock ' + info.version + ' is available'
+      (info.skew ? info.skew + ' ' : '')
+      + 'MindFlock ' + info.version + ' is available'
       + (info.current && info.current !== info.version
           ? ' \\u2014 you\\u2019re on ' + info.current : '')
       + '. Update installs it and restarts — the engine too.'));
@@ -1654,8 +1962,17 @@ const UPDATE_JS = `
   // dismisses for this run. Updating pulls only the small engine package (uv
   // reuses its dependency cache) — NOT the ~100 MB desktop shell — then the
   // server self-restarts and the window reconnects.
+  // --- engine newer than the app (one line, no button) ---------------------
+  function showSkew(info) {
+    var c = card('mf-skew-note');
+    c.appendChild(closeBtn(c, function () { window.mfengine.dismiss(); }));
+    c.appendChild(el('div', 'mf-up-body', info.message));
+  }
+
   function showEngine(info) {
-    if (!info || !info.latest) return;
+    if (!info) return;
+    if (info.kind === 'skew') return showSkew(info);
+    if (!info.latest) return;
     var c = card('mf-engine-toast');
     var body = el('div', 'mf-up-body',
       'A new MindFlock engine (' + info.latest + ') is available \\u2014 you\\u2019re on '
@@ -1669,6 +1986,9 @@ const UPDATE_JS = `
 
     var polling = null;
     function stopPolling() { if (polling) { clearInterval(polling); polling = null; } }
+    // Same run as the app toast's Update (updateEverything in main.js): it
+    // installs the engine, stops the old server, waits for the port, starts
+    // the new one and reports its version. The toast only shows progress.
     fix.addEventListener('click', function () {
       if (fix.disabled) return;
       fix.disabled = true; fix.textContent = 'Updating\\u2026';
@@ -1679,20 +1999,18 @@ const UPDATE_JS = `
           if (!st) return;
           log.textContent = (st.lines || []).slice(-40).join('\\n');
           log.scrollTop = log.scrollHeight;
+          if (st.message) body.textContent = st.message;
           if (st.state === 'done') {
             stopPolling();
-            fix.textContent = 'Restarting\\u2026';
-            body.textContent = 'The engine was updated \\u2014 restarting the server to load '
-              + 'it. This window will reconnect on its own.';
-            // Self-complete: stop the old server and let the launcher bring the
-            // new one up, then reload. No "quit and reopen" step for the user.
-            if (window.mfengine.restart) window.mfengine.restart().catch(function () {});
+            fix.textContent = 'Done';
           } else if (st.state === 'failed') {
             stopPolling();
             fix.disabled = false;
             fix.textContent = 'Retry';
-            body.textContent = 'The engine update didn\\u2019t finish (exit ' + st.code + '). '
-              + 'The log above has the details.';
+            if (!st.message) {
+              body.textContent = 'The engine update didn\\u2019t finish (exit ' + st.code + '). '
+                + 'The log above has the details.';
+            }
           }
         }).catch(function () {});
       }, 1000);
@@ -1731,11 +2049,27 @@ function scheduleRetry() {
   retryDelay = Math.min(RETRY_MS, retryDelay * 2)
 }
 
-// The app URL to load: carries `?setup=install` while the first-run
-// dependency step is still owed (see firstRunDeps).
+// The first-launch marker: written once the app page has loaded, so only the
+// launch that installed the engine gets the `?setup=1` hand-off (the web UI
+// opens its setup checklist on it) and every later launch opens `/` as before.
+const firstLaunchFile = () => path.join(app.getPath('userData'), 'first-launch.json')
+let firstLaunchDone = null   // lazily read; null = not looked yet
+function isFirstLaunchDone() {
+  if (firstLaunchDone == null) firstLaunchDone = fl.readFirstLaunchDone(fs, firstLaunchFile())
+  return firstLaunchDone
+}
+function markFirstLaunchDone() {
+  if (isFirstLaunchDone()) return
+  firstLaunchDone = true
+  if (fl.writeFirstLaunchDone(fs, firstLaunchFile())) console.log('[mindflock] first launch done')
+}
+
+// The app URL to load: carries `?setup=1` while the first-run hand-off is
+// still owed (see firstRunDeps) and this launch never reached the app before.
 function appUrl(extra) {
   const u = new URL(APP_URL)
-  if (firstRunDeps) u.searchParams.set('setup', 'install')
+  const q = fl.setupQuery(firstRunDeps, isFirstLaunchDone())
+  for (const k of Object.keys(q)) u.searchParams.set(k, q[k])
   for (const k of Object.keys(extra || {})) u.searchParams.set(k, extra[k])
   return u.toString()
 }
@@ -1819,6 +2153,9 @@ function createWindow() {
     // reset the cold-start backoff so the next outage probes fast again.
     if (win.webContents.getURL().startsWith(APP_URL)) {
       retryDelay = RETRY_MIN_MS
+      // The server answered: whatever our spawned bootstrap does from here on
+      // (exiting because another server owns the port, say) is not a crash.
+      serverStart.answered = true
       // The app page loading IS the proof the server is up, so this is the
       // cheapest reliable moment to compare engine and shell versions.
       checkEngineVersion().catch(() => {})
@@ -1828,7 +2165,10 @@ function createWindow() {
       // The server's own sign-in page (access-token gate on) -> sign in.
       autoSignIn().catch(() => {})
       // The app itself (not its sign-in page) took the first-run hand-off.
-      if (win.webContents.getTitle() !== SIGN_IN_TITLE) firstRunDeps = false
+      if (win.webContents.getTitle() !== SIGN_IN_TITLE) {
+        firstRunDeps = false
+        markFirstLaunchDone()
+      }
     }
     // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
     console.log('[mindflock] loaded:', win.webContents.getURL().split('?')[0])

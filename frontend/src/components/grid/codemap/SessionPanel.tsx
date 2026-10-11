@@ -23,6 +23,7 @@ import {
 import { relTime } from "../../../lib/format";
 import { ExemptPrompt } from "./AddZoneRow";
 import { zoneLocked, zoneWhere } from "../../../lib/codetree/zones";
+import { isShared, sharedWhere } from "./sharedZone";
 
 export interface PanelModel {
   live: CodeMapLive | null;
@@ -447,7 +448,7 @@ export function SessionPanel({ m, a }: { m: PanelModel; a: PanelActions }) {
                   </span>
                   <span className={"cm-row-sub" + (n === 0 ? " cm-warn-text" : "")}>
                     {z.name ? z.pattern + " · " : ""}
-                    {zoneWhere(z)}
+                    {isShared(z) ? sharedWhere(z) : zoneWhere(z)}
                     {z.waived ? " · allowed here" : ""} ·{" "}
                     {n === 0
                       ? g

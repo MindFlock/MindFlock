@@ -92,7 +92,7 @@ class TestPreview:
         assert body["lane_default"] in ("leave", "commit", "push", "pr", "merge")
         assert body["warnings"] == [
             "PAY-412 already has a session (jira-PAY-412) — it will be added to "
-            "the group, not restarted"
+            "the team run, not restarted"
         ]
 
     def test_text_must_be_a_string(self, env):
@@ -273,7 +273,7 @@ class TestControl:
         other = _create(env, n=1).json()["run"]["id"]
         r = client.post("/api/runs/%s/adopt" % other, json={"title": "web-dark-mode"})
         assert r.status_code == 409
-        assert r.json()["error"] == "branch already in group Q4 payments"
+        assert r.json()["error"] == "branch already in team run Q4 payments"
 
     def test_split_and_release_routes_answer_honestly(self, env):
         rid = _create(env, n=1).json()["run"]["id"]

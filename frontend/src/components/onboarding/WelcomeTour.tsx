@@ -57,9 +57,9 @@ const SLIDES: Slide[] = [
     body: (
       <>
         When an agent stops, its pane's button offers the next step —{" "}
-        <b>Commit…</b>, <b>Push</b>, <b>Make PR</b>. <b>⏩ Fast-track</b> takes
+        <b>Commit…</b>, <b>Push</b>, <b>Open PR</b>. <b>⏩ Fast-track</b> takes
         those steps for you, as far as you choose, and can ask first. Anything
-        waiting on you — a question or an approval — shows under the{" "}
+        that needs you — a question or an approval — shows under the{" "}
         <b>bell</b>.
       </>
     ),

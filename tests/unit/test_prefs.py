@@ -186,10 +186,13 @@ def test_a_prefs_save_tells_every_open_browser(client):
 
 def test_moving_the_automation_reconciles_the_pipeline(client, monkeypatch):
     """github.automation_device gates both GitHub halves, so moving them to
-    this device (Run here in Settings → Devices) must reach the
+    this device (Run here in Settings → Your devices) must reach the
     pipeline the way the on/off switches do."""
-    from backend.web.core import events, fleet, remote
+    import threading
 
+    from backend.web.core import events, fleet, remote, settings_hooks
+
+    monkeypatch.setattr(settings_hooks, "PIPELINE_DEBOUNCE", 0.05)
     monkeypatch.setattr(fleet, "in_fleet", lambda: True)
     monkeypatch.setattr(
         fleet, "live_members", lambda: {"laptop": {"host": "L"}, "mac": {"host": "M"}}
@@ -200,9 +203,48 @@ def test_moving_the_automation_reconciles_the_pipeline(client, monkeypatch):
     try:
         client.post("/api/settings", json={"github": {"automation_device": "mac"}})
         client.post("/api/settings", json={"github": {"automation_device": "mac"}})
+        threading.Event().wait(0.3)  # the debounced reconcile fires once
     finally:
         unsubscribe()
     toggles = [e for e in seen if e["event"].endswith("settings.github_toggled")]
     assert len(toggles) == 1  # moved once; the same choice again is no flip
+    assert toggles[0]["data"]["changed"] == ["automation"]
     store.invalidate()
     assert store.load_settings().github.automation_device == "mac"
+
+
+def test_map_tour_is_a_synced_bool(tmp_path):
+    """The Map tab's tour, once seen on one device, stays seen on the others:
+    it is a prefs field (settings sync carries it), not a per-browser flag."""
+    from backend.config.settings import PrefsSettings
+    from backend.web.core import settings_sync
+
+    assert PrefsSettings.from_dict({"map_tour": True}).to_dict() == {"map_tour": True}
+    assert PrefsSettings.from_dict({"map_tour": "nope"}).map_tour is None
+    assert "map_tour" in settings_sync.SYNCED["prefs"]
+
+
+def test_map_tour_false_survives_and_unset_is_omitted():
+    from backend.config.settings import PrefsSettings
+
+    assert PrefsSettings.from_dict({"map_tour": False}).to_dict() == {"map_tour": False}
+    assert "map_tour" not in PrefsSettings.from_dict({}).to_dict()
+
+
+def test_map_tour_over_the_prefs_route(client):
+    assert client.get("/api/prefs").json()["map_tour"] is None
+    assert client.post("/api/prefs", json={"map_tour": True}).json()["map_tour"] is True
+    store.invalidate()
+    assert store.load_settings().prefs.map_tour is True
+    assert client.post("/api/prefs", json={"map_tour": None}).json()["map_tour"] is None
+    store.invalidate()
+    assert store.load_settings().prefs.map_tour is None
+
+
+def test_map_tour_seen_on_one_device_is_seen_on_the_others(tmp_path, monkeypatch):
+    devices = Devices(tmp_path, monkeypatch)
+    devices.all_on()
+    store.update_settings(prefs={"map_tour": True})
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("prefs", "map_tour") is True

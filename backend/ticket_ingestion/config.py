@@ -1,6 +1,7 @@
 """Pipeline configuration loading."""
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,9 +33,14 @@ class GithubConfig:
     poll_interval_seconds: int
     enabled: bool
     skip_authors: list[str]
-    token: str = (
-        ""  # Optional; falls back to GH_TOKEN/GITHUB_TOKEN env, then `gh auth token`.
-    )
+    #: The merged token (Settings, else config.toml) — informational; the
+    #: resolver (:mod:`backend.ticket_ingestion.github_auth`) reads Settings
+    #: live and only uses ``toml_token`` below as its deprecated last rung.
+    token: str = ""
+    #: The RAW ``[github].token`` from config.toml, before the Settings merge.
+    #: DEPRECATED: last in the chain (Settings → env → gh → this), warned
+    #: about once at startup, ignored from the next release.
+    toml_token: str = ""
     # Multi-repo PR review: every ``owner/name`` repo to watch.
     repos: list[str] = field(default_factory=list)
     # Automated issue handling (opt-in, default off): newly opened issues in
@@ -164,6 +170,11 @@ class TicketProviderConfig:
       sits in the same state and the label is what says "MindFlock, take this
       one". Also bounds an ``"anyone"`` scope. Shortcut only; see
       :func:`~backend.ticket_ingestion.providers.base.ingest_label_list`.
+    * ``claim_label`` — optional stem of the label MindFlock puts on a ticket
+      it starts (``<stem>:working``, default ``mindflock:working``) — beside
+      assigning it to ``member_id`` — so a teammate's unpaired MindFlock sees
+      the ticket is taken; removed again when the session closes or ships.
+      See :mod:`backend.ticket_ingestion.tracker_claims`.
     * ``poll_interval_seconds`` — poll cadence.
     """
 
@@ -185,6 +196,10 @@ class TicketProviderConfig:
     #: Post a "taking this on" comment when moving into ``start_state``. See the
     #: class docstring.
     start_comment: bool = False
+    #: Stem of the label a claim writes on the ticket (``<stem>:working``);
+    #: ``""`` = ``"mindflock"``. See
+    #: :func:`~backend.ticket_ingestion.tracker_claims.claim_label`.
+    claim_label: str = ""
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -334,6 +349,23 @@ class EngineConfig:
 
 
 @dataclass
+class SourceConfigError:
+    """A ticketing source the layered loader skipped because it is missing or
+    mis-set a field its provider requires (``field``: the key, as the UI
+    names it — ``member_id``, ``api_token``, ``repo_url``…; ``message``: the
+    full list of problems, human-readable). The other sources keep running;
+    the orchestrator logs these at boot and mirrors them to the activity
+    beacon so ``/api/mindflock/status`` can name the source and field."""
+
+    source: str
+    field: str
+    message: str
+
+    def to_dict(self) -> dict:
+        return {"source": self.source, "field": self.field, "message": self.message}
+
+
+@dataclass
 class PipelineConfig:
     #: Whether the ticket-ingestion half (backfill + source poll loops) runs.
     #: The PR-review half is gated separately by ``github.enabled``; the process
@@ -372,6 +404,11 @@ class PipelineConfig:
     #: All configured ticketing sources (>=1). Multiple different providers AND
     #: multiple of the same provider (distinct ``id``/credentials) are allowed.
     ticketing_sources: list[TicketProviderConfig] = field(default_factory=list)
+    #: Sources the layered loader skipped (:class:`SourceConfigError`) — a
+    #: missing required field never stops the pipeline from booting with the
+    #: sources that are complete. Always empty for an explicit-path config,
+    #: which still raises :class:`ConfigError` for them.
+    source_errors: list[SourceConfigError] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.ticketing_sources:
@@ -717,6 +754,12 @@ def _merge_layers(raw: dict) -> dict:
     )
     if gh_issues_enabled is not None:
         github["issues_enabled"] = gh_issues_enabled
+    # Keep the raw config.toml token apart from the merged one: the resolver
+    # treats it as its deprecated LAST rung and warns about it once.
+    _raw_toml_token = github.get("token")
+    github["toml_token"] = (
+        _raw_toml_token.strip() if isinstance(_raw_toml_token, str) else ""
+    )
     _put(
         github,
         "token",
@@ -1040,6 +1083,7 @@ def _parse_source(
         ingest_labels=ingest_labels,
         start_state=start_state,
         start_comment=flag_on(src.get("start_comment")),
+        claim_label=str(src.get("claim_label", "") or "").strip(),
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),
@@ -1055,6 +1099,7 @@ def _parse_generic_config(
     config_path: Path,
     ticketing_section: dict,
     allow_no_sources: bool = False,
+    skip_invalid_sources: bool = False,
 ) -> PipelineConfig:
     """Parse the generic ``[ticketing]`` schema — one or many sources.
 
@@ -1063,6 +1108,9 @@ def _parse_generic_config(
 
     ``allow_no_sources`` (layered mode only) permits a config with no ticketing
     sources at all — the PR-review-only path — instead of erroring.
+    ``skip_invalid_sources`` (layered mode) drops a source with a missing or
+    invalid field into ``PipelineConfig.source_errors`` instead of raising, so
+    the sources that are complete (and PR review) still run.
     """
     repository = raw.get("repository", {}) or {}
     validation = raw.get("validation", {}) or {}
@@ -1078,18 +1126,33 @@ def _parse_generic_config(
     missing: list[str] = []
     type_errors: list[str] = []
     sources: list[TicketProviderConfig] = []
+    source_errors: list[SourceConfigError] = []
+    repo_url = repository.get("url") or ""
     multi = len(source_dicts) > 1
     for i, src in enumerate(source_dicts):
         cfg, problems = _parse_source(src, config_path, i if multi else None)
+        if skip_invalid_sources:
+            # The Settings-UI path: a source still being filled in (a Shortcut
+            # card without its member id yet, a rotated-away token) must not
+            # take the whole pipeline down — PR review and the other sources
+            # keep running, and the status names what is missing. A source
+            # with no repo to provision into is skipped the same way.
+            if not problems and not repo_url and not (cfg.repo_url or "").strip():
+                problems = [
+                    "%s.repo_url (the repo this source's tickets are worked in "
+                    "— or a global repository.url)" % _source_label(i, multi)
+                ]
+            if problems:
+                source_errors.append(_source_error(src, cfg, problems))
+                continue
         type_errors.extend(problems)
         sources.append(cfg)
 
     # There's no longer a required global default repo: a source clones the repo
     # named in its own ``repo_url``. Only error when NOTHING can supply a repo —
     # neither a global ``repository.url`` nor any per-source ``repo_url``.
-    repo_url = repository.get("url") or ""
     sources_have_repo = any((s.repo_url or "").strip() for s in sources)
-    if source_dicts and not repo_url and not sources_have_repo:
+    if sources and not repo_url and not sources_have_repo:
         missing.append(
             "repository.url (or a per-source repo_url on each ticketing source)"
         )
@@ -1124,11 +1187,15 @@ def _parse_generic_config(
     # No ticketing sources (PR-review-only layered config): tickets default off
     # and there's no primary source to read a poll interval from.
     primary = sources[0] if sources else None
-    tickets_default = bool(source_dicts)
+    tickets_default = bool(sources)
     poll_interval = int(primary.poll_interval_seconds) if primary else 60
 
     return PipelineConfig(
-        tickets_enabled=bool(raw.get("tickets_enabled", tickets_default)),
+        # Tickets can only run with at least one usable source: with every
+        # source skipped (or none configured) the toggle alone must not start
+        # scans against an empty default source.
+        tickets_enabled=bool(raw.get("tickets_enabled", tickets_default))
+        and bool(sources),
         repo_url=str(repo_url),
         git_transport=git_transport,
         workspace_dir=Path(workspace_dir),
@@ -1141,6 +1208,33 @@ def _parse_generic_config(
         github=github_cfg,
         engine=engine_cfg,
         ticketing_sources=sources,
+        source_errors=source_errors,
+    )
+
+
+def _source_label(idx: int, multi: bool) -> str:
+    return f"ticketing.source[{idx}]" if multi else "ticketing"
+
+
+_PROBLEM_FIELD_RE = re.compile(r"^ticketing(?:\.source\[\d+\])?\.(\w+)")
+
+
+def _source_error(
+    src: dict, cfg: TicketProviderConfig, problems: list[str]
+) -> SourceConfigError:
+    """The :class:`SourceConfigError` for a skipped source: named by its id
+    (what Intake shows), else its label, else its provider; ``field`` is the
+    first problem's key."""
+    name = (
+        str(src.get("id") or "").strip()
+        or str(src.get("label") or "").strip()
+        or cfg.provider
+    )
+    m = _PROBLEM_FIELD_RE.match(problems[0]) if problems else None
+    return SourceConfigError(
+        source=name,
+        field=m.group(1) if m else "",
+        message="; ".join(problems),
     )
 
 
@@ -1201,6 +1295,14 @@ def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:
         return None
     token_raw = github_section.get("token", "")
     token = token_raw.strip() if isinstance(token_raw, str) else ""
+    # Layered mode set ``toml_token`` apart from the Settings-merged ``token``
+    # (possibly ""); an explicit-path parse never layered, so its ``token`` IS
+    # the config.toml one.
+    if "toml_token" in github_section:
+        toml_raw = github_section.get("toml_token", "")
+        toml_token = toml_raw.strip() if isinstance(toml_raw, str) else ""
+    else:
+        toml_token = token
     return GithubConfig(
         base_branch=str(github_section.get("base_branch", "main")),
         min_age_minutes=int(github_section.get("min_age_minutes", 15)),
@@ -1208,6 +1310,7 @@ def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:
         enabled=bool(github_section.get("enabled", True)),
         skip_authors=list(github_section.get("skip_authors", []) or []),
         token=token,
+        toml_token=toml_token,
         repos=[str(r) for r in (github_section.get("repos", []) or [])],
         issues_enabled=bool(github_section.get("issues_enabled", False)),
         issue_repos=[str(r) for r in (github_section.get("issue_repos", []) or [])],
@@ -1294,4 +1397,10 @@ def _parse_config(
         # the Settings dialog and never touches ticketing. Proceed with no
         # ticketing sources — ticket ingestion simply stays off.
         return _parse_generic_config(raw, config_path, {}, allow_no_sources=True)
-    return _parse_generic_config(raw, config_path, ticketing_section)
+    return _parse_generic_config(
+        raw,
+        config_path,
+        ticketing_section,
+        allow_no_sources=layered,
+        skip_invalid_sources=layered,
+    )

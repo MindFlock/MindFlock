@@ -9,7 +9,8 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { selectSession } from "../../lib/sessionActions";
+import { redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
+import { errorPop } from "../../lib/errorPop";
 import { pickFastTrack, type Lane } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
 import { FastTrackChoice } from "./FastTrackChoice";
@@ -161,8 +162,8 @@ export function CommitDialog() {
     // "Commit & push" did nothing for 30s and then committed whatever the agent
     // had written in the meantime, under the message typed before all of it. You
     // pressed Commit; the commit has to happen.
-    try {
-      await instApi(title, "/commit", { json: { message: m } });
+    const commit = async (proceed: boolean) => {
+      await instApi(title, "/commit", { json: { message: m, ...(proceed ? { proceed_anyway: true } : {}) } });
       // Then fast-track the rest — the ⏩ button flips at once and says so.
       if (chosen.lane !== "leave")
         await pickFastTrack(
@@ -172,9 +173,23 @@ export function CommitDialog() {
           chosen.askFirst,
           { message: m }
         );
+    };
+    try {
+      await commit(false);
     } catch (err) {
-      // A toast, never a native alert dialog: the desktop app has none.
-      toast("Commit failed: " + errMsg(err), { duration: 7000 });
+      const rz = redZoneBreaches(err);
+      if (rz) {
+        // Your own window: zones WARN at the commit, they never block.
+        warnZones(title, rz, () =>
+          void commit(true).then(
+            () => void freshStage(title),
+            (e) => toast("Commit failed: " + errMsg(e), { duration: 7000 })
+          )
+        );
+      } else {
+        // A toast, never a native alert dialog: the desktop app has none.
+        toast("Commit failed: " + errMsg(err), { duration: 7000 });
+      }
     }
     // One fresh read so the pill flips to "pre-commit" the moment the hooks start
     // (the old 1s invalidate provably observed nothing — GET /api/instances serves
@@ -286,5 +301,34 @@ export function CommitDialog() {
         </p>
       </form>
     </div>
+  );
+}
+
+/** The commit warning a person's own window gets when the commit would take
+ * files inside a red zone (or outside a green one) — the push gate's breach
+ * card, worded as a warning, with "Commit anyway". Inline DOM card, never
+ * a native dialog (the desktop app has none). */
+export function warnZones(title: string, breaches: RedZoneBreachHit[], proceed: () => void): void {
+  const n = breaches.length;
+  const green = breaches.every((b) => b.kind === "green");
+  const shown = breaches
+    .slice(0, 5)
+    .map((b) => b.path + (b.pattern && b.pattern !== b.path && !green ? " (" + b.pattern + ")" : ""))
+    .join(" · ");
+  errorPop(
+    green ? "Commit — changes outside the green zone" : "Commit — red zone changed",
+    `${n} file${n === 1 ? "" : "s"} ${green ? "outside the scope" : "in a keep-out zone"}: ${shown}` +
+      (n > 5 ? ` · and ${n - 5} more` : "") +
+      ". The zone is your team's rule for this repo; agents are stopped there. Commit anyway, or leave these out first.",
+    [
+      {
+        label: "Open map",
+        run: () => {
+          selectSession(title);
+          useUi.getState().setLastTab(title, "map");
+        },
+      },
+      { label: "Commit anyway", primary: true, title: "Commit these changes despite the zone", run: proceed },
+    ]
   );
 }

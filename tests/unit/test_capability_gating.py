@@ -327,7 +327,7 @@ def test_index_has_caps_gates_and_tags():
     assert '"tailscale"' in client.get("/app.js").text
     assert '"data-caps-need"' in client.get("/app.js").text
     assert '"git ticketing"' in client.get("/app.js").text
-    assert '"data-caps-gate": "tailscale"' in client.get("/app.js").text
+    # (Your phone no longer hides behind a Tailscale gate: it shows the install step.)
     assert '"data-caps-gate": "git"' in client.get("/app.js").text
     assert '"data-caps-gate": "ticketing"' in client.get("/app.js").text
     # Feature entry points that vanish entirely without git.

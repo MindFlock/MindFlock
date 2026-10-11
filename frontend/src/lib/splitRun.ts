@@ -395,7 +395,7 @@ export function checkLine(run: Pick<RunDTO, "check"> & Partial<Pick<RunDTO, "mod
 }
 
 /** The release buttons a ready group offers, labelled from the group's OWN
- * lane — the primary is the lane the user chose. "Open the PR" never merges
+ * lane — the primary is the lane the user chose. "Open PR" never merges
  * (the server caps it at a PR); only the explicit "merge when checks pass"
  * does; a push group pushes its branch and opens nothing. */
 export function releaseChoices(
@@ -410,22 +410,22 @@ export function releaseChoices(
         merge: false,
         label: "Push to the local folder",
         primary: true,
-        title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened",
+        title: "Push the team run's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened",
       },
     ];
   if (lane === "push")
-    return [{ merge: false, label: "Push the branch", primary: true, title: "Push the group's branch — no PR is opened" }];
+    return [{ merge: false, label: "Push the branch", primary: true, title: "Push the team run's branch — no PR is opened" }];
   const pr = {
     merge: false,
-    label: lane === "merge" ? "Open the PR only" : "Open the PR",
+    label: lane === "merge" ? "Open PR only" : "Open PR",
     primary: lane !== "merge",
-    title: "Open the group's one PR — it is not merged",
+    title: "Open the team run's one PR — it is not merged",
   };
   const merge = {
     merge: true,
-    label: lane === "merge" ? "Open the PR, merge when checks pass" : "Open it, merge when checks pass",
+    label: lane === "merge" ? "Open PR, merge when checks pass" : "Open it, merge when checks pass",
     primary: lane === "merge",
-    title: "Open the group's one PR and merge it once its checks pass",
+    title: "Open the team run's one PR and merge it once its checks pass",
   };
   return lane === "merge" ? [merge, pr] : [pr, merge];
 }
@@ -462,7 +462,7 @@ export function releaseOutcome(run: RunDTO): {
       text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
       cls: "ok",
       url: r.pr_url,
-      link: "Open the PR ↗",
+      link: "View PR ↗",
     };
   }
   // Pushed into a folder on this machine: say where, and that no PR exists —
@@ -508,7 +508,7 @@ export function releaseOutcome(run: RunDTO): {
       text:
         "All merged into " +
         (run.lead?.branch || "the lead's branch") +
-        " — nothing pushed (this group is fast-tracked to " +
+        " — nothing pushed (this team run is fast-tracked to " +
         (lane === "commit" ? "Commit" : "Off") +
         ")",
       cls: "ok",

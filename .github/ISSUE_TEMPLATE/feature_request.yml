@@ -1,0 +1,58 @@
+name: Feature request
+description: Something MindFlock should do — a new flow, a missing option, a provider or tracker it doesn't speak yet
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check the [README's feature list](../blob/main/README.md#features)
+        and the [CHANGELOG](../blob/main/CHANGELOG.md) — a fair amount ships
+        every week, and the thing you want may already be in the newest
+        release (`mindflock update --check` says which one you run).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The job, not the button — what you do today, where it hurts, and how often.
+      placeholder: |
+        I run three ticket sessions a day and each one …
+        Today I have to …
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like MindFlock to do instead?
+      description: Describe the behaviour you'd expect. A sketch of the UI, the CLI command, or the setting is welcome but not needed.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of MindFlock?
+      multiple: true
+      options:
+        - Sessions / terminal grid / Diff
+        - Ticket, PR-review or issue ingestion (Intake)
+        - Guided git workflow / fast-track / team runs
+        - Agent CLIs and providers (Claude Code, Codex, aider, …) / local models
+        - MindFlock MCP / agent-to-agent
+        - Your devices / settings sync / remote control / phone UI
+        - Peer links (work with someone)
+        - Code Map / zones / Verify
+        - Desktop app (Electron) / install / update
+        - CLI
+        - Extensions / addons / API
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "e.g. Ubuntu 24.04 / macOS 15 arm64 / Windows 11 + WSL2 Ubuntu"
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds or alternatives you've tried
+      description: Another tool that does it, a setting that nearly does, a script you run by hand.

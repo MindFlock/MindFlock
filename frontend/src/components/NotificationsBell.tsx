@@ -30,6 +30,7 @@ import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
 import { needsAttention } from "./outbox/outbox";
+import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
 import { WaitingRow } from "./outbox/WaitingRow";
 import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
@@ -69,9 +70,9 @@ interface Notif {
   dedupe?: string;
   /** The notify rule that gated it ("run_needs_you" rows point at a needs row). */
   rule?: string;
-  /** A device.* row ("Your devices"): named "Devices", opens Settings → Devices. */
+  /** A device.* row ("Your devices"): named "Devices", opens Settings → Your devices. */
   device?: boolean;
-  /** A peer.* row (another person): named "Collaborate", opens Work with someone. */
+  /** A peer.* row (another person): named "Collaborate", opens People. */
   peer?: boolean;
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
@@ -89,7 +90,7 @@ const STAGE_WORDS: Record<string, string> = {
   pushed: "pushed",
   pr: "opened a PR",
   merged: "merged",
-  interrupt: "pre-commit failed",
+  interrupt: REASON_LABEL.precommit_failed,
   precommit: "running pre-commit hooks",
 };
 
@@ -128,9 +129,16 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       // and then nothing. Surface the error so the failure is visible.
       return { text: "couldn't start — " + (d.error || "failed"), cls: "n-warn" };
     case "session.deleted":
-      return { text: "deleted", cls: "n-muted" };
+      // One event for both ends: `closed` keeps the worktree (reopen from
+      // Recently closed), anything else removed it. Say which one happened.
+      return { text: d.closed && !d.wiped ? "closed" : "deleted", cls: "n-muted" };
     case "session.activity_changed":
-      if (env.new === "clarify") return { text: "needs your input", cls: "n-warn" };
+      // The session state's own word (lib/sessionState) — the same one its
+      // chip and its toast use. Gated by the needs_input switch for the
+      // toast/badge only: the bell is the source of truth and keeps the row.
+      if (env.new === "clarify") return { text: REASON_LABEL.question, cls: "n-warn" };
+      // An agent whose terminal died: the row's chip offers Restart.
+      if (env.new === "offline") return { text: STATE_LABEL.offline, cls: "n-warn" };
       // idle / working / offline are chip colours, not news. `new === "idle"`
       // used to render "finished — now idle" here, with no rule gate and no
       // dedupe — so it logged a row at the end of every assistant turn, between
@@ -155,11 +163,11 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "session.setup_finished":
       return env.new === "ok"
         ? { text: "worktree setup finished", cls: "n-done" }
-        : { text: "worktree setup FAILED — prompts held", cls: "n-warn" };
+        : { text: REASON_LABEL.setup_failed + " — prompts held", cls: "n-warn" };
     case "session.check_finished":
       return env.new === "ok"
         ? { text: "checks passed ✓", cls: "n-done" }
-        : { text: "checks failed ✗ (exit " + ((d as { rc?: number }).rc ?? "?") + ")", cls: "n-warn" };
+        : { text: REASON_LABEL.checks_failing + " (exit " + ((d as { rc?: number }).rc ?? "?") + ")", cls: "n-warn" };
     // Red zones (SPEC §3). `detail` is the server's own sentence ("blocked 3
     // edits to config.toml"), so the bell says what happened, not just that
     // something did.
@@ -182,7 +190,7 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     case "session.message":
       return messageNotif(d as MessageEventData, displayName);
     // Your devices (no session): a request to join, a join, a removal — and
-    // settings sync pausing itself, which only Settings → Devices can answer.
+    // settings sync pausing itself, which only Settings → Your devices can answer.
     case "device.join_requested":
     case "device.joined":
     case "device.removed":
@@ -423,7 +431,7 @@ export function NotificationsBell() {
             </div>
             {shownAttn.length > 0 && (
               <div className="notif-attn">
-                <div className="notif-attn-head">Needs attention</div>
+                <div className="notif-attn-head">Needs you</div>
                 {shownAttn.map((it) => {
                   const flashing = flash !== null && (flash === it.title || flash === it.key);
                   if (it.waiting) {
@@ -527,7 +535,7 @@ export function NotificationsBell() {
                           showGroup(n.run);
                         }
                       } else if (n.device) {
-                        // Approve / Deny, and the roster, are in Settings → Devices.
+                        // Approve / Deny, and the roster, are in Settings → Your devices.
                         setOpen(false);
                         useUi.getState().openDialogFor("settings", "devices");
                       } else if (n.peer) {
@@ -554,7 +562,7 @@ export function NotificationsBell() {
                         : n.settings && !n.session
                         ? "Updates"
                         : n.run && !n.session
-                        ? runLookups.name(n.run) || "Group"
+                        ? runLookups.name(n.run) || "Team run"
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
                           (n.session ? windowName(n.session) : "—")}
                     </span>

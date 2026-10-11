@@ -609,6 +609,11 @@ def recent_rows(sizes: bool = False, days: float = STALE_WORKTREE_DAYS) -> dict:
                 "provisioned": bool(e.get("provisioned")),
                 "exists": exists,
                 "closed_at": e.get("closed_at"),
+                # Set when the session left without the user closing it (the
+                # engine dropped it at load: "workspace missing").
+                "reason": e.get("reason") or "",
+                "branch_exists": e.get("branch_exists"),
+                "wiped": bool(e.get("wiped")),
                 "mtime": (
                     d.get("mtime") if d else (_stat_mtime(folder) if exists else None)
                 ),

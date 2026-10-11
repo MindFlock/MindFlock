@@ -316,7 +316,7 @@ describe("the single-session Options fold", () => {
     // A closed fold must still say what a start does: New's first page is
     // one box, and the summary is the only trace of the choice under it.
     expect(optionsSummary("leave", false)).toBe("Options · Fast-track: Off");
-    expect(optionsSummary("pr", false)).toBe("Options · Fast-track: Open a PR");
+    expect(optionsSummary("pr", false)).toBe("Options · Fast-track: Open PR");
     expect(optionsSummary("commit", true)).toBe("Options · Fast-track: Commit, asks first");
   });
 });

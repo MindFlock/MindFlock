@@ -1,4 +1,4 @@
-/** Opening Settings → Devices aimed at something, and the one "Paste a code"
+/** Opening Settings → Your devices aimed at something, and the one "Paste a code"
  * router. Kept apart from lib/fleet.ts, which stays free of the store and
  * of fetches so its wording tests run without either.
  *
@@ -8,7 +8,7 @@
  *    box (the person still presses Join: it says whose settings win first).
  *  - routePastedCode(text) — any code, wherever it was pasted: one of your
  *    devices' codes goes to Devices, someone's mfp1:/mfp2: invite is joined
- *    as a peer link (lib/peer.ts joinPeerCode) and Work with someone opens
+ *    as a peer link (lib/peer.ts joinPeerCode) and People opens
  *    on it, with the safety number to compare. */
 
 import { api } from "../api/client";
@@ -48,7 +48,7 @@ export function openDevicesFor(focus: DevicesFocus = {}): void {
 }
 
 /** Join someone's peer-link invite right away, then show the link (and the
- * safety number to compare) on Work with someone. A failure reopens the
+ * safety number to compare) on People. A failure reopens the
  * join box there, prefilled, with the server's sentence. */
 export async function joinPeerInvite(code: string): Promise<boolean> {
   toast("Joining…", { duration: 4000 });

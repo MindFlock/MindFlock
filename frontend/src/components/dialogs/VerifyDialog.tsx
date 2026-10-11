@@ -234,7 +234,7 @@ const CHECK_LABEL: Record<CheckState, string> = {
   pass: "Passed",
   fail: "Failed",
   cant: "You couldn't check this",
-  yours: "Waiting on you",
+  yours: "Needs you",
   pending: "Not checked yet",
 };
 

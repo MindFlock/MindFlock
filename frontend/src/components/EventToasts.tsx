@@ -1,10 +1,11 @@
 /** E2 — transition notifications + favicon/title badges (port of section 25).
  * Headless: renders nothing; subscribes to the client event bus, dedupes
- * toasts per session+state (30s), tracks the clarify set for the "● (n)"
- * title badge and the canvas favicon dot. */
+ * toasts per session+state (30s), tracks the sessions that need you (ONE
+ * state per session, lib/sessionState) for the "● (n)" title badge and the
+ * canvas favicon dot. */
 
 import { useEffect } from "react";
-import type { Instance } from "../api/types";
+import type { Instance, Person } from "../api/types";
 import {
   patchInstance,
   queryClient,
@@ -14,12 +15,8 @@ import {
 import { displayName, useUi } from "../state/store";
 import { slotNumber } from "../lib/windowName";
 import { fmtUsd } from "../lib/format";
-import {
-  dropActivity,
-  effectiveActivity,
-  followAutopilot,
-  forceActivity,
-} from "../lib/stage";
+import { dropActivity, followAutopilot, forceActivity } from "../lib/stage";
+import { deriveSessionState, notifyRuleFor, type SessionState } from "../lib/sessionState";
 import { selectSession } from "../lib/sessionActions";
 import { toast, type ToastOpts } from "../lib/toast";
 import { messageToastText, type MessageEventData } from "../lib/agentMessages";
@@ -31,20 +28,31 @@ import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
+import { reviveSession } from "../lib/revive";
+import { lostKeyboardNote } from "../lib/presence";
 
 const BASE_TITLE = document.title || "MindFlock";
-const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
+// Sessions that need you (lib/sessionState `inBell`, behind their Settings →
+// Notifications switch) that nobody has looked at since they started to.
+const attentionUnseen = new Set<string>();
+// What the badge counted last time, so a session can be told apart as NEWLY
+// needing you (→ unseen) from one that has needed you all along.
+let attentionWas = new Set<string>();
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
 }
 
-function clarifySet(): Set<string> {
-  return new Set(
-    instances()
-      .filter((i) => effectiveActivity(i) === "clarify")
-      .map((i) => i.title)
-  );
+/** The sessions whose state is in the bell AND whose notify switch is on:
+ * the bell shows every `inBell` state regardless (it is the source of truth);
+ * the toast and this badge obey the switch. */
+export function badgeWanted(rows: Instance[] = instances()): Set<string> {
+  const out = new Set<string>();
+  for (const i of rows) {
+    const ss = deriveSessionState(i);
+    if (ss.inBell && ruleOn(notifyRuleFor(ss))) out.add(i.title);
+  }
+  return out;
 }
 
 // --- Canvas favicon (background tabs can't see the title badge) --------------
@@ -119,10 +127,14 @@ function updateFavicon(n: number) {
 }
 
 export function updateTitleBadge() {
-  const clarify = clarifySet();
-  // Sessions that left clarify are handled by definition; re-arm them.
-  for (const t of [...clarifyUnseen]) if (!clarify.has(t)) clarifyUnseen.delete(t);
-  const n = clarifyUnseen.size;
+  const want = badgeWanted();
+  // A session that stopped needing you is handled by definition; re-arm it.
+  for (const t of [...attentionUnseen]) if (!want.has(t)) attentionUnseen.delete(t);
+  // One that STARTED needing you is unseen — unless you are looking at it.
+  const looking = document.hasFocus() ? useUi.getState().focused : "";
+  for (const t of want) if (!attentionWas.has(t) && t !== looking) attentionUnseen.add(t);
+  attentionWas = want;
+  const n = attentionUnseen.size;
   document.title = n ? "● (" + n + ") " + BASE_TITLE : BASE_TITLE;
   updateFavicon(n);
 }
@@ -133,22 +145,21 @@ export function redrawFavicon() {
   updateTitleBadge();
 }
 
-function markClarify(title: string) {
-  // Don't badge the session you're already looking at.
-  if (document.hasFocus() && useUi.getState().focused === title) return;
-  clarifyUnseen.add(title);
+function clearAttention(title?: string) {
+  if (title) attentionUnseen.delete(title);
+  else attentionUnseen.clear();
   updateTitleBadge();
 }
 
-function clearClarify(title?: string) {
-  if (title) clarifyUnseen.delete(title);
-  else clarifyUnseen.clear();
-  updateTitleBadge();
-}
-
-/** Focusing a session marks its clarify as handled (selectSession hooks in). */
+/** Focusing a session marks its attention as handled (selectSession hooks in). */
 export function markSessionSeen(title: string) {
-  if (clarifyUnseen.has(title)) clearClarify(title);
+  if (attentionUnseen.has(title)) clearAttention(title);
+}
+
+/** The toast line for a session that came to need you: its rail slot and
+ * name, then the state's own word — the one the chip and the bell use. */
+export function attentionToast(name: string, ss: SessionState, snippet?: string | null): string {
+  return name + ": " + ss.label + (snippet ? " — “" + snippet + "”" : "");
 }
 
 // Non-spammy toasts: at most one per session+state per 30s. The dedupe key is
@@ -237,7 +248,7 @@ export function EventToasts() {
     const unsubs: Array<() => void> = [];
 
     // Bringing the tab back into focus counts as "seen".
-    const onFocus = () => clearClarify();
+    const onFocus = () => clearAttention();
     window.addEventListener("focus", onFocus);
     unsubs.push(() => window.removeEventListener("focus", onFocus));
 
@@ -247,12 +258,22 @@ export function EventToasts() {
         forceActivity(env.session, env.new || "idle");
         refreshInstances();
         updateTitleBadge();
-        if (env.new === "clarify" && !isReplay(env)) {
-          markClarify(env.session);
-          const inst = instByTitle(env.session);
-          const snip = inst?.last_turn ? " — “" + inst.last_turn + "”" : "";
-          notifyOnce(env.session, "clarify", namedSlot(env.session) + " needs your input" + snip, {
+        if (isReplay(env)) return;
+        // The session state's word, behind the same Settings → Notifications
+        // switch the run toasts check (the bell keeps the row regardless).
+        const inst = instByTitle(env.session);
+        if (env.new === "clarify" && inst) {
+          const ss = deriveSessionState(inst, { activity: "clarify" });
+          if (!ruleOn(notifyRuleFor(ss))) return;
+          notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.last_turn), {
             onClick: () => selectSession(env.session),
+          });
+        } else if (env.new === "offline" && inst) {
+          const ss = deriveSessionState(inst, { activity: "offline" });
+          if (!ss.inBell || !ruleOn(notifyRuleFor(ss))) return;
+          notifyOnce(env.session, "offline", attentionToast(namedSlot(env.session), ss) + " — click to restart", {
+            onClick: () => void reviveSession(env.session),
+            duration: 8000,
           });
         }
       })
@@ -260,7 +281,9 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.setup_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "setupfail", "worktree setup failed on " + namedSlot(env.session) + " — prompts held", {
+        const ss = deriveSessionState({ title: env.session, setup: { state: "failed" } as Instance["setup"] });
+        if (!ruleOn(notifyRuleFor(ss))) return;
+        notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + " — prompts held", {
           onClick: () => selectSession(env.session),
         });
       })
@@ -268,9 +291,25 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.check_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), {
+        const ss = deriveSessionState({ title: env.session, check: { state: "failed" } as Instance["check"] });
+        if (!ruleOn(notifyRuleFor(ss))) return;
+        notifyOnce(env.session, "checkfail", attentionToast(namedSlot(env.session), ss), {
           onClick: () => selectSession(env.session),
         });
+      })
+    );
+    unsubs.push(
+      // Presence (lib/presence): the rail dots and the pane's drive control
+      // follow the push, not the next poll — and the person who just LOST the
+      // keyboard to someone else is told so.
+      ev.subscribe("session.presence_changed", () => refreshInstances()),
+      ev.subscribe("session.driver_changed", (env) => {
+        refreshInstances();
+        if (isReplay(env)) return;
+        const me = queryClient.getQueryData<Person>(["person"])?.id || "";
+        const text = lostKeyboardNote(env, me, namedSlot(env.session));
+        if (!text) return;
+        notifyOnce(env.session, "driver", text, { onClick: () => selectSession(env.session) });
       })
     );
     unsubs.push(
@@ -344,7 +383,9 @@ export function EventToasts() {
         if (isReplay(env)) return; // toast-only subscriber — skip stale history
         const title = env.session;
         if (env.new === "interrupt") {
-          notifyOnce(title, "interrupt", "pre-commit failed on " + displayName(title), {
+          const ss = deriveSessionState({ title, stage: "interrupt", activity: "idle" }, { activity: "idle" });
+          if (!ruleOn(notifyRuleFor(ss))) return;
+          notifyOnce(title, "interrupt", attentionToast(namedSlot(title), ss), {
             onClick: () => selectSession(title),
           });
         }
@@ -451,7 +492,7 @@ export function EventToasts() {
       );
     }
     // Your devices: someone asking to join is the one that needs you (the
-    // click opens Settings → Devices, where Approve is — after comparing the
+    // click opens Settings → Your devices, where Approve is — after comparing the
     // code both screens show); a join is news; settings sync pausing itself
     // stops all syncing until it's answered there. Never for a replayed
     // backlog: a request from an hour ago has expired, and the bell keeps the
@@ -476,7 +517,7 @@ export function EventToasts() {
     }
     // Another person (peer links): someone you invited arrived (compare the
     // safety number), unlinked you, left a message where no shared session
-    // takes it, or your relay moved. The click opens Work with someone.
+    // takes it, or your relay moved. The click opens People.
     for (const name of ["peer.link_added", "peer.link_removed", "peer.message", "peer.relay_changed"]) {
       unsubs.push(
         ev.subscribe(name, (env) => {
@@ -515,7 +556,7 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.deleted", (env) => {
         dropActivity(env.session);
-        clearClarify(env.session);
+        clearAttention(env.session);
       })
     );
     unsubs.push(

@@ -5,8 +5,9 @@ needs nothing pasted into MindFlock — so the routes still reach for it first.
 But it is OPTIONAL: a contributor whose git config uses SSH remotes and who
 never installed ``gh`` must still be able to press "Make PR". This module is
 the middle rung of that ladder: plain GitHub REST, authenticated with whatever
-token :mod:`backend.ticket_ingestion.github_auth` can resolve (config.toml →
-Settings → ``$GH_TOKEN``/``$GITHUB_TOKEN`` → ``gh auth token``). Below it sits
+token the one GitHub chain resolves (:mod:`backend.web.core.github_auth`:
+Settings → ``$GH_TOKEN``/``$GITHUB_TOKEN`` → ``gh auth token`` → config.toml,
+deprecated). Below it sits
 a browser fallback in the routes, which needs no credentials at all.
 
 Transport-independence is the point. The repo is resolved from the workspace's
@@ -105,8 +106,8 @@ def _github_config():
 
     The web UI's PR buttons must work on a machine that never configured
     ticket ingestion, so a missing/blank section is normal rather than an
-    error: the bare config resolves ``token=""`` and the shared resolver then
-    walks Settings → env → ``gh auth token`` exactly as it does elsewhere.
+    error: the bare config carries no config.toml token and the shared
+    resolver walks Settings → env → ``gh auth token`` exactly as elsewhere.
     """
     from backend.ticket_ingestion.config import GithubConfig
 
@@ -135,7 +136,7 @@ async def api_token() -> str:
     browser fallback is next), so it is folded into an empty string.
 
     Public because it is the web layer's one answer to "what token do we call
-    GitHub with": config.toml → Settings → env → ``gh auth token``. Anything
+    GitHub with": Settings → env → ``gh auth token`` → config.toml. Anything
     else in ``backend/web`` that talks to api.github.com calls this rather than
     growing its own copy of the chain.
     """

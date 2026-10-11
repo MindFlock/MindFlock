@@ -200,7 +200,7 @@ class TestQueue:
             assert rec["depth"] == "pr" and rec["lane"] == "pr"
             assert rec["source"] == "run"
             assert t["incarnation"] > 0
-        assert 'MindFlock group "Q4"' in env.created[0]["prompt"]
+        assert 'MindFlock team run "Q4"' in env.created[0]["prompt"]
 
     def test_a_second_pass_sees_them_working_and_starts_nothing_more(self, env):
         rid = _make(env, n=5, concurrency=3)
@@ -620,7 +620,8 @@ class TestOperations:
         with pytest.raises(drv.RunError) as err:
             drv.adopt(b, "foo-copy")
         assert (
-            err.value.status == 409 and "branch already in group" in err.value.message
+            err.value.status == 409
+            and "branch already in team run" in err.value.message
         )
         assert ap.get("foo-copy") is None  # the copy is never armed
 
@@ -638,7 +639,7 @@ class TestOperations:
             )
         )
         assert run["tasks"][0]["state"] == "working"
-        assert "added to the group, not restarted" in warnings[0]
+        assert "added to the team run, not restarted" in warnings[0]
         assert ap.get("sc-3")["lane"] == "commit"
         _step(run["id"])
         assert env.launched == []

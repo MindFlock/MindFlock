@@ -350,7 +350,8 @@ def put(
 
 
 def delete(base: str, path: str, timeout: float = REQUEST_TIMEOUT_S) -> Any:
-    """DELETE round-trip (used by ``mindflock rm`` → DELETE /api/instances/…)."""
+    """DELETE round-trip (DELETE /api/instances/{title} removes a session, its
+    worktree and branch; ``mindflock rm`` uses /close and /cleanup instead)."""
     return _request(base + path, None, timeout, method="DELETE")
 
 

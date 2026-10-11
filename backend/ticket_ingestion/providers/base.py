@@ -265,23 +265,27 @@ def has_ingest_label(labels, wanted) -> bool:
     return any((name or "").casefold() in want for name in labels or [])
 
 
-#: Providers that can search by something other than the assignee. Asana is
-#: absent on purpose: its task list endpoint requires an assignee (paired with a
-#: workspace) or a project scope, so "anyone" has nothing to stand on there.
-ANY_ASSIGNEE_PROVIDERS = frozenset({"shortcut", "jira", "linear", "github_issues"})
+#: Providers that can search by something other than the assignee. Asana's
+#: task list endpoint requires an assignee (paired with a workspace) OR a
+#: section scope — so "anyone" stands on the ingest sections there, exactly the
+#: way it stands on the ingest states for the three trackers with a workflow.
+ANY_ASSIGNEE_PROVIDERS = frozenset(
+    {"shortcut", "jira", "linear", "github_issues", "asana"}
+)
 
 #: Providers with a workflow-state model the pipeline can WRITE to — the ones
 #: that can be asked to move a ticket when its session starts (``start_state``).
-#: Same three that offer :meth:`TicketProvider.list_states`; GitHub Issues and
-#: Asana have nothing to move a ticket to.
-STATE_SETTING_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+#: Same four that offer :meth:`TicketProvider.list_states` (Asana's "states"
+#: are the sections of the workspace's projects); GitHub Issues has nothing to
+#: move a ticket to.
+STATE_SETTING_PROVIDERS = frozenset({"shortcut", "jira", "linear", "asana"})
 
 #: Of those, the ones whose search is bounded by ``workflow_state``. Dropping the
 #: assignee here without an ingest state selected would ask the tracker for every
 #: ticket in the organization, so the scope quietly stays "mine" until one is
 #: picked. GitHub Issues is not listed — it has no workflow states, and the
 #: ``owner/repo`` it is pinned to is the bound.
-STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear", "asana"})
 
 #: Providers that can gate ingestion on a ticket label (``ingest_labels``): a
 #: story is only auto-ingested once it carries one of the configured labels.
@@ -337,7 +341,7 @@ def start_state_id(cfg) -> str:
 
     ``""`` = leave the ticket where it is, which is what every source did before
     the setting existed. Fails narrow the same way :func:`ingests_any_assignee`
-    does: a provider with no writable workflow state (GitHub Issues, Asana) can
+    does: a provider with no writable workflow state (GitHub Issues) can
     only answer ``""``, so a stale value left in a hand-edited config after a
     provider switch moves nothing rather than erroring on every launch.
     """
@@ -446,9 +450,9 @@ class TicketProvider(abc.ABC):
         the pipeline. Default: an epoch-anchored :meth:`search_assigned`
         (which may still apply the source's workflow-state filter);
         Shortcut/Jira/Linear override to drop that filter and annotate the
-        state. GitHub Issues and Asana keep the default — they expose no
-        workflow-state model at all (:meth:`list_states` is ``[]``), so their
-        listings stay open-only / not-completed-only.
+        state. GitHub Issues keeps the default — it exposes no workflow-state
+        model at all (:meth:`list_states` is ``[]``), so its listing stays
+        open-only. Asana overrides too: its sections are its states.
         """
         return await self.search_assigned(datetime(1970, 1, 1, tzinfo=timezone.utc))
 
@@ -491,8 +495,8 @@ class TicketProvider(abc.ABC):
         Also optional: ``type`` (``unstarted`` | ``started`` | ``done``), which
         lets the panel park done-type buckets behind its "+ Add bucket" menu.
 
-        Default: ``[]`` — providers without workflow states (GitHub Issues,
-        Asana) don't offer the picker. Shortcut/Jira/Linear override.
+        Default: ``[]`` — a provider without workflow states (GitHub Issues)
+        doesn't offer the picker. Shortcut/Jira/Linear/Asana override.
         """
         return []
 
@@ -510,12 +514,58 @@ class TicketProvider(abc.ABC):
         work, and the board is bookkeeping about it.
 
         Default: unsupported. Providers without a writable workflow state
-        (GitHub Issues, Asana) never reach here — ``start_state_id`` answers
+        (GitHub Issues) never reach here — ``start_state_id`` answers
         ``""`` for them — so this is the hand-edited-config backstop.
         """
         raise ProviderError(
             f"{self.label or self.name} cannot move a ticket's workflow state"
         )
+
+    # ----------------------------------------------------------------- #
+    # Writes: mirroring a claim (backend.ticket_ingestion.tracker_claims)
+    #
+    # When MindFlock starts a ticket it says so ON THE TICKET — assigned to
+    # the person, carrying the source's claim label — so a teammate whose
+    # MindFlock was never paired with this one still sees "Ethan is on this".
+    # Three small writes, each idempotent (assigning someone already assigned,
+    # adding a label already there, removing one that is gone: no-ops), and
+    # each best-effort for the caller: a refused write is a warning, never a
+    # failed launch. ``can_claim`` False keeps the defaults, which refuse.
+    # ----------------------------------------------------------------- #
+
+    #: Whether this adapter implements the claim-mirror writes below.
+    can_claim: bool = False
+
+    def _no_claim(self) -> ProviderError:
+        return ProviderError(
+            f"{self.label or self.name} tickets can't be assigned or labelled "
+            "from MindFlock"
+        )
+
+    async def claim_identity(self) -> str:
+        """Who "me" is on this tracker: the source's ``member_id`` (Shortcut
+        member UUID, Jira accountId, Linear user id, GitHub login, Asana user
+        gid), else what the token says. ``""`` when neither answers — the
+        caller then can't tell a teammate's ticket from yours and claims
+        nothing."""
+        member = (getattr(self.cfg, "member_id", "") or "").strip()
+        if member:
+            return member
+        identity, _err = await self.test_connection()
+        return str((identity or {}).get("member_id") or "").strip()
+
+    async def assign_to(self, ticket_id: str, member: str) -> None:
+        """Add ``member`` (a :meth:`claim_identity` value) to the ticket's
+        assignees. Never removes anyone."""
+        raise self._no_claim()
+
+    async def add_label(self, ticket_id: str, label: str) -> None:
+        """Put ``label`` on the ticket (created on the tracker if needed)."""
+        raise self._no_claim()
+
+    async def remove_label(self, ticket_id: str, label: str) -> None:
+        """Take ``label`` off the ticket; absent already is success."""
+        raise self._no_claim()
 
     # ----------------------------------------------------------------- #
     # Writes: merging one ticket into another

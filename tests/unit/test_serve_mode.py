@@ -1,4 +1,4 @@
-"""The persisted serve mode (Settings → Mobile tailscale toggle).
+"""The persisted serve mode (Settings → Your phone tailscale toggle).
 
 Covers the three layers of the feature:
 

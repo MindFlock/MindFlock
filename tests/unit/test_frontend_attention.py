@@ -20,10 +20,14 @@ client = TestClient(server.app)
 def test_app_js_attention_source_and_priorities():
     js = client.get("/app.js").text
     assert "function attentionItems(" in js
-    # Priorities: clarify (with snippet) > broken > checks > ready-for-PR.
-    assert 'reason: "needs your answer"' in js
-    assert "worktree setup failed" in js
-    assert "checks failing" in js
+    # Priorities: question (with snippet) > broken > checks > ready-for-PR. The
+    # words are lib/sessionState's labels — one per state, the same on the chip,
+    # in the bell and in the toast.
+    assert "function deriveSessionState(" in js
+    assert 'question: "Question"' in js
+    assert 'setup_failed: "Setup failed"' in js
+    assert 'checks_failing: "Checks failing"' in js
+    assert 'precommit_failed: "Pre-commit failed"' in js
     assert 'reason: "pushed — ready for PR"' in js
 
 
@@ -33,7 +37,7 @@ def test_app_js_attention_is_in_the_bell_not_the_sidebar():
     js = client.get("/app.js").text
     html = client.get("/").text
     # Live section pinned in the bell popover + badge/refresh wiring.
-    assert "Needs attention" in js
+    assert "Needs you" in js
     assert "notif-badge" in js
     assert "attn-item" in js  # rendered inside _renderNotifList
     assert "attentionItems(" in js
@@ -51,7 +55,9 @@ def test_app_js_attention_is_in_the_bell_not_the_sidebar():
 
 def test_app_js_clarify_notification_carries_snippet():
     js = client.get("/app.js").text
-    assert "needs your input" in js
+    # The toast is "<slot> <name>: <label> — “<last turn>”" (attentionToast).
+    assert "function attentionToast(" in js
+    assert "attentionToast(namedSlot(env.session), ss, inst.last_turn)" in js
 
 
 def test_style_css_attention_styles():
@@ -80,7 +86,9 @@ def test_mobile_js_attention_picker():
 # --------------------------------------------------------------------------- #
 def test_app_js_setup_states_in_chip():
     js = client.get("/app.js").text
-    assert '"setup ✗"' in js and '"setting up"' in js
+    # A failed setup needs you ("Setup failed"); a running one is "Starting".
+    assert '"Setup failed"' in js and 'starting: "Starting"' in js
+    assert 'state === "running"' in js
 
 
 def test_app_js_check_chip_and_actions():

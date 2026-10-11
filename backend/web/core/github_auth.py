@@ -1,16 +1,28 @@
 """Connect GitHub: one sign-in for opening PRs and for pushing.
 
-Setup's "Connect GitHub" step (and ``/api/github/*``) is built on this module.
-Before it, the GitHub token was a field folded under Intake → Pull requests →
-Advanced with no link to make one, and a fresh machine had no git identity and
-no push credential either — the first push failed in a shell pane nobody was
-looking at.
+Setup's "Connect GitHub" step (and ``/api/github/*``) is built on this module,
+and so is every other GitHub consumer: :func:`resolve_token` here is THE one
+GitHub credential resolver. The ticket pipeline
+(:mod:`backend.ticket_ingestion.github_auth`) delegates to it, so Setup's
+"connected as @x" and the PR-review / issue-handling loops can never disagree
+about which token is in use.
+
+**Precedence**, the same everywhere (documented once, in
+docs/configuration.md):
+
+1. ``github.token`` in Settings — what Connect GitHub writes;
+2. ``$GH_TOKEN``, then ``$GITHUB_TOKEN``;
+3. ``gh auth token`` (the GitHub CLI's own sign-in);
+4. ``[github].token`` in ``config.toml`` — DEPRECATED, kept last for one
+   more release so an old operator config keeps working; a one-time warning
+   says to move it to Connect GitHub.
 
 **Three ways in, best first** (no new accounts — the owner registers nothing):
 
 1. *Device flow*, when a GitHub OAuth App client id is configured
-   (``github.oauth_client_id`` or ``$MINDFLOCK_GITHUB_CLIENT_ID``): GitHub
-   hands out a short code, the person types it at github.com/login/device, and
+   (``$MINDFLOCK_GITHUB_CLIENT_ID``, ``github.oauth_client_id`` or the
+   build's :data:`DEFAULT_GITHUB_OAUTH_CLIENT_ID`): GitHub hands out a short
+   code, the person types it at github.com/login/device, and
    :func:`poll_device_flow` collects the token. Nothing to copy.
 2. *gh*, when the GitHub CLI is installed: ``gh auth login --web`` runs in a
    login terminal (the same throwaway PTY the agent sign-in uses), then
@@ -20,7 +32,8 @@ looking at.
 
 Whichever way, the token lands in ``github.token`` — the field PR review, issue
 handling and Make PR already read, and the one settings sync shares with the
-user's other devices.
+user's other devices. :func:`test_connection` is the dialog's **Test**: a real
+``GET /user`` plus one repo-access check against the first configured repo.
 
 **Pushing** is plain git over the user's own remote. :func:`push_check` asks
 the remote for real (a ``push --dry-run`` with ``GIT_TERMINAL_PROMPT=0``, so a
@@ -31,13 +44,14 @@ own credential helper for github.com when no helper is set), and
 config — each only when the person clicks for it.
 
 Every HTTP call goes through :func:`_http` (stdlib ``urllib``; tests replace
-it). Nothing here ever returns a token.
+it). Nothing here ever returns a token to a client.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -62,6 +76,20 @@ API_URL = "https://api.github.com"
 #: What the device flow asks for: push/PRs on private repos, and org repos.
 SCOPES = "repo read:org"
 CLIENT_ID_ENV = "MINDFLOCK_GITHUB_CLIENT_ID"
+#: The OAuth App client id this build ships for Setup's device flow, used when
+#: neither ``$MINDFLOCK_GITHUB_CLIENT_ID`` nor ``github.oauth_client_id`` is
+#: set. EMPTY until the owner registers the app: on github.com go to Settings
+#: → Developer settings → OAuth Apps → New OAuth App, tick **Enable Device
+#: Flow**, and paste the app's Client ID (not the secret — the device flow
+#: needs none) here. While it is empty the Connect GitHub dialog says the
+#: device flow is not configured in this build and offers gh or a token.
+DEFAULT_GITHUB_OAUTH_CLIENT_ID = ""
+#: Where an operator's ``config.toml`` token stands in the chain. Named so the
+#: deprecation warning and the UI can say the same thing.
+SOURCE_CONFIG_TOML = "config.toml"
+_logger = logging.getLogger(__name__)
+#: The config.toml deprecation is said once per process, not once per poll.
+_TOML_WARNED = False
 
 #: The ``gh`` sign-in Setup runs in a login terminal. ``setup-git`` makes gh
 #: git's credential helper for github.com, so pushing works right after.
@@ -118,14 +146,17 @@ def _settings():
 
 
 def client_id() -> str:
-    """The OAuth App client id the device flow uses, or ``""`` (no flow)."""
+    """The OAuth App client id the device flow uses, or ``""`` (no flow):
+    ``$MINDFLOCK_GITHUB_CLIENT_ID`` → ``github.oauth_client_id`` → the
+    build's :data:`DEFAULT_GITHUB_OAUTH_CLIENT_ID`."""
     env = (os.environ.get(CLIENT_ID_ENV) or "").strip()
     if env:
         return env
     try:
-        return (_settings().load_settings().github.oauth_client_id or "").strip()
+        cid = (_settings().load_settings().github.oauth_client_id or "").strip()
     except Exception:  # noqa: BLE001
-        return ""
+        cid = ""
+    return cid or DEFAULT_GITHUB_OAUTH_CLIENT_ID.strip()
 
 
 def gh_path() -> str:
@@ -145,11 +176,17 @@ def _gh_token() -> str:
     return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
-def resolve_token() -> Tuple[str, str]:
-    """``(source, token)`` in the order every GitHub consumer resolves it
-    (:mod:`backend.ticket_ingestion.github_auth`): Settings, then
-    ``$GH_TOKEN``/``$GITHUB_TOKEN``, then ``gh auth token``. ``("none", "")``
-    when there is none."""
+def resolve_token(toml_token: str = "") -> Tuple[str, str]:
+    """``(source, token)`` — THE GitHub credential chain, in the one order
+    every consumer uses: Settings (``github.token``, what Connect GitHub
+    writes) → ``$GH_TOKEN`` → ``$GITHUB_TOKEN`` → ``gh auth token`` →
+    ``toml_token`` (an operator's ``[github].token`` from ``config.toml``,
+    deprecated: last, and warned about once). ``("none", "")`` when there is
+    none. Sources: ``settings``, ``env:GH_TOKEN``, ``env:GITHUB_TOKEN``,
+    ``gh-cli``, ``config.toml``, ``none``."""
+    toml_token = (toml_token or "").strip()
+    if toml_token:
+        _warn_toml_token_once()
     try:
         tok = (_settings().load_settings().github.token or "").strip()
     except Exception:  # noqa: BLE001
@@ -162,7 +199,24 @@ def resolve_token() -> Tuple[str, str]:
     tok = _gh_token()
     if tok:
         return "gh-cli", tok
+    if toml_token:
+        return SOURCE_CONFIG_TOML, toml_token
     return "none", ""
+
+
+def _warn_toml_token_once() -> None:
+    """Say once per process that ``[github].token`` in config.toml is on its
+    way out. Not an error: the token still works, it is just last now."""
+    global _TOML_WARNED
+    if _TOML_WARNED:
+        return
+    _TOML_WARNED = True
+    _logger.warning(
+        "[github].token in config.toml is deprecated and now comes LAST "
+        "(after Settings, $GH_TOKEN/$GITHUB_TOKEN and gh): move it to "
+        "Settings → Connections → GitHub → Connect. It is ignored from the "
+        "next release."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -240,10 +294,135 @@ def fetch_user(token: str, *, fresh: bool = False) -> dict:
     return dict(out)
 
 
+def check_repo(token: str, repo: str) -> dict:
+    """Can ``token`` see ``owner/name``? One ``GET /repos/{repo}`` →
+    ``{"ok", "name", "private", "default_branch", "can_push", "error"}``.
+    A 404 reads as "no such repo, or this token cannot see it", because that
+    is also what a private repo returns."""
+    out = {
+        "ok": False,
+        "name": repo,
+        "private": False,
+        "default_branch": "",
+        "can_push": False,
+        "error": "",
+    }
+    repo = (repo or "").strip()
+    if not repo or repo.count("/") != 1 or any(c.isspace() for c in repo):
+        out["error"] = "repo must be owner/name"
+        return out
+    if not token:
+        out["error"] = "no GitHub token available"
+        return out
+    status, _hdrs, body = _http(
+        "GET",
+        API_URL + "/repos/" + repo,
+        headers={"Authorization": "Bearer " + token},
+    )
+    if status == 0:
+        out["error"] = "couldn't reach GitHub"
+    elif status == 404:
+        out["error"] = (
+            "no such repo, or this token cannot see it "
+            "(private repos need the repo scope)"
+        )
+    elif status != 200 or not isinstance(body, dict):
+        msg = str(body.get("message") or "").strip() if isinstance(body, dict) else ""
+        out["error"] = msg or "GitHub answered HTTP %s" % status
+    else:
+        perms = body.get("permissions") or {}
+        out.update(
+            ok=True,
+            name=str(body.get("full_name") or repo),
+            private=bool(body.get("private")),
+            default_branch=str(body.get("default_branch") or ""),
+            # Reviewing pushes nothing, but issue handling needs to push a
+            # branch — so "read-only" is worth saying out loud.
+            can_push=bool(perms.get("push")),
+        )
+    return out
+
+
+def first_configured_repo() -> str:
+    """The repo the connection test checks access to: the first PR-review
+    repo, else the first issue-handling repo, else ``""`` (nothing to check
+    against yet — the test then stops at ``/user``)."""
+    try:
+        gh = _settings().load_settings().github
+        repos = list(gh.repo_list()) + list(gh.issue_repo_list())
+    except Exception:  # noqa: BLE001
+        return ""
+    return repos[0] if repos else ""
+
+
+def test_connection(toml_token: str = "") -> dict:
+    """The Connect GitHub dialog's **Test**: resolve the token the one way,
+    ask GitHub who it is (a fresh ``GET /user``, never the cached answer —
+    the whole point is "does the credential I have right now work"), then
+    check it reaches the first configured repo. Never the token itself.
+
+    ``ok`` is the whole verdict: a token resolved, GitHub accepted it, and
+    the repo check passed (or there was no repo to check). ``detail`` is the
+    one-line human reading of it."""
+    source, tok = resolve_token(toml_token)
+    repo = first_configured_repo()
+    out = {
+        "ok": False,
+        "token_source": source,
+        "login": "",
+        "scopes": [],
+        "user_error": "",
+        "repo": repo,
+        "repo_ok": None,
+        "repo_error": "",
+        "can_push": False,
+        "private": False,
+        "default_branch": "",
+        "detail": "",
+    }
+    if not tok:
+        out["user_error"] = "no GitHub token available"
+        out["detail"] = "no GitHub token — connect with the button above"
+        return out
+    who = fetch_user(tok, fresh=True)
+    out["login"] = who.get("login", "")
+    out["scopes"] = who.get("scopes", [])
+    out["user_error"] = who.get("error", "")
+    if not who.get("ok"):
+        out["detail"] = "token from %s: %s" % (source, out["user_error"])
+        return out
+    bits = ["@" + out["login"] + " via " + source]
+    if repo:
+        rc = check_repo(tok, repo)
+        out["repo_ok"] = rc["ok"]
+        out["repo_error"] = rc["error"]
+        out["can_push"] = rc["can_push"]
+        out["private"] = rc["private"]
+        out["default_branch"] = rc["default_branch"]
+        if rc["ok"]:
+            bits.append(
+                "%s reachable (%s)"
+                % (rc["name"], "can push" if rc["can_push"] else "read-only")
+            )
+        else:
+            bits.append("%s: %s" % (repo, rc["error"]))
+    else:
+        bits.append("no repository configured yet to check")
+    out["ok"] = bool(repo) is False or bool(out["repo_ok"])
+    out["detail"] = " · ".join(bits)
+    return out
+
+
 def store_token(token: str) -> None:
     """Save ``token`` as ``github.token`` — what the settings save route does
     with a pasted one: every cached copy is dropped, and the edit is stamped
     for settings sync now (it travels to the user's other devices)."""
+    try:
+        from backend.web.addons import connections as _conns
+
+        _conns.forget_github_test()
+    except Exception:  # noqa: BLE001 — the dashboard is bookkeeping
+        pass
     token = (token or "").strip()
     _settings().update_settings(github={"token": token})
     try:
@@ -553,6 +732,7 @@ def status(*, check_user: bool = True) -> dict:
         "user_error": user.get("error", ""),
         "gh": {"installed": bool(gh), "authenticated": bool(gh_authed)},
         "methods": methods,
+        "device_flow_configured": bool(client_id()),
         "token_url": TOKEN_URL,
         "identity": ident,
         "identity_suggested": (

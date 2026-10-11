@@ -347,6 +347,7 @@ def _verdict(
                 "marker" if source == "marker" else (rec.get("proof") or "cpu")
             )
             rec["worked_at"] = now
+            rec["last_worked_at"] = now  # never spent: see last_worked_at()
     else:
         # Any non-working reading ends the pane layer's proven-busy run,
         # WHATEVER layer delivered it. These used to be cleared only by the
@@ -381,6 +382,20 @@ def worked_at(title: str) -> Optional[float]:
     :func:`claim_work`, which is the same question asked atomically.
     """
     val = (_ACTIVITY_CACHE.get(title) or {}).get("worked_at")
+    return float(val) if isinstance(val, (int, float)) else None
+
+
+def last_worked_at(title: str) -> Optional[float]:
+    """Epoch this session was last CORROBORATED working in its current tmux
+    incarnation, or None — :func:`worked_at`'s stamp, but never SPENT.
+
+    :func:`claim_work` clears ``worked_at`` once the turn end is announced and
+    a ``limit`` reading drops it, so it cannot answer "did the agent work after
+    time T": the prompt-queue drain asks exactly that about its last send, and
+    a short turn can start and end between two of its polls, be seen working
+    by a ticker, and be announced (spending the stamp) before the drain looks.
+    Only a relaunch (:func:`_activity_record`) resets this one."""
+    val = (_ACTIVITY_CACHE.get(title) or {}).get("last_worked_at")
     return float(val) if isinstance(val, (int, float)) else None
 
 

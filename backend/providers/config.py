@@ -3,7 +3,8 @@
 A :class:`ProviderConfig` is pure data describing how to launch + classify a
 coding CLI. The bundled aider/codex providers are just configs; a user
 can register a brand-new CLI with zero Python by dropping a TOML file in
-``~/.mindflock/providers/`` (or ``$MINDFLOCK_PROVIDERS_DIR``).
+``~/.mindflock-assistant/providers/`` (``<MINDFLOCK_ASSISTANT_DIR>/providers``,
+or ``$MINDFLOCK_PROVIDERS_DIR`` outright — see :func:`_providers_dir`).
 
 TOML shape::
 
@@ -38,7 +39,10 @@ TOML shape::
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,6 +281,29 @@ def _env_bin_var(name: str) -> str:
     return f"MINDFLOCK_PROVIDER_BIN_{slug}"
 
 
+def env_binary_override(name: str) -> Tuple[str, str]:
+    """``(env var name, value)`` when ``MINDFLOCK_PROVIDER_BIN_<NAME>`` pins the
+    provider's binary in this process's environment, else ``("", "")``. The
+    Providers screen shows the variable next to a Binary path field it would
+    otherwise appear to ignore."""
+    var = _env_bin_var(name)
+    val = os.environ.get(var) or ""
+    return (var, val) if val else ("", "")
+
+
+def settings_binary_path(name: str) -> str:
+    """This device's saved binary path for provider ``name``
+    (``coding_cli.binary_paths[name]``, device-local — never synced), or
+    ``""``. The value the Binary path field edits, without the env override
+    :func:`binary_override` folds in."""
+    try:
+        from backend.config.settings import load_settings
+
+        return load_settings().coding_cli.binary_paths.get(name, "") or ""
+    except Exception:  # noqa: BLE001 — settings are optional; never break launch
+        return ""
+
+
 def binary_override(name: str) -> str:
     """A user-supplied binary path override for provider ``name``, or ``""``.
 
@@ -284,15 +311,10 @@ def binary_override(name: str) -> str:
     ``coding_cli.binary_paths[name]``. Returns ``""`` when the user has set no
     override, so callers can leave the built-in launch behaviour untouched.
     """
-    ev = os.environ.get(_env_bin_var(name))
+    ev = env_binary_override(name)[1]
     if ev:
         return ev
-    try:
-        from backend.config.settings import load_settings
-
-        return load_settings().coding_cli.binary_paths.get(name, "") or ""
-    except Exception:  # noqa: BLE001 — settings are optional; never break launch
-        return ""
+    return settings_binary_path(name)
 
 
 def resolve_provider_binary(name: str, cfg: Optional["ProviderConfig"] = None) -> str:
@@ -925,11 +947,31 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
     )
 
 
+_log = logging.getLogger(__name__)
+
+#: ``[(file name, error)]`` for every TOML in the providers dir the last
+#: :func:`load_user_configs` could not turn into a provider. A bad file must
+#: not break startup, but it must not vanish either: the Providers screen
+#: shows these as red rows (``GET /api/providers/status`` → ``errors``).
+_LOAD_ERRORS: List[Tuple[str, str]] = []
+
+
+def load_errors() -> List[dict]:
+    """The custom provider TOMLs skipped at the last registry (re)build, as
+    ``[{"file": name, "error": why}]`` in file-name order."""
+    return [{"file": f, "error": e} for f, e in _LOAD_ERRORS]
+
+
 def load_user_configs() -> List[ProviderConfig]:
-    """Load user-supplied provider configs from the providers dir (best-effort)."""
+    """Load user-supplied provider configs from the providers dir (best-effort).
+
+    A file that fails to parse or validate is skipped — and recorded in
+    :func:`load_errors` and the log, so the skip is visible somewhere other
+    than a provider silently missing from every picker."""
     import tomllib
 
     out: List[ProviderConfig] = []
+    _LOAD_ERRORS.clear()
     d = _providers_dir()
     try:
         files = sorted(d.glob("*.toml"))
@@ -939,6 +981,144 @@ def load_user_configs() -> List[ProviderConfig]:
         try:
             raw = tomllib.loads(f.read_text(encoding="utf-8"))
             out.append(_config_from_toml(raw))
-        except Exception:  # noqa: BLE001 — a bad TOML must not break startup
-            continue
+        except KeyError as err:  # noqa: PERF203 — one bad TOML must not break startup
+            why = f"missing required key {err}"
+            _LOAD_ERRORS.append((f.name, why))
+            _log.warning("provider TOML %s skipped: %s", f, why)
+        except Exception as err:  # noqa: BLE001 — a bad TOML must not break startup
+            why = f"{type(err).__name__}: {err}"
+            _LOAD_ERRORS.append((f.name, why))
+            _log.warning("provider TOML %s skipped: %s", f, why)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Editing a provider TOML in place
+# --------------------------------------------------------------------------- #
+#: ``[table]`` / ``[[array.of.tables]]`` header (TOML has no stdlib writer, so
+#: edits are done on the text — see :func:`patch_toml_tables`).
+_TOML_HEADER_RE = re.compile(r"^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(#.*)?$")
+
+
+def toml_value(value: object) -> str:
+    """Render one TOML value: strings via :func:`json.dumps` (JSON's escapes are
+    valid TOML basic-string escapes), lists inline, dicts as inline tables."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[%s]" % ", ".join(toml_value(v) for v in value)
+    if isinstance(value, dict):
+        return "{%s}" % ", ".join(
+            "%s = %s" % (k, toml_value(v)) for k, v in value.items()
+        )
+    return json.dumps(str(value))
+
+
+def _toml_parses(chunk: str) -> bool:
+    import tomllib
+
+    try:
+        tomllib.loads("[x]\n" + chunk)
+        return True
+    except Exception:  # noqa: BLE001 — not a complete value yet
+        return False
+
+
+def _key_line_re(key: str) -> "re.Pattern[str]":
+    return re.compile(r"^(\s*)%s\s*=" % re.escape(key))
+
+
+def _value_extent(lines: List[str], start: int, end: int) -> int:
+    """Index one past the last line of the key/value starting at ``start``
+    (a multi-line array or inline table spans several lines): the shortest run
+    of lines that parses as a complete TOML key/value, capped at ``end``."""
+    for stop in range(start + 1, end + 1):
+        if _toml_parses("".join(lines[start:stop])):
+            return stop
+    return start + 1
+
+
+def _trailing_comment(line: str) -> str:
+    """The ``# …`` comment after a single-line key/value, with its leading
+    spaces, or ``""``: a ``#`` inside the value's string is not a comment, so
+    only a split whose left side still parses counts."""
+    body = line.rstrip("\r\n")
+    for i in (m.start() for m in re.finditer("#", body)):
+        if _toml_parses(body[:i] + "\n"):
+            left = body[:i]
+            return body[len(left.rstrip()) :]
+    return ""
+
+
+def patch_toml_tables(text: str, updates: Dict[str, Dict[str, object]]) -> str:
+    """``text`` with only ``{table: {key: value}}`` changed, as a TOML document.
+
+    A value of ``None`` removes the key. Everything the patch does not name —
+    comments, blank lines, key order, every other key and table (``[usage]``,
+    ``[activity]``, ``[connect]``, ``[peer]``, ``prompt_arg``…) — is kept
+    byte-for-byte; a replaced key keeps its indentation and trailing comment, a
+    new key lands at the end of its table, and a missing table is appended.
+    The stdlib has ``tomllib`` but no writer, and re-rendering from the parsed
+    dict is exactly what used to drop every key the Settings form didn't
+    know (``PUT /api/providers/{name}``): a hand-written TOML is the user's
+    file, so an edit touches the edited line and nothing else.
+    """
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+
+    def sections() -> List[Tuple[str, int, int]]:
+        """``(table name, first body line, one past last body line)``."""
+        heads = [
+            (m.group(1), i)
+            for i, ln in enumerate(lines)
+            if (m := _TOML_HEADER_RE.match(ln)) and not ln.lstrip().startswith("#")
+        ]
+        out = []
+        for n, (name, i) in enumerate(heads):
+            end = heads[n + 1][1] if n + 1 < len(heads) else len(lines)
+            out.append((name, i + 1, end))
+        return out
+
+    for table, keys in updates.items():
+        if not keys:
+            continue
+        span = next((s for s in sections() if s[0] == table), None)
+        if span is None:
+            fresh = [
+                "%s = %s\n" % (k, toml_value(v))
+                for k, v in keys.items()
+                if v is not None
+            ]
+            if not fresh:
+                continue
+            if lines and lines[-1].strip():
+                lines.append("\n")
+            lines.extend(["[%s]\n" % table] + fresh)
+            continue
+        _, start, end = span
+        for key, value in keys.items():
+            _, start, end = next(s for s in sections() if s[0] == table)
+            pat = _key_line_re(key)
+            hit = next((i for i in range(start, end) if pat.match(lines[i])), None)
+            if hit is None:
+                if value is None:
+                    continue
+                last = end
+                while last > start and not lines[last - 1].strip():
+                    last -= 1
+                lines.insert(last, "%s = %s\n" % (key, toml_value(value)))
+                continue
+            stop = _value_extent(lines, hit, end)
+            if value is None:
+                del lines[hit:stop]
+                continue
+            indent = pat.match(lines[hit]).group(1)  # type: ignore[union-attr]
+            comment = _trailing_comment(lines[hit]) if stop == hit + 1 else ""
+            nl = "\r\n" if lines[hit].endswith("\r\n") else "\n"
+            lines[hit:stop] = [
+                "%s%s = %s%s%s" % (indent, key, toml_value(value), comment, nl)
+            ]
+    return "".join(lines)

@@ -22,6 +22,7 @@ import { isUnder, type Model, type TFile, type TNode } from "../../../lib/codetr
 import { zoneOfFile } from "../../../lib/codetree/zones";
 import type { AgentState, TZone } from "../../../lib/codetree/types";
 import { BirdIcon, LegendCard, dispName, nodeName, subLine } from "./TreeCards";
+import { isShared, sharedWhere } from "./sharedZone";
 
 const clip = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
@@ -54,6 +55,17 @@ export interface BirdIndexProps {
 
 /** Which rows are expanded, per session (the primary bird's key) — survives remounts. */
 const EXPANDED = new Map<string, Set<string>>();
+/** The EXPANDED key for "show every changed folder" (never a bird key: those are session titles). */
+const ALL_FOLDERS = "\u0000folders";
+/** Changed folders listed before "Show all N folders" (a folder carrying a rule is always listed). */
+export const FOLDERS_SHOWN = 5;
+
+/** The changed folders the column lists: the first `max` (most changes first) plus any
+ * further one a rule covers, unless all are asked for. */
+export function shownFolders<T>(folders: T[], all: boolean, ruled: (f: T) => boolean, max = FOLDERS_SHOWN): T[] {
+  if (all || folders.length <= max) return folders;
+  return folders.filter((f, i) => i < max || ruled(f));
+}
 
 /** One changed folder: its files (most depended-on first) and who changed them. */
 export interface ChangedFolder {
@@ -177,8 +189,9 @@ export function BirdIndex(p: BirdIndexProps) {
         ))}
       </ul>
       {/* Changes before Rules: a rule added from a Changes row lands below it, so nothing moves under the pointer */}
-      <Changes p={p} sum={sum} riskOpen={riskOpen} onRisk={() => setRisk(!riskOpen)} />
-      <Rules p={p} />
+      <Changes p={p} sum={sum} riskOpen={riskOpen} onRisk={() => setRisk(!riskOpen)} allFolders={ex.has(ALL_FOLDERS)} onAllFolders={() => toggle(ALL_FOLDERS)} />
+      {/* no rules yet: nothing to list (the toolbar and each folder row make one) */}
+      {p.zones.length > 0 && <Rules p={p} />}
     </>
   );
 
@@ -296,7 +309,7 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
               : "in the nest, thinking"
             : A.ag.primary
               ? A.activity === "clarify"
-                ? "waiting for your answer"
+                ? "needs you · question"
                 : "waiting"
               : "editing on its own branch";
   // another session works in its own worktree: only repo-wide keep-outs bind it
@@ -489,12 +502,17 @@ function Rules({ p }: { p: BirdIndexProps }) {
                   <span className="tx" title={full}>
                     {z.name || tailPath(full)}
                   </span>
-                  <small>{z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : "whole repo"}</small>
+                  <small title={isShared(z) ? sharedWhere(z) : undefined}>
+                    {z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : isShared(z) ? "shared" : "whole repo"}
+                  </small>
                   {nb > 0 && <small className="nb">{blockedTxt(nb)}</small>}
                 </button>
-                <button type="button" className="ct-x" aria-label={"Remove rule " + (z.name || z.pattern)} title="Remove this rule" disabled={p.zoneBusy === z.id} onClick={() => p.onRemoveZone(z)}>
-                  ×
-                </button>
+                {/* A shared zone is lifted in the committed file (Zones dialog), not here. */}
+                {!isShared(z) && (
+                  <button type="button" className="ct-x" aria-label={"Remove rule " + (z.name || z.pattern)} title="Remove this rule" disabled={p.zoneBusy === z.id} onClick={() => p.onRemoveZone(z)}>
+                    ×
+                  </button>
+                )}
               </li>
             );
           })}
@@ -505,7 +523,21 @@ function Rules({ p }: { p: BirdIndexProps }) {
 }
 
 /** Where the changes are, what could break, and one-click ⛔ / ✓ per changed folder. */
-function Changes({ p, sum, riskOpen, onRisk }: { p: BirdIndexProps; sum: ChangeSummary; riskOpen: boolean; onRisk: () => void }) {
+function Changes({
+  p,
+  sum,
+  riskOpen,
+  onRisk,
+  allFolders = false,
+  onAllFolders,
+}: {
+  p: BirdIndexProps;
+  sum: ChangeSummary;
+  riskOpen: boolean;
+  onRisk: () => void;
+  allFolders?: boolean;
+  onAllFolders?: () => void;
+}) {
   const M = p.M;
   if (!sum.total)
     return (
@@ -541,10 +573,13 @@ function Changes({ p, sum, riskOpen, onRisk }: { p: BirdIndexProps; sum: ChangeS
           ⚠ Could break
         </button>
       </div>
-      {/* 9 in all = this session's 7 (the pane header's "7 files") + the other sessions' 2 */}
-      <div className="ct-bix-sum ct-bix-split" title="This session = the pane header's file count (its branch, helpers included)">
-        this session <b>{sum.mine}</b> + other sessions <b>{sum.others}</b>
-      </div>
+      {/* 9 in all = this session's 7 (the pane header's "7 files") + the other sessions' 2;
+          with no other session changing anything the split only repeats the total */}
+      {sum.others > 0 && (
+        <div className="ct-bix-sum ct-bix-split" title="This session = the pane header's file count (its branch, helpers included)">
+          this session <b>{sum.mine}</b> + other sessions <b>{sum.others}</b>
+        </div>
+      )}
       <div className="ct-bix-sum">
         {sum.tops.map(([k, n], i) => (
           <span key={k}>
@@ -600,7 +635,7 @@ function Changes({ p, sum, riskOpen, onRisk }: { p: BirdIndexProps; sum: ChangeS
         <span className="o">✓ only here</span>
       </div>
       <ul className="ct-bix-folders" role="list" aria-label="Changed folders">
-        {sum.folders.map((cf) => {
+        {shownFolders(sum.folders, allFolders, (cf) => live.some((t) => isUnder(cf.n, t.node!))).map((cf) => {
           const n = cf.n;
           const keep = live.find((t) => t.type === "keep" && isUnder(n, t.node!)) || null;
           const only = live.find((t) => t.type === "only" && isUnder(n, t.node!)) || null;
@@ -674,6 +709,11 @@ function Changes({ p, sum, riskOpen, onRisk }: { p: BirdIndexProps; sum: ChangeS
           );
         })}
       </ul>
+      {sum.folders.length > FOLDERS_SHOWN && onAllFolders && (
+        <button type="button" className="ct-bix-allf" aria-expanded={allFolders} onClick={onAllFolders}>
+          {allFolders ? "Show fewer folders" : `Show all ${sum.folders.length} folders`}
+        </button>
+      )}
     </div>
   );
 }

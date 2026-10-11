@@ -1,7 +1,14 @@
 /** New-session dialog (ports section 16 + the new-form submit from section
- * 17 + the J4 preset row): quick path is name → Enter; folder browser,
- * templates strip, prompt presets, provisioning fold, and per-session launch
- * flags live behind progressive disclosure. */
+ * 17 + the J4 preset row): the fast path is Name → Enter, which costs
+ * nothing — the form opens pre-filled with the template, agent and account
+ * the last session in that folder used (lib/store's last-used memory), and
+ * no model runs. "Describe it instead…" is the secondary door: it expands
+ * the sentence box, and Enter there buys the model turn that fills the form.
+ * Folder browser, Templates strip (one server-side list, managed in
+ * TemplatesDialog), prompt presets, the Git & workspace fold with its Base
+ * branch picker, and per-session launch flags live behind progressive
+ * disclosure. Page 1 (the box alone) survives only for Intake's "Start
+ * together…" batch, whose box is a list. */
 
 import {
   useCallback,
@@ -12,7 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Config, Instance, PlanAnswer } from "../../api/types";
+import type { Config, Instance, PlanAnswer, RepoBranches } from "../../api/types";
 import { api } from "../../api/client";
 import {
   refreshInstances,
@@ -28,7 +35,12 @@ import {
   deviceTitle,
   startableDevices,
 } from "../../lib/devices";
-import { useUi } from "../../state/store";
+import {
+  forgetNewSessionProfile,
+  lastNewSessionChoice,
+  rememberNewSessionChoice,
+  useUi,
+} from "../../state/store";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import {
@@ -39,12 +51,15 @@ import {
 } from "../../lib/sessionActions";
 import {
   BUILTIN_PRESETS,
+  PRESETS_CHANGED,
   findPreset,
   loadUserPresets,
   saveUserPresets,
   upsertUserPreset,
   type Preset,
 } from "../../lib/presets";
+import { ensureTemplates, type Template } from "../../lib/templates";
+import { TemplatesDialog } from "./TemplatesDialog";
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { FlagChips, tokenize } from "./FlagChips";
 import { NewTicketPane } from "./NewTicketPane";
@@ -78,17 +93,6 @@ const NEW_TABS: Array<{ key: NewTab; label: string }> = [
   { key: "session", label: "Session" },
   { key: "ticket", label: "Ticket" },
 ];
-
-interface Template {
-  name: string;
-  program?: string;
-  repo_path?: string;
-  prompt?: string;
-  provisioned?: boolean;
-  workspace_strategy?: string;
-  in_place?: boolean;
-  init_repo?: boolean;
-}
 
 interface Provider {
   name: string;
@@ -735,6 +739,87 @@ export function newFolderBlockReason(where: { gate: string; confirmed: boolean }
   );
 }
 
+/** The shut "Git & workspace" fold's summary: where the work happens and,
+ * for a new worktree, what it is cut from — so the choice is read without a
+ * click. Pure, so the sentence is pinned by tests. */
+export function foldSummaryFor(where: {
+  provisioned: boolean;
+  strategy: string;
+  inPlace: boolean;
+  baseBranch: string;
+  current: string;
+  initRepo: boolean;
+  /** "Work on x itself" was picked for a remote-tracking base. */
+  continueBranch?: boolean;
+}): string {
+  let s: string;
+  if (where.provisioned)
+    s = "provisioned " + (where.strategy === "clone" ? "clone" : "worktree");
+  else if (where.inPlace) s = "in this folder";
+  else if (where.continueBranch && remoteBranchName(where.baseBranch))
+    s = "worktree on " + remoteBranchName(where.baseBranch) + " (shared branch)";
+  else {
+    const base = where.baseBranch || where.current;
+    s = "new worktree" + (base ? " from " + base : "");
+  }
+  if (where.initRepo) s += " · git init";
+  return s;
+}
+
+/** "origin/feature/x" → "feature/x": the branch a remote-tracking name is
+ * for ("" when it carries no remote prefix). */
+export function remoteBranchName(ref: string): string {
+  const m = /^(?:[^/\s]+)\/(.+)$/.exec((ref || "").trim());
+  return m ? m[1] : "";
+}
+
+/** The Base branch pick as create-body fields. A remote-tracking pick
+ * ("origin/x") either cuts a NEW branch from it, compared against "x"
+ * (`base_ref` + `base_branch`) — the default — or, with "Work on x itself",
+ * puts the session ON "x" tracking "origin/x" (`base_ref` + `continue_branch`;
+ * the server validates and refuses one checked out elsewhere). A local pick
+ * is always a new branch. Pure, so the contract is pinned by tests. */
+export function baseBranchFields(
+  base: string,
+  remote: boolean,
+  continueBranch: boolean
+): Record<string, string> {
+  base = (base || "").trim();
+  if (!base) return {};
+  const name = remote ? remoteBranchName(base) : "";
+  if (name && continueBranch) return { base_ref: base, continue_branch: name };
+  return { base_ref: base, base_branch: name || base };
+}
+
+/** What the opening's pre-fill does with the account the last session in
+ * this folder used: "apply" it when the current profiles still have it (or
+ * it is "default", the CLI's own login), "drop" it from memory when the list
+ * has loaded without it (the account was removed — posting it 400s "unknown
+ * account" on every Name → Enter), "wait" while the list hasn't loaded. */
+export function rememberedProfileVerdict(
+  id: string,
+  profiles: { id: string }[] | null | undefined
+): "apply" | "drop" | "wait" | "none" {
+  if (!id) return "none";
+  if (id === "default") return "apply";
+  if (!profiles) return "wait";
+  return profiles.some((p) => p.id === id) ? "apply" : "drop";
+}
+
+/** What the form's Name → Enter does, and what the describe box's Enter does:
+ * the two never share a key. Pure, so the fast path is pinned by a test:
+ * Enter in Name submits the form (one POST /api/instances, no model turn);
+ * Enter in the describe box runs the model turn and never creates. */
+export function enterAction(where: {
+  field: "name" | "describe" | "other";
+  shift: boolean;
+  runMode: boolean;
+}): "create" | "describe" | "newline" | "none" {
+  if (where.field === "describe") return where.shift || where.runMode ? "newline" : "describe";
+  if (where.shift) return "none";
+  return "create";
+}
+
 export function NewSessionDialog() {
   const open = useUi((s) => s.openDialog === "new-session");
   const closeDialog = useUi((s) => s.closeDialog);
@@ -808,19 +893,40 @@ export function NewSessionDialog() {
   const [promptOpen, setPromptOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
+  /** The form's "Describe it instead…" row is expanded. */
+  const [describeOpen, setDescribeOpen] = useState(false);
+  /** Base branch for a NEW WORKTREE: "" = whatever the server would pick (the
+   * folder's checked-out branch — shown in the picker's first row). Sent as
+   * base_ref + base_branch only when chosen, and only for a plain worktree
+   * session: the server refuses it for in-place and provisioned ones. */
+  const [baseBranch, setBaseBranch] = useState("");
+  /** The remote-tracking base for which "Work on x itself" was chosen ("" =
+   * a new branch). Keyed by the pick, so any other pick reads as the default
+   * without a reset of its own. */
+  const [continueOn, setContinueOn] = useState("");
+  /** GET /api/repos/branches for the folder in the field; null until asked. */
+  const [branches, setBranches] = useState<RepoBranches | null>(null);
   // The one-sentence door at the top of the body: what the user typed, whether
   // a model turn is in flight, and whether that turn has gone on long enough
   // that the ring alone stops reading as progress. Deliberately NOT wired to
   // anything the form submits — the sentence's only output is the fields
   // applyPlan writes, and it is kept only so the box still shows it afterwards.
-  /** Which of the two pages is on screen: 1 the sentence, 2 the form.
+  /** Which of the two pages is on screen: 1 the sentence alone, 2 the form.
    *
-   * An opening lands on 1. That is a deliberate reversal of "Ctrl+N, type a
-   * name, Enter" — the sentence is now the front door and the form is behind
-   * it — so page 1 carries an explicit way through to the form that costs one
-   * click and no model turn, and a failed create reopens on page 2, where the
-   * fields to fix it are. */
-  const [page, setPage] = useState(1);
+   * An opening lands on the FORM, with Name focused: "Ctrl+N, type a name,
+   * Enter" is the fast path again and costs no model turn — the form arrives
+   * pre-filled with what the last session in that folder used. Page 1 is
+   * only for Intake's "Start together…" batch, whose box is a list of
+   * sessions and whose options (RunOptions) have no place on the one-session
+   * form. The sentence box itself lives on the form now, behind "Describe it
+   * instead…". */
+  const [page, setPage] = useState(2);
+  /** The page this opening meant to land on — read by the focus effect, which
+   * runs before the setPage above has rendered. */
+  const openedPage = useRef(2);
+  /** Name is on page 2; an opening that found page 1 still mounted (after a
+   * batch) focuses it once the form is actually on screen. */
+  const focusTitleNext = useRef(false);
   const [describe, setDescribe] = useState("");
   const [describing, setDescribing] = useState(false);
   const [describeSlow, setDescribeSlow] = useState(false);
@@ -900,6 +1006,9 @@ export function NewSessionDialog() {
   // lazily on selection so the Model field is a picker, not a guess.
   const [profileModels, setProfileModels] = useState<Record<string, string[]>>({});
   const authProfiles = useAuthProfiles().data;
+  /** A remembered account waiting for the profile list to land before it is
+   * applied or forgotten (rememberedProfileVerdict). */
+  const pendingProfile = useRef<{ repo: string; id: string; program?: string } | null>(null);
   const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
@@ -994,7 +1103,11 @@ export function NewSessionDialog() {
         dapi<{ settings?: { coding_cli?: { default_launch_args?: Record<string, string> } } }>(
           "/api/settings"
         ),
-        dapi<{ templates?: Template[] }>("/api/templates"),
+        // This device's list is the shared cache (one fetch, then the one-time
+        // saved-prompt migration); another device's is its own.
+        dev
+          ? dapi<{ templates?: Template[] }>("/api/templates").then((d) => d.templates || [])
+          : ensureTemplates(true),
       ]);
       if (!here()) return;
       const cfg = cfgR.status === "fulfilled" ? cfgR.value : undefined;
@@ -1034,7 +1147,14 @@ export function NewSessionDialog() {
       for (const k of Object.keys(raw))
         launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
       setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
-      setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
+      const tpls = tplR.status === "fulfilled" ? tplR.value || [] : [];
+      setTemplates(tpls);
+      // The fast path's pre-fill: the template, agent and account the last
+      // session in this folder was started with (lib/store, per browser).
+      // After the defaults above, so a remembered agent outranks the config's
+      // default — and only for this device: another device's agents and
+      // accounts are its own.
+      if (!dev) applyLastUsed.current(tpls, provs);
     })();
     return () => {
       // Answers for a dialog that has since been closed (or closed and reopened)
@@ -1090,6 +1210,9 @@ export function NewSessionDialog() {
     const prefill = useUi.getState().takeNewPrefill();
     setDescribe(prefill);
     setBatch(!!prefill);
+    setDescribeOpen(false);
+    setBaseBranch("");
+    setBranches(null);
     setDescribing(false);
     setDescribeSlow(false);
     setPlanNote("");
@@ -1104,12 +1227,13 @@ export function NewSessionDialog() {
     // planFolderReducer's "reopen" for the asymmetry and why keeping it is
     // safe: the gate is derived from the live field, so a retained plan
     // self-clears the moment that field moves off it.
-    // Every opening starts at the sentence. The form is one click away and
-    // keeps whatever the last opening left in it only as far as the resets
-    // below allow — page is not one of the things worth remembering, because a
+    // Every opening starts at the FORM (a batch at its list). The form keeps
+    // whatever the last opening left in it only as far as the resets below
+    // allow — page is not one of the things worth remembering, because a
     // dialog that reopens halfway through a flow nobody is in the middle of
     // reads as a bug.
-    setPage(1);
+    openedPage.current = prefill ? 1 : 2;
+    setPage(openedPage.current);
     setNewFolderOk(false);
     planFolderDo({ t: "reopen" });
     // An answer for last opening's sentence has nothing to say about this one,
@@ -1126,10 +1250,11 @@ export function NewSessionDialog() {
     setPlanFirst(false);
     setSplit(false);
     setMaxPieces(SPLIT_DEFAULT);
-    // Matches the initial state, and has to be set here too: this reset runs
-    // on EVERY open, so a useState default alone left the fold shut from the
-    // second open onward.
-    setAdvancedOpen(true);
+    // "Git & workspace" starts SHUT, and its summary line says what it holds
+    // (where the work happens, and the base branch), so the choice is read
+    // without a click and changed with one. Set here, not only in useState:
+    // this reset runs on EVERY open.
+    setAdvancedOpen(false);
     setLaunchOpen(false);
     setPromptOpen(false);
     folderDo({ t: "reopen" });
@@ -1150,6 +1275,16 @@ export function NewSessionDialog() {
     setPresetName(null);
     loadedDevice.current = deviceRef.current;
     return loadFor(deviceRef.current);
+  }, [open]);
+
+  // The saved-prompt list is the templates list: repaint it when the fetch
+  // lands or anything (this dialog, the Templates dialog, a sync pull)
+  // changes it while the form is open.
+  useEffect(() => {
+    if (!open) return;
+    const reload = () => setSavedPresets(loadUserPresets());
+    document.addEventListener(PRESETS_CHANGED, reload);
+    return () => document.removeEventListener(PRESETS_CHANGED, reload);
   }, [open]);
 
   // A different device picked while the dialog is open: its folders, its
@@ -1181,10 +1316,15 @@ export function NewSessionDialog() {
     // two the opening is actually showing. titleRef is null on page 1 now (that
     // field is not rendered), and an opening that focused nothing would leave
     // the caret wherever the app last had it, outside the modal.
-    const el = page === 1 ? describeRef.current : titleRef.current;
+    const el = openedPage.current === 1 ? describeRef.current : titleRef.current;
     const active = document.activeElement;
+    if (!el) {
+      // The form is not on screen yet (the previous opening was a batch, so
+      // page 1 is what this render still shows): focus Name once it is.
+      if (openedPage.current === 2) focusTitleNext.current = true;
+      return;
+    }
     if (
-      el &&
       mayTakeOpeningFocus({
         activeIsTarget: active === el,
         activeInsideDialog: !!active && !!rootRef.current?.contains(active),
@@ -1461,14 +1601,14 @@ export function NewSessionDialog() {
    * account can't route is auto-swapped to one it can — the alternative is a
    * session that silently launches on the CLI's own login. A profile with raw
    * env overrides applies to every CLI, so it never steers. */
-  const setAccount = (id: string) => {
+  const setAccount = (id: string, agentNow?: string) => {
     setProfileId(id);
     setProfileModel("");
     const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
     if (!prof) return;
     const supported = prof.supported_agents || [];
     const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-    if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
+    if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
       const preferred =
         prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
       setAgent(preferred);
@@ -1505,7 +1645,11 @@ export function NewSessionDialog() {
     );
   })();
 
-  const fillFromTemplate = (t: Template) => {
+  /** Put a template into the form. `quiet` is the opening's own pre-fill
+   * (the last-used template): the fields change, nothing else does — no
+   * caret move, no fold opened, no title written over the one the person is
+   * about to type. A click on a chip is the loud version. */
+  const fillFromTemplate = (t: Template, opts: { quiet?: boolean } = {}) => {
     if (t.program) setAgent(t.program);
     if (t.repo_path) folderDo({ t: "user-set", path: t.repo_path });
     if (t.prompt) setPrompt(t.prompt);
@@ -1520,14 +1664,50 @@ export function NewSessionDialog() {
     // an ordinary combination.
     setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
+    setActiveTemplate(t.name);
+    if (opts.quiet) return;
     setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
     // A template that brings a prompt has just written into a fold that
     // defaults shut; leaving it shut hides the text it filled in.
     if (t.prompt) setPromptOpen(true);
-    setActiveTemplate(t.name);
     if (!title.trim()) setTitle(t.name || "");
     titleRef.current?.focus();
   };
+
+  /** The opening's pre-fill from the last session started in this folder:
+   * its template (quietly), its agent (if still installed) and its account.
+   * Through a ref because loadFor, which calls it once the lists have
+   * landed, is declared above the setters this needs. */
+  const applyLastUsed = useRef<(tpls: Template[], provs: Provider[]) => void>(() => {});
+  applyLastUsed.current = (tpls, provs) => {
+    const { choice } = lastNewSessionChoice(repoPath);
+    if (!choice) return;
+    const t = choice.template ? tpls.find((x) => x.name === choice.template) : null;
+    if (t) fillFromTemplate(t, { quiet: true });
+    if (choice.program && provs.some((p) => p.name === choice.program)) setAgent(choice.program);
+    // Carry the agent being applied this tick: setAccount would otherwise read
+    // the previous render's `program` and could swap the remembered agent away.
+    pendingProfile.current = choice.profile_id
+      ? { repo: repoPath, id: choice.profile_id, program: choice.program || undefined }
+      : null;
+    settleProfile.current();
+  };
+
+  /** Apply a remembered account only while it still exists — through
+   * setAccount, like a pick — and forget one that was removed. */
+  const settleProfile = useRef<() => void>(() => {});
+  settleProfile.current = () => {
+    const pend = pendingProfile.current;
+    if (!pend) return;
+    const verdict = rememberedProfileVerdict(pend.id, authProfiles ? authProfiles.profiles || [] : null);
+    if (verdict === "wait") return;
+    pendingProfile.current = null;
+    if (verdict === "apply") setAccount(pend.id, pend.program);
+    else if (verdict === "drop") forgetNewSessionProfile(pend.repo);
+  };
+  useEffect(() => {
+    settleProfile.current();
+  }, [authProfiles]);
 
   /** Write a plan from the Describe box into the form the user is looking at.
    *
@@ -1627,6 +1807,47 @@ export function NewSessionDialog() {
     el.focus({ preventScroll: true });
     el.setSelectionRange(el.value.length, el.value.length);
   }, [page]);
+
+  useEffect(() => {
+    if (page !== 2 || !focusTitleNext.current) return;
+    focusTitleNext.current = false;
+    titleRef.current?.focus();
+  }, [page]);
+
+  // "Describe it instead…" opened: the caret goes to the box it revealed.
+  useEffect(() => {
+    if (open && describeOpen && page === 2) describeRef.current?.focus();
+  }, [open, describeOpen, page]);
+
+  // The Base branch menu for the folder in the field, re-asked when the
+  // folder changes (debounced like the /api/repos/check probe) and only for
+  // a path — a name being looked up is not a folder yet. The server memoises
+  // ten seconds per folder, so the second ask costs nothing.
+  useEffect(() => {
+    if (!open || page !== 2) return;
+    const path = repoPath.trim();
+    setBaseBranch("");
+    if (!path || !looksLikePath(path)) {
+      setBranches(null);
+      return;
+    }
+    let live = true;
+    const h = window.setTimeout(async () => {
+      try {
+        const b = await dapi<RepoBranches>(
+          "/api/repos/branches?path=" + encodeURIComponent(path)
+        );
+        if (live) setBranches(b);
+      } catch {
+        // No menu, no error: the server picks the base as it always did.
+        if (live) setBranches(null);
+      }
+    }, CHECK_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(h);
+    };
+  }, [open, page, repoPath, dapi]);
 
   const cancelDescribe = () => {
     cancelPlanRun(planRun.current);
@@ -1756,7 +1977,7 @@ export function NewSessionDialog() {
       // open dialog — which is exactly what #new-error and MakePrDialog's .error
       // line already are. The remedy never changes and is already on screen, so
       // the sentence names it.
-      setPlanError(errMsg(err) + " — use Set it up myself instead.");
+      setPlanError(errMsg(err) + " — fill the form in by hand instead.");
     } finally {
       window.clearTimeout(slow);
       // Guarded like every other landing: a later run owns the button now, and
@@ -1787,7 +2008,11 @@ export function NewSessionDialog() {
     setAdvancedOpen(true);
   };
 
-  if (!open) return null;
+  // The Templates dialog is this dialog's manager (New → Manage… hands over
+  // to it and it hands back), so it rides here, in the one component that is
+  // always mounted — the two never show at once, and nothing else has to
+  // know it exists.
+  if (!open) return <TemplatesDialog />;
 
   const folderPath = repoPath.trim();
   const offerProvision = provisioningAvailable || !!folderPath;
@@ -1817,6 +2042,24 @@ export function NewSessionDialog() {
   // in-place checkbox greyed out by an invisible control is unfixable from the
   // dialog.
   const provisionOn = offerProvision && provision;
+  /** A plain new worktree: the one mode a Base branch applies to. */
+  const worktreeMode = (!inPlace || laneNeedsWorktree) && !provisionOn;
+  /** The Base branch pick is a remote-tracking name: the one that offers
+   * "Work on x itself". */
+  const baseIsRemote = !!(branches?.branches || []).find((b) => b.name === baseBranch)?.remote;
+  /** "Work on x itself" is offered for origin's branches only: push, the
+   * divergence check and the rebase all go through origin. */
+  const canContinue = baseIsRemote && baseBranch.startsWith("origin/");
+  /** What the shut "Git & workspace" fold says on its summary line. */
+  const foldSummary = foldSummaryFor({
+    provisioned: provisionOn,
+    strategy,
+    inPlace: inPlace && !laneNeedsWorktree,
+    baseBranch,
+    current: branches?.current || "",
+    initRepo,
+    continueBranch: !!baseBranch && continueOn === baseBranch && canContinue,
+  });
   // Computed once for both readers: the aside inside the Git & workspace fold,
   // and submit's refusal to post a create the server is certain to refuse.
   const provisionBlocked = provisionBlockReason({
@@ -1941,6 +2184,12 @@ export function NewSessionDialog() {
     inPlace: boolean;
     initRepo: boolean;
     provisioned: boolean;
+    /** The Base branch pick; "" = the server's own choice. */
+    baseBranch?: string;
+    /** The pick is a remote-tracking name ("origin/feature"). */
+    baseBranchRemote?: boolean;
+    /** Work ON that remote branch itself instead of a new one. */
+    continueBranch?: boolean;
   }): Record<string, unknown> => {
     const body: Record<string, unknown> = {
       title: p.title.trim(),
@@ -1964,6 +2213,16 @@ export function NewSessionDialog() {
     } else {
       body.init_repo = p.initRepo;
       body.in_place = p.inPlace;
+      // A chosen base for a NEW WORKTREE only — the server refuses the pair
+      // for in-place and provisioned sessions, and base_branch needs base_ref.
+      // base_ref is the thing the worktree is cut from (a remote-tracking
+      // name included); base_branch is the branch its diff and PR are read
+      // against, which never carries a remote prefix — "origin/feature" cuts
+      // from the remote and compares against "feature". "Work on feature
+      // itself" sends continue_branch instead (baseBranchFields).
+      const base = (p.baseBranch || "").trim();
+      if (base && !p.inPlace)
+        Object.assign(body, baseBranchFields(base, !!p.baseBranchRemote, !!p.continueBranch));
     }
     return body;
   };
@@ -2002,6 +2261,13 @@ export function NewSessionDialog() {
       // plan (see planFolderReducer), so without this the next opening would
       // offer to create a folder that is already there.
       planFolderDo({ t: "created" });
+      // What Name → Enter reuses next time in this folder.
+      if (!target)
+        rememberNewSessionChoice(String(body.repo_path || ""), {
+          template: activeTemplate,
+          program: String(body.program || ""),
+          profile_id: String(body.profile_id || ""),
+        });
       // Same reason as the guess in addPendingSession: the server's real title
       // must not arrive wearing a closed session's rename.
       clearStaleAlias(inst.title);
@@ -2086,6 +2352,9 @@ export function NewSessionDialog() {
         inPlace: inPlace && !laneNeedsWorktree,
         initRepo,
         provisioned: provision,
+        baseBranch,
+        baseBranchRemote: baseIsRemote,
+        continueBranch: !!baseBranch && continueOn === baseBranch,
       })
     );
   };
@@ -2386,28 +2655,116 @@ export function NewSessionDialog() {
             </>
           ) : (
             <>
-          {templates.length > 0 && (
-              <div id="new-templates" className="new-templates">
+            {/* The secondary door. A quiet row until opened; opened, it is the
+                sentence box page 1 used to be, in the Templates strip's card.
+                Enter there buys the model turn (runDescribe) that fills the
+                fields below — nothing is created by it. */}
+            {!describeOpen ? (
+              <div className="nf-describe-toggle">
+                <button
+                  type="button"
+                  id="new-describe-open"
+                  title="Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create."
+                  onClick={() => setDescribeOpen(true)}
+                >
+                  ✨ Describe it instead…
+                </button>
+                <span className="muted">or fill the form in and press Enter</span>
+              </div>
+            ) : (
+              <div id="new-describe" className="new-templates nf-describe">
                 <div className="nt-head">
-                  <span title="Saved New-session setups">Templates</span>
-                  <button
-                    type="button"
-                    id="new-templates-manage"
-                    className="linklike"
-                    onClick={() => {
-                      const w = window as unknown as {
-                        mindflockAddons?: { templates?: { open?: () => void } };
-                      };
-                      const t = w.mindflockAddons?.templates;
-                      if (t && typeof t.open === "function") {
-                        closeDialog();
-                        t.open();
-                      } else toast("Templates manager isn't loaded");
-                    }}
-                  >
-                    Manage…
-                  </button>
+                  <span>Describe what you want to work on</span>
+                  {describing ? (
+                    <span className="nf-describe-busy" aria-live="polite">
+                      <span className="btn-spin" aria-hidden="true" />
+                      {describeSlow ? "Still thinking…" : "Thinking…"}
+                      <button
+                        type="button"
+                        id="new-describe-cancel"
+                        className="linklike"
+                        onClick={cancelDescribe}
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      id="new-describe-close"
+                      className="linklike"
+                      onClick={() => {
+                        setDescribeOpen(false);
+                        setPlanError("");
+                      }}
+                    >
+                      Hide
+                    </button>
+                  )}
                 </div>
+                <div className="nf-describe-row">
+                  <textarea
+                    id="new-describe-text"
+                    ref={describeRef}
+                    rows={Math.min(6, Math.max(2, describe.split("\n").length))}
+                    value={describe}
+                    maxLength={DESCRIBE_MAX_CHARS}
+                    autoComplete="off"
+                    spellCheck={false}
+                    readOnly={describing}
+                    placeholder="e.g. fix the login bug in acme-api — Enter fills the form in"
+                    onChange={(e) => {
+                      setDescribe(e.target.value);
+                      setPlanError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+                      if (e.shiftKey) {
+                        e.stopPropagation();
+                        return;
+                      }
+                      // Enter here means "read this", never "create": the box
+                      // sits inside <form onSubmit={submit}>.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void runDescribe("fill");
+                    }}
+                  />
+                </div>
+                <p className="nf-describe-help">
+                  Your coding CLI reads this and fills in the folder, name and first
+                  instruction below. <b>Nothing is created until you press Create.</b>
+                </p>
+                {planNoteShown && (
+                  <p className="nf-describe-note" aria-live="polite">
+                    {planNoteShown}
+                  </p>
+                )}
+                {planError && (
+                  <p id="new-describe-error" className="error" aria-live="polite">
+                    {planError}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div id="new-templates" className="new-templates">
+              <div className="nt-head">
+                <span title="Saved New-session setups — one list on every device">Templates</span>
+                <button
+                  type="button"
+                  id="new-templates-manage"
+                  className="linklike"
+                  title="Add, edit and delete templates"
+                  onClick={() => {
+                    closeDialog();
+                    useUi.getState().openDialogFor("templates", "new");
+                  }}
+                >
+                  Manage…
+                </button>
+              </div>
+              {templates.length > 0 ? (
                 <div id="new-templates-list" className="nt-list">
                   {templates.map((t) => (
                     <button
@@ -2415,6 +2772,7 @@ export function NewSessionDialog() {
                       type="button"
                       className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
                       data-name={t.name}
+                      aria-pressed={activeTemplate === t.name}
                       title={(t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe")}
                       onClick={() => fillFromTemplate(t)}
                     >
@@ -2422,8 +2780,13 @@ export function NewSessionDialog() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="nf-describe-note">
+                  No templates yet. Save this form's prompt under a name (Prompt fold), or
+                  Manage… to add one.
+                </p>
+              )}
+            </div>
   
             <label>
               <span>
@@ -2433,7 +2796,7 @@ export function NewSessionDialog() {
                 id="new-title"
                 ref={titleRef}
                 autoComplete="off"
-                placeholder="untitled"
+                placeholder={activeTemplate ? activeTemplate + " — Enter creates it" : "untitled — Enter creates it"}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
@@ -2607,7 +2970,10 @@ export function NewSessionDialog() {
                     id="new-account"
                     title="Which identity this session's CLI runs as"
                     value={profileId}
-                    onChange={(e) => setAccount(e.target.value)}
+                    onChange={(e) => {
+                      pendingProfile.current = null;
+                      setAccount(e.target.value);
+                    }}
                   >
                     <option value="">
                       {authProfiles?.default_profile
@@ -2909,6 +3275,9 @@ export function NewSessionDialog() {
             >
               <summary>
                 Git &amp; workspace
+                <span className="nf-fold-sum" id="new-advanced-sum">
+                  — {foldSummary}
+                </span>
               </summary>
               <div className="nf-advanced-body">
                 {/* ONE question with three answers, not a radio pair plus a
@@ -3047,6 +3416,82 @@ export function NewSessionDialog() {
                   )}
                 </div>
   
+                {worktreeMode && branches?.is_git && branches.branches.length > 0 && (
+                  /* Only for a NEW WORKTREE: an in-place session runs on
+                     whatever the folder has checked out, and the server
+                     refuses a base for a provisioned one. The first row is
+                     the server's own choice, so leaving it sends nothing. */
+                  <>
+                  <label className="nf-base-branch">
+                    Base branch{" "}
+                    <span className="muted">— the worktree is cut from it and diffed against it</span>
+                    <select
+                      id="new-base-branch"
+                      value={baseBranch}
+                      onChange={(e) => setBaseBranch(e.target.value)}
+                    >
+                      <option value="">
+                        {(branches.current || branches.default || "the checked-out branch") +
+                          (branches.current ? " (checked out)" : "")}
+                      </option>
+                      {branches.branches.some((b) => !b.remote && !b.current) && (
+                        <optgroup label="Local">
+                          {branches.branches
+                            .filter((b) => !b.remote && !b.current)
+                            .map((b) => (
+                              <option key={b.name} value={b.name}>
+                                {b.name}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                      {branches.branches.some((b) => b.remote) && (
+                        <optgroup label="Remote">
+                          {branches.branches
+                            .filter((b) => b.remote)
+                            .map((b) => (
+                              <option key={b.name} value={b.name}>
+                                {b.name}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    {branches.truncated && (
+                      <span className="muted">Showing the first 200 branches.</span>
+                    )}
+                  </label>
+                  {canContinue && remoteBranchName(baseBranch) && (
+                    /* A remote-tracking pick: cut a new branch from it (the
+                       default), or work ON it — the same branch whoever
+                       pushed it works on (continue_branch). */
+                    <div className="nf-base-mode" role="radiogroup" aria-label="What to do with the remote branch">
+                      <label className="check">
+                        <input
+                          type="radio"
+                          name="new-base-mode"
+                          id="new-base-mode-new"
+                          checked={continueOn !== baseBranch}
+                          onChange={() => setContinueOn("")}
+                        />
+                        Start a new branch from {baseBranch}
+                      </label>
+                      <label className="check">
+                        <input
+                          type="radio"
+                          name="new-base-mode"
+                          id="new-base-mode-continue"
+                          checked={continueOn === baseBranch}
+                          onChange={() => setContinueOn(baseBranch)}
+                        />
+                        Work on {remoteBranchName(baseBranch)} itself{" "}
+                        <span className="muted">(shared with whoever pushed it)</span>
+                      </label>
+                    </div>
+                  )}
+                  </>
+                )}
+
                 {/* OUTSIDE the mode group, because it is not a fourth answer to
                     "where does the work happen" — it is a thing done to the folder
                     before any of the three run, and it combines with all of them.
@@ -3386,17 +3831,24 @@ export function NewSessionDialog() {
             </>
           ) : (
             <>
-              {/* Back, not Cancel: page 1 still holds the sentence, and a
-                  create that has not happened yet is not something to undo. */}
+              {/* Back only for a batch, whose list page 1 still holds. One
+                  session has nowhere to go back to: the form IS the door. */}
+              {batch && (
+                <button
+                  type="button"
+                  id="new-back"
+                  className="linklike"
+                  onClick={() => setPage(1)}
+                >
+                  ← Back
+                </button>
+              )}
               <button
-                type="button"
-                id="new-back"
-                className="linklike"
-                onClick={() => setPage(1)}
+                type="submit"
+                disabled={draft.starting || describing}
+                aria-busy={draft.starting || undefined}
+                title={describing ? "Waiting for the description to be read" : undefined}
               >
-                ← Back
-              </button>
-              <button type="submit" disabled={draft.starting} aria-busy={draft.starting || undefined}>
                 {draft.starting ? "Starting…" : "Create"}
               </button>
             </>

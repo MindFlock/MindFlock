@@ -72,6 +72,10 @@ contextBridge.exposeInMainWorld('mfdiag', {
   restartWsl: () => ipcRenderer.invoke('diag:restart-wsl'),
   install: () => ipcRenderer.invoke('install:start'),
   installState: () => ipcRenderer.invoke('install:state'),
+  // The page's other buttons, by name: 'retry-start' (respawn a server that
+  // died on boot), 'copy-diagnostics', 'brew-install' / 'brew-skip' (the
+  // macOS needs-homebrew step). Main validates the name.
+  action: (name) => ipcRenderer.invoke('diag:action', String(name == null ? '' : name)),
 })
 
 // Update bridge: the injected bottom-right toast (see UPDATE_JS in main.js)

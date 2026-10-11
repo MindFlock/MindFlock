@@ -32,6 +32,57 @@ export interface SetupSummary {
   failed_step?: string | null;
 }
 
+// --- First-run checklist (GET /api/setup; backend/web/core/setup_steps.py) ----
+
+export type SetupStepId = "tools" | "agent_login" | "repo" | "tracker" | "phone";
+
+/** One of the five steps, as stored (`general.setup`) and as drawn. */
+export interface SetupStep {
+  id: SetupStepId | string;
+  title: string;
+  required: boolean;
+  done: boolean;
+  at: string | null;
+  skipped: boolean;
+  status: "done" | "skipped" | "todo" | string;
+}
+
+/** The chip's "3/5" and the two gates: `required_done` retires the grid
+ * card, `complete` retires the chip. */
+export interface SetupProgress {
+  done: number;
+  total: number;
+  required_done: boolean;
+  complete: boolean;
+  next: SetupStepId | "" | string;
+}
+
+/** One agent CLI's sign-in state (step 2 shows a button per installed one).
+ * `logged_in` is null when the CLI names no credential location to check. */
+export interface SetupLogin {
+  name: string;
+  installed: boolean;
+  logged_in: boolean | null;
+  login_cmd: string;
+  default: boolean;
+}
+
+export interface SetupStatus {
+  steps: SetupStep[];
+  summary: SetupProgress;
+  doctor: {
+    ok: boolean;
+    checks: Array<Record<string, unknown>>;
+    install?: { steps?: Array<{ id: string; label: string; cmd: string }>; packages?: string[] };
+  } | null;
+  /** The doctor's Tailscale row (status != "ok" → "Install Tailscale"). */
+  tailscale: { status: string; detail: string; fix: string; docs: string } | null;
+  logins: SetupLogin[];
+  default_provider: string;
+  /** What `mindflock serve` printed at a first start ("" on later boots). */
+  report: string;
+}
+
 export type Activity = "working" | "clarify" | "limit" | "idle" | "offline";
 
 export type Stage =
@@ -112,6 +163,30 @@ export interface Instance {
   /** The session's model override of the profile's pin ("" = the pin). */
   profile_model?: string;
   stage: Stage | string;
+  /** The feature that owns this session and keeps it off the rail, the window
+   * numbers and the prompt-target pickers: `"verify"` for a checklist run,
+   * `""` for the user's own work. Optional only because an older server
+   * doesn't send it — see `isVerifySession` for the fallback that covers. */
+  hidden_by?: string;
+  /** The id of the person the session was created for (GET /api/person;
+   * docs/people.md). `""` for a session that predates people or one a peer
+   * link made. Optional: an older server doesn't send it. */
+  person?: string;
+  /** Works ON a pushed branch others push to too (created with
+   * `continue_branch`; backend/web/core/shared_branch.py). */
+  shared_branch?: boolean;
+  /** Commits the remote branch has that this session lacks, from the last
+   * fetch (push check, rebase, or a shared session's 5-minute refresh). */
+  behind?: number;
+  /** Who the session belongs to (defaults to `person`; changed only by POST
+   * /owner), who holds its keyboard (`""` = nobody) and who has a terminal
+   * open on it — backend/web/core/ownership.py, docs/people.md. Optional: an
+   * older server doesn't send them. Remote rows carry their device's. */
+  owner?: string;
+  driver?: string;
+  /** How to name the driver in a sentence ("" when nobody drives). */
+  driver_name?: string;
+  viewers?: Record<string, Viewer>;
   /** The owner pressed "back to idle" on a finished branch: show the guided
    * ladder from the start even though `stage` (which stays git-derived truth)
    * says committed/pushed/pr. Released server-side as soon as the worktree
@@ -402,6 +477,36 @@ export interface RedZone {
    * set it (`by`) lifts it — no remove / allow from the Map. */
   locked?: boolean;
   by?: string;
+  /** A zone the REPO shares (scope "shared"): from the committed
+   * `.mindflock/zones.toml` in this worktree. Who added it and when. */
+  author?: string;
+  added?: string;
+  /** On a local zone: the committed file has the same zone. */
+  shared?: boolean;
+  shared_author?: string;
+  /** Where a shared zone comes from (".mindflock/zones.toml"). */
+  source?: string;
+}
+
+/** GET/POST /api/instances/{title}/shared-zones — the repo's committed zones
+ * as this session's worktree has them (they follow its branch). */
+export interface SharedZonesBody {
+  shared: RedZone[];
+  /** Why the file is being ignored ("" = fine / no file). */
+  shared_error: string;
+  shared_path: string;
+  shared_exists: boolean;
+  /** POST only: the zone written, and whether it was new. */
+  zone?: RedZone;
+  created?: boolean;
+}
+
+/** A 409 from POST /api/tickets/start: the tracker says a teammate is on it.
+ * `override` names the field the owner re-POSTs to start it anyway. */
+export interface TicketClaimedBy {
+  kind: "tracker" | string;
+  name: string;
+  why: "label" | "started" | string;
 }
 
 export interface RedZoneSummary {
@@ -728,7 +833,7 @@ export interface Device {
   has_token?: boolean;
   needs_token?: boolean;
   /** One of "Your devices": it stays connected through the shared device
-   * key, so Disconnect doesn't apply — remove it in Settings → Devices. */
+   * key, so Disconnect doesn't apply — remove it in Settings → Your devices. */
   member?: boolean;
   /** The "Your devices" join protocol it speaks (0 = too old to join). */
   fleet_proto?: number;
@@ -1094,6 +1199,39 @@ export interface TicketingCatalogField {
   /** "choice" only. */
   options?: { value: string; label: string }[];
   hint?: string;
+  /** The server refuses to save the source without it (PUT → 400 per field)
+   * — unless `auto` is also set, in which case Test fills it in and it is
+   * required before the source counts as connected, not before it saves. */
+  required?: boolean;
+  /** Filled in by Test (member id, the Asana workspace), not typed. */
+  auto?: boolean;
+  /** The shape the server checks a non-blank value against ("url", "email",
+   * "key", "gid"); the message comes back per field on a 400. */
+  validate?: string;
+}
+
+/** One workflow state (or Asana section) a source's Test listed. */
+export interface TicketingWorkflowState {
+  id: string | number;
+  name?: string;
+  type?: string;
+  group?: string;
+  label?: string;
+}
+
+/** The last connection test recorded on a source (`last_test`): written only
+ * by `POST /api/settings/test/ticketing` with `record: true`, carried over by
+ * the sources PUT while the tested fields are unchanged and dropped otherwise.
+ * `connected` on a source means this passed within the last day. */
+export interface TicketingLastTest {
+  ok: boolean;
+  /** ISO-8601, UTC. */
+  at: string;
+  message: string;
+  member_id?: string;
+  states?: TicketingWorkflowState[];
+  /** Asana only: the workspaces the token sees when none is picked yet. */
+  workspaces?: { gid: string; name: string }[];
 }
 
 /** One connectable ticketing platform, and what it asks for. */
@@ -1108,7 +1246,10 @@ export interface TicketingCatalogEntry {
 }
 
 /** One connected source. Free-form beyond `id`/`provider` because each provider
- * contributes its own fields (token, workspace, project key, …). */
+ * contributes its own fields (token, workspace, project key, …). The one
+ * non-string passenger is `last_test` (a `TicketingLastTest`), read through
+ * `components/intake/sourceForm.ts::lastTestOf` rather than typed here, so the
+ * form's string fields stay string-typed. */
 export type TicketingSource = Record<string, string> & { id: string; provider: string };
 
 /** GET /api/traffic (backend/web/addons/traffic.py) — GitHub stars/forks,
@@ -1649,4 +1790,165 @@ export interface OutboxResponse {
     queued: OutboxQueued[];
   };
   summaries?: OutboxSummary[];
+}
+
+/* --- Agent providers (GET /api/providers/status) ------------------------- */
+
+/** One provider's connection status — a row of Settings → Agent providers. */
+export interface ProviderStatus {
+  name: string;
+  aliases?: string[];
+  binary?: string;
+  installed: boolean;
+  /** The resolved executable when installed. */
+  path?: string;
+  authenticated: boolean;
+  auth_known: boolean;
+  auth_detail?: string;
+  /** Whether a miss means anything: the provider named credential files or
+   * env vars to look at (false = it keeps its token where we never look). */
+  auth_probe?: boolean;
+  login_command?: string;
+  /** A login step the provider DECLARED; false = "no sign-in needed". */
+  has_login?: boolean;
+  install_hint?: string;
+  /** Why a custom provider's CLI can't be resolved (shell alias, bad path). */
+  launch_hint?: string;
+  is_default?: boolean;
+  /** This device's saved binary path (coding_cli.binary_paths[name]), "" when none. */
+  binary_override?: string;
+  /** The env var (MINDFLOCK_PROVIDER_BIN_<NAME>) pinning the binary, "" when unset. */
+  binary_override_env?: string;
+}
+
+/** A custom provider TOML the server could not load. */
+export interface ProviderLoadError {
+  file: string;
+  error: string;
+}
+
+export interface ProvidersStatusResponse {
+  providers?: ProviderStatus[];
+  default?: string;
+  errors?: ProviderLoadError[];
+}
+
+/** GET /api/repos/branches — the New dialog's Base branch menu for the
+ * folder in its Folder field: local branches (the checked-out one first),
+ * then remote-tracking refs, capped at 200. `default` is what the server
+ * cuts from when nothing is chosen (origin's HEAD, else main/master, else
+ * the checked-out branch). Not a repo: `is_git: false`, empty list. */
+export interface RepoBranches {
+  path: string;
+  is_git: boolean;
+  current: string;
+  default: string;
+  branches: Array<{ name: string; remote: boolean; current: boolean }>;
+  truncated?: boolean;
+}
+
+/** Recently closed entry fields for a session that left WITHOUT the user
+ * closing it (GET /api/recent and /api/recently-closed). The engine drops a
+ * session at load when its folder and its tmux are both gone and records it
+ * with `reason: "workspace missing"`, `wiped` (nothing to reopen) and
+ * `branch_exists` (whether its branch is still in the repo, so the work can be
+ * recovered by hand). All absent on an ordinary close. */
+export interface ClosedReason {
+  reason?: string;
+  branch_exists?: boolean | null;
+  wiped?: boolean;
+}
+
+/** One person with a terminal open on a session (`Instance.viewers`, keyed by
+ * person id). `device` is the one they used last, `devices` all of them;
+ * `typing` = input within the last few seconds. `name` is "" for another
+ * person (names don't travel between servers). */
+export interface Viewer {
+  name: string;
+  device: string;
+  devices?: string[];
+  since: number;
+  typing: boolean;
+}
+
+/** The person all of one person's devices share — GET/POST /api/person
+ * (backend/web/core/person.py, docs/people.md). `id` is agreed between the
+ * devices (pairing, then settings sync) and never edited; the rest syncs like
+ * any shared setting. An identifier, never a credential. */
+export interface Person {
+  id: string;
+  name: string;
+  /** Who MindFlock's OWN commits (fast-track, team-run merges, peer exports)
+   * are authored as. Both blank = the repo's git config decides. */
+  git_name: string;
+  git_email: string;
+}
+
+/** POST /api/person: `""` clears a field, an absent one is left alone. */
+export type PersonPatch = Partial<Pick<Person, "name" | "git_name" | "git_email">>;
+
+/** GET /api/connections — Settings → Connections, one row per outside thing
+ * MindFlock talks to (backend/web/addons/connections.py `_row`). */
+export type ConnectionStatus = "connected" | "needs_attention" | "off";
+
+export interface ConnectionAction {
+  label: string;
+  /** dialog: a named in-app dialog (connect-github, agent-sign-in, intake,
+   * db-explorer); screen: a Settings screen key; route: an in-app URL;
+   * copy: a command to copy. */
+  kind: "dialog" | "screen" | "route" | "copy";
+  target: string;
+  /** agent-sign-in: which CLI, and the auth profile to sign in (optional). */
+  provider?: string;
+  profile?: string;
+  /** intake: the tab, and the ticket source the row is about. */
+  tab?: string;
+  source_id?: string;
+}
+
+export interface ConnectionTestSpec {
+  endpoint: string;
+  method: string;
+  body?: Record<string, unknown>;
+}
+
+export interface ConnectionRow {
+  id: string;
+  name: string;
+  kind: string;
+  status: ConnectionStatus;
+  detail: string;
+  action: ConnectionAction | null;
+  test: ConnectionTestSpec | null;
+  fix_command?: string;
+  fix?: string;
+  docs?: string;
+  updated_at?: string;
+  /** The default agent provider's row. */
+  default?: boolean;
+  /** Old row fields, kept by the server for one release. */
+  legacy_status?: "connected" | "attention" | "not_connected";
+  settings_screen?: string;
+  configure_dialog?: string;
+  purpose?: string;
+}
+
+export interface ConnectionsSummary {
+  connected: number;
+  needs_attention: number;
+  off: number;
+  total: number;
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionRow[];
+  summary?: Partial<ConnectionsSummary>;
+}
+
+/** A user extension that failed to load at startup (GET /api/addons `failed`). */
+export interface ExtensionLoadFailure {
+  id: string;
+  file: string;
+  error: string;
+  at?: number;
 }

@@ -51,7 +51,6 @@ def test_index_has_wave2_markup():
     # E3 settings test buttons (gh/agent are static; ticketing tests are
     # per-source, rendered inside the ticketing-sources list at runtime)
     for el_id in (
-        "gh-test-btn",
         "agent-test-btn",
         "ticketing-sources",
         "ticketing-add",
@@ -84,7 +83,7 @@ def test_app_js_uses_new_apis():
     assert "updateTitleBadge" in js
     # C2: doctor-backed first-run checklist
     assert "/api/doctor" in js
-    assert "Create your first session" in js
+    assert "Pick a repo" in js and "Sign in to your agent" in js
     # E3: account test endpoints
     for path in (
         "/api/settings/test/shortcut",

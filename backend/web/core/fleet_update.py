@@ -1,4 +1,4 @@
-"""Update all my devices (Settings → Devices, ``mindflock devices update``).
+"""Update all my devices (Settings → Your devices, ``mindflock devices update``).
 
 Two halves, the same two audiences as the rest of "Your devices"
 (:mod:`backend.web.addons.fleet` routes them):

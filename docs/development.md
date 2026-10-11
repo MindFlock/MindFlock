@@ -18,7 +18,7 @@ pytest-asyncio, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`
 (engine + fastapi, uvicorn, segno).
 
 `segno` (pure-Python QR codes) is imported **lazily and optionally**: it renders
-the startup banner's mobile-URL QR, the Settings → Mobile QR, and the ntfy
+the startup banner's mobile-URL QR, the Settings → Your phone QR, and the ntfy
 subscribe QR, all through `mobile_access.qr_svg` / `_qr_lines`. Without it
 installed, `qr_svg` returns `None`, the API fields that carry it (`GET /api/mobile`,
 `GET /api/notify/ntfy` → `qr_svg`) are `null`, and each surface falls back to the
@@ -71,17 +71,31 @@ Settings → Advanced can make the **server update itself** (`/api/update/*`,
 `backend/web/core/self_update.py`). It **refuses to run against a dev checkout**:
 `install_kind()` calls an install `editable` when the `backend` package that is
 currently imported lives *outside* site-packages, and the update answers with a
-sentence ("`git pull` in the checkout, then restart") instead of a button. So an
+the exact git commands (fetch, check out the release, restart) instead of a
+button, and names the install method (uv tool, pipx, or editable). So an
 `uv tool install --force --editable` install is never clobbered by that screen —
 but do not defeat the check, because `uv tool install --force` would replace your
 working tree with a release build.
 
-The update path runs the **same step `install.sh` runs** — resolve the release
-tag to a full commit (peeled tags first: an annotated tag's own ref points at the
-tag object, not the commit), then `uv tool install --force --python 3.12
-"mindflock[web] @ git+<repo>@<commit>"`. The two have to stay in step, the
-`INSTALL_PYTHON` pin included; changing one without the other means the
-installer and the updater produce different installs.
+The update path runs the **same step `install.sh` runs** — pick the newest
+release (the GitHub releases API's `tag_name`, falling back to the highest
+`vX.Y.Z` tag from `git ls-remote --tags` when the API is unreachable or
+rate-limited), resolve that tag to a full commit (peeled tags first: an
+annotated tag's own ref points at the tag object, not the commit), then `uv
+tool install --force --python 3.12 "mindflock[web] @ git+<repo>@<commit>"`.
+The two have to stay in step, the `INSTALL_PYTHON` pin included (it is a named
+variable in both files); changing one without the other means the installer
+and the updater produce different installs. Both accept another ref
+(`MINDFLOCK_INSTALL_REF` / `mindflock update --ref`), and `install.sh` warns
+when it is not a release tag, because the desktop app installs the release
+matching its own version and an engine ahead of it is what the app's
+state.json downgrade path trips over. After a successful install `install.sh`
+records `~/.mindflock/install.json` —
+`{"method":"uv-tool","ref":…,"sha":…,"python":"3.12","at":…}` plus `repo` (or
+`path` for `MINDFLOCK_INSTALL_LOCAL`, where `ref` is `local`) — the contract
+`mindflock update` reads to follow the same path, detecting the install when
+the file is missing. CI's cold-install job asserts the file after installing
+the checkout under test.
 
 ### Rebuild the bundle in the same commit
 
@@ -242,26 +256,40 @@ a TODO. Signing config lives in `electron/package.json` (`mac`) and
 
 ```
 backend/
+├── cli.py / init_wizard.py  # the `mindflock` CLI + the guided first run (`init`, `serve --setup`)
+├── doctor.py             # dependency preflight (+ --fix install plans)
 ├── cmd/                  # Go-style command executor (mockable)
-├── config/               # ~/.mindflock config.json + state.json (Go byte-compatible)
+├── config/               # ~/.mindflock config.json + state.json (Go byte-compatible) + settings.py (the web settings store)
 ├── log/                  # Go-style file logger ({tempdir}/mindflock.log)
-├── providers/            # coding-agent CLI abstraction + pricing + usage history
+├── mcp/                  # the MindFlock MCP stdio server (27 tools + 7 peer-only tools; stdlib only)
+├── peer/                 # peer links: invites, pinned-key TLS, relay/tunnel, sandboxed shared folder
+├── providers/            # coding-agent CLI abstraction + pricing + usage history (+ mcp_attach.py)
 ├── session/              # Instance lifecycle
 │   ├── git/              #   worktrees, diff, commit/push
 │   ├── tmux/             #   tmux sessions, PTY, resize handling
 │   └── provisioned.py    #   workspace provisioning + launcher
-├── ticket_ingestion/   # the Shortcut/GitHub → Claude pipeline
+├── ticket_ingestion/     # the ticket / PR-review / issue ingestion pipeline (Shortcut, Jira, Linear, GitHub Issues, Asana)
 └── web/
     ├── server.py         # FastAPI app assembly: routes, background loops, terminal WS
     ├── core/             # one module per concern: engine, terminal (PTY↔WS),
     │                     # git_ops, agent_state, agent_sessions, snapshot,
     │                     # session_stats, budget, usage_api, mobile_access, …
-    ├── addons/           # addon framework + Ticket Ingestion + Assistant
-    ├── static/           # frontend (no build step; vendored xterm.js)
+    ├── addons/           # addon framework + ticket ingestion, assistant, settings, doctor,
+    │                     # connections, templates, notify, fleet, onboarding, dbclient, traffic
+    ├── static/           # COMMITTED build output of frontend/ (app.js, style.css) + mobile UI
     └── run.py / run.sh   # launchers (local by default, tailscale opt-in; QR banner)
 
+frontend/                  # the web UI source: React + TypeScript, built by Vite
+├── src/                  #   components/, lib/, state/, styles/; tests in src/__tests__/ (vitest)
+├── vite.config.ts        #   `npm run build` writes backend/web/static/
+└── vitest.config.ts      #   `npm test`
+
+electron/                  # the desktop app: main.js, preload.js, offline.html, logger.js
+└── build/                #   installer.nsh (Windows: checks WSL only), entitlements
+
 tests/{unit,property,integration}/
-scripts/list_workflows.py  # print Shortcut workflow/state ids for config.toml
+scripts/                   # bump-version.py, check-bundle-fresh.sh, quickstart-verify.sh,
+                           # list_workflows.py (Shortcut workflow/state ids), make-mac-selfsigned-cert.sh
 docs/                      # this documentation
 ```
 
@@ -285,6 +313,32 @@ redirects `tempfile` + `MINDFLOCK_ASSISTANT_DIR` into pytest's tmp dir so tests
 never touch your real caches — important because the pipeline's testmon
 refresher re-runs suites automatically.
 
+### Journey tests
+
+`tests/e2e` drives the real UI — the committed bundle, served by a real
+server with a stub `claude` on `PATH` (the cold-install job's stub, so no
+credentials) — in a headless system Chrome, and asserts on what a user sees:
+the first-run setup card, Ctrl+N → a session row with a terminal, ✕ → Recently
+closed → Reopen, Settings → Connections, and the Ctrl+W guard with the
+palette open. Each test boots its own server into a scratch `$HOME` with its
+own tmux server (never the default socket), on a free port, with
+`CS_CURSOR_AUTOADOPT=0`. They are opt-in — a plain `pytest` skips them — and
+need Chrome plus the `playwright` package from the dev group (`MINDFLOCK_E2E=1`
+also opts a run in):
+
+```bash
+uv run pytest tests/e2e -q            # ~30 s for the five journeys
+MINDFLOCK_E2E_SHOTS=1 uv run pytest tests/e2e -q   # keep every screenshot
+```
+
+A failing journey leaves `screenshot.png`, `server.log` and
+`page-errors.txt` under `tests/e2e/_artifacts/<test>/` (gitignored); the
+`e2e` CI job uploads the same directory. That job is non-blocking
+(`continue-on-error`) for now and not in the required set — read a red run,
+it is not a gate yet. Known expected failure: `test_shortcuts_guard` is
+`xfail(strict=False)` until Ctrl+W is guarded while the command palette is
+open; it flips to a pass by itself when that lands.
+
 ### Test map
 
 | Area | Files |
@@ -298,7 +352,7 @@ refresher re-runs suites automatically.
 | PR flow | `test_pr_pipeline` |
 | Property (hypothesis) | backfill ordering, prompt construction, validation-with-context, assignee filter, timestamp persistence |
 | Integration | `test_claude_runner` (async ClaudeCodeRunner) |
-| Frontend (vitest) | `frontend/src/__tests__/*.test.ts` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel, sessionLabel, shell) |
+| Frontend (vitest) | `frontend/src/__tests__/*.test.ts(x)` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel, sessionLabel, shell, intakeQueue, prefsSync, queueDnd, …) |
 
 `test_tailnet_trust` stubs `tailnet_trust._whois_uncached` and
 `_proc_socket_uid` (no real `tailscale` or `/proc` lookups), and clears the
@@ -313,10 +367,12 @@ launch behavior.
 The frontend tests are **not** part of `uv run pytest`. `vitest` is a
 `frontend/` devDependency and its config is `frontend/vitest.config.ts`
 (`environment: "node"`, separate from `vite.config.ts` on purpose so the
-production build is untouched by test settings). Nothing in CI runs them today:
+production build is untouched by test settings). CI runs them on every push
+(`.github/workflows/ci.yml`: `npm ci` then `npm test` in `frontend/`), next
+to the bundle-freshness check:
 
 ```bash
-cd frontend && npm test           # 10 files, 137 tests
+cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
 ```
 
 ## Conventions
@@ -332,20 +388,48 @@ cd frontend && npm test           # 10 files, 137 tests
 
 ## Known issues
 
-Verified against the codebase 2026-07-15; useful when touching these areas:
+Re-verified against the codebase 2026-10-10; useful when touching these areas:
 
-1. **Old config section names are not aliased.** All code reads `[mindflock]`; a
-   local `config.toml` still carrying a section under an earlier project name is
-   ignored wholesale, so every key in it — `enabled`, `mode`, `open_cursor`,
-   `skip_permissions` — silently reverts to its default (engine routing is
-   default-**on**, so a legacy `enabled = false` does not take effect).
-2. Ingestion is polling-only — there is no webhook listener.
-3. The clarification handler has no `skip` path — it always returns
-   `provide_context`.
-4. Story dedup is id-only — skipped stories are never retried automatically.
-5. Base clones (`_base_*`) are *not* in the workspace-cleanup preserve list; if the
-    pipeline sits idle for 3+ days the canonical clone can be pruned (it will be
-    re-cloned on next use).
+1. **Old config section names are not aliased.** All code reads `[mindflock]`
+   (`ticket_ingestion/config.py` reads `raw.get("mindflock")` and nothing
+   else); a local `config.toml` still carrying a section under an earlier
+   project name is ignored wholesale, so every key in it — `enabled`, `mode`,
+   `open_cursor`, `skip_permissions` — silently reverts to its default (engine
+   routing is default-**on**, so a legacy `enabled = false` does not take
+   effect).
+2. Ingestion is polling-only — there is no webhook listener (the server has no
+   webhook route; the orchestrator's "webhook" comments describe a path that
+   nothing calls).
+3. The clarification handler has no `skip` path —
+   `InteractiveClarificationHandler.request_clarification` always returns
+   `provide_context`, so the pipeline continues with the original story.
+4. Story dedup is id-only — a `skipped` / `failed` ledger entry is never
+   retried automatically; the retry is the manual "delete the ledger entry"
+   remedy in Intake (which now shows the stored failure reason beside it).
+5. Base clones (`_base_*`) are *not* in the workspace-cleanup preserve list
+   (`workspace_cleanup._PRESERVED_NAMES` is empty; only the testmon refresher
+   dir and workspaces with a live tmux session are kept); if the pipeline sits
+   idle for 3+ days the canonical clone is pruned and re-cloned on next use.
+
+Two other lists are kept next to the code they describe and are not repeated
+here — read them before touching those areas:
+
+- [mcp.md → Known gaps](mcp.md#known-gaps): resume after a server restart
+  drops the MCP attach and launch args; provisioned launchers bake the attach
+  args in; ticket workers and provisioned parents fork from the base branch,
+  not HEAD; repository issues aren't startable from the MCP; push failures are
+  read off the shell; live sessions get the MCP on their next launch only;
+  Claude backgrounds tool calls past ~2 min; waits cap at 1500 s; long-poll
+  tracking is per server process; a second `--allowedTools` and Codex
+  end-to-end are unverified.
+- [ingestion-pipeline.md → Current-behavior caveats](ingestion-pipeline.md#current-behavior-caveats):
+  engine routing on by default and only under `[mindflock]`; polling-only;
+  the Shortcut archived filter is unconditional and skipped by `fetch(id)`;
+  a 404 is not always "deleted" (pending markers are dropped at restart);
+  the Intake panel's skip reasons use their own state comparison; top-level
+  PR comments are fetched by dead code; the clarification "skip" branch is
+  unreachable and the standalone story runner passes no
+  `--dangerously-skip-permissions`.
 
 ## Useful commands
 

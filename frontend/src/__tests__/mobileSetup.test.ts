@@ -1,13 +1,13 @@
-/** Settings → Mobile (components/settings/screens/Mobile.tsx): the shared
- * link's setup checklist, the masked access token and the URL grid.
+/** Settings → Your phone (screens/Mobile.tsx: the phone steps and the URL
+ * grid) and the shared phone link's setup checklist (screens/SharedLink.tsx,
+ * rendered on Your devices).
  *
  * What is pinned: every step renders its server-given state as ✓ / ✗ / ? —
  * an unknown approval is never drawn as a tick; a failing step shows its
  * exact fix (the operator command, the named machine with the -1 note, the
  * one prefilled policy block, the admin console links); a passing
- * step folds its fix away; the phone step carries the QR; and the token is
- * masked until Show. The vitest environment is node, so views are checked
- * through react-dom/server. */
+ * step folds its fix away; and the phone step carries the QR. The vitest
+ * environment is node, so views are checked through react-dom/server. */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -21,11 +21,10 @@ vi.mock("../components/settings/useServerRestart", () => ({
   useServerRestart: () => ({ restarting: false, restart: vi.fn() }),
 }));
 
-const { PhoneSteps, SetupChecklist, TokenField, UrlList, TOKEN_MASK } = await import(
-  "../components/settings/screens/Mobile"
-);
-type Shared = import("../components/settings/screens/Mobile").SharedLinkState;
-type Step = import("../components/settings/screens/Mobile").SetupStep;
+const { PhoneSteps, UrlList } = await import("../components/settings/screens/Mobile");
+const { SetupChecklist } = await import("../components/settings/screens/SharedLink");
+type Shared = import("../components/settings/screens/SharedLink").SharedLinkState;
+type Step = import("../components/settings/screens/SharedLink").SetupStep;
 
 const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"],\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"],\n  },\n},\n"grants": [\n  {"src": ["tag:mindflock"], "dst": ["tag:mindflock"], "ip": ["tcp:8765", "tcp:443"]},\n  {"src": ["me@example.com"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]},\n],\n"tests": [\n  {"src": "tag:mindflock", "accept": ["tag:mindflock:8765"]},\n],`;
 
@@ -150,16 +149,6 @@ describe("SetupChecklist", () => {
     const s = step(render(shared({ operator: "fail" }, { error_kind: "missing" })), "operator");
     expect(s).toContain("tailscale.com/download");
     expect(s).not.toContain("--operator");
-  });
-});
-
-describe("TokenField", () => {
-  it("masks the token until Show", () => {
-    const html = renderToStaticMarkup(createElement(TokenField, { token: "secret-token-123" }));
-    expect(html).not.toContain("secret-token-123");
-    expect(html).toContain(TOKEN_MASK);
-    expect(html).toContain(">Show<");
-    expect(html).toContain(">Copy<");
   });
 });
 

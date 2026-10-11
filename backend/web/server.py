@@ -59,8 +59,12 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
                      blocked/breached/tampered events, the row summary
     remote           tailnet multi-device discovery + proxying
     repo_picker      ranked repo suggestions for the New Session folder field
+    revive           background revive: relaunch agents after a restart
     outbox           what is waiting on you / shipping / shipped / queued
     session_create   the create route's body (POST /api/instances)
+    session_end      ending a session: DELETE / /close / /cleanup / the
+                     workspace delete share one path (folder-in-use 409,
+                     Recently closed, children re-parented)
     session_stats    token/cost telemetry + transcript history rendering
     snapshot         per-session JSON descriptors (labels, diff stat)
     system_logs      log-tail sources for Settings → System logs
@@ -116,6 +120,7 @@ from backend.providers import effort as _provider_effort
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.config import ide as ide_cfg
 from backend.config import red_zones as _red_zones
+from backend.config import repo_zones as _repo_zones
 from backend.session import instance as _instance
 from backend.session import provisioned as provisioning
 from backend.session import tmux
@@ -127,12 +132,19 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
+from backend.web.core import hidden_sessions as _hidden_sessions
+from backend.web.core import person_sessions as _person_sessions
+from backend.web.core import shared_branch as _shared_branch
+from backend.web.core import ownership as _ownership
+from backend.web.core import person as _person
 from backend.web.core import peer_guard as _peer_guard
+from backend.web.core import session_end as _session_end
 from backend.web.core import auth as _auth
 from backend.web.core import tailnet_bind as _tailnet_bind
 from backend.web.core import tailnet_trust as _tailnet_trust
 from backend.web.core import fleet_claims as _fleet_claims
 from backend.web.core import settings_sync as _settings_sync
+from backend.web.core import setup_steps as _setup_steps
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
@@ -269,6 +281,7 @@ from backend.web.core.repo_picker import (
     search_repos,
     suggest_repos,
 )
+from backend.web.core.repo_branches import list_branches as _list_branches
 from backend.web.core.workspaces import (
     STALE_WORKTREE_DAYS,
     _base_clone_references,
@@ -326,6 +339,7 @@ from backend.web.core.engine import (
 )
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
+from backend.web.core import revive as _revive
 from backend.web.core import self_update as _self_update
 from backend.web.core import update_watch as _update_watch
 from backend.web.core.mobile_access import (
@@ -375,6 +389,7 @@ from backend.web.core.git_ops import (
 )
 from backend.web.core.terminal import (
     apply_scroll_speed,
+    is_terminal_reply,
     load_scroll_speed,
     pump_pty,
     save_scroll_speed,
@@ -482,6 +497,12 @@ async def lifespan(app: FastAPI):
     # Give the event bus the server loop so user shell hooks (B3) can be
     # spawned fire-and-forget even when emit() happens on a worker thread.
     _events.BUS.set_loop(asyncio.get_running_loop())
+    # The person this device belongs to (core.person): an existing store gets
+    # its id on this first load, before anything stamps a session with it.
+    try:
+        await asyncio.to_thread(_person.ensure_id)
+    except Exception:  # noqa: BLE001 — never block startup on a label
+        pass
     # Adopt loop: pull in instances written by other processes (TUI/pipeline).
     _register_task(_reload_loop())
     # Instances tick: the side effects that used to piggyback on the browser's
@@ -565,6 +586,13 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(apply_scroll_speed)
         except Exception:  # noqa: BLE001
             pass
+        # Verify runs created before the `hidden_by` flag existed were kept off
+        # the rail by their title alone; flag the ones a checklist still names
+        # so upgrading does not list every old run as work (idempotent).
+        try:
+            await asyncio.to_thread(_backfill_hidden_verify_sessions)
+        except Exception:  # noqa: BLE001
+            pass
         # Pasted screenshots are transient: every restart clears them all (each
         # new paste also prunes its directory to the newest _PASTE_KEEP).
         try:
@@ -601,6 +629,16 @@ async def lifespan(app: FastAPI):
         await mobile_announce.announce(mobile_announce.REASON_STARTUP)
 
     _register_task(_startup_warmups())
+    # Background revive (core.revive): after the boot quiet window, relaunch
+    # every session whose agent was running at shutdown, so nothing waits on
+    # Offline until someone clicks it. Off under pytest — ENGINE is the
+    # developer's real state there, and this LAUNCHES agents.
+    if _revive_on_start_loop_enabled():
+        _register_task(_revive.run_on_start())
+    # The Map's snapshot warmer reads every open session's worktree — never
+    # under pytest (ENGINE is the developer's real state there).
+    if _code_map_warm_on_start_enabled():
+        _register_task(_code_map_warm_on_start())
     # Addon startup hooks (e.g. the Assistant seeds its working dir here).
     for _addon in ADDONS:
         try:
@@ -1079,9 +1117,17 @@ _ATTACH_PROBE_GRACE_S = 2.0
 _HUMAN_INPUT_AT: Dict[str, float] = {}
 
 
-def _note_human_input(title: str) -> None:
-    """Record that a human just put input into ``title``'s window."""
+def _note_human_input(title: str, person: str = "", device: str = "") -> None:
+    """Record that a human just put input into ``title``'s window — per
+    title for the announcement gate below, and per (title, person, device)
+    for the session's ``viewers`` (core.ownership) when the caller knows
+    who."""
     _HUMAN_INPUT_AT[title] = time.time()
+    if person:
+        try:
+            _ownership.note_input(title, person, device)
+        except Exception:  # noqa: BLE001 — presence stamping must never fail
+            pass
     # A person in the pane: a background find index there stops at once.
     try:
         _pane_scroll_find.cancel_background(tmux.to_mindflock_tmux_name(title))
@@ -1368,7 +1414,8 @@ def _free_untitled() -> str:
     """
     title = "untitled"
     n = 2
-    while title in ENGINE.instances:
+    branches = _session_branches()
+    while title in ENGINE.instances or _aliases.owner_of(title, branches):
         title = "untitled-%d" % n
         n += 1
     return title
@@ -1490,6 +1537,9 @@ def _closed_just_now(title: str, within_s: float = 120.0) -> bool:
         newest = (_load_recently_closed() or [None])[0]
         if not newest or newest.get("title") != title:
             return False
+        if newest.get("wiped"):
+            # end_session records wiped sessions too; those were deleted.
+            return False
         closed = _datetime.datetime.fromisoformat(str(newest.get("closed_at")))
         return (
             _datetime.datetime.now().astimezone() - closed
@@ -1547,6 +1597,22 @@ def _disarm_removed_session(title: str) -> None:
 
 
 _SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
+
+
+def _release_tracker_claim(title: str) -> None:
+    """Take the ``mindflock:working`` label off the ticket a closed (or
+    shipped) session had claimed on its tracker — on a background thread, the
+    tracker is a network call. Never un-assigns; a no-op when the session
+    mirrored nothing (backend.ticket_ingestion.tracker_claims)."""
+    from backend.ticket_ingestion import tracker_claims as _tracker
+
+    try:
+        _tracker.release_soon(title)
+    except Exception:  # noqa: BLE001 — bookkeeping, never the removal
+        pass
+
+
+_SESSION_REMOVED_HOOKS.append(_release_tracker_claim)
 
 
 def _orphan_children(title: str) -> list:
@@ -1654,9 +1720,35 @@ def _forget_session_state(title: str) -> None:
     _forget_probes(title)
     for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT, _HUMAN_INPUT_AT):
         _d.pop(title, None)
+    # A namesake must not come back hidden from the rail either.
+    _hidden_sessions.drop(title)
+    # …nor credited to the dead session's person.
+    _person_sessions.drop(title)
+    # …nor working on somebody's shared branch.
+    _shared_branch.drop(title)
+    # …nor its owner, driver or presence stamps.
+    _ownership.drop(title)
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
     # thread), so it needs the translation the others do not.
     _THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)
+
+
+def _backfill_hidden_verify_sessions() -> int:
+    """Flag the verify runs that predate ``hidden_by`` (startup, once).
+
+    A live ``verify-…`` session that a checklist still names — as its current
+    run or any run in its history — gets ``hidden_by: "verify"``, which is what
+    kept it off the rail by title before the flag existed. The association is
+    required: the prefix alone is the heuristic the flag replaces.
+    """
+    sessions: set = set()
+    for plan in _test_plans.list_plans():
+        sessions.add(str(plan.get("run_session") or ""))
+        for run in plan.get("runs") or ():
+            if isinstance(run, dict):
+                sessions.add(str(run.get("session") or ""))
+    sessions.discard("")
+    return _hidden_sessions.backfill_verify(list(ENGINE.instances.keys()), sessions)
 
 
 def _prune_session_state(live_titles) -> None:
@@ -1777,8 +1869,9 @@ def _ensure_state_ticker() -> None:
 # Per-session gating avoids double-sending and reboot storms:
 #   * send only when activity is "idle" (finished a turn / at its prompt) and
 #     the session is "armed" — armed starts True, clears on send, and re-arms
-#     when we next observe "working" (the agent picked the prompt up). This
-#     tracks the real working→idle cycle instead of trusting a fixed cooldown.
+#     when we next observe "working" (the agent picked the prompt up), or on
+#     other evidence the send was consumed (_send_consumed). This tracks the
+#     real working→idle cycle instead of trusting a fixed cooldown.
 #   * "working"/"clarify" are left alone (busy, or waiting on a human decision).
 #   * "offline" for a started, non-paused session means the agent tmux died
 #     (e.g. the CLI exited when usage ran out) — reboot it (resuming the
@@ -1818,7 +1911,7 @@ _QUEUE_IDLE_SETTLE_MARKER = 4.0
 _QUEUE_BOOT_GRACE = 20.0
 _QUEUE_STATE: Dict[str, dict] = (
     {}
-)  # title -> {"armed", "sent_at", "rebooted_at", "idle_since"}
+)  # title -> {"armed", "sent_at", "sent_text", "rebooted_at", "idle_since"}
 
 # Usage-limit gate (roadmap D): when the agent pane shows a "usage limit reached"
 # screen, hold the queue until the limit resets instead of sending into a wall.
@@ -2038,6 +2131,7 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     entry = _prompt_queue.record_sent(title, nxt["id"])
     rec["armed"] = False
     rec["sent_at"] = now
+    rec["sent_text"] = nxt["text"]
     _events.BUS.emit(
         "session.prompt_sent",
         session=title,
@@ -2132,6 +2226,46 @@ def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool
         else _QUEUE_IDLE_SETTLE
     )
     return now - rec["idle_since"] >= settle
+
+
+def _send_consumed(inst, title: str, rec: dict) -> bool:
+    """Evidence that the drain's last send into ``title`` (``rec["sent_at"]``,
+    ``rec["sent_text"]``) was taken by the agent although the drain never read
+    ``working`` after it. Asked only with the session idle and SETTLED, so a
+    turn that is merely slow to start has had its chance to show. Either:
+
+    * the agent was corroborated working after the send
+      (``agent_state.last_worked_at`` — the unspent twin of ``worked_at``: a
+      turn short enough to start and end between two drain polls is still
+      seen by the 4s tickers, which may announce it and spend ``worked_at``
+      before the drain looks); or
+    * the input box no longer holds the sent text — the CLI submitted it and
+      handled it locally (``/clear``, ``/model``: no hook fires, no turn
+      starts). One screen capture, only for a provider that can read its box
+      (``BaseProvider.input_holds``); only an EMPTY box counts, since a box
+      holding other text (a human's draft, a placeholder) proves nothing.
+
+    False when neither holds; the caller's _QUEUE_REARM_IDLE fallback still
+    applies. Never raises."""
+    sent_at = float(rec.get("sent_at") or 0.0)
+    worked = _agent_state.last_worked_at(title)
+    if worked is not None and worked > sent_at:
+        return True
+    text = rec.get("sent_text")
+    if not text:
+        return False
+    try:
+        from backend.providers.base import BaseProvider
+
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        if type(provider).input_holds is BaseProvider.input_holds:
+            return False  # can't read its box: don't pay for a capture
+        screen, err = _agent_io.capture_screen(tmux.to_mindflock_tmux_name(title))
+        if err is not None or not screen:
+            return False
+        return provider.input_holds(screen, text) is False
+    except Exception:  # noqa: BLE001 — no evidence: the fallback re-arms
+        return False
 
 
 def _drain_one_queue(title: str) -> None:
@@ -2230,15 +2364,18 @@ def _drain_one_queue(title: str) -> None:
     mail_sent = (_MAIL_STATE.get(title) or {}).get("sent_at", 0.0)
     if not _idle_settled(rec, title, now, since=mail_sent):
         return
-    # A send that never started a turn (it landed while the CLI sat on a
-    # usage-limit screen, or the turn finished between two 5s polls) leaves
-    # ``armed`` False with no "working" transition ever coming — which would
-    # stall the queue forever. An agent still idle this long after our send
-    # clearly isn't going to pick it up: re-arm so the next pass (behind the
-    # usage-limit gate below) can retry.
-    if (
-        not rec.get("armed", True)
-        and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
+    # A send the drain never SAW picked up leaves ``armed`` False with no
+    # "working" reading coming. Two ways that happens while the send was in
+    # fact consumed — a turn that started and ended between two 5s polls, and
+    # a slash command the CLI handled locally (no hook, no turn) — re-arm as
+    # soon as the evidence says so (_send_consumed). The third — the send
+    # landed on a usage-limit screen and was never taken — has no evidence to
+    # offer: an agent still idle _QUEUE_REARM_IDLE after it clearly isn't
+    # going to pick it up, so re-arm then and let the next pass (behind the
+    # usage-limit gate below) retry.
+    if not rec.get("armed", True) and (
+        now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
+        or _send_consumed(inst, title, rec)
     ):
         rec["armed"] = True
     # send the next prompt if armed + past the send cooldown (which counts a
@@ -2368,6 +2505,7 @@ def _watch_one_limited(title: str) -> None:
         if _send_to_agent(name, _LIMIT_RESUME_PROMPT, submit=True):
             rec["armed"] = False
             rec["sent_at"] = now
+            rec["sent_text"] = _LIMIT_RESUME_PROMPT
             if log.ErrorLog is not None:
                 try:
                     log.ErrorLog.Printf(
@@ -5411,7 +5549,8 @@ async def _sweep_orphan_verify_sessions() -> None:
     ``run_session`` or any run record's ``session`` (a finished run's session
     deliberately stays open for the user to read). Closing goes through
     ``_end_verify_session``: a close, not a delete, so a mistaken sweep is one
-    click from coming back via recently-closed.
+    click from coming back via recently-closed. Candidates are the sessions
+    flagged ``hidden_by == "verify"``, never a title-prefix match.
     """
     try:
         plans = _test_plans.list_plans()
@@ -5427,8 +5566,10 @@ async def _sweep_orphan_verify_sessions() -> None:
             if title:
                 referenced.add(title)
     for title in list(ENGINE.instances.keys()):
-        # The prefix run_test_plan builds titles from ("verify-%s" % plan_id).
-        if not title.startswith("verify-") or title in referenced:
+        # Verify runs carry the hidden_by flag (set by run_test_plan, or by
+        # the startup backfill for runs created before the flag existed); a
+        # user's own `verify-foo` has no flag and is never swept.
+        if _hidden_sessions.hidden_by(title) != "verify" or title in referenced:
             continue
         inst = ENGINE.instances.get(title)
         created = getattr(inst, "CreatedAt", None)
@@ -5802,6 +5943,8 @@ def list_instances(request: Request) -> JSONResponse:
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
             _fresh_lineage(cached)
+            _ownership.overlay(cached)
+            _aliases.overlay(cached)
             return JSONResponse(cached + remote + _pending_rows())
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
@@ -5810,6 +5953,8 @@ def list_instances(request: Request) -> JSONResponse:
         for i in list(ENGINE.instances.values())
     ]
     _lanes.fill_duplicates(snap)
+    _ownership.overlay(snap)
+    _aliases.overlay(snap)
     return JSONResponse(snap + remote + _pending_rows())
 
 
@@ -5849,13 +5994,13 @@ def disconnect_device(device: str) -> JSONResponse:
 
     409 for one of "Your devices": the fleet key keeps it connected whatever
     happens to a pasted token, so forgetting the token would say
-    "disconnected" and change nothing — it is removed in Settings → Devices."""
+    "disconnected" and change nothing — it is removed in Settings → Your devices."""
     dev = _remote._DEVICES.get(device)
     if dev is not None and _remote._member_device(dev):
         host = dev.get("host") or device
         return JSONResponse(
             {
-                "error": "%s is one of your devices — remove it in Settings → Devices"
+                "error": "%s is one of your devices — remove it in Settings → Your devices"
                 % host
             },
             status_code=409,
@@ -6122,7 +6267,7 @@ async def _red_zone_loop() -> None:
 
 @app.get("/api/mobile")
 def get_mobile(request: Request) -> JSONResponse:
-    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Mobile).
+    """Mobile (/m) URLs + a scannable QR for phone access (Settings → Your phone).
 
     The QR's sign-in tokens (this device's own, the devices' key, every
     paired device's) and ``token`` go only to a caller that may see this
@@ -6131,7 +6276,12 @@ def get_mobile(request: Request) -> JSONResponse:
     gets the bare URLs, ``token: null``."""
     try:
         mine = _auth.may_see_own_token(request.scope)
-        return JSONResponse(_mobile_info(include_tokens=mine))
+        info = _mobile_info(include_tokens=mine)
+        # The first-run checklist marks "Your phone" only when ITS "Show QR"
+        # asked (?setup=1): Settings and the restart poll also read this route.
+        if mine and info.get("qr_svg") and request.query_params.get("setup") == "1":
+            _setup_steps.mark("phone")
+        return JSONResponse(info)
     except Exception:  # noqa: BLE001 — never 500 the settings screen
         return JSONResponse(
             {"urls": [], "qr_svg": None, "token": "", "note": "unavailable"}
@@ -6140,7 +6290,7 @@ def get_mobile(request: Request) -> JSONResponse:
 
 @app.post("/api/mobile/shared/recheck")
 def recheck_shared_link(request: Request) -> JSONResponse:
-    """Settings → Mobile's Re-check: re-read the shared link's setup from
+    """Settings → Your phone's Re-check: re-read the shared link's setup from
     Tailscale, re-apply what drifted (and re-advertise a tagged host that
     still isn't approved), then return the refreshed ``/api/mobile`` payload."""
     try:
@@ -6152,7 +6302,7 @@ def recheck_shared_link(request: Request) -> JSONResponse:
 
 @app.post("/api/server/restart")
 def post_server_restart(payload: Optional[dict] = None) -> JSONResponse:
-    """Re-exec the server process so a changed serve mode (Settings → Mobile
+    """Re-exec the server process so a changed serve mode (Settings → Your phone
     toggle) takes effect without the user finding the right terminal.
 
     Safe because the actual work lives outside this process: agent sessions
@@ -6176,6 +6326,34 @@ def post_server_restart(payload: Optional[dict] = None) -> JSONResponse:
     else:
         _restart.reexec_soon()
     return JSONResponse({"ok": True, "restarting": True})
+
+
+#: None = automatic: on in a real server, OFF under pytest (the startup sweep
+#: launches agents for every session in ENGINE, the developer's real state).
+_REVIVE_ON_START_ENABLED: Optional[bool] = None
+
+
+def _revive_on_start_loop_enabled() -> bool:
+    if _REVIVE_ON_START_ENABLED is not None:
+        return bool(_REVIVE_ON_START_ENABLED)
+    # MINDFLOCK_REVIVE_ON_START=0 forces it OFF at boot regardless of the
+    # setting (sandboxed servers: the e2e journeys, a scratch `serve`).
+    if os.environ.get("MINDFLOCK_REVIVE_ON_START", "1") == "0":
+        return False
+    return not _restart._under_pytest()
+
+
+@app.post("/api/server/revive-all")
+async def post_server_revive_all(request: Request) -> JSONResponse:
+    """Run the background-revive sweep now (:mod:`backend.web.core.revive`):
+    relaunch every session whose agent should be running but isn't, two at a
+    time, through the same path as ``/api/instances/{title}/revive``. Owner
+    only (``auth.may_configure``, 403) — it launches agents. Waits for the
+    sweep and returns ``{"revived": [...], "skipped": {title: reason},
+    "already_running": n, "summary": "revived N, skipped M: ..."}``."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    return JSONResponse(await _revive.sweep(trigger="on demand"))
 
 
 # --------------------------------------------------------------------------- #
@@ -6204,20 +6382,36 @@ async def get_update_check(refresh: int = 0) -> JSONResponse:
         release = None
     latest = (release or {}).get("version", "")
     blocked = _self_update.blocked_reason()
+    kind = _self_update.install_kind()
     # Settles a dead installer as interrupted before the state is read.
     await asyncio.to_thread(_self_update.running)
     st = _self_update.read_state()
+    tag = (release or {}).get("tag", "")
     return JSONResponse(
         {
             "current": current,
             "commit": _self_update.installed_commit(),
             "latest": latest,
-            "tag": (release or {}).get("tag", ""),
+            "tag": tag,
             "release_url": (release or {}).get("url", ""),
             "notes": (release or {}).get("notes", ""),
             "checked": release is not None,
             "available": _self_update.is_newer(latest, current),
-            "kind": _self_update.install_kind(),
+            "kind": kind,
+            # Where `kind` came from: install.sh's install.json, or the path
+            # of the running package. A dev checkout always wins the path.
+            "method_source": (
+                "install.json"
+                if kind != "editable"
+                and _self_update.read_install_json().get("method") == kind
+                else "detected"
+            ),
+            # For a development checkout: where it is and the exact commands
+            # that update it — the screen shows them instead of a button.
+            "checkout": _self_update.install_checkout(),
+            "editable_commands": (
+                _self_update.editable_update_commands(tag) if kind == "editable" else []
+            ),
             "blocked": blocked,
             "repo": _self_update.UPDATE_REPO,
             "state": st.get("state", "idle"),
@@ -6907,14 +7101,77 @@ def _is_onboarded() -> bool:
 
 
 def _mark_onboarded() -> None:
-    """Persist that first-run is done (idempotent, best-effort)."""
+    """The first-run checklist's "Pick a repo" step: done on the first session
+    create (idempotent, best-effort). ``general.onboarded`` is derived from it
+    by the settings layer — nothing writes that flag directly any more."""
     try:
-        from backend.config import settings as _settings
-
-        if not _settings.load_settings().general.onboarded:
-            _settings.update_settings(general={"onboarded": True})
+        _setup_steps.mark("repo")
     except Exception:  # noqa: BLE001 — never block session creation on this
         pass
+
+
+# --- First-run checklist (core/setup_steps.py) -------------------------------
+def _doctor_payload_cached(refresh: bool = False) -> Optional[dict]:
+    """The doctor addon's cached ``/api/doctor`` body (its 30 s cache; a
+    ``refresh`` re-probes), or a direct probe when the addon isn't up."""
+    try:
+        for addon in ADDONS:
+            if getattr(addon, "id", "") == "doctor":
+                return addon._payload(refresh=refresh)
+    except Exception:  # noqa: BLE001 — fall through to a direct probe
+        pass
+    try:
+        from backend import doctor as _doctor
+
+        return _doctor.to_payload(_doctor.run_checks())
+    except Exception:  # noqa: BLE001 — the checklist works without a doctor
+        return None
+
+
+@app.get("/api/setup")
+def get_setup(refresh: bool = False) -> JSONResponse:
+    """The five-step first-run checklist and everything the UI draws it from:
+    ``{steps: [{id, title, required, done, at, skipped, status}], summary:
+    {done, total, required_done, complete, next}, doctor: {ok, checks,
+    install} | null, tailscale: {status, detail, fix, docs} | null, logins:
+    [{name, installed, logged_in, login_cmd, default}], default_provider,
+    report}``. ``report`` is the first-run text ``mindflock serve`` printed at
+    boot (``""`` on a later boot). The doctor result is the cached one;
+    ``?refresh=1`` re-probes (after an install or a sign-in). sync def: the
+    probe shells out, so FastAPI runs it off the event loop."""
+    return JSONResponse(_setup_steps.status(_doctor_payload_cached(refresh=refresh)))
+
+
+@app.post("/api/setup/{step}/skip")
+async def post_setup_skip(step: str, request: Request) -> JSONResponse:
+    """Skip an OPTIONAL step (``tracker`` / ``phone``): ``{steps, summary}``
+    after. 400 for a required or unknown step; owner only
+    (``auth.may_configure``, 403)."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    if step not in _setup_steps.OPTIONAL:
+        return JSONResponse(
+            {
+                "error": "only an optional step can be skipped: %s"
+                % ", ".join(_setup_steps.OPTIONAL)
+            },
+            status_code=400,
+        )
+    _setup_steps.skip(step)
+    rows = _setup_steps.checklist()
+    return JSONResponse({"steps": rows, "summary": _setup_steps.summary(rows)})
+
+
+@app.post("/api/setup/{step}/unskip")
+async def post_setup_unskip(step: str, request: Request) -> JSONResponse:
+    """Undo a skip (the step shows as to-do again). Same rules as skip."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    if step not in _setup_steps.OPTIONAL:
+        return JSONResponse({"error": "not an optional step"}, status_code=400)
+    _setup_steps.unskip(step)
+    rows = _setup_steps.checklist()
+    return JSONResponse({"steps": rows, "summary": _setup_steps.summary(rows)})
 
 
 # --- Plain (non-provisioned) repo selection -----------------------------------
@@ -7190,6 +7447,54 @@ async def repo_check(path: str = "") -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(check_repo, path))
 
 
+@app.get("/api/repos/branches")
+async def repo_branches(path: str = "") -> JSONResponse:
+    """The New-session dialog's Base branch menu for the folder in its Folder
+    field: local branches (the checked-out one first) then remote-tracking
+    refs, capped at 200 and memoised 10 s per folder. A folder that is not a
+    git repo answers ``is_git: false`` with an empty list, never a 4xx — the
+    picker simply has nothing to offer. See :mod:`backend.web.core.repo_branches`.
+    """
+    if not (path or "").strip():
+        return JSONResponse({"error": "a path is required"}, status_code=400)
+    # A paired device reaches this through the forward list: git runs only in
+    # a folder this server already works in (home tree, recent repos, live
+    # sessions, the workspaces dir), never in an arbitrary path a caller names.
+    if not _branches_path_allowed(path):
+        return JSONResponse(
+            {
+                "path": path,
+                "is_git": False,
+                "current": "",
+                "default": "",
+                "branches": [],
+            }
+        )
+    return JSONResponse(await asyncio.to_thread(_list_branches, path))
+
+
+def _branches_path_allowed(path: str) -> bool:
+    full = os.path.realpath(os.path.expanduser(str(path or "")))
+    roots = [os.path.realpath(os.path.expanduser("~"))]
+    try:
+        roots.extend(os.path.realpath(p) for p in _recent_repo_paths() if p)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with ENGINE.lock:
+            roots.extend(
+                os.path.realpath(getattr(i, "Path", "") or "")
+                for i in ENGINE.instances.values()
+                if getattr(i, "Path", "")
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    for root in roots:
+        if root and (full == root or full.startswith(root.rstrip(os.sep) + os.sep)):
+            return True
+    return False
+
+
 @app.post("/api/session-plan")
 async def session_plan(payload: dict) -> JSONResponse:
     """Fill in the New Session form from one sentence. Creates nothing.
@@ -7263,12 +7568,13 @@ async def session_plan(payload: dict) -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=502)
 
 
-# There is deliberately no endpoint for the frontend to set general.onboarded.
-# The flag means "has created a session" — create_instance sets it via
-# _mark_onboarded, and backend/init_wizard.py pointedly does not — so letting a
-# UI surface flip it from outside that one event destroyed both first-run helpers
-# (the grid's setup card and the auto-opening dependency checklist) for a user
-# who had created nothing yet and still had, say, no tmux to create it with.
+# There is deliberately no endpoint for the frontend to set general.onboarded
+# or to mark a checklist step DONE: every step is marked by the backend hook
+# that observes the thing itself (the doctor, the first session create, the
+# first ticket source, a phone QR fetch — see core/setup_steps.py). The one
+# write the UI may ask for is a SKIP of an optional step (POST /api/setup/
+# <step>/skip, below) — the web UI's "Set up now" buttons used to mark
+# onboarded for anyone who merely clicked past the welcome tour.
 
 
 # MindFlock automation control (/api/mindflock/*) moved to the MindFlock addon.
@@ -7453,14 +7759,15 @@ def _provider_plans(prov) -> bool:
 
 
 @app.post("/api/instances")
-async def create_instance(payload: dict) -> JSONResponse:
+async def create_instance(payload: dict, request: Request) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
     The whole of it lives in :func:`core.session_create.create` (accepted keys,
     the three creation modes, lineage and spawn limits, the claim under the
     registry lock) so a team run creates its sessions through the same code.
+    The session records the person the request is for (core.person_sessions).
     """
-    return await _session_create.create(payload)
+    return await _session_create.create(payload, person=_auth.request_person(request))
 
 
 @app.get("/api/create_failures")
@@ -7516,75 +7823,60 @@ def post_aliases(payload: dict) -> JSONResponse:
     peer_err = _peer_guard.title_refusal(title, "renaming")
     if peer_err is not None:
         return peer_err
-    _aliases.set_alias(title, str(payload.get("alias") or "").strip())
+    alias = str(payload.get("alias") or "").strip()
+    taken = _aliases.owner_of(alias, _session_branches(), exclude=title)
+    if taken:
+        return JSONResponse(
+            {
+                "error": "another session is already named “%s”" % alias,
+                "session": taken,
+            },
+            status_code=409,
+        )
+    _aliases.set_alias(title, alias)
     return JSONResponse({"aliases": _aliases.all_aliases()})
+
+
+def _session_branches() -> Dict[str, str]:
+    """``title -> branch`` of every live session: what
+    :func:`core.aliases.owner_of` needs to know which names are taken."""
+    return {
+        t: str(getattr(i, "Branch", "") or "")
+        for t, i in list(ENGINE.instances.items())
+    }
 
 
 @app.delete("/api/instances/{title}")
 async def delete_instance(title: str) -> JSONResponse:
     """Kill the session and remove it (worktree + branch via ``inst.Kill``).
 
-    Drops it from the registry, persists the removal (merge-on-save excluding
-    this title), and GCs its per-session state (event snapshot, budget, probes,
-    branch baseline, port block). The editor window is closed only when no other
-    live session still shares the worktree."""
+    One of the four doors through :func:`core.session_end.end_session`
+    (``wipe=True``): the session is recorded in Recently closed, its children
+    move up to its own parent and are reported, and the per-session state
+    (event snapshot, budget, probes, branch baseline, port block, red zones)
+    is GC'd. **409** ``{"error": "folder in use", "sessions": [...]}`` — and
+    nothing changes — when another live session (a copy made by Duplicate
+    session) works in the same folder. → ``{ok, title, wiped, children}``."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    return await _end_session_response(title, wipe=True)
+
+
+async def _end_session_response(title: str, *, wipe: bool, scrub: bool = False):
+    """Run :func:`core.session_end.end_session` off the event loop and shape
+    its answer for the DELETE / /close / /cleanup routes."""
     try:
-        wt = inst.GetWorktreePath()
-    except Exception:  # noqa: BLE001
-        wt = ""
-    # Red zones: drop the feed cursor/plan latches (titles are reused) and
-    # tombstone the title so the reconcile loop can't re-adopt it while Kill
-    # runs; when no other session shares the worktree, remove its guard file.
-    # BEFORE Kill, while the worktree path still resolves the way the guard
-    # file's name was derived from it. The worktree-scope zones are settled
-    # AFTER Kill (after_kill), once we know whether the folder is really gone
-    # — an in-place session's folder is the user's own checkout and keeps
-    # its "This worktree" zones.
-    rz_shared = _worktree_in_use_by_other(wt, title)
-    await asyncio.to_thread(
-        lambda: _red_zone_monitor.forget(
-            title, wt, rz_shared, worktree_removed=False, inst=inst
+        result = await asyncio.to_thread(
+            _session_end.end_session, ENGINE, title, wipe=wipe, scrub=scrub
         )
-    )
-    try:
-        await asyncio.to_thread(inst.Kill)
-    except Exception as err:  # noqa: BLE001
-        # Even if kill partially failed, drop it from the active set.
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("kill error for %s: %v", title, err)
-    # The dying agent's last Post hooks can recreate the feed file between
-    # forget and Kill; and the zones go only with a folder that is gone.
-    await asyncio.to_thread(_red_zone_monitor.after_kill, title, wt, rz_shared)
-    _kill_shell_session(title)
-    # Keep the Cursor window open if another live session (e.g. a copy) still
-    # shares this worktree — only close it when this is the last one on the dir.
-    if not _worktree_in_use_by_other(wt, title):
-        _close_cursor_window(wt)
-        # The Atlas index of a worktree nobody uses any more.
-        _code_outline.forget(wt)
-        # GC the ~/.claude.json trust entry pre_trust_workdir seeded for this
-        # worktree (G3) — guarded internally to MindFlock-owned paths only.
-        await asyncio.to_thread(_remove_trust_entry, wt)
-    with ENGINE.lock:
-        ENGINE.instances.pop(title, None)
-    # Merge-on-save with the killed title excluded removes it from disk without
-    # the stale-set rewrite that storage.DeleteInstance would do (which would
-    # both clobber other processes' instances and reconstruct/attach every other
-    # session via LoadInstances).
-    ENGINE.save(exclude_titles={title})
-    _EVENT_SNAPSHOT.pop(title, None)
-    _aliases.drop(title)
-    _BUDGET_FIRED.pop(title, None)
-    _forget_session_state(title)
-    # A recreated same-title session must start with a fresh branch baseline.
-    _LAST_BRANCH.pop(title, None)
-    _ports.release(title)
-    _on_session_removed(title)
-    _events.BUS.emit("session.deleted", session=title)
-    return JSONResponse({"ok": True})
+    except _session_end.FolderInUse as err:
+        return JSONResponse(err.to_json(), status_code=409)
+    except _session_end.SessionNotFound:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    return JSONResponse({"ok": True, **result})
 
 
 #: The summary diff's shape must not depend on the user's gitconfig: per-file
@@ -7750,16 +8042,23 @@ async def instance_file_diff(
 
 @app.post("/api/instances/{title}/pause")
 async def instance_pause(title: str) -> JSONResponse:
-    """Pause the session (``inst.Pause`` — detach/stop tmux, keep the worktree),
-    persist the new state, and emit ``session.paused``. A pause error is a 400."""
+    """Pause the session: ``inst.Pause`` stops the agent (kills its tmux
+    session and PTY) and keeps the worktree and branch exactly as they are —
+    no commit, no removal; status becomes ``paused``. Persists the new state
+    and emits ``session.paused``. A pause error is a 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
-    # Pause commits a dirty tree with the user's own git identity / config
-    # (signing included) — the commit route refuses shared folders, so must this.
-    peer_err = _peer_guard.refusal(inst, "pause (it commits the folder)")
-    if peer_err is not None:
-        return peer_err
+    if getattr(inst, "PeerShare", ""):
+        # A shared-folder session runs sandboxed; stopping and relaunching it
+        # is the peer service's job (unshare), not pause/resume.
+        return JSONResponse(
+            {
+                "error": "peer shared sessions cannot be paused — unshare instead",
+                "peer_share": True,
+            },
+            status_code=409,
+        )
     try:
         await asyncio.to_thread(inst.Pause)
     except Exception as err:  # noqa: BLE001
@@ -7775,9 +8074,11 @@ async def instance_pause(title: str) -> JSONResponse:
 
 @app.post("/api/instances/{title}/resume")
 async def instance_resume(title: str) -> JSONResponse:
-    """Resume a paused session (``inst.Resume``), re-deriving its port block into
-    the fresh tmux env first, then persist and emit ``session.resumed``. A resume
-    error is a 400."""
+    """Resume a paused session: ``inst.Resume`` relaunches the agent in the same
+    worktree (a session paused under the old scheme, whose worktree was removed,
+    is rebuilt first — the engine's legacy path), re-deriving its port block
+    into the fresh tmux env first, then persist and emit ``session.resumed``.
+    A resume error is a 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -7799,6 +8100,29 @@ async def instance_resume(title: str) -> JSONResponse:
         new=getattr(inst.Status, "name", str(inst.Status)).lower(),
     )
     return JSONResponse(_instance_json(inst))
+
+
+@app.post("/api/instances/{title}/revive")
+async def instance_revive(title: str) -> JSONResponse:
+    """Restart an offline agent: the Offline chip's Restart action.
+
+    Calls the same lazy revive a terminal attach or a sent prompt does
+    (:func:`_ensure_agent_session`): a live agent tmux is reused, a dead one
+    is relaunched — resuming the conversation after a crash, fresh after a
+    clean quit. A paused session is **409** (resume it instead); a workspace
+    that is gone, or a shared folder the agent may not launch in, is **409**
+    with the helper's reason. → ``{"title", "revived": true}``."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    if getattr(inst, "Status", None) == Paused:
+        return JSONResponse(
+            {"error": "session is paused — resume it instead"}, status_code=409
+        )
+    _, rerr = await asyncio.to_thread(_ensure_agent_session, inst, title)
+    if rerr is not None:
+        return JSONResponse({"error": rerr}, status_code=409)
+    return JSONResponse({"title": title, "revived": True})
 
 
 # --------------------------------------------------------------------------- #
@@ -8208,43 +8532,112 @@ async def instance_code_map(title: str, fp: str = "") -> JSONResponse:
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
-
-    def _build() -> dict:
-        repo_id, repo = _rz_repo(wt)
-        zones = _red_zones.effective_zones(wt, repo_id)
-        raw = _code_map.fingerprint(inst, wt)
-        cur = _code_map_fp(inst, wt, zones, raw)
-        if (
-            fp
-            and cur is not None
-            and fp == cur
-            and not _code_map.last_graph_partial(wt)
-        ):
-            return {"unchanged": True, "fingerprint": cur}
-        extra: list = []
-        red = [z for z in zones if z.get("kind", "red") == "red"]
-        if red:
-            # Git-ignored files are shown for RED zones only ("my config
-            # file"); a green scope never makes an ignored file interesting.
-            _files, _dirs, extra, _trunc = _red_zones.zone_files(wt, red)
-        files, truncated = _code_map.list_files(wt, extra, fp=raw)
-        graph = _code_map.build_graph(wt, files, fp=raw)
-        partial = bool(graph.get("partial"))
-        return {
-            "root": wt,
-            "repo": repo,
-            "fingerprint": (cur + _PARTIAL_FP_SUFFIX) if (cur and partial) else cur,
-            "files": files,
-            "truncated": truncated,
-            "edges": graph.get("edges") or [],
-            "graph_partial": partial,
-            "langs": graph.get("langs") or {},
-        }
-
     try:
-        return JSONResponse(await asyncio.to_thread(_build))
+        return JSONResponse(await asyncio.to_thread(_code_map_snapshot, inst, wt, fp))
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": str(err)}, status_code=500)
+
+
+def _code_map_snapshot(inst, wt: str, fp: str = "") -> dict:
+    """The snapshot ``GET /code-map`` answers (see the route), built off the
+    event loop. Every piece is cached on the worktree fingerprint, so calling
+    it for a worktree whose snapshot is current costs one fingerprint."""
+    repo_id, repo = _rz_repo(wt)
+    zones = _red_zones.effective_zones(wt, repo_id)
+    raw = _code_map.fingerprint(inst, wt)
+    cur = _code_map_fp(inst, wt, zones, raw)
+    if fp and cur is not None and fp == cur and not _code_map.last_graph_partial(wt):
+        return {"unchanged": True, "fingerprint": cur}
+    extra: list = []
+    red = [z for z in zones if z.get("kind", "red") == "red"]
+    if red:
+        # Git-ignored files are shown for RED zones only ("my config
+        # file"); a green scope never makes an ignored file interesting.
+        _files, _dirs, extra, _trunc = _red_zones.zone_files(wt, red)
+    files, truncated = _code_map.list_files(wt, extra, fp=raw)
+    graph = _code_map.build_graph(wt, files, fp=raw)
+    partial = bool(graph.get("partial"))
+    return {
+        "root": wt,
+        "repo": repo,
+        "fingerprint": (cur + _PARTIAL_FP_SUFFIX) if (cur and partial) else cur,
+        "files": files,
+        "truncated": truncated,
+        "edges": graph.get("edges") or [],
+        "graph_partial": partial,
+        "langs": graph.get("langs") or {},
+    }
+
+
+# The Map's first open used to pay for everything at once: the file list and
+# the import graph (3 s on a 3k-file repo after a restart), then the layout.
+# Now the snapshot is warmed in the background — once at boot for every open
+# session (serialized, one worktree at a time, starting after the boot quiet
+# window AND the background revive's start, so it never competes with the
+# terminals and agents coming up), and the page prefetches it for the session
+# you are looking at — so opening the tab is a cache hit.
+_CODE_MAP_WARM_DELAY_S = _BOOT_QUIET_SECONDS + 15.0
+_CODE_MAP_WARM_GAP_S = 0.5
+_CODE_MAP_WARM_BUDGET_S = 90.0
+
+
+def _code_map_warm_all(budget_s: float = _CODE_MAP_WARM_BUDGET_S) -> dict:
+    """Build (or confirm) the snapshot of every session that has a worktree.
+    One at a time with a breather between, within ``budget_s`` in all; a
+    worktree whose build fails is skipped. Returns ``{"warmed": n,
+    "skipped": n, "partial": [titles]}`` — the log line. Never raises."""
+    out = {"warmed": 0, "skipped": 0, "partial": []}
+    if not git_available():
+        return out
+    deadline = time.monotonic() + max(0.0, budget_s)
+    for title in list(ENGINE.instances):
+        if time.monotonic() > deadline:
+            out["skipped"] += 1
+            continue
+        inst = ENGINE.instances.get(title)
+        try:
+            wt = inst.GetWorktreePath() if inst is not None else ""
+            if not wt or not os.path.isdir(wt):
+                out["skipped"] += 1
+                continue
+            snap = _code_map_snapshot(inst, wt, "")
+            if snap.get("graph_partial"):
+                out["partial"].append(title)
+            out["warmed"] += 1
+        except Exception:  # noqa: BLE001
+            out["skipped"] += 1
+        time.sleep(_CODE_MAP_WARM_GAP_S)
+    return out
+
+
+def _code_map_warm_on_start_enabled() -> bool:
+    """``MINDFLOCK_CODE_MAP_WARM=0`` switches the boot warm-up off (a scratch
+    ``serve`` on a slow disk); it is always off under pytest."""
+    if os.environ.get("MINDFLOCK_CODE_MAP_WARM", "1") == "0":
+        return False
+    return not _restart._under_pytest()
+
+
+async def _code_map_warm_on_start() -> None:
+    """Boot: wait out the quiet window (and the revive sweep's start), then
+    warm every session's snapshot."""
+    try:
+        await asyncio.sleep(_CODE_MAP_WARM_DELAY_S)
+        res = await asyncio.to_thread(_code_map_warm_all)
+        if log.ErrorLog is not None and (res["warmed"] or res["partial"]):
+            log.ErrorLog.Printf(
+                "code map warmed for %d session(s)%s",
+                res["warmed"],
+                (
+                    (" (partial: %s)" % ", ".join(res["partial"]))
+                    if res["partial"]
+                    else ""
+                ),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _child_fences(title: str) -> list:
@@ -8593,9 +8986,118 @@ async def instance_red_zones(title: str) -> JSONResponse:
             "exempt": doc["exempt"],
             "companions": _red_zones.companions_config(repo_id),
             "sessions_here": _sessions_on_worktree(wt),
+            # The repo's committed zones (.mindflock/zones.toml in this
+            # worktree) as the file has them — the Zones dialog's "Shared
+            # with the repo" section; `zones` above already enforces them.
+            **_shared_zones_body(wt),
         }
 
     return JSONResponse(await asyncio.to_thread(_read))
+
+
+def _shared_zones_body(wt: str) -> dict:
+    """``{"shared", "shared_error", "shared_path", "shared_exists"}`` — the
+    committed zones of ``wt`` (backend.config.repo_zones)."""
+    zones, error = _repo_zones.load_doc(wt)
+    return {
+        "shared": zones,
+        "shared_error": error,
+        "shared_path": _repo_zones.REL_PATH,
+        "shared_exists": os.path.isfile(_repo_zones.file_path(wt)),
+    }
+
+
+def _shared_zone_author() -> str:
+    """Who a shared zone says added it: the person's name, else their git
+    name (docs/people.md). ``""`` when neither is set."""
+    try:
+        me = _person.current()
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(me.get("name") or me.get("git_name") or "").strip()
+
+
+@app.get("/api/instances/{title}/shared-zones")
+async def instance_shared_zones(title: str) -> JSONResponse:
+    """The repo's committed zones as this session's worktree has them
+    (``.mindflock/zones.toml``, so they follow its branch)."""
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    return JSONResponse(await asyncio.to_thread(_shared_zones_body, wt))
+
+
+@app.post("/api/instances/{title}/shared-zones")
+async def instance_shared_zones_add(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """ "Add to repo": ``{"pattern", "kind": "red"|"green", "note", "name"}``
+    appended to ``.mindflock/zones.toml`` in THIS session's worktree — the
+    file rides the session's branch, so teammates get the zone when it merges.
+    Nothing is committed here. ``author`` = the person's name, ``added`` =
+    today. Repo policy, so the owner only (``auth.may_configure``, 403); 400
+    on a bad pattern or an unusable file, 409 when the pattern is already the
+    other kind there. Answers the shared-zones body + ``zone`` / ``created``,
+    after re-syncing the guard so the zone reaches the next tool call."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    payload = payload if isinstance(payload, dict) else {}
+
+    def _add():
+        zone, created = _repo_zones.add(
+            wt,
+            str(payload.get("pattern") or ""),
+            kind=str(payload.get("kind") or "red"),
+            note=str(payload.get("note") or ""),
+            name=str(payload.get("name") or ""),
+            author=_shared_zone_author(),
+        )
+        repo_id, _repo = _rz_repo(wt)
+        _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        return {"zone": zone, "created": created, **_shared_zones_body(wt)}
+
+    try:
+        body = await asyncio.to_thread(_add)
+    except _red_zones.ZoneConflict as err2:
+        return JSONResponse({"error": str(err2)}, status_code=409)
+    except (ValueError, OSError) as err2:
+        return JSONResponse({"error": str(err2)}, status_code=400)
+    return JSONResponse(body)
+
+
+@app.post("/api/instances/{title}/shared-zones/remove")
+async def instance_shared_zones_remove(
+    title: str, request: Request, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{"id"}`` — take one shared zone out of this worktree's
+    ``.mindflock/zones.toml`` (its block only; every other byte stays). The
+    owner only (403); 404 when it isn't there, 400 when the file is
+    unusable."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    zid = str((payload or {}).get("id") or "").strip()
+
+    def _rm():
+        gone = _repo_zones.remove(wt, zid)
+        if gone is None:
+            return None
+        repo_id, _repo = _rz_repo(wt)
+        _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        return {"zone": gone, **_shared_zones_body(wt)}
+
+    try:
+        body = await asyncio.to_thread(_rm)
+    except (ValueError, OSError) as err2:
+        return JSONResponse({"error": str(err2)}, status_code=400)
+    if body is None:
+        return JSONResponse({"error": "unknown shared zone: %s" % zid}, status_code=404)
+    return JSONResponse(body)
 
 
 def _sessions_on_worktree(wt: str) -> int:
@@ -9316,8 +9818,73 @@ def _deliver_to_agent(
     return "sent", None
 
 
+def _driven_elsewhere(request, title: str, payload) -> Optional[JSONResponse]:
+    """409 ``{"error": "driven by <name>", "driver"}`` when another person
+    holds ``title``'s keyboard (core.ownership) — the gate on every route that
+    types into the terminal for a person (``/send``, the prompt queue's add and
+    Send now, ``/answer``). ``{"take": true}`` in the body takes the keyboard
+    first; the driver themself (and anyone while nobody drives) passes. None
+    to proceed — always for an in-process call (``request`` None: the
+    server's own automation, never a person's keyboard)."""
+    if request is None:
+        return None
+    person, device = _ownership.caller(request)
+    want = isinstance(payload, dict) and payload.get("take") is True
+    body = _ownership.gate(title, person, device, want=want)
+    return None if body is None else JSONResponse(body, status_code=409)
+
+
+@app.post("/api/instances/{title}/driver")
+async def instance_driver(title: str, request: Request, payload: dict = None):
+    """Take or release the session's keyboard (core.ownership).
+    ``{"take": true}`` makes the caller's person the driver — anyone who can
+    reach the session may; the previous driver is told by a
+    ``session.driver_changed`` event. ``{"release": true}`` gives it up (409
+    when someone else drives). → ``{owner, driver, driver_name, viewers,
+    previous?}``; 404 unknown, 400 neither."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse({"error": "instance not found"}, status_code=404)
+    payload = payload or {}
+    person, device = _ownership.caller(request)
+    if payload.get("take") is True:
+        prev = _ownership.take(title, person, device)
+        return JSONResponse({**_ownership.row_fields(title), "previous": prev})
+    if payload.get("release") is True:
+        cur = _ownership.driver(title)
+        if cur and cur != person:
+            body = _ownership.busy(title, person) or {"error": "not the driver"}
+            return JSONResponse(body, status_code=409)
+        _ownership.release(title, person)
+        return JSONResponse(_ownership.row_fields(title))
+    return JSONResponse(
+        {"error": 'pass {"take": true} or {"release": true}'}, status_code=400
+    )
+
+
+@app.post("/api/instances/{title}/owner")
+async def instance_owner(title: str, request: Request, payload: dict = None):
+    """Give the session to another person: ``{"person": "<id>"}``. The owner
+    otherwise never changes (it is the person the session was created for).
+    The device owner's only (``auth.may_configure``, 403). → the presence
+    fields; 404 unknown, 400 not a person id."""
+    if not await _auth.may_configure(request.scope):
+        return JSONResponse(
+            {"error": "only this device's owner can change a session's owner"},
+            status_code=403,
+        )
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse({"error": "instance not found"}, status_code=404)
+    try:
+        _ownership.set_owner(title, str((payload or {}).get("person") or ""))
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    return JSONResponse(_ownership.row_fields(title))
+
+
 @app.post("/api/instances/{title}/send")
-async def instance_send(title: str, payload: dict) -> JSONResponse:
+async def instance_send(
+    title: str, payload: dict, request: Request = None
+) -> JSONResponse:
     """Send a single message to the session's agent window and (by default)
     submit it. Boots/resumes the agent session first if it isn't running, so a
     just-created session starts working from one call. ``submit=false`` types
@@ -9327,7 +9894,10 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
     agent's live activity first and never type into a prompt or the
     usage-limit menu — a submitted message is queued instead (→ ``{"sent":
     false, "queued": true, "submitted": false}``), an unsubmitted paste is
-    409 ``{"in_dialog": true}`` with nothing typed."""
+    409 ``{"in_dialog": true}`` with nothing typed.
+
+    Another person holding the keyboard (core.ownership) is 409 ``{"error":
+    "driven by <name>", "driver"}`` unless ``"take": true``."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -9336,6 +9906,9 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
         return JSONResponse({"error": "empty message"}, status_code=400)
     submit = bool((payload or {}).get("submit", True))
     dialog_safe = bool((payload or {}).get("dialog_safe", False))
+    busy = _driven_elsewhere(request, title, payload)
+    if busy is not None:
+        return busy
     if _budget_locked(title):
         return JSONResponse(
             {
@@ -9399,7 +9972,7 @@ def get_queue(title: str) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/queue")
-def post_queue(title: str, payload: dict) -> JSONResponse:
+def post_queue(title: str, payload: dict, request: Request = None) -> JSONResponse:
     """Add prompts to the queue. ``{"text": "..."}`` appends one; an optional
     ``index`` (0-based, clamped) inserts it at that position instead — the
     "add above/below this item" path. ``{"texts": ["...", ...]}`` bulk-appends
@@ -9411,6 +9984,9 @@ def post_queue(title: str, payload: dict) -> JSONResponse:
             {"error": "instance not found: %s" % title}, status_code=404
         )
     payload = payload or {}
+    busy = _driven_elsewhere(request, title, payload)
+    if busy is not None:
+        return busy
     texts = payload.get("texts")
     if isinstance(texts, list):
         entry, added, skipped = _prompt_queue.enqueue_many(
@@ -9502,7 +10078,9 @@ def post_queue_edit(title: str, payload: dict) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/queue/send_now")
-async def post_queue_send_now(title: str, payload: dict) -> JSONResponse:
+async def post_queue_send_now(
+    title: str, payload: dict, request: Request = None
+) -> JSONResponse:
     """Send one queued item to the agent NOW (manual override): skips the
     drain's idle wait, cooldowns, and the usage-limit hold — the user clicked,
     so deliver. ``{"id": "<item id>"}``. The item leaves the queue exactly as
@@ -9517,6 +10095,9 @@ async def post_queue_send_now(title: str, payload: dict) -> JSONResponse:
     )
     if it is None:
         return JSONResponse({"error": "queued item not found"}, status_code=404)
+    busy = _driven_elsewhere(request, title, payload)
+    if busy is not None:
+        return busy
     if _budget_locked(title):
         return JSONResponse(
             {
@@ -9542,6 +10123,7 @@ async def post_queue_send_now(title: str, payload: dict) -> JSONResponse:
     )
     rec["armed"] = False
     rec["sent_at"] = time.time()
+    rec["sent_text"] = it["text"]
     rec["idle_since"] = None
     _events.BUS.emit(
         "session.prompt_sent",
@@ -10340,7 +10922,13 @@ async def instance_cleanup(title: str) -> JSONResponse:
 
     Belt-and-suspenders over delete: after Kill (which removes the worktree /
     branch or rmtrees the clone), force-rmtree anything left and kill the shell
-    session. The frontend confirms before calling this.
+    session. The frontend confirms before calling this. Same door as DELETE
+    (:func:`core.session_end.end_session`, ``wipe=True, scrub=True``): **409**
+    ``{"error": "folder in use", "sessions": [...]}`` and nothing changes
+    while another live session works in the folder; the session lands in
+    Recently closed; its children move up and are reported.
+    → ``{ok, title, wiped, children}``. In-place sessions run in the user's
+    OWN repo — it is never deleted.
     """
     inst, err = _inst_or_404(title)
     if err is not None:
@@ -10348,33 +10936,7 @@ async def instance_cleanup(title: str) -> JSONResponse:
     peer_err = _peer_guard.refusal(inst, "cleanup (unshare the folder instead)")
     if peer_err is not None:
         return peer_err
-    wt = inst.GetWorktreePath()
-    # In-place sessions run in the user's OWN repo — never delete it.
-    in_place = getattr(inst, "InPlace", False)
-
-    def _do() -> None:
-        try:
-            inst.Kill()
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("cleanup: kill %s failed: %v", title, err)
-        if wt and not in_place:
-            shutil.rmtree(wt, ignore_errors=True)
-        _kill_shell_session(title)
-        if not _worktree_in_use_by_other(wt, title):
-            _close_cursor_window(wt)
-            _remove_trust_entry(wt)  # GC ~/.claude.json trust entry (G3)
-
-    await asyncio.to_thread(_do)
-    with ENGINE.lock:
-        ENGINE.instances.pop(title, None)
-    ENGINE.save(exclude_titles={title})
-    _EVENT_SNAPSHOT.pop(title, None)
-    _forget_session_state(title)
-    _aliases.drop(title)
-    _on_session_removed(title)
-    _events.BUS.emit("session.deleted", session=title, data={"cleaned": True})
-    return JSONResponse({"ok": True})
+    return await _end_session_response(title, wipe=True, scrub=True)
 
 
 @app.post("/api/instances/{title}/close")
@@ -10383,43 +10945,15 @@ async def close_instance(title: str) -> JSONResponse:
 
     Unlike DELETE (which removes the worktree + branch via ``inst.Kill``), this
     only kills the agent + shell tmux sessions and drops the instance from the
-    grid. The session is stashed in the recently-closed store so it can be
-    reopened later as a fresh agent pointed at the same worktree.
+    grid (:func:`core.session_end.end_session`, ``wipe=False``). The session
+    is stashed in the recently-closed store so it can be reopened later as a
+    fresh agent pointed at the same worktree; its children keep running under
+    its own parent and are reported. → ``{ok, title, wiped: false, children}``.
     """
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
-    _record_closed(inst)
-    try:
-        wt = inst.GetWorktreePath()
-    except Exception:  # noqa: BLE001
-        wt = ""
-
-    def _do() -> None:
-        _kill_agent_session(title)
-        _kill_shell_session(title)
-        # Ending a session closes its editor window too (the worktree stays on
-        # disk and can be reopened) — but only if no other live session (e.g. a
-        # copy) still shares this worktree.
-        if not _worktree_in_use_by_other(wt, title):
-            _close_cursor_window(wt)
-
-    await asyncio.to_thread(_do)
-    with ENGINE.lock:
-        ENGINE.instances.pop(title, None)
-    ENGINE.save(exclude_titles={title})
-    _EVENT_SNAPSHOT.pop(title, None)
-    # Titles come straight back — a reopen restores this very one — so the
-    # rolling record goes with the session rather than lingering to be
-    # inherited. (The incarnation stamp would retire it anyway; this keeps the
-    # dicts from growing under churn.)
-    _forget_session_state(title)
-    _aliases.drop(title)
-    # Its children are orphaned now, not on reopen: the title is free for the
-    # next session to take, and a namesake must not inherit them.
-    _on_session_removed(title)
-    _events.BUS.emit("session.deleted", session=title, data={"closed": True})
-    return JSONResponse({"ok": True})
+    return await _end_session_response(title, wipe=False)
 
 
 @app.post("/api/instances/{title}/copy")
@@ -10682,6 +11216,11 @@ def recently_closed() -> JSONResponse:
                 "provisioned": bool(e.get("provisioned")),
                 "closed_at": e.get("closed_at"),
                 "exists": bool(folder and os.path.isdir(folder)),
+                "wiped": bool(e.get("wiped")),
+                # Why it left when the user didn't close it ("workspace
+                # missing": dropped at load), and whether its branch survives.
+                "reason": e.get("reason") or "",
+                "branch_exists": e.get("branch_exists"),
             }
         )
     return JSONResponse(out)
@@ -10742,6 +11281,29 @@ async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
         if parent and (parent == title or parent not in ENGINE.instances):
             inst.Parent = ""
         ENGINE.instances[title] = inst
+    # A hidden helper (a Verify run) comes back hidden: the flag was stashed
+    # with the entry because `_forget_session_state` dropped the live one.
+    _shared = entry.get("shared_branch") or {}
+    if isinstance(_shared, dict) and _shared.get("branch"):
+        try:
+            from backend.web.core import shared_branch as _sb
+
+            _sb.set_shared(
+                title, str(_shared.get("remote") or ""), str(_shared["branch"])
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    _hidden = str(entry.get("hidden_by") or "")
+    if _hidden and _hidden_sessions.validate(_hidden) is None:
+        try:
+            _hidden_sessions.set_hidden_by(title, _hidden)
+        except Exception:  # noqa: BLE001
+            pass
+    # …and keeps the person it was created for (stashed the same way).
+    try:
+        _person_sessions.set_person(title, str(entry.get("person") or ""))
+    except Exception:  # noqa: BLE001
+        pass
     # Eagerly boot the agent tmux session on the preserved worktree instead of
     # leaving a phantom "running" instance whose agent only starts lazily when a
     # terminal happens to attach. Otherwise a reopen in single-pane view (where
@@ -10872,7 +11434,7 @@ def _commit_shell_command(skip: str = "") -> str:
         # Refresh the lock each round so a multi-round retry (each hook pass
         # can outlast the liveness grace) can't be self-healed mid-flight.
         'touch "$L"; '
-        "{sk}git commit -F {msgf}; rc=$?; "
+        "{sk}git {ident}commit -F {msgf}; rc=$?; "
         "[ $rc -eq 0 ] && break; "
         "git diff --quiet && break; "  # no auto-fix -> real failure
         "git add -A; n=$((n+1)); "
@@ -10894,7 +11456,23 @@ def _commit_shell_command(skip: str = "") -> str:
         # leaves a plain id list (letters, digits, '.', '_', '-', ',') unquoted,
         # so `git commit -F .mindflock_commit_msg` survives verbatim as a suffix.
         sk=("SKIP=%s " % shlex.quote(skip)) if skip else "",
+        # The person's git identity (Settings → Your devices), when set: this
+        # commit is MindFlock's, made on their behalf. Empty otherwise — the
+        # repo's git config decides and the command is unchanged.
+        ident=_commit_identity(),
     )
+
+
+def _commit_identity() -> str:
+    """``-c user.name=… -c user.email=… `` (shell-quoted, trailing space) for
+    :func:`_commit_shell_command`, or ``""``. Never raises."""
+    try:
+        from backend.web.core import person as _person
+
+        args = _person.git_identity_args()
+    except Exception:  # noqa: BLE001
+        return ""
+    return "".join(shlex.quote(a) + " " for a in args)
 
 
 def _commit_into_shell(title: str, wt: str, msg: str, skip: str = "") -> Optional[str]:
@@ -10925,6 +11503,55 @@ def _commit_into_shell(title: str, wt: str, msg: str, skip: str = "") -> Optiona
     return None
 
 
+def _is_human_session(inst) -> bool:
+    """A person's own window: created by a human, not spawned by an agent
+    (no ``Spawned`` flag, no ``Parent``)."""
+    return not getattr(inst, "Spawned", False) and not (
+        getattr(inst, "Parent", "") or ""
+    )
+
+
+def _uncommitted_zone_breaches(wt: str) -> list:
+    """Zone breaches in what a commit of ``wt`` would take — its uncommitted
+    changes, untracked files included — classified by the one predicate
+    (``red_zones.breach_verdicts``): ``[{"path", "pattern", "zone_id",
+    "kind"}]``, the push gate's shape. ``[]`` with no zones or on git
+    failure."""
+    ident = _red_zones.repo_identity(wt)
+    ci = _red_zone_monitor.root_ci(wt)
+    doc = _rz_doc(wt, ident[0] if ident else None, ci=ci)
+    if not doc["red"] and not doc["green"]:
+        return []
+    rels = []
+    for entry in _red_zones._git_z(
+        wt, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"
+    ):
+        rel = entry[3:] if len(entry) > 3 else ""
+        if rel and rel not in rels:
+            rels.append(rel)
+    hits = _red_zones.breach_verdicts(doc, rels, ci, root=os.path.realpath(wt))
+    return [
+        {
+            "path": rel,
+            "pattern": hits[rel].get("pattern"),
+            "zone_id": hits[rel].get("zone_id"),
+            "kind": hits[rel].get("kind") or "red",
+        }
+        for rel in rels
+        if rel in hits
+    ]
+
+
+def _zone_breach_message(hits: list) -> str:
+    if hits[0].get("kind") == "green":
+        msg = "outside green zone: %s" % hits[0]["path"]
+    else:
+        msg = "red zone changed: %s (%s)" % (hits[0]["path"], hits[0]["pattern"])
+    if len(hits) > 1:
+        msg += " and %d more" % (len(hits) - 1)
+    return msg
+
+
 @app.post("/api/instances/{title}/commit")
 async def instance_commit(title: str, payload: dict) -> JSONResponse:
     """Stage everything and commit (running the pre-commit hooks) inside the
@@ -10953,6 +11580,24 @@ async def instance_commit(title: str, payload: dict) -> JSONResponse:
             msg = ""
     if not msg:
         return JSONResponse({"error": "commit message required"}, status_code=400)
+    # Zones apply to your own windows too — as a WARNING. An agent is stopped
+    # at the edit (the guard); a person typing is never blocked, so their
+    # commit is where they hear about it: 409 + the same breach list the push
+    # gate answers, and the dialog's "Commit anyway" re-POSTs proceed_anyway.
+    if not (payload or {}).get("proceed_anyway") and _is_human_session(inst):
+        try:
+            hits = await asyncio.to_thread(_uncommitted_zone_breaches, wt)
+        except Exception:  # noqa: BLE001 — a warning never blocks on its bugs
+            hits = []
+        if hits:
+            return JSONResponse(
+                {
+                    "error": _zone_breach_message(hits),
+                    "red_zone_breaches": hits,
+                    "zone_warning": True,
+                },
+                status_code=409,
+            )
 
     err = await asyncio.to_thread(_commit_into_shell, title, wt, msg)
     if err is not None:
@@ -11350,6 +11995,28 @@ async def instance_push_branch(
             {"error": "no origin remote — add one with: git remote add origin <url>"},
             status_code=400,
         )
+    # The remote branch moved on (a teammate, or this person on another
+    # machine, pushed to it): say so — who, how many — instead of letting the
+    # shell push be rejected where nobody reads it. Every session, not only
+    # shared ones; bounded fetch, fails open. Never a force-push: the way out
+    # is POST /rebase-remote.
+    push_branch = await asyncio.to_thread(_current_branch, wt)
+    if push_branch:
+        div = await asyncio.to_thread(
+            _shared_branch.divergence, wt, "origin", push_branch
+        )
+        if div and div["behind"] > 0:
+            return JSONResponse(
+                {
+                    "error": _shared_branch.diverged_message(div),
+                    "behind": div["behind"],
+                    "authors": div["authors"],
+                    "remote": div["remote"],
+                    "branch": div["branch"],
+                    "diverged": True,
+                },
+                status_code=409,
+            )
 
     def _do():
         name, err = _ensure_shell_session(title, wt)
@@ -11379,6 +12046,55 @@ async def instance_push_branch(
     # step) appears as soon as it is true.
     _live_stage.watch(title, wt, "push")
     return JSONResponse({"ok": True, "tmux_name": _shell_tmux_name(title)})
+
+
+@app.post("/api/instances/{title}/rebase-remote")
+async def instance_rebase_remote(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``git pull --rebase <remote> <branch>`` in the worktree — the way out
+    of a push refused as ``diverged`` (see core.shared_branch). ``remote``
+    (optional, default ``origin`` — where the Push button pushes) must be a
+    remote of the worktree; the branch is the one checked out.
+
+    200 ``{"ok", "head", "behind", "row"}``. On a conflict the rebase is
+    aborted (the tree and HEAD are exactly as before) and the answer is 409
+    ``{"error", "conflicts": [paths]}`` so the person or the agent resolves
+    it; 409 too for uncommitted tracked changes or a rebase already in
+    progress. Never pushes, never force-pushes."""
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "push")
+    if peer_err is not None:
+        return peer_err
+    wt = inst.GetWorktreePath()
+    if not wt or not os.path.isdir(wt):
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    if _snapshot_activity(title) == "working":
+        # A rebase (and its abort, a hard reset) under an agent that is editing
+        # files would throw its edits away.
+        return JSONResponse(
+            {"error": "the agent is working — rebase once its turn ends", "busy": True},
+            status_code=409,
+        )
+    branch = await asyncio.to_thread(_current_branch, wt)
+    if not branch:
+        return JSONResponse(
+            {"error": "no branch checked out (detached HEAD)"}, status_code=409
+        )
+    remote = str((payload or {}).get("remote") or "origin").strip()
+    if remote not in await asyncio.to_thread(_shared_branch.remote_names, wt):
+        return JSONResponse({"error": "unknown remote: %s" % remote}, status_code=400)
+    status, body = await asyncio.to_thread(
+        _shared_branch.rebase_remote, wt, remote, branch
+    )
+    _forget_probes(title)
+    if status == 200:
+        body["row"] = await asyncio.to_thread(_republish_session, title)
+    return JSONResponse(body, status_code=status)
 
 
 @app.get("/api/instances/{title}/branches")
@@ -11443,7 +12159,10 @@ async def instance_branches(title: str) -> JSONResponse:
 # The one remedy sentence every "MindFlock can't do the GitHub half itself"
 # message ends with. Kept in one place because it is asserted verbatim in the
 # tests and quoted in the docs: both rungs are optional and either one fixes it.
-_PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
+_PR_REMEDY = (
+    "add a GitHub token in Settings → Connections → GitHub → Connect, "
+    "or install the GitHub CLI"
+)
 #: Caps on make-pr's optional title / body overrides (GitHub's own body limit
 #: is 65536 characters).
 _PR_TITLE_MAX = 256
@@ -11717,6 +12436,9 @@ async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONR
 
     await asyncio.to_thread(_post_merge)
     _forget_probes(title)
+    # Shipped: the ticket's claim label comes off (tracker_claims; the
+    # assignment stays). A no-op for a session that mirrored nothing.
+    _release_tracker_claim(title)
     return JSONResponse({"ok": True})
 
 
@@ -11776,7 +12498,7 @@ async def instance_fast_track(
     if held:
         return JSONResponse(
             {
-                "error": "its group is paused — the lane is kept and armed on resume",
+                "error": "its team run is paused — the fast-track is kept and armed on resume",
                 "held": True,
             },
             status_code=409,
@@ -11896,9 +12618,9 @@ def _lane_refusal(title: str, lane: str, ship: bool = False):
     if sharer:
         return JSONResponse(
             {
-                "error": "%s works in this same folder — a lane here would commit "
+                "error": "%s works in this same folder — fast-tracking here would commit "
                 "both sessions' work as one; start this session in its own "
-                "worktree to give it a lane" % sharer,
+                "worktree to fast-track it" % sharer,
                 "shared_with": sharer,
             },
             status_code=409,
@@ -12158,7 +12880,7 @@ def runs_task_skip(run_id: str, task_id: str) -> JSONResponse:
 @app.post("/api/runs/{run_id}/adopt")
 def runs_adopt(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
     """Add a live session to the group: ``{"title"}`` → ``{"task": Task}``;
-    409 ``branch already in group <name>`` when a group owns its branch."""
+    409 ``branch already in team run <name>`` when a team run owns its branch."""
     try:
         task = _team_run_driver.adopt(run_id, str((payload or {}).get("title") or ""))
     except _team_run_driver.RunError as err:
@@ -12672,6 +13394,43 @@ async def _annotate_fleet_holders(tickets: list) -> None:
         t["eligible"] = False
 
 
+@app.get("/api/person")
+def get_person() -> JSONResponse:
+    """The person this device belongs to (core.person; docs/people.md):
+    ``{"id", "name", "git_name", "git_email"}``. Shared by all of the
+    person's devices; an identifier, never a credential."""
+    return JSONResponse(_person.current())
+
+
+@app.post("/api/person")
+async def post_person(payload: dict, request: Request) -> JSONResponse:
+    """``{name?, git_name?, git_email?}`` (``""`` clears; absent = unchanged)
+    → the person. The id can't be set here: devices agree on it (pairing,
+    then settings sync). Synced fields, so it needs what any synced setting
+    needs (:func:`core.auth.may_configure`); 400 on a git email that isn't."""
+    from backend.config import settings as _settings
+
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    payload = payload if isinstance(payload, dict) else {}
+    fields = {
+        k: payload[k]
+        for k in ("name", "git_name", "git_email")
+        if k in payload and payload[k] is not None
+    }
+    try:
+        out = await asyncio.to_thread(_person.update, **fields)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except _settings.SettingsUnreadable as err:
+        return JSONResponse({"error": str(err)}, status_code=409)
+    try:
+        _settings_sync.local_change(["person.%s" % k for k in fields])
+    except Exception:  # noqa: BLE001 — the save stands without the nudge
+        pass
+    return JSONResponse(out)
+
+
 @app.get("/api/tickets/claims")
 def ticket_claims() -> JSONResponse:
     """The tickets THIS device holds — what another of the user's devices asks
@@ -12697,8 +13456,13 @@ async def ticket_fleet_holder(
 
 
 @app.post("/api/tickets/start")
-async def ticket_force_start(payload: dict) -> JSONResponse:
-    """Force-start a coding session for one ticket, bypassing auto filters."""
+async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
+    """Force-start a coding session for one ticket, bypassing auto filters.
+
+    409 with ``claimed_by`` when the tracker says a teammate is on it
+    (tracker_claims); ``override_claim: true`` starts it anyway — the owner's
+    call only: never for an agent's start (lineage), and only with what any
+    owner setting needs (``auth.may_configure``, else 403)."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -12717,6 +13481,16 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     lineage, lin_err = await _intake_lineage(payload)
     if lin_err is not None:
         return lin_err
+    override_claim = bool(payload.get("override_claim"))
+    if override_claim and (
+        lineage.get("parent")
+        or lineage.get("spawned")
+        or not await _auth.may_configure(request.scope)
+    ):
+        return JSONResponse(
+            {"error": "only the owner can start a ticket someone else is on"},
+            status_code=403,
+        )
     # The launch itself lives in core.ticket_start so a team run starts its
     # ticket tasks through the very same code.
     try:
@@ -12727,6 +13501,7 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
             agent=agent_override,
             effort=effort_override,
             lineage=lineage,
+            override_claim=override_claim,
         )
     except _ticket_start.LaunchError as err:
         return JSONResponse(err.body, status_code=err.status)
@@ -13748,6 +14523,9 @@ async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONRes
         resp = await instance_send(title, {"text": prompt})
         if resp.status_code >= 400:
             return resp
+        # A run that predates the flag (hidden by its name alone until now)
+        # is flagged the first time it is reused. Idempotent.
+        await asyncio.to_thread(_hidden_sessions.set_hidden_by, title, "verify")
     else:
         resp = await create_instance(
             {
@@ -13757,6 +14535,10 @@ async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONRes
                 # plan comes due.
                 "repo_path": plan["repo_root"],
                 "prompt": prompt,
+                # What keeps it off the rail (the row's `hidden_by`). The
+                # title prefix is NOT the signal: a user may name a session
+                # `verify-anything` and it must stay listed.
+                "hidden_by": "verify",
             }
         )
         if resp.status_code >= 400:
@@ -14364,27 +15146,33 @@ async def delete_workspace(payload: dict) -> JSONResponse:
                 status_code=400,
             )
 
+    # The live session working in this directory ends through the one
+    # end-of-session path (wipe): recorded in Recently closed, its children
+    # re-parented. Two or more sessions on the dir (a copy and its origin) is
+    # the folder-in-use case — refused, nothing changes.
+    holders = [
+        t
+        for t, inst in list(ENGINE.instances.items())
+        if _realpath_or_empty(inst) == real
+    ]
+    if len(holders) > 1:
+        return JSONResponse(
+            {"error": "folder in use", "sessions": sorted(holders)}, status_code=409
+        )
     killed = None
-    for title, inst in list(ENGINE.instances.items()):
+    children: list = []
+    if holders:
         try:
-            wp = os.path.realpath(inst.GetWorktreePath() or "")
-        except Exception:  # noqa: BLE001
-            wp = ""
-        if wp and wp == real:
-
-            def _kill(inst=inst, title=title) -> None:
-                try:
-                    inst.Kill()
-                except Exception as err:  # noqa: BLE001
-                    if log.ErrorLog is not None:
-                        log.ErrorLog.Printf("ws-delete kill %s: %v", title, err)
-
-            await asyncio.to_thread(_kill)
-            _kill_shell_session(title)
-            with ENGINE.lock:
-                ENGINE.instances.pop(title, None)
-            killed = title
-            break
+            ended = await asyncio.to_thread(
+                _session_end.end_session, ENGINE, holders[0], wipe=True
+            )
+        except _session_end.FolderInUse as err:
+            return JSONResponse(err.to_json(), status_code=409)
+        except _session_end.SessionNotFound:
+            ended = None
+        if ended is not None:
+            killed = ended["title"]
+            children = ended["children"]
 
     # Read before the directory goes: a linked worktree's `.git` FILE names the
     # repo that holds its registration, which is the only way to prune a NESTED
@@ -14413,10 +15201,16 @@ async def delete_workspace(payload: dict) -> JSONResponse:
             _prune_base_clone_worktrees()
 
     await asyncio.to_thread(_remove)
-    if killed:
-        ENGINE.save(exclude_titles={killed})
-        _on_session_removed(killed)
-    return JSONResponse({"ok": True, "killed_session": killed})
+    return JSONResponse({"ok": True, "killed_session": killed, "children": children})
+
+
+def _realpath_or_empty(inst) -> str:
+    """``realpath`` of the instance's worktree, or "" when it has none."""
+    try:
+        wp = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return os.path.realpath(wp) if wp else ""
 
 
 @app.post("/api/workspaces/clear")
@@ -15092,15 +15886,39 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
     # post-attach grace as the agent terminal: tmux's client probes are
     # answered by the emulator, not the human.
     attached_at = time.time()
-    await _serve_pty(
-        ws,
-        proc,
-        allow_input=True,
-        on_input=lambda: (
-            time.time() - attached_at > _ATTACH_PROBE_GRACE_S
-            and _note_human_input(title)
-        ),
-    )
+    # The shell is the session's keyboard too (core.ownership): read-only
+    # unless this person drives, exactly like the agent terminal.
+    person, device = _ownership.caller(ws)
+    loop = asyncio.get_running_loop()
+    out_q: "asyncio.Queue" = asyncio.Queue()
+
+    def _tell(frame: dict) -> None:  # any thread
+        try:
+            loop.call_soon_threadsafe(out_q.put_nowait, json.dumps(frame))
+        except RuntimeError:
+            pass
+
+    conn = _ownership.attach(title, person, device, notify=_tell)
+    out_q.put_nowait(json.dumps(_ownership.mode(title, person)))
+
+    def _gate(_data):
+        ok, notice = _ownership.may_type(conn)
+        return None if ok else notice
+
+    try:
+        await _serve_pty(
+            ws,
+            proc,
+            allow_input=True,
+            on_input=lambda: (
+                time.time() - attached_at > _ATTACH_PROBE_GRACE_S
+                and _note_human_input(title, person, device)
+            ),
+            gate=_gate,
+            out_q=out_q,
+        )
+    finally:
+        _ownership.detach(conn)
 
 
 # _agent_transcript_text moved to core.session_stats (imported above).
@@ -15265,7 +16083,9 @@ async def instance_output(
 
 
 @app.post("/api/instances/{title}/answer")
-async def instance_answer(title: str, payload: dict = None) -> JSONResponse:
+async def instance_answer(
+    title: str, request: Request, payload: dict = None
+) -> JSONResponse:
     """Answer a dialog the session's agent is blocked on.
 
     Body ``{"text"?: str, "keys"?: [..]}``: ``text`` (≤ 2000 chars, control
@@ -15289,8 +16109,9 @@ async def instance_answer(title: str, payload: dict = None) -> JSONResponse:
     ``"user"``): an agent's answer does not count as human presence, a
     person's click in the UI does (it is stamped like ``/send``).
     → ``{"ok": true, "activity_before"}``; 404 unknown, 400 bad body, 409 not
-    waiting / over budget / dialog changed / just answered, 502 when tmux
-    refused the keys.
+    waiting / over budget / dialog changed / just answered / driven by
+    another person (``{"take": true}`` takes the keyboard first), 502 when
+    tmux refused the keys.
     """
     inst, err = _inst_or_404(title)
     if err is not None:
@@ -15301,6 +16122,9 @@ async def instance_answer(title: str, payload: dict = None) -> JSONResponse:
     dialog_id, by, perr = _agent_io.parse_answer_meta(payload)
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
+    busy = _driven_elsewhere(request, title, payload)
+    if busy is not None:
+        return busy
     if await asyncio.to_thread(_budget_locked, title):
         return JSONResponse(
             {
@@ -15815,7 +16639,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         return
 
     loop = asyncio.get_event_loop()
-    out_q: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
+    out_q: "asyncio.Queue[Optional[bytes | str]]" = asyncio.Queue()
     fd = proc.fd
 
     def _on_readable() -> None:
@@ -15837,7 +16661,10 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             if data is None:
                 break
             try:
-                await ws.send_bytes(data)
+                if isinstance(data, str):  # a control frame (core.ownership)
+                    await ws.send_text(data)
+                else:
+                    await ws.send_bytes(data)
             except Exception:  # noqa: BLE001
                 break
         try:
@@ -15853,10 +16680,33 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # here" for every open pane with nobody at any keyboard, deferring
     # announcements it was supposed to speed up.
     attached_at = time.time()
+    # One keyboard per session (core.ownership): this terminal is read-only
+    # unless its person drives; the first to attach to a session nobody
+    # drives takes it. Terminal replies to tmux's probes always pass.
+    person, device = _ownership.caller(ws)
 
-    def note_presence() -> None:
+    def _tell(frame: dict) -> None:  # any thread
+        try:
+            loop.call_soon_threadsafe(out_q.put_nowait, json.dumps(frame))
+        except RuntimeError:
+            pass  # loop closing
+
+    conn = _ownership.attach(title, person, device, notify=_tell)
+    out_q.put_nowait(json.dumps(_ownership.mode(title, person)))
+
+    def note_presence(data=b"") -> None:
+        if is_terminal_reply(data):
+            return
         if time.time() - attached_at > _ATTACH_PROBE_GRACE_S:
-            _note_human_input(title)
+            _note_human_input(title, person, device)
+
+    def driving(data) -> bool:
+        if is_terminal_reply(data):
+            return True
+        ok, notice = _ownership.may_type(conn)
+        if not ok and notice:
+            out_q.put_nowait(json.dumps({"type": "readonly", "message": notice}))
+        return ok
 
     try:
         while True:
@@ -15868,11 +16718,11 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 # A human is at this window (stamped even when the budget lock
                 # drops the keystroke below — presence is about the person, not
                 # about whether the bytes landed).
-                note_presence()
+                note_presence(b)
                 # Budget lock: drop keystrokes once the session is over its
                 # ceiling (authoritative — the UI overlay is just the visible
                 # half). Resize control frames (text/JSON) still pass below.
-                if _budget_locked(title):
+                if _budget_locked(title) or not driving(b):
                     continue
                 os.write(fd, b)
                 continue
@@ -15882,8 +16732,8 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 try:
                     j = json.loads(t)
                 except (ValueError, TypeError):
-                    note_presence()
-                    if _budget_locked(title):
+                    note_presence(t)
+                    if _budget_locked(title) or not driving(t):
                         continue
                     os.write(fd, t.encode("utf-8"))
                     continue
@@ -15898,12 +16748,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     # A keystroke that happens to parse as JSON ("1", "true",
                     # "{}"). Stamp before the budget gate, same as the other
                     # two input branches — presence is about the person.
-                    note_presence()
-                    if not _budget_locked(title):
+                    note_presence(t)
+                    if not _budget_locked(title) and driving(t):
                         os.write(fd, t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:
+        _ownership.detach(conn)
         try:
             loop.remove_reader(fd)
         except Exception:  # noqa: BLE001
@@ -16047,8 +16898,22 @@ async def events_ws(ws: WebSocket) -> None:
 # below would otherwise only expose it as ``/mobile.html``).
 # --------------------------------------------------------------------------- #
 @app.get("/m")
-def mobile_view() -> FileResponse:
-    """Serve the mobile (``/m``) single-page shell for phone access."""
+def mobile_view(request: Request) -> FileResponse:
+    """Serve the mobile (``/m``) single-page shell for phone access.
+
+    A load from off this machine is a phone (or another device) that made it
+    here, which is what the first-run checklist's "Your phone" step means."""
+    try:
+        host = (request.client.host if request.client else "") or ""
+        if host and host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            _setup_steps.mark("phone")
+            # The setup step is forward-only (stamped once); Connections'
+            # "Your phone" row wants the LAST load.
+            from backend.web.addons import connections as _connections
+
+            _connections.note_phone_load()
+    except Exception:  # noqa: BLE001 — bookkeeping only
+        pass
     return FileResponse(str(_STATIC / "mobile.html"))
 
 

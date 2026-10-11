@@ -1,4 +1,4 @@
-"""Fleet addon: the HTTP surface of "Your devices" (Settings → Devices).
+"""Fleet addon: the HTTP surface of "Your devices" (Settings → Your devices).
 
 The state machines live in :mod:`backend.web.core.fleet`; this module is the
 routes and who may call them. Three audiences, three rules:
@@ -91,7 +91,7 @@ _NOT_TAILNET = {"error": "join from one of your devices on the tailnet"}
 #: device it is — the fix is on THIS device, not the joiner's.
 _PROXIED = {
     "error": "this device is only reachable through tailscale serve, which hides "
-    "who is asking — on it, open Settings → Devices and choose Make reachable"
+    "who is asking — on it, open Settings → Your devices and choose Make reachable"
 }
 #: How long a route waits on the members while it hands them the requests
 #: waiting here (they only show a copy; a slow one just misses it).

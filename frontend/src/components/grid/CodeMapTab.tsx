@@ -83,6 +83,7 @@ import { CodeTree } from "./codemap/CodeTree";
 import { SearchBox } from "./codemap/SearchBox";
 import { SessionPanel, recKey } from "./codemap/SessionPanel";
 import type { TreeCtl } from "./codemap/treeCtl";
+import { MapTour } from "./codemap/MapTour";
 
 // --- Module-level state (survives tab switches and pane remounts) ----------
 
@@ -195,6 +196,56 @@ interface Toast {
   ms?: number;
 }
 
+// --- Preload ----------------------------------------------------------------
+
+const PREFETCHING = new Set<string>();
+/** The title whose Map is showing the tour ("" = none): two Map tabs open at
+ * once must not both start it. */
+let TOUR_ON = "";
+
+/** Whether a prefetch for `title` has anything left to do: no snapshot yet,
+ * or a snapshot whose tree is not laid out. (Pure, for the tests.) */
+export function prefetchNeeded(hasSnap: boolean, hasModel: boolean, inflight: boolean): boolean {
+  return !inflight && !(hasSnap && hasModel);
+}
+
+/** Warm the Map for `title` before its tab is opened: the snapshot (the
+ * server builds and caches it) and the tree layout (worker, IndexedDB), into
+ * the same module caches the tab reads on mount — so the first click paints
+ * at once instead of "Growing the tree…" for several seconds. The pane calls
+ * this for the session you are looking at, after a short idle; the tab's
+ * own mount is unchanged (it dedupes through the same caches). Never polls,
+ * never throws. */
+export async function prefetchCodeMap(title: string): Promise<void> {
+  const en = entryFor(title);
+  if (!prefetchNeeded(!!en.snap, MODEL_OF.has(title), PREFETCHING.has(title))) return;
+  PREFETCHING.add(title);
+  try {
+    if (!en.snap) {
+      const d = await fetchSnapshot(title);
+      if (!d || ("unchanged" in d && d.unchanged)) return;
+      en.snap = d as CodeMapSnapshot;
+      en.snapAt = Date.now();
+      en.err = "";
+    }
+    if (MODEL_OF.has(title)) return;
+    const snap = en.snap;
+    const label = snap.repo?.label || title;
+    const repoKey = snap.repo?.id || "title:" + title;
+    let r = RAW.get(snap);
+    if (!r) {
+      r = rawFromSnapshot(snap, label);
+      RAW.set(snap, r);
+    }
+    const M = cachedModel(repoKey, r) || (await layoutModel(repoKey, r));
+    MODEL_OF.set(title, M);
+  } catch {
+    /* best effort: the tab's own load reports errors */
+  } finally {
+    PREFETCHING.delete(title);
+  }
+}
+
 // --- The tab --------------------------------------------------------------
 
 export function CodeMapTab({ title, active }: { title: string; active: boolean }) {
@@ -230,6 +281,10 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   /** "Go — only the planned files" exempted these already-changed files. */
   const [goExempt, setGoExempt] = useState<{ paths: string[]; state: string } | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [tour, setTour] = useState(false);
+  const tourSeen = useUi((s) => s.mapTourSeen);
+  const markTourSeen = useUi((s) => s.markMapTourSeen);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const themeKey = useThemeKey();
   const reducedMotion = useUi((s) => s.reduceMotion) || prefersReducedMotion();
 
@@ -932,6 +987,35 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
     }
   };
 
+  // --- The tour: opens itself on the first Map you see (any device), once the tree is up
+  useEffect(() => {
+    if (!active || !model || tourSeen || tour || (TOUR_ON && TOUR_ON !== title)) return;
+    TOUR_ON = title;
+    setTour(true);
+  }, [active, model, tourSeen, tour, title]);
+  useEffect(() => {
+    // switching away hides it; the next showing of this tab picks it up again unless it was finished
+    if (!active && tour) {
+      setTour(false);
+      if (TOUR_ON === title) TOUR_ON = "";
+    }
+  }, [active, tour, title]);
+  useEffect(
+    () => () => {
+      if (TOUR_ON === title) TOUR_ON = "";
+    },
+    [title]
+  );
+  const openTour = () => {
+    TOUR_ON = title;
+    setTour(true);
+  };
+  const closeTour = () => {
+    setTour(false);
+    if (TOUR_ON === title) TOUR_ON = "";
+    markTourSeen();
+  };
+
   // --- Render ------------------------------------------------------------------
 
   // Nothing to show yet and the first reads failed (a session still
@@ -988,7 +1072,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
   ) : null;
 
   return (
-    <div className="cm-root ct-root" onKeyDown={onRootKey}>
+    <div className="cm-root ct-root" ref={rootRef} onKeyDown={onRootKey}>
       {!failed && (
         <div className="cm-toolbar ct-toolbar">
           <button type="button" className="cm-btn" disabled={!histN} title="Back to where you were (Backspace)" onClick={() => ctl?.goBack()}>
@@ -997,48 +1081,56 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
           <button type="button" className="cm-btn" disabled={!model} title="Show the whole tree (0 or Home)" onClick={() => ctl?.wholeTree()}>
             ⌂<span className="lbl"> Whole tree</span>
           </button>
-          <span className="cm-seg ct-tools" role="group" aria-label="Paint a rule">
+          <span className="ct-rules" role="group" aria-label="Rules for agents">
+            <span className="ct-rules-k" aria-hidden="true">
+              Rules
+            </span>
+            <span className="cm-seg ct-tools" role="group" aria-label="Paint a rule">
+              <button
+                type="button"
+                className={"red" + (tool === "keep" ? " on" : "")}
+                aria-pressed={tool === "keep"}
+                disabled={!model}
+                title="Keep out: fence a folder or file off — agents may read there, every edit is blocked"
+                onClick={() => {
+                  ctl?.setTool("keep");
+                  setTick((x) => x + 1);
+                }}
+              >
+                ⛔<span className="lbl"> Keep out</span>
+              </button>
+              <button
+                type="button"
+                className={"green" + (tool === "only" ? " on" : "")}
+                aria-pressed={tool === "only"}
+                disabled={!model}
+                title="Only here: the one folder agents may edit in; everything else dims"
+                onClick={() => {
+                  ctl?.setTool("only");
+                  setTick((x) => x + 1);
+                }}
+              >
+                ✓<span className="lbl"> Only here</span>
+              </button>
+            </span>
             <button
               type="button"
-              className={"red" + (tool === "keep" ? " on" : "")}
-              aria-pressed={tool === "keep"}
-              disabled={!model}
-              title="Keep out: fence a folder or file off — agents may read there, every edit is blocked"
-              onClick={() => {
-                ctl?.setTool("keep");
-                setTick((x) => x + 1);
-              }}
+              className="cm-btn"
+              title="Keep agents out of a path — or scope them to only some paths — by typing a pattern"
+              onClick={() => (add ? setAdd(null) : openAdd("red", ""))}
             >
-              ⛔<span className="lbl"> Keep out</span>
-            </button>
-            <button
-              type="button"
-              className={"green" + (tool === "only" ? " on" : "")}
-              aria-pressed={tool === "only"}
-              disabled={!model}
-              title="Only here: the one folder agents may edit in; everything else dims"
-              onClick={() => {
-                ctl?.setTool("only");
-                setTick((x) => x + 1);
-              }}
-            >
-              ✓<span className="lbl"> Only here</span>
+              {add ? "Close" : "+ Zone"}
             </button>
           </span>
           <span className="cm-grow" />
           <SearchBox ref={searchRef} title={title} onPick={onPick} />
-          <span className={"cm-guard " + guard.cls} title={guard.title}>
-            <span className="cm-guard-dot" aria-hidden="true" />
-            <span className="lbl">{guard.label}</span>
-          </span>
-          <button
-            type="button"
-            className="cm-btn"
-            title="Keep agents out of a path — or scope them to only some paths — by typing a pattern"
-            onClick={() => (add ? setAdd(null) : openAdd("red", ""))}
-          >
-            {add ? "Close" : "+ Zone"}
-          </button>
+          {/* the guard pill matters once there is a rule to guard; before that it only said "No zones" */}
+          {zones.length > 0 && (
+            <span className={"cm-guard " + guard.cls} title={guard.title}>
+              <span className="cm-guard-dot" aria-hidden="true" />
+              <span className="lbl">{guard.label}</span>
+            </span>
+          )}
           <button
             type="button"
             className={"cm-btn" + (drawer ? " on" : "")}
@@ -1048,6 +1140,16 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
             onClick={() => setDrawer(!drawer)}
           >
             Session{sessionCount ? <span className="cm-count bad">{sessionCount}</span> : plan ? <span className="cm-count">plan</span> : null}
+          </button>
+          <button
+            type="button"
+            className={"cm-btn ct-guide" + (tour ? " on" : "")}
+            aria-pressed={tour}
+            title="A short tour of the Map: how to read the tree, what could break, rules"
+            disabled={!model}
+            onClick={() => (tour ? closeTour() : openTour())}
+          >
+            ?<span className="lbl"> Guide</span>
           </button>
         </div>
       )}
@@ -1182,6 +1284,7 @@ function CodeMap({ title, active }: { title: string; active: boolean }) {
       <div className="cm-sr" aria-live="polite" role="status">
         {announce}
       </div>
+      {tour && model && !failed && <MapTour rootRef={rootRef} onClose={closeTour} />}
     </div>
   );
 }

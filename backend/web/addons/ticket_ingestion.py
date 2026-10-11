@@ -213,16 +213,21 @@ def _issue_handling_enabled() -> bool:
         return False
 
 
-def _ticketing_configured() -> bool:
-    """Whether the pipeline process can boot at all: its config loader requires
-    a ``[ticketing]`` source even when the ticket half is switched off, so a
-    PR-only run still needs one configured."""
-    try:
-        from backend.config import settings as _s
+#: The env var that pins the pipeline to ONE ticketing source built from the
+#: environment (``MINDFLOCK_TICKET_TOKEN``… — see
+#: ``config._resolve_ticketing_layer``). While it is set every source saved
+#: in the Intake dialog is ignored, silently unless the status says so.
+TICKET_PROVIDER_ENV = "MINDFLOCK_TICKET_PROVIDER"
 
-        return any(s.provider for s in _s.load_settings().ticketing.sources)
-    except Exception:  # noqa: BLE001
-        return False
+
+def _env_override() -> Optional[dict]:
+    """``{provider, hides_ui_sources: True}`` while :data:`TICKET_PROVIDER_ENV`
+    pins the pipeline to an env-built source, else ``None`` — so the UI can
+    say why the sources it shows aren't the ones being polled."""
+    provider = (os.environ.get(TICKET_PROVIDER_ENV) or "").strip()
+    if not provider:
+        return None
+    return {"provider": provider, "hides_ui_sources": True}
 
 
 # Leading ISO timestamp on pipeline log lines ("2026-07-22T10:24:30 [ERROR] ...").
@@ -231,8 +236,10 @@ _LOG_TS_RE = re.compile(
 )
 
 # Connectivity failures as they appear in the ingestion log (aiohttp/OS errors:
-# DNS, refused/reset, unreachable, timeouts). Deliberately excludes auth/SSL
-# certificate errors — those are misconfiguration, not a network outage.
+# DNS, refused/reset, unreachable, timeouts) — a network outage, which clears
+# on its own. Auth failures are classified separately (_AUTH_ERROR_RE): they
+# used to be dropped here as "misconfiguration, not an outage", which left a
+# revoked token with no indicator at all.
 _CONN_ERROR_RE = re.compile(
     r"cannot connect to host"
     r"|name resolution"
@@ -244,6 +251,74 @@ _CONN_ERROR_RE = re.compile(
     r"|timed out",
     re.IGNORECASE,
 )
+
+# A tracker or GitHub refusing the credentials: the providers' own wording
+# ("Shortcut rejected the token (HTTP 401)", "Jira rejected the credentials
+# (HTTP 403)"), the monitors' ("GitHub /pulls returned 401 for o/r: Bad
+# credentials") and the generic HTTP spellings. A bare "401"/"403" only
+# counts next to an HTTP marker so a PR or ticket #403 never trips it.
+_AUTH_ERROR_RE = re.compile(
+    r"rejected the (?:token|credentials|api key)"
+    r"|(?:HTTP|status|returned|code)\s+40[13]\b"
+    r"|\b40[13]\s+(?:unauthori[sz]ed|forbidden)"
+    r"|\bunauthori[sz]ed\b"
+    r"|\bforbidden\b"
+    r"|bad credentials"
+    r"|invalid (?:api )?(?:token|key)"
+    r"|authentication failed",
+    re.IGNORECASE,
+)
+
+# Which source an error line is about, in order of confidence: the
+# orchestrator quotes the source id ("Poll scan for 'sc' failed"), the GitHub
+# monitors name the repo, a provider's own logger names the provider.
+_SOURCE_QUOTED_RE = re.compile(r"(?:source|scan for|for source) '([^']+)'")
+_GITHUB_REPO_RE = re.compile(r"GitHub /\w+ returned \d+ for (\S+?):")
+_PROVIDER_LOGGER_RE = re.compile(r"backend\.ticket_ingestion\.providers\.(\w+)")
+_PROVIDER_WORD_RE = re.compile(r"\b(Shortcut|Jira|Linear|Asana|GitHub)\b")
+
+#: Seconds an error line in the log stays "current". The pipeline retries
+#: every poll (~20 s tickets, ~60 s PRs), so a standing failure keeps
+#: re-logging and holds; after recovery the last line ages out on its own.
+ERROR_WINDOW = 180
+
+#: Written by the pipeline (``backend.ticket_ingestion.__main__``) when it
+#: exits over a configuration error or a crash: ``{pid, at, kind, message,
+#: fields}``. Same literal there.
+EXIT_RECORD = ".mindflock-pipeline-exit.json"
+
+
+def _error_source(line: str) -> str:
+    """The source / service an error line names (``""`` when it doesn't)."""
+    m = _SOURCE_QUOTED_RE.search(line)
+    if m:
+        return m.group(1)
+    m = _GITHUB_REPO_RE.search(line)
+    if m:
+        return "GitHub %s" % m.group(1)
+    m = _PROVIDER_LOGGER_RE.search(line)
+    if m:
+        return m.group(1)
+    m = _PROVIDER_WORD_RE.search(line)
+    return m.group(1) if m else ""
+
+
+def _newest_error(recent: dict) -> Optional[dict]:
+    """The most recent of the classified error lines (auth wins a tie)."""
+    if not recent:
+        return None
+    return max(
+        recent.values(),
+        key=lambda e: (str(e.get("at") or ""), e.get("kind") == "auth"),
+    )
+
+
+def _error_text(line: str) -> str:
+    """An error line without its timestamp / level / logger prefix, capped."""
+    text = _LOG_TS_RE.sub("", line, count=1).strip()
+    text = re.sub(r"^\[\w+\]\s*", "", text)
+    text = re.sub(r"^[\w.]+:\s+", "", text, count=1)
+    return text[:240]
 
 
 class TicketIngestionController:
@@ -264,6 +339,9 @@ class TicketIngestionController:
         self._log_path = self._repo_root / "logs" / "ticket-ingestion.log"
         self._proc: Optional[subprocess.Popen] = None
         self._started_at: Optional[float] = None
+        #: When this server first noticed its own child gone (the child's
+        #: exit time, near enough — Popen doesn't record one).
+        self._exited_at: Optional[float] = None
 
     def _own_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -410,10 +488,29 @@ class TicketIngestionController:
             pass
         return env
 
+    def _exit_record_path(self) -> Path:
+        return self._repo_root / EXIT_RECORD
+
+    def _exit_record(self) -> Optional[dict]:
+        """What the last pipeline wrote on its way out (:data:`EXIT_RECORD`),
+        or ``None``. Only trusted for OUR child when it names its pid."""
+        try:
+            raw = json.loads(self._exit_record_path().read_text())
+        except (OSError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
     def start(self) -> bool:
         if self.is_running():
             return False
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        # A fresh start owes the status a clean slate: the previous child's
+        # exit reason must not outlive it.
+        self._exited_at = None
+        try:
+            self._exit_record_path().unlink()
+        except OSError:
+            pass
         logf = open(self._log_path, "ab", buffering=0)
         try:
             logf.write(
@@ -502,12 +599,12 @@ class TicketIngestionController:
     def log_path(self) -> Path:
         return self._log_path
 
-    def _recent_connection_error(self, window_seconds: int = 180) -> bool:
-        """Whether the log tail shows a connectivity failure in the last few
-        minutes. The pipeline retries every poll interval (~20s), so an ongoing
-        outage keeps re-logging and holds this true; after recovery the last
-        error ages out of the window and it clears on its own. Untimestamped
-        traceback lines inherit the nearest preceding timestamped line."""
+    def _recent_errors(self, window_seconds: int = ERROR_WINDOW) -> dict:
+        """The most recent ``auth`` and ``network`` error lines in the log
+        tail that are still inside ``window_seconds``, keyed by kind:
+        ``{kind: {kind, message, at, source}}``. Untimestamped traceback
+        lines inherit the nearest preceding timestamped line. An auth line
+        that also reads like a connectivity one counts as auth."""
         try:
             with open(self._log_path, "rb") as fh:
                 fh.seek(0, os.SEEK_END)
@@ -515,8 +612,8 @@ class TicketIngestionController:
                 fh.seek(max(0, size - 65536))
                 tail = fh.read().decode("utf-8", "replace")
         except OSError:
-            return False
-        latest: Optional[_datetime.datetime] = None
+            return {}
+        latest: dict = {}
         current: Optional[_datetime.datetime] = None
         for line in tail.splitlines():
             m = _LOG_TS_RE.match(line)
@@ -525,13 +622,79 @@ class TicketIngestionController:
                     current = _datetime.datetime.fromisoformat(m.group(0))
                 except ValueError:
                     pass
-            if _CONN_ERROR_RE.search(line) and current is not None:
-                if latest is None or current > latest:
-                    latest = current
-        if latest is None:
-            return False
-        now = _datetime.datetime.now(latest.tzinfo)
-        return (now - latest).total_seconds() <= window_seconds
+            if current is None:
+                continue
+            if _AUTH_ERROR_RE.search(line):
+                kind = "auth"
+            elif _CONN_ERROR_RE.search(line):
+                kind = "network"
+            else:
+                continue
+            prev = latest.get(kind)
+            if prev is None or current >= prev["_at"]:
+                latest[kind] = {
+                    "kind": kind,
+                    "message": _error_text(line),
+                    "at": current.isoformat(),
+                    "source": _error_source(line),
+                    "_at": current,
+                }
+        out = {}
+        for kind, entry in latest.items():
+            at = entry.pop("_at")
+            now = _datetime.datetime.now(at.tzinfo)
+            if (now - at).total_seconds() <= window_seconds:
+                out[kind] = entry
+        return out
+
+    def _recent_connection_error(self, window_seconds: int = ERROR_WINDOW) -> bool:
+        """Whether the log tail shows a connectivity failure in the last few
+        minutes (see :meth:`_recent_errors`)."""
+        return "network" in self._recent_errors(window_seconds)
+
+    def _exit_status(self) -> "tuple[Optional[str], Optional[dict]]":
+        """``(exit_reason, last_error)`` for OUR child once it has exited —
+        ``(None, None)`` while it runs or when we never started one.
+
+        The reason is the pipeline's own word when it left one
+        (:data:`EXIT_RECORD`: a ``config`` error with the missing fields, a
+        ``crash`` with the exception), else read off the exit code: 0 is a
+        deliberate no-op (another pipeline held the lock), a signal is a
+        kill, anything else a crash named by the last error line logged."""
+        proc = self._proc
+        if proc is None or proc.poll() is None:
+            return None, None
+        if self._exited_at is None:
+            self._exited_at = time.time()
+        at = _datetime.datetime.fromtimestamp(self._exited_at).astimezone().isoformat()
+        rc = proc.returncode
+        rec = self._exit_record()
+        if rec and rec.get("pid") == proc.pid and rec.get("kind"):
+            kind = str(rec.get("kind"))
+            fields = [str(f) for f in (rec.get("fields") or []) if f]
+            message = str(rec.get("message") or "")
+            if kind == "config" and fields:
+                message = "missing or invalid: " + ", ".join(fields)
+            err = {
+                "kind": kind,
+                "message": message,
+                "at": str(rec.get("at") or at),
+                "source": "",
+            }
+            if fields:
+                err["fields"] = fields
+            reason = "configuration error" if kind == "config" else "crashed"
+            return reason, err
+        if rc == 0:
+            return "exited (another pipeline holds the lock)", None
+        if rc is not None and rc < 0:
+            reason = "killed by signal %d" % -rc
+        else:
+            reason = "exited with code %s" % rc
+        err = _newest_error(self._recent_errors(window_seconds=10**9))
+        if err is None:
+            err = {"kind": "crash", "message": reason, "at": at, "source": ""}
+        return reason, err
 
     def _activity(self) -> dict:
         """Parsed activity beacon written by the pipeline (its orchestrator
@@ -567,6 +730,31 @@ class TicketIngestionController:
         except Exception:  # noqa: BLE001 — status must never fail on this
             local = set()
         meta = self._lock_holder()[1] if running else None
+        # Why the child is gone, when it is ours and it is — plus the live
+        # error classes: a skipped source (config, from the beacon), a tracker
+        # or GitHub refusing the token (auth) or a connectivity failure
+        # (network), the most actionable first.
+        exit_reason, last_error = (None, None) if running else self._exit_status()
+        config_errors = [
+            e for e in (act.get("config_errors") or []) if isinstance(e, dict)
+        ]
+        recent = self._recent_errors() if running else {}
+        if running:
+            if config_errors:
+                first = config_errors[0]
+                last_error = {
+                    "kind": "config",
+                    "message": (
+                        "%s: missing %s" % (first.get("source"), first.get("field"))
+                        if first.get("field")
+                        else "%s: %s" % (first.get("source"), first.get("message"))
+                    ),
+                    "at": str(act.get("updated") or ""),
+                    "source": str(first.get("source") or ""),
+                    "field": str(first.get("field") or ""),
+                }
+            else:
+                last_error = _newest_error(recent)
         return {
             "running": running,
             "pid": pid,
@@ -585,7 +773,23 @@ class TicketIngestionController:
             "available": _ingestion_repo_available(),
             # Only meaningful while running — a stopped pipeline can't have a
             # live connectivity problem, and stale errors shouldn't stick.
-            "net_error": running and self._recent_connection_error(),
+            "net_error": running and "network" in recent,
+            # {kind: auth|config|network|crash, message, at, source[, field,
+            # fields]} — the current problem, or null. While running: a
+            # skipped source first, else the newest auth / network line in
+            # the log (ERROR_WINDOW). After OUR child exited: why.
+            "last_error": last_error,
+            # Why our child is gone ("configuration error", "crashed",
+            # "exited with code N", "killed by signal N", "exited (another
+            # pipeline holds the lock)"); null while it runs / not ours.
+            "exit_reason": exit_reason,
+            # Every source the running pipeline skipped: [{source, field,
+            # message}] (the beacon's list; [] when none or not running).
+            "config_errors": config_errors,
+            # MINDFLOCK_TICKET_PROVIDER pins the pipeline to one env-built
+            # source and hides every source saved in the UI: {provider,
+            # hides_ui_sources: true}, else null.
+            "env_override": _env_override(),
             # The last state the TICKET toggle was set to (persisted across
             # restarts; the server auto-starts a desired-on pipeline on boot).
             # desired=on with running=false means it is starting up or died.
@@ -669,13 +873,16 @@ class TicketIngestionAddon(Addon):
             daemon=True,
         ).start()
 
-        def _on_toggle(_envelope: dict) -> None:
+        def _on_toggle(envelope: dict) -> None:
             import threading
 
+            data = envelope.get("data") if isinstance(envelope, dict) else None
+            changed = (data or {}).get("changed") if isinstance(data, dict) else None
             # stop()/start() block on subprocess I/O; the bus callback runs on
             # the emitting (request) thread, so offload to a short-lived thread.
             threading.Thread(
                 target=self._reconcile_process,
+                args=(list(changed) if isinstance(changed, list) else [],),
                 name="mindflock-pr-toggle-reconcile",
                 daemon=True,
             ).start()
@@ -742,23 +949,29 @@ class TicketIngestionAddon(Addon):
     @staticmethod
     def _process_wanted() -> bool:
         """Whether the pipeline process should be running: ANY half is on
-        (and can actually run — tickets need a repo to provision into, a
-        PR-only / issue-only run still needs a ticketing source for the
-        config to load)."""
+        and can actually run. Tickets need a repo to provision into; PR
+        review and issue handling boot the pipeline on their own — the
+        layered config loads with zero ticketing sources."""
         tickets_on = _desired_running() and _ingestion_repo_available()
-        pr_on = _pr_review_enabled() and _ticketing_configured()
-        issues_on = _issue_handling_enabled() and _ticketing_configured()
-        return tickets_on or pr_on or issues_on
+        return tickets_on or _pr_review_enabled() or _issue_handling_enabled()
 
-    def _reconcile_process(self) -> None:
-        """Bring the pipeline process in line with the two toggles.
+    def _reconcile_process(self, changed: Optional[list] = None) -> None:
+        """Bring the pipeline process in line with the settings it reads at
+        boot (``changed``: the restart-signature keys that moved, for the
+        log — names only, never values).
 
-        Own-running + still wanted → restart (the halves are wired at boot, so
-        a flip only takes effect on a fresh process). Own-running + nothing
-        wanted → stop. Not running + wanted → start. An externally-owned
-        pipeline is left alone, matching the old toggle behaviour."""
+        Own-running + still wanted → restart (the halves and every source
+        are wired at boot, so a change only takes effect on a fresh
+        process). Own-running + nothing wanted → stop. Not running + wanted
+        → start. An externally-owned pipeline is left alone, matching the
+        old toggle behaviour."""
         if self.ctrl._own_running():
             if self._process_wanted():
+                if log.ErrorLog is not None:
+                    log.ErrorLog.Printf(
+                        "ingestion: settings changed (%s) — restarting the pipeline",
+                        ", ".join(str(c) for c in (changed or [])) or "switches",
+                    )
                 self.ctrl.restart()
             else:
                 self.ctrl.stop()

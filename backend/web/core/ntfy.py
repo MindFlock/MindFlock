@@ -236,7 +236,7 @@ def strip_token_param(url: str) -> Tuple[str, bool]:
     """``(url without any ``token=`` query param, whether one was removed)``.
 
     A tapped-notification URL is stored on the ntfy server and travels with
-    every push. Users naturally paste the URL from Settings → Mobile, which
+    every push. Users naturally paste the URL from Settings → Your phone, which
     carries ``?token=<access token>`` — that would hand this machine's
     credential to a third party, so it comes out here rather than in a warning
     the user may not read.

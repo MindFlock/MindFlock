@@ -36,7 +36,7 @@ import {
 import { openFastTrackMenu } from "./laneActions";
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
-import { useUi, type DialogName } from "../state/store";
+import { useUi } from "../state/store";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -127,68 +127,93 @@ export function terminalFocused(): boolean {
   return !!(el && el.closest && el.closest(".xterm"));
 }
 
-/** Modal dialogs during which Ctrl+W / Delete must not kill the session
- * behind: the store's dialog slot, plus a DOM fallback for modals that
- * still live outside the store (vanilla partials / addons). */
-const MODAL_DIALOG_NAMES: DialogName[] = [
-  "new-session",
-  "recent",
-  "commit",
-  "rename",
-  "device",
-  // The Intake reads like a page, not a popover, and its per-card Remove buttons make
-  // a stray Delete genuinely dangerous behind it.
-  "intake",
-  // Customize's checkboxes are about the rail, and the Prompts dialog has text
-  // fields where Ctrl+W is muscle memory — neither may end the focused session
-  // behind the dialog. (The waiting rows' Retry / Skip / Commit live in the
-  // bell: see "notif-pop" in MODAL_DOM_IDS.)
-  "customize",
-  "prompts",
-  // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
-  // nothing about it suggests the session behind is still taking keystrokes.
-  "verify",
-  // An extension's dialog body is arbitrary UI (forms, editable grids) — a
-  // stray Delete or Ctrl+W meant for it must never reach the session behind.
-  "extension",
-  // Red zones…: per-zone × Remove buttons (Delete is the natural "remove this"
-  // key) and pattern inputs where Ctrl+W is muscle memory — both would end the
-  // focused session's agent behind the dialog.
-  "red-zones",
-];
-const MODAL_DOM_IDS = [
-  "new-dialog",
-  "recent-dialog",
-  "commit-dialog",
-  "rename-dialog",
-  "device-dialog",
-  "intake-dialog",
-  "customize-dialog",
-  "prompts-dialog",
-  "verify-dialog",
-  "red-zones-dialog",
-  // The take-a-break screen owns the whole window and holds the keyboard on
-  // its own buttons; a Delete meant for the card must not reach the session
-  // running behind it.
-  "break-screen",
-  // The ⏩ fast-track picker holds the keyboard for its arrows and letters; a
-  // Delete or Ctrl+W pressed at it must not end the session it hangs from.
-  "fast-track-menu",
-  // The Prompts bar's menu holds the keyboard for its arrows the same way.
-  "prompts-menu",
-  // The bell holds the waiting rows (Retry / Skip / Commit / Raise budget /
-  // Start the workers) about OTHER sessions; a stray Delete or Ctrl+W on one
-  // of its buttons must never end the focused session behind it. The popover
-  // only exists while the bell is open.
-  "notif-pop",
-];
+/** Ctrl+W / Delete must never end the session behind an open dialog or
+ * overlay. This used to be an allow-list of dialog names and element ids, and
+ * every surface added since (the palette, Settings, Make PR, Setup, To-do,
+ * the shortcut sheet, the templates modal, an extension's dialog…) was a hole
+ * in it until someone lost a session through it. So the check is now generic:
+ *
+ *   1. ANY dialog in the store's slot counts (every DialogName is an overlay;
+ *      none of them wants the session behind it ended).
+ *   2. ANY visible element that reads as a dialog in the DOM counts:
+ *      `[role="dialog"]`, `.modal`, `.dialog`, `.palette`, or a `data-modal`
+ *      attribute — which also catches vanilla partials and addon dialogs the
+ *      store never hears about.
+ *   3. A short list of popovers that hold the keyboard without being dialogs
+ *      (the bell, the ⏩ picker, the Prompts menu, the break screen) — they are
+ *      not modal in markup, but a Delete pressed at one of their buttons is
+ *      about THEM, never about the focused session.
+ *
+ * Visible = present, no `hidden` attribute, no `.hidden` class on it or an
+ * ancestor, and not `display:none` where computed style is available. */
+export const OVERLAY_SELECTOR = '[role="dialog"], .modal, .dialog, .palette, [data-modal]';
+const POPOVER_IDS = ["break-screen", "fast-track-menu", "prompts-menu", "notif-pop"];
+
+function elementVisible(el: Element): boolean {
+  const h = el as HTMLElement;
+  if (h.hidden === true || h.hasAttribute?.("hidden")) return false;
+  if (h.classList?.contains("hidden")) return false;
+  if (h.closest?.(".hidden, [hidden]")) return false;
+  const win = typeof window !== "undefined" ? window : null;
+  if (win && typeof win.getComputedStyle === "function") {
+    try {
+      const cs = win.getComputedStyle(h);
+      if (cs.display === "none" || cs.visibility === "hidden") return false;
+    } catch {
+      /* a detached or foreign node: count it */
+    }
+  }
+  return true;
+}
+
+/** A dialog, overlay or keyboard-holding popover is on screen. */
+export function overlayOpen(): boolean {
+  if (useUi.getState().openDialog) return true;
+  const doc = typeof document !== "undefined" ? document : null;
+  if (!doc) return false;
+  if (typeof doc.querySelectorAll === "function") {
+    const nodes = doc.querySelectorAll(OVERLAY_SELECTOR);
+    for (let i = 0; i < nodes.length; i++) if (elementVisible(nodes[i])) return true;
+  }
+  if (typeof doc.getElementById === "function") {
+    for (const id of POPOVER_IDS) {
+      const el = doc.getElementById(id);
+      if (el && elementVisible(el)) return true;
+    }
+  }
+  return false;
+}
+
+/** Kept under its old name: callers (and tests) ask "is a modal open". */
 export function modalOpen(): boolean {
-  const open = useUi.getState().openDialog;
-  if (open && MODAL_DIALOG_NAMES.includes(open)) return true;
-  return MODAL_DOM_IDS.some((id) => {
-    const el = document.getElementById(id);
-    return !!el && !el.classList.contains("hidden");
-  });
+  return overlayOpen();
+}
+
+/** The keyboard is in a place where a key means TEXT, not a command: an input,
+ * textarea, select or contenteditable (isEditingTarget), or anywhere inside a
+ * terminal — xterm's helper textarea is one of those, but a click on the
+ * terminal's canvas can leave focus on a wrapper, and Ctrl+W typed at a shell
+ * is delete-word, not "end this session". */
+export function typingTarget(el: Element | null): boolean {
+  if (!el) return false;
+  if (isEditingTarget(el)) return true;
+  return !!el.closest?.(".xterm, .xterm-helper-textarea");
+}
+
+/** The one guard both Ctrl+W and Delete consult: a focused session, no dialog
+ * or overlay open, and the keyboard not in a text field or a terminal. Exported
+ * so the test can drive it with a fake document. */
+export function endShortcutAllowed(): boolean {
+  if (!useUi.getState().focused) return false;
+  if (overlayOpen()) return false;
+  const active = typeof document !== "undefined" ? (document.activeElement as Element | null) : null;
+  if (typingTarget(active)) return false;
+  // Not from inside a Map tab: its cards and per-zone × Remove buttons are
+  // focusable, a click there focuses this session, and Delete is the natural
+  // "remove this" key — it must never end the agent.
+  if ((active as HTMLElement | null)?.closest?.(".cm-root")) return false;
+  if (threadTabFocused()) return false;
+  return true;
 }
 
 // --- User-customized bindings ------------------------------------------------
@@ -197,7 +222,7 @@ export function modalOpen(): boolean {
 // every save is mirrored to the server's prefs.keymap (lib/prefs.ts), which
 // settings sync carries to your other computers. To keep one machine's
 // keyboard different (a laptop without the keys your desk has), pin
-// prefs.keymap in Settings → Devices → "Kept different on this device". Shape: { keys: {id: [{key,mod,shift,alt}, …]},
+// prefs.keymap in Settings → Your devices → "Kept different on this device". Shape: { keys: {id: [{key,mod,shift,alt}, …]},
 // chords: {defaultLetter: newSecondKey} }. An action can hold several
 // combos (the sheet's "+" appends one). Anything missing or unparseable
 // means "the defaults below"; a bare object (the pre-array format) is
@@ -343,7 +368,7 @@ export const CHORDS: Record<string, ChordEntry> = {
   // Stays bound whether or not gh/a token is present: makePrSession degrades to
   // GitHub's prefilled compare page, so the chord never dead-ends. Gating it on
   // a capability would just make the shortcut silently stop working.
-  r: { desc: "Make PR", run: (t) => makePrSession(t) },
+  r: { desc: "Open PR", run: (t) => makePrSession(t) },
   o: { desc: "Open / focus IDE", run: (t) => ideSession(t) },
   d: { desc: "Duplicate session", run: (t) => copySession(t) },
   h: { desc: "Hide / show window", run: (t) => hideSession(t) },
@@ -545,11 +570,15 @@ export const KEYMAP: KeymapEntry[] = [
     mod: true,
     id: "close",
     // "Session", not "window": the Alt+1..9 rows above use "window" for any
-    // rail row (the assistant, a log tail), and this one only ever ends the
+    // rail row (the assistant, a log tail), and this one only ever closes the
     // focused SESSION — a selected window never takes keyboard focus.
-    help: ["Focused session", "Ctrl+W / Delete", "End the focused session (undo: Ctrl+Shift+T)"],
-    when: () =>
-      !!useUi.getState().focused && !modalOpen() && !threadComposerFocused() && !threadTabFocused(),
+    // Close keeps the worktree: Recently closed (Ctrl+Shift+T) brings it back.
+    help: [
+      "Focused session",
+      "Ctrl+W / Delete",
+      "Close the focused session — keeps the worktree (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)",
+    ],
+    when: () => endShortcutAllowed() && !threadComposerFocused(),
     run: () => {
       const f = useUi.getState().focused;
       if (f) killSession(f);
@@ -559,16 +588,7 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
-    // Not from inside a Map tab: its cards and per-zone × Remove buttons are
-    // focusable, a click there focuses this session, and Delete is the natural
-    // "remove this" key — it must never end the agent (the Red zones dialog is
-    // guarded the same way, via modalOpen). Ctrl+W still works there.
-    when: () =>
-      !!useUi.getState().focused &&
-      !modalOpen() &&
-      !isEditingTarget(document.activeElement) &&
-      !(document.activeElement as HTMLElement | null)?.closest?.(".cm-root") &&
-      !threadTabFocused(),
+    when: () => endShortcutAllowed(),
     run: () => {
       const f = useUi.getState().focused;
       if (f) killSession(f);

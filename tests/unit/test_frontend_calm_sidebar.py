@@ -80,18 +80,25 @@ def test_switch_failures_are_titled_with_the_intake_switch_they_mirror():
     )
 
 
-def test_delete_and_wipe_asks_inline_in_two_steps():
+def test_delete_asks_inline_in_two_steps():
+    """The row menu ends a session in exactly two ways: Close (keeps the
+    worktree) and Delete… (removes worktree and branch), the latter asked on an
+    inline strip — never a native confirm(), which the desktop app lacks."""
     row = _code("components/sidebar/SidebarRow.tsx")
-    assert "const [wipeArmed, setWipeArmed] = useState(false);" in row
-    assert "Delete + wipe worktree" in row  # the first click arms it
-    assert "and its folder?" in row
-    assert re.search(r">\s*Delete \+ wipe\s*</button>", row)
-    assert re.search(r">\s*Keep\s*</button>", row)
-    # Focus lands on Keep, never on the wipe: a second Enter can't delete.
-    assert "autoFocus onClick={() => setWipeArmed(false)}" in row
-    armed = row[row.index("(wipeArmed ? (") : row.index("Delete + wipe worktree")]
+    assert "const [deleteArmed, setDeleteArmed] = useState(false);" in row
+    assert re.search(r">\s*Delete…\s*</button>", row)  # the first click arms it
+    assert "Removes the worktree and branch" in row
+    assert re.search(r">\s*Delete\s*</button>", row)
+    assert re.search(r">\s*Cancel\s*</button>", row)
+    # Focus lands on Cancel, never on Delete: a second Enter can't delete.
+    assert "autoFocus onClick={() => setDeleteArmed(false)}" in row
+    armed = row[row.index("(deleteArmed ? (") : row.index("end-delete")]
     assert armed.count("autoFocus") == 1
-    assert 'errorPop("Delete failed", errMsg(err));' in row
+    # Close is the other verb, and says what it keeps.
+    assert "keeps the worktree; reopen from Recently closed" in row
+    assert "killSession(title)" in row
+    for gone in ("Delete + wipe", "End session", "wipeArmed"):
+        assert gone not in row, gone
 
 
 def test_recently_closed_asks_in_one_inline_bar():
@@ -188,11 +195,17 @@ def test_no_welcome_hint_and_the_customize_hint_points_at_prompts():
 
 def test_doctor_chip_waits_out_the_first_run_card():
     side = _code("components/sidebar/Sidebar.tsx")
-    assert (
-        "const firstRunCard = instances.length === 0 && config?.onboarded === false;"
-        in side
-    )
+    # The grid card's own rule (setupModel.showSetupCard), not a local copy.
+    assert "const firstRunCard = showSetupCard({" in side
+    assert "config?.onboarded === false" not in side
     assert "doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard" in side
+    # It opens the Setup checklist, and sits in the footer beside the
+    # "Setup 3/5" chip (no longer a fixed chip mounted by App).
+    assert 'ui.openDialogFor("setup")' in side
+    assert 'openDialogFor("settings", "doctor")' not in side
+    foot = side[side.index('<footer id="sidebar-footer">') :]
+    assert foot.index('id="doctor-warn"') < foot.index("<SetupChip />")
+    assert "<SetupChip />" not in _code("App.tsx")
     for bid in (
         'id="doctor-warn"',
         'id="doctor-warn-open"',
@@ -278,25 +291,22 @@ def test_only_a_lane_line_waiting_on_you_is_a_door():
     assert "onDoubleClick: (e: MouseEvent) => e.stopPropagation()," in row
 
 
-def test_the_wipe_only_fires_from_the_armed_state_and_closing_disarms():
+def test_delete_only_fires_from_the_armed_state_and_closing_disarms():
     row = _code("components/sidebar/SidebarRow.tsx")
-    assert "if (!expanded) setWipeArmed(false);" in row
-    armed = row.index("(wipeArmed ? (")
-    unarmed = row.index(
-        '<button className="danger" onClick={() => setWipeArmed(true)}>', armed
-    )
-    # The one /cleanup call lives in the armed branch; the unarmed button only arms.
-    cleanup = row.index('instApi(title, "/cleanup", { method: "POST" })')
-    assert row.count('"/cleanup"') == 1
-    assert armed < cleanup < unarmed
-    assert "Delete <b>{shown}</b> and its folder?" in row
-    # A failed wipe still un-hides the row and refreshes, after the card.
-    after = row[cleanup : row.index("Delete + wipe\n", cleanup)]
-    assert (
-        after.index('errorPop("Delete failed"')
-        < after.index("useUi.getState().setHidden(title, false);")
-        < after.index("await refreshInstances();")
-    )
+    assert "if (!expanded) setDeleteArmed(false);" in row
+    armed = row.index("(deleteArmed ? (")
+    unarmed = row.index("onClick={() => setDeleteArmed(true)}", armed)
+    # The one delete call lives in the armed branch; the unarmed button only
+    # arms. The POST /cleanup itself lives in lib/sessionActions.deleteSession.
+    delete = row.index("deleteSession(title, true)")
+    assert row.count("deleteSession(") == 1
+    assert armed < delete < unarmed
+    assert '"/cleanup"' not in row
+    actions = _code("lib/sessionActions.ts")
+    assert 'instApi<EndResult>(title, "/cleanup", { method: "POST" })' in actions
+    # A 409 "folder in use" is drawn on the row (setInUse), not swallowed.
+    assert 'if (r && r !== "done") setInUse(r.inUse);' in row
+    assert 'className="folder-in-use"' in row
 
 
 def test_merge_keeps_its_browser_fallback_mark():
@@ -315,10 +325,7 @@ def test_closed_sessions_are_sent_to_recently_closed_by_its_one_name():
             continue
         assert "Recent…" not in rel.read_text(encoding="utf-8"), rel
     actions = _code("lib/sessionActions.ts")
-    assert (
-        'toast("Session ended — reopen it from Recently closed, under the session list '
-        '(or Ctrl+Z / Ctrl+Shift+T)");' in actions
-    )
+    assert '"Session closed — reopen it from Recently closed (Ctrl+Shift+T)"' in actions
     server = (_SRC.parents[1] / "backend" / "web" / "server.py").read_text(
         encoding="utf-8"
     )

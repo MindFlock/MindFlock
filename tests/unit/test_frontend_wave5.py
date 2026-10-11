@@ -94,7 +94,8 @@ def test_app_js_toast_subscribers_skip_replays():
     # Feature-detected accessor (older events.js can't break dispatch).
     assert 'typeof ev.isReplay === "function"' in js
     # Clarify toast/badge arming gated; state repaint (forceActivity) is not.
-    assert 'env.new === "clarify" && !isReplay(env)' in js
+    # (The replay check now precedes the clarify branch as an early return.)
+    assert 'env.new === "clarify" && inst' in js
     # Stage (interrupt), PR-state (open / merged) and budget subscribers all
     # bail on replays.
     assert js.count("if (isReplay(env)) return;") >= 3
@@ -118,10 +119,10 @@ def test_app_js_missing_workspace_wiring():
     # Chip is a distinct "missing workspace" label, not a fake stage.
     assert '"missing workspace"' in js
     assert "s-missing" in js
-    # Single Clean up action → the existing DELETE endpoint.
+    # Single Delete action → the existing DELETE endpoint.
     assert "cleanupMissing" in js
     assert '{ method: "DELETE" }' in js
-    assert "Clean up — remove session" in js
+    assert "Delete — remove session" in js
     # Pane placeholder with the same action; no terminal is created.
     assert "missing-pane" in js
     assert "missing-cleanup" in js
@@ -169,9 +170,9 @@ def test_app_js_no_origin_hint():
     assert '"command copied"' in js
     # Rendered as a subdued, non-destructive hint.
     assert "nextstep-hint" in js
-    # Push API errors (e.g. the friendly 400) surface as toasts, not alerts.
-    # (Error text is extracted via the shared errMsg() helper.)
-    assert 'toast("Push failed: " + errMsg(err)' in js
+    # Push API errors (e.g. the friendly 400) surface as an actionable error
+    # card (errorPop), never alerts. (Error text via the shared errMsg() helper.)
+    assert 'errorPop("Push failed", errMsg(err))' in js
     push_fn = js[js.index("async function pushSession") :]
     push_fn = push_fn[: push_fn.index("}\n")]
     assert "alert(" not in push_fn
@@ -219,14 +220,23 @@ def test_light_focused_rows_outline_all_chips():
 # shipped bundle so it cannot regress the next time the surfaces are touched.
 # --------------------------------------------------------------------------- #
 
-# The user-facing remedy, verbatim. Also asserted in the docs and the backend.
-PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
+# The user-facing remedy, verbatim. The backend, mobile.js and the docs say
+# the new one (the credential has one home now); the built app.js still
+# carries the frontend's own copy (lib/sessionActions.ts) until it is updated.
+PR_REMEDY_OLD = (
+    "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
+)
+PR_REMEDY = (
+    "add a GitHub token in Settings → Connections → GitHub → Connect, "
+    "or install the GitHub CLI"
+)
 
 
 def test_app_js_pr_actions_never_alert_about_gh():
     js = client.get("/app.js").text
     # The remedy sentence exists exactly once — one constant, no copies to drift.
     assert js.count(PR_REMEDY) == 1
+    assert PR_REMEDY_OLD not in js
     # No surface renders the backend's old gh sentence.
     assert "GitHub CLI (gh) is not installed" not in js
     # Make PR / Merge report through toasts; the blocking alert() is gone.
@@ -234,9 +244,9 @@ def test_app_js_pr_actions_never_alert_about_gh():
         body = js[js.index(fn) :]
         body = body[: body.index("\n}\n")]
         assert "alert(" not in body, fn
-        assert "toast(" in body, fn
-    assert 'toast("Make PR failed: " + errMsg(err)' in js
-    assert 'toast("Merge failed: " + errMsg(err)' in js
+        assert "toast(" in body or "errorPop(" in body, fn
+    assert 'errorPop("Open PR failed", errMsg(err))' in js
+    assert 'errorPop("Merge failed", errMsg(err))' in js
 
 
 def test_app_js_handles_the_browser_fallback_responses():
@@ -257,18 +267,18 @@ def test_app_js_gates_pr_entry_points_on_the_github_capability():
     assert "github !== false" in js
     # Unavailable != disabled — the step stays runnable, just marked as a hint
     # that lands in the browser.
-    assert "Make PR ↗" in js
+    assert "Open PR ↗" in js
     assert "Merge on GitHub ↗" in js
     assert "opens GitHub" in js
 
 
 def test_app_js_github_test_says_gh_is_optional_once():
     js = client.get("/app.js").text
-    # One helper behind the setup checklist, PR review and Git issues.
-    assert js.count("gh not installed (optional)") == 1
+    # GitHub's one test is the Connect GitHub dialog's (a real GET /user); the
+    # old token-source summary helper is gone, and gh is never "required".
+    assert "gh not installed (optional)" not in js
+    assert "setup-connect-github" in js
     assert 'gh not installed"' not in js
-    # The ✓/✗ verdict is token-driven, so no-gh is not a red ✗.
-    assert 'source !== "none"' in js
 
 
 def test_app_js_doctor_and_tour_stop_selling_gh_as_required():
@@ -285,6 +295,7 @@ def test_app_js_doctor_and_tour_stop_selling_gh_as_required():
 def test_mobile_js_offers_a_link_not_a_raw_gh_error():
     js = client.get("/mobile.js").text
     assert PR_REMEDY in js
+    assert PR_REMEDY_OLD not in js
     assert "j.ok === false" in js
     assert "j.compare_url" in js
     assert "j.pr_url" in js

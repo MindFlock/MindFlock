@@ -26,14 +26,15 @@ describe("notifFromEvent", () => {
     expect(notifFromEvent(env({ event: "session.activity_changed", new: "idle" }))).toBeNull();
   });
 
-  it("still ignores working and offline", () => {
+  it("ignores working; offline is a row, since it waits on you", () => {
     expect(notifFromEvent(env({ event: "session.activity_changed", new: "working" }))).toBeNull();
-    expect(notifFromEvent(env({ event: "session.activity_changed", new: "offline" }))).toBeNull();
+    // Offline is in the bell now (its chip offers Restart), so it IS a row.
+    expect(notifFromEvent(env({ event: "session.activity_changed", new: "offline" }))?.text).toBe("Offline");
   });
 
   it("keeps clarify — a question needs answering now", () => {
     const n = notifFromEvent(env({ event: "session.activity_changed", new: "clarify" }));
-    expect(n?.text).toBe("needs your input");
+    expect(n?.text).toBe("Question"); // lib/sessionState's word, same as the chip
     expect(n?.cls).toBe("n-warn");
   });
 
@@ -49,7 +50,7 @@ describe("notifFromEvent", () => {
     expect(say("pushed")).toBe("pushed");
     expect(say("pr")).toBe("opened a PR");
     expect(say("merged")).toBe("merged");
-    expect(say("interrupt")).toBe("pre-commit failed");
+    expect(say("interrupt")).toBe("Pre-commit failed"); // lib/sessionState's word
     expect(say("precommit")).toBe("running pre-commit hooks");
     // Anything else reads as the raw value — never "stage → …".
     expect(say("agent")).toBe("agent");
@@ -73,7 +74,7 @@ describe("notifFromEvent — your devices", () => {
     expect(n).toEqual({ text: "mac-mini · code 123 456", cls: "n-warn", device: true });
   });
 
-  it("joined is done, removed is info — both click through to Settings → Devices", () => {
+  it("joined is done, removed is info — both click through to Settings → Your devices", () => {
     expect(notifFromEvent(env({ event: "device.joined", session: "", data: { host: "ml-rig" } }))).toEqual({
       text: "ml-rig joined your devices",
       cls: "n-done",
@@ -84,7 +85,7 @@ describe("notifFromEvent — your devices", () => {
     expect(removed?.device).toBe(true);
   });
 
-  it("settings sync pausing itself is a warn row that opens Settings → Devices", () => {
+  it("settings sync pausing itself is a warn row that opens Settings → Your devices", () => {
     const n = notifFromEvent(env({ event: "settings.sync_paused", session: "", data: {} }));
     expect(n?.cls).toBe("n-warn");
     expect(n?.device).toBe(true);

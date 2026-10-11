@@ -1,4 +1,4 @@
-/** Settings → Devices helpers (lib/fleet.ts): code normalizing/formatting
+/** Settings → Your devices helpers (lib/fleet.ts): code normalizing/formatting
  * (must agree with the server's normalize_code), the invite countdown, and
  * the one-line statuses and event notes the screen, the bell and the toasts
  * show. */
@@ -262,10 +262,10 @@ describe("deviceEventNote", () => {
     expect(deviceEventNote("session.created", {})).toBeNull();
   });
 
-  it("settings sync pausing itself warns, toasts and points at Settings → Devices", () => {
+  it("settings sync pausing itself warns, toasts and points at Settings → Your devices", () => {
     const n = deviceEventNote("settings.sync_paused", {});
     expect(n).toEqual({ text: SYNC_PAUSED_NOTE, cls: "n-warn", toast: SYNC_PAUSED_NOTE });
-    expect(SYNC_PAUSED_NOTE).toMatch(/Settings → Devices/);
+    expect(SYNC_PAUSED_NOTE).toMatch(/Settings → Your devices/);
   });
 });
 
@@ -438,7 +438,7 @@ describe("who runs PR review and issue handling", () => {
     expect(here?.here).toBe(true);
     expect(here?.canMove).toBe(false);
     expect(here?.text).toMatch(/^This device runs PR review and issue handling/);
-    expect(here?.text).toMatch(/Run here in Settings → Devices on the device that should run them/);
+    expect(here?.text).toMatch(/Run here in Settings → Your devices on the device that should run them/);
   });
 
   it("not exactly one (older members deciding for themselves): the warning, with Run here", () => {

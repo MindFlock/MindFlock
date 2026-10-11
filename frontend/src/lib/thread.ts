@@ -291,7 +291,7 @@ export function headerSummary(rows: readonly WorkerRow[], finished = 0): Summary
   const parts: SummaryPart[] = [{ text: plural(rows.length, "worker") + (sha ? " forked from " : ""), cls: "" }];
   if (sha) parts.push({ text: sha, cls: "sha" });
   const ask = n("ask");
-  if (ask) parts.push({ text: ask + (ask === 1 ? " needs" : " need") + " your answer", cls: "needs" });
+  if (ask) parts.push({ text: ask + (ask === 1 ? " needs" : " need") + " you", cls: "needs" });
   const bad = n("failed") + n("blocked");
   if (n("failed")) parts.push({ text: n("failed") + " failed", cls: "bad" });
   if (n("blocked")) parts.push({ text: n("blocked") + " blocked", cls: "bad" });
@@ -330,7 +330,7 @@ export function progressOf(
   const segs: ProgressSeg[] = [
     { key: "done" as const, n: done, label: "done" },
     { key: "bad" as const, n: n("failed", "blocked") + finBad, label: "failed or blocked" },
-    { key: "needs" as const, n: n("ask"), label: "need your answer" },
+    { key: "needs" as const, n: n("ask"), label: "need you" },
     { key: "working" as const, n: n("working", "limit"), label: "working" },
     { key: "idle" as const, n: n("idle", "waiting"), label: "idle or waiting their turn" },
   ].filter((s) => s.n > 0);
@@ -364,7 +364,7 @@ export function workerStatus(
   switch (row.state) {
     case "ask":
       return {
-        word: "needs your answer",
+        word: "needs you · question",
         cls: "needs",
         detail: [t ? "asking for " + since(t, now) : "", parentName ? parentName + " is waiting on it" : ""]
           .filter(Boolean)

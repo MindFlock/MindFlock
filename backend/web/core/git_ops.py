@@ -250,6 +250,11 @@ def _make_initial_commit(path: str) -> None:
         have_email = have_name = ""
     if not have_email or not have_name:
         ident = ["-c", "user.email=mindflock@localhost", "-c", "user.name=MindFlock"]
+    # The person's git identity, when set, authors it (a commit MindFlock
+    # makes on their behalf); otherwise the repo's / the throwaway above.
+    from backend.web.core import person as _person
+
+    ident = _person.git_identity_args() or ident
     try:
         r = subprocess.run(
             [

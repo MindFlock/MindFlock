@@ -261,8 +261,40 @@ def spawn_tail(path, lines: int = 500, dimensions=(24, 80)):
     )
 
 
+# What a terminal emulator sends back on its own — answers to the device
+# probes tmux makes of a client (DA1/DA2, cursor position, DSR, mode reports,
+# OSC colour queries, DCS version strings) and focus reports. They are the
+# CLIENT talking to tmux, not a person typing into the pane, so a read-only
+# terminal still lets them through (a client that never answers is one tmux
+# keeps waiting on) and they never count as input.
+_TERMINAL_REPLY = re.compile(
+    rb"(?:"
+    rb"\x1b\[\??[0-9;]*R"  # cursor position report
+    rb"|\x1b\[[?>][0-9;]*c"  # primary / secondary device attributes
+    rb"|\x1b\[[0-9]n"  # device status
+    rb"|\x1b\[\??[0-9;]*\$y"  # mode report
+    rb"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC reply
+    rb"|\x1bP[^\x1b]*\x1b\\"  # DCS reply (XTVERSION, …)
+    rb"|\x1b\[[IO]"  # focus in / out
+    rb")+"
+)
+
+
+def is_terminal_reply(data) -> bool:
+    """Whether a websocket input frame is only the terminal emulator answering
+    tmux (see :data:`_TERMINAL_REPLY`) — never a person's keystroke."""
+    if isinstance(data, str):
+        data = data.encode("utf-8", "replace")
+    return bool(data) and _TERMINAL_REPLY.fullmatch(data) is not None
+
+
 async def pump_pty(
-    ws: WebSocket, proc, allow_input: bool = True, on_input=None
+    ws: WebSocket,
+    proc,
+    allow_input: bool = True,
+    on_input=None,
+    gate=None,
+    out_q: "Optional[asyncio.Queue]" = None,
 ) -> None:
     """Bridge a PtyProcess to a websocket: PTY output -> ws, ws input -> PTY,
     resize control frames -> ioctl. ``allow_input=False`` makes it read-only
@@ -274,10 +306,32 @@ async def pump_pty(
     session terminals pass a presence stamp through it (a person typing in a
     window is a person who does not need a push about that window); callers
     with no interest in presence (the assistant pane, the log stream) pass
-    nothing. Best-effort: a failing callback must not break the pump."""
+    nothing. Best-effort: a failing callback must not break the pump.
+
+    ``gate`` (optional, ``data -> None | str``) is asked about every input
+    frame that is not a terminal reply (:func:`is_terminal_reply`): ``None``
+    lets it through; a string drops it, and a non-empty string is sent back
+    as a ``{"type": "readonly", "message": …}`` text frame — the session
+    terminals' driver lock (core.ownership). ``out_q`` lets the caller push
+    its own frames (``str`` = a text frame, ``bytes`` = output) into the
+    socket from any thread via ``loop.call_soon_threadsafe``."""
     loop = asyncio.get_running_loop()
-    out_q: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
+    if out_q is None:
+        out_q = asyncio.Queue()
     fd = proc.fd
+
+    def _admit(data) -> bool:
+        if gate is None or is_terminal_reply(data):
+            return True
+        try:
+            verdict = gate(data)
+        except Exception:  # noqa: BLE001 — a broken gate never blocks typing
+            return True
+        if verdict is None:
+            return True
+        if verdict:
+            out_q.put_nowait(json.dumps({"type": "readonly", "message": verdict}))
+        return False
 
     def _on_readable() -> None:
         try:
@@ -298,7 +352,10 @@ async def pump_pty(
             if data is None:
                 break
             try:
-                await ws.send_bytes(data)
+                if isinstance(data, str):
+                    await ws.send_text(data)
+                else:
+                    await ws.send_bytes(data)
             except Exception:  # noqa: BLE001
                 break
         try:
@@ -314,8 +371,8 @@ async def pump_pty(
                 break
             b = msg.get("bytes")
             if b is not None:
-                if allow_input:
-                    if on_input is not None:
+                if allow_input and _admit(b):
+                    if on_input is not None and not is_terminal_reply(b):
                         try:
                             on_input()
                         except Exception:  # noqa: BLE001
@@ -333,8 +390,8 @@ async def pump_pty(
                         proc.setwinsize(int(j["rows"]), int(j["cols"]))
                     except Exception:  # noqa: BLE001
                         pass
-                elif allow_input:
-                    if on_input is not None:
+                elif allow_input and _admit(t):
+                    if on_input is not None and not is_terminal_reply(t):
                         try:
                             on_input()
                         except Exception:  # noqa: BLE001

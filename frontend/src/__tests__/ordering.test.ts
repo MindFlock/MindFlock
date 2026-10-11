@@ -186,10 +186,12 @@ describe("attentionItems", () => {
       inst({ title: "checkfail1", activity: "idle", check: { state: "failed" } }),
       inst({ title: "broken1", activity: "idle", stage: "interrupt", failed_step: "lint" }),
     ]);
+    // The words are lib/sessionState's labels — the same ones the row's chip
+    // and the toast use.
     expect(items.map((i) => [i.p, i.title, i.reason])).toEqual([
-      [0, "clar1", "needs your answer"],
-      [1, "broken1", "pre-commit failed at lint"],
-      [2, "checkfail1", "checks failing"],
+      [0, "clar1", "Question"],
+      [1, "broken1", "Pre-commit failed at lint"],
+      [2, "checkfail1", "Checks failing"],
       [3, "pushed1", "pushed — ready for PR"],
     ]);
     expect(items[0].snippet).toBe("help?");
@@ -209,6 +211,17 @@ describe("attentionItems", () => {
     ]);
     expect(items.map((i) => i.title)).toEqual(["lane-pr", "no-lane"]);
     expect(items.every((i) => i.reason === "pushed — ready for PR")).toBe(true);
+  });
+
+  it("lists an offline agent (its chip offers Restart) and a failed setup", () => {
+    const items = attentionItems([
+      inst({ title: "dead", activity: "offline", stage: "agent" }),
+      inst({ title: "nosetup", activity: "idle", setup: { state: "failed" } as Instance["setup"] }),
+    ]);
+    expect(items.map((i) => [i.p, i.title, i.reason])).toEqual([
+      [1, "dead", "Offline"],
+      [1, "nosetup", "Setup failed"],
+    ]);
   });
 
   it("skips paused and missing sessions", () => {

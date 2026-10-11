@@ -19,7 +19,7 @@ So, when ``general.shared_link`` names a service, this server:
 * **withdraws** on a clean shutdown (:func:`withdraw` — ``tailscale serve
   clear``), so a machine that is on but not running MindFlock stops drawing
   the phone's traffic;
-* **reports** the link (:func:`status`) for Settings → Mobile, the startup
+* **reports** the link (:func:`status`) for Settings → Your phone, the startup
   banner and the ntfy announce, which advertise it in place of this device's
   own URL once it is set up.
 
@@ -55,7 +55,7 @@ when it is made, so one made before the device was tagged stays pending; and
 re-applies when the live ``tailscale serve status --json`` no longer carries
 our handler or this device's tags changed since the last apply (the server
 runs it every :data:`RECHECK_INTERVAL` seconds while the setting is on), and
-on demand from Settings → Mobile's Re-check, which also re-advertises a
+on demand from Settings → Your phone's Re-check, which also re-advertises a
 tagged-but-unapproved host to give the auto-approver another look.
 
 Everything here is best-effort and never raises: no ``tailscale`` binary, no
@@ -646,7 +646,7 @@ def _step(sid: str, title: str, state: str, reason: str) -> dict:
 
 
 def _steps(st: dict) -> list:
-    """The setup checklist Settings → Mobile renders: one step per thing a
+    """The setup checklist Settings → Your phone renders: one step per thing a
     host needs, each ``ok`` / ``fail`` / ``unknown`` with a one-line reason.
     Built from :func:`status`'s facts only; the UI adds each step's fix."""
     svc = st["service"]
@@ -799,7 +799,7 @@ def _steps(st: dict) -> list:
 
 
 def status(login: str = "") -> dict:
-    """The shared link as Settings → Mobile shows it. ``login`` is the
+    """The shared link as Settings → Your phone shows it. ``login`` is the
     owner's Tailscale login for the policy's grants (:func:`owner_login`),
     passed only for a caller that may see it; ``""`` leaves the marked
     placeholder in.

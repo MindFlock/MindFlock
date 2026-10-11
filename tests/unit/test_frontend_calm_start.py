@@ -107,28 +107,60 @@ class TestFirstRun:
         assert 's.openDialog === "setup"' in src
         assert "LEGACY_SCREEN_TABS" in src
 
-    def test_setup_auto_show_takes_the_session_count(self):
-        src = _read("components/dialogs/SetupDialog.tsx")
-        assert "sessions: number;" in src
-        assert "opts.sessions > 0" in src
-        assert (
-            "shouldAutoShowSetup({ failing, onboarded: config?.onboarded, sessions })"
-            in src
-        )
+    def test_setup_never_opens_itself(self):
+        """The Setup modal opens from the chip, the doctor chip, the palette and
+        `?setup=1` — never from a failing doctor probe (the old rule, a third
+        first-run surface on top of the tour and the grid card)."""
+        for rel in (
+            "components/dialogs/SetupDialog.tsx",
+            "components/setup/DoctorList.tsx",
+        ):
+            src = _code(_read(rel))
+            assert "shouldAutoShowSetup" not in src
+            assert "sessions > 0" not in src
+        doctor = _code(_read("components/setup/DoctorList.tsx"))
+        assert "consumeSetupIntent()" in doctor
+        model = _read("components/setup/setupModel.ts")
+        assert 'v !== "1" && v !== "install"' in model
+
+    def test_the_tour_no_longer_opens_itself(self):
+        app = _code(_read("App.tsx"))
+        assert "tourDecision" not in app and "openTour" not in app
+        store = _code(_read("state/store.ts"))
+        assert "tourDone" not in store and "mf_tour_done" not in store
+        palette = _read("components/palette/CommandPalette.tsx")
+        assert 'label: "Tour"' in palette
+        assert "shortcuts-tour" in _read("components/palette/ShortcutsSheet.tsx")
 
     def test_setup_folds_the_optional_account_tests(self):
-        src = _read("components/dialogs/SetupDialog.tsx")
-        fold = src[src.index('className="setup-optional"') : src.index("</details>")]
-        assert "setup-test-github" in fold
+        src = _read("components/setup/SetupChecklist.tsx")
+        fold = src[
+            src.index('className="setup-optional"') : src.index(
+                "</details>", src.index('className="setup-optional"')
+            )
+        ]
+        # GitHub is the Connect GitHub dialog (its own Test), not a fold test.
+        assert "setup-test-github" not in src
+        assert "openConnectGitHub()" in src
         assert "setup-test-shortcut" in fold
         assert "setup-shortcut-token" in fold
         assert "setup-test-agent" not in fold
         assert "Tokens live in" not in src
         assert ".setup-optional" in _read("components/dialogs/SetupDialog.css")
 
+    def test_checklist_is_one_component_with_five_steps(self):
+        src = _read("components/setup/SetupChecklist.tsx")
+        for step in ("tools", "agent_login", "repo", "tracker", "phone"):
+            assert 'data-step="%s"' % step in src, step
+        # Both surfaces render the same component.
+        assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
+        assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
+        # Step 5 is always visible: Install Tailscale OR the QR, never hidden.
+        assert 'data-phone="install-tailscale"' in src and 'data-phone="qr"' in src
+
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")
         assert "<h2>Get set up</h2>" in src
-        assert "Three steps to a running agent." in src
+        assert "Five steps" in src
         assert "⋯ menu" not in src
         assert "Click a session's row in the sidebar to show it." in src

@@ -76,8 +76,173 @@ def test_a_uv_tool_install_without_uv_says_so(monkeypatch):
 
 def test_install_kind_reads_where_the_running_package_actually_is():
     # No monkeypatching: whatever this test run is, the answer must be one of
-    # the three the callers branch on — never an exception, and never None.
-    assert self_update.install_kind() in {"editable", "uv-tool", "other"}
+    # the four the callers branch on — never an exception, and never None.
+    assert self_update.install_kind() in {"editable", "uv-tool", "pipx", "other"}
+
+
+# --------------------------------------------------------------------------- #
+# install.json: the one record of HOW this engine was installed
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def home(tmp_path, monkeypatch):
+    """A temp $MINDFLOCK_HOME, so install.json is never the real one."""
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _write(home, **data):
+    (home / "install.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_install_json_lives_under_mindflock_home(home):
+    assert self_update.install_json_path() == home / "install.json"
+    assert self_update.read_install_json() == {}  # none yet
+    _write(home, method="pipx", ref="v0.7.5", sha="a" * 40, python="3.12", at=1)
+    assert self_update.read_install_json()["method"] == "pipx"
+
+
+def test_install_json_defaults_to_dot_mindflock(monkeypatch, tmp_path):
+    monkeypatch.delenv("MINDFLOCK_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert self_update.install_json_path() == tmp_path / ".mindflock" / "install.json"
+
+
+def test_a_corrupt_or_unknown_install_json_falls_back_to_detection(home, monkeypatch):
+    monkeypatch.setattr(self_update, "_detected_kind", lambda: "other")
+    (home / "install.json").write_text("{not json", encoding="utf-8")
+    assert self_update.read_install_json() == {}
+    assert self_update.install_kind() == "other"
+    _write(home, method="homebrew")  # an installer nobody has
+    assert "method" not in self_update.read_install_json()
+    assert self_update.install_kind() == "other"
+
+
+def test_install_json_names_the_method_for_a_release_install(home, monkeypatch):
+    monkeypatch.setattr(self_update, "_detected_kind", lambda: "other")
+    _write(home, method="pipx")
+    assert self_update.install_kind() == "pipx"
+    _write(home, method="uv-tool")
+    assert self_update.install_kind() == "uv-tool"
+
+
+def test_a_dev_checkout_wins_over_a_stale_install_json(home, monkeypatch):
+    # The running package is the evidence: an editable install must refuse
+    # even when an older release install left its install.json behind.
+    monkeypatch.setattr(self_update, "_detected_kind", lambda: "editable")
+    _write(home, method="uv-tool")
+    assert self_update.install_kind() == "editable"
+    assert "development checkout" in self_update.blocked_reason()
+
+
+def test_write_install_json_keeps_the_rest(home):
+    _write(home, method="pipx", ref="v0.7.4", sha="b" * 40, python="3.12", at=1)
+    assert self_update.write_install_json(ref="v9.9.9", sha="a" * 40, at=2)
+    data = json.loads((home / "install.json").read_text(encoding="utf-8"))
+    assert data == {
+        "method": "pipx",
+        "ref": "v9.9.9",
+        "sha": "a" * 40,
+        "python": "3.12",
+        "at": 2,
+    }
+
+
+def test_detection_recognises_a_pipx_venv(monkeypatch, tmp_path):
+    import backend
+
+    site = (
+        tmp_path
+        / "pipx"
+        / "venvs"
+        / "mindflock"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+    )
+    pkg = site / "backend"
+    pkg.mkdir(parents=True)
+    monkeypatch.setattr(backend, "__file__", str(pkg / "__init__.py"))
+    monkeypatch.setattr(
+        self_update.sysconfig, "get_paths", lambda: {"purelib": str(site)}
+    )
+    monkeypatch.setattr(
+        self_update.sys, "prefix", str(tmp_path / "pipx" / "venvs" / "mindflock")
+    )
+    assert self_update._detected_kind() == "pipx"
+
+
+# --------------------------------------------------------------------------- #
+# One install command per method — shared by the server, the CLI, the fleet
+# --------------------------------------------------------------------------- #
+def test_install_command_per_method():
+    spec = "mindflock[web] @ git+%s@%s" % (self_update.INSTALL_REPO, "a" * 40)
+    assert self_update.install_command("uv-tool", "a" * 40) == [
+        "uv",
+        "tool",
+        "install",
+        "--force",
+        "--python",
+        self_update.INSTALL_PYTHON,
+        spec,
+    ]
+    assert self_update.install_command("pipx", "v9.9.9") == [
+        "pipx",
+        "install",
+        "--force",
+        "mindflock[web] @ git+%s@v9.9.9" % self_update.INSTALL_REPO,
+    ]
+    assert self_update.install_command("editable", "v9.9.9") is None
+    assert self_update.install_command("other", "v9.9.9") is None
+
+
+def test_editable_update_commands_are_the_exact_git_lines(monkeypatch):
+    monkeypatch.setattr(self_update, "install_checkout", lambda: "")
+    lines = self_update.editable_update_commands("v9.9.9", "/home/me/My Flock")
+    assert lines == [
+        "cd '/home/me/My Flock'",
+        "git fetch --tags origin",
+        "git checkout v9.9.9",
+        "uv sync --group web",
+        "mindflock restart",
+    ]
+    # No tag known yet: main, and no cd for an unknown checkout.
+    assert self_update.editable_update_commands("", "")[:2] == [
+        "git fetch --tags origin",
+        "git checkout main",
+    ]
+
+
+def test_a_pipx_install_is_updatable_when_pipx_is_on_path(monkeypatch):
+    monkeypatch.setattr(self_update, "install_kind", lambda: "pipx")
+    monkeypatch.setattr(self_update.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert self_update.blocked_reason() == ""
+    monkeypatch.setattr(self_update.shutil, "which", lambda name: None)
+    assert "`pipx` is not on the server's PATH" in self_update.blocked_reason()
+
+
+def test_the_server_script_runs_the_shared_install_line(statedir):
+    uv = self_update._script("v9.9.9", "a" * 40, method="uv-tool")
+    assert "uv tool install --force --python %s" % self_update.INSTALL_PYTHON in uv
+    px = self_update._script("v9.9.9", "a" * 40, method="pipx", prev_commit="b" * 40)
+    assert "pipx install --force" in px and "uv tool install" not in px
+    # The rollback reinstalls the previous commit with the same installer.
+    assert px.count("pipx install --force") == 2 and "b" * 40 in px
+    assert subprocess.run(["/bin/sh", "-n", "-c", px]).returncode == 0
+
+
+@pytest.mark.asyncio
+async def test_latest_release_tag_is_empty_when_github_cannot_say(monkeypatch):
+    async def _none(force=False):
+        return None
+
+    monkeypatch.setattr(self_update, "latest_release", _none)
+    assert await self_update.latest_release_tag() == ""
+
+    async def _some(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9"}
+
+    monkeypatch.setattr(self_update, "latest_release", _some)
+    assert await self_update.latest_release_tag(force=True) == "v9.9.9"
 
 
 # --------------------------------------------------------------------------- #

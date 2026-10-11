@@ -19,9 +19,11 @@ from a browser.
 │   routes · stage detection (git_ops) · terminal bridge (pump_pty)       │
 │   event bus (core/events.py) · prompt queue · PR auto-review            │
 │   lineage + mailbox delivery lane (core/lineage.py, core/mailbox.py)    │
-│   remote-device proxy (core/remote.py, tailnet)                         │
+│   remote-device proxy (core/remote.py, tailnet) · settings sync         │
+│   peer links (backend/peer: invites, pinned-key TLS, sandboxed share)  │
 │   addons: mindflock (pipeline) · assistant · settings · doctor ·        │
-│           connections · templates · notify                              │
+│           connections · templates · notify · fleet · onboarding ·       │
+│           dbclient · traffic                                            │
 └──────────────┬───────────────────────────────────────────────────────────┘
                │ in-process (core/engine.py singleton)
 ┌──────────────▼───────────────────────────────────────────────────────────┐
@@ -108,7 +110,7 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `EventBus._dispatch_hooks` uses for shell hooks.
 - **`core/ntfy.py`** — the optional [ntfy](https://ntfy.sh) push channel: the
   transport (JSON publish, rate cap, last-result reporting) behind the notify
-  addon's server-side bus subscriber, so a "needs your input" reaches a phone
+  addon's server-side bus subscriber, so a "Needs you" reaches a phone
   with no browser tab open. Off until configured; see
   [web-ui.md](web-ui.md#notifications-).
 - **`core/auth.py`** — shared bearer-token ASGI middleware gating HTTP + websockets
@@ -150,7 +152,7 @@ FastAPI app `backend.web.server:app`. Key pieces:
   holds its pane (an agent CLI in the pane's process tree, not a shell it quit
   to). It never boots one, never types into a dialog or limit screen, lets the
   user's queued prompts go first, holds while a long-poll is open on that
-  inbox, and waits while a person has typed in that window in the last 45 s.
+  inbox, and waits while a person has typed in that session in the last 45 s.
   Every typer into a pane shares one lock per tmux session
   (`agent_sessions._typing_lock`), so a message can't merge into a queued
   prompt. Hop and
@@ -297,9 +299,11 @@ Agent/Terminal/Diff tabs per pane, guided next-step buttons, token/cost popups,
 voice input, a settings dialog, and a **Intake** dialog (top bar / Alt+I,
 `components/intake/`) whose Tickets / Pull requests / Issues tabs are where
 sessions come from — Settings is set-and-forget, Intake is the surface you visit
-to see what came in and start something by hand. `core/ws-xterm.js` is the
-shared xterm↔WebSocket wiring; `mobile.*` is a single-terminal phone UI at
-`/m`. See [web-ui.md](web-ui.md).
+to see what came in and start something by hand. The React app's own
+xterm↔WebSocket wiring is `lib/wsTerm` (`useWsTerm`); `core/ws-xterm.js` is
+the older helper kept for **addon panes** only, fed the bundled xterm through
+the globals `main.tsx` exposes (`window.Terminal`, `window.FitAddon`);
+`mobile.*` is a single-terminal phone UI at `/m`. See [web-ui.md](web-ui.md).
 
 `lib/clipboard.attachFileDrop(host, term, session?)` is the single owner of the
 drop/paste-to-path gesture, with exactly two callers: `lib/terminals`'
@@ -364,7 +368,7 @@ A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
 `mindflock mcp`, that gives an agent 27 tools over the rest of the flock:
 list and inspect sessions, read their output and diffs, message them, spawn
 workers (or start tickets as workers), wait for them, answer their dialogs,
-ship their work (commit, push, PR, merge, or arm the autopilot), close
+ship their work (commit, push, PR, merge, or arm Fast-track), close
 or delete them, and start and steer server-driven team runs. It runs as a **child of the agent CLI**, not of the web
 server, and is a thin client of the HTTP API (`backend/client.py`, bearer
 token included), so it holds no engine state and everything it does shows in
@@ -390,10 +394,27 @@ args at every launch site and are never persisted into `LaunchArgs`. The
 attach is on by default and toggled by `general.agent_mcp`, with
 `MINDFLOCK_AGENT_MCP=0` as a kill switch. See [mcp.md](mcp.md).
 
+### Peer links (`backend/peer`)
+
+Pair-coding with another MindFlock user, on another machine and possibly
+another network, without either repo leaving its owner. `invite.py` makes the
+`mfp1:`/`mfp2:` codes, `transport.py` / `wire.py` run the pinned-key TLS 1.3
+handshake (inside a WebSocket when a relay carries it), `relay.py` /
+`tunnel.py` the carriers (`peer.relay = auto` picks a Cloudflare quick tunnel
+when `cloudflared` is installed, else direct), `share.py` + `sandbox*.py` the
+shared folder — a shallow clone under `~/.mindflock/peer/shares/<id>/` run
+under bubblewrap with only its CLI's API hosts reachable (`egress.py`) — and
+`agent_api.py` + `bridge.py` the peer-only MCP toolset the shared session's
+agent gets (`backend/mcp/peer_tools.py`). `service.py` ties it to the server
+(`/api/peer*`, Settings → People, `mindflock peer …`). Linux +
+bubblewrap only. See [peer-link.md](peer-link.md).
+
 ### CLI (`backend/cli.py`)
 
-The `mindflock` console entry point: host commands (`serve`, `doctor [--fix]`,
-`uninstall`, and `mcp`, the MCP stdio server above) plus session commands
+The `mindflock` console entry point: host commands (`serve [--setup]`,
+`init` — the guided first run, `backend/init_wizard.py` —, `doctor [--fix]`,
+`update`, `restart`, `uninstall`, `token`, `accounts`, `devices`, `peer`,
+`join`, and `mcp`, the MCP stdio server above) plus session commands
 (`new`, `ls`, `attach`, `rm`, `open`, `events`, `msg`, `inbox`). The session
 commands are thin clients over a running server's HTTP API that send the
 bearer token when one resolves, so the terminal and the browser drive the same
@@ -430,7 +451,7 @@ independent cadences, so each side has to tolerate the other being older. See
    ~4 seconds with a stage badge. You watch/steer it from the browser or phone.
 6. The guided flow walks it forward: **Commit…** (runs pre-commit in the visible
    Terminal tab) → **Push** (plain `git push` over the repo's own remote, SSH or
-   HTTPS) → **Make PR** → **Merge** (`gh` when available, else the GitHub REST
+   HTTPS) → **Open PR** → **Merge** (`gh` when available, else the GitHub REST
    API with a token, else a prefilled browser URL). Stage detection is inferred
    from git plus whichever GitHub credential exists, so commits made in Cursor
    also move the badge.
@@ -449,6 +470,9 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/session_templates.json` | web (templates addon) | saved new-session templates |
 | `~/.mindflock/remote_devices.json` | web (remote) | paired tailnet devices + tokens |
 | `~/.mindflock/settings.json` | web (settings addon) | the web settings store |
+| `~/.mindflock/settings_sync.json` | web (`core/settings_sync.py`) | settings-sync stamps: which device last changed each synced field, pins kept separate |
+| `~/.mindflock/red_zones.json` | config (`backend/config/red_zones.py`) + web | keep-out (red) and only-here (green) zones per repo ([web-ui.md → Zones](web-ui.md#zones-keep-out-red-and-only-here-green)); read by the agent tool hook too |
+| `~/.mindflock/peer/` | peer (`backend/peer/paths.py`) | `identity/` (this install's peer key), `links.json`, `shares/<id>/` (one shared folder each), `relay/` (the relay ingress) |
 | `~/.mindflock/hooks/` | user | shell hooks run on session events ([extensions.md](extensions.md)) |
 | `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `scroll-speed`, `.exit-markers/`, `prompts/` |
 | `./config.toml` | pipeline + provisioning | all configuration (gitignored — holds tokens) |

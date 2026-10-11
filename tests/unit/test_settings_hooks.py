@@ -270,8 +270,10 @@ def test_only_a_change_the_pipeline_cares_about_reconciles_it(bus, monkeypatch):
     assert settings_hooks.PIPELINE_EVENT in _names(bus)
 
 
-def test_the_pipeline_debounce_is_five_seconds():
-    assert settings_hooks.PIPELINE_DEBOUNCE == 5.0
+def test_the_pipeline_debounce_is_two_seconds():
+    """Long enough to fold a form's blur-saves into one restart, short
+    enough that a pasted token is live before the user looks for it."""
+    assert settings_hooks.PIPELINE_DEBOUNCE == 2.0
 
 
 def test_automation_device_names_the_member_that_runs_it(monkeypatch):

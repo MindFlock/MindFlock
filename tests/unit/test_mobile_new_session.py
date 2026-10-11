@@ -387,7 +387,6 @@ def test_mobile_create_selects_the_new_session_when_it_lands():
     assert "function claimPending(" in js
     assert "claimPending();" in js
     claim = js.split("  function claimPending() {")[1].split("\n  function ")[0]
-    assert "pickerEl.value = title;" in claim
     assert "select(title);" in claim
     # The TITLE comes back from the server — an auto-named session can be
     # re-numbered under the engine lock, and waiting for a name we invented
@@ -550,7 +549,7 @@ def test_mobile_start_button_state_never_survives_a_dismiss():
         assert "resetStartBtn();" in body, fn
     reset = js.split("  function resetStartBtn() {")[1].split("\n  }\n")[0]
     assert "startBusy = false;" in reset
-    assert 'newStartBtn.textContent = "Start session";' in reset
+    assert 'newStartBtn.textContent = "Create session";' in reset
 
 
 # --------------------------------------------------------------------------- #

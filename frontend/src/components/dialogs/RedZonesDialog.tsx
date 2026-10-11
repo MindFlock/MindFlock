@@ -14,11 +14,18 @@
  * Repos appear here once they have a zone or a flag, and also for every live
  * session (their identity is looked up per session), so a repo you are working
  * in is always one click from its first zone. Inline rows only — no
- * window.prompt, which is dead in the Electron app. */
+ * window.prompt, which is dead in the Electron app.
+ *
+ * Everything above is LOCAL — this machine's store. Zones a TEAM shares live
+ * in the repo itself: `.mindflock/zones.toml`, committed like code. Each repo
+ * card's "Shared with the repo (committed)" section lists that file as a
+ * session's worktree has it (it follows the branch), names who added each
+ * zone, and "Add to repo" on a local zone appends it there — written into the
+ * worktree, not committed, so it rides that session's branch to everyone. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, instApi } from "../../api/client";
-import type { RedZone } from "../../api/types";
+import type { RedZone, SharedZonesBody } from "../../api/types";
 import { fetchCompanions, saveCompanions, type CompanionsDoc } from "../../lib/codemapApi";
 import { refreshInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
@@ -34,12 +41,24 @@ interface RepoDoc {
 interface RepoRow extends RepoDoc {
   id: string;
   sessions: string[];
+  /** The committed zones as the first session's worktree has them. */
+  shared: RedZone[];
+  sharedError: string;
 }
 
 interface SessionZones {
   repo: { id: string; label: string } | null;
   plan_first: boolean;
   zones: RedZone[];
+  shared?: RedZone[];
+  shared_error?: string;
+}
+
+interface SessionRepo {
+  label: string;
+  sessions: string[];
+  shared: RedZone[];
+  sharedError: string;
 }
 
 /** How many sessions we ask for their repo identity when the dialog opens —
@@ -50,7 +69,7 @@ export function RedZonesDialog() {
   const open = useUi((s) => s.openDialog === "red-zones");
   const closeDialog = useUi((s) => s.closeDialog);
   const [repos, setRepos] = useState<Record<string, RepoDoc>>({});
-  const [sessionRepos, setSessionRepos] = useState<Record<string, { label: string; sessions: string[] }>>({});
+  const [sessionRepos, setSessionRepos] = useState<Record<string, SessionRepo>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const seq = useRef(0);
@@ -71,12 +90,19 @@ export function RedZonesDialog() {
     ]);
     if (my !== seq.current) return;
     if (doc) setRepos(doc.repos || {});
-    const sr: Record<string, { label: string; sessions: string[] }> = {};
+    const sr: Record<string, SessionRepo> = {};
     for (const p of perSession) {
       if (p.status !== "fulfilled") continue;
       const [title, r] = p.value;
       if (!r || !r.repo || !r.repo.id) continue;
-      const cur = sr[r.repo.id] || { label: r.repo.label, sessions: [] };
+      // The first session's worktree speaks for the repo's shared zones; the
+      // card can switch to another (another branch may differ).
+      const cur = sr[r.repo.id] || {
+        label: r.repo.label,
+        sessions: [],
+        shared: r.shared || [],
+        sharedError: r.shared_error || "",
+      };
       cur.sessions.push(title);
       sr[r.repo.id] = cur;
     }
@@ -127,6 +153,8 @@ export function RedZonesDialog() {
         zones: d?.zones || [],
         plan_first: !!d?.plan_first,
         sessions: s?.sessions || [],
+        shared: s?.shared || [],
+        sharedError: s?.sharedError || "",
       });
     }
     // Repos with zones first, then repos you're working in, then by name.
@@ -206,6 +234,43 @@ function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, 
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const aliases = useUi((s) => s.aliases);
+  // The shared (committed) zones, as the `target` session's worktree has them.
+  const [target, setTarget] = useState(row.sessions[0] || "");
+  const [shared, setShared] = useState<{ zones: RedZone[]; error: string }>({
+    zones: row.shared,
+    error: row.sharedError,
+  });
+  useEffect(() => {
+    setShared({ zones: row.shared, error: row.sharedError });
+    setTarget((t) => (row.sessions.includes(t) ? t : row.sessions[0] || ""));
+  }, [row.shared, row.sharedError, row.sessions]);
+
+  const sharedCall = async (what: string, fn: () => Promise<SharedZonesBody>) => {
+    setBusy(what);
+    setErr("");
+    try {
+      const r = await fn();
+      setShared({ zones: r.shared || [], error: r.shared_error || "" });
+    } catch (x) {
+      setErr(errMsg(x));
+    } finally {
+      setBusy("");
+    }
+  };
+  const pickTarget = (t: string) => {
+    setTarget(t);
+    void sharedCall("shared", () => instApi<SharedZonesBody>(t, "/shared-zones"));
+  };
+  const addToRepo = (z: RedZone) =>
+    void sharedCall("share:" + z.id, () =>
+      instApi<SharedZonesBody>(target, "/shared-zones", {
+        json: { pattern: z.pattern, kind: z.kind || "red", note: z.note || "", name: z.name || "" },
+      })
+    );
+  const removeShared = (z: RedZone) =>
+    void sharedCall("unshare:" + z.id, () =>
+      instApi<SharedZonesBody>(target, "/shared-zones/remove", { json: { id: z.id } })
+    );
 
   const call = async (what: string, fn: () => Promise<{ repos?: Record<string, RepoDoc> }>) => {
     setBusy(what);
@@ -279,6 +344,26 @@ function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, 
                 {z.name && <span className="rzd-zone-name">{z.name}</span>}
                 {z.note && <span className="rzd-zone-note muted">{z.note}</span>}
               </span>
+              {inShared(z, shared.zones) ? (
+                <span className="rzd-chip rzd-in-repo" title={"Also in " + SHARED_FILE + " — shared with the repo"}>
+                  in repo
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="rzd-share"
+                  disabled={!target || busy === "share:" + z.id}
+                  title={
+                    target
+                      ? "Write this zone into " + SHARED_FILE + " in " + (aliases[target] || displayName(target)) +
+                        "'s worktree — commit it and it reaches everyone on the repo"
+                      : "Open a session on this repo first — the file is written into its worktree so it rides that branch"
+                  }
+                  onClick={() => addToRepo(z)}
+                >
+                  {busy === "share:" + z.id ? "Adding…" : "Add to repo"}
+                </button>
+              )}
               <button
                 type="button"
                 className="rzd-x"
@@ -332,8 +417,127 @@ function RepoCard({ row, onRepos }: { row: RepoRow; onRepos: (r: Record<string, 
         </button>
       </form>
       {err && <p className="error rzd-err">{err}</p>}
+      <SharedZonesView
+        zones={shared.zones}
+        error={shared.error}
+        target={target}
+        sessions={row.sessions}
+        sessionName={(t) => aliases[t] || displayName(t)}
+        busy={busy}
+        onTarget={pickTarget}
+        onRemove={removeShared}
+      />
       <Companions repoId={row.id} label={row.label} />
     </section>
+  );
+}
+
+/** The committed file shared zones live in (backend/config/repo_zones.py). */
+export const SHARED_FILE = ".mindflock/zones.toml";
+
+/** Same zone, whichever side it is on: kind + pattern without a trailing
+ * slash (`config/` and `config` name the same folder rule). */
+export function sharedKey(z: Pick<RedZone, "kind" | "pattern">): string {
+  return (z.kind === "green" ? "green" : "red") + ":" + (z.pattern || "").replace(/\/+$/, "");
+}
+
+export function inShared(z: Pick<RedZone, "kind" | "pattern">, shared: RedZone[]): boolean {
+  const k = sharedKey(z);
+  return shared.some((s) => sharedKey(s) === k);
+}
+
+/** "added by Ethan · 2026-10-10" — who put a shared zone in the file. */
+export function sharedAuthorLine(z: Pick<RedZone, "author" | "added">): string {
+  const who = (z.author || "").trim();
+  const when = (z.added || "").trim();
+  if (who) return "added by " + who + (when ? " · " + when : "");
+  return when ? "added " + when : "";
+}
+
+/** "Shared with the repo (committed)": the zones `.mindflock/zones.toml` holds
+ * in `target`'s worktree, each with who added it. Pure view — the card owns
+ * the calls. Without a session there is no worktree to read the file from. */
+export function SharedZonesView({
+  zones,
+  error,
+  target,
+  sessions,
+  sessionName,
+  busy,
+  onTarget,
+  onRemove,
+}: {
+  zones: RedZone[];
+  error: string;
+  target: string;
+  sessions: string[];
+  sessionName: (title: string) => string;
+  busy: string;
+  onTarget: (title: string) => void;
+  onRemove: (z: RedZone) => void;
+}) {
+  return (
+    <div className="rzd-shared">
+      <div className="rzd-shared-head">
+        <span className="rzd-shared-title">Shared with the repo (committed)</span>
+        {sessions.length > 1 ? (
+          <select
+            className="rzd-shared-target"
+            aria-label="Which session's worktree to read and write the shared zones in"
+            value={target}
+            onChange={(e) => onTarget(e.target.value)}
+          >
+            {sessions.map((t) => (
+              <option key={t} value={t}>
+                {sessionName(t)}
+              </option>
+            ))}
+          </select>
+        ) : target ? (
+          <span className="muted rzd-shared-where">in {sessionName(target)}'s worktree</span>
+        ) : null}
+      </div>
+      {!target ? (
+        <p className="muted rzd-none">
+          Open a session on this repo to see and add shared zones — they live in {SHARED_FILE} in its worktree.
+        </p>
+      ) : error ? (
+        <p className="error rzd-err">
+          {SHARED_FILE} is being ignored: {error}
+        </p>
+      ) : zones.length === 0 ? (
+        <p className="muted rzd-none">
+          None yet. “Add to repo” on a zone above writes it to {SHARED_FILE} — commit it and teammates get it.
+        </p>
+      ) : (
+        <ul className="rzd-zones rzd-shared-zones">
+          {zones.map((z) => (
+            <li key={z.id}>
+              <span className={"rzd-kind " + (z.kind === "green" ? "green" : "red")} title={z.kind === "green" ? "Only here" : "Keep out"}>
+                {z.kind === "green" ? "✓" : "⛔"}
+              </span>
+              <span className="rzd-zone-main">
+                <span className="rzd-zone-pattern">{z.pattern}</span>
+                <span className="rzd-zone-name">{z.kind === "green" ? "only here" : "keep out"}</span>
+                {z.name && <span className="rzd-zone-name">{z.name}</span>}
+                {z.note && <span className="rzd-zone-note muted">{z.note}</span>}
+                {sharedAuthorLine(z) && <span className="rzd-zone-author muted">{sharedAuthorLine(z)}</span>}
+              </span>
+              <button
+                type="button"
+                className="rzd-x"
+                aria-label={"Remove shared zone " + (z.name || z.pattern)}
+                title={"Remove it from " + SHARED_FILE + " (commit the change to share it)"}
+                disabled={busy === "unshare:" + z.id}
+                onClick={() => onRemove(z)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

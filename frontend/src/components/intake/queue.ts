@@ -183,7 +183,7 @@ export function collectQueued(payloads: QueuePayloads): QueuedItem[] {
  *   stopped — an item sitting there that nothing is coming for.
  * - `off-switch` — the engine runs, this kind's own switch is off.
  * - `elsewhere` — PR review and issue handling run on another of your devices
- *   (Settings → Devices), so this one never starts them on its own. Not a
+ *   (Settings → Your devices), so this one never starts them on its own. Not a
  *   switch problem: the switch is shared by your devices, and flipping it here
  *   would flip it on the one that does run them.
  * - `on` — it will be picked up on the next sweep.

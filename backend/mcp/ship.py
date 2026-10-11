@@ -100,7 +100,7 @@ def _first_line(text: str, limit: int = 72) -> str:
 D_SHIP = (
     "Ship a session's work NOW through MindFlock's own commit/push/PR/merge "
     "buttons, in order, up to depth: commit (stage all + commit, running the "
-    "repo's pre-commit hooks), push, pr (open a pull request; returns its "
+    "repo's pre-commit hooks), push, pr (Open PR; returns its "
     "URL), merge (merge that PR; needs confirm_merge=true). title: yourself or "
     "a session you manage. The commit message is written from the diff "
     "unless you pass message; the PR body is the worker's report_result "
@@ -108,20 +108,22 @@ D_SHIP = (
     "calling it again resumes. Refused while the target is mid-turn or on a "
     "dialog (shipping half-finished work): wait_for_session first, or use "
     "set_autopilot to ship when its turn ends; also refused while its "
-    "autopilot is armed. Merge only when the PR is "
+    "fast-track is armed. Merge only when the PR is "
     "mergeable and CI is not failing or running. wait=true (default) waits up "
     "to timeout_s for the commit hooks and the push. Returns steps "
     "[{step, state, ...}] with the commit sha, the PR url; a failed step "
-    "is an error naming it, with the hook output or the push error."
+    "is an error naming it, with the hook output or the push error. A push "
+    "the remote branch moved past (someone else pushed) is a step "
+    "{state: diverged, behind, authors} with ok=false: rebase first."
 )
 D_AUTOPILOT = (
-    "Arm MindFlock's autopilot on a session (yourself or one you manage): "
+    "Arm MindFlock's fast-track on a session (yourself or one you manage): "
     "when its agent's turn ends it ships itself up to depth (commit, push, pr "
     "or merge) through the same commit/push/PR/merge buttons, retrying the "
     "pre-commit hooks Settings allow-lists and halting with a reason on anything that needs a "
     "human. depth off disarms. Use it for a worker that is still working "
     "(ship_session refuses mid-turn). merge needs confirm_merge=true and waits "
-    "for CI. Returns the autopilot state {depth, state, step, reason, url}; "
+    "for CI. Returns the fast-track state {depth, state, step, reason, url}; "
     "get_session shows it later."
 )
 D_TICKET = (
@@ -132,8 +134,8 @@ D_TICKET = (
     "text. ticket: its slug (sc-23588), id or URL as list_tickets shows it; "
     "add source when the ticket is not in that list. note adds your own "
     "instructions after the ticket text; the report-back footer is appended "
-    "when its CLI gets the MindFlock tools. autopilot arms shipping at "
-    "creation (default off: the worker reports and you decide; merge needs "
+    "when its CLI gets the MindFlock tools. autopilot (the fast-track depth) "
+    "arms shipping at creation (default off: the worker reports and you decide; merge needs "
     "confirm_merge=true). It forks from the ticket repository's base branch, "
     "not your HEAD. Spawn limits apply. Then wait_for_session."
 )
@@ -310,7 +312,7 @@ class ShipTools:
         if status == "loading":
             raise ToolError("%r is still starting; nothing to ship yet" % title)
         if status == "paused":
-            raise ToolError("%r is paused (no worktree); resume it first" % title)
+            raise ToolError("%r is paused (agent stopped); resume it first" % title)
         if activity == "working":
             raise ToolError(
                 "%r is mid-turn: shipping now would commit half-finished work. %s"
@@ -436,7 +438,7 @@ class ShipTools:
             # Two drivers on one shell double-commit and double-push: the
             # autopilot's lease is the server's, so it wins.
             raise ToolError(
-                "%r has its autopilot armed (depth %s, %s): it will ship itself. "
+                "%r has its fast-track armed (depth %s, %s): it will ship itself. "
                 'Disarm it first with set_autopilot(title=%r, depth="off") to '
                 "ship by hand."
                 % (title, auto.get("depth"), auto.get("note") or "waiting", title)
@@ -503,10 +505,39 @@ class ShipTools:
                         timeout=60.0,
                     )
                 except client.ApiError as err:
-                    raise self._fail(
-                        "ship_session(%s): commit failed: %s" % (title, err.message),
-                        steps,
-                    ) from None
+                    body = getattr(err, "payload", None) or {}
+                    if (
+                        err.status == 409
+                        and isinstance(body, dict)
+                        and body.get("zone_warning")
+                    ):
+                        # A human-created window: the commit route WARNS about a
+                        # zone breach; the agent was already stopped at the edit
+                        # by the guard and the push gate still applies, so the
+                        # warning is carried, not fatal.
+                        hits = body.get("red_zone_breaches") or []
+                        warnings.append(
+                            "zone warning on commit: %s"
+                            % ", ".join(str(h.get("path") or h) for h in hits[:5])
+                        )
+                        try:
+                            self.api.post(
+                                self.api.inst_path(title, "/commit"),
+                                {"message": msg, "proceed_anyway": True},
+                                timeout=60.0,
+                            )
+                        except client.ApiError as err2:
+                            raise self._fail(
+                                "ship_session(%s): commit failed: %s"
+                                % (title, err2.message),
+                                steps,
+                            ) from None
+                    else:
+                        raise self._fail(
+                            "ship_session(%s): commit failed: %s"
+                            % (title, err.message),
+                            steps,
+                        ) from None
                 if not wait:
                     return started("commit", message=_first_line(msg, 200))
                 res = self._await_commit(title, before, deadline, ctx)
@@ -570,6 +601,32 @@ class ShipTools:
                         self.api.inst_path(title, "/push-branch"), {}, timeout=60.0
                     )
                 except client.ApiError as err:
+                    body = getattr(err, "payload", None) or {}
+                    if (
+                        err.status == 409
+                        and isinstance(body, dict)
+                        and body.get("diverged")
+                    ):
+                        # Not a crash: the remote branch moved on (someone else
+                        # pushed). Report it as the push step's outcome; the
+                        # way on is a rebase, never a force-push.
+                        steps.append(
+                            {
+                                "step": "push",
+                                "state": "diverged",
+                                "branch": body.get("branch") or st.get("branch"),
+                                "remote": body.get("remote") or "origin",
+                                "behind": body.get("behind"),
+                                "authors": body.get("authors") or [],
+                            }
+                        )
+                        out["hint"] = (
+                            "branch moved on the remote — rebase first: %s. "
+                            "POST /api/instances/%s/rebase-remote (or have the "
+                            "session run `git pull --rebase`), then call "
+                            "ship_session again." % (err.message, title)
+                        )
+                        return done(ok=False)
                     raise self._fail(self._push_error(title, err), steps) from None
                 if not wait:
                     return started("push", branch=st.get("branch"))
@@ -902,8 +959,8 @@ class ShipTools:
         autopilot = args.get("autopilot") or "off"
         if autopilot == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "autopilot merge merges the worker's PR with no one looking: pass "
-                "confirm_merge=true only when that was clearly asked for"
+                "autopilot=merge (fast-track to Merge) merges the worker's PR with no "
+                "one looking: pass confirm_merge=true only when that was clearly asked for"
             )
         source, ticket_id, listed = self._resolve_ticket(
             str(args["ticket"]), str(args.get("source") or "").strip()

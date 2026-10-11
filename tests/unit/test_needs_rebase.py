@@ -182,9 +182,11 @@ def test_index_has_no_bulk_update_button():
 
 def test_app_js_has_wedge_watchdog_rule():
     js = client.get("/app.js").text
-    assert "WEDGE_IDLE_S" in js
+    # The watchdog now lives in lib/sessionState.ts (one session state for
+    # every channel): the idle-with-uncommitted-work threshold and its reason.
+    assert "STUCK_IDLE_S" in js
     assert "activity_since" in js
-    assert "possibly stuck" in js
+    assert 'reason: "stuck"' in js
 
 
 def test_a_committed_and_walked_away_session_is_not_called_stuck():
@@ -196,7 +198,7 @@ def test_a_committed_and_walked_away_session_is_not_called_stuck():
     walked away from on the bell's attention badge, claiming to be wedged.
     """
     js = client.get("/app.js").text
-    at = js.index("const unfinished = ")
-    rule = js[at : js.index(";", at)]
-    assert "un.additions" in rule and "un.deletions" in rule
-    assert "committed" not in rule
+    at = js.index("function uncommittedWork(")
+    rule = js[at : js.index("\n}", at)]
+    assert "additions" in rule and "deletions" in rule
+    assert '"committed"' not in rule

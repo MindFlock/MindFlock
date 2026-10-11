@@ -1375,13 +1375,17 @@ def test_the_teardown_routes_forget_the_whole_record_not_just_the_probes():
     invisible at runtime until a user presses the wrong button — so pin it."""
     import inspect
 
+    from backend.web.core import session_end
+
+    # The three routes share one end-of-session path; the forget lives there.
     for route in (
         server.delete_instance,
         server.instance_cleanup,
         server.close_instance,
     ):
         src = inspect.getsource(route)
-        assert "_forget_session_state(title)" in src, route.__name__
+        assert "_end_session_response(title" in src, route.__name__
+    assert "_forget_session_state(title)" in inspect.getsource(session_end.end_session)
     # And the workflow verbs must NOT: they only want fresh probes.
     assert "_forget_probes" in inspect.getsource(server._forget_session_state)
 

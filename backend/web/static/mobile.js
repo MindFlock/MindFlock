@@ -33,7 +33,10 @@
     };
   }
 
-  var pickerEl = document.getElementById("picker");
+  var pickerEl = document.getElementById("picker");       // opens the Sessions sheet
+  var pickerTitleEl = document.getElementById("picker-title");
+  var stateChipEl = document.getElementById("state-chip");
+  var sessionListEl = document.getElementById("session-list");
   var dotEl = document.getElementById("dot");
   var termWrap = document.getElementById("term-wrap");
   var termHost = document.getElementById("term");
@@ -163,6 +166,7 @@
     setCtrl(false);
     if (term) { try { term.dispose(); } catch (e) {} term = null; }
     termHost.innerHTML = "";
+    updateDot();
     if (!title) { emptyEl.classList.remove("hidden"); setStatus(""); return; }
     emptyEl.classList.add("hidden");
     try { localStorage.setItem("cs_mobile_last", title); } catch (e) {}
@@ -178,7 +182,7 @@
     // just created. So wait, visibly, and let a poll tick attach.
     if (isLoading(title)) {
       awaitingReady = title;
-      setStatus("starting " + title + " — setting up the workspace…");
+      setStatus("starting " + nameOf(title) + " — setting up the workspace…");
     } else {
       connect();
     }
@@ -231,12 +235,6 @@
   }
 
   // --- session list polling ------------------------------------------------
-  function activityOf(title) {
-    for (var i = 0; i < instances.length; i++)
-      if (instances[i].title === title) return instances[i].activity || "offline";
-    return "offline";
-  }
-
   // POST /api/instances registers the instance as Loading and answers 202
   // BEFORE the worktree exists; GET /api/instances lists it on the very next
   // poll. So "is there a row" is not "is there a PTY" — this is how select()
@@ -248,6 +246,14 @@
   }
   function isLoading(title) {
     return statusOf(title) === "loading";
+  }
+  // What a session is CALLED: the server's `name` (the rename, else the label
+  // the desktop rail shows), else the title. Display only — every route below
+  // is still addressed by `title`.
+  function nameOf(title) {
+    for (var i = 0; i < instances.length; i++)
+      if (instances[i].title === title) return instances[i].name || title;
+    return title;
   }
 
   // The `?s=` deep link a notification taps through to. On the shared phone
@@ -276,19 +282,19 @@
         // session — the link names THIS device's, so take it now.
         var titles = instances.map(function (x) { return x.title; });
         var t = resolveDeepLink(deepLink, titles);
-        if (t && t !== current) { pickerEl.value = t; select(t); }
+        if (t && t !== current) select(t);
       })
       .catch(function () { selfDevice = ""; });
   }
 
+  // The Sessions sheet's rows, rebuilt whenever poll's signature moves (a
+  // title, its attention rank or its state word changed). Each row reads like
+  // the rail's: a tone dot, the name, the state word, the repo — and a ⋯ (or a
+  // long press) for that session's actions.
   function renderPicker() {
     var prev = current;
-    pickerEl.innerHTML = "";
+    renderRows();
     if (!instances.length) {
-      var o = document.createElement("option");
-      o.textContent = "no sessions";
-      pickerEl.appendChild(o);
-      pickerEl.disabled = true;
       // UNCONDITIONALLY, not `if (prev)`. The placeholder starts hidden in the
       // markup and select(null) is the only thing that reveals it, so guarding
       // this on a previous selection meant a phone that opened /m with no
@@ -302,20 +308,9 @@
       select(null);
       return;
     }
-    pickerEl.disabled = false;
-    // O1: attention-first picker — sessions that need the human sort to the
-    // top with a marker (🔵 answer me · 🔴 broken · 🟡 checks failing ·
-    // 🟢 ready for PR), so triage works from a phone without a sidebar.
-    instances.slice().sort(function (a, b) {
-      return attnRank(a) - attnRank(b);
-    }).forEach(function (inst) {
-      var o = document.createElement("option");
-      o.value = inst.title;
-      var label = attnMark(inst) + inst.title;
-      if (inst.repo) label += "  ·  " + inst.repo;
-      o.textContent = label;
-      pickerEl.appendChild(o);
-    });
+    // O1: attention-first — sessions that need the human sort to the top, the
+    // same order the bell lists them in, so triage works without a sidebar.
+    renderRows();
     // Keep the current selection if it still exists; else pick a sensible one.
     var titles = instances.map(function (i) { return i.title; });
     var want = prev && titles.indexOf(prev) >= 0 ? prev : null;
@@ -327,13 +322,111 @@
            : (saved && titles.indexOf(saved) >= 0) ? saved
            : titles[0];
     }
-    pickerEl.value = want;
     if (want !== current) select(want);
   }
 
+  function renderRows() {
+    sessionListEl.innerHTML = "";
+    if (!instances.length) {
+      sessionListEl.appendChild(folderNote("No open sessions."));
+      return;
+    }
+    instances.slice().sort(function (a, b) {
+      return attnRank(a) - attnRank(b);
+    }).forEach(function (inst) {
+      sessionListEl.appendChild(sessionRow(inst));
+    });
+  }
+
+  // How long a press must be held to count as a long press (and not a tap).
+  var LONG_PRESS_MS = 500;
+
+  function sessionRow(inst) {
+    var title = inst.title;
+    var ss = sessionState(inst);
+    var row = document.createElement("div");
+    row.className = "sess-row" + (title === current ? " current" : "");
+    row.setAttribute("data-title", title);
+    var main = document.createElement("button");
+    main.type = "button";
+    main.className = "sess-main";
+    var dot = document.createElement("span");
+    dot.className = "dot " + attnMark(inst) + " st-" + ss.state;
+    var text = document.createElement("span");
+    text.className = "sess-text";
+    // textContent throughout: titles and repo names are the user's own strings.
+    var name = document.createElement("span");
+    name.className = "sess-name";
+    name.textContent = inst.name || title;
+    var sub = document.createElement("span");
+    sub.className = "sess-sub";
+    var word = document.createElement("span");
+    word.className = "sess-state tone-" + ss.tone;
+    word.textContent = ss.label;
+    sub.appendChild(word);
+    if (inst.repo) sub.appendChild(document.createTextNode("  ·  " + inst.repo));
+    text.appendChild(name);
+    text.appendChild(sub);
+    main.appendChild(dot);
+    main.appendChild(text);
+    var more = document.createElement("button");
+    more.type = "button";
+    more.className = "sess-more";
+    more.textContent = "⋯";
+    more.setAttribute("aria-label", "Actions for " + nameOf(title));
+    more.addEventListener("click", function () { openActSheet(title); });
+    // Long press = ⋯. A timer rather than `contextmenu` alone: iOS Safari never
+    // fires contextmenu for a touch, Android Chrome does — both are wired, and
+    // `pressed` stops the click that follows the release from also opening the
+    // session.
+    var timer = null, pressed = false, x0 = 0, y0 = 0;
+    function cancelPress() { if (timer) { clearTimeout(timer); timer = null; } }
+    main.addEventListener("pointerdown", function (ev) {
+      pressed = false;
+      x0 = ev.clientX; y0 = ev.clientY;
+      cancelPress();
+      timer = setTimeout(function () {
+        timer = null;
+        pressed = true;
+        openActSheet(title);
+      }, LONG_PRESS_MS);
+    });
+    main.addEventListener("pointermove", function (ev) {
+      if (Math.abs(ev.clientX - x0) > 10 || Math.abs(ev.clientY - y0) > 10) cancelPress();
+    });
+    main.addEventListener("pointerup", cancelPress);
+    main.addEventListener("pointercancel", cancelPress);
+    main.addEventListener("contextmenu", function (ev) {
+      ev.preventDefault();
+      cancelPress();
+      if (!pressed) { pressed = true; openActSheet(title); }
+    });
+    main.addEventListener("click", function () {
+      if (pressed) { pressed = false; return; }
+      closeSheet(sessionsSheet);
+      select(title);
+    });
+    row.appendChild(main);
+    row.appendChild(more);
+    return row;
+  }
+
+  // The header: the dot and the chip are painted from the SAME state object,
+  // the way the rail paints a row's dot and chip (sessionState.ts).
   function updateDot() {
-    var a = current ? activityOf(current) : "offline";
-    dotEl.className = "dot " + a;
+    var inst = currentInst();
+    pickerTitleEl.textContent = current ? nameOf(current) : (instances.length ? "Sessions" : "no sessions");
+    if (!inst) {
+      dotEl.className = "dot tone-muted";
+      stateChipEl.classList.add("hidden");
+      return;
+    }
+    var ss = sessionState(inst);
+    dotEl.className = "dot tone-" + ss.tone + " st-" + ss.state;
+    dotEl.title = ss.hint || ss.label;
+    stateChipEl.textContent = ss.label;
+    stateChipEl.className = "state-chip tone-" + ss.tone;
+    stateChipEl.title = ss.hint || "";
   }
 
   // --- git workflow actions (Commit / Push / PR / Merge) --------------------
@@ -378,34 +471,86 @@
   }
 
   // POST an action endpoint, resolving the parsed JSON and rejecting with the
-  // server's {error} message (same contract app.js's api() speaks).
-  function postAction(action, body) {
-    return fetch("/api/instances/" + encodeURIComponent(current) + "/" + action, {
+  // server's {error} message (same contract app.js's api() speaks). The error
+  // also carries the HTTP status and the parsed body: a 409 here is a QUESTION
+  // more often than a failure (a red zone, failing checks, a shared folder),
+  // and the body is what says which.
+  function postFor(title, action, body) {
+    return fetch("/api/instances/" + encodeURIComponent(title) + "/" + action, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error((j && j.error) || "request failed (" + r.status + ")");
+        if (!r.ok) throw apiError((j && j.error) || "request failed (" + r.status + ")", r.status, j);
         return j;
       });
     });
   }
+  function postAction(action, body) {
+    return postFor(current, action, body);
+  }
+  function apiError(msg, status, body) {
+    var e = new Error(msg);
+    e.status = status;
+    e.body = body || {};
+    return e;
+  }
 
-  function doPush(force) {
-    if (!current) return;
+  // The red-zone gate's 409 (sessionActions.ts redZoneBreaches): the body's
+  // `red_zone_breaches` list, or null for any other error.
+  function redZoneBreaches(err) {
+    if (!err || err.status !== 409) return null;
+    var list = err.body && err.body.red_zone_breaches;
+    return Array.isArray(list) && list.length ? list : null;
+  }
+
+  // A push / PR / merge the red-zone gate blocked, explained in the desktop's
+  // words (sessionActions.ts offerRedZoneOverride), with the same "<verb>
+  // anyway" that re-sends past the gate for this one action.
+  function explainRedZone(title, verb, breaches, retry) {
+    var n = breaches.length;
+    var shown = breaches.slice(0, 5).map(function (b) {
+      return b.path + (b.pattern && b.pattern !== b.path ? " (" + b.pattern + ")" : "");
+    }).join(" · ");
+    var green = breaches.every(function (b) { return b.kind === "green"; });
+    askSheet(
+      green ? verb + " blocked — changes outside the green zone" : verb + " blocked — red zone changed",
+      nameOf(title) + " changed " + n + " " +
+        (green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")) +
+        ": " + shown + (n > 5 ? " · and " + (n - 5) + " more" : "") +
+        ". Revert them (the agent can: “revert your changes to …”), or " +
+        verb.toLowerCase() + " anyway — this once.",
+      retry ? verb + " anyway" : "", retry || null);
+  }
+
+  // `title` is captured at the tap and carried through every retry: a "Push
+  // anyway" answered after the picker moved must push the session it was
+  // asked about, not whichever one is on screen by then.
+  function doPush(force, title, overrideRz) {
+    title = title || current;
+    if (!title) return;
     flashStatus("pushing…");
-    postAction("push-branch", force ? { force: true } : {})
+    var pushBody = force ? { force: true } : {};
+    if (overrideRz) pushBody.override_red_zones = true;
+    postFor(title, "push-branch", pushBody)
       .then(function () { flashStatus("pushed"); setTimeout(poll, 800); })
       .catch(function (err) {
-        // O3 soft gate: checks haven't passed — offer an explicit override,
-        // exactly like the desktop pushSession flow.
-        if (err.message === "checks haven't passed for this commit") {
-          if (confirm("Checks haven't passed for this commit (see the 🟡 marker).\nPush anyway?")) {
-            doPush(true);
-            return;
-          }
+        var rz = redZoneBreaches(err);
+        if (rz) {
           setStatus("");
+          explainRedZone(title, "Push", rz, function () { doPush(force, title, true); });
+          return;
+        }
+        // O3 soft gate: checks haven't passed — offer an explicit override on
+        // the ask sheet, exactly like the desktop pushSession flow.
+        if (err.message === "checks haven't passed for this commit") {
+          setStatus("");
+          askSheet(
+            "Push blocked — checks haven't passed",
+            nameOf(title) + "'s commit has no passing check run (its state reads Checks failing). Override for this push only?",
+            "Push anyway",
+            function () { doPush(true, title, overrideRz); });
           return;
         }
         flashStatus("push failed: " + err.message);
@@ -417,12 +562,13 @@
   // opening/merging a PR needs credentials, and when the server has none it
   // answers 200 with ok:false plus a prefilled GitHub URL. So the phone shows a
   // link and a remedy, never a raw "gh is not installed" bounced back at it.
-  var PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
+  var PR_REMEDY = "add a GitHub token in Settings → Connections → GitHub → Connect, or install the GitHub CLI";
 
-  function doMakePr() {
-    if (!current) return;
+  function doMakePr(title, overrideRz) {
+    title = title || current;
+    if (!title) return;
     flashStatus("opening PR…");
-    postAction("make-pr", {})
+    postFor(title, "make-pr", overrideRz ? { override_red_zones: true } : {})
       .then(function (j) {
         if (j && j.ok === false) {
           if (j.compare_url) {
@@ -436,16 +582,38 @@
         }
         flashStatus(j && j.note ? j.note : "PR opened");
         if (j && j.url) window.open(j.url, "_blank");
-        setTimeout(poll, 800);
+        // PR is open — restart the guided cycle, as the desktop does after
+        // make-pr: the stage goes back to idle so Commit is the next step
+        // again. Server-side (the ↺ route), so both screens agree.
+        return postFor(title, "reset-stage", {})
+          .catch(function () { /* the next push re-derives the stage anyway */ })
+          .then(function () { setTimeout(poll, 800); });
       })
-      .catch(function (err) { flashStatus("make PR failed: " + err.message); });
+      .catch(function (err) {
+        var rz = redZoneBreaches(err);
+        if (rz) {
+          setStatus("");
+          explainRedZone(title, "Open PR", rz, function () { doMakePr(title, true); });
+          return;
+        }
+        flashStatus("Open PR failed: " + err.message);
+      });
   }
 
-  function doMerge() {
-    if (!current) return;
-    if (!confirm("Merge this branch's PR into the base branch?")) return;
+  // Asked first on the ask sheet — a merge can't be undone from MindFlock.
+  function doMerge(confirmed, title, overrideRz) {
+    title = title || current;
+    if (!title) return;
+    if (!confirmed) {
+      askSheet(
+        "Merge this PR?",
+        nameOf(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.",
+        "Merge PR",
+        function () { doMerge(true, title); });
+      return;
+    }
     flashStatus("merging…");
-    postAction("merge-pr", {})
+    postFor(title, "merge-pr", overrideRz ? { override_red_zones: true } : {})
       .then(function (j) {
         if (j && j.ok === false) {
           if (j.pr_url) {
@@ -459,7 +627,15 @@
         }
         setTimeout(poll, 800);
       })
-      .catch(function (err) { flashStatus("merge failed: " + err.message); });
+      .catch(function (err) {
+        var rz = redZoneBreaches(err);
+        if (rz) {
+          setStatus("");
+          explainRedZone(title, "Merge", rz, function () { doMerge(true, title, true); });
+          return;
+        }
+        flashStatus("merge failed: " + err.message);
+      });
   }
 
   function openCommitSheet() {
@@ -479,9 +655,30 @@
     // desktop CommitDialog switching to the terminal before submitting).
     switchTab("shell");
     flashStatus("committing…");
-    postAction("commit", { message: msg })
+    doCommit(msg, false);
+  }
+
+  // A zone breach on your OWN window is a warning with "Commit anyway", like
+  // the desktop's commit card — never a block.
+  function doCommit(msg, proceed) {
+    var body = proceed ? { message: msg, proceed_anyway: true } : { message: msg };
+    postAction("commit", body)
       .then(function () { flashStatus("commit started — watch the shell"); setTimeout(poll, 800); })
-      .catch(function (err) { flashStatus("commit failed: " + err.message); });
+      .catch(function (err) {
+        if (err && err.status === 409 && err.body && err.body.zone_warning) {
+          var hits = err.body.red_zone_breaches || [];
+          setStatus("");
+          askSheet(
+            "Commit touches a zone",
+            hits.slice(0, 5).map(function (h) { return h.path || h; }).join(" · ") +
+              (hits.length > 5 ? " · and " + (hits.length - 5) + " more" : "") +
+              ". Commit anyway?",
+            "Commit anyway",
+            function () { doCommit(msg, true); });
+          return;
+        }
+        flashStatus("commit failed: " + err.message);
+      });
   }
 
   // --- diff panel ------------------------------------------------------------
@@ -597,20 +794,108 @@
   }
   setDiffBaseLabel();
 
-  // O1: attention rank (lower = more urgent) + its picker marker. Mirrors the
-  // desktop intake priorities (app.js attentionItems).
+  // --- one session state ----------------------------------------------------
+  // The rail's table (frontend/src/lib/sessionState.ts deriveSessionState),
+  // copied word for word so the phone and the desktop say the same thing about
+  // the same session. Six states, six tones; the tone names are the CSS classes
+  // (tone-muted … tone-broken) the dot, the chip and the row words are painted
+  // with.
+  //
+  //   state      tone       label
+  //   starting   muted      Starting
+  //   working    working    Working
+  //   needs_you  attention  Question · Pre-commit failed · Checks failing · Setup failed
+  //   idle       neutral    Idle
+  //   limit      waiting    Waiting on limit[, resumes HH:MM]
+  //   offline    broken     Offline (actions: Restart)
+  //
+  // Two rows sit outside the table, as on the rail: "Paused" and "Missing" —
+  // neither is a state of the AGENT. No debounce here: the phone reads one
+  // 4s poll, not the desktop's event stream.
+  var SESSION_STATES = {
+    starting:  { tone: "muted",     label: "Starting" },
+    working:   { tone: "working",   label: "Working" },
+    needs_you: { tone: "attention", label: "Question" },
+    idle:      { tone: "neutral",   label: "Idle" },
+    limit:     { tone: "waiting",   label: "Waiting on limit" },
+    offline:   { tone: "broken",    label: "Offline" },
+  };
+  var REASON_LABEL = {
+    question: "Question",
+    precommit_failed: "Pre-commit failed",
+    checks_failing: "Checks failing",
+    setup_failed: "Setup failed",
+    stuck: "Idle",
+  };
+  // Idle this long on uncommitted work and the rail's bell lists it as stuck.
+  var STUCK_IDLE_S = 20 * 60;
+
+  function fmtClock(epochS) {
+    var d = new Date(epochS * 1000);
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  function st(state, extra) {
+    var o = { state: state, tone: SESSION_STATES[state].tone, label: SESSION_STATES[state].label,
+              inBell: false, restartable: false, hint: "" };
+    for (var k in extra) o[k] = extra[k];
+    return o;
+  }
+  function needsYou(reason, hint) {
+    return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
+  }
+
+  function sessionState(inst) {
+    if (inst.workspace_missing)
+      return st("offline", { label: "Missing", hint: "Workspace directory no longer exists — delete this session" });
+    if (inst.status === "paused")
+      return st("idle", { label: "Paused", tone: "muted", hint: "Session paused" });
+    if (inst.pending || inst.status === "loading")
+      return st("starting", { hint: "Provisioning workspace" });
+    if (inst.setup && inst.setup.state === "running")
+      return st("starting", { hint: "Worktree setup running" });
+    if (inst.setup && inst.setup.state === "failed")
+      return needsYou("setup_failed", "Worktree setup failed — prompts are held");
+    var act = inst.activity || "idle";
+    if (act === "clarify") return needsYou("question", "The agent asked you a question");
+    if (act === "working") return st("working", { hint: "Agent is working" });
+    if (act === "limit") {
+      var until = Number(inst.queue && inst.queue.limited_until) || 0;
+      var resumeAt = until > Date.now() / 1000 ? until : 0;
+      return st("limit", {
+        label: SESSION_STATES.limit.label + (resumeAt ? ", resumes " + fmtClock(resumeAt) : ""),
+        hint: "Usage limit reached — resumes on its own when the window resets",
+      });
+    }
+    if (act === "offline")
+      return st("offline", { inBell: true, restartable: !inst.device,
+                             hint: "The agent's terminal is gone — Restart relaunches it" });
+    if (inst.stage === "interrupt")
+      return needsYou("precommit_failed", inst.failed_step ? "Pre-commit failed at: " + inst.failed_step : "Pre-commit failed");
+    if (inst.check && inst.check.state === "failed" && !inst.check.stale)
+      return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
+    var since = Number(inst.activity_since) || 0;
+    var idleFor = since > 0 ? Date.now() / 1000 - since : 0;
+    var un = inst.diff_stat && inst.diff_stat.uncommitted;
+    var dirty = un && (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
+    if (idleFor > STUCK_IDLE_S && dirty)
+      return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
+    return st("idle", { hint: "Agent is idle — waiting for input" });
+  }
+
+  // O1: attention rank (lower = more urgent). The bell's order
+  // (sessionState.ts attentionPriority): a question, then whatever is broken,
+  // then failing checks; a pushed branch waiting for its PR comes after those,
+  // and everything else last.
   function attnRank(inst) {
-    if (inst.status === "paused") return 9;
-    if (inst.activity === "clarify") return 0;
-    if (inst.stage === "interrupt") return 1;
-    if (inst.setup && inst.setup.state === "failed") return 1;
-    if (inst.check && inst.check.state === "failed" && !inst.check.stale) return 2;
-    if (inst.stage === "pushed") return 3;
+    var ss = sessionState(inst);
+    if (ss.inBell) return ss.reason === "question" ? 0 : ss.reason === "checks_failing" ? 2 : 1;
+    if (inst.status !== "paused" && inst.stage === "pushed") return 3;
     return 9;
   }
+  // The row's marker: its tone class — the same colour the rail's dot wears.
   function attnMark(inst) {
-    var r = attnRank(inst);
-    return r === 0 ? "🔵 " : r === 1 ? "🔴 " : r === 2 ? "🟡 " : r === 3 ? "🟢 " : "";
+    return "tone-" + sessionState(inst).tone;
   }
 
   function poll() {
@@ -620,7 +905,9 @@
         instances = Array.isArray(list) ? list : [];
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
-        var sig = instances.map(function (i) { return attnRank(i) + i.title; }).join("|");
+        var sig = instances.map(function (i) {
+          return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label;
+        }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
         // sheet is selected the tick it shows up, and both of those read the
@@ -938,6 +1225,9 @@
   // is a real model turn (~10-25s), which is long enough that a button which
   // never changes reads as a page that has hung.
   var NEW_SLOW_MS = 8000;
+  // The desktop New dialog's own words (NewSessionDialog.tsx): "Review details
+  // first" reads the sentence and shows the review, "Create session" creates.
+  var NEW_GO_LABEL = "Review details first";
   // How long a 202 has to turn into a row in the session list before we stop
   // claiming it is starting. A create answers 202 immediately and does the
   // worktree/provisioning/tmux work in a background task, so the row is usually
@@ -998,7 +1288,7 @@
   var newDevices = [];         // startable devices: connected, from GET /api/devices
   var selfHost = "";           // this server's own hostname, for the "(this device)" row
   // The device the CURRENT plan, folder list and create aim at. Captured when
-  // Continue is pressed, not read off the select later: the folder list and the
+  // Review details first is pressed, not read off the select later: the folder list and the
   // review screen both have to talk about the device the plan was read on.
   var newTarget = "";
 
@@ -1094,7 +1384,7 @@
     // almost certainly not the folder this sentence is about.
     newPlan = null;
     newTextEl.value = "";
-    setPlanBusy(false, "Continue");
+    setPlanBusy(false, NEW_GO_LABEL);
     // The Start button too. Nothing the create's answer does resets it when
     // that answer is stale, so a sheet dismissed mid-create used to reopen with
     // "Starting…" disabled forever (startSession returns at
@@ -1121,7 +1411,7 @@
     // limits.
     startSeq += 1;
     if (planSlowTimer) { clearTimeout(planSlowTimer); planSlowTimer = null; }
-    setPlanBusy(false, "Continue");
+    setPlanBusy(false, NEW_GO_LABEL);
     resetStartBtn();
     newSheet.classList.add("hidden");
     newPlan = null;
@@ -1132,7 +1422,7 @@
     planBusy = on;
     newGoBtn.disabled = on;
     if (!on) newSkipBtn.classList.add("hidden");
-    // The plan in flight is being read on the device picked when Continue was
+    // The plan in flight is being read on the device picked when Review was
     // pressed; a select that still moved would be pointing somewhere else.
     newDeviceEl.disabled = on;
     newGoBtn.textContent = label;
@@ -1141,7 +1431,7 @@
   function resetStartBtn() {
     startBusy = false;
     newStartBtn.disabled = false;
-    newStartBtn.textContent = "Start session";
+    newStartBtn.textContent = "Create session";
   }
 
   // The ~-relative spelling, for DISPLAY only — mirrors session_plan._tilde and
@@ -1176,7 +1466,7 @@
 
   // The note's first sentence is the desktop dialog's preamble, and it names a
   // button that does not exist on this page ("press Create" — here it says
-  // Start session, under a heading that already asks the question). Everything
+  // Create session, under a heading that already asks the question). Everything
   // AFTER it is the resolved facts — which folder, which mode, the "I wasn't
   // certain" clause, the cut-short search — which is the whole reason to show
   // the note. Dropped by EXACT prefix, so the day note_for's wording changes
@@ -1299,7 +1589,7 @@
   function planDone(seq) {
     if (seq !== planSeq) return;
     if (planSlowTimer) { clearTimeout(planSlowTimer); planSlowTimer = null; }
-    setPlanBusy(false, "Continue");
+    setPlanBusy(false, NEW_GO_LABEL);
   }
 
   // "Pick the folder myself": abandon the read in flight (its answer, if it
@@ -1506,8 +1796,7 @@
         var title = pendingNew;
         pendingNew = "";
         // renderPicker has already run for this tick (a new title always moves
-        // the signature), so the option exists to be selected.
-        pickerEl.value = title;
+        // the signature), so the row exists to be selected.
         select(title);
         return;
       }
@@ -1573,23 +1862,392 @@
   newSheet.addEventListener("focusin", nudgeViewport);
   newSheet.addEventListener("focusout", nudgeViewport);
 
+  // --- sessions, session actions, recently closed, questions ------------------
+  // What the rail's row menu does, on a phone: open a session, Close it (keeps
+  // the worktree), Delete it (asked first, inline), Pause / Resume it, Restart
+  // it when it is offline, and bring a closed one back. Every question is a
+  // sheet on this page — confirm() and friends are a silent "no" in the
+  // desktop app and in some phone shells.
+  var sessionsSheet = document.getElementById("sessions-sheet");
+  var actSheet = document.getElementById("act-sheet");
+  var actTitleEl = document.getElementById("act-title");
+  var actStateEl = document.getElementById("act-state");
+  var actListEl = document.getElementById("act-list");
+  var actErrEl = document.getElementById("act-error");
+  var recentSheet = document.getElementById("recent-sheet");
+  var recentListEl = document.getElementById("recent-list");
+  var recentErrEl = document.getElementById("recent-error");
+  var askSheetEl = document.getElementById("ask-sheet");
+  var askTitleEl = document.getElementById("ask-title");
+  var askDetailEl = document.getElementById("ask-detail");
+  var askOkBtn = document.getElementById("ask-ok");
+  var askCancelBtn = document.getElementById("ask-cancel");
+
+  function openSheet(el) { el.classList.remove("hidden"); }
+  function closeSheet(el) { el.classList.add("hidden"); }
+
+  function openSessionsSheet() {
+    renderRows();
+    openSheet(sessionsSheet);
+  }
+
+  // --- the ask sheet: one question, or one gate explained ---
+  var askRun = null;
+  function askSheet(title, detail, okLabel, onOk) {
+    askTitleEl.textContent = title;
+    askDetailEl.textContent = detail || "";
+    askRun = okLabel ? onOk : null;
+    askOkBtn.textContent = okLabel || "";
+    askOkBtn.classList.toggle("hidden", !okLabel);
+    // With nothing to do but read it, the one button is an acknowledgement.
+    askCancelBtn.textContent = okLabel ? "Cancel" : "OK";
+    openSheet(askSheetEl);
+    // Focus lands on Cancel, as on the desktop's Delete strip: a second tap of
+    // whatever opened this never answers it.
+    askCancelBtn.focus();
+  }
+  function closeAsk() {
+    askRun = null;
+    closeSheet(askSheetEl);
+  }
+
+  // --- one session's actions ---
+  var actFor = "";            // the title the open actions sheet is about
+  var actBusy = false;
+  // A long press opens this sheet while the finger is still down; the release
+  // that follows must not land as a tap on whatever row is now under it.
+  var actOpenedAt = 0;
+  var ACT_SETTLE_MS = 400;
+  function actSettled() { return Date.now() - actOpenedAt > ACT_SETTLE_MS; }
+
+  function instByTitle(title) {
+    for (var i = 0; i < instances.length; i++)
+      if (instances[i].title === title) return instances[i];
+    return null;
+  }
+
+  function actError(msg) {
+    actErrEl.textContent = msg || "";
+    actErrEl.classList.toggle("hidden", !msg);
+  }
+
+  // "Folder in use by a, b. Close those first." — the rail's sentence
+  // (sessionActions.ts folderInUseText) for the 409 Delete answers while a
+  // copy of the session still works in the same folder.
+  function folderInUseText(titles) {
+    return "Folder in use by " + (titles.length ? titles.join(", ") : "another session") + ". Close those first.";
+  }
+  function folderInUse(err) {
+    if (!err || err.status !== 409 || !err.body || err.body.error !== "folder in use") return null;
+    return Array.isArray(err.body.sessions) ? err.body.sessions.map(String) : [];
+  }
+  function keptRunningText(j) {
+    var n = (j && Array.isArray(j.children)) ? j.children.length : 0;
+    if (!n) return "";
+    return " · " + (n === 1 ? "1 worker session kept running" : n + " worker sessions kept running");
+  }
+
+  function actRow(label, hint, run, extraCls) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "new-row act-row" + (extraCls ? " " + extraCls : "");
+    var main = document.createElement("span");
+    main.className = "act-label";
+    main.textContent = label;
+    b.appendChild(main);
+    if (hint) {
+      var h = document.createElement("span");
+      h.className = "act-hint";
+      h.textContent = hint;
+      b.appendChild(h);
+    }
+    b.addEventListener("click", function () { if (!actBusy && actSettled()) run(b); });
+    return b;
+  }
+
+  function openActSheet(title) {
+    actFor = title || "";
+    actBusy = false;
+    actOpenedAt = Date.now();
+    actError("");
+    renderActSheet();
+    closeSheet(sessionsSheet);
+    openSheet(actSheet);
+  }
+  function closeActSheet() {
+    actFor = "";
+    closeSheet(actSheet);
+  }
+
+  function renderActSheet() {
+    actListEl.innerHTML = "";
+    var title = actFor;
+    var inst = title ? instByTitle(title) : null;
+    actTitleEl.textContent = title ? nameOf(title) : "No session open";
+    actStateEl.innerHTML = "";
+    if (inst) {
+      var ss = sessionState(inst);
+      var chip = document.createElement("span");
+      chip.className = "state-chip tone-" + ss.tone;
+      chip.textContent = ss.label;
+      actStateEl.appendChild(chip);
+      if (ss.hint) {
+        var h = document.createElement("span");
+        h.className = "act-hint";
+        h.textContent = "  " + ss.hint;
+        actStateEl.appendChild(h);
+      }
+      if (ss.restartable)
+        actListEl.appendChild(actRow("Restart", "relaunches the agent, resuming the conversation",
+          function () { sessionCall(title, "revive", "Restarting " + nameOf(title) + "…", "Restart failed"); }));
+      if (inst.status === "paused")
+        actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
+          function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
+      else if (inst.status !== "loading" && !inst.workspace_missing && !inst.peer_share)
+        actListEl.appendChild(actRow("Pause", "stops the agent, keeps the worktree",
+          function () { sessionCall(title, "pause", "Paused " + nameOf(title) + " — the worktree is kept", "Pause failed"); }));
+      actListEl.appendChild(actRow("Close", "keeps the worktree; reopen from Recently closed",
+        function () { closeSession(title); }));
+      // A peer (sandboxed shared-folder) session is unshared, never deleted —
+      // the rail hides Delete for it too.
+      if (!inst.peer_share)
+        actListEl.appendChild(actRow("Delete…", "", function (btn) { askDelete(title, btn); }, "act-danger"));
+    } else if (title) {
+      actListEl.appendChild(folderNote("This session is no longer open."));
+    }
+    actListEl.appendChild(actRow("Recently closed", "reopen a session you closed",
+      function () { closeActSheet(); openRecentSheet(); }));
+  }
+
+  // Pause / Resume / Restart: one POST each, the sheet closes on success and
+  // stays open (with the server's sentence) on a refusal.
+  function sessionCall(title, route, okMsg, failWord) {
+    actBusy = true;
+    actError("");
+    postFor(title, route, {})
+      .then(function () {
+        actBusy = false;
+        closeActSheet();
+        flashStatus(okMsg);
+        poll();
+      })
+      .catch(function (err) {
+        actBusy = false;
+        actError(failWord + ": " + err.message);
+      });
+  }
+
+  function closeSession(title) {
+    actBusy = true;
+    actError("");
+    postFor(title, "close", {})
+      .then(function (j) {
+        actBusy = false;
+        closeActSheet();
+        flashStatus("Closed — reopen from Recently closed" + keptRunningText(j));
+        poll();
+      })
+      .catch(function (err) {
+        actBusy = false;
+        actError("Close failed: " + err.message);
+      });
+  }
+
+  // Delete… turns its own row into the rail's inline strip: what it does, and
+  // Cancel / Delete — focus on Cancel, so a second tap never deletes.
+  function askDelete(title, btn) {
+    actError("");
+    var strip = document.createElement("div");
+    strip.className = "delete-strip";
+    var msg = document.createElement("div");
+    msg.textContent = "Removes the worktree and branch";
+    var btns = document.createElement("div");
+    btns.className = "delete-strip-btns";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "act-danger";
+    del.textContent = "Delete";
+    cancel.addEventListener("click", function () { renderActSheet(); });
+    del.addEventListener("click", function () {
+      if (actBusy) return;
+      actBusy = true;
+      del.disabled = cancel.disabled = true;
+      postFor(title, "cleanup", {})
+        .then(function (j) {
+          actBusy = false;
+          closeActSheet();
+          flashStatus("Deleted " + nameOf(title) + " — worktree and branch removed" + keptRunningText(j));
+          poll();
+        })
+        .catch(function (err) {
+          actBusy = false;
+          renderActSheet();
+          var held = folderInUse(err);
+          actError(held ? folderInUseText(held) : "Delete failed: " + err.message);
+        });
+    });
+    btns.appendChild(cancel);
+    btns.appendChild(del);
+    strip.appendChild(msg);
+    strip.appendChild(btns);
+    btn.parentNode.replaceChild(strip, btn);
+    cancel.focus();
+  }
+
+  // --- recently closed ---
+  var recentSeq = 0;
+
+  // closed_at arrives as epoch seconds, epoch ms or an ISO string.
+  function closedMs(x) {
+    var v = x && x.closed_at;
+    if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
+    var n = Date.parse(v);
+    return isNaN(n) ? 0 : n;
+  }
+  function agoWord(ms) {
+    if (!ms) return "";
+    var s = Math.max(0, (Date.now() - ms) / 1000);
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m ago";
+    if (s < 86400) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  }
+
+  function recentError(msg) {
+    recentErrEl.textContent = msg || "";
+    recentErrEl.classList.toggle("hidden", !msg);
+  }
+
+  function openRecentSheet() {
+    closeSheet(sessionsSheet);
+    recentError("");
+    recentListEl.innerHTML = "";
+    recentListEl.appendChild(folderNote("loading…"));
+    openSheet(recentSheet);
+    var seq = ++recentSeq;
+    fetch("/api/recently-closed")
+      .then(function (r) {
+        if (!r.ok) throw new Error("couldn't read the list (" + r.status + ")");
+        return r.json();
+      })
+      .then(function (list) {
+        if (seq !== recentSeq) return;
+        list = Array.isArray(list) ? list.slice() : [];
+        list.sort(function (a, b) { return closedMs(b) - closedMs(a); });
+        recentListEl.innerHTML = "";
+        if (!list.length) { recentListEl.appendChild(folderNote("Nothing closed recently.")); return; }
+        list.forEach(function (ent) { recentListEl.appendChild(recentRow(ent)); });
+      })
+      .catch(function (err) {
+        if (seq !== recentSeq) return;
+        recentListEl.innerHTML = "";
+        recentError((err && err.message) || "couldn't read the list");
+      });
+  }
+
+  function recentRow(ent) {
+    var row = document.createElement("div");
+    row.className = "recent-row";
+    var text = document.createElement("span");
+    text.className = "sess-text";
+    var name = document.createElement("span");
+    name.className = "sess-name";
+    name.textContent = ent.title || "session";
+    var sub = document.createElement("span");
+    sub.className = "sess-sub";
+    sub.textContent = [ent.branch || "", agoWord(closedMs(ent))].filter(Boolean).join("  ·  ");
+    text.appendChild(name);
+    text.appendChild(sub);
+    row.appendChild(text);
+    if (ent.exists === false) {
+      var gone = document.createElement("span");
+      gone.className = "act-hint";
+      gone.textContent = "worktree gone";
+      row.appendChild(gone);
+      return row;
+    }
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "act recent-reopen";
+    btn.textContent = "Reopen";
+    btn.addEventListener("click", function () { reopenClosed(ent, btn); });
+    row.appendChild(btn);
+    return row;
+  }
+
+  function reopenClosed(ent, btn) {
+    btn.disabled = true;
+    recentError("");
+    fetch("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "reopen failed (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        closeSheet(recentSheet);
+        // Selected once it shows up in the list — the same wait a new session
+        // gets (claimPending).
+        pendingNew = (j && j.title) || ent.title || "";
+        pendingNewUntil = Date.now() + PENDING_NEW_MS;
+        flashStatus("Reopened " + (ent.title || "session"));
+        poll();
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        recentError((err && err.message) || "reopen failed");
+      });
+  }
+
+  document.getElementById("more-btn").addEventListener("click", function () { openActSheet(current); });
+  document.getElementById("sessions-recent").addEventListener("click", openRecentSheet);
+  document.getElementById("sessions-new").addEventListener("click", function () {
+    closeSheet(sessionsSheet);
+    openNewSheet();
+  });
+  document.getElementById("act-done").addEventListener("click", closeActSheet);
+  document.getElementById("recent-done").addEventListener("click", function () { closeSheet(recentSheet); });
+  askOkBtn.addEventListener("click", function () {
+    var run = askRun;
+    closeAsk();
+    if (run) run();
+  });
+  askCancelBtn.addEventListener("click", closeAsk);
+  // Tap the dimmed backdrop to dismiss, like the commit and new sheets.
+  [sessionsSheet, actSheet, recentSheet, askSheetEl].forEach(function (el) {
+    el.addEventListener("click", function (ev) {
+      if (ev.target !== el) return;
+      if (el === actSheet) { if (actSettled()) closeActSheet(); }
+      else if (el === askSheetEl) closeAsk();
+      else closeSheet(el);
+    });
+  });
+
   // --- wiring --------------------------------------------------------------
-  pickerEl.addEventListener("change", function () { select(pickerEl.value); });
+  pickerEl.addEventListener("click", openSessionsSheet);
 
   document.querySelectorAll(".tab").forEach(function (b) {
     b.addEventListener("click", function () { switchTab(b.dataset.tab); });
   });
 
   // Git workflow bar. Commit opens the message sheet; the rest POST straight
-  // to their endpoints (with the desktop's confirm/override prompts).
+  // to their endpoints (with the desktop's questions and gates, asked on the
+  // ask sheet).
   actionsEl.querySelectorAll(".act").forEach(function (b) {
     b.addEventListener("click", function () {
       if (b.disabled || !current) return;
       switch (b.dataset.act) {
         case "commit": openCommitSheet(); break;
-        case "push": doPush(false); break;
-        case "pr": doMakePr(); break;
-        case "merge": doMerge(); break;
+        case "push": doPush(false, current); break;
+        case "pr": doMakePr(current); break;
+        case "merge": doMerge(false, current); break;
       }
     });
   });

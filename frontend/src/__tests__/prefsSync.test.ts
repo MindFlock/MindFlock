@@ -171,28 +171,25 @@ describe("pullPrefs", () => {
     expect(JSON.parse(kv.data["mindflock.prompt_presets"])).toEqual(union);
   });
 
-  it("folds case-variant saved prompts (keeping the newer) and says so", async () => {
-    const kv = memKV({
-      mf_prefs_seeded: "1",
-      "mindflock.prompt_presets": JSON.stringify([
-        { name: "Deploy", prompt: "old" },
-        { name: "deploy", prompt: "new" },
-      ]),
-    });
+  it("no longer folds the legacy saved-prompt list: the templates list is the store now", async () => {
+    // tidyUserPresets() is a no-op (the server keeps one template per name),
+    // so a pull neither toasts about a case-variant pair nor rewrites the
+    // legacy key behind the migration's back (lib/templates.ts reads it once).
+    const legacy = JSON.stringify([
+      { name: "Deploy", prompt: "old" },
+      { name: "deploy", prompt: "new" },
+    ]);
+    const kv = memKV({ mf_prefs_seeded: "1", "mindflock.prompt_presets": legacy });
     g.localStorage = kv;
     routes = {
-      "GET /api/prefs": () => ({ prompt_presets: [{ name: "Deploy", prompt: "old" }] }),
+      "GET /api/prefs": () => ({}),
       "POST /api/prefs": () => ({ ok: true }),
       "GET /api/settings": () => ({ settings: {} }),
     };
     const { pullPrefs } = await import("../lib/prefsSync");
     await pullPrefs();
-    expect(toasts.join(" ")).toContain("“Deploy”");
-    // The newer one won locally AND went to the server, not the other way round.
-    expect(JSON.parse(kv.data["mindflock.prompt_presets"])).toEqual([{ name: "deploy", prompt: "new" }]);
-    expect(calls.find((c) => c.path === "POST /api/prefs")?.json).toEqual({
-      prompt_presets: [{ name: "deploy", prompt: "new" }],
-    });
+    expect(toasts.join(" ")).not.toContain("“Deploy”");
+    expect(calls.find((c) => c.path === "POST /api/prefs")).toBeUndefined();
   });
 
   it("a settings document with no ui group clears this device's accent (a cleared accent propagates)", async () => {

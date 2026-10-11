@@ -42,24 +42,29 @@ provider is chosen by `[ticketing].provider` (see
 | `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration; archived stories and stories under an archived epic are excluded |
 | `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF — headings keep their `#` level, which is what acceptance-criteria mining matches on) |
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
-| `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
+| `asana` | `GET /tasks?assignee=me&workspace=<gid>`; with ingest sections set, one `GET /tasks?section=<gid>` per section (the one Asana listing that takes no assignee), narrowed to the assignee client-side unless the source takes anyone's |
 
 **Writing a state back (`set_state()`)** is the adapter's one optional *write*
 capability, the twin of the read-only `list_states()` the ingest-state picker is
 built from. It takes an id from exactly that list and backs the source's
-`start_state` setting. `STATE_SETTING_PROVIDERS = {shortcut, jira, linear}` —
-the base class raises `ProviderError` for everyone else, so a `start_state` left
+`start_state` setting. `STATE_SETTING_PROVIDERS = {shortcut, jira, linear,
+asana}` — the base class raises `ProviderError` for everyone else, so a `start_state` left
 in a hand-edited config after a provider switch hits a backstop rather than a
 crash (`start_state_id()` already answers `""` for those providers). Its
 companion `comments_on_start()` gates the optional `start_comment`: a source
 with it on follows a successful, state-changing `set_state` with `add_comment`
 (`start_state.py::_announce`), and it is `False` wherever `start_state_id()` is
-`""`. The mechanics differ per tracker:
+`""`. The mechanics differ per tracker: Every adapter
+also implements the **claim mirror** (`can_claim`): `claim_identity()` (who
+"me" is), `assign_to()`, `add_label()` and `remove_label()`, each idempotent;
+see *Shared claims* below. Jira, Linear, Asana and GitHub tickets carry their
+labels (`Ticket.labels`) for the claim check.
 
 | Provider | How a state is written |
 |---|---|
 | `shortcut` | `PUT /stories/{id}` with `{workflow_state_id: <int>}`. No transition graph — any state the story's team can reach is a legal target — so it is one field write. A non-numeric id is rejected *before* any HTTP call |
 | `linear` | `issueUpdate(id:, input: {stateId:})`. Also no transition graph. A state belonging to **another team** is the rejection worth expecting, and Linear reports it as a GraphQL error, which surfaces as a `ProviderError` |
+| `asana` | Asana has no workflow states; its **sections** play that part. `list_states` is every section of every unarchived project in the workspace (up to 50 projects, one call each), named `Project · Section` with `group`/`label` split out; `set_state` is `POST /sections/{gid}/addTask`, which moves a task already in that project and adds one that isn't. A ticket's `state`/`state_id` is the section it sits in — the ingested one when it is in several projects. `start_comment` posts through `POST /tasks/{gid}/stories` |
 | `jira` | Statuses are not writable directly: `GET /rest/api/3/issue/{id}/transitions`, pick the transition whose **destination** matches the configured status — by id, then by name, since `list_states` stores ids but a hand-edited config may hold a name — and execute it. A status that is real but **not reachable** from where the issue currently sits is the common failure, and it is a configuration answer rather than a bug, so the error names the transitions that *were* offered |
 
 Failures here are warnings, never failed launches — see step 8 of the story flow
@@ -262,14 +267,37 @@ criteria mining and link/attachment extraction are shared in `providers/base.py`
 `test_connection`'s identity dict may carry an optional `display_name` (a human
 name), which the start comment prefers over `name`; Shortcut sets it because its
 `name` is the @mention handle, so a new adapter whose `name` is a handle should
-too.
+too. It may also carry what Test can resolve for the form — Asana returns
+`project` (+ `project_name`) when the token sees one workspace and `workspaces`
+when it sees several, GitHub Issues the `repo` it resolved to.
+
+**The catalog is the contract the form and the save share.** Each
+`PROVIDER_META` field's `key` is a `TicketProviderConfig` attribute; `required`
+says the sources PUT refuses to save without it (`validate_source`, with a
+per-field message — `validate: url | email | key | gid` checks a non-blank
+value's shape); `auto` marks a required field Test fills in rather than the
+user (Shortcut's `member_id`, Asana's workspace), which is required before the
+source counts as *connected* but not before it saves, since Test needs a saved
+source to record on. The card's required markers, inline errors and Clear
+controls are rendered from these flags, never hard-coded per provider. Jira's
+`project` is its **project key** and Linear's its **team key** — the names the
+adapters' own error text uses, since `cfg.project` is what both read.
+`assignee_scope = "anyone"` on a state-bounded provider (Shortcut, Jira,
+Linear, Asana) is refused at save time without an ingest state (or, on
+Shortcut, an ingest label), because `ingests_any_assignee` would otherwise
+quietly fall back to assigned-to-me. A source is **connected only after a live
+test**: the test route with `record: true` stamps `last_test` on the stored
+source, the PUT keeps that verdict only while the provider's catalog fields are
+unchanged, and both Connections and the Intake card read *connected* as "passed
+within the last 24 h, nothing left for Test to fill in" — see
+[web-api.md](web-api.md#config-providers-usage-settings).
 
 Optionally an adapter also implements **`search_assigned_all()`** (`base.py`),
 which backs Intake → Tickets → *Assigned tickets*: every ticket assigned to you
 with no age cutoff and no workflow-state filter, each annotated with its state.
-Shortcut, Jira and Linear override it; GitHub Issues and Asana keep the base
-implementation (an epoch-anchored `search_assigned`) because they expose no
-workflow-state model — so their tickets land in the panel's `No state` bucket.
+Shortcut, Jira, Linear and Asana override it; GitHub Issues keeps the base
+implementation (an epoch-anchored `search_assigned`) because it exposes no
+workflow-state model — so its issues land in the panel's `No state` bucket.
 That asymmetry is visible in the panel itself. The panel groups rows by
 ticketing source first and by workflow-state bucket *within* the source, so
 same-named states from two sources are no longer merged; `GET /api/tickets`
@@ -316,6 +344,35 @@ the auto-detection can't see your `config.toml`.
 with a message — deliberately not an error, so the web controller doesn't flag
 it. Two pipelines against one repo would collide on `workspaces/pr-<n>` dirs and
 tmux session names.
+
+**It follows your settings.** Sources, the GitHub token / repos / switches and
+which device runs the GitHub halves are read once at boot, so the web server
+restarts the pipeline it owns whenever one of them changes — saved locally in
+Intake / Settings or synced in from another device — 2 s after the last change
+of a burst (one restart per form, not per field), logging the changed keys
+(`github`, `ticketing.<id>`, `automation`; never values). The signature is in
+`backend/web/core/settings_hooks.py` (`pipeline_signature`: every field of
+every source with secrets hashed, the GitHub token hash, repos and switches).
+Per-poll knobs (grace period, skip authors) and per-launch ones (agent, effort,
+`max_sessions`) are read fresh and never restart it.
+
+**A broken source doesn't take it down.** In layered mode a source missing a
+required field (Shortcut `member_id`, Jira `email`/`base_url`, a `repo_url`
+with no global `[repository].url`…) is skipped at load — logged once at boot
+("Ticketing source 'sc' is skipped — missing member_id: …"), mirrored to the
+activity beacon as `config_errors`, and surfaced by `/api/mindflock/status` as
+`last_error: {kind: "config", source, field}` — while the complete sources and
+PR review run. With every source skipped tickets stay off. An explicit
+`config.toml` path (standalone runs, tests) still refuses to load. PR review
+and issue handling boot the pipeline with zero ticketing sources.
+
+**Why it is unwell.** The status also classifies a tracker or GitHub refusing
+the token (`auth`, naming the source — "Shortcut rejected the token (HTTP
+401)", "GitHub /pulls returned 401 for o/r"), a connectivity failure
+(`network`) and, once the server's child has exited, `exit_reason` plus the
+pipeline's own exit record (`.mindflock-pipeline-exit.json`: a `config` error
+with the fields it listed, or a `crash` with the exception). See
+[web-api.md](web-api.md) for the payload.
 
 On startup the orchestrator prunes workspaces untouched for 3 days
 (`_<name>_refresher` dirs are preserved), runs an initial story scan, then starts its
@@ -457,6 +514,53 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    card on the wrong board with the wrong credentials. The stamp is the
    load-bearing part of this step.
 
+9. **Say on the ticket who is on it** (every source) — right after the move,
+   on both launch paths, MindFlock **mirrors the claim into the tracker**
+   (`ticket_ingestion/tracker_claims.py`) so a teammate whose MindFlock is not
+   paired with yours sees it: the ticket is assigned to your tracker identity
+   (`member_id` — Shortcut member, Jira accountId, Linear user, Asana user gid —
+   or the GitHub login; only when it has no assignee yet, and **never** on an
+   `assignee_scope = "anyone"` source, whose tickets belong to whoever wrote
+   the code) and gets the source's claim label, `<claim_label>:working`
+   (`claim_label` defaults to `mindflock`, so `mindflock:working`; an Asana
+   label is a workspace tag, a Linear label is found or created on the
+   issue's team, Shortcut and GitHub create one they don't know). What was
+   mirrored is recorded per session in `~/.mindflock/tracker_claims.json`;
+   when that session **closes, is deleted or its PR is merged** the label comes
+   off again (not while a retry session of the same ticket still holds it).
+   The assignment is never undone. Best-effort like the move: a refused write
+   is a warning, never a failed launch.
+
+### Shared claims: a ticket someone else is on
+
+Fleet claims (`/api/tickets/claims`) stop one person's devices from starting a
+ticket twice. A **teammate** is seen through the tracker instead: before a
+ticket starts, the ticket as the tracker has it now counts as **claimed** when
+it is assigned to someone else — it has assignees and your identity is not
+among them — **and** it carries the claim label **or** sits in a
+`started`-type workflow state (from `list_states()`; Shortcut, Jira, Linear).
+On an any-assignee source only the label counts: every ticket there is
+someone else's, and many sit in a started-type state on purpose. A label this
+device put on itself (a crashed session) is not someone else's claim. An
+unknown identity (no `member_id` and the token won't say) claims nothing.
+
+- The **pipeline** re-reads the ticket after its other pre-launch checks and
+  skips a claimed one, logging `Not launching <slug>: <name> is on this.`;
+  nothing is recorded, so it is picked up again once the claim goes.
+- **Begin work** (and the MCP's `spawn_ticket_session`, team runs) answers 409
+  `{error, title, claimed_by: {kind: "tracker", name, why: "label"|"started"},
+  override: "override_claim"}`. Intake shows **"<name> is on this"** as the
+  row's first reason, and the Begin-work failure card carries **Override**,
+  which re-POSTs `override_claim: true` — the owner's call only (never an
+  agent's start; 403 without what owner settings need). An override neither
+  reassigns the ticket nor removes the teammate.
+- The flock-wide check is both sources: `fleet_claims.holder_for(slug,
+  story)` asks the paired devices first, then the tracker — so it works with
+  zero pairing.
+
+It is a check, not a lock: two unpaired people pressing Begin work in the same
+second can both pass it.
+
 The prompt contains the story name, Shortcut URL, description, acceptance
 criteria, comments, local attachment paths, and an instruction to advance the
 ticket in-repo and state out-of-scope work explicitly.
@@ -504,12 +608,24 @@ provisioning.
 A PR is processed **once per head**; to re-run it, delete its entry from
 `state.json`'s `processed_prs`.
 
-GitHub auth resolution: `[github].token` → `$GH_TOKEN` → `$GITHUB_TOKEN` →
-`gh auth token`. The token field itself lives in Intake → Pull requests →
-*Advanced options* (the Issues tab links there), and a repo card's **Test
-access** button checks that the resolved credential actually reaches that repo
-(`POST /api/settings/test/github-repo`) rather than only that some credential
-exists.
+GitHub auth resolution is the ONE chain every consumer uses
+(`backend/web/core/github_auth.resolve_token`; the pipeline's
+`ticket_ingestion/github_auth.py` only delegates to it): `github.token` in
+Settings (Connect GitHub) → `$GH_TOKEN` → `$GITHUB_TOKEN` → `gh auth token` →
+`[github].token` in `config.toml` (deprecated, last, warned about once at
+startup, ignored from the next release). The pipeline carries the raw
+`config.toml` token apart from the merged one (`GithubConfig.toml_token`) so
+that last rung is really last, and it re-resolves on every poll with a 60 s
+memo instead of caching for the life of the process — a token pasted into
+Connect GitHub reaches the loops within a minute, restart or not. The token
+has one home, **Settings → Connections → GitHub → Connect** (the Intake tabs
+only offer the button that opens it); its **Test** does a real `GET /user`
+plus one repo check, and a repo card's **Test access** checks that the
+resolved credential reaches that particular repo
+(`POST /api/settings/test/github-repo`). The GitHub Issues source resolves
+through the same chain; a per-source `api_token` an older release stored is
+read as the last fallback this release only, with a one-time log notice and
+an *Action needed* row in Settings → Connections.
 
 ## Issue-handling flow
 
@@ -593,6 +709,8 @@ artifact `.testmondata`, refresh command `pytest --testmon` with
 | `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}]}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. Corrupt/missing → starts fresh. |
 | `./automation_here.json` | `{here, runner}` — whether PR review and issue handling last ran on this device or on another of "Your devices" (`runner`, its name). The web server records "elsewhere"; when they move here the pipeline, before its first PR / issue scan, adds every PR and issue open right now to `processed_prs` / the processed-issues ledger with status `handed_over` (logging "PR review moved here — n open PRs already handled on X are skipped"), then records "here". The same seeding runs, once per loop, when this device is in a group with another live device (`MINDFLOCK_PIPELINE_FLEET=1` from the server) and that loop has never run here — no ledger entry or attempt and no `ledger_started.<prs\|issues>` in `state.json` — so a device that was chosen before the group's repos reached it never re-reviews what another device handled (the log names "another device"). After the check each enabled loop is marked in `state.json`'s `ledger_started`, so a device that has been running alone is never seeded later. If GitHub can't be listed it seeds, marks and scans nothing and retries next poll |
 | `./.mindflock-pipeline.lock` | Singleton flock; contains the winner's PID |
+| `./.mindflock-pipeline-activity.json` | Activity beacon `{pid, ticket_busy, pr_busy, issue_busy, held_for_slot, config_errors: [{source, field, message}], updated}` the web status reads (counts only while `pid` is the running pipeline's) |
+| `./.mindflock-pipeline-exit.json` | `{pid, at, kind: config\|crash, message, fields}` written on the way out of a configuration error or an unhandled crash; the web status reads it (when `pid` is its child's) to say why, and deletes it on the next start |
 | `./logs/pipeline.log` | The pipeline's own log (`[logging]` config) |
 | `./logs/ticket-ingestion.log` | stdout/stderr when run under the web UI addon |
 | `./workspaces/` | Per-story/PR workspaces, `_base_*`, `_testmon_refresher` |

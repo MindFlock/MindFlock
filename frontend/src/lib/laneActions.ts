@@ -44,7 +44,7 @@ export const LANE_LABEL: Record<Lane, string> = {
   leave: "Off",
   commit: "Commit",
   push: "Push",
-  pr: "Open a PR",
+  pr: "Open PR",
   merge: "Merge when green",
 };
 
@@ -139,7 +139,7 @@ export function teamRunCaps(caps: Partial<Caps> | undefined): {
 /** The reason shown on a control an OLDER server can't take (its caps don't
  * say it does — it would refuse the create). */
 export const SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
-export const SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a group — update it";
+export const SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a team run — update it";
 
 /** "Ask me before it ships" means nothing while fast-track is off. */
 export function askFirstApplies(lane: Lane): boolean {
@@ -195,7 +195,7 @@ export function detachableGroup(
 ): { id: string; task: string; name: string } | null {
   const run = inst.run;
   if (!run || !run.id || !run.task || run.role === "lead") return null;
-  return { id: run.id, task: run.task, name: run.name || "its group" };
+  return { id: run.id, task: run.task, name: run.name || "its team run" };
 }
 
 /** Why this row can't set its own fast-track, or "": a group's lead ships
@@ -208,13 +208,13 @@ export function laneLockReason(
 ): string {
   const run = inst.run;
   if (run && run.id) {
-    const group = run.name || "its group";
-    if (run.role === "lead") return `It leads ${group} — the group ships it once, through the group's release`;
+    const group = run.name || "its team run";
+    if (run.role === "lead") return `It leads ${group} — the team run ships it once, through the team run's release`;
     if (run.grouping === "together")
-      return `Its work merges into ${group}'s one PR — move it out of the group to fast-track it on its own`;
+      return `Its work merges into ${group}'s one PR — move it out of the team run to fast-track it on its own`;
   }
   const owner = inst.lane?.owner;
-  if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that window`;
+  if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that session`;
   return "";
 }
 
@@ -323,7 +323,7 @@ export async function pickFastTrack(
     if (!opts.quiet)
       toast(
         r?.held
-          ? `${name}: its group is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes`
+          ? `${name}: its team run is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes`
           : fastTrackSaid(name, lane, askFirst),
         { duration: 4500 }
       );

@@ -46,7 +46,7 @@ export function deviceLabel(d: Device, all: Device[], selfHost = ""): string {
 /** Whether the sidebar offers "Disconnect — forget this device's token":
  * only for a device reached with a pasted token. One of "Your devices" is
  * reached with the shared device key, so forgetting its token would change
- * nothing (the server answers 409 and points at Settings → Devices). */
+ * nothing (the server answers 409 and points at Settings → Your devices). */
 export function canDisconnect(d: Pick<Device, "has_token" | "member">): boolean {
   return !!d.has_token && !d.member;
 }

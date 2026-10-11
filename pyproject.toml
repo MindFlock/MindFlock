@@ -48,6 +48,10 @@ dev = [
     # Starlette's TestClient (web-UI contract + route-precedence tests) needs
     # httpx at import time.
     "httpx",
+    # Journey tests (tests/e2e) drive the real UI in the system Chrome through
+    # Playwright's Python bindings; the package ships its own driver, and the
+    # tests point it at /usr/bin/google-chrome, so no `playwright install`.
+    "playwright",
 ]
 # Engine deps — needed to run sessions (the session manager / provisioned mode).
 #   uv sync --group engine

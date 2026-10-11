@@ -2,7 +2,7 @@
 and splits, against REAL git worktrees (the split driver's ``env``).
 
 Pinned here: the release ships exactly what the card and the check showed;
-"Open the PR" never merges; a check of an older HEAD is never credited to a
+"Open PR" never merges; a check of an older HEAD is never credited to a
 newer one; an adopted lead's own lane is turned off; the merge queue never
 hangs silently (a stale MERGE_HEAD, a lead that wandered off its branch); a
 pause really stops a releasing lead.
@@ -56,7 +56,7 @@ def _clock(monkeypatch, offset):
 
 
 # --------------------------------------------------------------------------- #
-# Finding 2: "Open the PR" never merges
+# Finding 2: "Open PR" never merges
 # --------------------------------------------------------------------------- #
 class TestOpenThePrNeverMerges:
     def test_open_the_pr_on_a_merge_lane_group_opens_a_pr_only(self, env):
@@ -166,7 +166,7 @@ def test_an_adopted_lead_with_an_armed_lane_is_disarmed(env):
     lanes.arm_session("mine", "pr")  # the user's ⏩ on that session
     run = _split(env, repo_path="", lead="mine")
     assert ap.get("mine") is None
-    assert any("own lane was turned off" in e["text"] for e in run["events"])
+    assert any("own fast-track was turned off" in e["text"] for e in run["events"])
 
 
 # --------------------------------------------------------------------------- #
@@ -388,7 +388,7 @@ class TestReportIntegrated:
             rr["tasks"][0].update(state="integrating")
         with pytest.raises(drv.RunError) as err:
             drv.report_integrated(rid, "t1", "HEAD", "")
-        assert "only the group's lead" in err.value.message
+        assert "only the team run's lead" in err.value.message
 
 
 # --------------------------------------------------------------------------- #

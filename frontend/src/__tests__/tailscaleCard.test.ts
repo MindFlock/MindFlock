@@ -1,4 +1,4 @@
-/** Settings → Devices' "Tailscale on this device" card
+/** Settings → Your devices' "Tailscale on this device" card
  * (components/settings/screens/TailscaleCard.tsx), rendered from health
  * payloads shaped like GET /api/tailscale/health.
  *

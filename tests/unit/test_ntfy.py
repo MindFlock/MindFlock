@@ -7,7 +7,7 @@ turns a bus event into a push — including the cases where it must stay silent
 (channel off, rule muted, duplicate) and the ones where it must stay quiet about
 the topic and the token.
 
-The QR renderer shared with Settings → Mobile is here too: the ntfy view is why
+The QR renderer shared with Settings → Your phone is here too: the ntfy view is why
 ``mobile_access._mobile_svg`` became the public ``qr_svg``, and both callers have
 to keep working.
 """
@@ -577,7 +577,7 @@ def test_dispatch_pushes_a_matching_event(pushes):
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
     _addon()._on_event(_clarify())
     (push,) = pushes
-    assert push["title"] == "alpha needs your input"
+    assert push["title"] == "alpha needs you: Question"
     assert push["message"] == "The agent is waiting on a clarification."
     # Priority 4 is what rings a phone through most do-not-disturb setups.
     assert push["priority"] == 4 and push["tags"] == ["question"]
@@ -693,7 +693,7 @@ def test_dedupe_is_per_RULE_not_per_EVENT(pushes):
     addon._on_event(_clarify())  # same session, same event, within the window
     assert [p["title"] for p in pushes] == [
         "alpha ran out of usage",
-        "alpha needs your input",
+        "alpha needs you: Question",
     ]
     # The window still collapses a flap of the SAME rule, which is all it is for.
     addon._on_event(_clarify())
@@ -802,7 +802,7 @@ async def test_startup_subscribes_to_the_bus(pushes):
     events.BUS.emit(
         "session.activity_changed", session="gamma", old="working", new="clarify"
     )
-    assert len(pushes) == 1 and pushes[0]["title"] == "gamma needs your input"
+    assert len(pushes) == 1 and pushes[0]["title"] == "gamma needs you: Question"
     await addon.on_shutdown(ctx)
     events.BUS.emit(
         "session.activity_changed", session="delta", old="working", new="clarify"
@@ -884,7 +884,7 @@ def test_publish_soon_never_raises_at_the_emitter(monkeypatch, http):
 
 
 # --------------------------------------------------------------------------- #
-# The QR renderer, shared with Settings → Mobile
+# The QR renderer, shared with Settings → Your phone
 # --------------------------------------------------------------------------- #
 def test_qr_svg_is_the_shared_renderer():
     """The ntfy view is why ``_mobile_svg`` became the public ``qr_svg``; the old

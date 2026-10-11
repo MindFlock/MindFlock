@@ -146,7 +146,7 @@ export function splitRail<E extends RailEntry>(
     const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
     groups.push({
       id,
-      name: info?.name || named.get(id) || "Group",
+      name: info?.name || named.get(id) || "Team run",
       lane,
       state: info?.state || "running",
       paused: !!info?.paused,
@@ -276,7 +276,7 @@ export function runNote(
 ): RunNote | null {
   const d = data || {};
   const run = str(d.run);
-  const name = str(d.name) || info.name?.(run) || "A group";
+  const name = str(d.name) || info.name?.(run) || "A team run";
   const who = str(d.ref) || str(d.title) || str(d.task) || "a line";
   switch (event) {
     case "run.needs_you": {

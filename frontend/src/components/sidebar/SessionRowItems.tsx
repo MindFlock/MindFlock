@@ -101,7 +101,7 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
       {group && (
         <button
           data-row="detach"
-          title="The group stops driving it; the session and its fast-track stay"
+          title="The team run stops driving it; the session and its fast-track stay"
           onClick={act("", async () => {
             await moveOutOfGroup(group.id, group.task);
             return `${name} is out of ${group.name} — its session and fast-track stay as they are`;

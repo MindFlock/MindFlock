@@ -267,7 +267,7 @@ class TestParse:
         assert len(brief) <= 600
         assert '"Q4 payments"' in brief and "one of 3" in brief
         assert "opens a pull request" in brief
-        assert "Do not push" in brief
+        assert "Don't push" in brief
 
 
 def test_an_edit_that_changes_nothing_writes_nothing():

@@ -28,15 +28,20 @@ server, reached by scanning the startup QR over your tailnet.)
    `dist:win` / `dist:mac` / `dist:linux` force a target). None are notarized,
    so first launch shows an "unverified developer" warning (the top-level
    README walks through clearing it). The macOS build is self-signed only —
-   enough for macOS to remember folder-access grants, not enough for
-   Gatekeeper; see [Versioning & releases](../docs/development.md#versioning--releases)
-   for the cert setup.
+   enough for macOS to remember folder-access grants and for Squirrel.Mac to
+   accept updates, not enough for Gatekeeper; see
+   [Versioning & releases](../docs/development.md#versioning--releases) for
+   the cert setup. After that first approval, updates are one click from
+   inside the app (since 0.7.2 — see [Updating](#updating)); you never go
+   back to the download page.
 2. **Once**: nothing to do. First launch offers **Set up MindFlock on this
    computer**, which installs the engine (inside your default WSL distro on
    Windows — install WSL2 first:
    [learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install))
    and then carries on into tmux and your agent CLI (see
    [First launch installs the engine](#first-launch-installs-the-engine)).
+   The Windows `.exe` installs only the app; it does not install the engine
+   (see [the installer checks WSL](#windows-the-installer-checks-wsl)).
 3. **Every time after**: open MindFlock. The app probes port 8765 and, when
    nothing answers, silently starts `mindflock serve`. No terminal windows, no
    manual steps.
@@ -88,9 +93,11 @@ Overrides:
 
 - `MINDFLOCK_URL` — point at a different server
   (e.g. `MINDFLOCK_URL=http://localhost:9000`).
-- `MINDFLOCK_WSL_DISTRO` — Windows only: pins which distro to launch in.
-  Unset (the default), `wsl.exe` picks your default distro — the same one the
-  installer put the CLI into. `wsl -l -v` lists them.
+- `MINDFLOCK_WSL_DISTRO` — Windows only: pins which distro the **app**
+  launches and probes in. Unset (the default), `wsl.exe` picks your default
+  distro. It steers only the app: the first-launch engine install goes into
+  whichever distro the app is looking in, so set it before that first launch
+  if you don't want the default distro. `wsl -l -v` lists them.
 - `MINDFLOCK_REPO` — **developer mode**: path of a MindFlock *source checkout*
   (inside WSL on Windows); the app then runs that checkout's `.venv` server
   instead of the installed CLI.
@@ -105,14 +112,38 @@ Overrides:
 
 ## Updating
 
-One click. When a release is out, the app downloads it in the background
-(electron-updater, from the GitHub release's `latest*.yml` + blockmaps) and the
-**Update** toast installs everything: it first updates the engine to the same
-release (the pinned `install.sh`, only for a release install — a developer
-checkout or an editable engine is left alone), stops the old server, then
-installs the app silently and relaunches it; the relaunch starts the new
-engine. With the app already current, the same button just updates and
-restarts the engine.
+One path, one click. The app toast's **Update**, the engine toast's **Update
+engine** and the Settings → Advanced button all run the same
+`updateEverything({engine, app})` in `main.js`, and all poll the same run
+state, so none of them can drift from the others (Settings → Advanced used to
+have its own copy that stopped polling on "done" and never restarted the
+server, so the button stuck on "Updating…").
+
+The run, in order:
+
+1. **Engine.** If the engine is behind the target release and is a release
+   install (`/api/update/check` says `uv-tool` or `pipx`; install.sh reinstalls
+   it the way install.json records), the pinned `install.sh` updates it. A
+   developer checkout (`MINDFLOCK_REPO`, or an `editable` engine) is left
+   alone, and an engine that is already at or ahead of the target is never
+   downgraded.
+2. **App.** When a release is out, electron-updater has already downloaded it
+   in the background (from the GitHub release's `latest*.yml` + blockmaps): the
+   run stops the old server, waits until the port is actually released, then
+   installs the app silently and relaunches it; the relaunch starts the new
+   engine.
+3. **Engine only** (the app is current): the run stops the old server, waits
+   for the port to be released (`stopEngineServer`, the single-owner rule in
+   the launcher means it never spawns onto a port that still answers), starts
+   the new one, and reports "Engine vX is running" once the server answers on
+   it — only then is the run done.
+
+Version skew the other way — the engine newer than the app (install.sh re-run
+by hand, `mindflock update` on a machine whose app is behind) — is never
+silent and never a downgrade: when an app release is out, the app-update toast
+says "Your engine is newer than the app — update the app"; when none is, a
+one-line notice says so and the engine stays as it is. An engine that is older
+than the app keeps today's engine-update toast.
 
 - **Windows / Linux** (NSIS / AppImage) update in place.
 - **macOS** updates through Squirrel.Mac, which accepts an update only when it
@@ -124,6 +155,11 @@ restarts the engine.
 - Wherever the app can't swap itself (a dev run, a copy run from the mounted
   dmg, a failed signature check) the button still updates the engine and then
   opens the download page.
+
+The pure helpers (`cmpVersion`, the skew verdict, the shared run state) live in
+`electron/update.js` and are pinned by `node --test` in `electron/test/`.
+Outside the app, `mindflock update` is the same path for the engine alone (see
+[docs/cli.md](../docs/cli.md)).
 
 ## Run from source (developers)
 
@@ -353,3 +389,37 @@ no console to watch when something breaks. Two logs capture everything:
   `wsl.exe` probe on Windows) to say *why* nothing is answering: server
   booting, MindFlock not installed, or WSL down — with a one-click
   **Restart WSL** button for the last case.
+
+## First launch: never silent, finishes the job
+
+Helpers live in `firstlaunch.js` (pure, OS injected) with tests in `test/` —
+`npm test` or `node --test electron/test/*.test.js`.
+
+- **Starting… shows the server log after 10 s** (last 15 lines of
+  `~/.mindflock/desktop-server.log`). On Linux/macOS the bootstrap runs the
+  server in the *foreground* so the exec'd server is the process `main.js`
+  spawned; if it exits before the port answers, the page switches to
+  **failed-to-start** with the log tail, **Try again** and **Copy diagnostics**.
+  Inside WSL the bootstrap keeps its background-and-keepalive shape, so
+  Windows never reaches failed-to-start and the tail is unavailable there.
+- **macOS preflight**, in order, before `install.sh`: no Homebrew →
+  **needs-homebrew**: **Install Homebrew** opens the official installer in
+  Terminal (it asks for the password there), then polls for `brew` every 5 s;
+  **Skip** continues without it. Then no Command Line Tools →
+  `xcode-select --install` and the same 5 s poll until it lands. Both wait up
+  to 30 minutes before failing with "Try again".
+- **Gatekeeper on the page.** The app is self-signed and stays so; the
+  not-installed screen on macOS carries the two-line *System Settings →
+  Privacy & Security → Open Anyway* note.
+- **Hand-off.** After a first-run install succeeds and the server answers, the
+  app opens at `/?setup=1` (the web UI's setup checklist) — once. The first
+  load of the app page writes `first-launch.json` into userData, and every
+  later launch opens `/`. (Replaces `?setup=install`.)
+- **Windows preflight** (`build/installer.nsh`, `customInit`): before any file
+  is copied, no `wsl.exe` or a `wsl -l -q` that exits nonzero / lists nothing
+  aborts with one message box offering the setup guide, and quits. Skipped for
+  silent runs and the updater's `--updated` reinstall.
+- **Bridge:** `mfdiag.action(name)` → `diag:action` with `retry-start`,
+  `copy-diagnostics`, `brew-install`, `brew-skip`; `diag:get` also returns
+  `start` (`startedAt`, `answered`, `exited`, `view`, `showTail`, `tail`,
+  `logPath`, `canRetry`).

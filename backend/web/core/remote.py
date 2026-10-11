@@ -84,6 +84,25 @@ HELLO_PATH = "/api/remote/hello"
 # MindFlock is driving me" apart from its own user's browser and apply the
 # remote_control permission gate.
 REMOTE_HEADER = "X-MindFlock-Remote"
+# Beside the device key: the PERSON the sending device belongs to (docs/
+# people.md) — an identifier the target records on the request, never a
+# credential (the bearer below still decides everything).
+PERSON_HEADER = "X-MindFlock-Person"
+
+
+def _marker_headers() -> dict:
+    """The remote marker (this device's key) plus, when known, the person."""
+    headers = {REMOTE_HEADER: self_identity()["key"]}
+    try:
+        from backend.web.core import person as _person
+
+        pid = _person.known_id()
+    except Exception:  # noqa: BLE001 — a request never fails on this
+        pid = ""
+    if pid:
+        headers[PERSON_HEADER] = pid
+    return headers
+
 
 # Mobile OSes never count as controllable devices (tailscale `status` OS names).
 _MOBILE_OS = frozenset({"ios", "android", "ipados"})
@@ -369,7 +388,7 @@ def hello_json() -> dict:
         "shared_link": _shared_link_name(),
         # Whether THIS process answers the shared link right now (its
         # `tailscale serve` for it is up) — the phone-link host table on
-        # Settings → Devices ("hosted by mac-mini ✓, rig ✓ · laptop ⚠").
+        # Settings → Your devices ("hosted by mac-mini ✓, rig ✓ · laptop ⚠").
         "shared_link_live": _shared_link_live(),
         # "Your devices": which group this device belongs to ("" = none) and
         # the join protocol it speaks (0 = a MindFlock from before fleets — the
@@ -509,7 +528,7 @@ def _headers_for(
     it. ``auth=False`` sends no credential at all (the public join routes: a
     device that isn't a member yet must not spray its pasted token at an
     endpoint that doesn't need it)."""
-    headers = {REMOTE_HEADER: self_identity()["key"]}
+    headers = _marker_headers()
     tok = bearer
     if tok is None and auth:
         tok = _fleet_key_for(device) or token_for(device)
@@ -601,7 +620,7 @@ async def _probe_peer(peer: dict) -> Optional[Tuple[str, dict]]:
     """``(base_url, hello_dict)`` for the first candidate that answers, else
     None. What every candidate found is left on ``peer["probe"]`` (``ok``,
     ``refused``, ``timeout``, ``tls``, ``not_mindflock``, ``http_<n>``,
-    ``unreachable``) — how Settings → Devices says why a device isn't
+    ``unreachable``) — how Settings → Your devices says why a device isn't
     listed."""
     session = await _http_session()
     outcome = ""
@@ -746,7 +765,7 @@ async def _discover_once() -> None:
 
 #: Every non-mobile tailnet peer the last sweep looked at (online and
 #: offline), with what its probe found — the "why isn't it listed" answer
-#: Settings → Devices and ``mindflock devices list`` give per peer.
+#: Settings → Your devices and ``mindflock devices list`` give per peer.
 _PROBES: Dict[str, dict] = {}
 #: When MindFlock last answered on a device that discovery has since dropped
 #: (key -> epoch s): kept so a member row can still say "last seen 3 h ago".
@@ -911,7 +930,7 @@ async def refresh_device(key: str) -> Optional[dict]:
 
 
 async def discover_now() -> None:
-    """One tailnet sweep right now (Settings → Devices' Refresh button)."""
+    """One tailnet sweep right now (Settings → Your devices' Refresh button)."""
     if aiohttp is None:
         return
     await _discover_once()
@@ -1092,7 +1111,7 @@ async def connect_device(device: str, token: str) -> Tuple[bool, str]:
     dev = _DEVICES.get(device)
     if aiohttp is None or dev is None or not dev.get("reachable"):
         return False, "device not reachable"
-    headers = {REMOTE_HEADER: self_identity()["key"]}
+    headers = _marker_headers()
     if token:
         headers["Authorization"] = "Bearer " + token
     session = await _http_session()
@@ -1186,6 +1205,7 @@ _FWD_ALLOWED = frozenset(
         ("GET", "/api/repos/suggest"),
         ("GET", "/api/repos/search"),
         ("GET", "/api/repos/check"),
+        ("GET", "/api/repos/branches"),
         ("GET", "/api/browse"),
         ("POST", "/api/mkdir"),
         ("POST", "/api/session-plan"),

@@ -1,8 +1,8 @@
 """Re-exec the server in place, and the one case that does it by itself.
 
-``POST /api/server/restart`` (Settings → Mobile / Advanced) exists because the
+``POST /api/server/restart`` (Settings → Your phone / Advanced) exists because the
 serve mode — which interface uvicorn binds — is fixed at process start, so
-flipping the Settings → Mobile toggle can only take effect on the next boot.
+flipping the Settings → Your phone toggle can only take effect on the next boot.
 Re-execing is safe: the actual work lives outside this process (agent sessions
 are tmux sessions, ingestion is its own process, state is on disk), and every
 client already retries until the server answers again.
@@ -113,7 +113,7 @@ def reset_tailscale_attempts() -> None:
 
 
 def _serve_mode_setting() -> str:
-    """The persisted Settings → Mobile mode, normalized. Never raises."""
+    """The persisted Settings → Your phone mode, normalized. Never raises."""
     try:
         from backend.config.settings import load_settings
 

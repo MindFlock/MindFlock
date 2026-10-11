@@ -7,6 +7,610 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Phone (`/m`): a Sessions sheet replaces the native picker, with the rail's state words and tones; a session actions sheet (row ⋯, long press, or header ⋯) offers Restart (offline only), Pause / Resume session, Close and Delete… (inline confirm, "Folder in use by …" on a 409), plus Recently closed with Reopen. Push/Merge questions and gates are inline sheets (no `confirm()`); the stage resets after a PR opens; "Terminal" replaces "Shell"; the New sheet uses the desktop's button words.
+
+### Added
+
+- **Usage Optimizer** (a built-in Addon API v3 extension, id `optimizer`,
+  bar **Usage**). The thesis: a plan window is use-it-or-lose-it, so the
+  dashboard scores **capacity used** — the share of the windows your plan
+  could have filled that your windows actually reached (a window that reset
+  at 40 % counts 0.4, one you never opened counts 0) — per provider (Claude,
+  Codex, Antigravity) and overall, over 24 h / 7 d / 30 d. Live cards show
+  the active window and the weekly cap with a pace reading (used share vs.
+  elapsed share, the projection at reset, the time the limit lands at the
+  recent burn). Advice follows from it: draining faster than the window
+  while you are at the keyboard says to move routine work to a cheaper model
+  (`/model sonnet`, lower effort) so the lockout does not fall in your
+  working hours; a window about to reset half-empty, or idle unattended
+  hours, say to queue work. Charts: window fill (one bar per reset, tinted
+  by whether you were there), an uptime strip (working / idle / locked out /
+  no sessions, with a "you were here" row) and a time split that separates
+  **attended** time (someone typed into MindFlock in the last 10 minutes)
+  from runs on their own (overnight, after hours, looping queues), plus
+  tokens per hour for Claude. A sampler records one reading per provider per
+  minute (change-driven, 5-minute heartbeat) into
+  `~/.mindflock/usage_optimizer.jsonl` (35-day retention); routes under
+  `/api/optimizer` (`summary`, `sample`, `samples`). Opens as the dialog or
+  as a grid window.
+- **The Map opens fast and explains itself.** The focused pane prefetches its
+  Map, the server warms every session's snapshot at boot, and the import-scan
+  memo is kept on disk (`~/.mindflock-assistant/.code-map-cache/`), so the first click is a cache hit instead of "Growing
+  the tree…" for seconds (3.2 s → 0.4 s with a 3 s snapshot). A six-step tour
+  opens over the first Map you see (synced: `prefs.map_tour`) and replays from
+  **? Guide**. The default surface is calmer: the rule tools sit in one
+  **Rules** group, the guard pill waits for a zone, the bird index lists five
+  changed folders (then **Show all N**), the session split shows only when
+  another session changed something, and an empty Rules list is gone.
+  `MINDFLOCK_CODE_MAP_WARM=0` skips the boot warm-up.
+
+- **Two people on one pushed branch.** The New dialog's Base branch picker
+  offers, for a remote pick `origin/x`, **Work on x itself (shared with
+  whoever pushed it)** next to the default new branch: `POST /api/instances`
+  `continue_branch: "x"` (with `base_ref: "origin/x"`) checks the worktree out
+  ON `x` tracking `origin/x` (fetched first; 409 naming the worktree when `x`
+  is checked out elsewhere; 400 for a non-remote ref). Rows carry
+  `shared_branch` (a ⑂ on the rail row) and `behind` (↓N on the pane head).
+  Every push now fetches its branch first and answers 409 `diverged` ("x
+  moved on origin: N new commits by …") instead of a rejected shell push; the
+  card offers **Rebase onto origin/x and push** (`POST
+  /api/instances/{t}/rebase-remote`; a conflict aborts and names the files)
+  or Cancel — never a force-push. The MCP's `ship_session` reports it as a
+  `diverged` step; `get_session` carries `shared_branch` and `behind`.
+- **Connections is the dashboard.** Settings → Connections lists every
+  outside thing MindFlock talks to, one row each, in three states
+  (connected / needs attention / off) with one action and one Test per row and
+  the fix command with Copy: every agent CLI (the default marked; Sign in
+  opens the in-app login terminal, Off shows the install command), GitHub
+  (needs attention when the token's last Test failed), each ticket source,
+  Your devices, Your phone (a `/m` load in the last 7 days), People, the MCP
+  auto-attach (needs attention when the last launch got no tools, naming the
+  CLI), each saved database connection with its last Test, ntfy (the last
+  push), and extensions — including ones that failed to load. A header line
+  counts "N connected · M need attention · K off"; it refreshes every 30 s
+  and on `mf:connections-changed`. Row contract in
+  [docs/web-api.md](docs/web-api.md); the old `status` vocabulary stays one
+  release as `legacy_status`.
+- Extensions that fail to load at startup are recorded (file + error) and
+  listed on Settings → Extensions — now its own nav group — and in
+  `GET /api/addons` `failed`, instead of only being logged.
+
+- **A person behind your devices.** Settings gain `person` — `{id, name,
+  git_name, git_email}` — one identity all of one person's devices share
+  ([docs/people.md](docs/people.md)). The id is made once (an existing store
+  gets it on its first start), a device that pairs adopts the inviter's, and
+  devices paired before this settle on one over settings sync (the automation
+  device's, else the smaller). Every request proxied to another device carries
+  `X-MindFlock-Person`; new sessions record their person (`person` on
+  `/api/instances` rows), fleet events and ticket claims carry it, and MCP
+  `whoami` returns `person: {id, name}`. With a git name and email set,
+  MindFlock's own commits — fast-track/ship, team-run merges, the peer-link
+  export (no longer the anonymous "MindFlock peer") — are authored as you.
+  `GET/POST /api/person`; a **You** card for Settings → Your devices. The
+  person is an identifier, never a credential: the token and pairing still
+  gate everything.
+- **One keyboard per session; see who else is there.** A session has an
+  owner (the person it was created for; `POST /api/instances/{title}/owner`
+  reassigns it), viewers, and one driver
+  ([docs/people.md](docs/people.md#owner-driver-viewers)). The first person to
+  open a terminal on a session nobody drives holds its keyboard; everyone
+  else's terminal is read-only — a keystroke shows "Alice is driving — take
+  control to type" over the pane — and `/send`, the prompt queue, Send now
+  and `/answer` (so the MCP's `answer_prompt`) answer **409** `driven by
+  <name>` unless `"take": true`. `POST /api/instances/{title}/driver`
+  `{"take"|"release": true}` hands it over (the previous driver is told by a
+  `session.driver_changed` event); it lapses after 10 idle minutes and when
+  the driver's last terminal closes. `/api/instances` rows gain `owner`,
+  `driver`, `driver_name` and `viewers` (`session.presence_changed` on every
+  change; remote rows pass through unchanged, and taking a remote session's
+  keyboard rides the gateway). The rail shows up to three presence dots per
+  session, the driver's ringed, and the pane header a **Driving** /
+  **Watching — take control** button — only once someone besides you is on
+  the session, so one person across their own devices sees no change. MCP
+  rows carry owner/driver/viewers and `whoami` says `you_drive`.
+
+- **Shared ticket claims, through the tracker.** Starting a ticket now says so
+  on the ticket: it is assigned to you (when unassigned; never on an
+  "anyone's tickets" source) and labelled `mindflock:working` (per source
+  `claim_label`, default `mindflock`), and the label comes off when the
+  session closes or its PR merges — the assignment stays. Every start path
+  (Begin work, the pipeline, team runs, agents) treats a ticket assigned to
+  someone else with that label, or in a started state, as taken: Intake reads
+  **"<name> is on this"** and Begin work answers 409 `claimed_by` with an
+  owner-only **Override** (`override_claim`). Works with zero pairing; paired
+  devices are still asked first. Every provider gained assign / label /
+  unlabel calls ([docs/ingestion-pipeline.md](docs/ingestion-pipeline.md#shared-claims-a-ticket-someone-else-is-on)).
+- **Shared zones, committed with the repo.** `.mindflock/zones.toml` at the
+  repo root (`[[zone]]` with `kind`, `pattern`, `note`, `author`, `added`) is
+  enforced by the agents' guard, the push/PR gate and the Code Map on top of
+  the local zones, read from each worktree so it follows the branch; a bad
+  file is ignored and logged. The Zones dialog has a **Shared with the repo
+  (committed)** section with each zone's author and **Add to repo** on every
+  local zone (writes the file into a session's worktree; owner only;
+  `/api/instances/{title}/shared-zones`). Agents can't edit the file.
+- **Zones warn your own windows.** A session you started (not agent-spawned)
+  whose commit would take files inside a red zone or outside a green one gets
+  the breach card at Commit with **Commit anyway** (`proceed_anyway`) — never
+  a block.
+
+### Changed
+
+- **Rail: rename, select and filter.** A rename is the session's name
+  everywhere (rail, phone page via the new `name` field on
+  `GET /api/instances`, notifications) and must be unique: `POST /api/aliases`
+  and session create answer 409 when another session already goes by that
+  name; click the selected row's name to rename it. Select sessions straight on
+  the rail — Ctrl/⌘-click a row, Shift-click a range, or row menu → Select —
+  with a strip pinned to the top of the list (All / None, Close, Hide,
+  Delete…; Esc or ✕ leaves select mode); the footer **Select…** button is gone.
+  The filter box is always shown by default; Customize → Session list →
+  **Filter box** hides it (`/` still opens it for one search).
+
+- **One word per thing.** The web UI, phone page, CLI output, MCP tool
+  descriptions and docs now say **session** (not instance, or window for a
+  session), **Fast-track** (not autopilot, lane or auto-ship), **team run**
+  (not group or ship lane), **Commit / Push / Open PR / Merge**, **Close**
+  (keeps the worktree) and **Delete** (removes it), and **Needs you** with its
+  reason. Assistant, log tail, Verify and extension rows stay **windows**. The
+  table is at the top of [docs/web-ui.md](docs/web-ui.md#vocabulary); API
+  paths, JSON and settings keys, event names and MCP tool names are unchanged.
+- **Every install path lands on the same released version.** `install.sh`
+  resolves the newest release tag (GitHub releases API, then the highest
+  `vX.Y.Z` tag from `git ls-remote`) — the version the desktop app pins — and
+  warns when `MINDFLOCK_INSTALL_REF` names a branch or commit ("installing an
+  unreleased build; the desktop app pins releases"), so re-running it can no
+  longer put the engine ahead of the app. After a successful install it
+  records `~/.mindflock/install.json` (`method`, `ref`, `sha`, `python`, `at`)
+  for `mindflock update` to follow the same path, and its next steps point to
+  `mindflock init` and the desktop app. The README's uv and pipx commands pin
+  the release tag instead of `main`, and CI's cold-install job asserts the
+  record names the checkout under test.
+
+### Changed
+
+- **The ticket pipeline follows your settings.** A new or rotated tracker or
+  GitHub token, a changed assignee scope, label filter, base URL, email, queue
+  or repo — saved in Intake or Settings, or synced from another device — now
+  restarts the running pipeline on its own, 2 s after the last change (a form
+  that saves on every field restarts once), instead of only after a manual
+  off/on. The restart is logged with the changed keys, never values.
+- **PR review and issue handling run without a ticket source.** They used to
+  need a ticketing source to exist just so the pipeline's config would load.
+- **A source missing a required field no longer crashes the pipeline.** A
+  Shortcut card without its member id yet is skipped — the status names the
+  source and the field — while the other sources and PR review keep running.
+
+### Added
+
+- **`GET /api/mindflock/status` says what is wrong.** `last_error`
+  (`auth` — a tracker or GitHub refused the token, naming the source;
+  `config` — a skipped source and its field; `network`; `crash`),
+  `exit_reason` once the server's pipeline exited (a configuration error
+  names the missing fields), `config_errors`, and `env_override` while
+  `MINDFLOCK_TICKET_PROVIDER` hides the sources saved in the UI. Auth errors
+  were deliberately ignored by the connectivity check before, so a revoked
+  token showed no indicator.
+
+### Added
+
+- **Agent providers you can see, sign in to, and point at a binary.**
+  Settings → Agent providers shows one row per CLI, built-in or custom:
+  installed (with the path it resolved to), signed in (with the evidence —
+  or *no sign-in needed* / *sign-in unknown* when that is the honest
+  answer), a **Sign in** button that runs the CLI's own login in an in-app
+  terminal, the install command when it's missing, and a **Binary path**
+  field for every provider that fixes a claude or codex off PATH on this
+  device only (never synced). A custom TOML that fails to load is a red row
+  with the file and the error, and is logged. Settings → Agent CLI lists
+  every provider in the default picker (the absent ones disabled, saying
+  why) and **Test agent CLI** can probe any of them. Settings → Accounts
+  gets the same **Sign in** button per account, scoped to that account's
+  config dir, with the command kept as a copyable fallback.
+- **`mindflock doctor` checks the login of every agent you use**, not just
+  the default: the Assistant's, each ticket source's, PR review's and issue
+  handling's, and per-repo overrides, one row each; `doctor --fix` offers
+  each sign-in in turn.
+
+### Changed
+
+- **One GitHub credential path.** The GitHub token has one home: **Connect
+  GitHub** — Setup's step, and the same dialog from Settings → Connections →
+  GitHub → **Connect** or the **Connect GitHub** button on Intake's Pull
+  requests and Issues tabs. The raw, never-validated Token field under Intake
+  → Pull requests → Advanced options and the per-source Token on GitHub
+  Issues cards are gone, and the two "Test GitHub" buttons (which only said
+  where a token *would* come from) are replaced by the dialog's **Test**,
+  which really asks GitHub who the token is and whether it reaches your first
+  configured repository. Every consumer now resolves the token through one
+  chain in one order — Settings → `$GH_TOKEN` / `$GITHUB_TOKEN` → `gh auth
+  token` → `[github].token` in `config.toml` — so Setup can no longer say
+  "connected as @x" while PR review uses another token. **Deprecated:**
+  `[github].token` in `config.toml` used to come first; it is last now, logged
+  about once at startup, and ignored from the next release. A GitHub Issues
+  source that still carries its own token keeps working this release (read as
+  the last fallback, flagged *Action needed* in Settings → Connections) and is
+  ignored from the next. The pipeline re-resolves the token on every poll
+  (60 s memo) instead of caching it for the life of the process, so a pasted
+  token reaches the loops within a minute without a restart. Every "no GitHub
+  credential" remedy now says *Settings → Connections → GitHub → Connect*,
+  and that row's **Configure** opens the dialog. The device flow's OAuth
+  client id ships as a constant (`DEFAULT_GITHUB_OAUTH_CLIENT_ID`, empty
+  until the owner registers the app; `mindflock serve --github-client-id` /
+  `MINDFLOCK_GITHUB_CLIENT_ID` / `github.oauth_client_id` override it); while
+  it is empty the dialog says "Device flow is not configured in this build;
+  paste a token or use gh" instead of hiding the option.
+
+### Changed
+
+- **A ticket source is connected only after a live test, and the form cannot
+  produce a broken one.** Intake → Tickets source cards now show a three-state
+  pill — Connected, Needs attention (with why), Off — derived from the last
+  test recorded on the source, not from whether a token happens to be stored;
+  Settings → Connections reads the same rule (`connection`, `message`,
+  `tested_at` on each ticketing row). Saving a source validates it against the
+  provider catalog (required fields, URL / email / key / gid shapes, and
+  "Anyone's needs an ingest state") with the errors shown inline; a passing
+  save runs Test on its own, and Test's verdict, member id and state list are
+  stored on the source (`last_test`), so the state pickers open filled and
+  refresh on focus. Secrets get a **Clear** control (an explicit `null` on the
+  PUT; blank still means keep). Jira gains a *Project key* field and Linear a
+  *Team key* field — the names their adapters already read. Asana gains whose
+  tickets, ingest sections, move-to-section on start and a start comment
+  (sections are its states), and Test looks the workspace up from the token
+  instead of asking for a gid (several workspaces offer a pick).
+
+### Changed
+
+- **Two ways to trust another machine, each control on one screen.** The
+  Settings nav gains a **Devices and people** group: **Your devices** (was
+  Devices) is now the only place for pairing by code / Ask-Approve, the fleet
+  key, **Make reachable** (the one Tailscale-mode switch, with **Restart
+  server to apply** when the server doesn't restart by itself), the shared
+  phone link (**One link for all devices**, moved from Mobile), **Run here**,
+  settings sync, and an **Advanced** fold holding the older routes with one
+  line each on when you'd still use them: **Trusted Tailscale accounts**
+  (moved from Security), **Allow remote control** (moved from Security) and
+  **Pair by pasted token** (the sidebar's Connect… dialog, now an inline
+  form; Connect… lands here with that device preselected). **Your phone**
+  (was Mobile) is one QR, the `/m` link and the Tailscale steps in order — it
+  never hides any more: without Tailscale it shows the install step with the
+  doctor's diagnosis instead of a gate — and shows no token; when the server
+  is local-only it points at Your devices → Make reachable. **People** (was
+  Work with someone) is unchanged and leads with Invite someone / Join a
+  peer. **Security** keeps only the access token, the gate and a pointer to
+  Your devices. Screen keys did not change (`devices`, `mobile`, `peer`,
+  `security`), and the new names plus the moved controls' names
+  (`your-devices`, `your-phone`, `people`, `remote-control`,
+  `tailnet-trust`, `settings-sync`, …) route to the right screen, so palette
+  entries, docs links and deep links keep working. Palette: **Your
+  devices**, **Your phone**, **People…**. No route or setting changed.
+
+### Changed
+
+- **One first-run checklist instead of three overlapping surfaces.** The
+  welcome tour no longer opens by itself (it is a **Tour** entry in the
+  command palette and the **?** shortcuts sheet, and Settings → General's
+  Replay), the Setup dialog no longer pops up on a failing doctor probe, and
+  the empty grid's "Get set up" card is now a five-step checklist — Engine
+  and tools, Sign in to your agent (one button per installed agent CLI, green
+  once signed in), Pick a repo, Connect a tracker and GitHub, Your phone —
+  with the last two skippable. The phone step is always visible: it offers
+  **Install Tailscale** with the doctor's hint until Tailscale is there, then
+  the QR. Once the three required steps are done a compact **Setup 3/5** chip
+  takes over until every step is done or skipped; it, the sidebar's doctor
+  chip, the palette and the desktop app's `?setup=1` open the Setup dialog,
+  which renders the same checklist. `mindflock init` prints the same five
+  steps in the same state, and the text a first `mindflock serve` prints at
+  boot is shown in the checklist too (the desktop app's server writes it to
+  a log nobody reads). Steps are marked by the server from the thing itself
+  — the doctor run, the first session, the first ticket source, a phone
+  reaching `/m` — never by a button; the state is `general.setup`, and the
+  old `general.onboarded` is derived from it (migrated on load). New
+  `GET /api/setup` and `POST /api/setup/<step>/skip`. The doctor's fix text
+  now says "Settings → Agent CLI", matching the screen.
+### Fixed
+
+- **A queued prompt no longer waits five minutes behind a slash command.**
+  After each send the queue waited for a "working" reading before sending the
+  next item, so a command the CLI handles itself (`/clear`, `/model …`) left
+  the queue stuck until the 300 s fallback. It now re-arms as soon as there is
+  evidence the send was taken: the agent worked after it
+  (`agent_state.last_worked_at`, which a "turn ended" notice does not clear),
+  or the CLI's input box no longer holds the sent text (new provider method
+  `input_holds`, implemented for Claude Code).
+
+- **Your phone opens the shared link without the access token when the link
+  is served from a Mac.** Trusted Tailscale accounts used to skip the token
+  through the shared phone link only on Linux hosts; when Tailscale routed the
+  phone to a macOS host it asked for the token. macOS hosts now prove the
+  proxied request came from Tailscale itself (the connection's owning process,
+  read from `netstat -anv`) the same way Linux reads `/proc`.
+
+- **`spawn_session`'s `model` reaches the agent.** A model given without an
+  account was recorded on the session but never passed to the CLI, so workers
+  ran on the CLI's default. It now reaches Claude (`ANTHROPIC_MODEL`), Codex
+  (`-m`), Aider and Opencode (`--model`) and Goose (`GOOSE_MODEL`); for a CLI
+  with no known model flag `spawn_session` answers with a warning instead of
+  dropping it.
+
+- **A removed account no longer breaks Name → Enter.** The New dialog's
+  last-used pre-fill restored the account without checking it still exists,
+  so after removing an account every quick create in that folder posted its
+  id and got 400 "unknown account". The remembered account is now applied
+  (through the same path as a pick) only while the account list has it — or
+  it is "CLI's own login" — and forgotten from that folder's memory otherwise.
+- **Editing a custom provider no longer rewrites its TOML.** Saving the
+  Edit form used to re-render the file from the six fields it knows,
+  dropping `prompt_arg`, `oneshot_args`, the effort keys and the `[usage]`,
+  `[activity]`, `[connect]` and `[peer]` tables — and settings sync then
+  spread the loss to every device. It now patches only the edited keys and
+  refuses (409, naming the error) to touch a file that doesn't parse. The
+  providers module's docstring names the real default directory
+  (`~/.mindflock-assistant/providers/`).
+
+- **`mindflock rm` no longer deletes your work.** It now ends the session the
+  way the web UI's Close does (agent stopped, worktree and branch kept, session
+  in Recently closed) instead of silently removing the worktree while saying it
+  was kept. The old destructive behaviour is `mindflock rm --wipe TITLE`, which
+  asks `y/N` on a terminal, needs `--yes` in scripts, and names the sessions
+  still using the folder when the server refuses with 409. `rm` also takes
+  several titles at once.
+
+### Docs
+
+- **Docs and strings follow the new screens.** Every user-facing "Settings →
+  Devices / Mobile / Work with someone" (the CLI's prints, toasts, desktop
+  notifications, onboarding lines, README and docs) now says **Your devices**,
+  **Your phone** and **People**; trusted Tailscale accounts point at Your
+  devices → Advanced and a missing GitHub token at Settings → Connections →
+  GitHub → Connect. `docs/web-ui.md` describes the five-step checklist (no
+  auto tour, no auto Setup modal), the New-session fast path and one
+  Templates list, the regrouped Settings nav and its screens, and Intake's
+  source cards. Loose ends wired with it: the sidebar's **Connect…** opens
+  Your devices directly (the redirect dialog is gone), Your devices leads
+  with the **You** card, Settings → General gains **Revive sessions after a
+  restart** (`general.revive_on_start`), the **Setup 3/5** chip moved into
+  the sidebar footer beside the doctor chip (which now opens Setup), the
+  checklist's leftover Test GitHub became **Connect GitHub**, a GitHub Issues
+  source still holding its own token says to move it, and `doctor --fix` /
+  `init` give each `agent-auth-<name>` row the same sign-in hint and re-probe
+  as the default's.
+
+- **The docs tell the truth about install, update and what exists.** README,
+  `electron/README.md` and TROUBLESHOOTING now describe the Windows `.exe` as
+  installing only the app (the engine installs on the app's first launch;
+  the dead `MINDFLOCK_NO_WSL` / "Show details" advice is gone), say what
+  macOS Gatekeeper and the Command Line Tools ask for, mark `git` optional
+  per the doctor, and note that updates are one click since 0.7.2. The README
+  stops claiming MindFlock never commits, pushes or merges (fast-track, team
+  runs and autopilot do, at the depth you choose, never by default), lists
+  Code Map + zones, Verify, your devices, settings sync and peer links, and
+  counts the MCP's 27 tools (+ 7 peer tools). AGENTS.md and
+  `docs/development.md` describe `backend/web/static/` as committed Vite
+  output, add `frontend/`, `electron/`, `backend/mcp/` and `backend/peer/`
+  to the maps, correct the frontend test facts (83 files / 1615 tests, run
+  by CI) and re-verify the known issues (2026-10-10) with cross-references to
+  the MCP and ingestion lists. `docs/configuration.md` has the peer relay's
+  real default (`auto`) and the no-longer-a-gate `enabled`; `docs/web-ui.md`
+  lists every Settings screen and gains Settings sync, Work with someone and
+  Intake's *running on <device>* state; `docs/architecture.md` gains
+  `backend/peer`, the full addon list and the sync / zones / peer state
+  files; `docs/cli.md` documents `init --yes` and `serve --setup`;
+  `docs/peer-link.md` is marked shipped (0.7.0 / 0.7.1). A TROUBLESHOOTING
+  section for ticket sources, a feature-request issue template, and
+  CODEOWNERS no longer names the non-existent `CLA.md`.
+
+
+### Added
+
+- **One update path everywhere.** The desktop app's **Update** toast, its
+  **Update engine** toast and Settings → Advanced now run the same update
+  (engine first, then the app if one is downloaded) and watch the same
+  progress, so an engine-only update always stops the old server, waits until
+  the port is released, starts the new one and reports the version it answers
+  with — Settings → Advanced no longer sticks on "Updating…". When the engine
+  has run ahead of the app (install.sh re-run by hand), the app says so:
+  "Your engine is newer than the app — update the app" on the update toast, or
+  a one-line notice when no app release is out; the engine is never downgraded
+  to match.
+- **`mindflock update` installs the way you installed.** It reads
+  `~/.mindflock/install.json` (written by install.sh: method, ref, sha) and
+  runs the matching install — the pinned `uv tool install --force` the
+  in-app updater uses, or `pipx install --force` — then restarts a running
+  server onto it and prints the version it now reports. A development
+  checkout gets the exact git commands printed instead of an install.
+  `--check` exits 0 when current and 1 when behind; `--ref` takes a tag or a
+  commit.
+- **pipx installs can update from the browser.** Settings → Advanced
+  (`/api/update/check`) classifies a pipx engine as `pipx` (not `other`) and
+  updates it; it shows how the engine was installed, and for a development
+  checkout prints the git commands instead of a disabled button.
+
+- **Sessions come back after a restart without being looked at.** After the
+  server boots (past its 30 s quiet window) it relaunches, in the background,
+  every session whose agent was running — two at a time, oldest first, through
+  the same path as the Offline chip's Restart — instead of leaving them Offline
+  until clicked. Paused, provisioning, peer-shared, workspace-missing and
+  usage-limited sessions are skipped; one log line per revive and a summary
+  line ("revived N, skipped M: …"). `general.revive_on_start` (default on)
+  turns it off; `POST /api/server/revive-all` runs it on demand (owner only).
+- **Nothing disappears silently at startup.** A session dropped at load because
+  its folder and tmux are both gone is now recorded in Recently closed with
+  `reason: "workspace missing"` and whether its branch still exists
+  (`branch_exists`), and logged; the dialog shows "Workspace missing — removed
+  at startup" and names a surviving branch so the work can be recovered.
+- **Desktop first launch never looks hung.** "Starting…" shows the last lines
+  of the server's own log after ten seconds, and a server that stops before
+  it answers (Linux/macOS) gets its own screen: the log tail, **Try again**
+  and **Copy diagnostics** (everything a bug report needs, on the clipboard).
+- **Mac setup finishes by itself.** Before installing the engine, the desktop
+  app checks for Homebrew (tmux comes from it) and offers **Install Homebrew**
+  — it runs Homebrew's official installer in Terminal, which asks for your
+  password there, and MindFlock carries on when it's done — or **Skip**. A
+  Mac without Apple's Command Line Tools gets Apple's installer opened and
+  MindFlock waits for it instead of asking you to press Install again. The
+  one-more-step screen also says how to get past Gatekeeper (System Settings →
+  Privacy & Security → Open Anyway): the app is self-signed.
+- **The Windows installer checks WSL before copying anything.** No WSL, or
+  WSL with no Linux distro, now stops the installer with one message
+  ("MindFlock needs WSL 2 with a Linux distro. Install it with `wsl --install`,
+  reboot, then run this installer again.") and a link to the setup guide,
+  instead of installing an app that could only show an error.
+
+### Changed
+
+- After its first-run engine install the desktop app opens the web UI at
+  `/?setup=1` (the setup checklist) exactly once; later launches open `/`.
+  The install one-liner the app logs and shows is pinned to the app's own
+  version in both places (the log line used to point at `main`).
+
+### Changed
+
+- **One way to end a session.** The row menu, the ✕, `Ctrl+W` / `Delete`, the
+  command palette and the bulk bar all use the same two verbs: **Close** (stops
+  the agent, keeps the worktree; reopen from Recently closed) and **Delete…**
+  (removes the worktree and branch, asked first on an inline strip with
+  Delete / Cancel). "End" and "Delete + wipe worktree" are gone. Pause's item
+  now says what it does: *Pause (stops the agent, keeps the worktree)*.
+- **Shortcuts that cannot fire by accident.** `Ctrl+W` and `Delete` no longer
+  close the focused session while *any* dialog or overlay is open (detected
+  generically — the palette, Settings, Make PR, Setup, To-do, the shortcut
+  sheet, the templates modal and extension dialogs were holes in the old
+  allow-list), nor while the keyboard is in a text field or a terminal.
+- **Delete that cannot proceed says why.** When another live session shares the
+  folder (a Duplicate session runs in place), the row shows *Folder in use by
+  &lt;names&gt;. Close those first.* instead of a bare failure; when a closed or
+  deleted session leaves workers running, the toast adds *N worker sessions
+  kept running*.
+- **Bulk session actions are reachable again.** **Select…** in the sidebar
+  footer opens the checklist bar (it had no entry point since the per-row
+  checkboxes left), with the same Close / Delete… verbs and inline
+  confirmation instead of a browser `confirm()` that did nothing in the
+  desktop app.
+- **Command palette** gains *Close session*, *Delete session…* and *Pause
+  session* / *Resume session* (whichever applies) for the focused session.
+- **Questions no longer look like errors.** Merge this PR?, Delete …?, Clean
+  up …? are drawn on a neutral bottom-right card; failures (push, make PR,
+  merge, pause, resume, delete, reopen, check run, setup re-run) are all red
+  cards that stay until dismissed instead of toasts that vanished mid-read.
+- The bell logs a close as **closed**; **deleted** is reserved for a delete.
+
+### Added
+
+- **Journey tests.** `tests/e2e` drives the real UI in headless Chrome
+  against a sandboxed server with a stub agent — first-run setup card, New
+  session, close + reopen, Settings → Connections, the Ctrl+W guard — and
+  asserts on what a user sees, so a UX rough edge cannot come back silently.
+  `uv run pytest tests/e2e -q`; a new non-blocking `e2e` CI job runs them
+  and uploads screenshots on failure.
+
+### Changed
+
+- **Verify's helper sessions are hidden by a flag, not by their name.** A
+  checklist run used to stay off the session rail, the `Ctrl/Alt+1…9`
+  numbers and the prompt-target pickers because its title began with
+  `verify-`, so any session *you* named that way vanished too, with no row,
+  no pane and nothing to say why. The server now records `hidden_by:
+  "verify"` on the sessions Verify creates (`POST /api/instances` accepts the
+  field; every `GET /api/instances` row carries it) and the UI hides on that
+  alone. Name a session `verify-anything` yourself and it is listed, numbered
+  and promptable like any other. Runs created before the flag are flagged at
+  startup when a checklist still names them, so nothing old lands on the
+  rail; a row from an older server, which sends no flag at all, still falls
+  back to the name.
+
+### Changed
+
+- **One session state, the same words everywhere.** A session's rail dot, its
+  chip, the bell's *Needs attention* list, the toasts and the tab badge now all
+  read one state (`starting`, `working`, `needs you`, `idle`, `waiting on
+  limit`, `offline`) instead of each deriving its own, so a crashed agent can no
+  longer show a green dot beside an "offline" chip. One label per state:
+  **Starting** (grey pulse), **Working** (green), **Question** / **Pre-commit
+  failed** / **Checks failing** / **Setup failed** (gold — these need you and
+  are in the bell), **Idle** (neutral; the ship-stage chip — committed, pushed,
+  PR open — shows beside it, and it joins the bell only after 20 minutes idle
+  on uncommitted work), **Waiting on limit, resumes HH:MM** (blue — it
+  auto-resumes, so it is no longer painted red) and **Offline** (red, in the
+  bell). The six tones are CSS tokens, defined once for both themes.
+- **Offline has a remedy.** The Offline chip is a **↻ Restart** button
+  (`POST /api/instances/{title}/revive`): the same lazy relaunch a terminal
+  attach or a sent prompt does, resuming the conversation after a crash.
+  Offline and a failed worktree setup now appear in the bell; the toast for an
+  agent that went offline offers the restart on click.
+- **Notification switches govern every in-app channel.** The *needs input*,
+  *pre-commit failed*, *setup failed*, *checks failing* and *offline* toasts and
+  the tab-title / favicon badge obey Settings → Notifications like the group
+  toasts already did; the bell keeps showing them (it is the source of truth).
+  The badge counts every session that needs you, not only questions.
+
+### Changed
+
+- **Pause keeps your work.** Pausing a session now only stops the agent;
+  the worktree and branch stay exactly as they are — no automatic commit
+  under your name, no removed checkout. Resume relaunches the agent in the
+  same folder. Sessions paused before this change (checkout removed) still
+  resume the old way.
+- **Delete and Delete workspace refuse a folder another session is using.**
+  Ending a session with its worktree removed (`DELETE /api/instances/{title}`,
+  `/cleanup`, `/api/workspaces/delete`) answers **409** `folder in use` with
+  the other sessions' titles — and changes nothing — while a copy made by
+  Duplicate session (or any other live session) works in the same folder.
+- **Every ended session lands in Recently closed**, including deleted ones
+  (Delete used to skip the undo store).
+- **Ending a session no longer cuts its child sessions loose.** They keep
+  running under the ended session's own parent (or as roots), and the
+  DELETE / `/close` / `/cleanup` responses list them as `children` so the
+  UI can say so. One function, `backend/web/core/session_end.py`, is now
+  behind all four end-of-session routes.
+
+### Changed
+
+- **New session: the fast path costs nothing again.** The dialog opens on
+  the form with Name focused, pre-filled with the template, agent and account
+  the last session in that folder was started with (remembered per folder,
+  per browser), so Name → Enter creates the session with no model turn. The
+  one-sentence box is now a secondary **Describe it instead…** row on the
+  form: it expands the box, Enter there runs the model turn as before with a
+  visible "Thinking…" state and a Cancel, and the fields it fills are the
+  ones you are looking at. The old three-button first page survives only for
+  Intake's "Start together…" batch.
+- **Base branch picker.** The Git & workspace fold (now shut by default,
+  with where the work happens and the base branch on its summary line) has a
+  **Base branch** menu for a new worktree — local branches first, then
+  remote-tracking ones, from the new `GET /api/repos/branches?path=` — sent
+  as `base_ref` + `base_branch` on create. Leaving it on the first row keeps
+  the server's own choice.
+- **One Templates list.** Saved prompts and session templates were two lists
+  with near-duplicate starters; they are one now: the server-side templates
+  (`/api/templates`, synced between devices as before). A browser's old
+  per-browser saved prompts are migrated into it once, deduped by name and
+  body. The vanilla-JS templates modal is gone, replaced by a React Templates
+  dialog (New → Templates → **Manage…**, always shown now, or the palette's
+  **Templates…**) that lists, edits inline and deletes behind an inline
+  confirm row — the old modal asked `window.confirm`, which does nothing in
+  the desktop app, and never checked whether the delete happened.
+
+### Fixed
+
+- **`mindflock rm` no longer deletes your work.** It now ends the session the
+  way the web UI's Close does (agent stopped, worktree and branch kept, session
+  in Recently closed) instead of silently removing the worktree while saying it
+  was kept. The old destructive behaviour is `mindflock rm --wipe TITLE`, which
+  asks `y/N` on a terminal, needs `--yes` in scripts, and names the sessions
+  still using the folder when the server refuses with 409. `rm` also takes
+  several titles at once.
+- **Ticket sources and Templates: review leftovers.** A recorded Test whose
+  request overrides a tested field (a different token, state…) answers but no
+  longer stamps its verdict onto the stored source ("— save first to record
+  it"); a save that sends a Test-filled field blank (a blur racing the post-save
+  Test) keeps the stored member id / Asana workspace and its verdict; a new
+  "Add source" card still missing a required field stays local with its inline
+  errors instead of failing every other card's save; a Shortcut/Asana source
+  missing only its Test-filled field is pinned as skipped, not fatal, by the
+  pipeline loader; and Templates shows a failed load at list level instead of
+  "Loading templates…" forever.
+
 ## [0.7.5] - 2026-10-09
 
 ### Added

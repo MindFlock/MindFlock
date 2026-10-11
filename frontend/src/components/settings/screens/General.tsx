@@ -46,6 +46,7 @@ export function General(_: ScreenProps) {
         </span>
       </label>
       <ResumeOnUsageResetRow />
+      <ReviveOnStartRow />
       <ScrollSpeedRow />
       <ReduceMotionRow />
       <TakeABreakRow />
@@ -84,6 +85,39 @@ function ResumeOnUsageResetRow() {
           onChange={(e) => {
             s.saveField("general", "resume_on_usage_reset", e.target.checked);
             toast(e.target.checked ? "Auto-resume on" : "Auto-resume off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
+
+/** Revive after a restart: once the server has booted (past its quiet
+ * window) it relaunches, two at a time, every session whose agent was running
+ * when it went down — the Offline chip's Restart, for all of them
+ * (backend/web/core/revive.py). Unset reads as on. */
+function ReviveOnStartRow() {
+  const s = useSettings();
+  const on = s.get("general", "revive_on_start") !== false;
+  return (
+    <div className="set-row set-switch-row" id="general-revive-on-start">
+      <span className="notif-rule-text">
+        <span className="set-label">Revive sessions after a restart</span>
+        <span className="set-hint notif-rule-desc">
+          When MindFlock restarts, sessions whose agent was running come back on
+          their own, in the background, instead of waiting Offline for a click.
+          Paused and usage-limited sessions are left alone.
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text doesn't flip it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            s.saveField("general", "revive_on_start", e.target.checked);
+            toast(e.target.checked ? "Sessions revive after a restart" : "Sessions stay Offline after a restart");
           }}
         />
         <span className="ca-slider" />

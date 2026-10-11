@@ -24212,12 +24212,22 @@ function host() {
 	return el;
 }
 function errorPop(title, detail, actions) {
+	pop("error", title, detail, actions);
+}
+function confirmPop(title, detail, actions, cancel = "Cancel") {
+	pop("confirm", title, detail, cancel ? [...actions, {
+		label: cancel,
+		run: () => {}
+	}] : actions);
+}
+function pop(kind, title, detail, actions) {
 	const box = host();
 	const key = title + "\0" + detail;
 	for (const existing of Array.from(box.children)) if (existing.dataset.key === key) return;
 	const card = document.createElement("div");
-	card.className = "cs-error";
+	card.className = kind === "confirm" ? "cs-error cs-confirm" : "cs-error";
 	card.dataset.key = key;
+	card.dataset.kind = kind;
 	const head = document.createElement("div");
 	head.className = "cs-error-head";
 	head.textContent = title;
@@ -24743,8 +24753,13 @@ function rewriteBlockedReason(plan) {
 	return "";
 }
 var VERIFY_SESSION_PREFIX = "verify-";
-function isVerifySession(title) {
-	return (title || "").startsWith(VERIFY_SESSION_PREFIX);
+var VERIFY_HIDDEN_BY = "verify";
+function isVerifySession(session) {
+	if (typeof session !== "string") {
+		const by = session?.hidden_by;
+		if (by !== void 0 && by !== null) return by === VERIFY_HIDDEN_BY;
+	}
+	return ((typeof session === "string" ? session : session?.title) || "").startsWith(VERIFY_SESSION_PREFIX);
 }
 //#endregion
 //#region src/state/queries.ts
@@ -25105,322 +25120,827 @@ function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
 }
 //#endregion
-//#region src/lib/format.ts
-function errMsg(err) {
-	return err?.message || "error";
+//#region src/lib/sessionState.ts
+var actShown = /* @__PURE__ */ new Map();
+var actPending = /* @__PURE__ */ new Map();
+function noteActivity(inst) {
+	const title = inst.title;
+	const raw = inst.activity || "idle";
+	if (!actShown.has(title)) {
+		actShown.set(title, raw);
+		return;
+	}
+	if (actShown.get(title) === raw) {
+		actPending.delete(title);
+		return;
+	}
+	const p = actPending.get(title);
+	if (p && p.value === raw) {
+		p.count += 1;
+		if (p.count >= 2) {
+			actShown.set(title, raw);
+			actPending.delete(title);
+		}
+	} else actPending.set(title, {
+		value: raw,
+		count: 1
+	});
 }
-function fmtTokens(n) {
-	n = n || 0;
-	if (n < 1e3) return String(n);
-	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
-	return (n / 1e6).toFixed(1) + "M";
+function forceActivity(title, value) {
+	if (!title) return;
+	actShown.set(title, value || "idle");
+	actPending.delete(title);
 }
-function fmtUsd(u) {
-	u = u || 0;
-	if (u <= 0) return "$0";
-	if (u < .01) return "<$0.01";
-	if (u < 10) return "$" + u.toFixed(2);
-	if (u < 1e3) return "$" + u.toFixed(1);
-	return "$" + (u / 1e3).toFixed(1) + "k";
+function dropActivity(title) {
+	actShown.delete(title);
+	actPending.delete(title);
 }
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
+function effectiveActivity(inst) {
+	return actShown.get(inst.title || "") || inst.activity || "idle";
+}
+var STUCK_IDLE_S = 1200;
+var STATE_LABEL = {
+	starting: "Starting",
+	working: "Working",
+	idle: "Idle",
+	limit: "Waiting on limit",
+	offline: "Offline"
 };
-function provLabel(name) {
-	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+var REASON_LABEL = {
+	question: "Question",
+	precommit_failed: "Pre-commit failed",
+	checks_failing: "Checks failing",
+	setup_failed: "Setup failed",
+	stuck: "Idle"
+};
+var NOTIFY_RULE = {
+	question: "needs_input",
+	precommit_failed: "precommit_failed",
+	setup_failed: "setup_failed",
+	checks_failing: "checks_failing",
+	stuck: "",
+	offline: "session_offline"
+};
+function notifyRuleFor(ss) {
+	if (ss.state === "offline") return NOTIFY_RULE.offline;
+	if (ss.reason) return NOTIFY_RULE[ss.reason];
+	return "";
 }
-function relTime(ts) {
-	const secs = Math.max(0, Math.floor(Date.now() / 1e3 - ts));
-	if (secs < 60) return secs + "s ago";
-	if (secs < 3600) return Math.floor(secs / 60) + "m ago";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
-	return Math.floor(secs / 86400) + "d ago";
+function attentionPriority(ss) {
+	if (ss.reason === "question") return 0;
+	if (ss.reason === "checks_failing") return 2;
+	return 1;
 }
-function fmtDurationShort(ms) {
-	const mm = Math.max(1, Math.round(ms / 6e4));
-	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+function fmtClock(epochS) {
+	const d = /* @__PURE__ */ new Date(epochS * 1e3);
+	const hh = String(d.getHours()).padStart(2, "0");
+	const mm = String(d.getMinutes()).padStart(2, "0");
+	return hh + ":" + mm;
 }
-function displayBranch(inst) {
-	const full = inst.branch || "";
-	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
-	if (m) return m[1];
-	m = full.match(/^mindflock\/(.+)$/);
-	if (m) return m[1];
-	return full || inst.program || "";
+function spanWord(secs) {
+	if (secs < 3600) return Math.max(1, Math.round(secs / 60)) + "m";
+	if (secs < 86400) return Math.round(secs / 3600) + "h";
+	return Math.round(secs / 86400) + "d";
 }
-function humanSize(bytes) {
-	if (bytes < 1024) return bytes + " B";
-	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
-	return (bytes / 1073741824).toFixed(2) + " GB";
+function uncommittedWork(inst) {
+	const un = inst.diff_stat?.uncommitted;
+	return (Number(un?.additions) || 0) + (Number(un?.deletions) || 0) > 0;
 }
-function pathBasename(p) {
-	const s = (p || "").replace(/[\\/]+$/, "");
-	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-	return i >= 0 ? s.slice(i + 1) : s;
+function needsYou(reason, hint) {
+	return {
+		state: "needs_you",
+		reason,
+		label: REASON_LABEL[reason],
+		tone: "attention",
+		inBell: true,
+		restartable: false,
+		hint
+	};
+}
+function deriveSessionState(inst, extras) {
+	const now = extras?.now ?? Date.now();
+	if (inst.workspace_missing) return {
+		state: "offline",
+		label: "Missing",
+		tone: "broken",
+		inBell: false,
+		restartable: false,
+		hint: "Workspace directory no longer exists — delete this session"
+	};
+	if (inst.status === "paused") return {
+		state: "idle",
+		label: "Paused",
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint: "Session paused"
+	};
+	if (inst.pending || inst.status === "loading") return {
+		state: "starting",
+		label: STATE_LABEL.starting,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint: "Provisioning workspace"
+	};
+	if (inst.setup && inst.setup.state === "running") return {
+		state: "starting",
+		label: STATE_LABEL.starting,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint: "Worktree setup running (deps / env files) — queued prompts are held until it finishes"
+	};
+	if (inst.setup && inst.setup.state === "failed") return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
+	const act = extras?.activity ?? effectiveActivity(inst);
+	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
+	if (act === "working") return {
+		state: "working",
+		label: STATE_LABEL.working,
+		tone: "working",
+		inBell: false,
+		restartable: false,
+		hint: "Agent is working"
+	};
+	if (act === "limit") {
+		const until = Number(inst.queue?.limited_until) || 0;
+		const resumeAt = until > now / 1e3 ? until : void 0;
+		return {
+			state: "limit",
+			label: STATE_LABEL.limit + (resumeAt ? ", resumes " + fmtClock(resumeAt) : ""),
+			tone: "waiting",
+			inBell: false,
+			resumeAt,
+			restartable: false,
+			hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
+		};
+	}
+	if (act === "offline") return {
+		state: "offline",
+		label: STATE_LABEL.offline,
+		tone: "broken",
+		inBell: true,
+		restartable: !inst.device,
+		hint: "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
+	};
+	if (inst.stage === "interrupt") {
+		const step = (inst.failed_step || "").trim();
+		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
+	}
+	if (inst.check && inst.check.state === "failed" && !inst.check.stale) return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
+	const since = Number(inst.activity_since) || 0;
+	const idleFor = since > 0 ? now / 1e3 - since : 0;
+	if (idleFor > STUCK_IDLE_S && uncommittedWork(inst)) return {
+		state: "idle",
+		reason: "stuck",
+		label: STATE_LABEL.idle,
+		tone: "neutral",
+		inBell: true,
+		restartable: false,
+		hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck"
+	};
+	return {
+		state: "idle",
+		label: STATE_LABEL.idle,
+		tone: "neutral",
+		inBell: false,
+		restartable: false,
+		hint: "Agent is idle — waiting for input"
+	};
+}
+function attentionReason(ss) {
+	return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
 }
 //#endregion
-//#region src/lib/clipboard.ts
-function copyText(text) {
-	if (!text) return Promise.resolve(false);
-	if (window.mfclip?.writeText) try {
-		window.mfclip.writeText(text);
-		return Promise.resolve(true);
-	} catch {}
-	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => fallbackCopy(text));
-	return Promise.resolve(fallbackCopy(text));
+//#region src/lib/agentMessages.ts
+var MESSAGE_SNIPPET = 80;
+function snippet(text, max = MESSAGE_SNIPPET) {
+	const s = String(text ?? "").replace(/\s+/g, " ").trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
 }
-var clipBridgeBroken = false;
-function readClipboardText() {
-	if (window.mfclip?.readText) try {
-		const v = window.mfclip.readText();
-		clipBridgeBroken = false;
-		return Promise.resolve(v);
-	} catch {
-		clipBridgeBroken = true;
-	}
-	if (navigator.clipboard?.readText) return navigator.clipboard.readText().catch(() => "");
-	return Promise.resolve("");
+function senderName(from, nameOf) {
+	return from ? nameOf(from) : "external";
 }
-function readClipboardImage() {
-	if (window.mfclip?.readImagePNG) try {
-		const b64 = window.mfclip.readImagePNG();
-		if (!b64) return Promise.resolve(null);
-		const bin = atob(b64);
-		const buf = new Uint8Array(bin.length);
-		for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-		return Promise.resolve(new Blob([buf], { type: "image/png" }));
-	} catch {
-		clipBridgeBroken = true;
-		return Promise.resolve(null);
+function resultStatus(d) {
+	return String(d.status || "").trim().toLowerCase();
+}
+function resultMark(status) {
+	return status === "blocked" || status === "failed" ? "⚠" : "✓";
+}
+function messageToastText(recipient, data, nameOf) {
+	const d = data || {};
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	if (d.kind === "result") {
+		const status = resultStatus(d);
+		const head = resultMark(status) + " worker " + from + " reported";
+		if (status) return head + ": " + status + (body ? " — " + body : "");
+		return head + (body ? ": " + body : "");
 	}
-	if (navigator.clipboard?.read) return navigator.clipboard.read().then((items) => {
-		for (const it of items) {
-			const t = (it.types || []).find((x) => x.startsWith("image/"));
-			if (t) return it.getType(t);
+	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
+}
+function messageNotif(data, nameOf) {
+	const d = data || {};
+	if (d.kind !== "result") return null;
+	const status = resultStatus(d);
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	const warn = status === "blocked" || status === "failed";
+	return {
+		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
+		cls: warn ? "n-warn" : "n-done"
+	};
+}
+function lineageMark(parent, spawned, nameOf) {
+	const p = String(parent || "");
+	const s = !!spawned;
+	if (!p && !s) return null;
+	if (p) {
+		const name = nameOf(p);
+		return {
+			text: "↳ " + name,
+			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
+			spawned: s
+		};
+	}
+	return {
+		text: "↳ agent",
+		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
+		spawned: true
+	};
+}
+function isChildOf(row, title) {
+	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
+}
+function childrenOf(title, rows) {
+	return rows.filter((r) => isChildOf(r, title));
+}
+var rawActivity = (r) => String(r.activity || "idle");
+function currentReport(row, act) {
+	const r = row.last_report;
+	if (!r || !String(r.status || "").trim()) return null;
+	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
+	return r;
+}
+function workerState(row, act) {
+	if (act === "clarify") return "ask";
+	const r = currentReport(row, act);
+	if (r) {
+		const s = String(r.status).trim().toLowerCase();
+		return s === "blocked" || s === "failed" ? s : "done";
+	}
+	if (act === "limit") return "limit";
+	if (act === "working") return "working";
+	if (row.order?.state === "held") return "waiting";
+	return "idle";
+}
+var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
+function since$1(ts, now) {
+	const secs = Math.max(0, Math.floor(now - ts));
+	if (secs < 60) return secs + "s";
+	if (secs < 3600) return Math.floor(secs / 60) + "m";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h";
+	return Math.floor(secs / 86400) + "d";
+}
+function workerLine(row, opts) {
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const state = workerState(row, act);
+	const r = currentReport(row, act);
+	let text;
+	let cls;
+	if (state === "ask") {
+		text = "? needs you · question";
+		cls = "rep-ask";
+	} else if (state === "blocked" || state === "failed") {
+		text = "✗ " + state;
+		cls = "rep-blocked";
+	} else if (state === "done") {
+		text = "✓ reported";
+		cls = "rep-done";
+	} else if (state === "limit") {
+		text = "usage limit — waiting";
+		cls = "rep-blocked";
+	} else if (state === "working") {
+		const t = Number(row.activity_since) || 0;
+		text = t > 0 ? "working · " + since$1(t, now) : "working";
+		cls = "rep-work";
+	} else if (state === "waiting") {
+		text = "waiting" + (row.order?.detail ? " · " + row.order.detail : "");
+		cls = "rep-idle";
+	} else {
+		text = "idle — no report";
+		cls = "rep-idle";
+	}
+	const lead = laneLead(row.lane);
+	if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) text = lead + " · " + text;
+	const parent = opts.parentName;
+	let detail;
+	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
+	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
+	else if (state === "working") detail = "still working, no report yet";
+	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+	else if (state === "waiting") detail = "MindFlock holds its task until its turn" + (row.order?.detail ? " (" + row.order.detail + ")" : "");
+	else detail = "stopped without reporting back";
+	return {
+		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
+		cls,
+		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
+		state
+	};
+}
+var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
+	const n = children.length;
+	if (!n) return null;
+	const states = children.map((c) => workerState(c, actOf(c)));
+	const count = (s) => states.filter((x) => x === s).length;
+	const ask = count("ask");
+	const failed = count("failed");
+	const blocked = count("blocked");
+	const reported = states.filter(isReported$1).length;
+	const working = count("working");
+	const waiting = count("waiting");
+	const parts = [];
+	if (ask) parts.push({
+		text: ask + " needs you",
+		cls: "needs"
+	});
+	if (failed) parts.push({
+		text: failed + " failed",
+		cls: "bad"
+	});
+	if (blocked) parts.push({
+		text: blocked + " blocked",
+		cls: "bad"
+	});
+	if (ask) parts.push({
+		text: plural$6(n, "worker"),
+		cls: ""
+	});
+	else if (reported === n) parts.push({
+		text: n === 1 ? "worker reported" : "all " + n + " reported",
+		cls: "ok"
+	});
+	else if (reported) parts.push({
+		text: reported + " of " + n + " reported",
+		cls: ""
+	});
+	else if (working === n) parts.push({
+		text: n + " working",
+		cls: ""
+	});
+	else if (working) parts.push({
+		text: working + " of " + n + " working",
+		cls: ""
+	});
+	else if (waiting) parts.push({
+		text: waiting + " of " + n + " waiting their turn",
+		cls: ""
+	});
+	else parts.push({
+		text: plural$6(n, "worker") + " · no reports",
+		cls: ""
+	});
+	return {
+		parts,
+		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
+			nested: true,
+			parentName: "",
+			act: actOf(c),
+			now
+		}).text).join("\n") + "\nClick to open the Thread"
+	};
+}
+function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
+	const n = children.length;
+	if (!n || actOf(parent) !== "idle") return null;
+	if (parent.status && parent.status !== "running") return null;
+	const name = nameOf(parent.title);
+	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
+	if (reported === n && blocked) return {
+		kind: "blocked",
+		label: "wrap up",
+		cls: "s-waiting",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
+	};
+	if (reported === n) return {
+		kind: "wrap",
+		label: "wrap up",
+		cls: "wrapchip",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
+	};
+	return {
+		kind: "waiting",
+		label: "waiting",
+		cls: "s-waiting",
+		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
+	};
+}
+function childrenByParent(rows) {
+	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
+	const out = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		const p = String(r.parent || "");
+		if (!live.has(p) || !isChildOf(r, p)) continue;
+		if (!out.has(p)) out.set(p, []);
+		out.get(p).push(r);
+	}
+	return out;
+}
+function inFamily(row, isWorker, kids) {
+	return isWorker || kids > 0 || !!row.playbook;
+}
+function workerOf(parent, nameOf) {
+	return parent ? "· worker of " + nameOf(parent) : "";
+}
+var LANE_HEAD = {
+	leave: "fast-track off",
+	commit: "→ commit",
+	push: "→ push",
+	pr: "→ PR",
+	merge: "→ merge"
+};
+var LANE_MEANS = {
+	leave: "MindFlock commits nothing for it",
+	commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
+	push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
+	pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
+	merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass"
+};
+var LANE_RANK = {
+	leave: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function laneOf(row) {
+	const l = row.lane;
+	if (l && l.target && l.target in LANE_RANK) return l;
+	const ap = row.autopilot;
+	if (ap && ap.depth) {
+		const target = ap.depth === "agent" ? "leave" : ap.depth;
+		if (target in LANE_RANK) return {
+			target,
+			ask_first: false
+		};
+	}
+	return null;
+}
+function laneLead(lane) {
+	const t = String(lane?.target || "");
+	if (!t || t === "leave") return "";
+	return LANE_HEAD[t] || "→ " + t;
+}
+var LANE_DEPTH_RANK = {
+	agent: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function awaitingApproval(row) {
+	const lane = laneOf(row);
+	const ap = row.autopilot;
+	if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
+	return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
+}
+function prNumber(row) {
+	const n = row.merge_state?.number;
+	if (n) return String(n);
+	const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
+	return m ? m[1] : "";
+}
+function checksText(row) {
+	const c = String(row.merge_state?.checks || "");
+	if (c === "ok") return {
+		text: "checks ✓",
+		bad: false
+	};
+	if (c === "failed") return {
+		text: "checks ✗",
+		bad: true
+	};
+	if (c === "pending") return {
+		text: "checks…",
+		bad: false
+	};
+	return {
+		text: "",
+		bad: false
+	};
+}
+function stageRank(stage) {
+	return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
+}
+function escalationText(reason) {
+	const r = String(reason || "").trim();
+	switch (r) {
+		case "stuck": return "stalled twice — no diff, no report";
+		case "blocked": return "its agent reported blocked";
+		case "ship_halted": return "hooks failed twice";
+		case "conflict": return "merge conflict";
+		case "budget": return "the team run's budget is used up";
+		case "restart": return "couldn't pick it back up after a restart";
+		case "": return "needs you";
+		default: return r;
+	}
+}
+function shipLine(row, opts = {}) {
+	const lane = laneOf(row);
+	if (!lane && !row.run) return null;
+	const target = lane?.target || "leave";
+	if (target === "leave" && !row.run) return null;
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const task = opts.task || null;
+	const ap = row.autopilot || null;
+	const stage = String(row.stage || "");
+	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
+	const copy = lane?.owner && lane.owner !== row.title ? "\nThis session shares its branch with “" + lane.owner + "”, which carries it." : "";
+	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
+	const base = {
+		restCls: "",
+		title: (means ? "Fast-track: " + means + "." : "") + copy
+	};
+	const line = (lead, rest, cls, state, why = "") => ({
+		...base,
+		lead,
+		rest,
+		cls,
+		state,
+		title: (why ? why + "\n" : "") + base.title
+	});
+	if (act === "clarify") return line("? needs you · question", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
+	const tstate = String(task?.state || "");
+	const reason = String(task?.reason || "");
+	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
+	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
+	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
+	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
+	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
+	const rank = LANE_RANK[target] ?? 0;
+	const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
+	if ((tstate === "shipped" || tstate === "integrated" || rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank || target === "merge" && !!ap && ap.state === "done" && ap.step === "merge") && rank > 0) {
+		if (target === "pr" || target === "merge") {
+			const n = prNumber(row);
+			const pr = n ? "PR #" + n : "PR";
+			if (target === "merge" && ap?.state === "done" && ap.step === "merge") return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
+			const ck = checksText(row);
+			return {
+				...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."),
+				restCls: ck.bad ? "bad" : ""
+			};
 		}
-		return null;
-	}, () => null);
-	return Promise.resolve(null);
-}
-async function pasteClipboard(term, session) {
-	const text = await readClipboardText();
-	if (text) {
-		term.paste(text);
-		toast("Pasted " + text.length + " chars");
-		return;
+		return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
 	}
-	const img = await readClipboardImage();
-	if (!img) {
-		toast(clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty", clipBridgeBroken ? { duration: 6e3 } : void 0);
-		return;
+	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
+		const s = stageRank(stage);
+		const note = String(ap?.note || "");
+		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
 	}
-	try {
-		const r = await api("/api/paste-image" + (session ? "?session=" + encodeURIComponent(session) : ""), {
-			method: "POST",
-			headers: { "Content-Type": img.type || "image/png" },
-			body: img
-		});
-		term.paste(r.path);
-		toast("Pasted image → " + r.path);
-	} catch (err) {
-		toast("Image paste failed: " + (err?.message || "error"));
-	}
-}
-async function uploadFileToWorkspace(blob, session, name) {
-	let q = session ? "?session=" + encodeURIComponent(session) : "";
-	if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
-	return (await api("/api/paste-image" + q, {
-		method: "POST",
-		headers: { "Content-Type": blob.type || "application/octet-stream" },
-		body: blob
-	})).path;
-}
-async function uploadFilesAsPathText(files, session) {
-	const list = Array.from(files || []);
-	if (!list.length) return "";
-	toast("Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…");
-	const paths = [];
-	for (const f of list) try {
-		paths.push(await uploadFileToWorkspace(f, session, f.name));
-	} catch (err) {
-		toast("Upload failed: " + (f.name || "file") + " — " + (err?.message || "error"));
-	}
-	if (!paths.length) return "";
-	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
-	return paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ");
-}
-async function pasteFilesAsPaths(files, term, session) {
-	const text = await uploadFilesAsPathText(files, session);
-	if (text) term.paste(text + " ");
-}
-var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
-function attachFileDrop(host, term, session) {
-	const onPaste = (ev) => {
-		const cd = ev.clipboardData;
-		if (!cd) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		const files = Array.from(cd.files || []);
-		const text = cd.getData("text/plain");
-		const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
-		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session);
-		else if (text) {
-			term.paste(text);
-			toast("Pasted " + text.length + " chars");
-		} else pasteClipboard(term, session);
-	};
-	const onDragOver = (ev) => {
-		if (!dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		ev.dataTransfer.dropEffect = "copy";
-		host.classList.add("file-drop");
-	};
-	const onDragLeave = (ev) => {
-		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
-	};
-	const onDrop = (ev) => {
-		if (!dtHasFiles(ev.dataTransfer)) return;
-		ev.preventDefault();
-		ev.stopPropagation();
-		host.classList.remove("file-drop");
-		pasteFilesAsPaths(ev.dataTransfer.files, term, session);
-	};
-	host.addEventListener("paste", onPaste, true);
-	host.addEventListener("dragover", onDragOver);
-	host.addEventListener("dragleave", onDragLeave);
-	host.addEventListener("drop", onDrop);
-	return () => {
-		host.removeEventListener("paste", onPaste, true);
-		host.removeEventListener("dragover", onDragOver);
-		host.removeEventListener("dragleave", onDragLeave);
-		host.removeEventListener("drop", onDrop);
-		host.classList.remove("file-drop");
-	};
-}
-function installGlobalDropGuards() {
-	window.addEventListener("dragover", (ev) => {
-		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-	});
-	window.addEventListener("drop", (ev) => {
-		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-	});
-}
-function fallbackCopy(text) {
-	try {
-		const ta = document.createElement("textarea");
-		ta.value = text;
-		ta.style.position = "fixed";
-		ta.style.top = "-1000px";
-		ta.style.opacity = "0";
-		document.body.appendChild(ta);
-		ta.focus();
-		ta.select();
-		const ok = document.execCommand("copy");
-		document.body.removeChild(ta);
-		return ok;
-	} catch {
-		return false;
-	}
+	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
+	let rest;
+	let state = "idle";
+	if (act === "working") {
+		const t = Number(row.activity_since) || 0;
+		rest = t > 0 ? " · working " + since$1(t, now) : " · working";
+		state = "working";
+	} else if (act === "limit") {
+		rest = " · usage limit — waiting";
+		state = "limit";
+	} else if (act === "offline") rest = " · offline";
+	else rest = " · idle";
+	return line(head, rest, "rep-lane", state);
 }
 //#endregion
-//#region src/components/grid/layout.ts
-var MAX_VISIBLE = 9;
-var DROP_PH = "\0drop";
-function viewCap(viewMode) {
-	return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
+//#region src/components/sidebar/ordering.ts
+function orderedKeys(keys, order) {
+	const present = new Set(keys);
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const k of order) if (present.has(k) && !seen.has(k)) {
+		out.push(k);
+		seen.add(k);
+	}
+	for (const k of keys) if (!seen.has(k)) {
+		out.push(k);
+		seen.add(k);
+	}
+	return out;
 }
-function capTitles(all, cap, mru) {
-	if (all.length <= cap) return all;
-	const byMru = mru.filter((t) => all.includes(t));
-	const rest = all.filter((t) => !byMru.includes(t));
-	const chosen = new Set(byMru.concat(rest).slice(0, cap));
-	return all.filter((t) => chosen.has(t));
+function orderedInstances(instances, order) {
+	if (!instances.length) return {
+		rows: [],
+		nextOrder: order
+	};
+	const byTitle = new Map(instances.map((i) => [i.title, i]));
+	const rows = orderedKeys([...byTitle.keys()], order).map((t) => byTitle.get(t));
+	return {
+		rows,
+		nextOrder: rows.map((i) => i.title)
+	};
 }
-function computeVisible(instances, opts) {
-	const { rows } = orderedInstances(instances, opts.order);
-	const shown = rows.filter((i) => !opts.hidden.has(i.title));
-	const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
-	const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
-	return shown.filter((i) => chosen.has(i.title));
+function movedRailOrder(opts) {
+	const { saved, live, drag, target, before, stale } = opts;
+	if (!drag || drag === target) return saved;
+	const seen = new Set(saved);
+	const order = saved.concat(live.filter((k) => !seen.has(k))).filter((k) => k !== drag && !(stale && stale(k)));
+	let to = order.indexOf(target);
+	if (to < 0) to = order.length;
+	else if (!before) to += 1;
+	order.splice(to, 0, drag);
+	const savedSet = new Set(saved);
+	while (order.length) {
+		const last = order[order.length - 1];
+		if (last !== drag && last.startsWith("\0") && !savedSet.has(last)) order.pop();
+		else break;
+	}
+	return order;
 }
-function computeVisibleSlots(instances, specialKeys, opts) {
-	return capTitles(orderedKeys(instances.map((i) => i.title).concat(specialKeys), opts.order).filter((t) => !opts.hidden.has(t)), Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
+function orderWithAfter(order, title, after) {
+	if (!title || !after || title === after) return order;
+	const next = order.filter((t) => t !== title);
+	const at = next.indexOf(after);
+	if (at < 0) return order;
+	next.splice(at + 1, 0, title);
+	return next;
 }
-function balancedRows(titles) {
-	const n = titles.length;
-	if (!n) return [];
-	const perRow = Math.ceil(n / Math.max(1, Math.round(Math.sqrt(n))));
-	const rows = [];
-	for (let i = 0; i < n; i += perRow) rows.push(titles.slice(i, i + perRow));
-	return rows;
-}
-function insertIntoGrid(rows, title) {
-	const n = rows.flat().length + 1;
-	const perRow = Math.ceil(n / Math.max(1, Math.round(Math.sqrt(n))));
-	const last = rows[rows.length - 1];
-	if (last && last.length < perRow) last.push(title);
-	else rows.push([title]);
-	return rows;
-}
-function reconcileGridRows(prev, visibleTitles) {
-	const vis = new Set(visibleTitles);
-	const kept = new Set(prev.flat().filter((t) => vis.has(t)));
-	const incoming = visibleTitles.filter((t) => !kept.has(t));
-	let rows = prev.map((r) => r.map((t) => vis.has(t) ? t : incoming.shift() || null).filter(Boolean)).filter((r) => r.length);
-	if (!rows.length) return balancedRows(visibleTitles);
-	for (const t of incoming) rows = insertIntoGrid(rows, t);
-	return rows;
-}
-function insertBeside(prev, removeTitle, token, targetTitle, side) {
-	const rows = prev.map((r) => r.filter((t) => t !== removeTitle)).filter((r) => r.length);
-	let ri = -1, ci = -1;
+var NEST_MAX = 3;
+function railNesting(rows) {
+	const out = rows.map(() => ({
+		depth: 0,
+		more: false,
+		guides: [],
+		stem: false
+	}));
+	let chain = [];
 	rows.forEach((r, i) => {
-		const j = r.indexOf(targetTitle);
-		if (j >= 0) {
-			ri = i;
-			ci = j;
-		}
+		const p = r.parent || "";
+		const at = p ? chain.findIndex((j) => rows[j].key === p) : -1;
+		if (at >= 0 && at + 1 <= NEST_MAX) {
+			chain = chain.slice(0, at + 1);
+			out[i].depth = at + 1;
+			chain.push(i);
+		} else chain = [i];
 	});
-	if (ri < 0) rows.push([token]);
-	else if (side === "left") rows[ri].splice(ci, 0, token);
-	else if (side === "right") rows[ri].splice(ci + 1, 0, token);
-	else if (side === "top") rows.splice(ri, 0, [token]);
-	else rows.splice(ri + 1, 0, [token]);
-	return rows;
+	for (let i = 0; i < rows.length; i++) {
+		const d = out[i].depth;
+		if (i + 1 < rows.length && out[i + 1].depth === d + 1) out[i].stem = true;
+		if (!d) continue;
+		for (let j = i + 1; j < rows.length && out[j].depth >= d; j++) if (out[j].depth === d) {
+			out[i].more = rows[j].parent === rows[i].parent;
+			break;
+		}
+	}
+	const open = [];
+	for (let i = 0; i < rows.length; i++) {
+		const d = out[i].depth;
+		open.length = Math.max(d, 0);
+		out[i].guides = [];
+		for (let k = 1; k < d; k++) out[i].guides[k] = !!open[k];
+		if (d) open[d] = out[i].more;
+	}
+	return out;
 }
-function placeInGrid(prev, dragTitle, targetTitle, side) {
-	if (!dragTitle || dragTitle === targetTitle) return prev;
-	return insertBeside(prev, dragTitle, dragTitle, targetTitle, side);
+function sameNest(a, b) {
+	if (a.depth !== b.depth || a.more !== b.more || a.stem !== b.stem) return false;
+	for (let k = 1; k < a.depth; k++) if (!!a.guides[k] !== !!b.guides[k]) return false;
+	return true;
 }
-function previewRowsFor(prev, dragTitle, targetTitle, side) {
-	return insertBeside(prev, dragTitle, DROP_PH, targetTitle, side);
+function deviceLineage(rows) {
+	return rows.map((r) => r.device && r.parent && !r.parent.includes("::") ? {
+		...r,
+		parent: r.device + "::" + r.parent
+	} : r);
 }
-function dropSideFor(rect, clientX, clientY) {
-	const dx = (clientX - rect.left) / rect.width - .5;
-	const dy = (clientY - rect.top) / rect.height - .5;
-	if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
-	return dy < 0 ? "top" : "bottom";
+function placeNewWorkers(saved, live) {
+	const parentOf = new Map(live.map((r) => [r.title, r.parent || ""]));
+	const seen = new Set(saved);
+	const depthOf = (t) => {
+		let d = 0;
+		for (let p = parentOf.get(t); p && d <= live.length; p = parentOf.get(p)) d++;
+		return d;
+	};
+	const fresh = live.filter((r) => r.parent && r.parent !== r.title && parentOf.has(r.parent) && !seen.has(r.title)).map((r) => r.title).sort((a, b) => depthOf(a) - depthOf(b));
+	if (!fresh.length) return saved;
+	const isUnder = (t, anc) => {
+		let hops = 0;
+		for (let p = parentOf.get(t); p && hops <= live.length; p = parentOf.get(p), hops++) if (p === anc) return true;
+		return false;
+	};
+	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+	const pending = new Set(fresh);
+	for (const t of fresh) {
+		pending.delete(t);
+		const p = parentOf.get(t);
+		const rest = order.filter((x) => x !== t);
+		let at = rest.indexOf(p);
+		if (at < 0) continue;
+		while (at + 1 < rest.length && !pending.has(rest[at + 1]) && isUnder(rest[at + 1], p)) at++;
+		order = orderWithAfter(order, t, rest[at]);
+	}
+	return order;
+}
+function placeNewRunMembers(saved, live) {
+	const seen = new Set(saved);
+	const fresh = live.filter((r) => r.run?.id && !seen.has(r.title));
+	if (!fresh.length) return saved;
+	const runOf = new Map(live.map((r) => [r.title, r.run?.id || ""]));
+	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+	const placed = /* @__PURE__ */ new Set();
+	for (const r of fresh) {
+		const rest = order.filter((t) => t !== r.title);
+		let at = -1;
+		rest.forEach((t, i) => {
+			if (runOf.get(t) === r.run.id && (seen.has(t) || placed.has(t))) at = i;
+		});
+		placed.add(r.title);
+		if (at >= 0) order = orderWithAfter(order, r.title, rest[at]);
+	}
+	return order;
+}
+function matchesFilter(inst, filter, aliases) {
+	if (!filter) return true;
+	return [
+		inst.title,
+		aliases[inst.title],
+		inst.branch
+	].filter(Boolean).join(" ").toLowerCase().indexOf(filter) >= 0;
+}
+function attentionItems(instances) {
+	const items = [];
+	for (const inst of instances || []) {
+		if (inst.workspace_missing || inst.status === "paused") continue;
+		const ss = deriveSessionState(inst);
+		if (ss.inBell) {
+			const step = ss.reason === "precommit_failed" ? (inst.failed_step || "").trim() : "";
+			items.push({
+				p: attentionPriority(ss),
+				title: inst.title,
+				reason: attentionReason(ss) + (step ? " at " + step : ""),
+				snippet: ss.reason === "question" || ss.reason === "stuck" ? inst.last_turn || "" : void 0
+			});
+		} else if (ss.state === "idle" && inst.stage === "pushed") {
+			if (laneOf(inst)?.target !== "push") items.push({
+				p: 3,
+				title: inst.title,
+				reason: "pushed — ready for PR"
+			});
+		}
+	}
+	return items.sort((a, b) => a.p - b.p || a.title.localeCompare(b.title));
 }
 //#endregion
-//#region src/lib/stageWatch.ts
-var inflight$1 = /* @__PURE__ */ new Map();
-function freshStage(title) {
-	if (!title) return Promise.resolve(null);
-	const live = inflight$1.get(title);
-	if (live) return live;
-	const p = instApi(title, "/stage").then((row) => {
-		if (row && row.title) patchInstance(title, row);
-		return row ?? null;
-	}).catch(() => null).finally(() => {
-		inflight$1.delete(title);
-	});
-	inflight$1.set(title, p);
-	return p;
+//#region src/lib/sessionLabel.ts
+function escapeRe(s) {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function featureBranchName(branch, slug) {
+	const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
+	return m ? m[1] : "";
+}
+function branchTail(branch) {
+	const parts = branch.split("/").filter(Boolean);
+	return parts.length ? parts[parts.length - 1] : "";
+}
+function splitKind(title) {
+	if (title.startsWith("pr-")) return {
+		kind: "pr",
+		slug: title.slice(3)
+	};
+	if (title.startsWith("issue-")) return {
+		kind: "iss",
+		slug: title.slice(6)
+	};
+	return null;
+}
+function sessionLabel(title, branch) {
+	const plain = {
+		text: title,
+		kind: "",
+		name: "",
+		slug: title
+	};
+	if (!title) return plain;
+	const split = splitKind(title);
+	const ticketName = split ? "" : featureBranchName(branch, title);
+	if (!split && !ticketName) return plain;
+	const kind = split ? split.kind : "tix";
+	const slug = split ? split.slug : title;
+	if (!slug) return plain;
+	const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
+	const useName = name && name !== slug && name !== title ? name : "";
+	return {
+		text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+		kind,
+		name: useName,
+		slug
+	};
 }
 //#endregion
 //#region node_modules/zustand/esm/vanilla.mjs
@@ -25658,7 +26178,8 @@ var PREF_DEFAULTS = {
 	break_every: null,
 	idle_flock: null,
 	idle_after: null,
-	hints: null
+	hints: null,
+	map_tour: null
 };
 var PREF_MAP = [
 	{
@@ -25728,13 +26249,18 @@ var PREF_MAP = [
 		ls: "mf_hints",
 		field: "hints",
 		kind: "json-bool"
+	},
+	{
+		ls: "mf_map_tour",
+		field: "map_tour",
+		kind: "json-bool"
 	}
 ];
 var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
 var BY_FIELD = new Map(PREF_MAP.map((p) => [p.field, p]));
 var THEME_CHANGED = "mf-theme-changed";
 var SEEDED_KEY = "mf_prefs_seeded";
-function storage() {
+function storage$1() {
 	try {
 		return globalThis.localStorage || null;
 	} catch {
@@ -25753,7 +26279,7 @@ function coerce(p, v) {
 		case "raw": return typeof v === "string" && (!p.values || p.values.includes(v)) ? v : void 0;
 	}
 }
-function readLocal(field, kv = storage()) {
+function readLocal(field, kv = storage$1()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return void 0;
 	let raw = null;
@@ -25770,7 +26296,7 @@ function readLocal(field, kv = storage()) {
 		return;
 	}
 }
-function readAllLocal(kv = storage()) {
+function readAllLocal(kv = storage$1()) {
 	const out = {};
 	for (const p of PREF_MAP) {
 		const v = readLocal(p.field, kv);
@@ -25778,7 +26304,7 @@ function readAllLocal(kv = storage()) {
 	}
 	return out;
 }
-function writeLocal(field, value, kv = storage()) {
+function writeLocal(field, value, kv = storage$1()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return;
 	try {
@@ -25909,7 +26435,7 @@ function refusedFields(resOrErr) {
 	const o = resOrErr;
 	const list = o && (Array.isArray(o.refused) ? o.refused : o.body?.refused);
 	if (!Array.isArray(list)) return null;
-	return list.filter((f) => FIELDS.has(f));
+	return list.filter((f) => FIELDS$1.has(f));
 }
 function refusalReason(resOrErr) {
 	const o = resOrErr;
@@ -25935,14 +26461,14 @@ function noteRefused(fields, resOrErr = null) {
 	const why = refusalReason(resOrErr);
 	onRefused(fresh, "Your " + what + " are kept in this browser only — this device didn't save them" + (why ? ": " + why : "."));
 }
-var FIELDS = new Set(PREF_MAP.map((p) => p.field));
-function dirtyFields(kv = storage()) {
+var FIELDS$1 = new Set(PREF_MAP.map((p) => p.field));
+function dirtyFields(kv = storage$1()) {
 	const out = /* @__PURE__ */ new Set();
 	if (!kv) return out;
 	try {
 		const arr = JSON.parse(kv.getItem(DIRTY_KEY) || "[]");
 		if (Array.isArray(arr)) {
-			for (const f of arr) if (FIELDS.has(f)) out.add(f);
+			for (const f of arr) if (FIELDS$1.has(f)) out.add(f);
 		}
 	} catch {}
 	return out;
@@ -25960,7 +26486,7 @@ function markDirty(field, kv) {
 	d.add(field);
 	saveDirty(d, kv);
 }
-function settleFields(fields, sentGen = null, kv = storage()) {
+function settleFields(fields, sentGen = null, kv = storage$1()) {
 	const d = dirtyFields(kv);
 	let changed = false;
 	for (const f of fields) {
@@ -25983,12 +26509,12 @@ function withoutEcho(fn) {
 		suspended--;
 	}
 }
-function pendingFields(kv = storage()) {
+function pendingFields(kv = storage$1()) {
 	const out = dirtyFields(kv);
 	for (const f of pending$2) out.add(f);
 	return out;
 }
-function notePrefWrite(lsKey, kv = storage()) {
+function notePrefWrite(lsKey, kv = storage$1()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
 	pending$2.add(field);
@@ -26010,7 +26536,7 @@ function bodyFor(fields, kv) {
 	}
 	return body;
 }
-async function flushPrefWrites(kv = storage()) {
+async function flushPrefWrites(kv = storage$1()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$2, ...dirtyFields(kv)]);
@@ -26043,7 +26569,7 @@ function settleExcept(fields, refused, sentGen, kv, resOrErr) {
 	const mine = refused.filter((f) => fields.has(f));
 	if (mine.length) noteRefused(mine, resOrErr);
 }
-function flushPrefsOnHide(kv = storage()) {
+function flushPrefsOnHide(kv = storage$1()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$2, ...dirtyFields(kv)]);
@@ -26109,13 +26635,17 @@ var useUi = create((set, get) => ({
 	verifyPanes: [],
 	extPanes: [],
 	specialOpen: [],
+	bulkMode: false,
 	bulkSelected: /* @__PURE__ */ new Set(),
+	bulkAnchor: null,
 	aliases: load$1("mf_aliases", {}),
 	collapsedDevices: new Set(load$1("cs_devcollapse", [])),
 	collapsedRuns: new Set(load$1("mf_runcollapse", [])),
 	collapsedFamilies: new Set(load$1("mf_familycollapse", [])),
 	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
 	barOrder: load$1("mf_barorder", []),
+	showFilter: load$1("mf_show_filter", true),
+	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
 	breakReminder: load$1("mf_break_on", false),
 	breakEveryMin: clampBreakMinutes(load$1("mf_break_every", BREAK_DEFAULT_MINUTES)),
@@ -26123,8 +26653,8 @@ var useUi = create((set, get) => ({
 	idleFlockAfterMin: clampIdleMinutes(load$1("mf_idle_after", IDLE_DEFAULT_MINUTES)),
 	hintsEnabled: load$1("mf_hints", true),
 	dismissedHints: new Set(load$1("mf_hints_seen", [])),
-	tourDone: load$1("mf_tour_done", false),
 	tourOpen: false,
+	mapTourSeen: load$1("mf_map_tour", false) === true,
 	lastTab: load$1("cs_lasttab", {}),
 	openDialog: null,
 	dialogTarget: null,
@@ -26220,23 +26750,74 @@ var useUi = create((set, get) => ({
 		if (!cur.includes(kind)) get().touchMru(windowKey(kind));
 		set({ specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind] });
 	},
+	setBulkMode: (on) => set(on ? { bulkMode: true } : {
+		bulkMode: false,
+		bulkSelected: /* @__PURE__ */ new Set(),
+		bulkAnchor: null
+	}),
 	toggleBulk: (title) => {
 		const next = new Set(get().bulkSelected);
 		if (next.has(title)) next.delete(title);
 		else next.add(title);
+		set({
+			bulkSelected: next,
+			bulkAnchor: title,
+			bulkMode: true
+		});
+	},
+	pickRow: (title, range) => {
+		const { bulkAnchor, railOrder, bulkSelected } = get();
+		const from = range && bulkAnchor ? railOrder.indexOf(bulkAnchor) : -1;
+		const to = railOrder.indexOf(title);
+		if (from < 0 || to < 0) {
+			get().toggleBulk(title);
+			return;
+		}
+		const next = new Set(bulkSelected);
+		const [a, b] = from < to ? [from, to] : [to, from];
+		for (const k of railOrder.slice(a, b + 1)) if (!k.startsWith("\0")) next.add(k);
+		set({
+			bulkSelected: next,
+			bulkAnchor: title,
+			bulkMode: true
+		});
+	},
+	setBulk: (titles, on) => {
+		const next = new Set(get().bulkSelected);
+		for (const t of titles) if (on) next.add(t);
+		else next.delete(t);
 		set({ bulkSelected: next });
 	},
-	clearBulk: () => set({ bulkSelected: /* @__PURE__ */ new Set() }),
+	clearBulk: () => set({
+		bulkSelected: /* @__PURE__ */ new Set(),
+		bulkAnchor: null
+	}),
+	setShowFilter: (on) => {
+		save("mf_show_filter", on);
+		set({
+			showFilter: on,
+			filterPeek: false
+		});
+	},
+	setFilterPeek: (on) => set({ filterPeek: on }),
 	setAlias: (title, alias) => {
-		const aliases = { ...get().aliases };
-		if (alias) aliases[title] = alias;
-		else delete aliases[title];
-		save("mf_aliases", aliases);
-		set({ aliases });
+		const prev = get().aliases[title] || "";
+		const write = (value) => {
+			const aliases = { ...get().aliases };
+			if (value) aliases[title] = value;
+			else delete aliases[title];
+			save("mf_aliases", aliases);
+			set({ aliases });
+		};
+		write(alias);
 		api("/api/aliases", { json: {
 			title,
 			alias: alias || ""
-		} }).catch(() => {});
+		} }).catch((err) => {
+			if (!(err instanceof ApiError) || err.status !== 409) return;
+			if ((get().aliases[title] || "") === alias) write(prev);
+			toast(err.message || `Another session is already named “${alias}”`);
+		});
 	},
 	toggleDeviceCollapsed: (device) => {
 		const next = new Set(get().collapsedDevices);
@@ -26308,14 +26889,13 @@ var useUi = create((set, get) => ({
 		save("mf_hints_seen", [...next]);
 		set({ dismissedHints: next });
 	},
-	openTour: () => set({ tourOpen: true }),
-	finishTour: () => {
-		save("mf_tour_done", true);
-		set({
-			tourOpen: false,
-			tourDone: true
-		});
+	markMapTourSeen: () => {
+		if (get().mapTourSeen) return;
+		save("mf_map_tour", true);
+		set({ mapTourSeen: true });
 	},
+	openTour: () => set({ tourOpen: true }),
+	finishTour: () => set({ tourOpen: false }),
 	setLastTab: (title, tab) => {
 		const lastTab = {
 			...get().lastTab,
@@ -26382,10 +26962,297 @@ var useUi = create((set, get) => ({
 function displayName(title) {
 	return useUi.getState().aliases[title] || title;
 }
-function tourDecision(opts) {
-	if (opts.tourDone || !opts.hintsEnabled) return "skip";
-	if (opts.onboarded === void 0) return "wait";
-	return opts.onboarded ? "skip" : "open";
+var LAST_NEW_SESSION_KEY = "mf_new_session_last";
+function readLastNew(kv) {
+	try {
+		const raw = kv ? JSON.parse(kv.getItem(LAST_NEW_SESSION_KEY) || "null") : null;
+		if (raw && typeof raw === "object") return {
+			folder: typeof raw.folder === "string" ? raw.folder : "",
+			byRepo: raw.byRepo && typeof raw.byRepo === "object" ? raw.byRepo : {}
+		};
+	} catch {}
+	return {
+		folder: "",
+		byRepo: {}
+	};
+}
+function lsKV() {
+	try {
+		return typeof localStorage !== "undefined" ? localStorage : null;
+	} catch {
+		return null;
+	}
+}
+function lastNewSessionChoice(repo, kv = lsKV()) {
+	const last = readLastNew(kv);
+	const key = (repo || "").trim() || last.folder;
+	return {
+		folder: last.folder,
+		choice: key && last.byRepo[key] || null
+	};
+}
+function forgetNewSessionProfile(repo, kv = lsKV()) {
+	if (!kv) return;
+	const last = readLastNew(kv);
+	const key = (repo || "").trim() || last.folder;
+	const choice = key ? last.byRepo[key] : null;
+	if (!choice || !choice.profile_id) return;
+	const byRepo = {
+		...last.byRepo,
+		[key]: {
+			...choice,
+			profile_id: ""
+		}
+	};
+	try {
+		kv.setItem(LAST_NEW_SESSION_KEY, JSON.stringify({
+			folder: last.folder,
+			byRepo
+		}));
+	} catch {}
+}
+function rememberNewSessionChoice(repo, choice, kv = lsKV()) {
+	const folder = (repo || "").trim();
+	if (!folder || !kv) return;
+	const byRepo = { ...readLastNew(kv).byRepo };
+	delete byRepo[folder];
+	const entries = Object.entries(byRepo).slice(-31);
+	entries.push([folder, {
+		template: choice.template || "",
+		program: choice.program || "",
+		profile_id: choice.profile_id || ""
+	}]);
+	try {
+		kv.setItem(LAST_NEW_SESSION_KEY, JSON.stringify({
+			folder,
+			byRepo: Object.fromEntries(entries)
+		}));
+	} catch {}
+}
+//#endregion
+//#region src/lib/windowName.ts
+function snapshot() {
+	const w = globalThis;
+	try {
+		const list = w.mindflock?.sessions?.();
+		return Array.isArray(list) ? list : [];
+	} catch {
+		return [];
+	}
+}
+function windowName(title) {
+	const raw = String(title || "");
+	if (!raw) return "";
+	const alias = useUi.getState().aliases[raw];
+	if (alias) return alias;
+	const inst = snapshot().find((i) => i && (i.title === raw || i.display_title === raw));
+	if (!inst) return raw;
+	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
+}
+function slotNumber(title) {
+	const raw = String(title || "");
+	if (!raw) return "";
+	try {
+		const ui = useUi.getState();
+		const rail = ui.railOrder;
+		if (rail.length) {
+			let idx = rail.indexOf(raw);
+			if (idx < 0) {
+				const inst = snapshot().find((i) => i && i.display_title === raw);
+				if (inst) idx = rail.indexOf(inst.title);
+			}
+			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+		}
+		const { rows } = orderedInstances(snapshot().filter((i) => i && !isVerifySession(i)), ui.order);
+		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
+		const local = filtered.filter((i) => !i.device);
+		const remote = filtered.filter((i) => i.device);
+		const idx = [...local, ...remote].findIndex((i) => i.title === raw || i.display_title === raw);
+		return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+	} catch {
+		return "";
+	}
+}
+function nameTakenBy(title, name) {
+	const n = String(name || "").trim();
+	if (!n) return "";
+	for (const i of snapshot()) {
+		const t = i?.title;
+		if (!t || t === title || i.device) continue;
+		if (n === t || n === windowName(t)) return t;
+	}
+	return "";
+}
+function publishWindowName() {
+	const w = globalThis;
+	w.mindflock = w.mindflock || {};
+	w.mindflock.displayName = windowName;
+	w.mindflock.slotNumber = slotNumber;
+}
+//#endregion
+//#region src/lib/clipboard.ts
+function copyText(text) {
+	if (!text) return Promise.resolve(false);
+	if (window.mfclip?.writeText) try {
+		window.mfclip.writeText(text);
+		return Promise.resolve(true);
+	} catch {}
+	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => fallbackCopy(text));
+	return Promise.resolve(fallbackCopy(text));
+}
+var clipBridgeBroken = false;
+function readClipboardText() {
+	if (window.mfclip?.readText) try {
+		const v = window.mfclip.readText();
+		clipBridgeBroken = false;
+		return Promise.resolve(v);
+	} catch {
+		clipBridgeBroken = true;
+	}
+	if (navigator.clipboard?.readText) return navigator.clipboard.readText().catch(() => "");
+	return Promise.resolve("");
+}
+function readClipboardImage() {
+	if (window.mfclip?.readImagePNG) try {
+		const b64 = window.mfclip.readImagePNG();
+		if (!b64) return Promise.resolve(null);
+		const bin = atob(b64);
+		const buf = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+		return Promise.resolve(new Blob([buf], { type: "image/png" }));
+	} catch {
+		clipBridgeBroken = true;
+		return Promise.resolve(null);
+	}
+	if (navigator.clipboard?.read) return navigator.clipboard.read().then((items) => {
+		for (const it of items) {
+			const t = (it.types || []).find((x) => x.startsWith("image/"));
+			if (t) return it.getType(t);
+		}
+		return null;
+	}, () => null);
+	return Promise.resolve(null);
+}
+async function pasteClipboard(term, session) {
+	const text = await readClipboardText();
+	if (text) {
+		term.paste(text);
+		toast("Pasted " + text.length + " chars");
+		return;
+	}
+	const img = await readClipboardImage();
+	if (!img) {
+		toast(clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty", clipBridgeBroken ? { duration: 6e3 } : void 0);
+		return;
+	}
+	try {
+		const r = await api("/api/paste-image" + (session ? "?session=" + encodeURIComponent(session) : ""), {
+			method: "POST",
+			headers: { "Content-Type": img.type || "image/png" },
+			body: img
+		});
+		term.paste(r.path);
+		toast("Pasted image → " + r.path);
+	} catch (err) {
+		toast("Image paste failed: " + (err?.message || "error"));
+	}
+}
+async function uploadFileToWorkspace(blob, session, name) {
+	let q = session ? "?session=" + encodeURIComponent(session) : "";
+	if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
+	return (await api("/api/paste-image" + q, {
+		method: "POST",
+		headers: { "Content-Type": blob.type || "application/octet-stream" },
+		body: blob
+	})).path;
+}
+async function uploadFilesAsPathText(files, session) {
+	const list = Array.from(files || []);
+	if (!list.length) return "";
+	toast("Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…");
+	const paths = [];
+	for (const f of list) try {
+		paths.push(await uploadFileToWorkspace(f, session, f.name));
+	} catch (err) {
+		toast("Upload failed: " + (f.name || "file") + " — " + (err?.message || "error"));
+	}
+	if (!paths.length) return "";
+	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
+	return paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ");
+}
+async function pasteFilesAsPaths(files, term, session) {
+	const text = await uploadFilesAsPathText(files, session);
+	if (text) term.paste(text + " ");
+}
+var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
+function attachFileDrop(host, term, session) {
+	const onPaste = (ev) => {
+		const cd = ev.clipboardData;
+		if (!cd) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		const files = Array.from(cd.files || []);
+		const text = cd.getData("text/plain");
+		const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
+		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session);
+		else if (text) {
+			term.paste(text);
+			toast("Pasted " + text.length + " chars");
+		} else pasteClipboard(term, session);
+	};
+	const onDragOver = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		ev.dataTransfer.dropEffect = "copy";
+		host.classList.add("file-drop");
+	};
+	const onDragLeave = (ev) => {
+		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
+	};
+	const onDrop = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		host.classList.remove("file-drop");
+		pasteFilesAsPaths(ev.dataTransfer.files, term, session);
+	};
+	host.addEventListener("paste", onPaste, true);
+	host.addEventListener("dragover", onDragOver);
+	host.addEventListener("dragleave", onDragLeave);
+	host.addEventListener("drop", onDrop);
+	return () => {
+		host.removeEventListener("paste", onPaste, true);
+		host.removeEventListener("dragover", onDragOver);
+		host.removeEventListener("dragleave", onDragLeave);
+		host.removeEventListener("drop", onDrop);
+		host.classList.remove("file-drop");
+	};
+}
+function installGlobalDropGuards() {
+	window.addEventListener("dragover", (ev) => {
+		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+	});
+	window.addEventListener("drop", (ev) => {
+		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+	});
+}
+function fallbackCopy(text) {
+	try {
+		const ta = document.createElement("textarea");
+		ta.value = text;
+		ta.style.position = "fixed";
+		ta.style.top = "-1000px";
+		ta.style.opacity = "0";
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		const ok = document.execCommand("copy");
+		document.body.removeChild(ta);
+		return ok;
+	} catch {
+		return false;
+	}
 }
 //#endregion
 //#region src/lib/claudeCopy.ts
@@ -26481,6 +27348,158 @@ function runsClaudeCode(session) {
 }
 function agentCopyText(text, session, cols, startCol = 0) {
 	return text && runsClaudeCode(session) ? cleanClaudeSelection(text, cols, startCol) : text;
+}
+//#endregion
+//#region src/lib/wsTerm.ts
+var NOT_YET = 4404;
+var NOT_READY = 4409;
+var RETRY_MS = [
+	700,
+	1500,
+	3e3
+];
+var RETRY_MAX_MS = 3e3;
+var RETRY_LIMIT = 100;
+function retryAfter(code, attempts, reconnect) {
+	if (!reconnect || attempts >= RETRY_LIMIT) return null;
+	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+	return null;
+}
+function isStarting(code) {
+	return code === NOT_YET || code === NOT_READY;
+}
+var NOTICE_MS = 3e3;
+function showTermNotice(host, text) {
+	let el = host.querySelector(":scope > .term-notice");
+	if (!el) {
+		el = document.createElement("div");
+		el.className = "term-notice";
+		el.setAttribute("role", "status");
+		if (getComputedStyle(host).position === "static") host.style.position = "relative";
+		host.appendChild(el);
+	}
+	el.textContent = text;
+	el.classList.remove("gone");
+	const prev = el._t;
+	if (prev) clearTimeout(prev);
+	el._t = setTimeout(() => el.classList.add("gone"), NOTICE_MS);
+}
+function controlNotice(frame) {
+	if (!frame || typeof frame !== "object") return null;
+	const j = frame;
+	if (j.type === "readonly") return { notice: typeof j.message === "string" ? j.message : "" };
+	if (j.type === "driver") return { notice: null };
+	return null;
+}
+function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
+	const [state, setState] = (0, import_react.useState)("connecting");
+	(0, import_react.useEffect)(() => {
+		const host = hostRef.current;
+		if (!host) return;
+		const term = new Dl({
+			cursorBlink: interactive,
+			fontSize: 12,
+			theme: termTheme(),
+			disableStdin: !interactive,
+			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
+			scrollback: 2e4,
+			macOptionClickForcesSelection: true
+		});
+		const fit = new o();
+		term.loadAddon(fit);
+		term.open(host);
+		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
+		if (interactive) host.title = "Drop or paste a file to hand over its path";
+		let ws = null;
+		let timer;
+		let dead = false;
+		let attempts = 0;
+		let said = false;
+		const doFit = (sendResize) => {
+			try {
+				fit.fit();
+			} catch {
+				return;
+			}
+			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+				type: "resize",
+				cols: term.cols,
+				rows: term.rows
+			}));
+		};
+		const connect = () => {
+			if (dead) return;
+			const proto = location.protocol === "https:" ? "wss" : "ws";
+			const sock = new WebSocket(proto + "://" + location.host + wsPath);
+			ws = sock;
+			sock.binaryType = "arraybuffer";
+			sock.onopen = () => {
+				if (dead) return;
+				attempts = 0;
+				setState("streaming");
+				doFit(true);
+			};
+			sock.onmessage = (ev) => {
+				if (typeof ev.data === "string") try {
+					const j = JSON.parse(ev.data);
+					if (j.type === "error") {
+						term.write("\r\n[error] " + j.message + "\r\n");
+						return;
+					}
+					const ctl = controlNotice(j);
+					if (ctl) {
+						if (ctl.notice) showTermNotice(host, ctl.notice);
+						return;
+					}
+				} catch {
+					term.write(ev.data);
+				}
+				else term.write(new Uint8Array(ev.data));
+			};
+			sock.onclose = (ev) => {
+				if (dead) return;
+				const wait = retryAfter(ev.code, attempts, reconnect);
+				if (wait === null) {
+					setState("disconnected");
+					return;
+				}
+				const transient = isStarting(ev.code);
+				if (!said) {
+					said = true;
+					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
+				}
+				setState(transient ? "starting" : "reconnecting");
+				timer = setTimeout(connect, wait);
+				attempts++;
+			};
+			sock.onerror = () => {};
+		};
+		if (interactive) term.onData((d) => {
+			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
+		});
+		const obs = new ResizeObserver(() => doFit(true));
+		obs.observe(host);
+		const t = setTimeout(() => doFit(true), 50);
+		connect();
+		return () => {
+			dead = true;
+			clearTimeout(t);
+			if (timer) clearTimeout(timer);
+			obs.disconnect();
+			detachFiles?.();
+			try {
+				ws?.close();
+			} catch {}
+			term.dispose();
+		};
+	}, [
+		hostRef,
+		wsPath,
+		interactive,
+		reconnect
+	]);
+	return state;
 }
 //#endregion
 //#region src/lib/terminals.ts
@@ -26857,7 +27876,14 @@ function makeTerm(title, wsPath, interactive) {
 				handle.doFit();
 			};
 			sock.onmessage = (ev) => {
-				if (!booted) {
+				let control = false;
+				if (typeof ev.data === "string") try {
+					const t = JSON.parse(ev.data)?.type;
+					control = t === "driver" || t === "readonly";
+				} catch {
+					control = false;
+				}
+				if (!booted && !control) {
 					booted = true;
 					handle.onBoot?.();
 				}
@@ -26865,6 +27891,11 @@ function makeTerm(title, wsPath, interactive) {
 					const j = JSON.parse(ev.data);
 					if (j.type === "error") {
 						term.write("\r\n[error] " + j.message + "\r\n");
+						return;
+					}
+					const ctl = controlNotice(j);
+					if (ctl) {
+						if (ctl.notice) showTermNotice(container, ctl.notice);
 						return;
 					}
 				} catch {
@@ -26987,2203 +28018,6 @@ function freezeTerm(title, kind) {
 }
 function focusTerm(title, kind = "agent") {
 	peekTerm(title, kind)?.term.focus();
-}
-//#endregion
-//#region src/lib/sessionActions.ts
-function caps() {
-	return queryClient.getQueryData(["config"])?.caps ?? {
-		git: true,
-		tailscale: true,
-		ticketing: true,
-		github: true
-	};
-}
-function ideName() {
-	return queryClient.getQueryData(["config"])?.ide_name || "Cursor";
-}
-function instances$1() {
-	return queryClient.getQueryData(["instances"]) || [];
-}
-function selectSession(title, opts) {
-	const ui = useUi.getState();
-	ui.setHidden(title, false);
-	const windowKeys = [
-		...ui.specialOpen.map((k) => windowKey(k)),
-		...ui.verifyPanes.map((t) => windowKey("verify", t)),
-		...ui.extPanes.map((p) => windowKey("ext", p.key))
-	];
-	const visible = computeVisibleSlots(instances$1(), windowKeys, {
-		hidden: ui.hidden,
-		viewMode: ui.viewMode,
-		mru: ui.mru,
-		order: ui.order
-	});
-	const focused = ui.focused;
-	if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
-		const keep = visible.filter((t) => t !== focused);
-		const keepMru = ui.mru.filter((t) => keep.includes(t));
-		const keepRest = keep.filter((t) => !keepMru.includes(t));
-		ui.setOrderlessMru(keepMru.concat(keepRest, [focused], ui.mru.filter((t) => t !== focused && !keep.includes(t))));
-	}
-	ui.touchMru(title);
-	ui.setFocused(title);
-	if (!opts?.noKeyboard) focusTerm(title);
-}
-setSessionSelector(selectSession);
-function selectWindow(sent) {
-	useUi.getState().touchMru(sent);
-	requestAnimationFrame(() => {
-		for (const pane of document.querySelectorAll(".pane")) if (pane.getAttribute("data-title") === sent) {
-			pane.scrollIntoView({
-				block: "nearest",
-				behavior: "smooth"
-			});
-			return;
-		}
-	});
-}
-function selectRailKey(key) {
-	if (key.startsWith("\0")) selectWindow(key);
-	else selectSession(key);
-}
-function requireGit() {
-	if (caps().git) return true;
-	toast("git is not installed — install git to use diffs, commits and PRs");
-	return false;
-}
-var PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
-var PR_FALLBACK_HINT = "MindFlock can’t open or merge the PR for you yet — " + PR_REMEDY + ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
-function hasPrSupport(c) {
-	return (c ?? caps()).github !== false;
-}
-function offerUrl(url, msg) {
-	if (window.open(url, "_blank")) {
-		toast(msg, { duration: 6e3 });
-		return;
-	}
-	toast(msg + " — click to open", {
-		onClick: () => window.open(url, "_blank"),
-		duration: 9e3
-	});
-}
-var closeUndo = [];
-async function killSession(title) {
-	if (!title) return;
-	try {
-		await instApi(title, "/close", { method: "POST" });
-	} catch (err) {
-		errorPop("Close failed", errMsg(err));
-		return;
-	}
-	const ui = useUi.getState();
-	ui.setHidden(title, false);
-	if (ui.focused === title) ui.setFocused(null);
-	releaseTerms(title);
-	closeUndo.push(title);
-	toast("Session ended — reopen it from Recently closed, under the session list (or Ctrl+Z / Ctrl+Shift+T)");
-	await refreshInstances();
-}
-var closedWhen = (x) => {
-	const n = typeof x.closed_at === "number" ? x.closed_at : Date.parse(x.closed_at);
-	return isNaN(n) ? 0 : n;
-};
-var undoBusy = false;
-async function undoLastClose() {
-	if (undoBusy) return;
-	undoBusy = true;
-	try {
-		let list;
-		try {
-			const data = await api("/api/recently-closed");
-			list = Array.isArray(data) ? data : [];
-		} catch {
-			return;
-		}
-		if (!list.length) {
-			toast("Nothing to reopen");
-			return;
-		}
-		let ent = null;
-		while (closeUndo.length && !ent) {
-			const t = closeUndo.pop();
-			const matches = list.filter((e) => e.title === t).sort((a, b) => closedWhen(b) - closedWhen(a));
-			if (matches.length) ent = matches[0];
-		}
-		if (!ent) ent = [...list].sort((a, b) => closedWhen(b) - closedWhen(a))[0];
-		if (!ent) {
-			toast("Nothing to reopen");
-			return;
-		}
-		if (!ent.exists) {
-			toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", { duration: 5e3 });
-			return;
-		}
-		try {
-			const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
-			await refreshInstances();
-			if (inst?.title) selectSession(inst.title);
-			toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
-		} catch (err) {
-			toast("Reopen failed: " + errMsg(err), { duration: 5e3 });
-		}
-	} finally {
-		undoBusy = false;
-	}
-}
-async function cleanupMissing(title, confirmed = false) {
-	if (!title) return;
-	if (!confirmed) {
-		errorPop("Clean up “" + displayName(title) + "”?", "Its workspace folder no longer exists — this removes the dead session.", [{
-			label: "Clean up",
-			primary: true,
-			run: () => void cleanupMissing(title, true)
-		}]);
-		return;
-	}
-	const ui = useUi.getState();
-	ui.setHidden(title, false);
-	if (ui.focused === title) ui.setFocused(null);
-	queryClient.setQueryData(["instances"], (prev) => (prev || []).filter((i) => i.title !== title));
-	releaseTerms(title);
-	try {
-		await instApi(title, "", { method: "DELETE" });
-	} catch (err) {
-		toast("Clean up failed: " + errMsg(err), { duration: 5e3 });
-		await refreshInstances();
-		return;
-	}
-	toast("Session removed");
-	await refreshInstances();
-}
-function clearStaleAlias(title) {
-	const ui = useUi.getState();
-	if (title && ui.aliases[title]) ui.setAlias(title, "");
-}
-function addPendingSession(bare, device = "") {
-	const base = device ? device + "::" + bare : bare;
-	const taken = new Set(instances$1().map((i) => i.title));
-	let title = base;
-	if (taken.has(base)) {
-		let i = 2;
-		while (taken.has(base + "-" + i)) i++;
-		title = base + "-" + i;
-	}
-	clearStaleAlias(title);
-	const pending = {
-		title,
-		status: "loading",
-		pending_create: true,
-		...device ? {
-			device,
-			display_title: title.slice(device.length + 2)
-		} : {}
-	};
-	queryClient.setQueryData(["instances"], (prev) => [...prev || [], pending]);
-	return title;
-}
-function failPendingSession(title) {
-	queryClient.setQueryData(["instances"], (prev) => (prev || []).filter((i) => !(i.pending_create && i.title === title)));
-	dropFromOrder(title);
-}
-function dropFromOrder(title) {
-	const ui = useUi.getState();
-	if (title && ui.order.includes(title)) ui.setOrder(ui.order.filter((t) => t !== title));
-}
-function placeAfter(title, after) {
-	const ui = useUi.getState();
-	const live = instances$1().map((i) => i.title);
-	if (!live.includes(title) || !live.includes(after)) return;
-	const seen = new Set(ui.order);
-	const merged = ui.order.concat(live.filter((t) => !seen.has(t)));
-	const next = orderWithAfter(merged, title, after);
-	if (next !== merged) ui.setOrder(next);
-}
-async function copySession(title) {
-	if (!title) return;
-	const guess = addPendingSession(title + "-copy");
-	placeAfter(guess, title);
-	try {
-		const inst = await instApi(title, "/copy", { method: "POST" });
-		if (inst?.title) clearStaleAlias(inst.title);
-		await refreshInstances();
-		if (inst?.title) {
-			if (inst.title !== guess) dropFromOrder(guess);
-			placeAfter(inst.title, title);
-			selectSession(inst.title);
-		}
-	} catch (err) {
-		failPendingSession(guess);
-		errorPop("Copy failed", errMsg(err));
-	}
-}
-function commitSession(title) {
-	if (!requireGit() || !title) return;
-	useUi.getState().openDialogFor("commit", title);
-}
-function redZoneBreaches(err) {
-	if (!(err instanceof ApiError) || err.status !== 409) return null;
-	const body = err.body;
-	const list = body && Array.isArray(body.red_zone_breaches) ? body.red_zone_breaches : null;
-	return list && list.length ? list : null;
-}
-function offerRedZoneOverride(title, verb, breaches, retry) {
-	const n = breaches.length;
-	const shown = breaches.slice(0, 5).map((b) => b.path + (b.pattern && b.pattern !== b.path ? " (" + b.pattern + ")" : "")).join(" · ");
-	const green = breaches.every((b) => b.kind === "green");
-	errorPop(green ? `${verb} blocked — changes outside the green zone` : `${verb} blocked — red zone changed`, `${displayName(title)} changed ${n} ${green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". Revert them (the agent can: “revert your changes to …”), or override for this " + verb.toLowerCase() + " only.", [{
-		label: "Open map",
-		run: () => {
-			selectSession(title);
-			useUi.getState().setLastTab(title, "map");
-		}
-	}, {
-		label: verb + " anyway",
-		primary: true,
-		title: "Override the zone gate for this one " + verb.toLowerCase(),
-		run: retry
-	}]);
-}
-async function pushSession(title, force = false, overrideRedZones = false) {
-	if (!title || !requireGit()) return;
-	selectSession(title, { noKeyboard: true });
-	markStep(title, "push");
-	try {
-		const body = {};
-		if (force) body.force = true;
-		if (overrideRedZones) body.override_red_zones = true;
-		await instApi(title, "/push-branch", { json: body });
-	} catch (err) {
-		const rz = redZoneBreaches(err);
-		if (rz) {
-			clearStep(title);
-			offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
-		} else if (err.message === "checks haven't passed for this commit") {
-			clearStep(title);
-			errorPop("Push blocked — checks haven't passed", displayName(title) + "'s commit has no passing check run (see the ✗ checks chip on its row). Override for this push only?", [{
-				label: "Push anyway",
-				primary: true,
-				title: "Push " + displayName(title) + " past the check gate",
-				run: () => void (overrideRedZones ? pushSession(title, true, true) : pushSession(title, true))
-			}]);
-			return;
-		} else {
-			clearStep(title);
-			toast("Push failed: " + errMsg(err), { duration: 6e3 });
-		}
-	}
-	freshStage(title);
-}
-async function resetStage(title, opts) {
-	if (!title || !requireGit()) return;
-	markLoopReset(title);
-	try {
-		const r = await instApi(title, "/reset-stage", { method: "POST" });
-		if (r?.row?.title) patchInstance(title, r.row);
-		const cleared = r?.cleared || [];
-		if (!opts?.quiet) toast("Back to idle" + (cleared.length ? " — also cleared " + cleared.join(" + ") : ""));
-	} catch (err) {
-		clearLoopReset(title);
-		toast("Could not reset this window: " + errMsg(err), { duration: 6e3 });
-	}
-}
-async function ideSession(title, quiet = false) {
-	if (!title) return;
-	try {
-		await instApi(title, "/ide", { method: "POST" });
-	} catch (err) {
-		if (quiet) toast(ideName() + ": " + errMsg(err), { duration: 7e3 });
-		else errorPop(ideName() + " failed", errMsg(err));
-	}
-}
-function makePrSession(title) {
-	if (!title || !requireGit()) return;
-	useUi.getState().openDialogFor("make-pr", title);
-}
-async function submitMakePr(title, base, overrideRedZones = false) {
-	if (!title || !requireGit()) return;
-	markStep(title, "pr");
-	try {
-		const body = {};
-		if (base) body.base = base;
-		if (overrideRedZones) body.override_red_zones = true;
-		const r = await instApi(title, "/make-pr", { json: body });
-		if (r && r.ok === false) {
-			const msg = r.message || PR_REMEDY;
-			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
-			else toast(msg, { duration: 9e3 });
-		} else {
-			if (r?.url) window.open(r.url, "_blank");
-			await resetStage(title, { quiet: true });
-		}
-	} catch (err) {
-		clearStep(title);
-		const rz = redZoneBreaches(err);
-		if (rz) offerRedZoneOverride(title, "Open PR", rz, () => void submitMakePr(title, base, true));
-		else toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
-	}
-	await freshStage(title);
-}
-async function mergeSession(title, overrideRedZones = false, confirmed = false) {
-	if (!title || !requireGit()) return;
-	if (!overrideRedZones && !confirmed) {
-		errorPop("Merge this PR?", displayName(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.", [{
-			label: "Merge PR",
-			primary: true,
-			run: () => void mergeSession(title, false, true)
-		}]);
-		return;
-	}
-	markStep(title, "merge");
-	try {
-		const r = await instApi(title, "/merge-pr", overrideRedZones ? { json: { override_red_zones: true } } : { method: "POST" });
-		if (r && r.ok === false) {
-			const msg = r.message || PR_REMEDY;
-			if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
-			else toast(msg, { duration: 9e3 });
-		}
-	} catch (err) {
-		clearStep(title);
-		const rz = redZoneBreaches(err);
-		if (rz) offerRedZoneOverride(title, "Merge", rz, () => void mergeSession(title, true));
-		else toast("Merge failed: " + errMsg(err), { duration: 6e3 });
-	}
-	await freshStage(title);
-}
-function hideSession(title) {
-	if (!title) return;
-	const ui = useUi.getState();
-	if (ui.hidden.has(title)) {
-		ui.setHidden(title, false);
-		return;
-	}
-	ui.setHidden(title, true);
-	if (ui.focused === title) ui.setFocused(null);
-	toast("Hid " + (ui.aliases[title] || title) + " — click to undo", {
-		onClick: () => useUi.getState().setHidden(title, false),
-		duration: 5e3
-	});
-}
-async function pauseSession(title) {
-	if (!title) return;
-	try {
-		await instApi(title, "/pause", { method: "POST" });
-	} catch (err) {
-		toast("Pause failed: " + errMsg(err), { duration: 5e3 });
-	}
-	await refreshInstances();
-}
-async function resumeSession(title) {
-	if (!title) return;
-	try {
-		await instApi(title, "/resume", { method: "POST" });
-	} catch (err) {
-		toast("Resume failed: " + errMsg(err), { duration: 5e3 });
-	}
-	await refreshInstances();
-}
-//#endregion
-//#region src/lib/agentMessages.ts
-var MESSAGE_SNIPPET = 80;
-function snippet(text, max = MESSAGE_SNIPPET) {
-	const s = String(text ?? "").replace(/\s+/g, " ").trim();
-	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
-}
-function senderName(from, nameOf) {
-	return from ? nameOf(from) : "external";
-}
-function resultStatus(d) {
-	return String(d.status || "").trim().toLowerCase();
-}
-function resultMark(status) {
-	return status === "blocked" || status === "failed" ? "⚠" : "✓";
-}
-function messageToastText(recipient, data, nameOf) {
-	const d = data || {};
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	if (d.kind === "result") {
-		const status = resultStatus(d);
-		const head = resultMark(status) + " worker " + from + " reported";
-		if (status) return head + ": " + status + (body ? " — " + body : "");
-		return head + (body ? ": " + body : "");
-	}
-	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
-}
-function messageNotif(data, nameOf) {
-	const d = data || {};
-	if (d.kind !== "result") return null;
-	const status = resultStatus(d);
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	const warn = status === "blocked" || status === "failed";
-	return {
-		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
-		cls: warn ? "n-warn" : "n-done"
-	};
-}
-function lineageMark(parent, spawned, nameOf) {
-	const p = String(parent || "");
-	const s = !!spawned;
-	if (!p && !s) return null;
-	if (p) {
-		const name = nameOf(p);
-		return {
-			text: "↳ " + name,
-			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
-			spawned: s
-		};
-	}
-	return {
-		text: "↳ agent",
-		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
-		spawned: true
-	};
-}
-function isChildOf(row, title) {
-	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
-}
-function childrenOf(title, rows) {
-	return rows.filter((r) => isChildOf(r, title));
-}
-var rawActivity = (r) => String(r.activity || "idle");
-function currentReport(row, act) {
-	const r = row.last_report;
-	if (!r || !String(r.status || "").trim()) return null;
-	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
-	return r;
-}
-function workerState(row, act) {
-	if (act === "clarify") return "ask";
-	const r = currentReport(row, act);
-	if (r) {
-		const s = String(r.status).trim().toLowerCase();
-		return s === "blocked" || s === "failed" ? s : "done";
-	}
-	if (act === "limit") return "limit";
-	if (act === "working") return "working";
-	if (row.order?.state === "held") return "waiting";
-	return "idle";
-}
-var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
-function since$1(ts, now) {
-	const secs = Math.max(0, Math.floor(now - ts));
-	if (secs < 60) return secs + "s";
-	if (secs < 3600) return Math.floor(secs / 60) + "m";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h";
-	return Math.floor(secs / 86400) + "d";
-}
-function workerLine(row, opts) {
-	const act = opts.act ?? rawActivity(row);
-	const now = opts.now ?? Date.now() / 1e3;
-	const state = workerState(row, act);
-	const r = currentReport(row, act);
-	let text;
-	let cls;
-	if (state === "ask") {
-		text = "? needs your answer";
-		cls = "rep-ask";
-	} else if (state === "blocked" || state === "failed") {
-		text = "✗ " + state;
-		cls = "rep-blocked";
-	} else if (state === "done") {
-		text = "✓ reported";
-		cls = "rep-done";
-	} else if (state === "limit") {
-		text = "usage limit — waiting";
-		cls = "rep-blocked";
-	} else if (state === "working") {
-		const t = Number(row.activity_since) || 0;
-		text = t > 0 ? "working · " + since$1(t, now) : "working";
-		cls = "rep-work";
-	} else if (state === "waiting") {
-		text = "waiting" + (row.order?.detail ? " · " + row.order.detail : "");
-		cls = "rep-idle";
-	} else {
-		text = "idle — no report";
-		cls = "rep-idle";
-	}
-	const lead = laneLead(row.lane);
-	if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) text = lead + " · " + text;
-	const parent = opts.parentName;
-	let detail;
-	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
-	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
-	else if (state === "working") detail = "still working, no report yet";
-	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
-	else if (state === "waiting") detail = "MindFlock holds its task until its turn" + (row.order?.detail ? " (" + row.order.detail + ")" : "");
-	else detail = "stopped without reporting back";
-	return {
-		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
-		cls,
-		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
-		state
-	};
-}
-var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
-function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
-	const n = children.length;
-	if (!n) return null;
-	const states = children.map((c) => workerState(c, actOf(c)));
-	const count = (s) => states.filter((x) => x === s).length;
-	const ask = count("ask");
-	const failed = count("failed");
-	const blocked = count("blocked");
-	const reported = states.filter(isReported$1).length;
-	const working = count("working");
-	const waiting = count("waiting");
-	const parts = [];
-	if (ask) parts.push({
-		text: ask + " needs you",
-		cls: "needs"
-	});
-	if (failed) parts.push({
-		text: failed + " failed",
-		cls: "bad"
-	});
-	if (blocked) parts.push({
-		text: blocked + " blocked",
-		cls: "bad"
-	});
-	if (ask) parts.push({
-		text: plural$6(n, "worker"),
-		cls: ""
-	});
-	else if (reported === n) parts.push({
-		text: n === 1 ? "worker reported" : "all " + n + " reported",
-		cls: "ok"
-	});
-	else if (reported) parts.push({
-		text: reported + " of " + n + " reported",
-		cls: ""
-	});
-	else if (working === n) parts.push({
-		text: n + " working",
-		cls: ""
-	});
-	else if (working) parts.push({
-		text: working + " of " + n + " working",
-		cls: ""
-	});
-	else if (waiting) parts.push({
-		text: waiting + " of " + n + " waiting their turn",
-		cls: ""
-	});
-	else parts.push({
-		text: plural$6(n, "worker") + " · no reports",
-		cls: ""
-	});
-	return {
-		parts,
-		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
-			nested: true,
-			parentName: "",
-			act: actOf(c),
-			now
-		}).text).join("\n") + "\nClick to open the Thread"
-	};
-}
-function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
-	const n = children.length;
-	if (!n || actOf(parent) !== "idle") return null;
-	if (parent.status && parent.status !== "running") return null;
-	const name = nameOf(parent.title);
-	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
-	if (reported === n && blocked) return {
-		kind: "blocked",
-		label: "wrap up",
-		cls: "s-waiting",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
-	};
-	if (reported === n) return {
-		kind: "wrap",
-		label: "wrap up",
-		cls: "wrapchip",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
-	};
-	return {
-		kind: "waiting",
-		label: "waiting",
-		cls: "s-waiting",
-		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
-	};
-}
-function childrenByParent(rows) {
-	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
-	const out = /* @__PURE__ */ new Map();
-	for (const r of rows) {
-		const p = String(r.parent || "");
-		if (!live.has(p) || !isChildOf(r, p)) continue;
-		if (!out.has(p)) out.set(p, []);
-		out.get(p).push(r);
-	}
-	return out;
-}
-function inFamily(row, isWorker, kids) {
-	return isWorker || kids > 0 || !!row.playbook;
-}
-function workerOf(parent, nameOf) {
-	return parent ? "· worker of " + nameOf(parent) : "";
-}
-var LANE_HEAD = {
-	leave: "fast-track off",
-	commit: "→ commit",
-	push: "→ push",
-	pr: "→ PR",
-	merge: "→ merge"
-};
-var LANE_MEANS = {
-	leave: "MindFlock commits nothing for it",
-	commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
-	push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
-	pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
-	merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass"
-};
-var LANE_RANK = {
-	leave: 0,
-	commit: 1,
-	push: 2,
-	pr: 3,
-	merge: 4
-};
-function laneOf(row) {
-	const l = row.lane;
-	if (l && l.target && l.target in LANE_RANK) return l;
-	const ap = row.autopilot;
-	if (ap && ap.depth) {
-		const target = ap.depth === "agent" ? "leave" : ap.depth;
-		if (target in LANE_RANK) return {
-			target,
-			ask_first: false
-		};
-	}
-	return null;
-}
-function laneLead(lane) {
-	const t = String(lane?.target || "");
-	if (!t || t === "leave") return "";
-	return LANE_HEAD[t] || "→ " + t;
-}
-var LANE_DEPTH_RANK = {
-	agent: 0,
-	commit: 1,
-	push: 2,
-	pr: 3,
-	merge: 4
-};
-function awaitingApproval(row) {
-	const lane = laneOf(row);
-	const ap = row.autopilot;
-	if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
-	return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
-}
-function prNumber(row) {
-	const n = row.merge_state?.number;
-	if (n) return String(n);
-	const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
-	return m ? m[1] : "";
-}
-function checksText(row) {
-	const c = String(row.merge_state?.checks || "");
-	if (c === "ok") return {
-		text: "checks ✓",
-		bad: false
-	};
-	if (c === "failed") return {
-		text: "checks ✗",
-		bad: true
-	};
-	if (c === "pending") return {
-		text: "checks…",
-		bad: false
-	};
-	return {
-		text: "",
-		bad: false
-	};
-}
-function stageRank(stage) {
-	return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
-}
-function escalationText(reason) {
-	const r = String(reason || "").trim();
-	switch (r) {
-		case "stuck": return "stalled twice — no diff, no report";
-		case "blocked": return "its agent reported blocked";
-		case "ship_halted": return "hooks failed twice";
-		case "conflict": return "merge conflict";
-		case "budget": return "the group's budget is used up";
-		case "restart": return "couldn't pick it back up after a restart";
-		case "": return "needs you";
-		default: return r;
-	}
-}
-function shipLine(row, opts = {}) {
-	const lane = laneOf(row);
-	if (!lane && !row.run) return null;
-	const target = lane?.target || "leave";
-	if (target === "leave" && !row.run) return null;
-	const act = opts.act ?? rawActivity(row);
-	const now = opts.now ?? Date.now() / 1e3;
-	const task = opts.task || null;
-	const ap = row.autopilot || null;
-	const stage = String(row.stage || "");
-	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
-	const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
-	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
-	const base = {
-		restCls: "",
-		title: (means ? "Fast-track: " + means + "." : "") + copy
-	};
-	const line = (lead, rest, cls, state, why = "") => ({
-		...base,
-		lead,
-		rest,
-		cls,
-		state,
-		title: (why ? why + "\n" : "") + base.title
-	});
-	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
-	const tstate = String(task?.state || "");
-	const reason = String(task?.reason || "");
-	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
-	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
-	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
-	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
-	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
-	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
-	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
-	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
-	const rank = LANE_RANK[target] ?? 0;
-	const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
-	if ((tstate === "shipped" || tstate === "integrated" || rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank || target === "merge" && !!ap && ap.state === "done" && ap.step === "merge") && rank > 0) {
-		if (target === "pr" || target === "merge") {
-			const n = prNumber(row);
-			const pr = n ? "PR #" + n : "PR";
-			if (target === "merge" && ap?.state === "done" && ap.step === "merge") return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
-			const ck = checksText(row);
-			return {
-				...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."),
-				restCls: ck.bad ? "bad" : ""
-			};
-		}
-		return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
-	}
-	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
-		const s = stageRank(stage);
-		const note = String(ap?.note || "");
-		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
-	}
-	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
-	let rest;
-	let state = "idle";
-	if (act === "working") {
-		const t = Number(row.activity_since) || 0;
-		rest = t > 0 ? " · working " + since$1(t, now) : " · working";
-		state = "working";
-	} else if (act === "limit") {
-		rest = " · usage limit — waiting";
-		state = "limit";
-	} else if (act === "offline") rest = " · offline";
-	else rest = " · idle";
-	return line(head, rest, "rep-lane", state);
-}
-//#endregion
-//#region src/lib/runs.ts
-var RUN_DONE_STATES = /* @__PURE__ */ new Set([
-	"done",
-	"done_with_failures",
-	"cancelled"
-]);
-var TOGETHER_DETAIL_S = 604800;
-function needsRunDetail(r, nowS) {
-	if (!RUN_DONE_STATES.has(r.state)) return true;
-	return r.policy?.grouping === "together" && nowS - (Number(r.created_at) || 0) <= TOGETHER_DETAIL_S;
-}
-function splitRail(entries, runs, opts = {}) {
-	const act = opts.act || ((i) => String(i.activity || "idle"));
-	const byId = new Map(runs.map((r) => [r.id, r]));
-	const members = /* @__PURE__ */ new Map();
-	const firstAt = /* @__PURE__ */ new Map();
-	const named = /* @__PURE__ */ new Map();
-	entries.forEach((e, i) => {
-		const run = e.inst && !e.inst.device ? e.inst.run : null;
-		if (!run || !run.id) return;
-		if (!members.has(run.id)) members.set(run.id, []);
-		members.get(run.id).push(e);
-		if (!firstAt.has(run.id)) firstAt.set(run.id, i);
-		if (run.name && !named.has(run.id)) named.set(run.id, run.name);
-	});
-	const ids = [.../* @__PURE__ */ new Set([...members.keys(), ...runs.map((r) => r.id)])];
-	const groups = [];
-	for (const id of ids) {
-		const info = byId.get(id) || null;
-		const mine = members.get(id) || [];
-		if (info?.policy?.grouping === "together" || info?.split || mine.some((e) => e.inst?.run?.role === "lead" || e.inst?.run?.grouping === "together")) continue;
-		const tasks = info?.tasks || [];
-		const done = !!info && RUN_DONE_STATES.has(info.state);
-		const queued = done ? [] : tasks.filter((t) => t.state === "queued");
-		if (!mine.length && !queued.length) continue;
-		if (opts.filtering && !mine.length) continue;
-		const total = Math.max(info?.counts?.total || 0, tasks.length, mine.length + queued.length);
-		if (total < 2) continue;
-		const taskOf = /* @__PURE__ */ new Map();
-		for (const t of tasks) if (t.title) taskOf.set(t.title, t);
-		const needsTitles = /* @__PURE__ */ new Set();
-		let limited = false;
-		for (const e of mine) {
-			const a = act(e.inst);
-			if (a === "clarify") needsTitles.add(e.key);
-			if (a === "limit") limited = true;
-		}
-		for (const t of tasks) if (t.state === "needs_you") needsTitles.add(t.title || t.id);
-		const localShipped = mine.filter((e) => shipLine(e.inst, {
-			act: act(e.inst),
-			task: taskOf.get(e.key)
-		})?.state === "shipped").length;
-		const shipped = info?.counts ? Math.max(info.counts.shipped || 0, 0) : localShipped;
-		const failed = info?.counts?.failed || tasks.filter((t) => t.state === "failed").length;
-		const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
-		groups.push({
-			id,
-			name: info?.name || named.get(id) || "Group",
-			lane,
-			state: info?.state || "running",
-			paused: !!info?.paused,
-			pauseReason: info?.pause_reason || "",
-			done,
-			cancelled: info?.state === "cancelled",
-			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
-			collapsed: !!opts.collapsed?.has(id),
-			entries: mine,
-			queued,
-			needs: needsTitles.size,
-			shipped,
-			failed,
-			total,
-			taskOf
-		});
-	}
-	const at = (g) => firstAt.get(g.id) ?? Number.MAX_SAFE_INTEGER;
-	const created = (g) => byId.get(g.id)?.created_at || 0;
-	groups.sort((a, b) => at(a) - at(b) || created(a) - created(b));
-	const grouped = new Set(groups.flatMap((g) => g.entries.map((e) => e.key)));
-	const rest = entries.filter((e) => !grouped.has(e.key));
-	const family = (e) => {
-		const run = e.inst && !e.inst.device ? e.inst.run : null;
-		return !!run && (run.role === "lead" || run.grouping === "together");
-	};
-	return {
-		groups,
-		families: rest.filter(family),
-		own: rest.filter((e) => !family(e))
-	};
-}
-function splitKeys(split) {
-	const out = [];
-	for (const g of split.groups) if (!g.collapsed) for (const e of g.entries) out.push(e.key);
-	for (const e of split.families || []) out.push(e.key);
-	for (const e of split.own) out.push(e.key);
-	return out;
-}
-function queuedLine(i) {
-	if (i <= 0) return "queued · next free slot";
-	const n = i + 1;
-	const suf = n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
-	return "queued · " + n + suf;
-}
-function queuedTitle(t) {
-	const ref = String(t.ticket_id || "").trim();
-	const text = String(t.text || "").trim();
-	if (ref && text) return ref + " " + text;
-	return ref || text || t.title || "queued line";
-}
-function shippedBadge(g) {
-	return g.shipped + "/" + g.total + " shipped";
-}
-function groupTitle(g) {
-	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
-	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
-	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
-	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
-	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
-	else if (g.waitingUsage) bits.push("waiting for usage to come back");
-	bits.push("Click to fold");
-	return bits.join("\n");
-}
-var LEAD_ASKS = {
-	plan: "the lead proposed the pieces — approve them",
-	release: "one PR is ready to open",
-	check_failed: "the check failed on the merged branch",
-	lead_gone: "its lead is gone — nothing can merge or ship",
-	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
-};
-var num$4 = (v) => Number(v) || 0;
-var str$4 = (v) => v == null ? "" : String(v);
-function runNote(event, data, info = {}) {
-	const d = data || {};
-	const run = str$4(d.run);
-	const name = str$4(d.name) || info.name?.(run) || "A group";
-	const who = str$4(d.ref) || str$4(d.title) || str$4(d.task) || "a line";
-	switch (event) {
-		case "run.needs_you": {
-			const reason = str$4(d.reason);
-			if (reason === "prompt") return null;
-			if (reason in LEAD_ASKS) {
-				const lead = str$4(d.title) || str$4(d.session);
-				return {
-					text: name + ": " + (str$4(d.text) || LEAD_ASKS[reason]),
-					cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
-					run,
-					dedupe: d.key ? "needs:" + str$4(d.key) : [
-						"needs",
-						run,
-						reason,
-						str$4(d.round) || str$4(d.incarnation)
-					].join(":"),
-					rule: "run_needs_you",
-					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
-				};
-			}
-			return {
-				text: name + ": " + who + " " + (str$4(d.text) || escalationText(reason)),
-				cls: "n-warn",
-				run,
-				dedupe: d.key ? "needs:" + str$4(d.key) : [
-					"needs",
-					run,
-					str$4(d.task),
-					reason,
-					str$4(d.incarnation)
-				].join(":"),
-				rule: "run_needs_you"
-			};
-		}
-		case "run.finished": {
-			const shipped = num$4(d.shipped);
-			const failed = num$4(d.failed);
-			const lane = info.lane?.(run) || "";
-			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
-			const what = str$4(d.outcome) || shipped + word;
-			return {
-				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
-				cls: failed ? "n-warn" : "n-done",
-				run,
-				dedupe: "finished:" + run,
-				rule: "run_finished"
-			};
-		}
-		case "run.task_shipped": {
-			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
-			return {
-				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
-				cls: "n-done",
-				run,
-				dedupe: [
-					"shipped",
-					run,
-					str$4(d.task)
-				].join(":"),
-				rule: ""
-			};
-		}
-		default: return null;
-	}
-}
-function groupLanding(runId, runs, rows) {
-	if (!runId) return null;
-	const live = (rows || []).filter((r) => !r.device);
-	const has = (t) => !!t && live.some((r) => r.title === t);
-	const lead = (runs || []).find((r) => r.id === runId)?.lead?.title || "";
-	if (has(lead)) return { lead };
-	const mine = live.filter((r) => r.run?.id === runId);
-	const byRole = mine.find((r) => r.run?.role === "lead");
-	if (byRole) return { lead: byRole.title };
-	return mine.length ? { row: mine[0].title } : null;
-}
-//#endregion
-//#region src/state/runs.ts
-var RUNS_LIVE_MS = 5e3;
-var RUNS_IDLE_MS = 3e4;
-var ROUTE_MISSING_MS = 12e4;
-var missing = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
-async function fetchRuns() {
-	let list;
-	try {
-		list = (await api("/api/runs"))?.runs || [];
-	} catch (e) {
-		if (missing(e)) return null;
-		throw e;
-	}
-	const nowS = Date.now() / 1e3;
-	const live = list.filter((r) => needsRunDetail(r, nowS));
-	const details = await Promise.all(live.map((r) => api("/api/runs/" + encodeURIComponent(r.id)).then((d) => d?.run || null, () => null)));
-	const byId = new Map(details.filter((d) => !!d).map((d) => [d.id, d]));
-	return list.map((r) => ({
-		...r,
-		...byId.get(r.id) || {}
-	}));
-}
-function liveRuns(data) {
-	return !!data && data.some((r) => !RUN_DONE_STATES.has(r.state));
-}
-function useRuns() {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["runs"],
-		queryFn: fetchRuns,
-		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : liveRuns(q.state.data) && !document.hidden ? RUNS_LIVE_MS : RUNS_IDLE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useRun(id) {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["run", id || ""],
-		queryFn: async () => {
-			try {
-				return (await api("/api/runs/" + encodeURIComponent(String(id))))?.run || null;
-			} catch (e) {
-				if (missing(e)) return null;
-				throw e;
-			}
-		},
-		enabled: !!id,
-		refetchInterval: (q) => q.state.data && RUN_DONE_STATES.has(q.state.data.state) ? RUNS_IDLE_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev, prevQuery) => prevQuery?.queryKey[1] === (id || "") ? prev : void 0,
-		retry: false
-	});
-}
-async function fetchOutbox() {
-	try {
-		return await api("/api/outbox?group=all");
-	} catch (e) {
-		if (missing(e)) return null;
-		throw e;
-	}
-}
-function useOutbox() {
-	(0, import_react.useEffect)(bridgeRunEvents, []);
-	return useQuery({
-		queryKey: ["outbox"],
-		queryFn: fetchOutbox,
-		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useNotifyConfig() {
-	return useQuery({
-		queryKey: ["notify-config"],
-		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
-		staleTime: 6e4,
-		refetchInterval: 12e4,
-		retry: false
-	});
-}
-function ruleOn(id) {
-	if (!id) return true;
-	const rule = queryClient.getQueryData(["notify-config"])?.rules?.find((r) => r.id === id);
-	return !rule || rule.enabled !== false;
-}
-var runLookups = {
-	name: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.name || "",
-	lane: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.policy?.lane || ""
-};
-function refreshRuns() {
-	queryClient.invalidateQueries({ queryKey: ["runs"] });
-	queryClient.invalidateQueries({ queryKey: ["run"] });
-	return queryClient.invalidateQueries({ queryKey: ["outbox"] });
-}
-var runsBridged = false;
-function bridgeRunEvents() {
-	const ev = window.mindflock?.events;
-	if (runsBridged || !ev) return;
-	runsBridged = true;
-	const bump = (_env) => void refreshRuns();
-	for (const name of [
-		"run.changed",
-		"run.needs_you",
-		"run.task_shipped",
-		"run.finished",
-		"session.autopilot_changed"
-	]) ev.subscribe(name, bump);
-	ev.subscribe("run.changed", (env) => {
-		if (env.data?.state !== "dissolved") return;
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		const lead = String(env.data?.lead || "");
-		if (lead) toast(dissolvedText(lead, String(env.data?.why || "")), { duration: 7e3 });
-	});
-}
-function dissolvedText(lead, why) {
-	const reason = why.trim().replace(/\s+/g, " ");
-	return `${lead} didn't split it — it's doing the task itself` + (reason ? `: ${reason.length > 120 ? reason.slice(0, 119) + "…" : reason}` : "");
-}
-//#endregion
-//#region src/lib/runsApi.ts
-var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
-var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
-async function runAction(what, path, body = {}, done = "") {
-	try {
-		await api(path, { json: body });
-		if (done) toast(done);
-		return true;
-	} catch (err) {
-		errorPop(what + " failed", errMsg(err));
-		return false;
-	} finally {
-		refreshRuns();
-		refreshInstances();
-	}
-}
-function raiseBudget(runId, usd, name = "") {
-	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
-}
-function cancelRun(runId, name = "") {
-	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
-}
-function suggestedBudget(budget, spent) {
-	const floor = Math.max(spent, budget) * 1.5;
-	const step = floor < 10 ? 1 : floor < 100 ? 5 : 25;
-	return Math.max(step, Math.ceil(floor / step) * step);
-}
-//#endregion
-//#region src/lib/laneActions.ts
-var LANE_ORDER = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var LANE_CHOICES = LANE_ORDER;
-var LANE_LABEL = {
-	leave: "Off",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open a PR",
-	merge: "Merge when green"
-};
-var LANE_SHORT = {
-	leave: "off",
-	commit: "Commit",
-	push: "Push",
-	pr: "PR",
-	merge: "Merge"
-};
-var LANE_DESC = {
-	leave: "MindFlock doesn't commit anything — you take it from there",
-	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-	push: "Commit and push once the agent stops and your hooks pass",
-	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-	merge: "Commit, push, open a PR and merge it once its checks pass"
-};
-var LANE_KEY = {
-	leave: "O",
-	commit: "C",
-	push: "U",
-	pr: "P",
-	merge: "M"
-};
-var ASK_FIRST_LABEL = "Ask me before it ships";
-var ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
-function normalizeLane(v) {
-	const s = String(v || "").trim().toLowerCase();
-	if (s === "agent" || s === "off" || s === "none") return "leave";
-	return LANE_ORDER.includes(s) ? s : "";
-}
-function laneDefault(setting) {
-	return normalizeLane(setting) || "leave";
-}
-function laneChoice(inst) {
-	const l = laneOf(inst);
-	const lane = l ? normalizeLane(l.target) : "";
-	if (!l || !lane) return {
-		lane: "leave",
-		askFirst: false,
-		owner: ""
-	};
-	return {
-		lane,
-		askFirst: !!l.ask_first,
-		owner: l.owner || ""
-	};
-}
-function teamRunCaps(caps) {
-	const t = caps?.team_runs;
-	const max = Number(t?.max_pieces);
-	return {
-		split: t?.split === true,
-		together: t?.together === true,
-		maxPieces: Number.isFinite(max) && max >= 2 ? Math.floor(max) : 8
-	};
-}
-var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
-var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a group — update it";
-function askFirstApplies(lane) {
-	return lane !== "leave";
-}
-function splitBlockReason(caps, inst) {
-	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
-	const m = caps?.agent_mcp;
-	if (m) {
-		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → Agent orchestration";
-		const provider = inst.provider || inst.program || "";
-		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
-	}
-	if (inst.mcp_attached === false) return "Restart this agent to give it the MindFlock tools";
-	if (inst.activity === "clarify") return "Answer its prompt first";
-	if (inst.activity === "limit") return "It's at its usage limit — split once it's back";
-	return "";
-}
-function splitTaskOf(inst) {
-	return String(inst.last_prompt_full || inst.last_prompt || inst.last_turn || "").trim();
-}
-function detachableGroup(inst) {
-	const run = inst.run;
-	if (!run || !run.id || !run.task || run.role === "lead") return null;
-	return {
-		id: run.id,
-		task: run.task,
-		name: run.name || "its group"
-	};
-}
-function laneLockReason(inst) {
-	const run = inst.run;
-	if (run && run.id) {
-		const group = run.name || "its group";
-		if (run.role === "lead") return `It leads ${group} — the group ships it once, through the group's release`;
-		if (run.grouping === "together") return `Its work merges into ${group}'s one PR — move it out of the group to fast-track it on its own`;
-	}
-	const owner = inst.lane?.owner;
-	if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that window`;
-	return "";
-}
-function fastTrackModel(inst) {
-	const cur = laneChoice(inst);
-	const lock = laneLockReason(inst);
-	return {
-		current: {
-			lane: cur.lane,
-			askFirst: cur.askFirst
-		},
-		lock,
-		items: LANE_CHOICES.map((lane) => ({
-			lane,
-			label: LANE_LABEL[lane],
-			desc: LANE_DESC[lane],
-			key: LANE_KEY[lane],
-			current: lane === cur.lane
-		})),
-		ask: {
-			on: cur.askFirst && askFirstApplies(cur.lane),
-			why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first")
-		}
-	};
-}
-function fastTrackSaid(name, lane, askFirst) {
-	if (lane === "leave") return `${name}: fast-track off — MindFlock won't commit anything`;
-	return `${name}: fast-track → ${LANE_LABEL[lane]}${askFirstApplies(lane) && askFirst ? ", asks first" : ""}`;
-}
-async function setLane(title, lane, askFirst, opts = {}) {
-	return instApi(title, "/lane", { json: {
-		lane,
-		ask_first: askFirstApplies(lane) && askFirst,
-		...opts.message ? { message: opts.message } : {}
-	} });
-}
-async function pickFastTrack(title, name, lane, askFirst, opts = {}) {
-	const row = instances$1().find((r) => r.title === title);
-	const before = {
-		lane: row?.lane ?? null,
-		autopilot: row?.autopilot ?? null
-	};
-	patchInstance(title, {
-		lane: lane === "leave" ? null : {
-			target: lane,
-			ask_first: askFirstApplies(lane) && askFirst,
-			owner: title,
-			by: "user"
-		},
-		...lane === "leave" ? { autopilot: null } : {}
-	});
-	try {
-		const r = await setLane(title, lane, askFirst, opts);
-		patchInstance(title, {
-			lane: r?.lane ?? null,
-			...r && "autopilot" in r ? { autopilot: r.autopilot ?? null } : {}
-		});
-		if (!opts.quiet) toast(r?.held ? `${name}: its group is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes` : fastTrackSaid(name, lane, askFirst), { duration: 4500 });
-		return true;
-	} catch (err) {
-		patchInstance(title, before);
-		toast(`${name}: ${errMsg(err)}`, { duration: 6e3 });
-		return false;
-	}
-}
-async function moveOutOfGroup(runId, taskId) {
-	await api(taskPath(runId, taskId, "skip"), { json: {} });
-}
-async function startSplitOf(inst, name, lane, askFirst) {
-	return api("/api/runs", { json: {
-		name,
-		items: [{
-			kind: "task",
-			text: splitTaskOf(inst)
-		}],
-		policy: {
-			lane,
-			ask_first: askFirstApplies(lane) && askFirst,
-			grouping: "together",
-			release: "ask"
-		},
-		concurrency: 3,
-		program: inst.provider || inst.program,
-		split: true,
-		lead: inst.title
-	} });
-}
-async function splitSession(inst, name) {
-	const cur = laneChoice(inst);
-	await startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst);
-	useUi.getState().threadOpen(inst.title);
-	return `${name} is proposing the pieces — approve the plan in its Thread tab`;
-}
-async function setLaneWhenReady(title, lane, askFirst, delays = [
-	1500,
-	3e3,
-	5e3,
-	8e3,
-	12e3,
-	2e4
-]) {
-	if (lane === "leave") return true;
-	for (let i = 0;; i++) try {
-		await setLane(title, lane, askFirst);
-		return true;
-	} catch (err) {
-		if (!(err instanceof ApiError && err.status === 409 && i < delays.length)) {
-			toast(`Couldn't fast-track ${title} to “${LANE_LABEL[lane]}”: ${errMsg(err)}`, { duration: 7e3 });
-			return false;
-		}
-		await new Promise((r) => setTimeout(r, delays[i]));
-	}
-}
-function openFastTrackMenu(title) {
-	const inst = instances$1().find((r) => r.title === title);
-	if (!inst || inst.pending) {
-		toast("That session isn't ready yet");
-		return;
-	}
-	selectSession(title, { noKeyboard: true });
-	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
-}
-//#endregion
-//#region src/lib/autopilot.ts
-var SESSION_DEPTHS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SOURCE_DEPTHS = [
-	"agent",
-	"commit",
-	"push",
-	"pr"
-];
-var DEPTH_LABELS = {
-	off: "Off",
-	agent: "Agent only",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open a PR",
-	merge: "Merge when green"
-};
-function depthLabel(depth) {
-	return DEPTH_LABELS[depth] || depth || "Off";
-}
-function autopilotChipTitle(run) {
-	const target = depthLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
-	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
-	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-	return "Fast-tracking to " + target + where + skipped;
-}
-function mergeBlockerLabel(ms) {
-	switch (ms.state) {
-		case "dirty": return "conflicts";
-		case "behind": return "behind base";
-		case "draft": return "draft PR";
-		case "blocked":
-			if (ms.checks === "failed") return "checks ✗";
-			if (ms.checks === "pending") return "checks…";
-			return "review needed";
-		default: return ms.mergeable === null ? "checking…" : "can't merge";
-	}
-}
-//#endregion
-//#region src/lib/stage.ts
-var STEP_BADGE_MAX = 24;
-var STAGE_META = {
-	provisioning: { label: "provisioning" },
-	agent: { label: "agent" },
-	precommit: { label: "pre-commit" },
-	interrupt: { label: "pre-commit ✗" },
-	committed: { label: "committed" },
-	pushed: { label: "pushed" },
-	pr: { label: "PR open" },
-	merged: { label: "complete ✓" }
-};
-function stageMeta(stage) {
-	return STAGE_META[stage] || STAGE_META.agent;
-}
-var echo = /* @__PURE__ */ new Map();
-var ECHO_TTL_MS = 2e4;
-function echoing(title) {
-	if (!title) return false;
-	const at = echo.get(title);
-	if (at === void 0) return false;
-	if (Date.now() - at > ECHO_TTL_MS) {
-		echo.delete(title);
-		return false;
-	}
-	return true;
-}
-function markLoopReset(title) {
-	if (title) echo.set(title, Date.now());
-}
-function clearLoopReset(title) {
-	echo.delete(title);
-}
-function reconcileLoopReset(inst) {
-	if (!inst.title) return;
-	if (inst.stage_reset) echo.delete(inst.title);
-	else echoing(inst.title);
-}
-function isStageReset(inst) {
-	return !!inst.stage_reset || echoing(inst.title);
-}
-function guidedStage(inst) {
-	if (isStageReset(inst)) return "agent";
-	return inst.stage || "agent";
-}
-var RESETTABLE = /* @__PURE__ */ new Set([
-	"committed",
-	"pushed",
-	"pr"
-]);
-var RESET_ASK = {
-	committed: "push",
-	pushed: "open a PR",
-	pr: "merge"
-};
-function resetStep(inst) {
-	const title = inst.title;
-	const caps = queryClient.getQueryData(["config"])?.caps;
-	if (caps && !caps.git) return null;
-	if (!title || inst.status === "loading" || inst.status === "paused") return null;
-	if (inst.workspace_missing) return null;
-	if (isStageReset(inst)) return null;
-	const stage = inst.stage || "agent";
-	if (!RESETTABLE.has(stage)) return null;
-	return {
-		label: "↺",
-		title: "Back to idle — restart the guided cycle on this branch.\nNothing is undone: the commits stay, an open PR stays open. The header\njust stops asking you to " + (RESET_ASK[stage] || "finish up") + " so you can keep working here.\nIt clears itself the moment you commit again.",
-		run: () => resetStage(title)
-	};
-}
-var actShown = /* @__PURE__ */ new Map();
-var actPending = /* @__PURE__ */ new Map();
-function noteActivity(inst) {
-	const title = inst.title;
-	const raw = inst.activity || "idle";
-	if (!actShown.has(title)) {
-		actShown.set(title, raw);
-		return;
-	}
-	if (actShown.get(title) === raw) {
-		actPending.delete(title);
-		return;
-	}
-	const p = actPending.get(title);
-	if (p && p.value === raw) {
-		p.count += 1;
-		if (p.count >= 2) {
-			actShown.set(title, raw);
-			actPending.delete(title);
-		}
-	} else actPending.set(title, {
-		value: raw,
-		count: 1
-	});
-}
-function forceActivity(title, value) {
-	if (!title) return;
-	actShown.set(title, value || "idle");
-	actPending.delete(title);
-}
-function dropActivity(title) {
-	actShown.delete(title);
-	actPending.delete(title);
-}
-function effectiveActivity(inst) {
-	return actShown.get(inst.title || "") || inst.activity || "idle";
-}
-function activityChip(act) {
-	if (act === "working") return {
-		label: "running",
-		cls: "s-running",
-		title: "Agent is working"
-	};
-	if (act === "clarify") return {
-		label: "question",
-		cls: "s-clarify",
-		title: "The agent asked you a question — answer it in its pane or from the bell"
-	};
-	if (act === "limit") return {
-		label: "limit",
-		cls: "s-limit",
-		title: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
-	};
-	if (act === "offline") return {
-		label: "offline",
-		cls: "s-offline",
-		title: "Agent offline"
-	};
-	return {
-		label: "idle",
-		cls: "s-idle",
-		title: "Agent is idle — waiting for input"
-	};
-}
-function chipState(inst) {
-	if (inst.workspace_missing) return {
-		label: "missing",
-		cls: "s-missing",
-		title: "Workspace directory no longer exists — clean up this session"
-	};
-	if (inst.status === "loading") return {
-		label: "provisioning",
-		cls: "s-provisioning",
-		title: "Provisioning workspace"
-	};
-	if (inst.status === "paused") return {
-		label: "paused",
-		cls: "s-paused",
-		title: "Session paused"
-	};
-	if (inst.setup && inst.setup.state === "failed") return {
-		label: "setup ✗",
-		cls: "s-interrupt",
-		title: "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)"
-	};
-	if (inst.setup && inst.setup.state === "running") return {
-		label: "setting up",
-		cls: "s-provisioning",
-		title: "Worktree setup running (deps / env files) — queued prompts are held until it finishes"
-	};
-	const act = effectiveActivity(inst);
-	if (act === "working" || act === "clarify" || act === "limit") return activityChip(act);
-	const stage = guidedStage(inst);
-	if (stage === "agent") return activityChip(act === "offline" ? "offline" : "idle");
-	if (stage === "interrupt") {
-		const step = (inst.failed_step || "").trim();
-		return {
-			label: !!step && step.length <= STEP_BADGE_MAX ? "✗ " + step : "pre-commit ✗",
-			cls: "s-interrupt",
-			title: step ? "Pre-commit failed at: " + step : "Pre-commit failed"
-		};
-	}
-	const m = stageMeta(stage);
-	return {
-		label: m.label,
-		cls: "s-" + stage,
-		title: m.label
-	};
-}
-function checkChip(inst) {
-	const c = inst.check;
-	if (!c || !c.state) return null;
-	const cmd = String(c.command || "");
-	if (c.state === "running") return {
-		label: "checks…",
-		cls: "s-provisioning",
-		title: "Checks running: " + cmd
-	};
-	if (c.state === "failed") {
-		const rc = c.rc;
-		return {
-			label: "✗ checks",
-			cls: "s-interrupt",
-			title: "Checks failed (exit " + (rc == null ? "?" : rc) + ") — push is gated until they pass (or push anyway)"
-		};
-	}
-	if (c.state === "ok") return c.stale ? {
-		label: "✓ stale",
-		cls: "s-idle",
-		title: "Checks passed for an older commit — a fresh run starts after the next commit"
-	} : {
-		label: "✓ checks",
-		cls: "s-committed",
-		title: "Checks passed for this commit"
-	};
-	return null;
-}
-var NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
-var NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
-var inflight = /* @__PURE__ */ new Map();
-var INFLIGHT_TTL_MS = 12e4;
-function markStep(title, verb) {
-	if (title) inflight.set(title, {
-		verb,
-		at: Date.now()
-	});
-}
-function clearStep(title) {
-	inflight.delete(title);
-}
-function inflightVerb(inst) {
-	const title = inst.title;
-	if (!title) return null;
-	const rec = inflight.get(title);
-	if (!rec) return null;
-	if (Date.now() - rec.at > INFLIGHT_TTL_MS) {
-		inflight.delete(title);
-		return null;
-	}
-	const stage = inst.stage || "";
-	if (rec.verb === "push" && (stage === "pushed" || stage === "pr") || rec.verb === "pr" && stage === "pr" || rec.verb === "merge" && stage !== "pr") {
-		inflight.delete(title);
-		return null;
-	}
-	return rec.verb;
-}
-function liveStep(inst) {
-	const stage = guidedStage(inst);
-	if (inst.workspace_missing) return {
-		label: "workspace gone",
-		tone: "blocked",
-		title: "The workspace directory no longer exists."
-	};
-	if (inst.status === "paused") return {
-		label: "paused",
-		tone: "quiet",
-		title: "Session paused — resume it to continue."
-	};
-	const setup = inst.setup;
-	if (setup?.state === "running") return {
-		label: "setting up",
-		tone: "work",
-		title: "Running the workspace setup commands."
-	};
-	if (setup?.state === "failed") return {
-		label: "setup failed",
-		tone: "blocked",
-		title: "Workspace setup failed" + (setup.failed_step ? " at " + setup.failed_step : "") + ". Queued prompts are held until it succeeds."
-	};
-	if (stage === "provisioning") return {
-		label: "provisioning",
-		tone: "work",
-		title: "Creating the workspace."
-	};
-	if (stage === "precommit") return {
-		label: "pre-commit",
-		tone: "work",
-		title: "Running the pre-commit hooks."
-	};
-	if (stage === "interrupt") return {
-		label: "pre-commit ✗",
-		tone: "blocked",
-		title: "A pre-commit hook blocked the commit" + (inst.failed_step ? " at " + inst.failed_step : "") + "."
-	};
-	const verb = inflightVerb(inst);
-	if (verb === "push") return {
-		label: "pushing",
-		tone: "work",
-		title: "Pushing the branch to origin."
-	};
-	if (verb === "pr") return {
-		label: "opening PR",
-		tone: "work",
-		title: "Opening the pull request."
-	};
-	if (verb === "merge") return {
-		label: "merging",
-		tone: "work",
-		title: "Merging the pull request."
-	};
-	const check = inst.check;
-	if (check?.state === "running") return {
-		label: "checks",
-		tone: "work",
-		title: "Running the verification check."
-	};
-	if (check?.state === "failed") return {
-		label: "checks ✗",
-		tone: "blocked",
-		title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + "."
-	};
-	const run = inst.autopilot;
-	if (run && run.depth && run.state === "running" && run.note) return {
-		label: run.note,
-		tone: "work",
-		title: autopilotChipTitle(run)
-	};
-	if (stage === "pr") {
-		const ms = inst.merge_state;
-		if (ms && !ms.can_merge) return {
-			label: mergeBlockerLabel(ms),
-			tone: "blocked",
-			title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n"),
-			href: inst.pr_url || ms.url || void 0
-		};
-		return {
-			label: "PR open",
-			tone: "ok",
-			title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
-			href: inst.pr_url || void 0
-		};
-	}
-	return null;
-}
-var followed = /* @__PURE__ */ new Map();
-function followAutopilot(inst, opts) {
-	const title = inst.title;
-	const run = inst.autopilot;
-	if (!title) return null;
-	if (!run || !run.depth || run.state !== "running") {
-		followed.delete(title);
-		return null;
-	}
-	const step = String(run.step || "");
-	const seen = followed.get(title);
-	if (seen === step) return null;
-	const first = seen === void 0;
-	followed.set(title, step);
-	if (step === "commit") {
-		try {
-			useUi.getState().setLastTab(title, "shell");
-		} catch {}
-		return "commit";
-	}
-	if (step === "pr") {
-		if (first && !opts?.live) return null;
-		const url = String(run.url || "") || inst.pr_url || "";
-		if (url) try {
-			offerUrl(url, "PR opened for " + title);
-		} catch {}
-		return "pr";
-	}
-	return null;
-}
-function fastTrackStep(inst) {
-	const title = inst.title;
-	const caps = queryClient.getQueryData(["config"])?.caps;
-	if (caps && !caps.git) return null;
-	if (!title || inst.workspace_missing) return null;
-	if (inst.peer_share) return null;
-	const { lane, askFirst } = laneChoice(inst);
-	const run = inst.autopilot;
-	const running = !!(run && run.depth && run.state === "running");
-	const halted = !!(run && run.depth && run.state === "halted");
-	if (!running && !halted) {
-		if (inst.status === "loading") return null;
-		if (lane === "leave" && guidedStage(inst) === "provisioning") return null;
-	}
-	const ask = askFirstApplies(lane) && askFirst;
-	const where = LANE_LABEL[lane] + (ask ? ", asks first" : "");
-	const change = "\n\nClick to change it or turn it off (Ctrl+K F).";
-	let tip;
-	if (running && run) {
-		const doing = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waits for the agent to finish)";
-		const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-		tip = "Fast-track → " + where + doing + skipped + change;
-	} else if (halted && run) tip = "Fast-track stopped: " + (run.reason || "unknown reason") + "\n\nClick to pick it again or turn it off (Ctrl+K F).";
-	else if (lane === "leave") tip = "Fast-track is off. Click to choose how far MindFlock carries this session once its agent is done — commit, push, open a PR, or merge when green (Ctrl+K F).";
-	else tip = "Fast-track → " + where + ": " + LANE_DESC[lane] + ".\n\nClick to change it or turn it off (Ctrl+K F).";
-	return {
-		lane,
-		askFirst: ask,
-		label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : ""),
-		active: running,
-		halted,
-		title: tip
-	};
-}
-function nextStep(inst) {
-	const title = inst.title;
-	const caps = queryClient.getQueryData(["config"])?.caps;
-	if (caps && !caps.git) return null;
-	if (!title || inst.status === "loading" || inst.status === "paused") return null;
-	if (inst.workspace_missing) return null;
-	if (inst.peer_share) return null;
-	switch (guidedStage(inst)) {
-		case "agent": return {
-			label: "Commit…",
-			run: () => commitSession(title)
-		};
-		case "interrupt": return {
-			label: "Re-commit",
-			run: () => commitSession(title)
-		};
-		case "committed":
-			if (inst.has_origin === false) return {
-				label: "No remote — add origin…",
-				hint: true,
-				title: "This repo has no origin remote, so there is nowhere to push.\nRun this in the workspace (click to copy):\n" + NO_ORIGIN_CMD + "\nHTTPS works just as well:\n" + NO_ORIGIN_ALT,
-				run: () => copyText(NO_ORIGIN_CMD).then((ok) => {
-					toast(ok ? "command copied" : "copy failed — " + NO_ORIGIN_CMD);
-				})
-			};
-			return {
-				label: "Push",
-				run: () => pushSession(title)
-			};
-		case "pushed": return hasPrSupport(caps) ? {
-			label: "Make PR",
-			run: () => makePrSession(title)
-		} : {
-			label: "Make PR ↗",
-			hint: true,
-			title: PR_FALLBACK_HINT,
-			run: () => makePrSession(title)
-		};
-		case "pr":
-			if (!hasPrSupport(caps)) return inst.pr_url ? {
-				label: "Merge on GitHub ↗",
-				hint: true,
-				title: PR_FALLBACK_HINT,
-				run: () => window.open(inst.pr_url, "_blank")
-			} : {
-				label: "Merge ↗",
-				hint: true,
-				title: PR_FALLBACK_HINT,
-				run: () => mergeSession(title)
-			};
-			{
-				const ms = inst.merge_state;
-				if (ms && !ms.can_merge) return {
-					label: "Merge blocked",
-					disabled: true,
-					title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n") + (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
-					run: () => {}
-				};
-			}
-			return {
-				label: "Merge",
-				run: () => mergeSession(title)
-			};
-		case "merged": return inst.pr_url ? {
-			label: "Open PR ↗",
-			run: () => window.open(inst.pr_url, "_blank")
-		} : null;
-		default: return null;
-	}
-}
-//#endregion
-//#region src/components/sidebar/ordering.ts
-function orderedKeys(keys, order) {
-	const present = new Set(keys);
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	for (const k of order) if (present.has(k) && !seen.has(k)) {
-		out.push(k);
-		seen.add(k);
-	}
-	for (const k of keys) if (!seen.has(k)) {
-		out.push(k);
-		seen.add(k);
-	}
-	return out;
-}
-function orderedInstances(instances, order) {
-	if (!instances.length) return {
-		rows: [],
-		nextOrder: order
-	};
-	const byTitle = new Map(instances.map((i) => [i.title, i]));
-	const rows = orderedKeys([...byTitle.keys()], order).map((t) => byTitle.get(t));
-	return {
-		rows,
-		nextOrder: rows.map((i) => i.title)
-	};
-}
-function movedRailOrder(opts) {
-	const { saved, live, drag, target, before, stale } = opts;
-	if (!drag || drag === target) return saved;
-	const seen = new Set(saved);
-	const order = saved.concat(live.filter((k) => !seen.has(k))).filter((k) => k !== drag && !(stale && stale(k)));
-	let to = order.indexOf(target);
-	if (to < 0) to = order.length;
-	else if (!before) to += 1;
-	order.splice(to, 0, drag);
-	const savedSet = new Set(saved);
-	while (order.length) {
-		const last = order[order.length - 1];
-		if (last !== drag && last.startsWith("\0") && !savedSet.has(last)) order.pop();
-		else break;
-	}
-	return order;
-}
-function orderWithAfter(order, title, after) {
-	if (!title || !after || title === after) return order;
-	const next = order.filter((t) => t !== title);
-	const at = next.indexOf(after);
-	if (at < 0) return order;
-	next.splice(at + 1, 0, title);
-	return next;
-}
-var NEST_MAX = 3;
-function railNesting(rows) {
-	const out = rows.map(() => ({
-		depth: 0,
-		more: false,
-		guides: [],
-		stem: false
-	}));
-	let chain = [];
-	rows.forEach((r, i) => {
-		const p = r.parent || "";
-		const at = p ? chain.findIndex((j) => rows[j].key === p) : -1;
-		if (at >= 0 && at + 1 <= NEST_MAX) {
-			chain = chain.slice(0, at + 1);
-			out[i].depth = at + 1;
-			chain.push(i);
-		} else chain = [i];
-	});
-	for (let i = 0; i < rows.length; i++) {
-		const d = out[i].depth;
-		if (i + 1 < rows.length && out[i + 1].depth === d + 1) out[i].stem = true;
-		if (!d) continue;
-		for (let j = i + 1; j < rows.length && out[j].depth >= d; j++) if (out[j].depth === d) {
-			out[i].more = rows[j].parent === rows[i].parent;
-			break;
-		}
-	}
-	const open = [];
-	for (let i = 0; i < rows.length; i++) {
-		const d = out[i].depth;
-		open.length = Math.max(d, 0);
-		out[i].guides = [];
-		for (let k = 1; k < d; k++) out[i].guides[k] = !!open[k];
-		if (d) open[d] = out[i].more;
-	}
-	return out;
-}
-function sameNest(a, b) {
-	if (a.depth !== b.depth || a.more !== b.more || a.stem !== b.stem) return false;
-	for (let k = 1; k < a.depth; k++) if (!!a.guides[k] !== !!b.guides[k]) return false;
-	return true;
-}
-function deviceLineage(rows) {
-	return rows.map((r) => r.device && r.parent && !r.parent.includes("::") ? {
-		...r,
-		parent: r.device + "::" + r.parent
-	} : r);
-}
-function placeNewWorkers(saved, live) {
-	const parentOf = new Map(live.map((r) => [r.title, r.parent || ""]));
-	const seen = new Set(saved);
-	const depthOf = (t) => {
-		let d = 0;
-		for (let p = parentOf.get(t); p && d <= live.length; p = parentOf.get(p)) d++;
-		return d;
-	};
-	const fresh = live.filter((r) => r.parent && r.parent !== r.title && parentOf.has(r.parent) && !seen.has(r.title)).map((r) => r.title).sort((a, b) => depthOf(a) - depthOf(b));
-	if (!fresh.length) return saved;
-	const isUnder = (t, anc) => {
-		let hops = 0;
-		for (let p = parentOf.get(t); p && hops <= live.length; p = parentOf.get(p), hops++) if (p === anc) return true;
-		return false;
-	};
-	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
-	const pending = new Set(fresh);
-	for (const t of fresh) {
-		pending.delete(t);
-		const p = parentOf.get(t);
-		const rest = order.filter((x) => x !== t);
-		let at = rest.indexOf(p);
-		if (at < 0) continue;
-		while (at + 1 < rest.length && !pending.has(rest[at + 1]) && isUnder(rest[at + 1], p)) at++;
-		order = orderWithAfter(order, t, rest[at]);
-	}
-	return order;
-}
-function placeNewRunMembers(saved, live) {
-	const seen = new Set(saved);
-	const fresh = live.filter((r) => r.run?.id && !seen.has(r.title));
-	if (!fresh.length) return saved;
-	const runOf = new Map(live.map((r) => [r.title, r.run?.id || ""]));
-	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
-	const placed = /* @__PURE__ */ new Set();
-	for (const r of fresh) {
-		const rest = order.filter((t) => t !== r.title);
-		let at = -1;
-		rest.forEach((t, i) => {
-			if (runOf.get(t) === r.run.id && (seen.has(t) || placed.has(t))) at = i;
-		});
-		placed.add(r.title);
-		if (at >= 0) order = orderWithAfter(order, r.title, rest[at]);
-	}
-	return order;
-}
-var SEARCH_MIN = 6;
-function matchesFilter(inst, filter, aliases) {
-	if (!filter) return true;
-	return [
-		inst.title,
-		aliases[inst.title],
-		inst.branch
-	].filter(Boolean).join(" ").toLowerCase().indexOf(filter) >= 0;
-}
-var WEDGE_IDLE_S = 1200;
-function attentionItems(instances) {
-	const items = [];
-	for (const inst of instances || []) {
-		if (inst.workspace_missing || inst.status === "paused") continue;
-		const act = effectiveActivity(inst);
-		if (act === "clarify") items.push({
-			p: 0,
-			title: inst.title,
-			reason: "needs your answer",
-			snippet: inst.last_turn || ""
-		});
-		else if (inst.stage === "interrupt") items.push({
-			p: 1,
-			title: inst.title,
-			reason: "pre-commit failed" + (inst.failed_step ? " at " + inst.failed_step : "")
-		});
-		else if (inst.setup && inst.setup.state === "failed") items.push({
-			p: 1,
-			title: inst.title,
-			reason: "worktree setup failed"
-		});
-		else if (inst.check && inst.check.state === "failed" && !inst.check.stale) items.push({
-			p: 2,
-			title: inst.title,
-			reason: "checks failing"
-		});
-		else if (inst.stage === "pushed") {
-			if (laneOf(inst)?.target !== "push") items.push({
-				p: 3,
-				title: inst.title,
-				reason: "pushed — ready for PR"
-			});
-		} else if (act === "idle" && Number(inst.activity_since) > 0) {
-			const idleFor = Date.now() / 1e3 - Number(inst.activity_since);
-			const un = (inst.diff_stat || {})?.uncommitted || {};
-			const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
-			if (idleFor > WEDGE_IDLE_S && unfinished) items.push({
-				p: 1,
-				title: inst.title,
-				reason: "idle " + relTime(Number(inst.activity_since)).replace(" ago", "") + " with unfinished work — possibly stuck",
-				snippet: inst.last_turn || ""
-			});
-		}
-	}
-	return items.sort((a, b) => a.p - b.p || a.title.localeCompare(b.title));
-}
-//#endregion
-//#region src/lib/sessionLabel.ts
-function escapeRe(s) {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function featureBranchName(branch, slug) {
-	const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
-	return m ? m[1] : "";
-}
-function branchTail(branch) {
-	const parts = branch.split("/").filter(Boolean);
-	return parts.length ? parts[parts.length - 1] : "";
-}
-function splitKind(title) {
-	if (title.startsWith("pr-")) return {
-		kind: "pr",
-		slug: title.slice(3)
-	};
-	if (title.startsWith("issue-")) return {
-		kind: "iss",
-		slug: title.slice(6)
-	};
-	return null;
-}
-function sessionLabel(title, branch) {
-	const plain = {
-		text: title,
-		kind: "",
-		name: "",
-		slug: title
-	};
-	if (!title) return plain;
-	const split = splitKind(title);
-	const ticketName = split ? "" : featureBranchName(branch, title);
-	if (!split && !ticketName) return plain;
-	const kind = split ? split.kind : "tix";
-	const slug = split ? split.slug : title;
-	if (!slug) return plain;
-	const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
-	const useName = name && name !== slug && name !== title ? name : "";
-	return {
-		text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
-		kind,
-		name: useName,
-		slug
-	};
-}
-//#endregion
-//#region src/lib/windowName.ts
-function snapshot() {
-	const w = globalThis;
-	try {
-		const list = w.mindflock?.sessions?.();
-		return Array.isArray(list) ? list : [];
-	} catch {
-		return [];
-	}
-}
-function windowName(title) {
-	const raw = String(title || "");
-	if (!raw) return "";
-	const alias = useUi.getState().aliases[raw];
-	if (alias) return alias;
-	const inst = snapshot().find((i) => i && (i.title === raw || i.display_title === raw));
-	if (!inst) return raw;
-	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
-}
-function slotNumber(title) {
-	const raw = String(title || "");
-	if (!raw) return "";
-	try {
-		const ui = useUi.getState();
-		const rail = ui.railOrder;
-		if (rail.length) {
-			let idx = rail.indexOf(raw);
-			if (idx < 0) {
-				const inst = snapshot().find((i) => i && i.display_title === raw);
-				if (inst) idx = rail.indexOf(inst.title);
-			}
-			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
-		}
-		const { rows } = orderedInstances(snapshot().filter((i) => i && !isVerifySession(String(i.title || ""))), ui.order);
-		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
-		const local = filtered.filter((i) => !i.device);
-		const remote = filtered.filter((i) => i.device);
-		const idx = [...local, ...remote].findIndex((i) => i.title === raw || i.display_title === raw);
-		return idx >= 0 && idx < 9 ? String(idx + 1) : "";
-	} catch {
-		return "";
-	}
-}
-function publishWindowName() {
-	const w = globalThis;
-	w.mindflock = w.mindflock || {};
-	w.mindflock.displayName = windowName;
-	w.mindflock.slotNumber = slotNumber;
 }
 //#endregion
 //#region src/components/settings/screens/Appearance.tsx
@@ -29506,6 +28340,1659 @@ function Appearance(_) {
 	] });
 }
 //#endregion
+//#region src/components/grid/layout.ts
+var MAX_VISIBLE = 9;
+var DROP_PH = "\0drop";
+function viewCap(viewMode) {
+	return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
+}
+function capTitles(all, cap, mru) {
+	if (all.length <= cap) return all;
+	const byMru = mru.filter((t) => all.includes(t));
+	const rest = all.filter((t) => !byMru.includes(t));
+	const chosen = new Set(byMru.concat(rest).slice(0, cap));
+	return all.filter((t) => chosen.has(t));
+}
+function computeVisible(instances, opts) {
+	const { rows } = orderedInstances(instances, opts.order);
+	const shown = rows.filter((i) => !opts.hidden.has(i.title));
+	const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
+	const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
+	return shown.filter((i) => chosen.has(i.title));
+}
+function computeVisibleSlots(instances, specialKeys, opts) {
+	return capTitles(orderedKeys(instances.map((i) => i.title).concat(specialKeys), opts.order).filter((t) => !opts.hidden.has(t)), Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
+}
+function balancedRows(titles) {
+	const n = titles.length;
+	if (!n) return [];
+	const perRow = Math.ceil(n / Math.max(1, Math.round(Math.sqrt(n))));
+	const rows = [];
+	for (let i = 0; i < n; i += perRow) rows.push(titles.slice(i, i + perRow));
+	return rows;
+}
+function insertIntoGrid(rows, title) {
+	const n = rows.flat().length + 1;
+	const perRow = Math.ceil(n / Math.max(1, Math.round(Math.sqrt(n))));
+	const last = rows[rows.length - 1];
+	if (last && last.length < perRow) last.push(title);
+	else rows.push([title]);
+	return rows;
+}
+function reconcileGridRows(prev, visibleTitles) {
+	const vis = new Set(visibleTitles);
+	const kept = new Set(prev.flat().filter((t) => vis.has(t)));
+	const incoming = visibleTitles.filter((t) => !kept.has(t));
+	let rows = prev.map((r) => r.map((t) => vis.has(t) ? t : incoming.shift() || null).filter(Boolean)).filter((r) => r.length);
+	if (!rows.length) return balancedRows(visibleTitles);
+	for (const t of incoming) rows = insertIntoGrid(rows, t);
+	return rows;
+}
+function insertBeside(prev, removeTitle, token, targetTitle, side) {
+	const rows = prev.map((r) => r.filter((t) => t !== removeTitle)).filter((r) => r.length);
+	let ri = -1, ci = -1;
+	rows.forEach((r, i) => {
+		const j = r.indexOf(targetTitle);
+		if (j >= 0) {
+			ri = i;
+			ci = j;
+		}
+	});
+	if (ri < 0) rows.push([token]);
+	else if (side === "left") rows[ri].splice(ci, 0, token);
+	else if (side === "right") rows[ri].splice(ci + 1, 0, token);
+	else if (side === "top") rows.splice(ri, 0, [token]);
+	else rows.splice(ri + 1, 0, [token]);
+	return rows;
+}
+function placeInGrid(prev, dragTitle, targetTitle, side) {
+	if (!dragTitle || dragTitle === targetTitle) return prev;
+	return insertBeside(prev, dragTitle, dragTitle, targetTitle, side);
+}
+function previewRowsFor(prev, dragTitle, targetTitle, side) {
+	return insertBeside(prev, dragTitle, DROP_PH, targetTitle, side);
+}
+function dropSideFor(rect, clientX, clientY) {
+	const dx = (clientX - rect.left) / rect.width - .5;
+	const dy = (clientY - rect.top) / rect.height - .5;
+	if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
+	return dy < 0 ? "top" : "bottom";
+}
+//#endregion
+//#region src/lib/stageWatch.ts
+var inflight$1 = /* @__PURE__ */ new Map();
+function freshStage(title) {
+	if (!title) return Promise.resolve(null);
+	const live = inflight$1.get(title);
+	if (live) return live;
+	const p = instApi(title, "/stage").then((row) => {
+		if (row && row.title) patchInstance(title, row);
+		return row ?? null;
+	}).catch(() => null).finally(() => {
+		inflight$1.delete(title);
+	});
+	inflight$1.set(title, p);
+	return p;
+}
+//#endregion
+//#region src/lib/format.ts
+function errMsg(err) {
+	return err?.message || "error";
+}
+function fmtTokens(n) {
+	n = n || 0;
+	if (n < 1e3) return String(n);
+	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
+	return (n / 1e6).toFixed(1) + "M";
+}
+function fmtUsd(u) {
+	u = u || 0;
+	if (u <= 0) return "$0";
+	if (u < .01) return "<$0.01";
+	if (u < 10) return "$" + u.toFixed(2);
+	if (u < 1e3) return "$" + u.toFixed(1);
+	return "$" + (u / 1e3).toFixed(1) + "k";
+}
+var PROV_LABELS = {
+	claude: "Claude",
+	codex: "Codex",
+	aider: "Aider"
+};
+function provLabel(name) {
+	if (!name) return "";
+	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+}
+function relTime(ts) {
+	const secs = Math.max(0, Math.floor(Date.now() / 1e3 - ts));
+	if (secs < 60) return secs + "s ago";
+	if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+	return Math.floor(secs / 86400) + "d ago";
+}
+function fmtDurationShort(ms) {
+	const mm = Math.max(1, Math.round(ms / 6e4));
+	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+}
+function displayBranch(inst) {
+	const full = inst.branch || "";
+	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
+	if (m) return m[1];
+	m = full.match(/^mindflock\/(.+)$/);
+	if (m) return m[1];
+	return full || inst.program || "";
+}
+function humanSize(bytes) {
+	if (bytes < 1024) return bytes + " B";
+	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+	return (bytes / 1073741824).toFixed(2) + " GB";
+}
+function pathBasename(p) {
+	const s = (p || "").replace(/[\\/]+$/, "");
+	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+	return i >= 0 ? s.slice(i + 1) : s;
+}
+//#endregion
+//#region src/lib/runs.ts
+var RUN_DONE_STATES = /* @__PURE__ */ new Set([
+	"done",
+	"done_with_failures",
+	"cancelled"
+]);
+var TOGETHER_DETAIL_S = 604800;
+function needsRunDetail(r, nowS) {
+	if (!RUN_DONE_STATES.has(r.state)) return true;
+	return r.policy?.grouping === "together" && nowS - (Number(r.created_at) || 0) <= TOGETHER_DETAIL_S;
+}
+function splitRail(entries, runs, opts = {}) {
+	const act = opts.act || ((i) => String(i.activity || "idle"));
+	const byId = new Map(runs.map((r) => [r.id, r]));
+	const members = /* @__PURE__ */ new Map();
+	const firstAt = /* @__PURE__ */ new Map();
+	const named = /* @__PURE__ */ new Map();
+	entries.forEach((e, i) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		if (!run || !run.id) return;
+		if (!members.has(run.id)) members.set(run.id, []);
+		members.get(run.id).push(e);
+		if (!firstAt.has(run.id)) firstAt.set(run.id, i);
+		if (run.name && !named.has(run.id)) named.set(run.id, run.name);
+	});
+	const ids = [.../* @__PURE__ */ new Set([...members.keys(), ...runs.map((r) => r.id)])];
+	const groups = [];
+	for (const id of ids) {
+		const info = byId.get(id) || null;
+		const mine = members.get(id) || [];
+		if (info?.policy?.grouping === "together" || info?.split || mine.some((e) => e.inst?.run?.role === "lead" || e.inst?.run?.grouping === "together")) continue;
+		const tasks = info?.tasks || [];
+		const done = !!info && RUN_DONE_STATES.has(info.state);
+		const queued = done ? [] : tasks.filter((t) => t.state === "queued");
+		if (!mine.length && !queued.length) continue;
+		if (opts.filtering && !mine.length) continue;
+		const total = Math.max(info?.counts?.total || 0, tasks.length, mine.length + queued.length);
+		if (total < 2) continue;
+		const taskOf = /* @__PURE__ */ new Map();
+		for (const t of tasks) if (t.title) taskOf.set(t.title, t);
+		const needsTitles = /* @__PURE__ */ new Set();
+		let limited = false;
+		for (const e of mine) {
+			const a = act(e.inst);
+			if (a === "clarify") needsTitles.add(e.key);
+			if (a === "limit") limited = true;
+		}
+		for (const t of tasks) if (t.state === "needs_you") needsTitles.add(t.title || t.id);
+		const localShipped = mine.filter((e) => shipLine(e.inst, {
+			act: act(e.inst),
+			task: taskOf.get(e.key)
+		})?.state === "shipped").length;
+		const shipped = info?.counts ? Math.max(info.counts.shipped || 0, 0) : localShipped;
+		const failed = info?.counts?.failed || tasks.filter((t) => t.state === "failed").length;
+		const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
+		groups.push({
+			id,
+			name: info?.name || named.get(id) || "Team run",
+			lane,
+			state: info?.state || "running",
+			paused: !!info?.paused,
+			pauseReason: info?.pause_reason || "",
+			done,
+			cancelled: info?.state === "cancelled",
+			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+			collapsed: !!opts.collapsed?.has(id),
+			entries: mine,
+			queued,
+			needs: needsTitles.size,
+			shipped,
+			failed,
+			total,
+			taskOf
+		});
+	}
+	const at = (g) => firstAt.get(g.id) ?? Number.MAX_SAFE_INTEGER;
+	const created = (g) => byId.get(g.id)?.created_at || 0;
+	groups.sort((a, b) => at(a) - at(b) || created(a) - created(b));
+	const grouped = new Set(groups.flatMap((g) => g.entries.map((e) => e.key)));
+	const rest = entries.filter((e) => !grouped.has(e.key));
+	const family = (e) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		return !!run && (run.role === "lead" || run.grouping === "together");
+	};
+	return {
+		groups,
+		families: rest.filter(family),
+		own: rest.filter((e) => !family(e))
+	};
+}
+function splitKeys(split) {
+	const out = [];
+	for (const g of split.groups) if (!g.collapsed) for (const e of g.entries) out.push(e.key);
+	for (const e of split.families || []) out.push(e.key);
+	for (const e of split.own) out.push(e.key);
+	return out;
+}
+function queuedLine(i) {
+	if (i <= 0) return "queued · next free slot";
+	const n = i + 1;
+	const suf = n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
+	return "queued · " + n + suf;
+}
+function queuedTitle(t) {
+	const ref = String(t.ticket_id || "").trim();
+	const text = String(t.text || "").trim();
+	if (ref && text) return ref + " " + text;
+	return ref || text || t.title || "queued line";
+}
+function shippedBadge(g) {
+	return g.shipped + "/" + g.total + " shipped";
+}
+function groupTitle(g) {
+	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
+	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
+	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
+	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
+	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
+	else if (g.waitingUsage) bits.push("waiting for usage to come back");
+	bits.push("Click to fold");
+	return bits.join("\n");
+}
+var LEAD_ASKS = {
+	plan: "the lead proposed the pieces — approve them",
+	release: "one PR is ready to open",
+	check_failed: "the check failed on the merged branch",
+	lead_gone: "its lead is gone — nothing can merge or ship",
+	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
+};
+var num$4 = (v) => Number(v) || 0;
+var str$4 = (v) => v == null ? "" : String(v);
+function runNote(event, data, info = {}) {
+	const d = data || {};
+	const run = str$4(d.run);
+	const name = str$4(d.name) || info.name?.(run) || "A team run";
+	const who = str$4(d.ref) || str$4(d.title) || str$4(d.task) || "a line";
+	switch (event) {
+		case "run.needs_you": {
+			const reason = str$4(d.reason);
+			if (reason === "prompt") return null;
+			if (reason in LEAD_ASKS) {
+				const lead = str$4(d.title) || str$4(d.session);
+				return {
+					text: name + ": " + (str$4(d.text) || LEAD_ASKS[reason]),
+					cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
+					run,
+					dedupe: d.key ? "needs:" + str$4(d.key) : [
+						"needs",
+						run,
+						reason,
+						str$4(d.round) || str$4(d.incarnation)
+					].join(":"),
+					rule: "run_needs_you",
+					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
+				};
+			}
+			return {
+				text: name + ": " + who + " " + (str$4(d.text) || escalationText(reason)),
+				cls: "n-warn",
+				run,
+				dedupe: d.key ? "needs:" + str$4(d.key) : [
+					"needs",
+					run,
+					str$4(d.task),
+					reason,
+					str$4(d.incarnation)
+				].join(":"),
+				rule: "run_needs_you"
+			};
+		}
+		case "run.finished": {
+			const shipped = num$4(d.shipped);
+			const failed = num$4(d.failed);
+			const lane = info.lane?.(run) || "";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const what = str$4(d.outcome) || shipped + word;
+			return {
+				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
+				cls: failed ? "n-warn" : "n-done",
+				run,
+				dedupe: "finished:" + run,
+				rule: "run_finished"
+			};
+		}
+		case "run.task_shipped": {
+			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
+			return {
+				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				cls: "n-done",
+				run,
+				dedupe: [
+					"shipped",
+					run,
+					str$4(d.task)
+				].join(":"),
+				rule: ""
+			};
+		}
+		default: return null;
+	}
+}
+function groupLanding(runId, runs, rows) {
+	if (!runId) return null;
+	const live = (rows || []).filter((r) => !r.device);
+	const has = (t) => !!t && live.some((r) => r.title === t);
+	const lead = (runs || []).find((r) => r.id === runId)?.lead?.title || "";
+	if (has(lead)) return { lead };
+	const mine = live.filter((r) => r.run?.id === runId);
+	const byRole = mine.find((r) => r.run?.role === "lead");
+	if (byRole) return { lead: byRole.title };
+	return mine.length ? { row: mine[0].title } : null;
+}
+//#endregion
+//#region src/state/runs.ts
+var RUNS_LIVE_MS = 5e3;
+var RUNS_IDLE_MS = 3e4;
+var ROUTE_MISSING_MS = 12e4;
+var missing = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
+async function fetchRuns() {
+	let list;
+	try {
+		list = (await api("/api/runs"))?.runs || [];
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+	const nowS = Date.now() / 1e3;
+	const live = list.filter((r) => needsRunDetail(r, nowS));
+	const details = await Promise.all(live.map((r) => api("/api/runs/" + encodeURIComponent(r.id)).then((d) => d?.run || null, () => null)));
+	const byId = new Map(details.filter((d) => !!d).map((d) => [d.id, d]));
+	return list.map((r) => ({
+		...r,
+		...byId.get(r.id) || {}
+	}));
+}
+function liveRuns(data) {
+	return !!data && data.some((r) => !RUN_DONE_STATES.has(r.state));
+}
+function useRuns() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["runs"],
+		queryFn: fetchRuns,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : liveRuns(q.state.data) && !document.hidden ? RUNS_LIVE_MS : RUNS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useRun(id) {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["run", id || ""],
+		queryFn: async () => {
+			try {
+				return (await api("/api/runs/" + encodeURIComponent(String(id))))?.run || null;
+			} catch (e) {
+				if (missing(e)) return null;
+				throw e;
+			}
+		},
+		enabled: !!id,
+		refetchInterval: (q) => q.state.data && RUN_DONE_STATES.has(q.state.data.state) ? RUNS_IDLE_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev, prevQuery) => prevQuery?.queryKey[1] === (id || "") ? prev : void 0,
+		retry: false
+	});
+}
+async function fetchOutbox() {
+	try {
+		return await api("/api/outbox?group=all");
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+}
+function useOutbox() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["outbox"],
+		queryFn: fetchOutbox,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useNotifyConfig() {
+	return useQuery({
+		queryKey: ["notify-config"],
+		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
+		staleTime: 6e4,
+		refetchInterval: 12e4,
+		retry: false
+	});
+}
+function ruleOn(id) {
+	if (!id) return true;
+	const rule = queryClient.getQueryData(["notify-config"])?.rules?.find((r) => r.id === id);
+	return !rule || rule.enabled !== false;
+}
+var runLookups = {
+	name: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.name || "",
+	lane: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.policy?.lane || ""
+};
+function refreshRuns() {
+	queryClient.invalidateQueries({ queryKey: ["runs"] });
+	queryClient.invalidateQueries({ queryKey: ["run"] });
+	return queryClient.invalidateQueries({ queryKey: ["outbox"] });
+}
+var runsBridged = false;
+function bridgeRunEvents() {
+	const ev = window.mindflock?.events;
+	if (runsBridged || !ev) return;
+	runsBridged = true;
+	const bump = (_env) => void refreshRuns();
+	for (const name of [
+		"run.changed",
+		"run.needs_you",
+		"run.task_shipped",
+		"run.finished",
+		"session.autopilot_changed"
+	]) ev.subscribe(name, bump);
+	ev.subscribe("run.changed", (env) => {
+		if (env.data?.state !== "dissolved") return;
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		const lead = String(env.data?.lead || "");
+		if (lead) toast(dissolvedText(lead, String(env.data?.why || "")), { duration: 7e3 });
+	});
+}
+function dissolvedText(lead, why) {
+	const reason = why.trim().replace(/\s+/g, " ");
+	return `${lead} didn't split it — it's doing the task itself` + (reason ? `: ${reason.length > 120 ? reason.slice(0, 119) + "…" : reason}` : "");
+}
+//#endregion
+//#region src/lib/runsApi.ts
+var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
+var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
+async function runAction(what, path, body = {}, done = "") {
+	try {
+		await api(path, { json: body });
+		if (done) toast(done);
+		return true;
+	} catch (err) {
+		errorPop(what + " failed", errMsg(err));
+		return false;
+	} finally {
+		refreshRuns();
+		refreshInstances();
+	}
+}
+function raiseBudget(runId, usd, name = "") {
+	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The team run") + " resumed with a $" + usd + " budget");
+}
+function cancelRun(runId, name = "") {
+	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The team run") + " cancelled — its sessions and branches are kept");
+}
+function suggestedBudget(budget, spent) {
+	const floor = Math.max(spent, budget) * 1.5;
+	const step = floor < 10 ? 1 : floor < 100 ? 5 : 25;
+	return Math.max(step, Math.ceil(floor / step) * step);
+}
+//#endregion
+//#region src/lib/laneActions.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = LANE_ORDER;
+var LANE_LABEL = {
+	leave: "Off",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge when green"
+};
+var LANE_SHORT = {
+	leave: "off",
+	commit: "Commit",
+	push: "Push",
+	pr: "PR",
+	merge: "Merge"
+};
+var LANE_DESC = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "Commit, push, open a PR and merge it once its checks pass"
+};
+var LANE_KEY = {
+	leave: "O",
+	commit: "C",
+	push: "U",
+	pr: "P",
+	merge: "M"
+};
+var ASK_FIRST_LABEL = "Ask me before it ships";
+var ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(setting) {
+	return normalizeLane(setting) || "leave";
+}
+function laneChoice(inst) {
+	const l = laneOf(inst);
+	const lane = l ? normalizeLane(l.target) : "";
+	if (!l || !lane) return {
+		lane: "leave",
+		askFirst: false,
+		owner: ""
+	};
+	return {
+		lane,
+		askFirst: !!l.ask_first,
+		owner: l.owner || ""
+	};
+}
+function teamRunCaps(caps) {
+	const t = caps?.team_runs;
+	const max = Number(t?.max_pieces);
+	return {
+		split: t?.split === true,
+		together: t?.together === true,
+		maxPieces: Number.isFinite(max) && max >= 2 ? Math.floor(max) : 8
+	};
+}
+var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
+var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a team run — update it";
+function askFirstApplies(lane) {
+	return lane !== "leave";
+}
+function splitBlockReason(caps, inst) {
+	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
+	const m = caps?.agent_mcp;
+	if (m) {
+		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → Agent orchestration";
+		const provider = inst.provider || inst.program || "";
+		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
+	}
+	if (inst.mcp_attached === false) return "Restart this agent to give it the MindFlock tools";
+	if (inst.activity === "clarify") return "Answer its prompt first";
+	if (inst.activity === "limit") return "It's at its usage limit — split once it's back";
+	return "";
+}
+function splitTaskOf(inst) {
+	return String(inst.last_prompt_full || inst.last_prompt || inst.last_turn || "").trim();
+}
+function detachableGroup(inst) {
+	const run = inst.run;
+	if (!run || !run.id || !run.task || run.role === "lead") return null;
+	return {
+		id: run.id,
+		task: run.task,
+		name: run.name || "its team run"
+	};
+}
+function laneLockReason(inst) {
+	const run = inst.run;
+	if (run && run.id) {
+		const group = run.name || "its team run";
+		if (run.role === "lead") return `It leads ${group} — the team run ships it once, through the team run's release`;
+		if (run.grouping === "together") return `Its work merges into ${group}'s one PR — move it out of the team run to fast-track it on its own`;
+	}
+	const owner = inst.lane?.owner;
+	if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that session`;
+	return "";
+}
+function fastTrackModel(inst) {
+	const cur = laneChoice(inst);
+	const lock = laneLockReason(inst);
+	return {
+		current: {
+			lane: cur.lane,
+			askFirst: cur.askFirst
+		},
+		lock,
+		items: LANE_CHOICES.map((lane) => ({
+			lane,
+			label: LANE_LABEL[lane],
+			desc: LANE_DESC[lane],
+			key: LANE_KEY[lane],
+			current: lane === cur.lane
+		})),
+		ask: {
+			on: cur.askFirst && askFirstApplies(cur.lane),
+			why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first")
+		}
+	};
+}
+function fastTrackSaid(name, lane, askFirst) {
+	if (lane === "leave") return `${name}: fast-track off — MindFlock won't commit anything`;
+	return `${name}: fast-track → ${LANE_LABEL[lane]}${askFirstApplies(lane) && askFirst ? ", asks first" : ""}`;
+}
+async function setLane(title, lane, askFirst, opts = {}) {
+	return instApi(title, "/lane", { json: {
+		lane,
+		ask_first: askFirstApplies(lane) && askFirst,
+		...opts.message ? { message: opts.message } : {}
+	} });
+}
+async function pickFastTrack(title, name, lane, askFirst, opts = {}) {
+	const row = instances$1().find((r) => r.title === title);
+	const before = {
+		lane: row?.lane ?? null,
+		autopilot: row?.autopilot ?? null
+	};
+	patchInstance(title, {
+		lane: lane === "leave" ? null : {
+			target: lane,
+			ask_first: askFirstApplies(lane) && askFirst,
+			owner: title,
+			by: "user"
+		},
+		...lane === "leave" ? { autopilot: null } : {}
+	});
+	try {
+		const r = await setLane(title, lane, askFirst, opts);
+		patchInstance(title, {
+			lane: r?.lane ?? null,
+			...r && "autopilot" in r ? { autopilot: r.autopilot ?? null } : {}
+		});
+		if (!opts.quiet) toast(r?.held ? `${name}: its team run is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes` : fastTrackSaid(name, lane, askFirst), { duration: 4500 });
+		return true;
+	} catch (err) {
+		patchInstance(title, before);
+		toast(`${name}: ${errMsg(err)}`, { duration: 6e3 });
+		return false;
+	}
+}
+async function moveOutOfGroup(runId, taskId) {
+	await api(taskPath(runId, taskId, "skip"), { json: {} });
+}
+async function startSplitOf(inst, name, lane, askFirst) {
+	return api("/api/runs", { json: {
+		name,
+		items: [{
+			kind: "task",
+			text: splitTaskOf(inst)
+		}],
+		policy: {
+			lane,
+			ask_first: askFirstApplies(lane) && askFirst,
+			grouping: "together",
+			release: "ask"
+		},
+		concurrency: 3,
+		program: inst.provider || inst.program,
+		split: true,
+		lead: inst.title
+	} });
+}
+async function splitSession(inst, name) {
+	const cur = laneChoice(inst);
+	await startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst);
+	useUi.getState().threadOpen(inst.title);
+	return `${name} is proposing the pieces — approve the plan in its Thread tab`;
+}
+async function setLaneWhenReady(title, lane, askFirst, delays = [
+	1500,
+	3e3,
+	5e3,
+	8e3,
+	12e3,
+	2e4
+]) {
+	if (lane === "leave") return true;
+	for (let i = 0;; i++) try {
+		await setLane(title, lane, askFirst);
+		return true;
+	} catch (err) {
+		if (!(err instanceof ApiError && err.status === 409 && i < delays.length)) {
+			toast(`Couldn't fast-track ${title} to “${LANE_LABEL[lane]}”: ${errMsg(err)}`, { duration: 7e3 });
+			return false;
+		}
+		await new Promise((r) => setTimeout(r, delays[i]));
+	}
+}
+function openFastTrackMenu(title) {
+	const inst = instances$1().find((r) => r.title === title);
+	if (!inst || inst.pending) {
+		toast("That session isn't ready yet");
+		return;
+	}
+	selectSession(title, { noKeyboard: true });
+	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
+}
+//#endregion
+//#region src/lib/autopilot.ts
+var SESSION_DEPTHS = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var SOURCE_DEPTHS = [
+	"agent",
+	"commit",
+	"push",
+	"pr"
+];
+var DEPTH_LABELS = {
+	off: "Off",
+	agent: "Agent only",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge when green"
+};
+function depthLabel(depth) {
+	return DEPTH_LABELS[depth] || depth || "Off";
+}
+function autopilotChipTitle(run) {
+	const target = depthLabel(run.depth);
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
+	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+	return "Fast-tracking to " + target + where + skipped;
+}
+function mergeBlockerLabel(ms) {
+	switch (ms.state) {
+		case "dirty": return "conflicts";
+		case "behind": return "behind base";
+		case "draft": return "draft PR";
+		case "blocked":
+			if (ms.checks === "failed") return "checks ✗";
+			if (ms.checks === "pending") return "checks…";
+			return "review needed";
+		default: return ms.mergeable === null ? "checking…" : "can't merge";
+	}
+}
+//#endregion
+//#region src/lib/stage.ts
+var STAGE_META = {
+	provisioning: { label: "provisioning" },
+	agent: { label: "agent" },
+	precommit: { label: "pre-commit" },
+	interrupt: { label: "pre-commit ✗" },
+	committed: { label: "committed" },
+	pushed: { label: "pushed" },
+	pr: { label: "PR open" },
+	merged: { label: "complete ✓" }
+};
+function stageMeta(stage) {
+	return STAGE_META[stage] || STAGE_META.agent;
+}
+var echo = /* @__PURE__ */ new Map();
+var ECHO_TTL_MS = 2e4;
+function echoing(title) {
+	if (!title) return false;
+	const at = echo.get(title);
+	if (at === void 0) return false;
+	if (Date.now() - at > ECHO_TTL_MS) {
+		echo.delete(title);
+		return false;
+	}
+	return true;
+}
+function markLoopReset(title) {
+	if (title) echo.set(title, Date.now());
+}
+function clearLoopReset(title) {
+	echo.delete(title);
+}
+function reconcileLoopReset(inst) {
+	if (!inst.title) return;
+	if (inst.stage_reset) echo.delete(inst.title);
+	else echoing(inst.title);
+}
+function isStageReset(inst) {
+	return !!inst.stage_reset || echoing(inst.title);
+}
+function guidedStage(inst) {
+	if (isStageReset(inst)) return "agent";
+	return inst.stage || "agent";
+}
+var RESETTABLE = /* @__PURE__ */ new Set([
+	"committed",
+	"pushed",
+	"pr"
+]);
+var RESET_ASK = {
+	committed: "push",
+	pushed: "open a PR",
+	pr: "merge"
+};
+function resetStep(inst) {
+	const title = inst.title;
+	const caps = queryClient.getQueryData(["config"])?.caps;
+	if (caps && !caps.git) return null;
+	if (!title || inst.status === "loading" || inst.status === "paused") return null;
+	if (inst.workspace_missing) return null;
+	if (isStageReset(inst)) return null;
+	const stage = inst.stage || "agent";
+	if (!RESETTABLE.has(stage)) return null;
+	return {
+		label: "↺",
+		title: "Back to idle — restart the guided cycle on this branch.\nNothing is undone: the commits stay, an open PR stays open. The header\njust stops asking you to " + (RESET_ASK[stage] || "finish up") + " so you can keep working here.\nIt clears itself the moment you commit again.",
+		run: () => resetStage(title)
+	};
+}
+var STATE_CLS = {
+	starting: "s-provisioning",
+	working: "s-running",
+	needs_you: "s-clarify",
+	idle: "s-idle",
+	limit: "s-limit",
+	offline: "s-offline"
+};
+function stateChip(ss) {
+	let cls = STATE_CLS[ss.state];
+	if (ss.label === "Paused") cls = "s-paused";
+	else if (ss.label === "Missing") cls = "s-missing";
+	return {
+		label: ss.label,
+		cls: cls + " tone-" + ss.tone,
+		title: ss.hint || ss.label
+	};
+}
+function activityChip(act) {
+	return stateChip(deriveSessionState({
+		title: "",
+		activity: act
+	}, { activity: act }));
+}
+function chipState(inst, ss = deriveSessionState(inst)) {
+	if (ss.state !== "idle" || ss.label !== "Idle") return stateChip(ss);
+	const stage = guidedStage(inst);
+	if (stage === "agent" || stage === "interrupt") return stateChip(ss);
+	const m = stageMeta(stage);
+	return {
+		label: m.label,
+		cls: "s-" + stage,
+		title: ss.reason === "stuck" && ss.hint ? ss.hint : m.label
+	};
+}
+function checkChip(inst) {
+	const c = inst.check;
+	if (!c || !c.state) return null;
+	const cmd = String(c.command || "");
+	if (c.state === "running") return {
+		label: "checks…",
+		cls: "s-provisioning",
+		title: "Checks running: " + cmd
+	};
+	if (c.state === "failed") {
+		const rc = c.rc;
+		return {
+			label: "✗ checks",
+			cls: "s-interrupt",
+			title: "Checks failed (exit " + (rc == null ? "?" : rc) + ") — push is gated until they pass (or push anyway)"
+		};
+	}
+	if (c.state === "ok") return c.stale ? {
+		label: "✓ stale",
+		cls: "s-idle",
+		title: "Checks passed for an older commit — a fresh run starts after the next commit"
+	} : {
+		label: "✓ checks",
+		cls: "s-committed",
+		title: "Checks passed for this commit"
+	};
+	return null;
+}
+var NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
+var NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
+var inflight = /* @__PURE__ */ new Map();
+var INFLIGHT_TTL_MS = 12e4;
+function markStep(title, verb) {
+	if (title) inflight.set(title, {
+		verb,
+		at: Date.now()
+	});
+}
+function clearStep(title) {
+	inflight.delete(title);
+}
+function inflightVerb(inst) {
+	const title = inst.title;
+	if (!title) return null;
+	const rec = inflight.get(title);
+	if (!rec) return null;
+	if (Date.now() - rec.at > INFLIGHT_TTL_MS) {
+		inflight.delete(title);
+		return null;
+	}
+	const stage = inst.stage || "";
+	if (rec.verb === "push" && (stage === "pushed" || stage === "pr") || rec.verb === "pr" && stage === "pr" || rec.verb === "merge" && stage !== "pr") {
+		inflight.delete(title);
+		return null;
+	}
+	return rec.verb;
+}
+function liveStep(inst) {
+	const stage = guidedStage(inst);
+	if (inst.workspace_missing) return {
+		label: "workspace gone",
+		tone: "blocked",
+		title: "The workspace directory no longer exists."
+	};
+	if (inst.status === "paused") return {
+		label: "paused",
+		tone: "quiet",
+		title: "Session paused — resume it to continue."
+	};
+	const setup = inst.setup;
+	if (setup?.state === "running") return {
+		label: "setting up",
+		tone: "work",
+		title: "Running the workspace setup commands."
+	};
+	if (setup?.state === "failed") return {
+		label: "setup failed",
+		tone: "blocked",
+		title: "Workspace setup failed" + (setup.failed_step ? " at " + setup.failed_step : "") + ". Queued prompts are held until it succeeds."
+	};
+	if (stage === "provisioning") return {
+		label: "provisioning",
+		tone: "work",
+		title: "Creating the workspace."
+	};
+	if (stage === "precommit") return {
+		label: "pre-commit",
+		tone: "work",
+		title: "Running the pre-commit hooks."
+	};
+	if (stage === "interrupt") return {
+		label: "pre-commit ✗",
+		tone: "blocked",
+		title: "A pre-commit hook blocked the commit" + (inst.failed_step ? " at " + inst.failed_step : "") + "."
+	};
+	const verb = inflightVerb(inst);
+	if (verb === "push") return {
+		label: "pushing",
+		tone: "work",
+		title: "Pushing the branch to origin."
+	};
+	if (verb === "pr") return {
+		label: "opening PR",
+		tone: "work",
+		title: "Opening the pull request."
+	};
+	if (verb === "merge") return {
+		label: "merging",
+		tone: "work",
+		title: "Merging the pull request."
+	};
+	const check = inst.check;
+	if (check?.state === "running") return {
+		label: "checks",
+		tone: "work",
+		title: "Running the verification check."
+	};
+	if (check?.state === "failed") return {
+		label: "checks ✗",
+		tone: "blocked",
+		title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + "."
+	};
+	const run = inst.autopilot;
+	if (run && run.depth && run.state === "running" && run.note) return {
+		label: run.note,
+		tone: "work",
+		title: autopilotChipTitle(run)
+	};
+	if (stage === "pr") {
+		const ms = inst.merge_state;
+		if (ms && !ms.can_merge) return {
+			label: mergeBlockerLabel(ms),
+			tone: "blocked",
+			title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n"),
+			href: inst.pr_url || ms.url || void 0
+		};
+		return {
+			label: "PR open",
+			tone: "ok",
+			title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
+			href: inst.pr_url || void 0
+		};
+	}
+	return null;
+}
+var followed = /* @__PURE__ */ new Map();
+function followAutopilot(inst, opts) {
+	const title = inst.title;
+	const run = inst.autopilot;
+	if (!title) return null;
+	if (!run || !run.depth || run.state !== "running") {
+		followed.delete(title);
+		return null;
+	}
+	const step = String(run.step || "");
+	const seen = followed.get(title);
+	if (seen === step) return null;
+	const first = seen === void 0;
+	followed.set(title, step);
+	if (step === "commit") {
+		try {
+			useUi.getState().setLastTab(title, "shell");
+		} catch {}
+		return "commit";
+	}
+	if (step === "pr") {
+		if (first && !opts?.live) return null;
+		const url = String(run.url || "") || inst.pr_url || "";
+		if (url) try {
+			offerUrl(url, "PR opened for " + title);
+		} catch {}
+		return "pr";
+	}
+	return null;
+}
+function fastTrackStep(inst) {
+	const title = inst.title;
+	const caps = queryClient.getQueryData(["config"])?.caps;
+	if (caps && !caps.git) return null;
+	if (!title || inst.workspace_missing) return null;
+	if (inst.peer_share) return null;
+	const { lane, askFirst } = laneChoice(inst);
+	const run = inst.autopilot;
+	const running = !!(run && run.depth && run.state === "running");
+	const halted = !!(run && run.depth && run.state === "halted");
+	if (!running && !halted) {
+		if (inst.status === "loading") return null;
+		if (lane === "leave" && guidedStage(inst) === "provisioning") return null;
+	}
+	const ask = askFirstApplies(lane) && askFirst;
+	const where = LANE_LABEL[lane] + (ask ? ", asks first" : "");
+	const change = "\n\nClick to change it or turn it off (Ctrl+K F).";
+	let tip;
+	if (running && run) {
+		const doing = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waits for the agent to finish)";
+		const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+		tip = "Fast-track → " + where + doing + skipped + change;
+	} else if (halted && run) tip = "Fast-track stopped: " + (run.reason || "unknown reason") + "\n\nClick to pick it again or turn it off (Ctrl+K F).";
+	else if (lane === "leave") tip = "Fast-track is off. Click to choose how far MindFlock carries this session once its agent is done — commit, push, open a PR, or merge when green (Ctrl+K F).";
+	else tip = "Fast-track → " + where + ": " + LANE_DESC[lane] + ".\n\nClick to change it or turn it off (Ctrl+K F).";
+	return {
+		lane,
+		askFirst: ask,
+		label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : ""),
+		active: running,
+		halted,
+		title: tip
+	};
+}
+function nextStep(inst) {
+	const title = inst.title;
+	const caps = queryClient.getQueryData(["config"])?.caps;
+	if (caps && !caps.git) return null;
+	if (!title || inst.status === "loading" || inst.status === "paused") return null;
+	if (inst.workspace_missing) return null;
+	if (inst.peer_share) return null;
+	switch (guidedStage(inst)) {
+		case "agent": return {
+			label: "Commit…",
+			run: () => commitSession(title)
+		};
+		case "interrupt": return {
+			label: "Re-commit",
+			run: () => commitSession(title)
+		};
+		case "committed":
+			if (inst.has_origin === false) return {
+				label: "No remote — add origin…",
+				hint: true,
+				title: "This repo has no origin remote, so there is nowhere to push.\nRun this in the workspace (click to copy):\n" + NO_ORIGIN_CMD + "\nHTTPS works just as well:\n" + NO_ORIGIN_ALT,
+				run: () => copyText(NO_ORIGIN_CMD).then((ok) => {
+					toast(ok ? "command copied" : "copy failed — " + NO_ORIGIN_CMD);
+				})
+			};
+			return {
+				label: "Push",
+				run: () => pushSession(title)
+			};
+		case "pushed": return hasPrSupport(caps) ? {
+			label: "Open PR",
+			run: () => makePrSession(title)
+		} : {
+			label: "Open PR ↗",
+			hint: true,
+			title: PR_FALLBACK_HINT,
+			run: () => makePrSession(title)
+		};
+		case "pr":
+			if (!hasPrSupport(caps)) return inst.pr_url ? {
+				label: "Merge on GitHub ↗",
+				hint: true,
+				title: PR_FALLBACK_HINT,
+				run: () => window.open(inst.pr_url, "_blank")
+			} : {
+				label: "Merge ↗",
+				hint: true,
+				title: PR_FALLBACK_HINT,
+				run: () => mergeSession(title)
+			};
+			{
+				const ms = inst.merge_state;
+				if (ms && !ms.can_merge) return {
+					label: "Merge blocked",
+					disabled: true,
+					title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n") + (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
+					run: () => {}
+				};
+			}
+			return {
+				label: "Merge",
+				run: () => mergeSession(title)
+			};
+		case "merged": return inst.pr_url ? {
+			label: "View PR ↗",
+			run: () => window.open(inst.pr_url, "_blank")
+		} : null;
+		default: return null;
+	}
+}
+//#endregion
+//#region src/lib/sessionActions.ts
+function caps() {
+	return queryClient.getQueryData(["config"])?.caps ?? {
+		git: true,
+		tailscale: true,
+		ticketing: true,
+		github: true
+	};
+}
+function ideName() {
+	return queryClient.getQueryData(["config"])?.ide_name || "Cursor";
+}
+function instances$1() {
+	return queryClient.getQueryData(["instances"]) || [];
+}
+function selectSession(title, opts) {
+	const ui = useUi.getState();
+	ui.setHidden(title, false);
+	const windowKeys = [
+		...ui.specialOpen.map((k) => windowKey(k)),
+		...ui.verifyPanes.map((t) => windowKey("verify", t)),
+		...ui.extPanes.map((p) => windowKey("ext", p.key))
+	];
+	const visible = computeVisibleSlots(instances$1(), windowKeys, {
+		hidden: ui.hidden,
+		viewMode: ui.viewMode,
+		mru: ui.mru,
+		order: ui.order
+	});
+	const focused = ui.focused;
+	if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
+		const keep = visible.filter((t) => t !== focused);
+		const keepMru = ui.mru.filter((t) => keep.includes(t));
+		const keepRest = keep.filter((t) => !keepMru.includes(t));
+		ui.setOrderlessMru(keepMru.concat(keepRest, [focused], ui.mru.filter((t) => t !== focused && !keep.includes(t))));
+	}
+	ui.touchMru(title);
+	ui.setFocused(title);
+	if (!opts?.noKeyboard) focusTerm(title);
+}
+setSessionSelector(selectSession);
+function selectWindow(sent) {
+	useUi.getState().touchMru(sent);
+	requestAnimationFrame(() => {
+		for (const pane of document.querySelectorAll(".pane")) if (pane.getAttribute("data-title") === sent) {
+			pane.scrollIntoView({
+				block: "nearest",
+				behavior: "smooth"
+			});
+			return;
+		}
+	});
+}
+function selectRailKey(key) {
+	if (key.startsWith("\0")) selectWindow(key);
+	else selectSession(key);
+}
+function requireGit() {
+	if (caps().git) return true;
+	toast("git is not installed — install git to use diffs, commits and PRs");
+	return false;
+}
+var PR_REMEDY = "add a GitHub token in Settings → Connections → GitHub → Connect, or install the GitHub CLI";
+var PR_FALLBACK_HINT = "MindFlock can’t open or merge the PR for you yet — " + PR_REMEDY + ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
+function hasPrSupport(c) {
+	return (c ?? caps()).github !== false;
+}
+function offerUrl(url, msg) {
+	if (window.open(url, "_blank")) {
+		toast(msg, { duration: 6e3 });
+		return;
+	}
+	toast(msg + " — click to open", {
+		onClick: () => window.open(url, "_blank"),
+		duration: 9e3
+	});
+}
+var closeUndo = [];
+function folderInUse(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return null;
+	const body = err.body;
+	if (!body || body.error !== "folder in use") return null;
+	return Array.isArray(body.sessions) ? body.sessions.map(String) : [];
+}
+function folderInUseText(titles) {
+	const names = titles.map((t) => displayName(t));
+	return "Folder in use by " + (names.length ? names.join(", ") : "another session") + ". Close those first.";
+}
+function keptRunningText(result) {
+	const n = result?.children?.length || 0;
+	if (!n) return null;
+	return n === 1 ? "1 worker session kept running" : `${n} worker sessions kept running`;
+}
+function forgetLocally(title) {
+	const ui = useUi.getState();
+	ui.setHidden(title, false);
+	if (ui.focused === title) ui.setFocused(null);
+	releaseTerms(title);
+}
+async function killSession(title) {
+	if (!title) return;
+	let r = null;
+	try {
+		r = await instApi(title, "/close", { method: "POST" });
+	} catch (err) {
+		errorPop("Close failed", errMsg(err));
+		return;
+	}
+	forgetLocally(title);
+	closeUndo.push(title);
+	const kept = keptRunningText(r);
+	toast("Session closed — reopen it from Recently closed (Ctrl+Shift+T)" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	await refreshInstances();
+}
+async function deleteSession(title, confirmed = false) {
+	if (!title) return null;
+	if (!confirmed) {
+		confirmPop("Delete " + displayName(title) + "?", "Removes the worktree and branch. Close instead keeps the worktree (reopen it from Recently closed).", [{
+			label: "Delete",
+			primary: true,
+			run: () => void deleteSession(title, true).then((r) => {
+				if (r && r !== "done") errorPop("Can't delete " + displayName(title), folderInUseText(r.inUse));
+			})
+		}]);
+		return null;
+	}
+	let r = null;
+	try {
+		r = await instApi(title, "/cleanup", { method: "POST" });
+	} catch (err) {
+		const held = folderInUse(err);
+		if (held) return { inUse: held };
+		errorPop("Delete failed", errMsg(err));
+		return null;
+	}
+	forgetLocally(title);
+	const kept = keptRunningText(r);
+	toast("Deleted " + displayName(title) + " — worktree and branch removed" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	await refreshInstances();
+	return "done";
+}
+var closedWhen = (x) => {
+	const n = typeof x.closed_at === "number" ? x.closed_at : Date.parse(x.closed_at);
+	return isNaN(n) ? 0 : n;
+};
+var undoBusy = false;
+async function undoLastClose() {
+	if (undoBusy) return;
+	undoBusy = true;
+	try {
+		let list;
+		try {
+			const data = await api("/api/recently-closed");
+			list = Array.isArray(data) ? data : [];
+		} catch {
+			return;
+		}
+		if (!list.length) {
+			toast("Nothing to reopen");
+			return;
+		}
+		let ent = null;
+		while (closeUndo.length && !ent) {
+			const t = closeUndo.pop();
+			const matches = list.filter((e) => e.title === t).sort((a, b) => closedWhen(b) - closedWhen(a));
+			if (matches.length) ent = matches[0];
+		}
+		if (!ent) ent = [...list].sort((a, b) => closedWhen(b) - closedWhen(a))[0];
+		if (!ent) {
+			toast("Nothing to reopen");
+			return;
+		}
+		if (!ent.exists) {
+			toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", { duration: 5e3 });
+			return;
+		}
+		try {
+			const inst = await api("/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen", { method: "POST" });
+			await refreshInstances();
+			if (inst?.title) selectSession(inst.title);
+			toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
+		} catch (err) {
+			errorPop("Reopen failed", errMsg(err));
+		}
+	} finally {
+		undoBusy = false;
+	}
+}
+async function cleanupMissing(title, confirmed = false) {
+	if (!title) return;
+	if (!confirmed) {
+		confirmPop("Delete “" + displayName(title) + "”?", "Its workspace folder no longer exists — this removes the dead session.", [{
+			label: "Delete",
+			primary: true,
+			run: () => void cleanupMissing(title, true)
+		}]);
+		return;
+	}
+	const ui = useUi.getState();
+	ui.setHidden(title, false);
+	if (ui.focused === title) ui.setFocused(null);
+	queryClient.setQueryData(["instances"], (prev) => (prev || []).filter((i) => i.title !== title));
+	releaseTerms(title);
+	let r = null;
+	try {
+		r = await instApi(title, "", { method: "DELETE" });
+	} catch (err) {
+		const held = folderInUse(err);
+		if (held) errorPop("Can't delete " + displayName(title), folderInUseText(held));
+		else errorPop("Delete failed", errMsg(err));
+		await refreshInstances();
+		return;
+	}
+	const kept = keptRunningText(r);
+	toast("Session removed" + (kept ? " · " + kept : ""), kept ? { duration: 5e3 } : void 0);
+	await refreshInstances();
+}
+function clearStaleAlias(title) {
+	const ui = useUi.getState();
+	if (title && ui.aliases[title]) ui.setAlias(title, "");
+}
+function addPendingSession(bare, device = "") {
+	const base = device ? device + "::" + bare : bare;
+	const taken = new Set(instances$1().map((i) => i.title));
+	let title = base;
+	if (taken.has(base)) {
+		let i = 2;
+		while (taken.has(base + "-" + i)) i++;
+		title = base + "-" + i;
+	}
+	clearStaleAlias(title);
+	const pending = {
+		title,
+		status: "loading",
+		pending_create: true,
+		...device ? {
+			device,
+			display_title: title.slice(device.length + 2)
+		} : {}
+	};
+	queryClient.setQueryData(["instances"], (prev) => [...prev || [], pending]);
+	return title;
+}
+function failPendingSession(title) {
+	queryClient.setQueryData(["instances"], (prev) => (prev || []).filter((i) => !(i.pending_create && i.title === title)));
+	dropFromOrder(title);
+}
+function dropFromOrder(title) {
+	const ui = useUi.getState();
+	if (title && ui.order.includes(title)) ui.setOrder(ui.order.filter((t) => t !== title));
+}
+function placeAfter(title, after) {
+	const ui = useUi.getState();
+	const live = instances$1().map((i) => i.title);
+	if (!live.includes(title) || !live.includes(after)) return;
+	const seen = new Set(ui.order);
+	const merged = ui.order.concat(live.filter((t) => !seen.has(t)));
+	const next = orderWithAfter(merged, title, after);
+	if (next !== merged) ui.setOrder(next);
+}
+async function copySession(title) {
+	if (!title) return;
+	const guess = addPendingSession(title + "-copy");
+	placeAfter(guess, title);
+	try {
+		const inst = await instApi(title, "/copy", { method: "POST" });
+		if (inst?.title) clearStaleAlias(inst.title);
+		await refreshInstances();
+		if (inst?.title) {
+			if (inst.title !== guess) dropFromOrder(guess);
+			placeAfter(inst.title, title);
+			selectSession(inst.title);
+		}
+	} catch (err) {
+		failPendingSession(guess);
+		errorPop("Copy failed", errMsg(err));
+	}
+}
+function commitSession(title) {
+	if (!requireGit() || !title) return;
+	useUi.getState().openDialogFor("commit", title);
+}
+function redZoneBreaches(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return null;
+	const body = err.body;
+	const list = body && Array.isArray(body.red_zone_breaches) ? body.red_zone_breaches : null;
+	return list && list.length ? list : null;
+}
+function offerRedZoneOverride(title, verb, breaches, retry) {
+	const n = breaches.length;
+	const shown = breaches.slice(0, 5).map((b) => b.path + (b.pattern && b.pattern !== b.path ? " (" + b.pattern + ")" : "")).join(" · ");
+	const green = breaches.every((b) => b.kind === "green");
+	errorPop(green ? `${verb} blocked — changes outside the green zone` : `${verb} blocked — red zone changed`, `${displayName(title)} changed ${n} ${green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". Revert them (the agent can: “revert your changes to …”), or override for this " + verb.toLowerCase() + " only.", [{
+		label: "Open map",
+		run: () => {
+			selectSession(title);
+			useUi.getState().setLastTab(title, "map");
+		}
+	}, {
+		label: verb + " anyway",
+		primary: true,
+		title: "Override the zone gate for this one " + verb.toLowerCase(),
+		run: retry
+	}]);
+}
+function divergedPush(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return null;
+	const b = err.body;
+	if (!b || typeof b !== "object" || b.diverged !== true) return null;
+	return {
+		error: String(b.error || err.message),
+		remote: String(b.remote || "origin"),
+		branch: String(b.branch || ""),
+		behind: Number(b.behind) || 0,
+		authors: Array.isArray(b.authors) ? b.authors.map(String) : []
+	};
+}
+async function rebaseRemoteAndPush(title, remote, force = false, overrideRedZones = false) {
+	try {
+		const r = await instApi(title, "/rebase-remote", { json: { remote } });
+		if (r?.row?.title) patchInstance(title, r.row);
+	} catch (err) {
+		errorPop("Rebase stopped — nothing changed", displayName(title) + ": " + errMsg(err));
+		freshStage(title);
+		return;
+	}
+	await pushSession(title, force, overrideRedZones);
+}
+async function pushSession(title, force = false, overrideRedZones = false) {
+	if (!title || !requireGit()) return;
+	selectSession(title, { noKeyboard: true });
+	markStep(title, "push");
+	try {
+		const body = {};
+		if (force) body.force = true;
+		if (overrideRedZones) body.override_red_zones = true;
+		await instApi(title, "/push-branch", { json: body });
+	} catch (err) {
+		const rz = redZoneBreaches(err);
+		const div = divergedPush(err);
+		if (div) {
+			clearStep(title);
+			const where = div.remote + "/" + div.branch;
+			confirmPop("Push blocked — " + where + " moved on", displayName(title) + ": " + div.error + ". Rebase its commits onto " + where + " and push?", [{
+				label: "Rebase onto " + where + " and push",
+				primary: true,
+				title: "git pull --rebase " + div.remote + " " + div.branch + ", then push (never a force-push)",
+				run: () => void rebaseRemoteAndPush(title, div.remote, force, overrideRedZones)
+			}], "Cancel");
+		} else if (rz) {
+			clearStep(title);
+			offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
+		} else if (err.message === "checks haven't passed for this commit") {
+			clearStep(title);
+			errorPop("Push blocked — checks haven't passed", displayName(title) + "'s commit has no passing check run (see the ✗ checks chip on its row). Override for this push only?", [{
+				label: "Push anyway",
+				primary: true,
+				title: "Push " + displayName(title) + " past the check gate",
+				run: () => void (overrideRedZones ? pushSession(title, true, true) : pushSession(title, true))
+			}]);
+			return;
+		} else {
+			clearStep(title);
+			errorPop("Push failed", errMsg(err));
+		}
+	}
+	freshStage(title);
+}
+async function resetStage(title, opts) {
+	if (!title || !requireGit()) return;
+	markLoopReset(title);
+	try {
+		const r = await instApi(title, "/reset-stage", { method: "POST" });
+		if (r?.row?.title) patchInstance(title, r.row);
+		const cleared = r?.cleared || [];
+		if (!opts?.quiet) toast("Back to idle" + (cleared.length ? " — also cleared " + cleared.join(" + ") : ""));
+	} catch (err) {
+		clearLoopReset(title);
+		toast("Could not reset this session: " + errMsg(err), { duration: 6e3 });
+	}
+}
+async function ideSession(title, quiet = false) {
+	if (!title) return;
+	try {
+		await instApi(title, "/ide", { method: "POST" });
+	} catch (err) {
+		if (quiet) toast(ideName() + ": " + errMsg(err), { duration: 7e3 });
+		else errorPop(ideName() + " failed", errMsg(err));
+	}
+}
+function makePrSession(title) {
+	if (!title || !requireGit()) return;
+	useUi.getState().openDialogFor("make-pr", title);
+}
+async function submitMakePr(title, base, overrideRedZones = false) {
+	if (!title || !requireGit()) return;
+	markStep(title, "pr");
+	try {
+		const body = {};
+		if (base) body.base = base;
+		if (overrideRedZones) body.override_red_zones = true;
+		const r = await instApi(title, "/make-pr", { json: body });
+		if (r && r.ok === false) {
+			const msg = r.message || PR_REMEDY;
+			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
+			else toast(msg, { duration: 9e3 });
+		} else {
+			if (r?.url) window.open(r.url, "_blank");
+			await resetStage(title, { quiet: true });
+		}
+	} catch (err) {
+		clearStep(title);
+		const rz = redZoneBreaches(err);
+		if (rz) offerRedZoneOverride(title, "Open PR", rz, () => void submitMakePr(title, base, true));
+		else errorPop("Open PR failed", errMsg(err));
+	}
+	await freshStage(title);
+}
+async function mergeSession(title, overrideRedZones = false, confirmed = false) {
+	if (!title || !requireGit()) return;
+	if (!overrideRedZones && !confirmed) {
+		confirmPop("Merge this PR?", displayName(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.", [{
+			label: "Merge PR",
+			primary: true,
+			run: () => void mergeSession(title, false, true)
+		}]);
+		return;
+	}
+	markStep(title, "merge");
+	try {
+		const r = await instApi(title, "/merge-pr", overrideRedZones ? { json: { override_red_zones: true } } : { method: "POST" });
+		if (r && r.ok === false) {
+			const msg = r.message || PR_REMEDY;
+			if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
+			else toast(msg, { duration: 9e3 });
+		}
+	} catch (err) {
+		clearStep(title);
+		const rz = redZoneBreaches(err);
+		if (rz) offerRedZoneOverride(title, "Merge", rz, () => void mergeSession(title, true));
+		else errorPop("Merge failed", errMsg(err));
+	}
+	await freshStage(title);
+}
+function hideSession(title) {
+	if (!title) return;
+	const ui = useUi.getState();
+	if (ui.hidden.has(title)) {
+		ui.setHidden(title, false);
+		return;
+	}
+	ui.setHidden(title, true);
+	if (ui.focused === title) ui.setFocused(null);
+	toast("Hid " + (ui.aliases[title] || title) + " — click to undo", {
+		onClick: () => useUi.getState().setHidden(title, false),
+		duration: 5e3
+	});
+}
+async function pauseSession(title) {
+	if (!title) return;
+	try {
+		await instApi(title, "/pause", { method: "POST" });
+	} catch (err) {
+		errorPop("Pause failed", errMsg(err));
+	}
+	await refreshInstances();
+}
+async function resumeSession(title) {
+	if (!title) return;
+	try {
+		await instApi(title, "/resume", { method: "POST" });
+	} catch (err) {
+		errorPop("Resume failed", errMsg(err));
+	}
+	await refreshInstances();
+}
+//#endregion
 //#region src/lib/keymap.ts
 var _host = null;
 function isEditingTarget(el) {
@@ -29524,42 +30011,52 @@ function terminalFocused() {
 	const el = document.activeElement;
 	return !!(el && el.closest && el.closest(".xterm"));
 }
-var MODAL_DIALOG_NAMES = [
-	"new-session",
-	"recent",
-	"commit",
-	"rename",
-	"device",
-	"intake",
-	"customize",
-	"prompts",
-	"verify",
-	"extension",
-	"red-zones"
-];
-var MODAL_DOM_IDS = [
-	"new-dialog",
-	"recent-dialog",
-	"commit-dialog",
-	"rename-dialog",
-	"device-dialog",
-	"intake-dialog",
-	"customize-dialog",
-	"prompts-dialog",
-	"verify-dialog",
-	"red-zones-dialog",
+var OVERLAY_SELECTOR = "[role=\"dialog\"], .modal, .dialog, .palette, [data-modal]";
+var POPOVER_IDS = [
 	"break-screen",
 	"fast-track-menu",
 	"prompts-menu",
 	"notif-pop"
 ];
-function modalOpen() {
-	const open = useUi.getState().openDialog;
-	if (open && MODAL_DIALOG_NAMES.includes(open)) return true;
-	return MODAL_DOM_IDS.some((id) => {
-		const el = document.getElementById(id);
-		return !!el && !el.classList.contains("hidden");
-	});
+function elementVisible(el) {
+	const h = el;
+	if (h.hidden === true || h.hasAttribute?.("hidden")) return false;
+	if (h.classList?.contains("hidden")) return false;
+	if (h.closest?.(".hidden, [hidden]")) return false;
+	const win = typeof window !== "undefined" ? window : null;
+	if (win && typeof win.getComputedStyle === "function") try {
+		const cs = win.getComputedStyle(h);
+		if (cs.display === "none" || cs.visibility === "hidden") return false;
+	} catch {}
+	return true;
+}
+function overlayOpen() {
+	if (useUi.getState().openDialog) return true;
+	const doc = typeof document !== "undefined" ? document : null;
+	if (!doc) return false;
+	if (typeof doc.querySelectorAll === "function") {
+		const nodes = doc.querySelectorAll(OVERLAY_SELECTOR);
+		for (let i = 0; i < nodes.length; i++) if (elementVisible(nodes[i])) return true;
+	}
+	if (typeof doc.getElementById === "function") for (const id of POPOVER_IDS) {
+		const el = doc.getElementById(id);
+		if (el && elementVisible(el)) return true;
+	}
+	return false;
+}
+function typingTarget(el) {
+	if (!el) return false;
+	if (isEditingTarget(el)) return true;
+	return !!el.closest?.(".xterm, .xterm-helper-textarea");
+}
+function endShortcutAllowed() {
+	if (!useUi.getState().focused) return false;
+	if (overlayOpen()) return false;
+	const active = typeof document !== "undefined" ? document.activeElement : null;
+	if (typingTarget(active)) return false;
+	if (active?.closest?.(".cm-root")) return false;
+	if (threadTabFocused()) return false;
+	return true;
 }
 var RETIRED_KEY_IDS = ["outbox"];
 var _keyOv = {
@@ -29664,7 +30161,7 @@ var CHORDS = {
 		run: (t) => pushSession(t)
 	},
 	r: {
-		desc: "Make PR",
+		desc: "Open PR",
 		run: (t) => makePrSession(t)
 	},
 	o: {
@@ -29897,9 +30394,9 @@ var KEYMAP = [
 		help: [
 			"Focused session",
 			"Ctrl+W / Delete",
-			"End the focused session (undo: Ctrl+Shift+T)"
+			"Close the focused session — keeps the worktree (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)"
 		],
-		when: () => !!useUi.getState().focused && !modalOpen() && !threadComposerFocused() && !threadTabFocused(),
+		when: () => endShortcutAllowed() && !threadComposerFocused(),
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) killSession(f);
@@ -29909,7 +30406,7 @@ var KEYMAP = [
 		key: "Delete",
 		shift: "any",
 		aliasOf: "close",
-		when: () => !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement) && !document.activeElement?.closest?.(".cm-root") && !threadTabFocused(),
+		when: () => endShortcutAllowed(),
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) killSession(f);
@@ -30054,8 +30551,150 @@ function installKeymap(host) {
 	};
 }
 //#endregion
+//#region src/lib/templates.ts
+var TEMPLATES_CHANGED = "mf-presets-changed";
+var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
+var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
+var PRESETS_MIGRATED_KEY = "mf_presets_migrated";
+function storage() {
+	try {
+		return typeof localStorage !== "undefined" ? localStorage : null;
+	} catch {
+		return null;
+	}
+}
+function cleanList(raw) {
+	return Array.isArray(raw) ? raw.filter((t) => t && typeof t.name === "string" && t.name.trim()).map((t) => ({ ...t })) : [];
+}
+var cache$1 = null;
+var loading = null;
+function notify() {
+	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
+}
+function setTemplates(list, kv = storage()) {
+	cache$1 = cleanList(list);
+	try {
+		kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache$1));
+	} catch {}
+	notify();
+	return cache$1;
+}
+function templatesNow(kv = storage()) {
+	if (cache$1) return cache$1;
+	try {
+		return cleanList(JSON.parse(kv?.getItem(TEMPLATES_MIRROR_KEY) || "[]"));
+	} catch {
+		return [];
+	}
+}
+function templatesLoaded() {
+	return cache$1 !== null;
+}
+function ensureTemplates(force = false) {
+	if (cache$1 && !force) return Promise.resolve(cache$1);
+	if (loading) return loading;
+	loading = (async () => {
+		try {
+			let list = setTemplates((await api("/api/templates")).templates || []);
+			if (await migratePresetsOnce(list)) list = setTemplates((await api("/api/templates")).templates || []);
+			return list;
+		} finally {
+			loading = null;
+		}
+	})();
+	return loading;
+}
+async function saveTemplate(t) {
+	return setTemplates((await api("/api/templates", { json: t })).templates || []);
+}
+async function deleteTemplate(name) {
+	const d = await api("/api/templates/" + encodeURIComponent(name), { method: "DELETE" });
+	setTemplates(templatesNow().filter((t) => presetKey(t.name) !== presetKey(name)));
+	return !!d.deleted;
+}
+function isPromptOnly(t) {
+	return typeof t.prompt === "string" && !!t.prompt.trim() && !t.program && !t.repo_path && !t.provisioned && !t.in_place && !t.init_repo;
+}
+function promptTemplates(list) {
+	return list.filter(isPromptOnly).map((t) => ({
+		name: t.name,
+		prompt: t.prompt
+	}));
+}
+function planPresetMigration(local, server) {
+	const byKey = /* @__PURE__ */ new Map();
+	for (const t of server) byKey.set(presetKey(t.name), t);
+	const save = [];
+	const skipped = [];
+	for (const p of local) {
+		const name = (p.name || "").trim();
+		const prompt = typeof p.prompt === "string" ? p.prompt : "";
+		if (!name || !prompt.trim()) continue;
+		const hit = byKey.get(presetKey(name));
+		if (!hit) {
+			save.push({
+				name,
+				prompt
+			});
+			byKey.set(presetKey(name), {
+				name,
+				prompt
+			});
+			continue;
+		}
+		if ((hit.prompt || "") === prompt) {
+			skipped.push(name);
+			continue;
+		}
+		const alt = name + " (saved prompt)";
+		if (byKey.has(presetKey(alt))) {
+			skipped.push(name);
+			continue;
+		}
+		save.push({
+			name: alt,
+			prompt
+		});
+		byKey.set(presetKey(alt), {
+			name: alt,
+			prompt
+		});
+	}
+	return {
+		save,
+		skipped
+	};
+}
+async function migratePresetsOnce(server, kv = storage(), post = (t) => api("/api/templates", { json: t })) {
+	if (!kv) return 0;
+	let done = false;
+	let local = [];
+	try {
+		done = kv.getItem(PRESETS_MIGRATED_KEY) === "1";
+		const raw = JSON.parse(kv.getItem(OLD_PRESETS_STORAGE_KEY) || "[]");
+		local = Array.isArray(raw) ? raw : [];
+	} catch {
+		return 0;
+	}
+	if (done) return 0;
+	const { save } = planPresetMigration(local, server);
+	let failed = 0;
+	let saved = 0;
+	for (const t of save) try {
+		await post(t);
+		saved++;
+	} catch {
+		failed++;
+	}
+	if (!failed) try {
+		kv.setItem(PRESETS_MIGRATED_KEY, "1");
+		if (typeof kv.removeItem === "function") writeLocal("prompt_presets", [], kv);
+		else kv.setItem(OLD_PRESETS_STORAGE_KEY, "[]");
+	} catch {}
+	return saved;
+}
+//#endregion
 //#region src/lib/presets.ts
-var PRESET_STORE_KEY = "mindflock.prompt_presets";
 var BUILTIN_PRESETS = [
 	{
 		name: "Fix failing tests",
@@ -30074,22 +30713,21 @@ var BUILTIN_PRESETS = [
 		prompt: "Refactor the code you touch for clarity and simplicity WITHOUT changing behavior. Keep the public API stable and keep all tests green."
 	}
 ];
+var PRESETS_CHANGED = TEMPLATES_CHANGED;
 function loadUserPresets() {
-	try {
-		const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-		return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string") : [];
-	} catch {
-		return [];
-	}
+	if (!templatesLoaded()) ensureTemplates().catch(() => void 0);
+	return promptTemplates(templatesNow());
 }
-var PRESETS_CHANGED = "mf-presets-changed";
 function saveUserPresets(list) {
 	const { list: clean, dropped } = normalizePresets(list);
-	try {
-		localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(clean));
-	} catch {}
-	notePrefWrite(PRESET_STORE_KEY);
-	if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
+	const current = promptTemplates(templatesNow());
+	const keep = new Set(clean.map((p) => presetKey(p.name)));
+	for (const p of current) if (!keep.has(presetKey(p.name))) deleteTemplate(p.name).catch(() => void 0);
+	for (const p of clean) {
+		const old = current.find((q) => presetKey(q.name) === presetKey(p.name));
+		if (!old || old.name !== p.name || old.prompt !== p.prompt) saveTemplate(templateFor(p)).catch(() => void 0);
+	}
+	setTemplates([...templatesNow().filter((t) => !isPromptOnly(t)), ...clean.map(templateFor)]);
 	return dropped;
 }
 function upsertUserPreset(name, prompt) {
@@ -30102,24 +30740,31 @@ function upsertUserPreset(name, prompt) {
 		name: n,
 		prompt
 	});
-	saveUserPresets(list);
+	const existing = templatesNow().find((t) => presetKey(t.name) === k);
+	saveTemplate({
+		...existing || {},
+		name: n,
+		prompt
+	}).catch(() => void 0);
+	setTemplates([...templatesNow().filter((t) => presetKey(t.name) !== k), {
+		...existing || {},
+		name: n,
+		prompt
+	}]);
 	return {
 		list,
 		replaced: hit && hit.name.trim() !== n ? hit.name : null
 	};
 }
 function tidyUserPresets() {
-	let raw;
-	try {
-		raw = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-	} catch {
-		return [];
-	}
-	if (!Array.isArray(raw)) return [];
-	const { list, dropped } = normalizePresets(raw);
-	if (!dropped.length) return [];
-	saveUserPresets(list);
-	return dropped;
+	return [];
+}
+function templateFor(p) {
+	return {
+		...templatesNow().find((t) => presetKey(t.name) === presetKey(p.name)) || {},
+		name: p.name,
+		prompt: p.prompt
+	};
 }
 function findPreset(value) {
 	const m = /^([bu]):([\s\S]*)$/.exec(value || "");
@@ -30168,6 +30813,9 @@ function applyLive(fields) {
 				break;
 			case "hints":
 				st.hintsEnabled = v !== false;
+				break;
+			case "map_tour":
+				st.mapTourSeen = v === true;
 				break;
 			case "keymap":
 				reloadKeymap();
@@ -31849,25 +32497,25 @@ function releaseChoices(lane, localOrigin) {
 		merge: false,
 		label: "Push to the local folder",
 		primary: true,
-		title: "Push the group's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
+		title: "Push the team run's branch to " + localOrigin + " — a folder on this machine, not GitHub: no PR can be opened"
 	}];
 	if (lane === "push") return [{
 		merge: false,
 		label: "Push the branch",
 		primary: true,
-		title: "Push the group's branch — no PR is opened"
+		title: "Push the team run's branch — no PR is opened"
 	}];
 	const pr = {
 		merge: false,
-		label: lane === "merge" ? "Open the PR only" : "Open the PR",
+		label: lane === "merge" ? "Open PR only" : "Open PR",
 		primary: lane !== "merge",
-		title: "Open the group's one PR — it is not merged"
+		title: "Open the team run's one PR — it is not merged"
 	};
 	const merge = {
 		merge: true,
-		label: lane === "merge" ? "Open the PR, merge when checks pass" : "Open it, merge when checks pass",
+		label: lane === "merge" ? "Open PR, merge when checks pass" : "Open it, merge when checks pass",
 		primary: lane === "merge",
-		title: "Open the group's one PR and merge it once its checks pass"
+		title: "Open the team run's one PR and merge it once its checks pass"
 	};
 	return lane === "merge" ? [merge, pr] : [pr, merge];
 }
@@ -31892,7 +32540,7 @@ function releaseOutcome(run) {
 			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
 			cls: "ok",
 			url: r.pr_url,
-			link: "Open the PR ↗"
+			link: "View PR ↗"
 		};
 	}
 	if ((r?.state === "handoff" || r?.state === "done") && local) return {
@@ -31920,7 +32568,7 @@ function releaseOutcome(run) {
 		link: ""
 	};
 	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
-		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
+		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this team run is fast-tracked to " + (lane === "commit" ? "Commit" : "Off") + ")",
 		cls: "ok",
 		url: "",
 		link: ""
@@ -32042,7 +32690,7 @@ function shipVerb(step) {
 	switch (String(step || "")) {
 		case "push": return "Push";
 		case "pr":
-		case "make_pr": return "Open the PR";
+		case "make_pr": return "Open PR";
 		case "merge": return "Merge";
 		default: return "Commit";
 	}
@@ -32089,7 +32737,7 @@ function waitingChip(w) {
 		cls: "warn"
 	};
 	if (w.kind === "approve") return {
-		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
+		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open pr", "open the PR") + " — you asked to see it first",
 		cls: ""
 	};
 	return {
@@ -32154,9 +32802,9 @@ function waitingActions(w, can) {
 	if (w.kind === "lead_gone") {
 		if (a.has("cancel_group") && can.run) out.push({
 			key: "cancel_group",
-			label: "Cancel the group",
+			label: "Cancel the team run",
 			primary: true,
-			title: "Stop the group — its sessions and branches are kept"
+			title: "Stop the team run — its sessions and branches are kept"
 		});
 		return out;
 	}
@@ -32189,7 +32837,7 @@ function waitingActions(w, can) {
 		key: "skip",
 		label: "Skip",
 		primary: false,
-		title: "Take it out of the group — its session and branch stay"
+		title: "Take it out of the team run — its session and branch stay"
 	});
 	return out;
 }
@@ -32257,8 +32905,8 @@ function doWaitAction(key, w, runId, taskId) {
 		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
 		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
 		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-		case "release": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the group");
-		case "release_merge": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
+		case "release": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
+		case "release_merge": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
 		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
 		case "cancel_group": return cancelRun(runId, w.run?.name || "");
 		default: return Promise.resolve(false);
@@ -32393,7 +33041,7 @@ function WaitingRow({ w, row, shown, group, runInfo }) {
 }
 function BudgetRow({ w, runInfo }) {
 	const runId = w.run?.id || "";
-	const name = w.run?.name || runInfo?.name || "The group";
+	const name = w.run?.name || runInfo?.name || "The team run";
 	const budget = Number(runInfo?.budget_usd) || 0;
 	const spent = Number(runInfo?.cost_usd) || 0;
 	const [usd, setUsd] = (0, import_react.useState)(() => String(suggestedBudget(budget, spent)));
@@ -32419,7 +33067,7 @@ function BudgetRow({ w, runInfo }) {
 					children: name
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "pr-open-title",
-					children: [w.reason || "the group's budget is used up", budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""]
+					children: [w.reason || "the team run's budget is used up", budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""]
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -32449,14 +33097,14 @@ function BudgetRow({ w, runInfo }) {
 					type: "button",
 					className: "btn-primary pr-review-btn",
 					disabled: busy || !valid,
-					title: valid ? "Raise the budget and resume the group" : "More than it has spent ($" + spent.toFixed(2) + ")",
+					title: valid ? "Raise the budget and resume the team run" : "More than it has spent ($" + spent.toFixed(2) + ")",
 					onClick: () => go(() => raiseBudget(runId, amount, name)),
 					children: ["Raise to $", valid ? amount : "…"]
 				})] }), (w.actions || []).includes("stop") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
 					disabled: busy,
-					title: "Cancel the group — nothing new starts or ships; sessions and branches stay",
+					title: "Cancel the team run — nothing new starts or ships; sessions and branches stay",
 					onClick: () => go(() => cancelRun(runId, name)),
 					children: "Stop"
 				})]
@@ -32622,7 +33270,7 @@ function carrierText(carrier) {
 	if (carrier === "tcp") return "directly (same network or tailnet)";
 	return "";
 }
-var PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in Work with someone";
+var PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in People";
 var PEER_SCREEN = "peer";
 function peerChip(inst) {
 	if (!inst.peer_share) return null;
@@ -32634,7 +33282,7 @@ function peerChip(inst) {
 	return {
 		label,
 		connected,
-		title: (name ? "A shared folder with " + name : "A shared folder") + state + ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in Work with someone."
+		title: (name ? "A shared folder with " + name : "A shared folder") + state + ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in People."
 	};
 }
 function peerEventNote(event, data) {
@@ -32794,7 +33442,7 @@ function updateNote(data) {
 	if (behind.length) return {
 		text,
 		screen: "devices",
-		toast: text + " — Update them in Settings → Devices"
+		toast: text + " — Update them in Settings → Your devices"
 	};
 	return {
 		text,
@@ -32864,7 +33512,7 @@ function pinChoices(sync) {
 function sentence(s) {
 	return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
-var SYNC_PAUSED_NOTE = "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Devices.";
+var SYNC_PAUSED_NOTE = "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Your devices.";
 function deviceEventNote(event, data) {
 	const d = data || {};
 	const host = String(d.host || d.device || "A device");
@@ -33071,7 +33719,7 @@ function automationLine(members) {
 	if (here) return {
 		runner,
 		here,
-		text: "This device runs PR review and issue handling for all your devices. To move them, choose Run here in Settings → Devices on the device that should run them.",
+		text: "This device runs PR review and issue handling for all your devices. To move them, choose Run here in Settings → Your devices on the device that should run them.",
 		canMove: false
 	};
 	if (runner) return {
@@ -33169,7 +33817,7 @@ function phoneLinkLine(pl) {
 function admitLine(a) {
 	if (a.state !== "unreachable_joiner") return "";
 	const h = a.host || a.device;
-	return "Joined, but " + h + " isn't reachable from here" + (a.reason ? " — " + a.reason : "") + ". On " + h + ": Settings → Devices → Make reachable.";
+	return "Joined, but " + h + " isn't reachable from here" + (a.reason ? " — " + a.reason : "") + ". On " + h + ": Settings → Your devices → Make reachable.";
 }
 function joinedToast(j) {
 	const host = j.host || j.device;
@@ -33315,7 +33963,7 @@ var STAGE_WORDS = {
 	pushed: "pushed",
 	pr: "opened a PR",
 	merged: "merged",
-	interrupt: "pre-commit failed",
+	interrupt: REASON_LABEL.precommit_failed,
 	precommit: "running pre-commit hooks"
 };
 function notifFromEvent(env) {
@@ -33333,12 +33981,16 @@ function notifFromEvent(env) {
 			cls: "n-warn"
 		};
 		case "session.deleted": return {
-			text: "deleted",
+			text: d.closed && !d.wiped ? "closed" : "deleted",
 			cls: "n-muted"
 		};
 		case "session.activity_changed":
 			if (env.new === "clarify") return {
-				text: "needs your input",
+				text: REASON_LABEL.question,
+				cls: "n-warn"
+			};
+			if (env.new === "offline") return {
+				text: STATE_LABEL.offline,
 				cls: "n-warn"
 			};
 			return null;
@@ -33366,14 +34018,14 @@ function notifFromEvent(env) {
 			text: "worktree setup finished",
 			cls: "n-done"
 		} : {
-			text: "worktree setup FAILED — prompts held",
+			text: REASON_LABEL.setup_failed + " — prompts held",
 			cls: "n-warn"
 		};
 		case "session.check_finished": return env.new === "ok" ? {
 			text: "checks passed ✓",
 			cls: "n-done"
 		} : {
-			text: "checks failed ✗ (exit " + (d.rc ?? "?") + ")",
+			text: REASON_LABEL.checks_failing + " (exit " + (d.rc ?? "?") + ")",
 			cls: "n-warn"
 		};
 		case "session.red_zone_blocked": return {
@@ -33601,7 +34253,7 @@ function NotificationsBell() {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "notif-attn-head",
-						children: "Needs attention"
+						children: "Needs you"
 					}),
 					shownAttn.map((it) => {
 						const flashing = flash !== null && (flash === it.title || flash === it.key);
@@ -33710,7 +34362,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.run && !n.session ? runLookups.name(n.run) || "Group" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -33766,7 +34418,7 @@ function desktopNoteFor(event, data) {
 		}
 		case "peer.link_added": return {
 			title: String(d.peer_name || "Someone") + (d.repaired ? " reconnected" : " joined your invite"),
-			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "Work with someone",
+			body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
 			target: "peer"
 		};
 		case "update.available": {
@@ -33774,7 +34426,7 @@ function desktopNoteFor(event, data) {
 			const behind = Array.isArray(d.behind) ? d.behind.length : 0;
 			return {
 				title: "MindFlock " + (v ? v + " " : "") + "is available",
-				body: String(d.detail || "") || (behind ? "Update your devices in Settings → Devices" : "Open MindFlock to update"),
+				body: String(d.detail || "") || (behind ? "Update your devices in Settings → Your devices" : "Open MindFlock to update"),
 				target: behind ? "devices" : "update",
 				version: v
 			};
@@ -33809,34 +34461,6 @@ function installDesktopNotifyClicks() {
 }
 //#endregion
 //#region src/lib/onboarding.ts
-var STEP_ORDER = [
-	"deps",
-	"devices",
-	"agent",
-	"tailscale",
-	"github",
-	"repo"
-];
-function orderedSteps(plan) {
-	const by = new Map((plan?.steps || []).map((s) => [s.id, s]));
-	return STEP_ORDER.map((id) => by.get(id)).filter((s) => !!s);
-}
-function stepNumber(id, ids = STEP_ORDER) {
-	const i = ids.indexOf(id);
-	return i < 0 ? "•" : "①②③④⑤⑥".charAt(i) || "•";
-}
-function stepVisible(s) {
-	return !(s.id === "tailscale" && s.status === "skip");
-}
-function visibleSteps(plan) {
-	if (!plan) return STEP_ORDER.filter((id) => id !== "tailscale");
-	return orderedSteps(plan).filter(stepVisible).map((s) => s.id);
-}
-var STATUS_GLYPH = {
-	ok: "✓",
-	todo: "•",
-	skip: "–"
-};
 function primaryGithubMethod(st) {
 	const m = st?.methods || [];
 	if (m.includes("device")) return "device";
@@ -33889,14 +34513,119 @@ function pushFailedNote(session, data) {
 	};
 }
 //#endregion
+//#region src/lib/revive.ts
+async function reviveSession(title) {
+	try {
+		await instApi(title, "/revive", { method: "POST" });
+	} catch (e) {
+		toast("Couldn't restart " + displayName(title) + " — " + errMsg(e));
+		return false;
+	}
+	forceActivity(title, "idle");
+	toast("Restarting " + displayName(title) + "…");
+	refreshInstances();
+	return true;
+}
+//#endregion
+//#region src/lib/presence.ts
+var MAX_DOTS = 3;
+function useMe() {
+	return useQuery({
+		queryKey: ["person"],
+		queryFn: () => api("/api/person"),
+		staleTime: Infinity,
+		retry: false
+	}).data?.id || "";
+}
+function initials(name, device = "") {
+	return (name || device || "?").trim().split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
+}
+function whoLabel(pid, v, me) {
+	if (v?.name) return v.name;
+	if (pid && pid === me) return "You";
+	return v?.device || "Someone";
+}
+function othersPresent(inst, me) {
+	return Object.keys(inst.viewers || {}).filter((p) => p && p !== me).length > 0 || !!(inst.driver && inst.driver !== me);
+}
+function presenceDots(inst, me) {
+	if (!othersPresent(inst, me)) return {
+		dots: [],
+		more: 0
+	};
+	const viewers = { ...inst.viewers || {} };
+	const driver = inst.driver || "";
+	if (driver && !viewers[driver]) viewers[driver] = {
+		name: driver === me ? "" : inst.driver_name || "",
+		device: "",
+		since: 0,
+		typing: false
+	};
+	const dots = Object.keys(viewers).filter(Boolean).sort((a, b) => a === driver ? -1 : b === driver ? 1 : (viewers[a].since || 0) - (viewers[b].since || 0)).map((pid) => {
+		const v = viewers[pid];
+		const who = whoLabel(pid, v, me);
+		const where = v.device ? ` (${v.device})` : "";
+		const doing = pid === driver ? "driving" : v.typing ? "typing" : "watching";
+		return {
+			person: pid,
+			initials: pid === me && !v.name ? initials("You") : initials(v.name, v.device),
+			tip: `${who}${where} · ${doing}`,
+			driving: pid === driver,
+			typing: !!v.typing
+		};
+	});
+	return {
+		dots: dots.slice(0, MAX_DOTS),
+		more: Math.max(0, dots.length - MAX_DOTS)
+	};
+}
+function driveControl(inst, me) {
+	if (inst.driver === void 0 || !othersPresent(inst, me)) return null;
+	const driver = inst.driver || "";
+	if (driver && driver === me) {
+		const others = Object.entries(inst.viewers || {}).filter(([p]) => p && p !== me).map(([p, v]) => whoLabel(p, v, me));
+		return {
+			label: "Driving",
+			tip: "You hold the keyboard" + (others.length ? ` — ${others.join(", ")} watching` : "") + ". Click to let go.",
+			driving: true,
+			action: "release"
+		};
+	}
+	if (driver) return {
+		label: "Watching — take control",
+		tip: `${inst.driver_name || whoLabel(driver, inst.viewers?.[driver], me)} is driving. Take control to type here (they are told).`,
+		driving: false,
+		action: "take"
+	};
+	return {
+		label: "Take control",
+		tip: "Nobody holds the keyboard. Take it to type here.",
+		driving: false,
+		action: "take"
+	};
+}
+function setDriver(title, action) {
+	return instApi(title, "/driver", { json: action === "take" ? { take: true } : { release: true } });
+}
+function lostKeyboardNote(env, me, sessionName) {
+	if (!me || env.old !== me || !env.new || env.new === me) return null;
+	return `${typeof env.data?.name === "string" && env.data.name ? env.data.name : "Someone"} took control of ${sessionName} — you're watching now`;
+}
+//#endregion
 //#region src/components/EventToasts.tsx
 var BASE_TITLE = document.title || "MindFlock";
-var clarifyUnseen = /* @__PURE__ */ new Set();
+var attentionUnseen = /* @__PURE__ */ new Set();
+var attentionWas = /* @__PURE__ */ new Set();
 function instances() {
 	return queryClient.getQueryData(["instances"]) || [];
 }
-function clarifySet() {
-	return new Set(instances().filter((i) => effectiveActivity(i) === "clarify").map((i) => i.title));
+function badgeWanted(rows = instances()) {
+	const out = /* @__PURE__ */ new Set();
+	for (const i of rows) {
+		const ss = deriveSessionState(i);
+		if (ss.inBell && ruleOn(notifyRuleFor(ss))) out.add(i.title);
+	}
+	return out;
 }
 var faviconLink = null;
 var faviconLogo = new Image();
@@ -33959,9 +34688,12 @@ function updateFavicon(n) {
 	} catch {}
 }
 function updateTitleBadge() {
-	const clarify = clarifySet();
-	for (const t of [...clarifyUnseen]) if (!clarify.has(t)) clarifyUnseen.delete(t);
-	const n = clarifyUnseen.size;
+	const want = badgeWanted();
+	for (const t of [...attentionUnseen]) if (!want.has(t)) attentionUnseen.delete(t);
+	const looking = document.hasFocus() ? useUi.getState().focused : "";
+	for (const t of want) if (!attentionWas.has(t) && t !== looking) attentionUnseen.add(t);
+	attentionWas = want;
+	const n = attentionUnseen.size;
 	document.title = n ? "● (" + n + ") " + BASE_TITLE : BASE_TITLE;
 	updateFavicon(n);
 }
@@ -33969,18 +34701,16 @@ function redrawFavicon() {
 	faviconState = null;
 	updateTitleBadge();
 }
-function markClarify(title) {
-	if (document.hasFocus() && useUi.getState().focused === title) return;
-	clarifyUnseen.add(title);
-	updateTitleBadge();
-}
-function clearClarify(title) {
-	if (title) clarifyUnseen.delete(title);
-	else clarifyUnseen.clear();
+function clearAttention(title) {
+	if (title) attentionUnseen.delete(title);
+	else attentionUnseen.clear();
 	updateTitleBadge();
 }
 function markSessionSeen(title) {
-	if (clarifyUnseen.has(title)) clearClarify(title);
+	if (attentionUnseen.has(title)) clearAttention(title);
+}
+function attentionToast(name, ss, snippet) {
+	return name + ": " + ss.label + (snippet ? " — “" + snippet + "”" : "");
 }
 var notifyAt = /* @__PURE__ */ new Map();
 function notifyOnce(session, state, msg, opts) {
@@ -34032,27 +34762,52 @@ function EventToasts() {
 		if (!ev) return;
 		const isReplay = (env) => !!(typeof ev.isReplay === "function" && ev.isReplay(env));
 		const unsubs = [];
-		const onFocus = () => clearClarify();
+		const onFocus = () => clearAttention();
 		window.addEventListener("focus", onFocus);
 		unsubs.push(() => window.removeEventListener("focus", onFocus));
 		unsubs.push(ev.subscribe("session.activity_changed", (env) => {
 			forceActivity(env.session, env.new || "idle");
 			refreshInstances();
 			updateTitleBadge();
-			if (env.new === "clarify" && !isReplay(env)) {
-				markClarify(env.session);
-				const inst = instByTitle(env.session);
-				const snip = inst?.last_turn ? " — “" + inst.last_turn + "”" : "";
-				notifyOnce(env.session, "clarify", namedSlot(env.session) + " needs your input" + snip, { onClick: () => selectSession(env.session) });
+			if (isReplay(env)) return;
+			const inst = instByTitle(env.session);
+			if (env.new === "clarify" && inst) {
+				const ss = deriveSessionState(inst, { activity: "clarify" });
+				if (!ruleOn(notifyRuleFor(ss))) return;
+				notifyOnce(env.session, "clarify", attentionToast(namedSlot(env.session), ss, inst.last_turn), { onClick: () => selectSession(env.session) });
+			} else if (env.new === "offline" && inst) {
+				const ss = deriveSessionState(inst, { activity: "offline" });
+				if (!ss.inBell || !ruleOn(notifyRuleFor(ss))) return;
+				notifyOnce(env.session, "offline", attentionToast(namedSlot(env.session), ss) + " — click to restart", {
+					onClick: () => void reviveSession(env.session),
+					duration: 8e3
+				});
 			}
 		}));
 		unsubs.push(ev.subscribe("session.setup_finished", (env) => {
 			if (isReplay(env) || env.new === "ok") return;
-			notifyOnce(env.session, "setupfail", "worktree setup failed on " + namedSlot(env.session) + " — prompts held", { onClick: () => selectSession(env.session) });
+			const ss = deriveSessionState({
+				title: env.session,
+				setup: { state: "failed" }
+			});
+			if (!ruleOn(notifyRuleFor(ss))) return;
+			notifyOnce(env.session, "setupfail", attentionToast(namedSlot(env.session), ss) + " — prompts held", { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.check_finished", (env) => {
 			if (isReplay(env) || env.new === "ok") return;
-			notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), { onClick: () => selectSession(env.session) });
+			const ss = deriveSessionState({
+				title: env.session,
+				check: { state: "failed" }
+			});
+			if (!ruleOn(notifyRuleFor(ss))) return;
+			notifyOnce(env.session, "checkfail", attentionToast(namedSlot(env.session), ss), { onClick: () => selectSession(env.session) });
+		}));
+		unsubs.push(ev.subscribe("session.presence_changed", () => refreshInstances()), ev.subscribe("session.driver_changed", (env) => {
+			refreshInstances();
+			if (isReplay(env)) return;
+			const text = lostKeyboardNote(env, queryClient.getQueryData(["person"])?.id || "", namedSlot(env.session));
+			if (!text) return;
+			notifyOnce(env.session, "driver", text, { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.push_failed", (env) => {
 			if (isReplay(env)) return;
@@ -34095,7 +34850,15 @@ function EventToasts() {
 			if (env.new) patchInstance(env.session, { stage: String(env.new) });
 			if (isReplay(env)) return;
 			const title = env.session;
-			if (env.new === "interrupt") notifyOnce(title, "interrupt", "pre-commit failed on " + displayName(title), { onClick: () => selectSession(title) });
+			if (env.new === "interrupt") {
+				const ss = deriveSessionState({
+					title,
+					stage: "interrupt",
+					activity: "idle"
+				}, { activity: "idle" });
+				if (!ruleOn(notifyRuleFor(ss))) return;
+				notifyOnce(title, "interrupt", attentionToast(namedSlot(title), ss), { onClick: () => selectSession(title) });
+			}
 		}));
 		unsubs.push(ev.subscribe("session.pr_state_changed", (env) => {
 			if (isReplay(env)) return;
@@ -34191,7 +34954,7 @@ function EventToasts() {
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
-			clearClarify(env.session);
+			clearAttention(env.session);
 		}));
 		unsubs.push(ev.subscribe("session.budget_exceeded", (env) => {
 			if (isReplay(env)) return;
@@ -34934,7 +35697,7 @@ function SessionRowItems({ inst }) {
 		}),
 		group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			"data-row": "detach",
-			title: "The group stops driving it; the session and its fast-track stay",
+			title: "The team run stops driving it; the session and its fast-track stay",
 			onClick: act("", async () => {
 				await moveOutOfGroup(group.id, group.task);
 				return `${name} is out of ${group.name} — its session and fast-track stay as they are`;
@@ -34954,6 +35717,52 @@ function SessionRowItems({ inst }) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 	] });
+}
+//#endregion
+//#region src/components/presence/Presence.tsx
+function PresenceDots({ inst, me }) {
+	const { dots, more } = presenceDots(inst, me);
+	if (!dots.length) return null;
+	const tip = dots.map((d) => d.tip).join("\n") + (more ? `\n+${more} more` : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "presence",
+		title: tip,
+		"aria-label": tip.replace(/\n/g, "; "),
+		children: [dots.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "presence-dot" + (d.driving ? " driving" : "") + (d.typing ? " typing" : ""),
+			title: d.tip,
+			children: d.initials
+		}, d.person)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "presence-more",
+			children: ["+", more]
+		})]
+	});
+}
+function DriveButton({ inst, me }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const ctl = driveControl(inst, me);
+	if (!ctl) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "drive-ctl" + (ctl.driving ? " driving" : " watching"),
+		title: ctl.tip,
+		"aria-label": ctl.tip,
+		disabled: busy,
+		onMouseDown: (e) => e.stopPropagation(),
+		onClick: async (e) => {
+			e.stopPropagation();
+			setBusy(true);
+			try {
+				await setDriver(inst.title, ctl.action);
+				refreshInstances();
+			} catch (err) {
+				toast("Couldn't " + (ctl.action === "take" ? "take control" : "let go") + ": " + errMsg(err));
+			} finally {
+				setBusy(false);
+			}
+		},
+		children: ctl.label
+	});
 }
 //#endregion
 //#region src/components/sidebar/SidebarRow.tsx
@@ -35009,7 +35818,8 @@ var FLAT = {
 var NO_KIDS = [];
 var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [expanded, setExpanded] = (0, import_react.useState)(false);
-	const [wipeArmed, setWipeArmed] = (0, import_react.useState)(false);
+	const [deleteArmed, setDeleteArmed] = (0, import_react.useState)(false);
+	const [inUse, setInUse] = (0, import_react.useState)(null);
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
@@ -35022,6 +35832,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const alias = aliases[inst.title];
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const setAlias = useUi((s) => s.setAlias);
+	const picking = useUi((s) => s.bulkMode);
+	const picked = useUi((s) => s.bulkSelected.has(inst.title));
 	const title = inst.title;
 	const missing = !!inst.workspace_missing;
 	const paused = inst.status === "paused";
@@ -35034,7 +35846,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	};
 	const prSupport = hasPrSupport(caps);
 	const ideName = config?.ide_name || "Cursor";
-	const chip0 = chipState(inst);
+	const ss = deriveSessionState(inst);
+	const me = useMe();
+	const chip0 = chipState(inst, ss);
 	const chip = runTask?.state === "integrated" ? runTask.sameFolder ? {
 		...chip0,
 		label: "committed",
@@ -35121,7 +35935,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	};
 	(0, import_react.useEffect)(() => clearRenameTimer, []);
 	(0, import_react.useEffect)(() => {
-		if (!expanded) setWipeArmed(false);
+		if (!expanded) setDeleteArmed(false);
 	}, [expanded]);
 	const armRename = () => {
 		clearRenameTimer();
@@ -35139,12 +35953,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 			return;
 		}
 		const next = raw.trim();
-		const nextAlias = !next || next === label.text || next === displayTitle(inst) ? "" : next;
-		if (nextAlias === (alias || "")) return;
-		setAlias(title, nextAlias);
-		toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
+		if (!next || next === shown) return;
+		if (nameTakenBy(title, next)) {
+			toast(`Another session is already named “${next}”`);
+			return;
+		}
+		setAlias(title, next === label.text ? "" : next);
+		toast(`Renamed to “${next}”`);
 	};
-	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (dropCue ? ` drop-${dropCue}` : "");
+	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (picked ? " bulk-picked" : "") + (dropCue ? ` drop-${dropCue}` : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: rowCls,
 		"data-title": title,
@@ -35164,8 +35981,16 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		}, !editing),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "inst-row",
-			onClick: () => {
+			onMouseDown: (e) => {
+				if (e.shiftKey) e.preventDefault();
+			},
+			onClick: (e) => {
 				if (editing || Date.now() - editEndedAt.current < 400) return;
+				if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
+					clearRenameTimer();
+					useUi.getState().pickRow(title, e.shiftKey);
+					return;
+				}
 				if (focused !== title) {
 					selectSession(title);
 					return;
@@ -35174,6 +35999,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 			},
 			onDoubleClick: () => {
 				clearRenameTimer();
+				if (picking) return;
 				if (!missing && !pending) ideSession(title, true);
 			},
 			children: [
@@ -35189,9 +36015,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "idx",
 					title: num ? `Ctrl+${num} / Alt+${num} to focus` : "",
-					children: num
+					children: picking ? picked ? "✓" : "" : num
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot " + inst.status + (disconnected ? " disconnected" : "") }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : ""),
+					title: disconnected ? "Terminal socket lost — reconnecting" : ss.label
+				}),
 				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "chevron" + (expanded ? " open" : ""),
 					title: "Actions",
@@ -35227,11 +36056,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "title",
 							title: [
-								alias ? `${alias}  ·  ${label.text}` : label.text,
-								label.kind ? `session: ${displayTitle(inst)}` : "",
+								shown,
+								label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
 								inst.branch ? `branch: ${inst.branch}` : "",
 								wline ? wline.title : lineage ? lineage.title : "",
-								focused === title ? "Click again to rename" : ""
+								focused === title && !picking ? "Click again to rename" : "",
+								picking ? "" : "Ctrl+click or Shift+click to select several"
 							].filter(Boolean).join("\n"),
 							children: shown
 						}),
@@ -35267,7 +36097,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							className: "roll-line",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "lineage workers lead-line",
-								title: "Its group: " + (leadRun?.name || "") + "\nClick to open the Thread",
+								title: "Its team run: " + (leadRun?.name || "") + "\nClick to open the Thread",
 								role: "button",
 								tabIndex: 0,
 								onClick: (e) => act(() => openThread(title), e),
@@ -35346,10 +36176,32 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					className: "stagechip " + pchip.cls,
 					title: pchip.title,
 					children: pchip.label
+				}) : ss.state === "offline" && ss.restartable && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "stagechip chip-restart " + chip.cls,
+					title: chip.title,
+					"aria-label": "Offline — restart the agent",
+					onClick: (e) => act(() => void reviveSession(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "chip-act",
+						"aria-hidden": "true",
+						children: "↻ Restart"
+					})]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip " + chip.cls,
 					title: chip.title,
 					children: chip.label
+				}),
+				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PresenceDots, {
+					inst,
+					me
+				}),
+				inst.shared_branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "shared-branch-mark",
+					title: "Shared branch " + (inst.branch || "") + " — others push to it too",
+					"aria-label": "shared branch",
+					children: "⑂"
 				}),
 				extra.check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip checkchip " + extra.check.cls,
@@ -35381,9 +36233,9 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 				}),
 				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "kill" + (missing ? " cleanup" : ""),
-					title: missing ? "Clean up — workspace is gone; remove this session" : "End session — keeps worktree (Ctrl+W / Del; undo with Ctrl+Shift+T)",
+					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — keeps the worktree (Ctrl+W / Del; reopen from Recently closed, Ctrl+Shift+T)",
 					onClick: (e) => act(() => missing ? cleanupMissing(title) : killSession(title), e),
-					children: missing ? "Clean up" : "✕"
+					children: missing ? "Delete" : "✕"
 				})
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -35424,7 +36276,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							className: "danger",
 							onClick: () => cleanupMissing(title),
-							children: "Clean up — remove session"
+							children: "Delete — remove session"
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 							peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								title: "Checkpoint the shared folder and bring it into your own repo as a peer/… branch",
@@ -35450,7 +36302,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 									onClick: () => makePrSession(title),
 									title: prSupport ? void 0 : PR_FALLBACK_HINT,
 									children: [
-										"Make PR",
+										"Open PR",
 										prSupport ? "" : " ↗",
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 											className: "kbd",
@@ -35465,7 +36317,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								}),
 								inst.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									onClick: () => window.open(inst.pr_url, "_blank"),
-									children: "Open PR ↗"
+									children: "View PR ↗"
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 							] }),
@@ -35476,7 +36328,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 										await instApi(title, "/setup/rerun", { method: "POST" });
 										toast("Worktree setup re-running — watch the setup chip");
 									} catch (err) {
-										toast("Setup re-run failed: " + errMsg(err), { duration: 6e3 });
+										errorPop("Setup re-run failed", errMsg(err));
 									}
 									await refreshInstances();
 								}, e),
@@ -35488,7 +36340,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 										await instApi(title, "/check", { method: "POST" });
 										toast("Checks running…");
 									} catch (err) {
-										toast("Check run failed: " + errMsg(err), { duration: 6e3 });
+										errorPop("Check run failed", errMsg(err));
 									}
 									await refreshInstances();
 								}, e),
@@ -35519,6 +36371,16 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								})
 							] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: (e) => act(() => {
+									useUi.getState().pickRow(title, false);
+									setExpanded(false);
+								}, e),
+								children: [picked ? "Unselect" : "Select", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "kbd",
+									children: "Ctrl+click"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: () => hideSession(title),
 								children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "kbd",
@@ -35536,49 +36398,73 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								disabled: !!peer && !paused,
 								title: peer && !paused ? PEER_SANDBOX_HINT : void 0,
 								onClick: () => paused ? resumeSession(title) : pauseSession(title),
-								children: paused ? "Resume session" : "Pause session"
+								children: paused ? "Resume session" : "Pause (stops the agent, keeps the worktree)"
 							}),
-							caps.git && !peer && (wipeArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "wipe-confirm",
-								role: "group",
-								title: `Permanently removes the worktree directory and closes its ${ideName} window. This cannot be undone.`,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								className: "end-close",
+								title: "Stops the agent and keeps the worktree; reopen it from Recently closed (Ctrl+Shift+T)",
+								onClick: (e) => act(() => killSession(title), e),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "wipe-q",
-									children: [
-										"Delete ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: shown }),
-										" and its folder?"
-									]
+									className: "end-verb",
+									children: ["✕ Close", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "kbd",
+										children: "Ctrl+W"
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "end-sub",
+									children: "keeps the worktree; reopen from Recently closed"
+								})]
+							}),
+							caps.git && !peer && (deleteArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "del-confirm",
+								role: "group",
+								"aria-label": `Delete ${shown}?`,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "del-q",
+									children: "Removes the worktree and branch"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "wipe-acts",
+									className: "del-acts",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
 										className: "danger",
-										onClick: () => act(async () => {
-											setWipeArmed(false);
-											try {
-												await instApi(title, "/cleanup", { method: "POST" });
-											} catch (err) {
-												errorPop("Delete failed", errMsg(err));
-											}
-											useUi.getState().setHidden(title, false);
-											await refreshInstances();
-										}),
-										children: "Delete + wipe"
+										onClick: (e) => act(async () => {
+											setDeleteArmed(false);
+											const r = await deleteSession(title, true);
+											if (r && r !== "done") setInUse(r.inUse);
+											else if (r === "done") setInUse(null);
+										}, e),
+										children: "Delete"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
 										autoFocus: true,
-										onClick: () => setWipeArmed(false),
-										children: "Keep"
+										onClick: () => setDeleteArmed(false),
+										children: "Cancel"
 									})]
 								})]
 							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								className: "danger",
-								onClick: () => setWipeArmed(true),
-								children: "Delete + wipe worktree"
+								className: "danger end-delete",
+								title: "Removes the worktree and branch (asks first)",
+								onClick: () => setDeleteArmed(true),
+								children: "Delete…"
 							}))
 						] })
 					]
+				}),
+				inUse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "folder-in-use",
+					role: "status",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fiu-text",
+						children: folderInUseText(inUse)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fiu-x",
+						"aria-label": "Dismiss",
+						title: "Dismiss",
+						onClick: (e) => act(() => setInUse(null), e),
+						children: "✕"
+					})]
 				})
 			]
 		})]
@@ -35681,6 +36567,8 @@ function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }) {
 function SessionFilter() {
 	const filter = useUi((s) => s.filter);
 	const setFilter = useUi((s) => s.setFilter);
+	const peek = useUi((s) => s.filterPeek && !s.showFilter);
+	const setFilterPeek = useUi((s) => s.setFilterPeek);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "sidebar-search",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -35691,10 +36579,15 @@ function SessionFilter() {
 			spellCheck: false,
 			"aria-label": "Filter sessions",
 			value: filter,
+			autoFocus: peek,
 			onChange: (e) => setFilter(e.target.value.trim()),
+			onBlur: (e) => {
+				if (peek && !e.target.value.trim()) setFilterPeek(false);
+			},
 			onKeyDown: (e) => {
 				if (e.key === "Escape") {
 					setFilter("");
+					setFilterPeek(false);
 					e.target.blur();
 				}
 			}
@@ -35772,45 +36665,77 @@ function SidebarResizer() {
 //#region src/components/sidebar/BulkBar.tsx
 function BulkBar() {
 	const { data: instances = [] } = useInstances();
-	const ui = useUi();
-	const live = new Set(instances.map((i) => i.title));
-	const selected = [...ui.bulkSelected].filter((t) => live.has(t));
-	if (!selected.length) return null;
-	const anyMissing = instances.some((i) => selected.includes(i.title) && i.workspace_missing);
+	const bulkMode = useUi((s) => s.bulkMode);
+	const bulkSelected = useUi((s) => s.bulkSelected);
+	const [ask, setAsk] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [held, setHeld] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		if (!bulkMode) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented || isEditingTarget(e.target)) return;
+			if (useUi.getState().openDialog) return;
+			e.preventDefault();
+			setAsk(null);
+			useUi.getState().setBulkMode(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [bulkMode]);
+	if (!bulkMode) return null;
+	const rows = instances.filter((i) => !i.pending);
+	const live = new Set(rows.map((i) => i.title));
+	const selected = rows.filter((i) => bulkSelected.has(i.title)).map((i) => i.title);
+	const n = selected.length;
+	const anyMissing = rows.some((i) => selected.includes(i.title) && i.workspace_missing);
 	const finish = (titles) => {
 		const s = useUi.getState();
+		s.setBulk(titles, false);
 		for (const t of titles) {
-			if (s.bulkSelected.has(t)) s.toggleBulk(t);
 			s.setHidden(t, false);
 			if (s.focused === t) s.setFocused(null);
+			releaseTerms(t);
 		}
 	};
 	const run = async (kind) => {
 		let titles = selected.slice();
-		let suffix;
-		let opts;
-		let verb;
-		if (kind === "end") {
-			if (!confirm(`End ${titles.length} session(s)? Their worktrees are kept (reopen from Recently closed).`)) return;
-			suffix = "/close";
-			opts = { method: "POST" };
-			verb = "Ended";
-		} else if (kind === "delete") {
-			if (!confirm(`Delete + wipe ${titles.length} session(s)? This removes their worktrees and branches.`)) return;
-			suffix = "";
-			opts = { method: "DELETE" };
+		let suffix = "";
+		let opts = { method: "POST" };
+		let verb = "Closed";
+		if (kind === "close") suffix = "/close";
+		else if (kind === "delete") {
+			suffix = "/cleanup";
 			verb = "Deleted";
 		} else {
-			titles = titles.filter((t) => instances.some((i) => i.title === t && i.workspace_missing));
+			titles = titles.filter((t) => rows.some((i) => i.title === t && i.workspace_missing));
 			if (!titles.length) return;
-			suffix = "";
 			opts = { method: "DELETE" };
-			verb = "Cleaned up";
+			verb = "Deleted";
 			queryClient.setQueryData(["instances"], (prev) => (prev || []).filter((i) => !titles.includes(i.title)));
 		}
-		const ok = (await Promise.all(titles.map((t) => instApi(t, suffix, opts).then(() => true).catch(() => false)))).filter(Boolean).length;
-		finish(titles);
-		toast(`${verb} ${ok}/${titles.length} session(s)`);
+		setAsk(null);
+		setBusy(true);
+		const inUse = [];
+		const failed = [];
+		let kept = 0;
+		const done = [];
+		await Promise.all(titles.map(async (t) => {
+			try {
+				const r = await instApi(t, suffix, opts);
+				done.push(t);
+				kept += r?.children?.length || 0;
+			} catch (err) {
+				const h = folderInUse(err);
+				if (h) inUse.push(...h.filter((x) => !inUse.includes(x)));
+				else failed.push(t);
+			}
+		}));
+		setBusy(false);
+		finish(done);
+		setHeld(inUse);
+		const keptText = keptRunningText({ children: new Array(kept).fill("") });
+		toast(`${verb} ${done.length}/${titles.length} session(s)` + (keptText ? " · " + keptText : ""), { duration: keptText ? 5e3 : void 0 });
+		if (failed.length) errorPop(`${verb === "Closed" ? "Close" : "Delete"} failed for ${failed.length} session(s)`, failed.map((t) => displayName(t)).join(", "));
 		await refreshInstances();
 	};
 	const hide = () => {
@@ -35829,42 +36754,103 @@ function BulkBar() {
 			duration: 5e3
 		});
 	};
+	const setAll = (on) => useUi.getState().setBulk([...live], on);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "bulk-bar",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "bulk-count",
-			children: [selected.length, " selected"]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "bulk-acts",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					title: "End selected sessions (keeps their worktrees)",
-					onClick: () => run("end"),
-					children: "End"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					title: "Hide selected windows",
-					onClick: hide,
-					children: "Hide"
-				}),
-				anyMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					title: "Remove selected sessions whose workspace is gone",
-					onClick: () => run("cleanmissing"),
-					children: "Clean up missing"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "danger",
-					title: "Delete selected + wipe their worktrees",
-					onClick: () => run("delete"),
-					children: "Delete + wipe"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					title: "Clear selection",
-					onClick: () => useUi.getState().clearBulk(),
-					children: "Clear"
-				})
-			]
-		})]
+		className: "bulk-open",
+		role: "group",
+		"aria-label": "Bulk session actions",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bulk-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bulk-count",
+					children: n ? `${n} selected` : "Click sessions to select them"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bulk-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setAll(n !== rows.length),
+						disabled: !rows.length,
+						children: n === rows.length && n ? "None" : "All"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "bulk-done",
+						title: "Leave select mode (Esc)",
+						"aria-label": "Leave select mode",
+						onClick: () => useUi.getState().setBulkMode(false),
+						children: "✕"
+					})]
+				})]
+			}),
+			ask ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bulk-ask",
+				role: "group",
+				"aria-label": ask === "close" ? "Close selected?" : "Delete selected?",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "bulk-q",
+					children: ask === "close" ? `Close ${n} session(s)? Keeps their worktrees — reopen from Recently closed.` : `Delete ${n} session(s)? Removes their worktrees and branches.`
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "bulk-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: ask === "delete" ? "danger" : void 0,
+						disabled: busy,
+						onClick: () => void run(ask),
+						children: ask === "close" ? "Close" : "Delete"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						autoFocus: true,
+						onClick: () => setAsk(null),
+						children: "Cancel"
+					})]
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bulk-acts bulk-verbs",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						title: "Close selected sessions (keeps their worktrees)",
+						disabled: !n || busy,
+						onClick: () => setAsk("close"),
+						children: "Close"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						title: "Hide selected windows",
+						disabled: !n || busy,
+						onClick: hide,
+						children: "Hide"
+					}),
+					anyMissing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						title: "Remove selected sessions whose workspace is gone",
+						disabled: busy,
+						onClick: () => void run("cleanmissing"),
+						children: "Delete missing"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "danger",
+						title: "Delete selected sessions — removes their worktrees and branches (asks first)",
+						disabled: !n || busy,
+						onClick: () => setAsk("delete"),
+						children: "Delete…"
+					})
+				]
+			}),
+			held.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bulk-held",
+				role: "status",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: folderInUseText(held) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "bulk-held-x",
+					"aria-label": "Dismiss",
+					onClick: () => setHeld([]),
+					children: "✕"
+				})]
+			})
+		]
 	});
 }
 //#endregion
@@ -36544,7 +37530,7 @@ function PrReviewBar() {
 var ALL_RUNNING = "*";
 function isRunningTarget(row) {
 	if (!row || !row.title) return false;
-	if (isVerifySession(String(row.title))) return false;
+	if (isVerifySession(row)) return false;
 	if (row.status === "paused") return false;
 	return row.status === "running" || !!row.started;
 }
@@ -37080,7 +38066,7 @@ function RunGroupHeader({ group, repoPath }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rg-sp" }),
 			group.needs > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-needs",
-				title: group.needs + " waiting on you",
+				title: group.needs + (group.needs === 1 ? " needs you" : " need you"),
 				children: group.needs
 			}),
 			group.cancelled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -37275,7 +38261,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						disabled: busy,
-						title: "Take it out of the group — it never starts",
+						title: "Take it out of the team run — it never starts",
 						onClick: () => go(() => runAction("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t))),
 						children: "Remove"
 					})
@@ -37286,7 +38272,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 				role: "menuitem",
 				className: "rg-copy-summary",
 				disabled: !summary,
-				title: summary ? "Copy what this group did, as Markdown" : looking ? "Looking for this group's summary…" : "MindFlock has no summary for this group",
+				title: summary ? "Copy what this team run did, as Markdown" : looking ? "Looking for this team run's summary…" : "MindFlock has no summary for this team run",
 				onClick: async () => {
 					if (!summary) return;
 					toast(await copyText(summary) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
@@ -37306,7 +38292,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 						className: "rg-danger",
 						disabled: busy,
 						onClick: () => go(() => cancelRun(id, group.name)),
-						children: "Cancel group"
+						children: "Cancel team run"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						onClick: () => setMode(""),
@@ -37329,7 +38315,7 @@ function QueuedRow({ task, pos, groupName }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 		className: "inst run-queued",
 		"data-queued": task.id,
-		title: title + "\nQueued in " + groupName + " — it starts as a slot frees up. Start it now or remove it from the group's ⋯ menu.",
+		title: title + "\nQueued in " + groupName + " — it starts as a slot frees up. Start it now or remove it from the team run's ⋯ menu.",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "inst-row",
 			children: [
@@ -37361,7 +38347,7 @@ function QueuedRow({ task, pos, groupName }) {
 function OwnHeader() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "device-group run-group-head run-own",
-		title: "Sessions not started in a group",
+		title: "Sessions not started in a team run",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dev-caret" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "dev-name",
 			children: "On their own"
@@ -37369,128 +38355,423 @@ function OwnHeader() {
 	});
 }
 //#endregion
-//#region src/lib/wsTerm.ts
-var NOT_YET = 4404;
-var NOT_READY = 4409;
-var RETRY_MS = [
-	700,
-	1500,
-	3e3
-];
-var RETRY_MAX_MS = 3e3;
-var RETRY_LIMIT = 100;
-function retryAfter(code, attempts, reconnect) {
-	if (!reconnect || attempts >= RETRY_LIMIT) return null;
-	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
-	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+//#region src/lib/githubConnect.ts
+var OPEN_CONNECT_GITHUB_EVENT = "mf:open-connect-github";
+function openConnectGitHub() {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new CustomEvent(OPEN_CONNECT_GITHUB_EVENT));
+}
+var DEVICE_FLOW_UNCONFIGURED = "Device flow is not configured in this build; paste a token or use gh";
+function describeConnectionTest(r) {
+	if (!r) return {
+		ok: false,
+		msg: "no answer from the server"
+	};
+	const source = String(r.token_source || "none");
+	if (source === "none" || !r.login) return {
+		ok: false,
+		msg: r.user_error || r.detail || "no GitHub token available"
+	};
+	const bits = ["@" + r.login + " via " + source];
+	if (r.repo) {
+		if (r.repo_ok) bits.push(r.repo + " reachable (" + (r.can_push ? "can push" : "read-only") + ")");
+		else bits.push(r.repo + ": " + (r.repo_error || "not reachable"));
+	} else bits.push("no repository configured yet to check");
+	if (r.gh_installed) bits.push(r.gh_authenticated ? "gh signed in" : "gh installed, not signed in");
+	return {
+		ok: !!r.ok,
+		msg: bits.join(" · ")
+	};
+}
+//#endregion
+//#region src/components/settings/screens/Connections.tsx
+var CONNECTIONS_CHANGED_EVENT = "mf:connections-changed";
+function notifyConnectionsChanged() {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new CustomEvent(CONNECTIONS_CHANGED_EVENT));
+}
+var REFRESH_MS = 3e4;
+var PILL_TEXT = {
+	connected: "Connected",
+	needs_attention: "Needs attention",
+	off: "Off"
+};
+function rowStatus(c) {
+	const s = c.status || "";
+	if (s === "connected" || s === "needs_attention" || s === "off") return s;
+	if (s === "attention") return "needs_attention";
+	return "off";
+}
+var KIND_LABELS = {
+	agent: "Agent CLIs",
+	github: "GitHub",
+	tracker: "Ticket trackers",
+	devices: "Devices and people",
+	mcp: "Agent orchestration",
+	database: "Databases",
+	notifications: "Notifications",
+	extension: "Extensions",
+	system: "System"
+};
+function groupRows(rows) {
+	const out = [];
+	const at = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		const kind = r.kind || "other";
+		let i = at.get(kind);
+		if (i === void 0) {
+			i = out.length;
+			at.set(kind, i);
+			out.push({
+				kind,
+				label: KIND_LABELS[kind] || kind.charAt(0).toUpperCase() + kind.slice(1),
+				rows: []
+			});
+		}
+		out[i].rows.push(r);
+	}
+	return out;
+}
+function summaryLine(rows) {
+	if (!rows.length) return "";
+	const n = {
+		connected: 0,
+		needs_attention: 0,
+		off: 0
+	};
+	for (const r of rows) n[rowStatus(r)] += 1;
+	const need = n.needs_attention === 1 ? "needs" : "need";
+	return `${n.connected} connected · ${n.needs_attention} ${need} attention · ${n.off} off`;
+}
+function describeTestResult(res) {
+	const r = res && typeof res === "object" ? res : {};
+	const str = (v) => typeof v === "string" ? v.trim() : "";
+	const sub = (k) => {
+		const v = r[k];
+		return v && typeof v === "object" ? str(v.detail) : "";
+	};
+	const ok = r.ok === true;
+	return {
+		ok,
+		text: str(r.detail) || str(r.message) || str(r.error) || str(r.server) || (ok ? sub("auth") || sub("cli") : sub("cli") || sub("auth")) || (ok ? "Works" : "Failed")
+	};
+}
+async function runTest(t) {
+	try {
+		return describeTestResult(await api(t.endpoint, {
+			method: t.method || "POST",
+			json: t.body
+		}));
+	} catch (err) {
+		return {
+			ok: false,
+			text: err instanceof Error ? err.message : String(err)
+		};
+	}
+}
+function configureAction(c, gotoScreen) {
+	if (c.configure_dialog === "connect-github") return openConnectGitHub;
+	if (c.settings_screen) return () => gotoScreen(c.settings_screen);
 	return null;
 }
-function isStarting(code) {
-	return code === NOT_YET || code === NOT_READY;
+function actionHandler(a, deps) {
+	switch (a.kind) {
+		case "screen": return () => deps.gotoScreen(a.target);
+		case "copy": return () => void copyCommand(a.target);
+		case "route": return () => window.open(a.target, "_blank", "noopener");
+		case "dialog":
+			if (a.target === "connect-github") return openConnectGitHub;
+			if (a.target === "intake") return () => deps.openDialogFor("intake", a.tab || "tickets");
+			if (a.target === "db-explorer") return () => {
+				deps.closeDialog();
+				runCommand("dbclient", "dbclient.explorer");
+			};
+			return null;
+	}
+	return null;
 }
-function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
-	const [state, setState] = (0, import_react.useState)("connecting");
+async function copyCommand(cmd) {
+	toast(await copyText(cmd) ? "Copied" : "Could not copy — select the command and copy it by hand");
+}
+function ConnectionRowView({ c, deps, result, testing, onTest, onChanged }) {
+	const status = rowStatus(c);
+	const a = c.action;
+	const fixCmd = status !== "connected" ? c.fix_command || "" : "";
+	const copyIsFix = a?.kind === "copy" && (!fixCmd || a.target === fixCmd);
+	const handler = a && !copyIsFix && a.target !== "agent-sign-in" ? actionHandler(a, deps) : null;
+	const legacy = !a ? configureAction(c, deps.gotoScreen) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "conn-row",
+		"data-conn": c.id,
+		"data-status": status,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "conn-main",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "conn-head",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "conn-name",
+							children: c.name
+						}), c.default && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "conn-badge",
+							children: "default"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "conn-detail muted",
+						children: c.detail || c.purpose || ""
+					}),
+					fixCmd || copyIsFix && a ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "conn-fix",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: fixCmd || a.target }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn conn-copy",
+							onClick: () => void copyCommand(fixCmd || a.target),
+							children: "Copy"
+						})]
+					}) : status !== "connected" && c.fix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "conn-fix muted",
+						children: c.fix
+					}) : null,
+					result && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "conn-test-result " + (result.ok ? "ok" : "bad"),
+						role: "status",
+						children: [result.ok ? "✓ " : "✗ ", result.text]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "conn-pill conn-" + status,
+				children: PILL_TEXT[status]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "conn-actions",
+				children: [
+					c.test && onTest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn conn-test",
+						disabled: testing,
+						onClick: onTest,
+						children: testing ? "Testing…" : "Test"
+					}),
+					a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+						provider: a.provider,
+						profile: a.profile,
+						label: a.label || "Sign in",
+						onDone: onChanged
+					}) : null,
+					handler && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn conn-configure",
+						onClick: handler,
+						children: a.label
+					}),
+					legacy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn conn-configure",
+						onClick: legacy,
+						children: "Configure"
+					}),
+					c.docs && status !== "connected" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						className: "conn-docs",
+						href: c.docs,
+						target: "_blank",
+						rel: "noopener noreferrer",
+						children: "Docs"
+					})
+				]
+			})
+		]
+	});
+}
+function Connections({ gotoScreen }) {
+	const [conns, setConns] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const [results, setResults] = (0, import_react.useState)({});
+	const [testing, setTesting] = (0, import_react.useState)({});
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const alive = (0, import_react.useRef)(true);
+	const load = (0, import_react.useCallback)(async (refresh) => {
+		try {
+			const data = await api("/api/connections" + (refresh ? "?refresh=1" : ""));
+			if (!alive.current) return;
+			setConns(data?.connections || []);
+			setError("");
+		} catch {
+			if (alive.current) setError("Could not load connections.");
+		}
+	}, []);
 	(0, import_react.useEffect)(() => {
-		const host = hostRef.current;
-		if (!host) return;
-		const term = new Dl({
-			cursorBlink: interactive,
-			fontSize: 12,
-			theme: termTheme(),
-			disableStdin: !interactive,
-			fontFamily: "ui-monospace, \"Cascadia Code\", Menlo, Consolas, monospace",
-			scrollback: 2e4,
-			macOptionClickForcesSelection: true
-		});
-		const fit = new o();
-		term.loadAddon(fit);
-		term.open(host);
-		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
-		if (interactive) host.title = "Drop or paste a file to hand over its path";
-		let ws = null;
-		let timer;
-		let dead = false;
-		let attempts = 0;
-		let said = false;
-		const doFit = (sendResize) => {
-			try {
-				fit.fit();
-			} catch {
-				return;
-			}
-			if (sendResize && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
-				type: "resize",
-				cols: term.cols,
-				rows: term.rows
-			}));
-		};
-		const connect = () => {
-			if (dead) return;
-			const proto = location.protocol === "https:" ? "wss" : "ws";
-			const sock = new WebSocket(proto + "://" + location.host + wsPath);
-			ws = sock;
-			sock.binaryType = "arraybuffer";
-			sock.onopen = () => {
-				if (dead) return;
-				attempts = 0;
-				setState("streaming");
-				doFit(true);
-			};
-			sock.onmessage = (ev) => {
-				if (typeof ev.data === "string") try {
-					const j = JSON.parse(ev.data);
-					if (j.type === "error") {
-						term.write("\r\n[error] " + j.message + "\r\n");
-						return;
-					}
-				} catch {
-					term.write(ev.data);
-				}
-				else term.write(new Uint8Array(ev.data));
-			};
-			sock.onclose = (ev) => {
-				if (dead) return;
-				const wait = retryAfter(ev.code, attempts, reconnect);
-				if (wait === null) {
-					setState("disconnected");
-					return;
-				}
-				const transient = isStarting(ev.code);
-				if (!said) {
-					said = true;
-					term.write("\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n");
-				}
-				setState(transient ? "starting" : "reconnecting");
-				timer = setTimeout(connect, wait);
-				attempts++;
-			};
-			sock.onerror = () => {};
-		};
-		if (interactive) term.onData((d) => {
-			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
-		});
-		const obs = new ResizeObserver(() => doFit(true));
-		obs.observe(host);
-		const t = setTimeout(() => doFit(true), 50);
-		connect();
+		alive.current = true;
+		load(true);
+		const timer = window.setInterval(() => void load(false), REFRESH_MS);
+		const onChanged = () => void load(true);
+		window.addEventListener(CONNECTIONS_CHANGED_EVENT, onChanged);
 		return () => {
-			dead = true;
-			clearTimeout(t);
-			if (timer) clearTimeout(timer);
-			obs.disconnect();
-			detachFiles?.();
-			try {
-				ws?.close();
-			} catch {}
-			term.dispose();
+			alive.current = false;
+			window.clearInterval(timer);
+			window.removeEventListener(CONNECTIONS_CHANGED_EVENT, onChanged);
 		};
-	}, [
-		hostRef,
-		wsPath,
-		interactive,
-		reconnect
-	]);
-	return state;
+	}, [load]);
+	const test = async (c) => {
+		if (!c.test) return;
+		setTesting((t) => ({
+			...t,
+			[c.id]: true
+		}));
+		const out = await runTest(c.test);
+		if (!alive.current) return;
+		setTesting((t) => ({
+			...t,
+			[c.id]: false
+		}));
+		setResults((r) => ({
+			...r,
+			[c.id]: out
+		}));
+		load(true);
+	};
+	const deps = {
+		gotoScreen,
+		openDialogFor,
+		closeDialog
+	};
+	const groups = conns ? groupRows(conns) : [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+			className: "set-section-title",
+			children: [
+				"Connections",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					id: "settings-connections-summary",
+					className: "muted",
+					children: conns ? summaryLine(conns) : ""
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Everything MindFlock talks to, one row each. Connect sets one up; Test checks it now."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "settings-connections-list",
+			className: "conn-list",
+			children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: error
+			}) : conns === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "Checking…"
+			}) : groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "conn-group",
+				"data-kind": g.kind,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "conn-group-title",
+					children: g.label
+				}), g.rows.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectionRowView, {
+					c,
+					deps,
+					result: results[c.id],
+					testing: testing[c.id],
+					onTest: () => void test(c),
+					onChanged: () => void load(true)
+				}, c.id || c.name))]
+			}, g.kind))
+		})
+	] });
+}
+//#endregion
+//#region src/components/dialogs/AgentSignIn.tsx
+function signInTarget(c) {
+	if (!c || c.id !== "agent-auth" || c.status !== "warn") return null;
+	if (!c.cmd || !c.provider) return null;
+	return c.provider;
+}
+function agentDisplayName(name) {
+	return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+}
+function SignInWindow({ provider, profile, onClose }) {
+	const hostRef = (0, import_react.useRef)(null);
+	const query = profile ? "?profile=" + encodeURIComponent(profile) : "";
+	const state = useWsTerm(hostRef, "/api/providers/" + encodeURIComponent(provider) + "/login-terminal" + query, true);
+	const closeRef = (0, import_react.useRef)(onClose);
+	closeRef.current = onClose;
+	const close = async () => {
+		try {
+			await api("/api/providers/" + encodeURIComponent(provider) + "/login-close" + query, { method: "POST" });
+		} catch {}
+		closeRef.current();
+	};
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	const status = state === "streaming" ? "sign in when it asks (a browser window may open) — then close this window" : state;
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "signin-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) close();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "prov-login-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: [
+						"Sign in to ",
+						agentDisplayName(provider),
+						profile ? " (" + profile + ")" : ""
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						id: "signin-status",
+						children: status
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "signin-close",
+						onClick: () => void close(),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prov-login-term",
+				ref: hostRef
+			})]
+		})
+	}), document.body);
+}
+function AgentSignIn({ provider, profile, label, onDone, className }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn agent-signin-btn" + (className ? " " + className : ""),
+		onClick: (e) => {
+			e.stopPropagation();
+			setOpen(true);
+		},
+		children: label || "Sign in to " + agentDisplayName(provider)
+	}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
+		provider,
+		profile,
+		onClose: () => {
+			setOpen(false);
+			notifyConnectionsChanged();
+			onDone();
+		}
+	})] });
 }
 //#endregion
 //#region src/components/dialogs/InstallTerminal.tsx
@@ -37624,443 +38905,98 @@ function InstallMissing({ steps, onDone }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/AgentSignIn.tsx
-function signInTarget(c) {
-	if (!c || c.id !== "agent-auth" || c.status !== "warn") return null;
-	if (!c.cmd || !c.provider) return null;
-	return c.provider;
+//#region src/components/setup/setupModel.ts
+var STEP_ORDER = [
+	"tools",
+	"agent_login",
+	"repo",
+	"tracker",
+	"phone"
+];
+var STEP_TITLES = {
+	tools: "Engine and tools",
+	agent_login: "Sign in to your agent",
+	repo: "Pick a repo",
+	tracker: "Connect a tracker and GitHub",
+	phone: "Your phone"
+};
+var REQUIRED_STEPS = [
+	"tools",
+	"agent_login",
+	"repo"
+];
+var STATUS_GLYPH = {
+	done: "✓",
+	skipped: "–",
+	todo: "•"
+};
+function orderedSteps(status) {
+	const by = new Map((status?.steps || []).map((s) => [s.id, s]));
+	return STEP_ORDER.map((id) => by.get(id) || {
+		id,
+		title: STEP_TITLES[id],
+		required: REQUIRED_STEPS.includes(id),
+		done: false,
+		at: null,
+		skipped: false,
+		status: "todo"
+	});
 }
-function agentDisplayName(name) {
-	return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+function showSetupCard(opts) {
+	if (opts.sessions !== 0) return false;
+	if (opts.status) return !opts.status.summary.required_done;
+	return opts.onboarded === false;
 }
-function SignInWindow({ provider, onClose }) {
-	const hostRef = (0, import_react.useRef)(null);
-	const state = useWsTerm(hostRef, "/api/providers/" + encodeURIComponent(provider) + "/login-terminal", true);
-	const closeRef = (0, import_react.useRef)(onClose);
-	closeRef.current = onClose;
-	const close = async () => {
-		try {
-			await api("/api/providers/" + encodeURIComponent(provider) + "/login-close", { method: "POST" });
-		} catch {}
-		closeRef.current();
+function showSetupChip(opts) {
+	if (!opts.status) return false;
+	if (opts.status.summary.complete) return false;
+	return !showSetupCard(opts);
+}
+function chipLabel(status) {
+	const s = status?.summary;
+	if (!s) return "Setup";
+	return "Setup " + s.done + "/" + s.total;
+}
+function stepNumber(id) {
+	const i = STEP_ORDER.indexOf(id);
+	return i < 0 ? "•" : "①②③④⑤".charAt(i) || "•";
+}
+function installedLogins(logins) {
+	const rows = (logins || []).filter((l) => l.installed);
+	return rows.filter((l) => l.default).concat(rows.filter((l) => !l.default));
+}
+function loginLine(l) {
+	if (l.logged_in === true) return {
+		text: "signed in",
+		ok: true
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	const status = state === "streaming" ? "sign in when it asks (a browser window may open) — then close this window" : state;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
-		id: "signin-dialog",
-		role: "dialog",
-		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "prov-login-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ws-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["Sign in to ", agentDisplayName(provider)] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						id: "signin-status",
-						children: status
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "signin-close",
-						onClick: () => void close(),
-						children: "Close"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "prov-login-term",
-				ref: hostRef
-			})]
-		})
-	}), document.body);
+	if (l.logged_in === false) return {
+		text: "not signed in yet",
+		ok: false
+	};
+	return {
+		text: "sign-in can't be checked — fine if it works",
+		ok: null
+	};
 }
-function AgentSignIn({ provider, onDone, className }) {
-	const [open, setOpen] = (0, import_react.useState)(false);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-		type: "button",
-		className: "test-btn agent-signin-btn" + (className ? " " + className : ""),
-		onClick: (e) => {
-			e.stopPropagation();
-			setOpen(true);
-		},
-		children: ["Sign in to ", agentDisplayName(provider)]
-	}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignInWindow, {
-		provider,
-		onClose: () => {
-			setOpen(false);
-			onDone();
-		}
-	})] });
+function tailscaleMissing(status) {
+	const ts = status?.tailscale;
+	if (!ts) return false;
+	return ts.status !== "ok";
+}
+function consumeSetupIntent(loc = window.location, hist = window.history) {
+	const params = new URLSearchParams(loc.search);
+	const v = params.get("setup");
+	if (v !== "1" && v !== "install") return false;
+	params.delete("setup");
+	const q = params.toString();
+	try {
+		hist.replaceState(null, "", loc.pathname + (q ? "?" + q : "") + loc.hash);
+	} catch {}
+	return true;
 }
 //#endregion
-//#region src/components/dialogs/ConnectGitHub.tsx
-function errText$1(e) {
-	return e instanceof Error ? e.message : String(e);
-}
-function GhSignInWindow({ onClose }) {
-	const hostRef = (0, import_react.useRef)(null);
-	const state = useWsTerm(hostRef, "/api/github/gh-login-terminal", true);
-	const closeRef = (0, import_react.useRef)(onClose);
-	closeRef.current = onClose;
-	const close = async () => {
-		try {
-			await api("/api/github/gh-login-close", { method: "POST" });
-		} catch {}
-		closeRef.current();
-	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
-		id: "gh-signin-dialog",
-		role: "dialog",
-		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "prov-login-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ws-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Sign in to GitHub" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: state === "streaming" ? "copy the code it shows, press Enter, sign in in the browser — then close this window" : state
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-signin-close",
-						onClick: () => void close(),
-						children: "Close"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "prov-login-term",
-				ref: hostRef
-			})]
-		})
-	}), document.body);
-}
-function ConnectGitHub({ onChange }) {
-	const [st, setSt] = (0, import_react.useState)(null);
-	const [err, setErr] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const [flow, setFlow] = (0, import_react.useState)(null);
-	const [ghOpen, setGhOpen] = (0, import_react.useState)(false);
-	const [token, setToken] = (0, import_react.useState)("");
-	const [name, setName] = (0, import_react.useState)("");
-	const [email, setEmail] = (0, import_react.useState)("");
-	const [push, setPush] = (0, import_react.useState)(null);
-	const changeRef = (0, import_react.useRef)(onChange);
-	changeRef.current = onChange;
-	const load = (0, import_react.useCallback)(async () => {
-		try {
-			const s = await api("/api/github/status");
-			setSt(s);
-			setErr("");
-			if (s.flow && s.flow.state === "pending") setFlow(s.flow);
-			setName((v) => v || s.identity?.name || s.identity_suggested?.name || "");
-			setEmail((v) => v || s.identity?.email || s.identity_suggested?.email || "");
-		} catch (e) {
-			setErr(errText$1(e));
-		}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		load();
-	}, [load]);
-	const connected = (0, import_react.useCallback)(async (login) => {
-		toast(login ? "GitHub connected — @" + login : "GitHub connected");
-		await load();
-		changeRef.current?.();
-	}, [load]);
-	(0, import_react.useEffect)(() => {
-		if (!flow || flowFinished(flow)) return;
-		const t = setTimeout(async () => {
-			try {
-				const f = await api("/api/github/device/poll", { method: "POST" });
-				setFlow(f);
-				if (f.state === "done") connected(f.login);
-			} catch (e) {
-				setFlow({
-					...flow,
-					state: "error",
-					error: errText$1(e)
-				});
-			}
-		}, pollDelay(flow) * 1e3);
-		return () => clearTimeout(t);
-	}, [flow, connected]);
-	const run = async (what, fn) => {
-		setBusy(what);
-		try {
-			await fn();
-		} catch (e) {
-			toast(errText$1(e), { duration: 8e3 });
-		} finally {
-			setBusy("");
-		}
-	};
-	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "error",
-		children: ["GitHub status failed: ", err]
-	});
-	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "muted",
-		children: "Checking GitHub…"
-	});
-	const method = primaryGithubMethod(st);
-	const pasteBox = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "setup-acct-row gh-token-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-				href: st.token_url,
-				target: "_blank",
-				rel: "noopener noreferrer",
-				className: "gh-token-link",
-				children: "Make a token on GitHub"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "password",
-				className: "gh-token-input",
-				placeholder: "…then paste it here",
-				autoComplete: "off",
-				value: token,
-				onChange: (e) => setToken(e.target.value),
-				onClick: (e) => e.stopPropagation()
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "gh-token-save",
-				disabled: !!busy || !token.trim(),
-				onClick: (e) => {
-					e.stopPropagation();
-					run("token", async () => {
-						const r = await api("/api/github/token", { json: { token: token.trim() } });
-						setToken("");
-						if (r.error) toast(r.error);
-						await connected(r.login);
-					});
-				},
-				children: busy === "token" ? "Checking…" : "Save"
-			})
-		]
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "connect-github",
-		id: "connect-github",
-		children: [
-			st.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "gh-connected",
-				id: "gh-connected",
-				children: [
-					"✓ Connected",
-					st.login ? " as @" + st.login : "",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "muted",
-						children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
-					}),
-					st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "error",
-						children: [" — ", st.user_error]
-					})
-				]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				method === "device" && (flow && flow.state === "pending" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "gh-device",
-					id: "gh-device",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Enter this code at GitHub:" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
-							className: "gh-user-code",
-							children: flow.user_code
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: (e) => {
-								e.stopPropagation();
-								copyText(flow.user_code).then((ok) => toast(ok ? "Code copied" : "Copy failed"));
-							},
-							children: "Copy"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
-							href: flow.verification_uri,
-							target: "_blank",
-							rel: "noopener noreferrer",
-							children: ["Open ", flow.verification_uri.replace(/^https?:\/\//, "")]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "waiting for you to approve…"
-						})
-					]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-device-start",
-						disabled: !!busy,
-						onClick: (e) => {
-							e.stopPropagation();
-							run("device", async () => {
-								const f = await api("/api/github/device/start", { method: "POST" });
-								setFlow(f);
-							});
-						},
-						children: "Sign in with GitHub"
-					}), flow && flow.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "error",
-						children: flow.error
-					})]
-				})),
-				method === "gh" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-cli-signin",
-						disabled: !!busy,
-						onClick: (e) => {
-							e.stopPropagation();
-							setGhOpen(true);
-						},
-						children: "Sign in to GitHub"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "opens GitHub in your browser (through the gh CLI)"
-					})]
-				}),
-				method === "token" ? pasteBox : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-					className: "gh-token-fold",
-					onClick: (e) => e.stopPropagation(),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or paste a token" }), pasteBox]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted setup-hint",
-					children: "Recommended, not required: other forges push over your own remote as usual."
-				})
-			] }),
-			needsIdentity(st) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "gh-identity",
-				id: "gh-identity",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Your name and email for commits"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "setup-acct-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								className: "gh-ident-name",
-								placeholder: "Your Name",
-								value: name,
-								onChange: (e) => setName(e.target.value),
-								onClick: (e) => e.stopPropagation()
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								className: "gh-ident-email",
-								placeholder: "you@example.com",
-								value: email,
-								onChange: (e) => setEmail(e.target.value),
-								onClick: (e) => e.stopPropagation()
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "gh-ident-save",
-								disabled: !!busy || !name.trim() || !email.trim(),
-								onClick: (e) => {
-									e.stopPropagation();
-									run("identity", async () => {
-										await api("/api/github/identity", { json: {
-											name: name.trim(),
-											email: email.trim()
-										} });
-										toast("git now knows who you are");
-										await load();
-										changeRef.current?.();
-									});
-								},
-								children: "Use these"
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Saved in your global git config (~/.gitconfig) when you click — the @users.noreply address keeps your real email private."
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "setup-acct-row gh-push-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-push-check",
-						disabled: !!busy,
-						onClick: (e) => {
-							e.stopPropagation();
-							run("push", async () => setPush(await api("/api/github/push-check", { method: "POST" })));
-						},
-						children: busy === "push" ? "Checking…" : "Check I can push"
-					}),
-					push && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : ""),
-						children: [(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || ""), push.ok === false && push.fix ? " — " + push.fix : ""]
-					}),
-					push?.ok === false && push.id === "https_auth" && st.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "gh-git-credential",
-						disabled: !!busy,
-						onClick: (e) => {
-							e.stopPropagation();
-							run("cred", async () => {
-								toast((await api("/api/github/git-credential", { method: "POST" })).helper === "gh" ? "git pushes through gh now" : "git pushes with your GitHub sign-in now");
-								setPush(await api("/api/github/push-check", { method: "POST" }));
-							});
-						},
-						children: "Let git push with this sign-in"
-					})
-				]
-			}),
-			ghOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhSignInWindow, { onClose: () => {
-				setGhOpen(false);
-				run("gh", async () => {
-					try {
-						const r = await api("/api/github/import-gh", { method: "POST" });
-						await connected(r.login);
-					} catch {
-						await load();
-					}
-				});
-			} })
-		]
-	});
-}
-//#endregion
-//#region src/components/dialogs/SetupDialog.tsx
+//#region src/components/setup/DoctorList.tsx
 var DOCTOR_ICON = {
 	ok: "✓",
 	info: "ℹ",
@@ -38077,30 +39013,9 @@ var useDoctorWarnStore = create((set) => ({
 function useDoctorWarn() {
 	return useDoctorWarnStore();
 }
-var setupAutoShown = false;
-function consumeSetupIntent(loc = window.location, hist = window.history) {
-	const params = new URLSearchParams(loc.search);
-	if (params.get("setup") !== "install") return false;
-	params.delete("setup");
-	const q = params.toString();
-	try {
-		hist.replaceState(null, "", loc.pathname + (q ? "?" + q : "") + loc.hash);
-	} catch {}
-	return true;
-}
-function shouldAutoShowSetup(opts) {
-	return opts.failing && opts.onboarded === false && opts.sessions > 0;
-}
 function useDoctorAutoShow() {
-	const { data: config } = useConfig();
-	const { data: instances } = useInstances();
-	const sessions = instances ? instances.length : -1;
-	const failing = useDoctorWarnStore((s) => s.failing);
 	(0, import_react.useEffect)(() => {
-		if (consumeSetupIntent()) {
-			setupAutoShown = true;
-			useUi.getState().openDialogFor("setup");
-		}
+		if (consumeSetupIntent()) useUi.getState().openDialogFor("setup");
 		const check = async () => {
 			try {
 				const d = await api("/api/doctor");
@@ -38114,26 +39029,8 @@ function useDoctorAutoShow() {
 		}, 3e5);
 		return () => clearInterval(t);
 	}, []);
-	(0, import_react.useEffect)(() => {
-		if (setupAutoShown) return;
-		if (failing && config?.onboarded === false && sessions === 0) {
-			setupAutoShown = true;
-			return;
-		}
-		if (!shouldAutoShowSetup({
-			failing,
-			onboarded: config?.onboarded,
-			sessions
-		})) return;
-		setupAutoShown = true;
-		useUi.getState().openDialogFor("setup");
-	}, [
-		failing,
-		config?.onboarded,
-		sessions
-	]);
 }
-function DoctorList({ reprobeKey }) {
+function DoctorList({ reprobeKey, onChange }) {
 	const [doctor, setDoctor] = (0, import_react.useState)(lastDoctor);
 	const [error, setError] = (0, import_react.useState)("");
 	const [installed, setInstalled] = (0, import_react.useState)(0);
@@ -38145,8 +39042,10 @@ function DoctorList({ reprobeKey }) {
 				const d = await api("/api/doctor" + (reprobe ? "?refresh=1" : ""));
 				if (!live) return;
 				lastDoctor = d;
+				useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
 				setDoctor(d);
 				setError("");
+				if (reprobe) onChange?.();
 			} catch (e) {
 				if (live) setError(e.message);
 			}
@@ -38202,6 +39101,9 @@ function DoctorList({ reprobeKey }) {
 		}, c.id || i))
 	})] });
 }
+//#endregion
+//#region src/components/setup/githubTest.tsx
+var idleTest = { testing: false };
 function TestResult({ state }) {
 	if (state.testing) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "test-result",
@@ -38213,87 +39115,388 @@ function TestResult({ state }) {
 		children: (state.ok ? "✓ " : "✗ ") + state.msg
 	});
 }
-var idleTest = { testing: false };
-function describeGithubTest(r) {
-	const source = String(r?.token_source || "none");
-	const haveToken = !!r?.ok || source !== "" && source !== "none";
-	const bits = ["token: " + source];
-	if (r?.gh_installed) bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-	else bits.push("gh not installed (optional)");
-	if (r?.detail) bits.push(String(r.detail));
-	return {
-		testing: false,
-		ok: haveToken,
-		msg: bits.join(" · ")
-	};
-}
-async function runGithubTest() {
-	try {
-		return describeGithubTest(await api("/api/settings/test/github", { method: "POST" }));
-	} catch (e) {
-		return {
-			testing: false,
-			ok: false,
-			msg: e.message
-		};
-	}
-}
-function StepReason({ step }) {
-	if (!step || !step.reason) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "setup-reason st-" + step.status,
-		"data-step-status": step.status,
-		children: (STATUS_GLYPH[step.status] || "•") + " " + step.reason
+//#endregion
+//#region src/components/setup/useSetup.ts
+var SETUP_KEY = ["setup"];
+function useSetup(enabled = true) {
+	return useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4,
+		enabled
 	});
 }
-function SetupChecklist$1(_props) {
-	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
-	const [gh, setGh] = (0, import_react.useState)(idleTest);
-	const [sc, setSc] = (0, import_react.useState)(idleTest);
-	const [agent, setAgent] = (0, import_react.useState)(idleTest);
-	const [signIn, setSignIn] = (0, import_react.useState)(null);
-	const [scToken, setScToken] = (0, import_react.useState)("");
-	const [plan, setPlan] = (0, import_react.useState)(null);
-	const [choosing, setChoosing] = (0, import_react.useState)(false);
-	const loadPlan = (0, import_react.useCallback)(async (refresh = false) => {
+async function refreshSetup(reprobe = false) {
+	if (!reprobe) {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+		return;
+	}
+	try {
+		const d = await api("/api/setup?refresh=1");
+		queryClient.setQueryData(SETUP_KEY, d);
+	} catch {
+		await queryClient.invalidateQueries({ queryKey: SETUP_KEY });
+	}
+}
+async function skipSetupStep(step, undo = false) {
+	const r = await api("/api/setup/" + encodeURIComponent(step) + (undo ? "/unskip" : "/skip"), { method: "POST" });
+	queryClient.setQueryData(SETUP_KEY, (old) => old ? {
+		...old,
+		steps: r.steps,
+		summary: r.summary
+	} : old);
+}
+//#endregion
+//#region src/components/setup/SetupChecklist.tsx
+function progressLine(status) {
+	if (!status) return "Checking…";
+	const s = status.summary;
+	const next = status.steps.find((x) => x.id === s.next);
+	if (s.complete) return "All set";
+	return s.done + " of " + s.total + " done" + (next ? " · next: " + next.title : "");
+}
+function StepHead({ step }) {
+	const note = step.status === "done" ? "done" : step.status === "skipped" ? "skipped" : step.required ? "" : "optional";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "setup-num",
+			children: stepNumber(step.id)
+		}),
+		" ",
+		step.title,
+		note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "setup-state st-" + step.status,
+			"data-step-status": step.status,
+			children: STATUS_GLYPH[step.status] + " " + note
+		})
+	] });
+}
+function SkipRow({ step }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	if (step.done) return null;
+	const run = async (undo) => {
+		setBusy(true);
 		try {
-			setPlan(await api("/api/onboarding" + (refresh ? "?refresh=1" : "")));
-		} catch {}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		let live = true;
-		loadPlan();
-		api("/api/doctor").then((d) => {
-			if (live) setSignIn(signInTarget((d.checks || []).find((c) => c.id === "agent-auth")));
-		}).catch(() => {});
-		return () => {
-			live = false;
-		};
-	}, [loadPlan]);
-	const step = (id) => plan?.steps.find((x) => x.id === id);
-	const shown = visibleSteps(plan);
-	const num = (id) => stepNumber(id, shown);
-	const closeSetup = () => {
-		if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
-	};
-	const openDevices = () => {
-		closeSetup();
-		useUi.getState().openDialogFor("settings", "devices");
-	};
-	const choose = async (choice) => {
-		setChoosing(true);
-		try {
-			setPlan(await api("/api/onboarding/choice", { json: { choice } }));
+			await skipSetupStep(step.id, undo);
 		} catch (e) {
 			toast(e.message);
 		} finally {
-			setChoosing(false);
+			setBusy(false);
 		}
 	};
-	const testGithub = (0, import_react.useCallback)(async () => {
-		setGh({ testing: true });
-		setGh(await runGithubTest());
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "linklike setup-skip" + (step.skipped ? " setup-unskip" : ""),
+		disabled: busy,
+		onClick: (e) => {
+			e.stopPropagation();
+			run(step.skipped);
+		},
+		children: step.skipped ? "Show again" : "Skip"
+	});
+}
+function SetupChecklist$1() {
+	const { data: status, error } = useSetup();
+	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
+	const steps = orderedSteps(status);
+	const by = new Map(steps.map((s) => [s.id, s]));
+	const step = (id) => by.get(id);
+	const closeSetup = () => {
+		if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
+	};
+	const go = (name, target) => {
+		closeSetup();
+		useUi.getState().openDialogFor(name, target);
+	};
+	const tools = step("tools");
+	const agent = step("agent_login");
+	const repo = step("repo");
+	const tracker = step("tracker");
+	const phone = step("phone");
+	const logins = installedLogins(status?.logins);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "setup-checklist",
+		"data-setup-next": status?.summary.next || "",
+		children: [
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "error",
+				children: ["setup status failed: ", error.message]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted setup-progress",
+				children: progressLine(status)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "setup-step st-" + tools.status,
+				"data-step": "tools",
+				"data-status": tools.status,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: tools }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "setup-fold",
+					open: !tools.done,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+							onClick: (e) => e.stopPropagation(),
+							children: tools.done ? "Everything required is installed — show the list" : "What this computer has"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "setup-doctor",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+								reprobeKey,
+								onChange: () => void refreshSetup()
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "setup-actions",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "setup-recheck",
+								onClick: (e) => {
+									e.stopPropagation();
+									setReprobeKey((k) => k + 1);
+								},
+								children: "Re-check"
+							})
+						})
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "setup-step st-" + agent.status,
+				"data-step": "agent_login",
+				"data-status": agent.status,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: agent }),
+					!status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "muted setup-hint",
+						children: "Checking…"
+					}) : logins.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "muted setup-hint",
+						children: [
+							"No agent CLI is installed yet — step ① installs ",
+							status.default_provider || "one",
+							"."
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "setup-logins",
+						children: logins.map((l) => {
+							const line = loginLine(l);
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+								className: "setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown"),
+								"data-provider": l.name,
+								"data-logged-in": String(l.logged_in),
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "setup-login-name",
+										children: [agentDisplayName(l.name), l.default && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "muted",
+											children: " (default)"
+										})]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "setup-login-state",
+										children: (line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text
+									}),
+									l.login_cmd && line.ok !== true && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+										provider: l.name,
+										onDone: () => void refreshSetup(true)
+									})
+								]
+							}, l.name);
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "muted setup-hint",
+						children: [
+							"API keys and extra accounts live in",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike setup-open-accounts",
+								onClick: (e) => {
+									e.stopPropagation();
+									go("settings", "accounts");
+								},
+								children: "Settings → Accounts"
+							}),
+							"."
+						]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "setup-step st-" + repo.status,
+				"data-step": "repo",
+				"data-status": repo.status,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: repo }), repo.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted setup-hint",
+					children: "Your first session was created. New (Ctrl+N) starts another."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted setup-hint",
+					children: "A session is an isolated git worktree plus a terminal running your agent. Pick the folder to work in — the folder browser is in the dialog — and say what to do."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "setup-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "setup-new",
+						onClick: (e) => {
+							e.stopPropagation();
+							go("new-session");
+						},
+						children: "+ New session"
+					})
+				})] })]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "setup-step st-" + tracker.status,
+				"data-step": "tracker",
+				"data-status": tracker.status,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: tracker }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "muted setup-hint",
+						children: tracker.done ? "A tracker is connected — Intake turns its tickets into sessions." : "Connect GitHub for PRs and issues; your tracker (Jira, Linear, Shortcut, Asana, GitHub Issues) is a ticket source in Settings → Connections. Done once the first ticket source is saved."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "setup-actions",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "setup-open-connections",
+								onClick: (e) => {
+									e.stopPropagation();
+									go("settings", "connections");
+								},
+								children: "Open Settings → Connections"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "setup-connect-github",
+								title: "Sign in with GitHub, use gh, or paste a token, then Test it against your first repository. That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
+								onClick: (e) => {
+									e.stopPropagation();
+									openConnectGitHub();
+								},
+								children: "Connect GitHub"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: tracker })
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutTest, {})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "setup-step st-" + phone.status,
+				"data-step": "phone",
+				"data-status": phone.status,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: phone }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneStep, {
+						status,
+						done: phone.done
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "setup-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "setup-open-mobile",
+							onClick: (e) => {
+								e.stopPropagation();
+								go("settings", "mobile");
+							},
+							children: "Settings → Your phone"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: phone })]
+					})
+				]
+			}),
+			status?.report && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "setup-report",
+				onClick: (e) => e.stopPropagation(),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "What the server found at first start" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: status.report })]
+			})
+		]
+	});
+}
+function PhoneStep({ status, done }) {
+	const [qr, setQr] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const showQr = (0, import_react.useCallback)(async () => {
+		setBusy(true);
+		try {
+			const d = await api("/api/mobile?setup=1");
+			setQr({
+				svg: d.qr_svg || "",
+				urls: d.urls || []
+			});
+			refreshSetup();
+		} catch (e) {
+			toast(e.message);
+		} finally {
+			setBusy(false);
+		}
 	}, []);
+	if (status && tailscaleMissing(status)) {
+		const ts = status.tailscale;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "setup-phone setup-phone-tailscale",
+			"data-phone": "install-tailscale",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "muted setup-hint",
+					children: [
+						"Your phone reaches MindFlock over Tailscale, which isn't ready on this computer",
+						ts.detail ? " — " + ts.detail : "",
+						"."
+					]
+				}),
+				ts.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "setup-hint",
+					children: ["Install Tailscale: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ts.fix })]
+				}),
+				ts.docs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "setup-hint",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						href: ts.docs,
+						target: "_blank",
+						rel: "noopener noreferrer",
+						children: ts.docs
+					})
+				})
+			]
+		});
+	}
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "setup-phone",
+		"data-phone": "qr",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted setup-hint",
+				children: done ? "Your phone has been here. Scan again any time from Settings → Your phone." : "Install Tailscale on your phone, sign in to the same account, then scan this QR."
+			}),
+			qr?.svg ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "setup-qr",
+				dangerouslySetInnerHTML: { __html: qr.svg }
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "setup-actions",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "setup-show-qr",
+					disabled: busy,
+					onClick: (e) => {
+						e.stopPropagation();
+						showQr();
+					},
+					children: busy ? "Loading…" : "Show QR"
+				})
+			}),
+			qr && !qr.svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted setup-hint",
+				children: "No QR yet — turn on Make reachable in Settings → Your devices first."
+			})
+		]
+	});
+}
+function ShortcutTest() {
+	const [sc, setSc] = (0, import_react.useState)(idleTest);
+	const [scToken, setScToken] = (0, import_react.useState)("");
 	const testShortcut = (0, import_react.useCallback)(async () => {
 		setSc({ testing: true });
 		const tok = scToken.trim();
@@ -38327,288 +39530,42 @@ function SetupChecklist$1(_props) {
 			});
 		}
 	}, [scToken]);
-	const testAgent = (0, import_react.useCallback)(async () => {
-		setAgent({ testing: true });
-		try {
-			const r = await api("/api/settings/test/agent", { method: "POST" });
-			setSignIn(signInTarget(r?.auth));
-			const bits = [];
-			if (r?.cli?.detail) bits.push(r.cli.detail);
-			if (r?.auth?.detail) bits.push(r.auth.detail);
-			setAgent({
-				testing: false,
-				ok: !!r?.ok,
-				msg: bits.join(" · ") || (r?.ok ? "agent CLI ready" : "agent CLI not ready")
-			});
-		} catch (e) {
-			setAgent({
-				testing: false,
-				ok: false,
-				msg: e.message
-			});
-		}
-		loadPlan(true);
-	}, [loadPlan]);
-	const devices = step("devices");
-	const agentStep = step("agent");
-	const tsStep = step("tailscale");
-	const ghStep = step("github");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			"data-step": "deps",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "setup-optional",
+		onClick: (e) => e.stopPropagation(),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional: test a Shortcut token" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "setup-acct-row setup-shortcut-row",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "setup-num",
-					children: num("deps")
-				}), " Dependencies"] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "setup-doctor",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, { reprobeKey })
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "setup-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-recheck",
-						onClick: (e) => {
-							e.stopPropagation();
-							setReprobeKey((k) => k + 1);
-							loadPlan(true);
-						},
-						children: "Re-check"
-					})
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step setup-devices",
-			"data-step": "devices",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "setup-num",
-				children: num("devices")
-			}), " First computer, or join one you already have?"] }), !plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "muted setup-hint",
-				children: "Checking…"
-			}) : devices?.ask ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "muted setup-hint",
-				children: "Already use MindFlock on another computer? Join it first: your settings, GitHub token and ticket sources come along. (Agent sign-ins stay on each computer, so you sign in here after.)"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "setup-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "setup-first-computer",
-					disabled: choosing,
+					className: "setup-test-shortcut",
 					onClick: (e) => {
 						e.stopPropagation();
-						choose("first");
+						testShortcut();
 					},
-					children: "This is my first computer"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "setup-join-computer",
-					disabled: choosing,
-					onClick: (e) => {
-						e.stopPropagation();
-						choose("join");
-					},
-					children: "Join one I already have"
-				})]
-			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: devices }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "setup-actions",
-					children: [devices?.choice === "join" && devices.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-open-devices",
-						onClick: (e) => {
-							e.stopPropagation();
-							openDevices();
-						},
-						children: "Join it in Settings → Devices"
-					}), devices?.status !== "ok" || devices?.choice === "first" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike setup-devices-change",
-						disabled: choosing,
-						onClick: (e) => {
-							e.stopPropagation();
-							choose("");
-						},
-						children: "Change"
-					}) : null]
+					children: "Test Shortcut"
 				}),
-				devices?.choice === "join" && devices.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted setup-hint",
-					children: "On your other computer: Settings → Devices → Add a device shows a code to paste here — and, for a computer with nothing installed yet, one line that installs MindFlock and joins in one go."
-				})
-			] })]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			"data-step": "agent",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "setup-num",
-				children: num("agent")
-			}), " Sign in to your agent"] }), agentStep?.status === "skip" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: agentStep }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: agentStep }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "setup-acct-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-test-agent",
-						onClick: (e) => {
-							e.stopPropagation();
-							testAgent();
-						},
-						children: "Test agent CLI"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: agent }),
-					signIn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
-						provider: signIn,
-						onDone: () => void testAgent()
-					})
-				]
-			})] })]
-		}),
-		shown.includes("tailscale") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			"data-step": "tailscale",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "setup-num",
-					children: num("tailscale")
-				}), " Tailscale"] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: tsStep }),
-				tsStep?.status === "todo" && tsStep.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "setup-hint",
-					children: ["fix: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tsStep.fix })]
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "password",
+					className: "setup-shortcut-token",
+					placeholder: "Shortcut API token (optional)",
+					autoComplete: "off",
+					title: "Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token.",
+					value: scToken,
+					onChange: (e) => setScToken(e.target.value),
+					onClick: (e) => e.stopPropagation()
 				}),
-				tsStep?.status === "todo" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "setup-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-open-tailscale",
-						onClick: (e) => {
-							e.stopPropagation();
-							openDevices();
-						},
-						children: "Sign in in Settings → Devices"
-					})
-				})
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: sc })
 			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			"data-step": "github",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "setup-num",
-					children: num("github")
-				}), " Connect GitHub"] }),
-				ghStep?.status === "skip" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: ghStep }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, { onChange: () => void loadPlan() }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-					className: "setup-optional",
-					onClick: (e) => e.stopPropagation(),
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional: test GitHub or a Shortcut token" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "setup-acct-row",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "setup-test-github",
-								title: "Checks that a GitHub token resolves (Connect GitHub above, $GH_TOKEN / $GITHUB_TOKEN, or gh auth token). That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
-								onClick: (e) => {
-									e.stopPropagation();
-									testGithub();
-								},
-								children: "Test GitHub"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: gh })]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "setup-acct-row setup-shortcut-row",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "setup-test-shortcut",
-									onClick: (e) => {
-										e.stopPropagation();
-										testShortcut();
-									},
-									children: "Test Shortcut"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "password",
-									className: "setup-shortcut-token",
-									placeholder: "Shortcut API token (optional)",
-									autoComplete: "off",
-									title: "Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token.",
-									value: scToken,
-									onChange: (e) => setScToken(e.target.value),
-									onClick: (e) => e.stopPropagation()
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: sc })
-							]
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "muted setup-hint",
-					children: [
-						"Ticket sources are set up in",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "setup-open-intake linklike",
-							onClick: (e) => {
-								e.stopPropagation();
-								closeSetup();
-								useUi.getState().openDialogFor("intake", "tickets");
-							},
-							children: "Intake"
-						}),
-						" · agent accounts in ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "setup-open-settings linklike",
-							onClick: (e) => {
-								e.stopPropagation();
-								closeSetup();
-								useUi.getState().openDialogFor("settings", "accounts");
-							},
-							children: "Settings → Accounts"
-						})
-					]
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-step",
-			"data-step": "repo",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "setup-num",
-					children: num("repo")
-				}), " Create your first session"] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepReason, { step: step("repo") }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "setup-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-new",
-						onClick: (e) => {
-							e.stopPropagation();
-							closeSetup();
-							useUi.getState().openDialogFor("new-session");
-						},
-						children: "+ New session"
-					})
-				})
-			]
-		})
-	] });
+		})]
+	});
 }
+//#endregion
+//#region src/components/dialogs/SetupDialog.tsx
 function SetupDialog() {
 	const open = useUi((s) => s.openDialog === "setup");
 	const closeDialog = useUi((s) => s.closeDialog);
+	const { data: status } = useSetup(open);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const onKey = (e) => {
@@ -38631,7 +39588,10 @@ function SetupDialog() {
 			id: "setup-panel-dlg",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ws-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Setup" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["Setup ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted setup-head-progress",
+					children: progressLine(status)
+				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					id: "setup-close",
 					onClick: closeDialog,
@@ -38687,6 +39647,32 @@ function Hint({ id, children, action, className }) {
 	});
 }
 //#endregion
+//#region src/components/setup/SetupChip.tsx
+function SetupChip() {
+	const { data: status } = useSetup();
+	const { data: config } = useConfig();
+	const { data: instances } = useInstances();
+	const sessions = instances ? instances.length : -1;
+	const haveSessions = sessions > 0;
+	(0, import_react.useEffect)(() => {
+		if (haveSessions) refreshSetup();
+	}, [haveSessions]);
+	if (sessions < 0) return null;
+	if (!showSetupChip({
+		sessions,
+		status,
+		onboarded: config?.onboarded
+	})) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		id: "setup-chip",
+		className: "setup-chip",
+		title: "Finish setting up MindFlock — click for the checklist",
+		onClick: () => useUi.getState().openDialogFor("setup"),
+		children: chipLabel(status)
+	});
+}
+//#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var NO_FOLDS = /* @__PURE__ */ new Set();
 var VIEW_MODES = [
@@ -38702,6 +39688,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const ui = useUi();
 	const doctorWarn = useDoctorWarn();
 	const { data: config } = useConfig();
+	const { data: setup } = useSetup();
 	const qc = useQueryClient();
 	const { data: closed } = useQuery({
 		queryKey: ["recently-closed"],
@@ -38725,7 +39712,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const addonBarsRef = (0, import_react.useRef)(null);
 	const extBars = useExtensionBarDefs();
 	const extKeys = (0, import_react.useMemo)(() => extBars.map((b) => b.key), [extBars]);
-	const listed = (0, import_react.useMemo)(() => deviceLineage(instances.filter((i) => !isVerifySession(i.title))), [instances]);
+	const listed = (0, import_react.useMemo)(() => deviceLineage(instances.filter((i) => !isVerifySession(i))), [instances]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(listed), [listed]);
 	const order = (0, import_react.useMemo)(() => placeNewRunMembers(placeNewWorkers(ui.order, listed), listed.filter((i) => !i.device)), [ui.order, listed]);
 	const { data: runsData } = useRuns();
@@ -38937,36 +39924,16 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const cap = viewCap(ui.viewMode);
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
 	const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
-	const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
-	const firstRunCard = instances.length === 0 && config?.onboarded === false;
+	const searchVisible = ui.showFilter || ui.filterPeek || !!ui.filter;
+	const firstRunCard = showSetupCard({
+		sessions: instances.length,
+		status: setup,
+		onboarded: config?.onboarded
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		id: "sidebar",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarResizer, {}),
-			doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "doctor-warn",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "dw-text",
-						children: "⚠ setup issues —"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "doctor-warn-open",
-						className: "linklike",
-						onClick: () => ui.openDialogFor("settings", "doctor"),
-						children: "open Doctor"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "doctor-warn-dismiss",
-						title: "Dismiss until reload",
-						"aria-label": "Dismiss setup warning",
-						onClick: doctorWarn.dismiss,
-						children: "✕"
-					})
-				]
-			}),
 			orderedSections(ui.barOrder, extKeys).map((key) => {
 				if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sessions-block" + (secCue && secCue.key === SESSIONS_KEY ? ` drop-${secCue.cue}` : ""),
@@ -39013,7 +39980,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										badge,
 										badgeOff,
 										collapsed,
-										title: dev.host + (dev.os ? "  ·  " + dev.os : "") + (dev.ip ? "  ·  " + dev.ip : "") + (d.member ? "  ·  One of your devices — remove it in Settings → Devices" : ""),
+										title: dev.host + (dev.os ? "  ·  " + dev.os : "") + (dev.ip ? "  ·  " + dev.ip : "") + (d.member ? "  ·  One of your devices — remove it in Settings → Your devices" : ""),
 										showForget: canDisconnect(dev),
 										member: !!d.member,
 										note,
@@ -39067,6 +40034,33 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
 				id: "sidebar-footer",
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "foot-row foot-setup",
+						children: [doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "doctor-warn",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "dw-text",
+									children: "⚠ setup issues —"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									id: "doctor-warn-open",
+									className: "linklike",
+									onClick: () => ui.openDialogFor("setup"),
+									children: "open Setup"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									id: "doctor-warn-dismiss",
+									title: "Dismiss until reload",
+									"aria-label": "Dismiss setup warning",
+									onClick: doctorWarn.dismiss,
+									children: "✕"
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChip, {})]
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "view-modes",
 						title: "Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots",
@@ -39157,7 +40151,6 @@ function DeviceHeader(props) {
 	});
 }
 function DeviceSection(props) {
-	const openDialogFor = useUi((s) => s.openDialogFor);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceHeader, { ...props }),
 		!props.collapsed && props.note && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -39180,7 +40173,7 @@ function DeviceSection(props) {
 					className: "dev-connect",
 					onClick: (e) => {
 						e.stopPropagation();
-						openDialogFor("device", props.devKey);
+						openDevicesFor({ device: props.devKey });
 					},
 					children: "Connect…"
 				})
@@ -41320,7 +42313,7 @@ function runStages(run) {
 			label: "Plan",
 			how: "the lead proposes, you approve",
 			state: st === "planning" ? "now" : st === "plan_ready" ? "now" : "done",
-			detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — waiting for you" : pieces ? pieces + " pieces" : ""
+			detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — needs you" : pieces ? pieces + " pieces" : ""
 		});
 	}
 	const working = tasks.filter((t) => !TERMINAL.has(t.state) && t.state !== "queued" && t.state !== "integrating").length;
@@ -41362,7 +42355,7 @@ function runStages(run) {
 		label: "One PR",
 		how: "you release it",
 		state: rel === "done" || rel === "handoff" ? "done" : rel === "failed" ? "bad" : rel === "releasing" || st === "release_ready" ? "now" : "next",
-		detail: rel === "done" ? run.release?.pr_url ? "opened" : "released" : st === "release_ready" ? "waiting for you" : ""
+		detail: rel === "done" ? run.release?.pr_url ? "opened" : "released" : st === "release_ready" ? "needs you" : ""
 	});
 	return out;
 }
@@ -41555,7 +42548,7 @@ function headerSummary(rows, finished = 0) {
 	});
 	const ask = n("ask");
 	if (ask) parts.push({
-		text: ask + (ask === 1 ? " needs" : " need") + " your answer",
+		text: ask + (ask === 1 ? " needs" : " need") + " you",
 		cls: "needs"
 	});
 	const bad = n("failed") + n("blocked");
@@ -41616,7 +42609,7 @@ function progressOf(rows, finished) {
 			{
 				key: "needs",
 				n: n("ask"),
-				label: "need your answer"
+				label: "need you"
 			},
 			{
 				key: "working",
@@ -41658,7 +42651,7 @@ function workerStatus(row, parentName, now = Date.now() / 1e3) {
 	const t = row.activitySince;
 	switch (row.state) {
 		case "ask": return {
-			word: "needs your answer",
+			word: "needs you · question",
 			cls: "needs",
 			detail: [t ? "asking for " + since(t, now) : "", parentName ? parentName + " is waiting on it" : ""].filter(Boolean).join(" · ")
 		};
@@ -41939,7 +42932,7 @@ function StagesDiagram({ stages }) {
 	if (!stages.length) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 		className: "od-stages",
-		"aria-label": "The order this group runs in",
+		"aria-label": "The order this team run runs in",
 		children: stages.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "od-stage is-" + s.state,
 			children: [i > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -41990,7 +42983,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 			children: [myName, "'s workers"]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "thread-sub",
-			children: "Loading its group…"
+			children: "Loading its team run…"
 		})]
 	});
 	const id = run.id;
@@ -42064,7 +43057,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 	const outcome = releaseOutcome(run);
 	const lane = laneNote(me?.lane);
 	const pushOnly = run.policy?.lane === "push";
-	const release = (merge) => act(merge ? "merge" : "release", pushOnly ? "Push the branch" : "Open the PR", "/release", { merge_when_green: merge }, merge ? "Opening the PR — it merges once checks pass" : pushOnly ? "Pushing the branch" : "Opening the PR");
+	const release = (merge) => act(merge ? "merge" : "release", pushOnly ? "Push the branch" : "Open PR", "/release", { merge_when_green: merge }, merge ? "Opening the PR — it merges once checks pass" : pushOnly ? "Pushing the branch" : "Opening the PR");
 	const reviewDiff = () => {
 		selectSession(title, { noKeyboard: true });
 		useUi.getState().setLastTab(title, "diff");
@@ -42108,7 +43101,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 				run.mode === "same_folder" && !!(run.stray?.paths?.length || run.stray?.commits?.length) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "thread-sub th-bad rb-warn",
 					"data-stray": "",
-					children: [run.stray?.paths?.length ? "Changes no piece owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no piece's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no piece made is on the group's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
+					children: [run.stray?.paths?.length ? "Changes no piece owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no piece's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no piece made is on the team run's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
 				}),
 				finished && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "thread-head-btns",
@@ -42116,7 +43109,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 						type: "button",
 						className: "th-btn rb-copy-summary",
 						disabled: !summary,
-						title: summary ? "Copy what this group did, as Markdown" : "MindFlock has no summary for this group",
+						title: summary ? "Copy what this team run did, as Markdown" : "MindFlock has no summary for this team run",
 						onClick: async () => {
 							if (!summary) return;
 							toast(await copyText(summary) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
@@ -42514,7 +43507,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 										type: "button",
 										className: "th-btn rb-remove",
 										disabled: !!busy,
-										title: "Take it out of the group — it never starts",
+										title: "Take it out of the team run — it never starts",
 										onClick: () => pieceAct(t, "skip"),
 										children: "Remove"
 									})] })
@@ -43221,7 +44214,7 @@ function FinishedItem({ f }) {
 					type: "button",
 					className: "th-btn",
 					onClick: () => window.open(f.pr_url, "_blank"),
-					children: "Open PR ↗"
+					children: "View PR ↗"
 				}), f.how === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "th-btn",
@@ -53055,7 +54048,7 @@ function ActivityCard(p) {
 			className: "ct-act-list",
 			children: [!p.rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 				className: "ct-muted",
-				children: "Nothing yet — the agent hasn't touched a file since the map armed."
+				children: "Nothing yet. Files the agent reads and edits appear here as it works."
 			}), (p.open ? p.rows : p.rows.slice(0, 1)).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: "ct-act-row" + (r.bad ? " bad" : "") + (r.rule ? " rule " + r.rule : ""),
@@ -53811,10 +54804,25 @@ function affectsOf(M, A, cache) {
 	return A.edits.size ? agentBlast(M, A, cache).ids.size : 0;
 }
 //#endregion
+//#region src/components/grid/codemap/sharedZone.ts
+function isShared(z) {
+	return z.scope === "shared";
+}
+function sharedWhere(z) {
+	const who = (z.author || "").trim();
+	return "shared with the repo" + (who ? " · added by " + who : z.added ? " · added " + z.added : "");
+}
+//#endregion
 //#region src/components/grid/codemap/BirdIndex.tsx
 var clip = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var plural$2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
+var ALL_FOLDERS = "\0folders";
+var FOLDERS_SHOWN = 5;
+function shownFolders(folders, all, ruled, max = FOLDERS_SHOWN) {
+	if (all || folders.length <= max) return folders;
+	return folders.filter((f, i) => i < max || ruled(f));
+}
 function changeSummary(M, agents) {
 	const primary = agents.find((A) => A.ag.primary) || null;
 	const mineA = (A) => A.ag.primary || !!primary && A.ag.parent === primary.ag.key;
@@ -53938,9 +54946,11 @@ function BirdIndex(p) {
 			p,
 			sum,
 			riskOpen,
-			onRisk: () => setRisk(!riskOpen)
+			onRisk: () => setRisk(!riskOpen),
+			allFolders: ex.has(ALL_FOLDERS),
+			onAllFolders: () => toggle(ALL_FOLDERS)
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rules, { p })
+		p.zones.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rules, { p })
 	] });
 	if (p.size === "wide") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-left ct-bix",
@@ -54065,7 +55075,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 	const following = p.followKey === A.ag.key;
 	const bk = A.blocked[A.blocked.length - 1];
 	const working = subs.filter((S) => !S.done).length;
-	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : st === "done" ? "finished — back in the nest" : st === "planning" ? "planning (buds on the files it will touch)" : st === "thinking" ? working ? `in the nest — ${plural$2(working, "helper")} out working` : "in the nest, thinking" : A.ag.primary ? A.activity === "clarify" ? "waiting for your answer" : "waiting" : "editing on its own branch";
+	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : st === "done" ? "finished — back in the nest" : st === "planning" ? "planning (buds on the files it will touch)" : st === "thinking" ? working ? `in the nest — ${plural$2(working, "helper")} out working` : "in the nest, thinking" : A.ag.primary ? A.activity === "clarify" ? "needs you · question" : "waiting" : "editing on its own branch";
 	const binding = A.ag.primary ? p.tzones : p.tzones.filter((z) => z.type === "keep" && z.z.scope !== "worktree");
 	const zf = f && st !== "blocked" && st !== "done" ? zoneOfFile(f, binding) : null;
 	const changed = open ? [...A.edits.keys()].map((id) => M.files[id]).filter(Boolean).sort((a, b) => b.usedBy.length - a.usedBy.length || a.path.localeCompare(b.path)) : [];
@@ -54296,13 +55306,16 @@ function Rules({ p }) {
 							title: full,
 							children: z.name || tailPath(full)
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : "whole repo" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", {
+							title: isShared(z) ? sharedWhere(z) : void 0,
+							children: z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : isShared(z) ? "shared" : "whole repo"
+						}),
 						nb > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", {
 							className: "nb",
 							children: blockedTxt(nb)
 						})
 					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				}), !isShared(z) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "ct-x",
 					"aria-label": "Remove rule " + (z.name || z.pattern),
@@ -54315,7 +55328,7 @@ function Rules({ p }) {
 		}) })]
 	});
 }
-function Changes({ p, sum, riskOpen, onRisk }) {
+function Changes({ p, sum, riskOpen, onRisk, allFolders = false, onAllFolders }) {
 	const M = p.M;
 	if (!sum.total) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ct-bix-changes",
@@ -54350,7 +55363,7 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 					children: "⚠ Could break"
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			sum.others > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-bix-sum ct-bix-split",
 				title: "This session = the pane header's file count (its branch, helpers included)",
 				children: [
@@ -54439,7 +55452,7 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 				className: "ct-bix-folders",
 				role: "list",
 				"aria-label": "Changed folders",
-				children: sum.folders.map((cf) => {
+				children: shownFolders(sum.folders, allFolders, (cf) => live.some((t) => isUnder(cf.n, t.node))).map((cf) => {
 					const n = cf.n;
 					const keep = live.find((t) => t.type === "keep" && isUnder(n, t.node)) || null;
 					const only = live.find((t) => t.type === "only" && isUnder(n, t.node)) || null;
@@ -54507,6 +55520,13 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 						})]
 					}, n.id + ":" + cf.label);
 				})
+			}),
+			sum.folders.length > FOLDERS_SHOWN && onAllFolders && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ct-bix-allf",
+				"aria-expanded": allFolders,
+				onClick: onAllFolders,
+				children: allFolders ? "Show fewer folders" : `Show all ${sum.folders.length} folders`
 			})
 		]
 	});
@@ -56615,7 +57635,7 @@ function SessionPanel({ m, a }) {
 									className: "cm-row-sub" + (n === 0 ? " cm-warn-text" : ""),
 									children: [
 										z.name ? z.pattern + " · " : "",
-										zoneWhere(z),
+										isShared(z) ? sharedWhere(z) : zoneWhere(z),
 										z.waived ? " · allowed here" : "",
 										" ·",
 										" ",
@@ -56831,6 +57851,243 @@ function SessionPanel({ m, a }) {
 	] });
 }
 //#endregion
+//#region src/components/grid/codemap/MapTour.tsx
+var MAP_TOUR = [
+	{
+		target: "",
+		title: "Your code, drawn as a tree",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"The ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "trunk" }),
+			" is the repo, each ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "branch" }),
+			" a folder and each ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "leaf" }),
+			" a file. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Roots" }),
+			" ",
+			"underground are the tests, and the piles on the ground are docs and config. Thicker branches hold more code."
+		] })
+	},
+	{
+		target: "",
+		title: "Bright leaves are what changed",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Grey is untouched. A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "glowing leaf" }),
+			" is a file an agent changed, and the ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lit branches" }),
+			" lead you to it. Labels like ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "web/core ●4" }),
+			" count the changes in that folder. Click a leaf or folder for its card."
+		] })
+	},
+	{
+		target: "[data-hud=\"left\"]",
+		title: "Each agent is a bird",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"This column lists the agents working on this repo: what each is doing now and what it changed. A bird",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: " nests" }),
+			" where it mostly works. Click a row to follow its bird around the tree."
+		] })
+	},
+	{
+		target: ".ct-bix-risk-tog",
+		title: "What could break",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Hover a bright leaf and the files that ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "import" }),
+			" it light up ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "gold" }),
+			". ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚠ Could break" }),
+			" ",
+			"ranks the changed files by how much depends on them, so you know what to review first."
+		] })
+	},
+	{
+		target: ".ct-rules",
+		title: "Fence agents in or out",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
+			": agents may read a folder but never edit it. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
+			": they may edit only inside it. Pick one, then click a folder on the tree. Every changed folder in the column has the same two buttons."
+		] })
+	},
+	{
+		target: ".cm-search",
+		title: "Getting around",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Press ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+			" to find a file or function. Scroll to zoom, drag to pan, double-click a folder to zoom into it, and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⌂ Whole tree" }),
+			" brings you back. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
+			" beside Agents is the legend."
+		] })
+	}
+];
+var CARD_W = 320;
+var GAP = 12;
+function placeCard(t, W, H, cardH) {
+	const cw = Math.min(CARD_W, W - 16);
+	const clampX = (x) => Math.max(8, Math.min(x, W - cw - 8));
+	const clampY = (y) => Math.max(8, Math.min(y, H - cardH - 8));
+	if (!t) return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+	if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * .4) return {
+		left: t.x + t.w + GAP,
+		top: clampY(t.y)
+	};
+	if (t.y + t.h + GAP + cardH <= H - 8) return {
+		left: clampX(t.x),
+		top: t.y + t.h + GAP
+	};
+	if (t.y - GAP - cardH >= 8) return {
+		left: clampX(t.x),
+		top: t.y - GAP - cardH
+	};
+	return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+}
+function MapTour({ rootRef, onClose, steps = MAP_TOUR }) {
+	const [i, setI] = (0, import_react.useState)(0);
+	const [rect, setRect] = (0, import_react.useState)(null);
+	const [box, setBox] = (0, import_react.useState)({
+		W: 0,
+		H: 0
+	});
+	const [cardH, setCardH] = (0, import_react.useState)(180);
+	const cardRef = (0, import_react.useRef)(null);
+	const step = steps[Math.min(i, steps.length - 1)];
+	const last = i >= steps.length - 1;
+	const measure = (0, import_react.useCallback)(() => {
+		const root = rootRef.current;
+		if (!root) return;
+		const r0 = root.getBoundingClientRect();
+		setBox({
+			W: r0.width,
+			H: r0.height
+		});
+		const el = step.target ? root.querySelector(step.target) : null;
+		const r = el ? el.getBoundingClientRect() : null;
+		setRect(r && r.width > 0 && r.height > 0 ? {
+			x: r.left - r0.left,
+			y: r.top - r0.top,
+			w: r.width,
+			h: r.height
+		} : null);
+		if (cardRef.current) setCardH(cardRef.current.offsetHeight || 180);
+	}, [rootRef, step.target]);
+	(0, import_react.useLayoutEffect)(measure, [measure, i]);
+	(0, import_react.useEffect)(() => {
+		const root = rootRef.current;
+		if (!root || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => measure());
+		ro.observe(root);
+		return () => ro.disconnect();
+	}, [rootRef, measure]);
+	(0, import_react.useEffect)(() => {
+		cardRef.current?.focus();
+	}, [i]);
+	const onKey = (e) => {
+		e.stopPropagation();
+		if (e.key === "Escape") {
+			e.preventDefault();
+			onClose();
+		} else if (e.key === "ArrowRight" || e.key === "Enter") {
+			e.preventDefault();
+			if (last) onClose();
+			else setI(i + 1);
+		} else if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			if (i > 0) setI(i - 1);
+		}
+	};
+	const pos = placeCard(rect, box.W, box.H, cardH);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "mt-layer",
+		"aria-live": "polite",
+		children: [rect && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "mt-ring",
+			"aria-hidden": "true",
+			style: {
+				left: rect.x - 4,
+				top: rect.y - 4,
+				width: rect.w + 8,
+				height: rect.h + 8
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: cardRef,
+			className: "mt-card",
+			role: "dialog",
+			"aria-modal": "false",
+			"aria-labelledby": "mt-title",
+			tabIndex: -1,
+			style: {
+				left: pos.left,
+				top: pos.top
+			},
+			onKeyDown: onKey,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mt-step",
+						children: [
+							i + 1,
+							" of ",
+							steps.length
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "mt-skip",
+						onClick: onClose,
+						children: "Skip tour"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: "mt-title",
+					children: step.title
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mt-body",
+					children: step.body
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-foot",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "mt-dots",
+							"aria-hidden": "true",
+							children: steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "cm-btn mt-back",
+							disabled: i === 0,
+							onClick: () => setI(i - 1),
+							children: "Back"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "cm-btn on mt-next",
+							onClick: () => last ? onClose() : setI(i + 1),
+							children: last ? "Done" : "Next"
+						})
+					]
+				})
+			]
+		})]
+	});
+}
+//#endregion
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
@@ -56920,6 +58177,38 @@ function useThemeKey() {
 	}, []);
 	return k;
 }
+var PREFETCHING = /* @__PURE__ */ new Set();
+var TOUR_ON = "";
+function prefetchNeeded(hasSnap, hasModel, inflight) {
+	return !inflight && !(hasSnap && hasModel);
+}
+async function prefetchCodeMap(title) {
+	const en = entryFor(title);
+	if (!prefetchNeeded(!!en.snap, MODEL_OF.has(title), PREFETCHING.has(title))) return;
+	PREFETCHING.add(title);
+	try {
+		if (!en.snap) {
+			const d = await fetchSnapshot(title);
+			if (!d || "unchanged" in d && d.unchanged) return;
+			en.snap = d;
+			en.snapAt = Date.now();
+			en.err = "";
+		}
+		if (MODEL_OF.has(title)) return;
+		const snap = en.snap;
+		const label = snap.repo?.label || title;
+		const repoKey = snap.repo?.id || "title:" + title;
+		let r = RAW.get(snap);
+		if (!r) {
+			r = rawFromSnapshot(snap, label);
+			RAW.set(snap, r);
+		}
+		const M = cachedModel(repoKey, r) || await layoutModel(repoKey, r);
+		MODEL_OF.set(title, M);
+	} catch {} finally {
+		PREFETCHING.delete(title);
+	}
+}
 function CodeMapTab({ title, active }) {
 	const [ever, setEver] = (0, import_react.useState)(active);
 	(0, import_react.useEffect)(() => {
@@ -56952,6 +58241,10 @@ function CodeMap({ title, active }) {
 	const [reqBusy, setReqBusy] = (0, import_react.useState)({});
 	const [goExempt, setGoExempt] = (0, import_react.useState)(null);
 	const [toast, setToast] = (0, import_react.useState)(null);
+	const [tour, setTour] = (0, import_react.useState)(false);
+	const tourSeen = useUi((s) => s.mapTourSeen);
+	const markTourSeen = useUi((s) => s.markMapTourSeen);
+	const rootRef = (0, import_react.useRef)(null);
 	const themeKey = useThemeKey();
 	const reducedMotion = useUi((s) => s.reduceMotion) || prefersReducedMotion();
 	const searchRef = (0, import_react.useRef)(null);
@@ -57702,6 +58995,39 @@ function CodeMap({ title, active }) {
 			} else if (ctlRef.current?.key(ev.nativeEvent)) ev.preventDefault();
 		}
 	};
+	(0, import_react.useEffect)(() => {
+		if (!active || !model || tourSeen || tour || TOUR_ON && TOUR_ON !== title) return;
+		TOUR_ON = title;
+		setTour(true);
+	}, [
+		active,
+		model,
+		tourSeen,
+		tour,
+		title
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!active && tour) {
+			setTour(false);
+			if (TOUR_ON === title) TOUR_ON = "";
+		}
+	}, [
+		active,
+		tour,
+		title
+	]);
+	(0, import_react.useEffect)(() => () => {
+		if (TOUR_ON === title) TOUR_ON = "";
+	}, [title]);
+	const openTour = () => {
+		TOUR_ON = title;
+		setTour(true);
+	};
+	const closeTour = () => {
+		setTour(false);
+		if (TOUR_ON === title) TOUR_ON = "";
+		markTourSeen();
+	};
 	const failed = !!err && !snap && !live && !model;
 	const ctl = ctlRef.current;
 	const tool = ctl?.v?.tool || "explore";
@@ -57788,6 +59114,7 @@ function CodeMap({ title, active }) {
 	}) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "cm-root ct-root",
+		ref: rootRef,
 		onKeyDown: onRootKey,
 		children: [
 			!failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -57816,38 +59143,57 @@ function CodeMap({ title, active }) {
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "cm-seg ct-tools",
+						className: "ct-rules",
 						role: "group",
-						"aria-label": "Paint a rule",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							type: "button",
-							className: "red" + (tool === "keep" ? " on" : ""),
-							"aria-pressed": tool === "keep",
-							disabled: !model,
-							title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
-							onClick: () => {
-								ctl?.setTool("keep");
-								setTick((x) => x + 1);
-							},
-							children: ["⛔", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "lbl",
-								children: " Keep out"
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							type: "button",
-							className: "green" + (tool === "only" ? " on" : ""),
-							"aria-pressed": tool === "only",
-							disabled: !model,
-							title: "Only here: the one folder agents may edit in; everything else dims",
-							onClick: () => {
-								ctl?.setTool("only");
-								setTick((x) => x + 1);
-							},
-							children: ["✓", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "lbl",
-								children: " Only here"
-							})]
-						})]
+						"aria-label": "Rules for agents",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ct-rules-k",
+								"aria-hidden": "true",
+								children: "Rules"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "cm-seg ct-tools",
+								role: "group",
+								"aria-label": "Paint a rule",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "red" + (tool === "keep" ? " on" : ""),
+									"aria-pressed": tool === "keep",
+									disabled: !model,
+									title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
+									onClick: () => {
+										ctl?.setTool("keep");
+										setTick((x) => x + 1);
+									},
+									children: ["⛔", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "lbl",
+										children: " Keep out"
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "green" + (tool === "only" ? " on" : ""),
+									"aria-pressed": tool === "only",
+									disabled: !model,
+									title: "Only here: the one folder agents may edit in; everything else dims",
+									onClick: () => {
+										ctl?.setTool("only");
+										setTick((x) => x + 1);
+									},
+									children: ["✓", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "lbl",
+										children: " Only here"
+									})]
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-btn",
+								title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
+								onClick: () => add ? setAdd(null) : openAdd("red", ""),
+								children: add ? "Close" : "+ Zone"
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "cm-grow" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SearchBox, {
@@ -57855,7 +59201,7 @@ function CodeMap({ title, active }) {
 						title,
 						onPick
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					zones.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "cm-guard " + guard.cls,
 						title: guard.title,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -57865,13 +59211,6 @@ function CodeMap({ title, active }) {
 							className: "lbl",
 							children: guard.label
 						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "cm-btn",
-						title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
-						onClick: () => add ? setAdd(null) : openAdd("red", ""),
-						children: add ? "Close" : "+ Zone"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
@@ -57887,6 +59226,18 @@ function CodeMap({ title, active }) {
 							className: "cm-count",
 							children: "plan"
 						}) : null]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-btn ct-guide" + (tour ? " on" : ""),
+						"aria-pressed": tour,
+						title: "A short tour of the Map: how to read the tree, what could break, rules",
+						disabled: !model,
+						onClick: () => tour ? closeTour() : openTour(),
+						children: ["?", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lbl",
+							children: " Guide"
+						})]
 					})
 				]
 			}),
@@ -58038,6 +59389,10 @@ function CodeMap({ title, active }) {
 				"aria-live": "polite",
 				role: "status",
 				children: announce
+			}),
+			tour && model && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapTour, {
+				rootRef,
+				onClose: closeTour
 			})
 		]
 	});
@@ -58266,7 +59621,7 @@ function AccountChip({ inst }) {
 			] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "usage-pop-note",
-				children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay. A thread belongs to the account that started it, so this window keeps one conversation per account: swapping back reopens the one you left, a first swap starts fresh."
+				children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay. A thread belongs to the account that started it, so this session keeps one conversation per account: swapping back reopens the one you left, a first swap starts fresh."
 			})
 		]
 	})] });
@@ -58462,6 +59817,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 //#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
+var MAP_PREFETCH_MS = 1500;
 var BODY_TABS = /* @__PURE__ */ new Set([
 	"agent",
 	"shell",
@@ -58683,6 +60039,18 @@ function Pane({ inst, drag, dragging }) {
 		tab,
 		title
 	]);
+	(0, import_react.useEffect)(() => {
+		if (!focused || !caps.git || missing || loading || tab === "map") return;
+		const t = setTimeout(() => void prefetchCodeMap(title), MAP_PREFETCH_MS);
+		return () => clearTimeout(t);
+	}, [
+		focused,
+		caps.git,
+		missing,
+		loading,
+		tab,
+		title
+	]);
 	const showTab = (t) => {
 		setHistPane(null);
 		setPaneFind(null);
@@ -58740,6 +60108,7 @@ function Pane({ inst, drag, dragging }) {
 	(0, import_react.useEffect)(() => {
 		if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
 	}, [ftMenu, ftGone]);
+	const me = useMe();
 	if (missing) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane missing-pane" + (focused ? " focused" : ""),
@@ -58800,7 +60169,7 @@ function Pane({ inst, drag, dragging }) {
 							e.stopPropagation();
 							cleanupMissing(title);
 						},
-						children: "Clean up"
+						children: "Delete"
 					})
 				]
 			})
@@ -58904,6 +60273,15 @@ function Pane({ inst, drag, dragging }) {
 						title: "Runs on " + deviceName,
 						children: deviceName
 					}),
+					(inst.behind || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "pane-behind",
+						title: `${inst.behind} commit(s) on the remote branch that this session doesn't have — Push offers to rebase`,
+						children: [
+							"↓",
+							inst.behind,
+							" behind"
+						]
+					}),
 					hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tabs",
@@ -58961,7 +60339,7 @@ function Pane({ inst, drag, dragging }) {
 							threadShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								"data-tab": "thread",
 								className: "thread-tab" + (tab === "thread" ? " active" : ""),
-								title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} waiting on your answer` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
+								title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
 								onClick: (e) => {
 									e.stopPropagation();
 									showTab("thread");
@@ -59046,6 +60424,10 @@ function Pane({ inst, drag, dragging }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AccountChip, { inst }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DriveButton, {
+						inst,
+						me
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "state" + (wsState !== "connected" ? " state-bad" : ""),
 						children: wsState
@@ -59191,7 +60573,7 @@ function Pane({ inst, drag, dragging }) {
 							setTimeout(() => focusTerm(title, kind), 0);
 						}
 					}),
-					reduceMotion && chip.cls === "s-running" && tab === "agent" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunningCover, { paneRef }),
+					reduceMotion && chip.cls.split(" ").includes("s-running") && tab === "agent" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunningCover, { paneRef }),
 					budget?.locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetLock, {
 						title,
 						budget
@@ -59745,7 +61127,7 @@ function TerminalGrid({ specialPanes }) {
 	const { data: config } = useConfig();
 	const ui = useUi();
 	const [drag, setDrag] = (0, import_react.useState)(null);
-	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i.title)), [instances]);
+	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i)), [instances]);
 	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])), [specialPanes]);
 	const slotTitles = (0, import_react.useMemo)(() => computeVisibleSlots(workable, [...specialByKey.keys()], {
 		hidden: ui.hidden,
@@ -59820,7 +61202,12 @@ function TerminalGrid({ specialPanes }) {
 	const booting = !isSuccess;
 	const noneAtAll = (instances || []).length === 0;
 	const showEmpty = !booting && visible.length === 0 && specialPanes.length === 0;
-	const firstRun = noneAtAll && config && !config.onboarded;
+	const { data: setup } = useSetup(!booting && noneAtAll);
+	const firstRun = showSetupCard({
+		sessions: instances ? instances.length : -1,
+		status: setup,
+		onboarded: config?.onboarded
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "grid",
 		onDragOver: (ev) => {
@@ -59864,11 +61251,11 @@ function TerminalGrid({ specialPanes }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Get set up" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted",
-							children: "Three steps to a running agent."
+							children: "Five steps — three to a running agent, two you can skip."
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "setup-body",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist$1, { standalone: true })
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist$1, {})
 						})
 					]
 				})
@@ -59967,13 +61354,23 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("customize")
 		});
 		acts.push({
+			label: "Select sessions…",
+			hint: "close, hide or delete several at once · Ctrl+click a row",
+			run: () => ui.setBulkMode(true)
+		});
+		acts.push({
 			label: "Prompts…",
 			hint: "manage saved prompts",
 			run: () => ui.openDialogFor("prompts")
 		});
 		acts.push({
+			label: "Templates…",
+			hint: "manage saved New-session setups",
+			run: () => ui.openDialogFor("templates")
+		});
+		acts.push({
 			label: "Recently closed…",
-			hint: "reopen or clean up closed sessions",
+			hint: "reopen or delete closed sessions",
 			run: () => ui.openDialogFor("recent")
 		});
 		acts.push({
@@ -59999,8 +61396,13 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("settings", "devices")
 		});
 		acts.push({
-			label: "Work with someone…",
-			hint: "peer links: invite someone, or join with their code",
+			label: "Your phone",
+			hint: "the QR code and /m link",
+			run: () => ui.openDialogFor("settings", "mobile")
+		});
+		acts.push({
+			label: "People…",
+			hint: "peer links: invite someone, or join a peer with their code",
 			run: () => ui.openDialogFor("settings", "peer")
 		});
 		acts.push({
@@ -60011,6 +61413,11 @@ function CommandPalette({ host }) {
 		acts.push({
 			label: "Open Setup checklist",
 			run: () => ui.openDialogFor("setup")
+		});
+		acts.push({
+			label: "Tour",
+			hint: "what MindFlock is, in five slides",
+			run: () => ui.openTour()
 		});
 		acts.push({
 			label: "Toggle sidebar",
@@ -60071,7 +61478,7 @@ function CommandPalette({ host }) {
 					run: () => pushSession(t)
 				});
 				acts.push({
-					label: `Make PR — ${t}`,
+					label: `Open PR — ${t}`,
 					hint: "Ctrl+K R" + prHint,
 					run: () => makePrSession(t)
 				});
@@ -60092,6 +61499,28 @@ function CommandPalette({ host }) {
 				label: `Hide window — ${t}`,
 				hint: "Ctrl+K H",
 				run: () => hideSession(t)
+			});
+			if (inst && !inst.pending) {
+				if (inst.status === "paused") acts.push({
+					label: `Resume session — ${t}`,
+					hint: "starts the agent again",
+					run: () => resumeSession(t)
+				});
+				else if (!shared) acts.push({
+					label: `Pause session — ${t}`,
+					hint: "stops the agent, keeps the worktree",
+					run: () => pauseSession(t)
+				});
+			}
+			acts.push({
+				label: `Close session — ${t}`,
+				hint: "Ctrl+W · keeps the worktree",
+				run: () => killSession(t)
+			});
+			if (caps.git && !shared) acts.push({
+				label: `Delete session… — ${t}`,
+				hint: "removes the worktree and branch",
+				run: () => void deleteSession(t)
 			});
 			if (caps.git) acts.push({
 				label: `Code map — ${t}`,
@@ -60141,7 +61570,7 @@ function CommandPalette({ host }) {
 		const code = routeCode(query);
 		if (code.kind) out.unshift({
 			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
-			hint: code.kind === "peer" ? "another person · Work with someone" : "your devices",
+			hint: code.kind === "peer" ? "another person · People" : "your devices",
 			run: () => void routePastedCode(query)
 		});
 		return out;
@@ -60401,6 +61830,16 @@ function ShortcutsSheet() {
 							children: "Restore defaults"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "shortcuts-tour linklike",
+							type: "button",
+							title: "A five-slide tour of MindFlock",
+							onClick: () => {
+								closeDialog();
+								useUi.getState().openTour();
+							},
+							children: "Tour"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							className: "shortcuts-close",
 							type: "button",
 							"aria-label": "Close",
@@ -60479,6 +61918,450 @@ function ShortcutsSheet() {
 				})
 			]
 		})
+	});
+}
+//#endregion
+//#region src/components/dialogs/TemplatesDialog.tsx
+var TEMPLATES_UI_INIT = {
+	editing: null,
+	confirming: null,
+	error: ""
+};
+function templatesReducer(s, a) {
+	switch (a.t) {
+		case "edit": return {
+			editing: a.name,
+			confirming: null,
+			error: ""
+		};
+		case "new": return {
+			editing: "",
+			confirming: null,
+			error: ""
+		};
+		case "ask-delete": return {
+			editing: null,
+			confirming: a.name,
+			error: ""
+		};
+		case "cancel":
+		case "saved":
+		case "deleted": return {
+			editing: null,
+			confirming: null,
+			error: ""
+		};
+		case "error": return {
+			...s,
+			error: a.message
+		};
+	}
+}
+function formFromTemplate(t) {
+	return {
+		name: t?.name || "",
+		program: t?.program || "",
+		repo_path: t?.repo_path || "",
+		prompt: t?.prompt || "",
+		mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
+		workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
+		init_repo: !!t?.init_repo
+	};
+}
+function templateBody(f) {
+	const name = f.name.trim();
+	if (!name) return { error: "A template needs a name." };
+	if (name.length > 100) return { error: "Names are at most 100 characters." };
+	return { body: {
+		name,
+		program: f.program.trim(),
+		repo_path: f.repo_path.trim(),
+		prompt: f.prompt,
+		provisioned: f.mode === "provisioned",
+		in_place: f.mode === "in_place",
+		workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
+		init_repo: f.init_repo
+	} };
+}
+function renameLeaves(oldName, newName) {
+	const a = oldName.trim().toLowerCase();
+	const b = newName.trim().toLowerCase();
+	return a && a !== b ? oldName : null;
+}
+function templateMeta(t) {
+	const bits = [];
+	if (t.program) bits.push(t.program);
+	if (t.repo_path) bits.push(t.repo_path);
+	bits.push(t.provisioned ? "provisioned" + (t.workspace_strategy === "clone" ? " (clone)" : "") : t.in_place ? "in this folder" : "new worktree");
+	if (t.init_repo) bits.push("git init");
+	return bits.join(" · ");
+}
+function TemplatesDialogView(p) {
+	const { templates, ui, form, busy, loaded } = p;
+	const loadError = p.loadError || "";
+	const editor = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "tpl-editor",
+		onSubmit: (e) => {
+			e.preventDefault();
+			p.onSave();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "tpl-name",
+				autoComplete: "off",
+				value: form.name,
+				onChange: (e) => p.onForm({ name: e.target.value }),
+				placeholder: "e.g. fix-tests"
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-two",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+					"Agent ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "— optional; the default CLI when blank"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "tpl-program",
+						autoComplete: "off",
+						value: form.program,
+						onChange: (e) => p.onForm({ program: e.target.value }),
+						placeholder: "claude"
+					})
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+					"Folder ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "— optional"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "tpl-repo",
+						autoComplete: "off",
+						value: form.repo_path,
+						onChange: (e) => p.onForm({ repo_path: e.target.value }),
+						placeholder: "/home/me/projects/foo"
+					})
+				] })]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+				"Prompt ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: "— sent to the agent at launch; a prompt-only template is a saved prompt"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "tpl-prompt",
+					rows: 4,
+					value: form.prompt,
+					onChange: (e) => p.onForm({ prompt: e.target.value })
+				})
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-mode",
+				role: "radiogroup",
+				"aria-label": "Where the work happens",
+				children: [
+					[
+						["worktree", "New worktree"],
+						["in_place", "Work directly in the folder"],
+						["provisioned", "Provision workspace"]
+					].map(([mode, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "tpl-mode",
+							checked: form.mode === mode,
+							onChange: () => p.onForm({ mode })
+						}), label]
+					}, mode)),
+					form.mode === "provisioned" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "tpl-strategy",
+						value: form.workspace_strategy,
+						onChange: (e) => p.onForm({ workspace_strategy: e.target.value }),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "worktree",
+							children: "shared base clone (worktree)"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "clone",
+							children: "full clone"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "tpl-init",
+							checked: form.init_repo,
+							onChange: (e) => p.onForm({ init_repo: e.target.checked })
+						}), "Create a git repo in the folder"]
+					})
+				]
+			}),
+			ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				"aria-live": "polite",
+				children: ui.error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-row-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => p.dispatch({ t: "cancel" }),
+					children: "Cancel"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "submit",
+					disabled: busy,
+					children: busy ? "Saving…" : "Save"
+				})]
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "templates-dialog",
+		className: "modal",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) p.onClose();
+		},
+		onKeyDown: (e) => {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				if (ui.editing !== null || ui.confirming) p.dispatch({ t: "cancel" });
+				else p.onClose();
+			}
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "templates-card",
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "templates-title",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "templates-title",
+						children: "Templates"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "templates-close",
+						onClick: p.onClose,
+						children: "Close"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "tpl-intro muted",
+					children: "A template is a saved New-session setup — agent, folder, workspace and first prompt — and the list is the same on every device. The New dialog's Name → Enter reuses the one you last picked for that folder. A template that is only a prompt is also what the Prompts bar pastes."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-list",
+					id: "templates-list",
+					children: [
+						ui.editing === "" ? editor : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "templates-new",
+							className: "tpl-new",
+							onClick: () => p.dispatch({ t: "new" }),
+							children: "+ New template"
+						}),
+						loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "error tpl-load-error",
+							role: "alert",
+							children: ["Could not load templates: ", loadError]
+						}),
+						!loaded && !loadError && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "tpl-empty muted",
+							children: "Loading templates…"
+						}),
+						loaded && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "tpl-empty muted",
+							children: "No templates yet — save one above, or from the New dialog's Prompt fold."
+						}),
+						templates.map((t) => ui.editing === t.name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "tpl-card tpl-card-editing",
+							"data-name": t.name,
+							children: editor
+						}, t.name) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "tpl-card",
+							"data-name": t.name,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "tpl-card-top",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "tpl-card-text",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: "tpl-name",
+												children: t.name
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: "tpl-meta",
+												children: templateMeta(t)
+											}),
+											t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: "tpl-prompt",
+												children: t.prompt
+											})
+										]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "tpl-actions",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "tpl-btn",
+											onClick: () => p.dispatch({
+												t: "edit",
+												name: t.name
+											}),
+											children: "Edit"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "tpl-btn tpl-del",
+											onClick: () => p.dispatch({
+												t: "ask-delete",
+												name: t.name
+											}),
+											disabled: busy,
+											children: "Delete"
+										})]
+									})]
+								}),
+								ui.confirming === t.name && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "tpl-confirm",
+									role: "group",
+									"aria-live": "polite",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"Delete “",
+											t.name,
+											"”? It goes from every device."
+										] }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "tpl-btn tpl-del tpl-confirm-yes",
+											disabled: busy,
+											onClick: () => p.onDelete(t.name),
+											children: busy ? "Deleting…" : "Delete"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "tpl-btn",
+											onClick: () => p.dispatch({ t: "cancel" }),
+											children: "Keep"
+										})
+									]
+								}),
+								ui.confirming === t.name && ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "error",
+									"aria-live": "polite",
+									children: ui.error
+								})
+							]
+						}, t.name))
+					]
+				})
+			]
+		})
+	});
+}
+function TemplatesDialog() {
+	const open = useUi((s) => s.openDialog === "templates");
+	const target = useUi((s) => s.dialogTarget);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
+	const [loaded, setLoaded] = (0, import_react.useState)(false);
+	const [loadError, setLoadError] = (0, import_react.useState)("");
+	const [ui, dispatch] = (0, import_react.useReducer)(templatesReducer, TEMPLATES_UI_INIT);
+	const [form, setForm] = (0, import_react.useState)(() => formFromTemplate(null));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const editingRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		dispatch({ t: "cancel" });
+		setBusy(false);
+		setLoadError("");
+		let live = true;
+		const reload = () => setList(templatesNow());
+		document.addEventListener(TEMPLATES_CHANGED, reload);
+		ensureTemplates(true).then((list) => {
+			if (!live) return;
+			setList(list);
+			setLoaded(true);
+		}).catch((err) => {
+			if (live) setLoadError(errMsg(err));
+		});
+		return () => {
+			live = false;
+			document.removeEventListener(TEMPLATES_CHANGED, reload);
+		};
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (ui.editing === editingRef.current) return;
+		editingRef.current = ui.editing;
+		if (ui.editing === null) return;
+		const t = ui.editing ? templates.find((x) => x.name === ui.editing) || null : null;
+		setForm(formFromTemplate(t));
+	}, [ui.editing]);
+	if (!open) return null;
+	const close = () => {
+		closeDialog();
+		if (target === "new") useUi.getState().openDialogFor("new-session");
+	};
+	const save = async () => {
+		const r = templateBody(form);
+		if ("error" in r) {
+			dispatch({
+				t: "error",
+				message: r.error
+			});
+			return;
+		}
+		setBusy(true);
+		try {
+			await saveTemplate(r.body);
+			const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
+			if (gone) await deleteTemplate(gone);
+			setList(templatesNow());
+			dispatch({ t: "saved" });
+			toast(`Saved template “${r.body.name}”`);
+		} catch (err) {
+			dispatch({
+				t: "error",
+				message: errMsg(err)
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	const del = async (name) => {
+		setBusy(true);
+		try {
+			const ok = await deleteTemplate(name);
+			setList(templatesNow());
+			dispatch({ t: "deleted" });
+			toast(ok ? `Deleted template “${name}”` : `“${name}” was already gone`);
+		} catch (err) {
+			dispatch({
+				t: "error",
+				message: "Couldn't delete: " + errMsg(err)
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialogView, {
+		templates,
+		ui,
+		form,
+		busy,
+		loaded,
+		loadError,
+		onForm: (patch) => setForm((f) => ({
+			...f,
+			...patch
+		})),
+		dispatch,
+		onSave: () => void save(),
+		onDelete: (name) => void del(name),
+		onClose: close
 	});
 }
 //#endregion
@@ -61593,8 +63476,8 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 					onChange: draft.setLane,
 					askFirst: draft.askFirst,
 					onAskFirst: draft.setAskFirst,
-					disabledReason: oneForAll ? { leave: "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" } : void 0,
-					askReason: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : void 0
+					disabledReason: oneForAll ? { leave: "One PR for all commits each line into the team run's branch — Commit keeps it all on this machine" } : void 0,
+					askReason: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the team run's branch as they finish" : void 0
 				})
 			})]
 		}),
@@ -61660,7 +63543,7 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 						]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "rt-hint",
-						children: "the rest wait in the group, not in your grid"
+						children: "the rest wait in the team run, not in your grid"
 					})]
 				})]
 			}),
@@ -61668,7 +63551,7 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 				className: "rt-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "rt-label",
-					children: "Group as"
+					children: "Team run name"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "rt-ctl",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -61972,6 +63855,41 @@ function newFolderBlockReason(where) {
 	if (!where.gate || where.confirmed) return "";
 	return "There is no folder at " + where.gate + " yet — tick “Yes, create " + where.gate + "” under Folder to have Create make it, or put a folder that already exists in Folder.";
 }
+function foldSummaryFor(where) {
+	let s;
+	if (where.provisioned) s = "provisioned " + (where.strategy === "clone" ? "clone" : "worktree");
+	else if (where.inPlace) s = "in this folder";
+	else if (where.continueBranch && remoteBranchName(where.baseBranch)) s = "worktree on " + remoteBranchName(where.baseBranch) + " (shared branch)";
+	else {
+		const base = where.baseBranch || where.current;
+		s = "new worktree" + (base ? " from " + base : "");
+	}
+	if (where.initRepo) s += " · git init";
+	return s;
+}
+function remoteBranchName(ref) {
+	const m = /^(?:[^/\s]+)\/(.+)$/.exec((ref || "").trim());
+	return m ? m[1] : "";
+}
+function baseBranchFields(base, remote, continueBranch) {
+	base = (base || "").trim();
+	if (!base) return {};
+	const name = remote ? remoteBranchName(base) : "";
+	if (name && continueBranch) return {
+		base_ref: base,
+		continue_branch: name
+	};
+	return {
+		base_ref: base,
+		base_branch: name || base
+	};
+}
+function rememberedProfileVerdict(id, profiles) {
+	if (!id) return "none";
+	if (id === "default") return "apply";
+	if (!profiles) return "wait";
+	return profiles.some((p) => p.id === id) ? "apply" : "drop";
+}
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
 	const closeDialog = useUi((s) => s.closeDialog);
@@ -62000,7 +63918,13 @@ function NewSessionDialog() {
 	const [promptOpen, setPromptOpen] = (0, import_react.useState)(false);
 	const [templates, setTemplates] = (0, import_react.useState)([]);
 	const [activeTemplate, setActiveTemplate] = (0, import_react.useState)("");
-	const [page, setPage] = (0, import_react.useState)(1);
+	const [describeOpen, setDescribeOpen] = (0, import_react.useState)(false);
+	const [baseBranch, setBaseBranch] = (0, import_react.useState)("");
+	const [continueOn, setContinueOn] = (0, import_react.useState)("");
+	const [branches, setBranches] = (0, import_react.useState)(null);
+	const [page, setPage] = (0, import_react.useState)(2);
+	const openedPage = (0, import_react.useRef)(2);
+	const focusTitleNext = (0, import_react.useRef)(false);
 	const [describe, setDescribe] = (0, import_react.useState)("");
 	const [describing, setDescribing] = (0, import_react.useState)(false);
 	const [describeSlow, setDescribeSlow] = (0, import_react.useState)(false);
@@ -62025,6 +63949,7 @@ function NewSessionDialog() {
 	const [profileModel, setProfileModel] = (0, import_react.useState)("");
 	const [profileModels, setProfileModels] = (0, import_react.useState)({});
 	const authProfiles = useAuthProfiles().data;
+	const pendingProfile = (0, import_react.useRef)(null);
 	const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
 	const launchDefaults = (0, import_react.useRef)({});
 	const titleRef = (0, import_react.useRef)(null);
@@ -62073,7 +63998,7 @@ function NewSessionDialog() {
 			const [cfgR, setR, tplR] = await Promise.allSettled([
 				dev ? dapi("/api/config") : refreshConfig().then(() => queryClient.getQueryData(["config"])),
 				dapi("/api/settings"),
-				dapi("/api/templates")
+				dev ? dapi("/api/templates").then((d) => d.templates || []) : ensureTemplates(true)
 			]);
 			if (!here()) return;
 			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
@@ -62098,7 +64023,9 @@ function NewSessionDialog() {
 			launchDefaults.current = {};
 			for (const k of Object.keys(raw)) launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
 			setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
-			setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
+			const tpls = tplR.status === "fulfilled" ? tplR.value || [] : [];
+			setTemplates(tpls);
+			if (!dev) applyLastUsed.current(tpls, provs);
 		})();
 		return () => {
 			live = false;
@@ -62121,11 +64048,15 @@ function NewSessionDialog() {
 		const prefill = useUi.getState().takeNewPrefill();
 		setDescribe(prefill);
 		setBatch(!!prefill);
+		setDescribeOpen(false);
+		setBaseBranch("");
+		setBranches(null);
 		setDescribing(false);
 		setDescribeSlow(false);
 		setPlanNote("");
 		setPlanError("");
-		setPage(1);
+		openedPage.current = prefill ? 1 : 2;
+		setPage(openedPage.current);
 		setNewFolderOk(false);
 		planFolderDo({ t: "reopen" });
 		cancelPlanRun(planRun.current);
@@ -62136,7 +64067,7 @@ function NewSessionDialog() {
 		setPlanFirst(false);
 		setSplit(false);
 		setMaxPieces(SPLIT_DEFAULT);
-		setAdvancedOpen(true);
+		setAdvancedOpen(false);
 		setLaunchOpen(false);
 		setPromptOpen(false);
 		folderDo({ t: "reopen" });
@@ -62154,6 +64085,12 @@ function NewSessionDialog() {
 		return loadFor(deviceRef.current);
 	}, [open]);
 	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const reload = () => setSavedPresets(loadUserPresets());
+		document.addEventListener(PRESETS_CHANGED, reload);
+		return () => document.removeEventListener(PRESETS_CHANGED, reload);
+	}, [open]);
+	(0, import_react.useEffect)(() => {
 		if (!open || loadedDevice.current === device) return;
 		loadedDevice.current = device;
 		folderDo({ t: "device" });
@@ -62166,9 +64103,13 @@ function NewSessionDialog() {
 	}, [open, device]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
-		const el = page === 1 ? describeRef.current : titleRef.current;
+		const el = openedPage.current === 1 ? describeRef.current : titleRef.current;
 		const active = document.activeElement;
-		if (el && mayTakeOpeningFocus({
+		if (!el) {
+			if (openedPage.current === 2) focusTitleNext.current = true;
+			return;
+		}
+		if (mayTakeOpeningFocus({
 			activeIsTarget: active === el,
 			activeInsideDialog: !!active && !!rootRef.current?.contains(active)
 		})) el.focus();
@@ -62344,14 +64285,14 @@ function NewSessionDialog() {
 			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`, { duration: 6e3 });
 		} else toast("Starting it — the session appears in the rail", { duration: 4e3 });
 	};
-	const setAccount = (id) => {
+	const setAccount = (id, agentNow) => {
 		setProfileId(id);
 		setProfileModel("");
 		const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
 		if (!prof) return;
 		const supported = prof.supported_agents || [];
 		const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-		if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
+		if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
 			const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
 			setAgent(preferred);
 		}
@@ -62372,7 +64313,7 @@ function NewSessionDialog() {
 		if (supported.includes(canonAgent(program))) return "";
 		return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
 	})();
-	const fillFromTemplate = (t) => {
+	const fillFromTemplate = (t, opts = {}) => {
 		if (t.program) setAgent(t.program);
 		if (t.repo_path) folderDo({
 			t: "user-set",
@@ -62383,12 +64324,40 @@ function NewSessionDialog() {
 		if (t.workspace_strategy) setStrategy(t.workspace_strategy);
 		setInPlace(!!t.in_place && !t.provisioned);
 		setInitRepo(!!t.init_repo);
+		setActiveTemplate(t.name);
+		if (opts.quiet) return;
 		setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
 		if (t.prompt) setPromptOpen(true);
-		setActiveTemplate(t.name);
 		if (!title.trim()) setTitle(t.name || "");
 		titleRef.current?.focus();
 	};
+	const applyLastUsed = (0, import_react.useRef)(() => {});
+	applyLastUsed.current = (tpls, provs) => {
+		const { choice } = lastNewSessionChoice(repoPath);
+		if (!choice) return;
+		const t = choice.template ? tpls.find((x) => x.name === choice.template) : null;
+		if (t) fillFromTemplate(t, { quiet: true });
+		if (choice.program && provs.some((p) => p.name === choice.program)) setAgent(choice.program);
+		pendingProfile.current = choice.profile_id ? {
+			repo: repoPath,
+			id: choice.profile_id,
+			program: choice.program || void 0
+		} : null;
+		settleProfile.current();
+	};
+	const settleProfile = (0, import_react.useRef)(() => {});
+	settleProfile.current = () => {
+		const pend = pendingProfile.current;
+		if (!pend) return;
+		const verdict = rememberedProfileVerdict(pend.id, authProfiles ? authProfiles.profiles || [] : null);
+		if (verdict === "wait") return;
+		pendingProfile.current = null;
+		if (verdict === "apply") setAccount(pend.id, pend.program);
+		else if (verdict === "drop") forgetNewSessionProfile(pend.repo);
+	};
+	(0, import_react.useEffect)(() => {
+		settleProfile.current();
+	}, [authProfiles]);
 	const applyPlan = (a) => {
 		setError("");
 		folderDo({
@@ -62429,6 +64398,45 @@ function NewSessionDialog() {
 		el.focus({ preventScroll: true });
 		el.setSelectionRange(el.value.length, el.value.length);
 	}, [page]);
+	(0, import_react.useEffect)(() => {
+		if (page !== 2 || !focusTitleNext.current) return;
+		focusTitleNext.current = false;
+		titleRef.current?.focus();
+	}, [page]);
+	(0, import_react.useEffect)(() => {
+		if (open && describeOpen && page === 2) describeRef.current?.focus();
+	}, [
+		open,
+		describeOpen,
+		page
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!open || page !== 2) return;
+		const path = repoPath.trim();
+		setBaseBranch("");
+		if (!path || !looksLikePath(path)) {
+			setBranches(null);
+			return;
+		}
+		let live = true;
+		const h = window.setTimeout(async () => {
+			try {
+				const b = await dapi("/api/repos/branches?path=" + encodeURIComponent(path));
+				if (live) setBranches(b);
+			} catch {
+				if (live) setBranches(null);
+			}
+		}, CHECK_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(h);
+		};
+	}, [
+		open,
+		page,
+		repoPath,
+		dapi
+	]);
 	const cancelDescribe = () => {
 		cancelPlanRun(planRun.current);
 		setDescribing(false);
@@ -62496,7 +64504,7 @@ function NewSessionDialog() {
 		} catch (err) {
 			if (planRun.current.seq !== seq) return;
 			if (err?.name === "AbortError") return;
-			setPlanError(errMsg(err) + " — use Set it up myself instead.");
+			setPlanError(errMsg(err) + " — fill the form in by hand instead.");
 		} finally {
 			window.clearTimeout(slow);
 			if (planRun.current.seq === seq) {
@@ -62510,13 +64518,25 @@ function NewSessionDialog() {
 		setInitRepo(true);
 		setAdvancedOpen(true);
 	};
-	if (!open) return null;
+	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialog, {});
 	const folderPath = repoPath.trim();
 	const offerProvision = provisioningAvailable || !!folderPath;
 	const plainFolder = folderCheck?.asked === folderPath && !!folderCheck?.plain;
 	const searchHits = search && search.asked === folderPath && searchOpen && !browserOpen ? search : null;
 	const selIndex = searchHits && searchHits.matches.length ? Math.min(searchSel, searchHits.matches.length - 1) : -1;
 	const provisionOn = offerProvision && provision;
+	const worktreeMode = (!inPlace || laneNeedsWorktree) && !provisionOn;
+	const baseIsRemote = !!(branches?.branches || []).find((b) => b.name === baseBranch)?.remote;
+	const canContinue = baseIsRemote && baseBranch.startsWith("origin/");
+	const foldSummary = foldSummaryFor({
+		provisioned: provisionOn,
+		strategy,
+		inPlace: inPlace && !laneNeedsWorktree,
+		baseBranch,
+		current: branches?.current || "",
+		initRepo,
+		continueBranch: !!baseBranch && continueOn === baseBranch && canContinue
+	});
 	const provisionBlocked = provisionBlockReason({
 		provision: provisionOn,
 		plainFolder,
@@ -62609,6 +64629,8 @@ function NewSessionDialog() {
 		} else {
 			body.init_repo = p.initRepo;
 			body.in_place = p.inPlace;
+			const base = (p.baseBranch || "").trim();
+			if (base && !p.inPlace) Object.assign(body, baseBranchFields(base, !!p.baseBranchRemote, !!p.continueBranch));
 		}
 		return body;
 	};
@@ -62625,6 +64647,11 @@ function NewSessionDialog() {
 				title: deviceTitle(target, made.title)
 			};
 			planFolderDo({ t: "created" });
+			if (!target) rememberNewSessionChoice(String(body.repo_path || ""), {
+				template: activeTemplate,
+				program: String(body.program || ""),
+				profile_id: String(body.profile_id || "")
+			});
 			clearStaleAlias(inst.title);
 			await refreshInstances();
 			selectSession(inst.title);
@@ -62672,7 +64699,10 @@ function NewSessionDialog() {
 			prompt,
 			inPlace: inPlace && !laneNeedsWorktree,
 			initRepo,
-			provisioned: provision
+			provisioned: provision,
+			baseBranch,
+			baseBranchRemote: baseIsRemote,
+			continueBranch: !!baseBranch && continueOn === baseBranch
 		}));
 	};
 	const savePreset = () => {
@@ -62900,38 +64930,131 @@ function NewSessionDialog() {
 							newFolderRow
 						]
 					}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						!describeOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "nf-describe-toggle",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "new-describe-open",
+								title: "Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create.",
+								onClick: () => setDescribeOpen(true),
+								children: "✨ Describe it instead…"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: "or fill the form in and press Enter"
+							})]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "new-describe",
+							className: "new-templates nf-describe",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "nt-head",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Describe what you want to work on" }), describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "nf-describe-busy",
+										"aria-live": "polite",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "btn-spin",
+												"aria-hidden": "true"
+											}),
+											describeSlow ? "Still thinking…" : "Thinking…",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "new-describe-cancel",
+												className: "linklike",
+												onClick: cancelDescribe,
+												children: "Cancel"
+											})
+										]
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										id: "new-describe-close",
+										className: "linklike",
+										onClick: () => {
+											setDescribeOpen(false);
+											setPlanError("");
+										},
+										children: "Hide"
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "nf-describe-row",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+										id: "new-describe-text",
+										ref: describeRef,
+										rows: Math.min(6, Math.max(2, describe.split("\n").length)),
+										value: describe,
+										maxLength: DESCRIBE_MAX_CHARS,
+										autoComplete: "off",
+										spellCheck: false,
+										readOnly: describing,
+										placeholder: "e.g. fix the login bug in acme-api — Enter fills the form in",
+										onChange: (e) => {
+											setDescribe(e.target.value);
+											setPlanError("");
+										},
+										onKeyDown: (e) => {
+											if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+											if (e.shiftKey) {
+												e.stopPropagation();
+												return;
+											}
+											e.preventDefault();
+											e.stopPropagation();
+											runDescribe("fill");
+										}
+									})
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "nf-describe-help",
+									children: ["Your coding CLI reads this and fills in the folder, name and first instruction below. ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you press Create." })]
+								}),
+								planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "nf-describe-note",
+									"aria-live": "polite",
+									children: planNoteShown
+								}),
+								planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									id: "new-describe-error",
+									className: "error",
+									"aria-live": "polite",
+									children: planError
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							id: "new-templates",
 							className: "new-templates",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nt-head",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									title: "Saved New-session setups",
+									title: "Saved New-session setups — one list on every device",
 									children: "Templates"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									id: "new-templates-manage",
 									className: "linklike",
+									title: "Add, edit and delete templates",
 									onClick: () => {
-										const t = window.mindflockAddons?.templates;
-										if (t && typeof t.open === "function") {
-											closeDialog();
-											t.open();
-										} else toast("Templates manager isn't loaded");
+										closeDialog();
+										useUi.getState().openDialogFor("templates", "new");
 									},
 									children: "Manage…"
 								})]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							}), templates.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								id: "new-templates-list",
 								className: "nt-list",
 								children: templates.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "nt-chip" + (activeTemplate === t.name ? " active" : ""),
 									"data-name": t.name,
+									"aria-pressed": activeTemplate === t.name,
 									title: (t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe"),
 									onClick: () => fillFromTemplate(t),
 									children: t.name
 								}, t.name))
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "nf-describe-note",
+								children: "No templates yet. Save this form's prompt under a name (Prompt fold), or Manage… to add one."
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Name ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -62941,7 +65064,7 @@ function NewSessionDialog() {
 							id: "new-title",
 							ref: titleRef,
 							autoComplete: "off",
-							placeholder: "untitled",
+							placeholder: activeTemplate ? activeTemplate + " — Enter creates it" : "untitled — Enter creates it",
 							value: title,
 							onChange: (e) => setTitle(e.target.value)
 						})] }),
@@ -63054,7 +65177,10 @@ function NewSessionDialog() {
 										id: "new-account",
 										title: "Which identity this session's CLI runs as",
 										value: profileId,
-										onChange: (e) => setAccount(e.target.value),
+										onChange: (e) => {
+											pendingProfile.current = null;
+											setAccount(e.target.value);
+										},
 										children: [
 											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: "",
@@ -63290,145 +65416,229 @@ function NewSessionDialog() {
 							"data-caps": "git",
 							open: advancedOpen,
 							onToggle: (e) => setAdvancedOpen(e.target.open),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Git & workspace" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Git & workspace", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "nf-fold-sum",
+								id: "new-advanced-sum",
+								children: ["— ", foldSummary]
+							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-advanced-body",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "nf-mode",
-									role: "radiogroup",
-									"aria-labelledby": "new-mode-label",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											id: "new-mode-label",
-											className: "nf-mode-label",
-											children: "Where the work happens"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "check",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "radio",
-													name: "new-workspace-mode",
-													id: "new-worktree",
-													checked: (!inPlace || laneNeedsWorktree) && !provisionOn,
-													onChange: () => {
-														setInPlace(false);
-														setProvision(false);
-													}
-												}),
-												"New worktree",
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "muted",
-													children: "(a separate checkout on its own branch — nothing is installed into it)"
-												})
-											]
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "check",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "radio",
-													name: "new-workspace-mode",
-													id: "new-in-place",
-													checked: inPlace && !laneNeedsWorktree,
-													onChange: () => {
-														if (laneNeedsWorktree) draft.setLane("leave");
-														setSplit(false);
-														setInPlace(true);
-														setProvision(false);
-													}
-												}),
-												"Work directly in this folder",
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "muted",
-													children: splitOn ? "(turns auto-split off — a split works in its own worktree)" : laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
-												})
-											]
-										}),
-										offerProvision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											id: "new-provision-row",
-											className: "check",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "radio",
-													name: "new-workspace-mode",
-													id: "new-provision",
-													checked: provisionOn,
-													onChange: () => {
-														setProvision(true);
-														setInPlace(false);
-													}
-												}),
-												"Provision workspace",
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "muted",
-													children: "— the same separate checkout, plus run repo setup & warm test caches (or a full clone instead of a worktree)"
-												})
-											]
-										}),
-										worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-											className: "nf-git-nudge",
-											children: worktreeClamped
-										}),
-										provisionBlocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-											className: "nf-git-nudge nf-provision-warn",
-											children: [
-												provisionBlocked,
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-													type: "button",
-													className: "linklike",
-													title: "Ticks “Create a git repo in this folder” below",
-													onClick: armInitRepo,
-													children: "Create one here"
-												})
-											]
-										}),
-										offerProvision && provision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											id: "provision-opts",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Workspace strategy", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-												id: "new-workspace-strategy",
-												value: strategy,
-												onChange: (e) => setStrategy(e.target.value),
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-													value: "worktree",
-													children: "shared base clone (worktree) — fast, default"
-												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-													value: "clone",
-													children: "full clone — standalone"
-												})]
-											})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-												className: "muted provision-hint",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "nf-mode",
+										role: "radiogroup",
+										"aria-labelledby": "new-mode-label",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												id: "new-mode-label",
+												className: "nf-mode-label",
+												children: "Where the work happens"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+												className: "check",
 												children: [
-													"Tip: paste a full branch in ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Name" }),
-													" (e.g.",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+														type: "radio",
+														name: "new-workspace-mode",
+														id: "new-worktree",
+														checked: (!inPlace || laneNeedsWorktree) && !provisionOn,
+														onChange: () => {
+															setInPlace(false);
+															setProvision(false);
+														}
+													}),
+													"New worktree",
 													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "feature/sc-17436/grafana-dashboard-…" }),
-													") to use it as the branch verbatim — the session name becomes its last segment."
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+														className: "muted",
+														children: "(a separate checkout on its own branch — nothing is installed into it)"
+													})
 												]
-											})]
-										})
-									]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "check",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "checkbox",
-											id: "new-init-repo",
-											checked: initRepo,
-											onChange: (e) => setInitRepo(e.target.checked)
-										}),
-										"Create a git repo in this folder",
-										" ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "muted",
-											children: "(git init + initial commit — enables diff/commit/PR)"
-										})
-									]
-								})]
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+												className: "check",
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+														type: "radio",
+														name: "new-workspace-mode",
+														id: "new-in-place",
+														checked: inPlace && !laneNeedsWorktree,
+														onChange: () => {
+															if (laneNeedsWorktree) draft.setLane("leave");
+															setSplit(false);
+															setInPlace(true);
+															setProvision(false);
+														}
+													}),
+													"Work directly in this folder",
+													" ",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+														className: "muted",
+														children: splitOn ? "(turns auto-split off — a split works in its own worktree)" : laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
+													})
+												]
+											}),
+											offerProvision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+												id: "new-provision-row",
+												className: "check",
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+														type: "radio",
+														name: "new-workspace-mode",
+														id: "new-provision",
+														checked: provisionOn,
+														onChange: () => {
+															setProvision(true);
+															setInPlace(false);
+														}
+													}),
+													"Provision workspace",
+													" ",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+														className: "muted",
+														children: "— the same separate checkout, plus run repo setup & warm test caches (or a full clone instead of a worktree)"
+													})
+												]
+											}),
+											worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+												className: "nf-git-nudge",
+												children: worktreeClamped
+											}),
+											provisionBlocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+												className: "nf-git-nudge nf-provision-warn",
+												children: [
+													provisionBlocked,
+													" ",
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														className: "linklike",
+														title: "Ticks “Create a git repo in this folder” below",
+														onClick: armInitRepo,
+														children: "Create one here"
+													})
+												]
+											}),
+											offerProvision && provision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												id: "provision-opts",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Workspace strategy", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+													id: "new-workspace-strategy",
+													value: strategy,
+													onChange: (e) => setStrategy(e.target.value),
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "worktree",
+														children: "shared base clone (worktree) — fast, default"
+													}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "clone",
+														children: "full clone — standalone"
+													})]
+												})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+													className: "muted provision-hint",
+													children: [
+														"Tip: paste a full branch in ",
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Name" }),
+														" (e.g.",
+														" ",
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "feature/sc-17436/grafana-dashboard-…" }),
+														") to use it as the branch verbatim — the session name becomes its last segment."
+													]
+												})]
+											})
+										]
+									}),
+									worktreeMode && branches?.is_git && branches.branches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "nf-base-branch",
+										children: [
+											"Base branch",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: "— the worktree is cut from it and diffed against it"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+												id: "new-base-branch",
+												value: baseBranch,
+												onChange: (e) => setBaseBranch(e.target.value),
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "",
+														children: (branches.current || branches.default || "the checked-out branch") + (branches.current ? " (checked out)" : "")
+													}),
+													branches.branches.some((b) => !b.remote && !b.current) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Local",
+														children: branches.branches.filter((b) => !b.remote && !b.current).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: b.name,
+															children: b.name
+														}, b.name))
+													}),
+													branches.branches.some((b) => b.remote) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Remote",
+														children: branches.branches.filter((b) => b.remote).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: b.name,
+															children: b.name
+														}, b.name))
+													})
+												]
+											}),
+											branches.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: "Showing the first 200 branches."
+											})
+										]
+									}), canContinue && remoteBranchName(baseBranch) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "nf-base-mode",
+										role: "radiogroup",
+										"aria-label": "What to do with the remote branch",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+											className: "check",
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+													type: "radio",
+													name: "new-base-mode",
+													id: "new-base-mode-new",
+													checked: continueOn !== baseBranch,
+													onChange: () => setContinueOn("")
+												}),
+												"Start a new branch from ",
+												baseBranch
+											]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+											className: "check",
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+													type: "radio",
+													name: "new-base-mode",
+													id: "new-base-mode-continue",
+													checked: continueOn === baseBranch,
+													onChange: () => setContinueOn(baseBranch)
+												}),
+												"Work on ",
+												remoteBranchName(baseBranch),
+												" itself",
+												" ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "muted",
+													children: "(shared with whoever pushed it)"
+												})
+											]
+										})]
+									})] }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "check",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+												type: "checkbox",
+												id: "new-init-repo",
+												checked: initRepo,
+												onChange: (e) => setInitRepo(e.target.checked)
+											}),
+											"Create a git repo in this folder",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: "(git init + initial commit — enables diff/commit/PR)"
+											})
+										]
+									})
+								]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -63685,7 +65895,7 @@ function NewSessionDialog() {
 							onClick: runMode ? () => void startRun() : startNow,
 							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
 						})
-					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "new-back",
 						className: "linklike",
@@ -63693,8 +65903,9 @@ function NewSessionDialog() {
 						children: "← Back"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
-						disabled: draft.starting,
+						disabled: draft.starting || describing,
 						"aria-busy": draft.starting || void 0,
+						title: describing ? "Waiting for the description to be read" : void 0,
 						children: draft.starting ? "Starting…" : "Create"
 					})] })]
 				})
@@ -64234,7 +66445,7 @@ function AutomationSwitch({ label, title, rowId, inputId, statusId, checked, onC
 		})]
 	});
 }
-function SourceCard({ sourceId, summary, collapsed, onToggle, children, footer }) {
+function SourceCard({ sourceId, summary, badge, collapsed, onToggle, children, footer }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "tk-source" + (collapsed ? " tk-collapsed" : ""),
 		"data-source-id": sourceId,
@@ -64243,13 +66454,17 @@ function SourceCard({ sourceId, summary, collapsed, onToggle, children, footer }
 			className: "tk-head",
 			"aria-expanded": !collapsed,
 			onClick: onToggle,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "tk-caret",
-				children: collapsed ? "▸" : "▾"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "tk-summary",
-				children: summary
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tk-caret",
+					children: collapsed ? "▸" : "▾"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tk-summary",
+					children: summary
+				}),
+				badge
+			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "tk-body",
 			children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -64262,21 +66477,24 @@ function SourceCard({ sourceId, summary, collapsed, onToggle, children, footer }
 		})]
 	});
 }
-function TestButton({ label = "Test connection", onTest }) {
-	const [state, setState] = (0, import_react.useState)({ testing: false });
+function TestButton({ label = "Test connection", onTest, result }) {
+	const [own, setOwn] = (0, import_react.useState)({ testing: false });
+	const state = result || own;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "test-btn",
+		disabled: state.testing,
 		onClick: async () => {
-			setState({ testing: true });
+			if (!result) setOwn({ testing: true });
 			try {
-				setState({
+				const msg = await onTest();
+				if (!result) setOwn({
 					testing: false,
 					ok: true,
-					msg: await onTest()
+					msg
 				});
 			} catch (err) {
-				setState({
+				if (!result) setOwn({
 					testing: false,
 					ok: false,
 					msg: err.message || "failed"
@@ -64288,6 +66506,14 @@ function TestButton({ label = "Test connection", onTest }) {
 		className: "test-result" + (state.msg ? state.ok ? " ok" : " bad" : ""),
 		children: state.testing ? "testing…" : state.msg ? (state.ok ? "✓ " : "✗ ") + state.msg : ""
 	})] });
+}
+function SourcePill({ state, label, message }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ik-source-pill " + state,
+		title: message || label,
+		"data-state": state,
+		children: label
+	});
 }
 function WorkGroup({ name, count, detail, open, onToggle, onHide, hideTitle, indent, heading, middle, children }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -64634,6 +66860,130 @@ function useToggleSet(key, invert = false, keep) {
 	};
 }
 //#endregion
+//#region src/components/intake/sourceForm.ts
+var TEST_FRESH_MS = 864e5;
+function lastTestOf(source) {
+	const raw = source?.last_test;
+	if (!raw || typeof raw !== "object") return null;
+	const t = raw;
+	if (typeof t.ok !== "boolean") return null;
+	return {
+		ok: t.ok,
+		at: typeof t.at === "string" ? t.at : "",
+		message: typeof t.message === "string" ? t.message : "",
+		member_id: typeof t.member_id === "string" ? t.member_id : void 0,
+		states: Array.isArray(t.states) ? t.states : void 0,
+		workspaces: Array.isArray(t.workspaces) ? t.workspaces : void 0
+	};
+}
+function withLastTest(source, verdict) {
+	const out = { ...source };
+	if (verdict) out.last_test = verdict;
+	else delete out.last_test;
+	return out;
+}
+function savedStates(source) {
+	return lastTestOf(source)?.states || [];
+}
+function workspaceChoices(source) {
+	if ((source.project || "").trim()) return [];
+	return (lastTestOf(source)?.workspaces || []).filter((w) => w && w.gid);
+}
+function requiredMarker(field) {
+	if (!field.required) return "";
+	return field.auto ? "filled by Test" : "required";
+}
+function hasSecret(source, field) {
+	return !!field.secret && !!(source[field.key] || "").trim();
+}
+function clearSecretPatch(key) {
+	return { [key]: null };
+}
+function missingAutoFields(meta, source) {
+	return (meta?.fields || []).filter((f) => f.required && f.auto && !(source[f.key] || "").trim());
+}
+function missingRequiredFields(meta, source) {
+	return (meta?.fields || []).filter((f) => f.required && !f.auto && !(source[f.key] || "").trim());
+}
+function isTestSensitive(meta, patch) {
+	const keys = /* @__PURE__ */ new Set(["provider", ...(meta?.fields || []).map((f) => f.key)]);
+	return Object.keys(patch).some((k) => keys.has(k));
+}
+function shouldAutoTest(meta, source, patch) {
+	if (!meta) return false;
+	if (!isTestSensitive(meta, patch)) return false;
+	return missingRequiredFields(meta, source).length === 0;
+}
+function putBody(sources, nulls = {}) {
+	return { sources: sources.map((s) => {
+		const out = { ...s };
+		for (const key of nulls[s.id] || []) out[key] = null;
+		return out;
+	}) };
+}
+function splitForSave(sources, catalog, storedIds) {
+	const send = [];
+	const held = {};
+	for (const s of sources) {
+		const meta = catalog.find((p) => p.id === s.provider) || null;
+		const missing = storedIds.has(s.id) ? [] : missingRequiredFields(meta, s);
+		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, "Required"]));
+		else send.push(s);
+	}
+	return {
+		send,
+		held
+	};
+}
+function fieldErrorsFrom(body) {
+	if (!body || typeof body !== "object") return {};
+	const errors = body.errors;
+	if (!errors || typeof errors !== "object") return {};
+	const out = {};
+	for (const [id, fields] of Object.entries(errors)) {
+		if (!fields || typeof fields !== "object") continue;
+		const clean = {};
+		for (const [k, v] of Object.entries(fields)) if (typeof v === "string" && v) clean[k] = v;
+		if (Object.keys(clean).length) out[id] = clean;
+	}
+	return out;
+}
+function sourceTestState(source, meta, now = Date.now()) {
+	const provider = (source.provider || "").trim().toLowerCase();
+	if (!(!!(source.api_token || "").trim() || provider === "github_issues")) return {
+		state: "off",
+		message: "no credentials yet"
+	};
+	const test = lastTestOf(source);
+	if (!test) return {
+		state: "needs_attention",
+		message: "not tested yet — run Test"
+	};
+	if (!test.ok) return {
+		state: "needs_attention",
+		message: test.message || "the last test failed"
+	};
+	const missing = missingAutoFields(meta, source);
+	if (missing.length) return {
+		state: "needs_attention",
+		message: (test.message ? test.message + " — " : "") + missing.map((f) => f.label).join(", ") + " still to fill in (run Test)"
+	};
+	const at = Date.parse(test.at);
+	if (!Number.isFinite(at) || now - at > TEST_FRESH_MS) return {
+		state: "needs_attention",
+		message: "last tested over a day ago — retest"
+	};
+	return {
+		state: "connected",
+		message: test.message || "Connected"
+	};
+}
+var TEST_STATE_LABELS = {
+	connected: "Connected",
+	needs_attention: "Needs attention",
+	off: "Off"
+};
+//#endregion
 //#region src/components/intake/search.ts
 function annotations(item) {
 	return [item.eligible ? "queued for auto" : "", ...item.reasons || []];
@@ -64901,7 +67251,10 @@ function TicketsTab(_) {
 	const [sources, setSources] = (0, import_react.useState)(savedSources.data ?? null);
 	const [collapsed, setCollapsed] = (0, import_react.useState)(() => new Set((savedSources.data || []).map((s) => s.id)));
 	const seeded = (0, import_react.useRef)(savedSources.data !== void 0);
+	const storedIds = (0, import_react.useRef)(new Set((savedSources.data || []).map((s) => s.id)));
 	const seq = (0, import_react.useRef)(0);
+	const [errors, setErrors] = (0, import_react.useState)({});
+	const [tests, setTests] = (0, import_react.useState)({});
 	(0, import_react.useEffect)(() => {
 		if (seeded.current) return;
 		if (savedSources.data === void 0) {
@@ -64912,25 +67265,106 @@ function TicketsTab(_) {
 			return;
 		}
 		seeded.current = true;
+		storedIds.current = new Set(savedSources.data.map((s) => s.id));
 		setSources(savedSources.data);
 		setCollapsed(new Set(savedSources.data.map((s) => s.id)));
 	}, [savedSources.data, savedSources.isError]);
-	const persist = (0, import_react.useCallback)(async (list) => {
-		const mySeq = ++seq.current;
-		const missingRepo = list.filter((s) => !(s.repo_url || "").trim()).length;
+	const runTest = (0, import_react.useCallback)(async (src, meta) => {
+		const payload = {
+			id: src.id,
+			provider: src.provider,
+			record: true
+		};
+		for (const f of meta?.fields || []) {
+			const v = src[f.key];
+			if (f.secret && (!v || v === "•••set")) continue;
+			if (v != null) payload[f.key] = v;
+		}
+		if (src.repo_url) payload.repo_url = src.repo_url;
+		setTests((prev) => ({
+			...prev,
+			[src.id]: { testing: true }
+		}));
 		try {
-			await api("/api/settings/ticketing/sources", {
-				method: "PUT",
-				json: { sources: list }
-			});
-			if (mySeq !== seq.current) return;
-			putTicketingSources(list);
-			toast(missingRepo ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest` : "Saved ticketing sources");
+			const r = await api("/api/settings/test/ticketing", { json: payload });
+			const verdict = r?.source ? lastTestOf(r.source) : null;
+			if (r?.source) {
+				const srv = r.source;
+				setSources((prev) => (prev || []).map((s) => s.id === srv.id ? withLastTest({
+					...s,
+					member_id: srv.member_id || s.member_id || "",
+					project: srv.project || s.project || ""
+				}, verdict) : s));
+			}
+			const msg = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+			setTests((prev) => ({
+				...prev,
+				[src.id]: {
+					testing: false,
+					ok: !!r?.ok,
+					msg
+				}
+			}));
+			if (!r?.ok) throw new Error(msg);
 			refreshConfig();
+			return msg;
 		} catch (err) {
-			errorPop("Ticketing sources not saved", err.message || "the server rejected the ticketing settings");
+			const msg = err.message || "test failed";
+			setTests((prev) => ({
+				...prev,
+				[src.id]: {
+					testing: false,
+					ok: false,
+					msg
+				}
+			}));
+			throw err;
 		}
 	}, []);
+	const persist = (0, import_react.useCallback)(async (list, opts = {}) => {
+		const mySeq = ++seq.current;
+		const { send, held } = splitForSave(list, catalog, storedIds.current);
+		const heldCount = Object.keys(held).length;
+		if (!send.length && !storedIds.current.size) {
+			setErrors(held);
+			return;
+		}
+		const missingRepo = send.filter((s) => !(s.repo_url || "").trim()).length;
+		try {
+			const r = await api("/api/settings/ticketing/sources", {
+				method: "PUT",
+				json: putBody(send, opts.nulls)
+			});
+			if (mySeq !== seq.current) return;
+			storedIds.current = new Set((r?.sources || send).map((s) => s.id));
+			setErrors(held);
+			const byId = new Map((r?.sources || []).map((s) => [s.id, s]));
+			const stamp = (s) => byId.has(s.id) ? withLastTest(s, lastTestOf(byId.get(s.id))) : s;
+			const saved = list.map(stamp);
+			setSources((prev) => (prev || []).map(stamp));
+			putTicketingSources(r?.sources || send);
+			toast(heldCount ? `Saved — ${heldCount} new source(s) wait for their required fields` : missingRepo ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest` : "Saved ticketing sources");
+			refreshConfig();
+			if (opts.autoTest) {
+				const src = saved.find((s) => s.id === opts.autoTest);
+				if (src) {
+					const meta = catalog.find((p) => p.id === src.provider) || null;
+					runTest(src, meta).catch(() => {});
+				}
+			}
+		} catch (err) {
+			const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
+			if (Object.keys(fieldErrors).length) {
+				if (mySeq === seq.current) setErrors({
+					...held,
+					...fieldErrors
+				});
+				toast("Not saved — fix the marked fields");
+				return;
+			}
+			errorPop("Ticketing sources not saved", err.message || "the server rejected the ticketing settings");
+		}
+	}, [catalog, runTest]);
 	if (sources === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "set-hint",
 		children: "Loading…"
@@ -64952,16 +67386,34 @@ function TicketsTab(_) {
 	const update = (id, patch) => {
 		setSources((prev) => {
 			const list = prev || [];
+			const nulls = {};
+			const strings = {};
+			for (const [k, v] of Object.entries(patch)) {
+				if (v === null) (nulls[id] ||= []).push(k);
+				strings[k] = v ?? "";
+			}
+			let autoTest;
 			const next = list.map((s) => {
 				if (s.id !== id) return s;
 				const merged = {
 					...s,
-					...patch
+					...strings
 				};
-				if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+				if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) {
+					merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+					if (storedIds.current.has(s.id)) storedIds.current.add(merged.id);
+					if (nulls[id]) {
+						nulls[merged.id] = nulls[id];
+						delete nulls[id];
+					}
+				}
+				if (shouldAutoTest(catalog.find((p) => p.id === merged.provider) || null, merged, patch)) autoTest = merged.id;
 				return merged;
 			});
-			persist(next);
+			persist(next, {
+				nulls,
+				autoTest
+			});
 			return next;
 		});
 	};
@@ -65023,6 +67475,9 @@ function TicketsTab(_) {
 							else next.add(src.id);
 							return next;
 						}),
+						fieldErrors: errors[src.id],
+						test: tests[src.id],
+						onTest: () => runTest(src, catalog.find((p) => p.id === src.provider) || null),
 						onChange: (patch) => update(src.id, patch),
 						onRemove: () => remove(src.id)
 					}, src.id))
@@ -65081,9 +67536,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 				className: "tk-state",
 				"data-tk-field": field.key,
 				value: "",
-				onFocus: () => {
-					if (!states.length) loadStates();
-				},
+				onFocus: loadStates,
 				onChange: (e) => {
 					if (e.target.value) commit([...selected, e.target.value]);
 				},
@@ -65116,9 +67569,7 @@ function StartStatePicker({ field, source, states, loadStates, onChange }) {
 				className: "tk-state-one",
 				"data-tk-field": field.key,
 				value: current,
-				onFocus: () => {
-					if (!states.length) loadStates();
-				},
+				onFocus: loadStates,
 				onChange: (e) => onChange({ [field.key]: e.target.value }),
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
@@ -65142,17 +67593,15 @@ function StartStatePicker({ field, source, states, loadStates, onChange }) {
 		]
 	});
 }
-function ChoicePicker({ field, source, onChange }) {
+function ChoicePicker({ field, source, error, onChange }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: field.label
-			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldLabel, { field }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-				className: "tk-choice",
+				className: "tk-choice" + (error ? " field-missing" : ""),
 				"data-tk-field": field.key,
+				"aria-invalid": error ? true : void 0,
 				value: source[field.key] || "",
 				onChange: (e) => onChange({ [field.key]: e.target.value }),
 				children: (field.options || []).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
@@ -65160,12 +67609,22 @@ function ChoicePicker({ field, source, onChange }) {
 					children: o.label
 				}, o.value))
 			}),
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-field-error",
+				"data-tk-error": field.key,
+				children: error
+			}) : null,
 			field.hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
 				children: field.hint
 			}) : null
 		]
 	});
+}
+function claimedBy(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return null;
+	const body = err.body;
+	return body && body.claimed_by && body.claimed_by.name ? body.claimed_by : null;
 }
 function listNames(names) {
 	if (names.length <= 2) return names.join(" and ");
@@ -65494,31 +67953,61 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 			return title;
 		},
 		onStart: async ({ agent, depth, effort }) => {
-			const r = await api("/api/tickets/start", { json: {
+			const start = (override) => api("/api/tickets/start", { json: {
 				source: t.source,
 				id: t.id,
 				...agent ? { agent } : {},
 				...depth ? { depth } : {},
-				...effort ? { effort } : {}
+				...effort ? { effort } : {},
+				...override ? { override_claim: true } : {}
 			} });
+			let r;
+			try {
+				r = await start(false);
+			} catch (err) {
+				if (claimedBy(err)) errorPop("Begin work failed — " + t.slug, err.message, [{
+					label: "Override",
+					primary: true,
+					title: "Start it here anyway — the ticket stays assigned to them",
+					run: () => void start(true).then((ok) => {
+						refreshInstances();
+						setTimeout(onStarted, 5e3);
+						toast("Session " + (ok?.title || t.slug) + " — provisioning, see the sidebar");
+					}, (e) => errorPop("Begin work failed — " + t.slug, e.message || "error"))
+				}]);
+				throw err;
+			}
 			refreshInstances();
 			setTimeout(onStarted, 5e3);
 			return "Session " + (r?.title || t.slug);
 		}
 	});
 }
-function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChange, onRemove }) {
+function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, test, onTest, onToggle, onChange, onRemove }) {
 	const meta = catalog.find((p) => p.id === source.provider) || null;
+	const errs = fieldErrors || {};
+	const unsaved = Object.keys(errs).length > 0;
+	const verdict = sourceTestState(source, meta);
+	const pillState = unsaved ? "needs_attention" : verdict.state;
+	const pillLabel = unsaved ? "Not saved" : TEST_STATE_LABELS[verdict.state];
+	const pillMessage = unsaved ? "fix the marked fields" : verdict.message;
+	const stored = lastTestOf(source);
 	const effortProvider = source.agent || agents.fallback || "";
 	const effortCaps = useProviderEfforts().data;
 	const effortCap = effortCaps ? effortCaps[effortProvider] : void 0;
 	const effortUsable = supportsEffort(effortCap);
-	const [states, setStates] = (0, import_react.useState)([]);
+	const [states, setStates] = (0, import_react.useState)(() => savedStates(source));
+	const savedStateKey = stored?.at || "";
+	(0, import_react.useEffect)(() => {
+		const fresh = savedStates(source);
+		if (fresh.length) setStates(fresh);
+	}, [savedStateKey]);
 	const provName = meta?.label || source.provider;
 	const detail = (source.label || source.member_id || source.repo_url || "").trim();
 	const namesProvider = [provName, source.provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length)));
 	const summary = (!detail ? provName : namesProvider ? detail : provName + " — " + detail) + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
 	const repoMissing = !(source.repo_url || "").trim();
+	const ownGithubToken = source.provider === "github_issues" && source.api_token === "•••set";
 	const testPayload = () => {
 		const payload = {
 			id: source.id,
@@ -65541,20 +68030,31 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SourceCard, {
 		sourceId: source.id,
 		summary,
+		badge: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+			state: pillState,
+			label: pillLabel,
+			message: pillMessage
+		}),
 		collapsed,
 		onToggle,
-		footer: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestButton, { onTest: async () => {
-			const r = await api("/api/settings/test/ticketing", { json: testPayload() });
-			if (!r?.ok) throw new Error(String(r?.error || "test failed"));
-			if (r.member_id && source.member_id !== r.member_id) onChange({ member_id: String(r.member_id) });
-			loadStates();
-			return "Connected" + (r.name ? " — " + r.name : "");
-		} }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "test-btn tk-remove",
-			onClick: onRemove,
-			children: "Remove"
-		})] }),
+		footer: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestButton, {
+				label: stored ? "Retest" : "Test connection",
+				onTest,
+				result: test
+			}),
+			!test?.msg && !test?.testing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-source-message",
+				title: pillMessage,
+				children: pillMessage
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn tk-remove",
+				onClick: onRemove,
+				children: "Remove"
+			})
+		] }),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "set-row",
@@ -65577,6 +68077,12 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 						children: meta?.blurb || ""
 					})
 				]
+			}),
+			ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint tk-own-token",
+				role: "note",
+				"data-tk-notice": "own-token",
+				children: "This source still has its own token — move it to Settings → Connections → GitHub → Connect (read as a fallback this release, ignored from the next)"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "set-row",
@@ -65726,31 +68232,103 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 				}, f.key) : f.type === "choice" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChoicePicker, {
 					field: f,
 					source,
+					onChange,
+					error: errs[f.key]
+				}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CatalogInput, {
+					field: f,
+					source,
+					error: errs[f.key],
 					onChange
-				}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: f.label
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: f.secret ? "password" : "text",
-							autoComplete: "off",
-							"data-tk-field": f.key,
-							placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
-							defaultValue: f.secret ? "" : source[f.key] || "",
-							onBlur: (e) => {
-								if (f.secret && e.target.value === "") return;
-								if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
-							}
-						}),
-						f.hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: f.hint
-						}) : null
-					]
 				}, f.key))
+			})
+		]
+	});
+}
+function FieldLabel({ field }) {
+	const marker = requiredMarker(field);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "set-label",
+		children: [field.label, marker ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ik-field-marker" + (marker === "required" ? " required" : ""),
+			"data-marker": marker,
+			children: marker === "required" ? "*" : marker
+		}) : null]
+	});
+}
+function FieldNote({ field, error }) {
+	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ik-field-error",
+		"data-tk-error": field.key,
+		children: error
+	});
+	return field.hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "set-hint",
+		children: field.hint
+	}) : null;
+}
+function CatalogInput({ field: f, source, error, onChange }) {
+	const choices = f.key === "project" && f.auto ? workspaceChoices(source) : [];
+	if (choices.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldLabel, { field: f }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				className: "tk-choice",
+				"data-tk-field": f.key,
+				"data-tk-workspaces": choices.length,
+				value: "",
+				onChange: (e) => {
+					if (e.target.value) onChange({ [f.key]: e.target.value });
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: "Pick a workspace…"
+				}), choices.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: w.gid,
+					children: w.name
+				}, w.gid))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
+				field: f,
+				error
+			})
+		]
+	});
+	const stored = hasSecret(source, f);
+	const input = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		type: f.secret ? "password" : "text",
+		autoComplete: "off",
+		"data-tk-field": f.key,
+		className: error ? "field-missing" : "",
+		"aria-invalid": error ? true : void 0,
+		placeholder: f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || "",
+		defaultValue: f.secret ? "" : source[f.key] || "",
+		onBlur: (e) => {
+			if (f.secret && e.target.value === "") return;
+			if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
+		}
+	}, f.secret ? stored ? "set" : "empty" : void 0);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldLabel, { field: f }),
+			f.secret && stored ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ik-secret-row",
+				children: [input, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ik-secret-clear",
+					"data-tk-clear": f.key,
+					title: "Forget the stored " + f.label.toLowerCase(),
+					onClick: (e) => {
+						e.preventDefault();
+						onChange(clearSecretPatch(f.key));
+					},
+					children: "Clear"
+				})]
+			}) : input,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
+				field: f,
+				error
 			})
 		]
 	});
@@ -66333,7 +68911,6 @@ function PullRequestsTab({ gotoTab }) {
 		fetching: prsQuery.isFetching,
 		loaded: !!prs
 	}) || (prsQuery.data?.login ? "GitHub: " + prsQuery.data.login : prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
-	const [ghTest, setGhTest] = (0, import_react.useState)({ testing: false });
 	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
 	const n = repos.length;
 	const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
@@ -66509,7 +69086,7 @@ function PullRequestsTab({ gotoTab }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "set-hint set-block-hint",
-						children: "The defaults every repository card inherits, plus the settings that are genuinely one-per-app (the poll loop and the GitHub credential)."
+						children: "The defaults every repository card inherits, plus the settings that are genuinely one-per-app (the poll loop)."
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentPicker, {
 						label: "Agent CLI",
@@ -66612,52 +69189,35 @@ function PullRequestsTab({ gotoTab }) {
 							})
 						]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "set-row",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-label",
-								children: "Token"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-								group: "github",
-								field: "token",
-								type: "password",
-								placeholder: "optional — else $GH_TOKEN / gh auth"
+								children: "GitHub connection"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "test-row",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									id: "gh-connect-btn",
+									className: "test-btn",
+									onClick: () => openConnectGitHub(),
+									children: "Connect GitHub"
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "set-hint",
-								children: "Shared with issue handling — it authenticates the same account. Also what lets MindFlock open and merge PRs for you without the gh CLI. Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never needs it — that is plain git over your own remote."
+								children: [
+									"One sign-in for PR review, issue handling and Open PR, shared with your other devices (Settings → Connections → GitHub → Connect). Its ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Test" }),
+									" ",
+									"asks GitHub who the token is and whether it reaches your first repository; a card's ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Test access" }),
+									" checks one repository. Pushing never needs it — that is plain git over your own remote."
+								]
 							})
 						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "test-row",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "gh-test-btn",
-								className: "test-btn",
-								onClick: async () => {
-									setGhTest({ testing: true });
-									setGhTest(await runGithubTest());
-								},
-								children: "Test GitHub"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								id: "gh-test-result",
-								className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
-								children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "set-hint",
-							children: [
-								"Shows where a token would come from. A token is all this needs — gh is reported too, but it is optional. Use a card's ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Test access" }),
-								" ",
-								"to check one repository."
-							]
-						})]
 					})
 				]
 			})]
@@ -66690,7 +69250,6 @@ function IssuesTab({ gotoTab }) {
 		fetching: issuesQuery.isFetching,
 		loaded: !!issues
 	});
-	const [ghTest, setGhTest] = (0, import_react.useState)({ testing: false });
 	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
 	const n = repos.length;
 	const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
@@ -66942,38 +69501,21 @@ function IssuesTab({ gotoTab }) {
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-label",
-								children: "GitHub token"
+								children: "GitHub connection"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "test-row",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
-									id: "gh-issue-test-btn",
+									id: "gh-issue-connect-btn",
 									className: "test-btn",
-									onClick: async () => {
-										setGhTest({ testing: true });
-										setGhTest(await runGithubTest());
-									},
-									children: "Test GitHub"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									id: "gh-issue-test-result",
-									className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
-									children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
-								})]
+									onClick: () => openConnectGitHub(),
+									children: "Connect GitHub"
+								})
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
-								children: [
-									"The GitHub credential is shared with PR review — it authenticates the same account. Set or change it on the",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: "linklike",
-										onClick: () => gotoTab("prs"),
-										children: "Pull requests tab"
-									}),
-									"; the button above checks the current connection."
-								]
+								children: "The same sign-in PR review uses — it authenticates the same account (Settings → Connections → GitHub → Connect). A GitHub Issues source from an older release that still carries its own token keeps working this release with a notice in Settings → Connections; move it here."
 							})
 						]
 					})
@@ -67108,7 +69650,7 @@ function StalledNote({ s }) {
 			" on its own; this computer doesn't (to move them here, choose",
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Run here" }),
-			" in Settings → Devices). You can still start ",
+			" in Settings → Your devices). You can still start ",
 			many ? "any of them" : "it",
 			" here, with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start now" }),
@@ -67569,6 +70111,29 @@ function IntakeDialog() {
 	});
 }
 //#endregion
+//#region src/components/settings/screenKeys.ts
+var LEGACY_SCREEN_KEYS = {
+	"your-devices": "devices",
+	"your-phone": "mobile",
+	phone: "mobile",
+	people: "peer",
+	"peer-links": "peer",
+	peers: "peer",
+	"remote-control": "devices",
+	"tailnet-trust": "devices",
+	"trusted-accounts": "devices",
+	"pair-by-token": "devices",
+	"settings-sync": "devices",
+	"make-reachable": "devices",
+	"shared-link": "devices",
+	fleet: "devices"
+};
+function resolveScreenKey(name, known) {
+	if (!name) return "";
+	const key = LEGACY_SCREEN_KEYS[name] || name;
+	return known.includes(key) ? key : "";
+}
+//#endregion
 //#region src/components/settings/screens/General.tsx
 function General(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -67618,6 +70183,7 @@ function General(_) {
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
@@ -67646,6 +70212,34 @@ function ResumeOnUsageResetRow() {
 				onChange: (e) => {
 					s.saveField("general", "resume_on_usage_reset", e.target.checked);
 					toast(e.target.checked ? "Auto-resume on" : "Auto-resume off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
+function ReviveOnStartRow() {
+	const s = useSettings();
+	const on = s.get("general", "revive_on_start") !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "general-revive-on-start",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Revive sessions after a restart"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "When MindFlock restarts, sessions whose agent was running come back on their own, in the background, instead of waiting Offline for a click. Paused and usage-limited sessions are left alone."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("general", "revive_on_start", e.target.checked);
+					toast(e.target.checked ? "Sessions revive after a restart" : "Sessions stay Offline after a restart");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -67910,93 +70504,6 @@ function ScrollSpeedRow() {
 	});
 }
 //#endregion
-//#region src/components/settings/useServerRestart.ts
-var RESTART_TIMEOUT_MS = 3e4;
-var POLL_INTERVAL_MS = 1e3;
-function useServerRestart() {
-	const [restarting, setRestarting] = (0, import_react.useState)(false);
-	const [timedOut, setTimedOut] = (0, import_react.useState)(false);
-	const timer = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => () => {
-		if (timer.current) clearInterval(timer.current);
-	}, []);
-	return {
-		restarting,
-		timedOut,
-		restart: (0, import_react.useCallback)((opts) => {
-			if (timer.current) clearInterval(timer.current);
-			setRestarting(true);
-			setTimedOut(false);
-			if (!opts?.alreadyRequested) api("/api/server/restart", { method: "POST" }).catch(() => {});
-			const t0 = Date.now();
-			const finish = (didTimeOut) => {
-				if (timer.current) clearInterval(timer.current);
-				timer.current = null;
-				if (!didTimeOut && opts?.reload) {
-					window.location.reload();
-					return;
-				}
-				setRestarting(false);
-				setTimedOut(didTimeOut);
-				opts?.onBack?.();
-			};
-			timer.current = setInterval(async () => {
-				try {
-					await api("/api/mobile");
-				} catch {
-					if (Date.now() - t0 > RESTART_TIMEOUT_MS) finish(true);
-					return;
-				}
-				finish(false);
-			}, POLL_INTERVAL_MS);
-		}, [])
-	};
-}
-//#endregion
-//#region src/components/settings/useMakeReachable.ts
-function reachableFields(opts) {
-	const g = {};
-	if (opts.reach) {
-		g.serve_mode = "tailscale";
-		g.auth_mode = "on";
-	}
-	if (opts.sharedLink) g.shared_link = opts.sharedLink;
-	return g;
-}
-async function keepSignedIn() {
-	try {
-		const r = await api("/api/settings/auth-token");
-		if (r?.token) await api("/api/auth", { json: { token: r.token } });
-	} catch {}
-}
-function useMakeReachable(onBack) {
-	const { restarting, timedOut, restart } = useServerRestart();
-	const [saving, setSaving] = (0, import_react.useState)(false);
-	const apply = (0, import_react.useCallback)(async (opts) => {
-		const general = reachableFields(opts);
-		if (!Object.keys(general).length) return null;
-		setSaving(true);
-		try {
-			if (opts.reach) await keepSignedIn();
-			const res = await api("/api/settings", { json: { general } });
-			if (res?.restarting) restart({
-				alreadyRequested: true,
-				onBack
-			});
-			else onBack?.();
-			return res;
-		} finally {
-			setSaving(false);
-		}
-	}, [restart, onBack]);
-	return {
-		busy: saving || restarting,
-		restarting,
-		timedOut,
-		apply
-	};
-}
-//#endregion
 //#region src/components/settings/screens/TailscaleCard.tsx
 var POLL_MS$1 = 3e3;
 function signedInAs(h) {
@@ -68227,13 +70734,10 @@ function TailscaleCard({ active = true }) {
 }
 //#endregion
 //#region src/components/settings/screens/Mobile.tsx
-var TOKEN_MASK = "••••••••••••••••";
-function Mobile(_) {
+function Mobile(p) {
 	const { data: config } = useConfig();
 	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
-	const { restarting, restart } = useServerRestart();
-	const [modeBusy, setModeBusy] = (0, import_react.useState)(false);
 	const tailscale = config?.caps?.tailscale !== false;
 	const load = (0, import_react.useCallback)(async () => {
 		if (!tailscale) return;
@@ -68241,81 +70745,70 @@ function Mobile(_) {
 			setData(await api("/api/mobile"));
 			setError("");
 		} catch {
-			setError("Could not load mobile info.");
+			setError("Could not load the phone URLs.");
 		}
 	}, [tailscale]);
 	(0, import_react.useEffect)(() => {
-		load();
-	}, [load]);
-	const setMode = async (on) => {
-		setModeBusy(true);
-		let restarting = false;
-		try {
-			if (on) await keepSignedIn();
-			restarting = !!(await api("/api/settings", { json: { general: on ? reachableFields({ reach: true }) : { serve_mode: "local" } } }))?.restarting;
-		} catch {}
-		setModeBusy(false);
-		if (restarting) restart({
-			alreadyRequested: true,
-			onBack: load
-		});
-		else load();
-	};
-	const onRestart = () => restart({ onBack: load });
-	const pending = !!(data?.serve_mode && data.serve_mode === "tailscale" === !!data.local_only);
-	const shared = data?.shared || {};
-	const sharedQr = data?.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : void 0;
+		if (p.active) load();
+	}, [p.active, load]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
-			children: "Mobile"
+			children: "Your phone"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "caps-gate",
-			"data-caps-gate": "tailscale",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-					"Install ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Tailscale" }),
-					" to get access to these features — it puts your phone and this machine on a private network, so you can drive your sessions from anywhere."
-				] }),
-				!tailscale && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, {}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Then reopen this screen — the QR code and phone URLs appear here." })
-			]
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint set-block-hint",
+			children: "Your phone reaches this computer over Tailscale, a private network between your own devices. Three steps, in order:"
 		}),
-		tailscale && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneSteps, { app: data?.phone_app }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+			className: "mobile-phone-steps set-hint",
+			id: "mobile-computer-steps",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				"data-phone-step": "computer",
+				"data-state": tailscale ? "ok" : "fail",
+				children: tailscale ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "Tailscale is installed on this computer." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Install Tailscale on this computer" }),
+					" and sign in. What that means here depends on the OS (the Mac app, or Tailscale inside WSL when it's only on Windows) — the card below knows, and says what's wrong if anything is.",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Then reopen this screen — the QR code and phone URLs appear below." })
+				] })
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneSteps, { app: data?.phone_app }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "mobile-body",
 			className: "mobile-body",
-			children: !tailscale ? null : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			children: !tailscale ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "mobile-waiting",
+				children: [
+					"The QR code and the ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/m" }),
+					" link show here once Tailscale is set up on this computer."
+				]
+			}) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error",
 				children: error
 			}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
 				children: "Loading…"
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "set-row set-switch-row",
-					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Reachable from your other devices and phone (over Tailscale)"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "ca-switch",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "checkbox",
-							checked: data.serve_mode === "tailscale",
-							disabled: modeBusy,
-							onChange: (e) => setMode(e.target.checked)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+				data.local_only && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "devices-warn",
+					id: "mobile-local-only",
+					role: "alert",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+						"This computer only listens on itself — your phone can't reach it yet. Turn on",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Make reachable" }),
+						" in Your devices (Tailscale mode with the access gate on; MindFlock restarts once)."
+					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "mobile-open-devices",
+						onClick: () => p.gotoScreen("devices"),
+						children: "Open Your devices"
 					})]
-				}),
-				pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn mobile-restart",
-					disabled: restarting,
-					onClick: onRestart,
-					children: restarting ? "Restarting…" : "Restart server to apply"
 				}),
 				data.qr_svg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					id: "mobile-qr",
@@ -68326,12 +70819,10 @@ function Mobile(_) {
 					children: data.note
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
-				data.token && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TokenField, { token: data.token }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
-					shared,
-					qrSvg: sharedQr,
-					onChanged: load,
-					onData: setData
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "mobile-sign-in-hint",
+					children: "Scanning signs the phone in. To open the link by hand it asks for the access token (Settings → Security). One URL for all your computers: Your devices → One link for all devices."
 				})
 			] })
 		})
@@ -68342,6 +70833,7 @@ function PhoneSteps({ app }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
 		className: "mobile-phone-steps set-hint",
 		id: "mobile-phone-steps",
+		start: 2,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			"data-phone-step": "tailscale",
 			children: [
@@ -68389,394 +70881,6 @@ function UrlList({ urls }) {
 			}) })]
 		}, u.url))
 	});
-}
-function TokenField({ token }) {
-	const [shown, setShown] = (0, import_react.useState)(false);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Access token"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "token-reveal",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: shown ? token : TOKEN_MASK }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: () => setShown(!shown),
-						children: shown ? "Hide" : "Show"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyButton, {
-						text: token,
-						what: "Access token"
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "Signs a browser in to this device — treat it like a password."
-			})
-		]
-	});
-}
-function CopyButton({ text, what }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-		type: "button",
-		className: "test-btn",
-		onClick: () => copyText(text).then((ok) => toast(ok ? what + " copied" : "Copy failed")),
-		children: "Copy"
-	});
-}
-function Snippet({ text, what }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sl-snippet",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyButton, {
-			text,
-			what
-		})]
-	});
-}
-function AdminLink({ href, children }) {
-	if (!href) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
-		className: "sl-admin-link",
-		href,
-		target: "_blank",
-		rel: "noopener noreferrer",
-		children: [children, " ↗"]
-	});
-}
-var DEFAULT_SHARED_NAME = "mindflock";
-function SharedLink({ shared, qrSvg, onChanged, onData }) {
-	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [error, setError] = (0, import_react.useState)("");
-	(0, import_react.useEffect)(() => {
-		if (shared.name) setName(shared.name);
-	}, [shared.name]);
-	const save = async (value) => {
-		setBusy(true);
-		setError("");
-		try {
-			await api("/api/settings", { json: { general: { shared_link: value } } });
-		} catch (e) {
-			setError(e.message || "Could not save.");
-		}
-		setBusy(false);
-		onChanged();
-	};
-	const recheck = async () => {
-		setBusy(true);
-		setError("");
-		try {
-			onData(await api("/api/mobile/shared/recheck", { method: "POST" }));
-		} catch (e) {
-			setError(e.message || "Could not re-check.");
-		}
-		setBusy(false);
-	};
-	const on = !!shared.enabled;
-	(0, import_react.useEffect)(() => {
-		if (!on) return;
-		const t = window.setInterval(onChanged, 6e4);
-		return () => window.clearInterval(t);
-	}, [on, onChanged]);
-	const others = shared.devices || [];
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "One link for all devices"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Turn this on with the same name on each of your machines. The phone then keeps one URL, and it opens on whichever machine is running, so it still works when this one is off."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
-			title: "Advertise this device as a host of the shared Tailscale Service",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Shared link"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					checked: on,
-					disabled: busy,
-					onChange: (e) => save(e.target.checked ? name || DEFAULT_SHARED_NAME : "")
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Name"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "text",
-					value: name,
-					disabled: busy,
-					placeholder: DEFAULT_SHARED_NAME,
-					onChange: (e) => setName(e.target.value.trim().toLowerCase()),
-					onBlur: () => on && name && name !== shared.name && save(name),
-					onKeyDown: (e) => e.key === "Enter" && on && name && name !== shared.name && save(name)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Use the same name on every device."
-				})
-			]
-		}),
-		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "error",
-			children: error
-		}),
-		on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			shared.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: [{
-				label: "Shared URL",
-				url: shared.url
-			}] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist, {
-				shared,
-				qrSvg,
-				busy,
-				onRecheck: recheck
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine.",
-					" ",
-					"Signing in once covers Your devices (Settings → Devices) and devices paired under Remote control: the QR carries their keys too."
-				]
-			})
-		] })
-	] });
-}
-var MARK = {
-	ok: "✓",
-	fail: "✗",
-	unknown: "?"
-};
-var MARK_LABEL = {
-	ok: "done",
-	fail: "needs fixing",
-	unknown: "unknown"
-};
-function SetupChecklist({ shared, qrSvg, busy, onRecheck }) {
-	const steps = shared.steps || [];
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sl-setup",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sl-setup-head",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Setup"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy,
-				onClick: onRecheck,
-				children: busy ? "Checking…" : "Re-check"
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-			className: "sl-steps",
-			children: steps.map((s, i) => {
-				const fix = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepFix, {
-					step: s,
-					shared,
-					qrSvg
-				});
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "sl-step sl-" + s.state,
-					"data-step": s.id,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sl-mark",
-						title: MARK_LABEL[s.state],
-						"aria-label": MARK_LABEL[s.state],
-						children: MARK[s.state] || "?"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "sl-body",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "sl-title",
-								children: [
-									i + 1,
-									". ",
-									s.title
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "set-hint sl-reason",
-								children: s.reason
-							}),
-							s.state === "ok" && s.id !== "phone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-								className: "sl-fix",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Show how" }), fix]
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sl-fix",
-								children: fix
-							})
-						]
-					})]
-				}, s.id);
-			})
-		})]
-	});
-}
-function StepFix({ step, shared, qrSvg }) {
-	const svc = shared.service || "svc:" + (shared.name || DEFAULT_SHARED_NAME);
-	const name = shared.name || DEFAULT_SHARED_NAME;
-	const tag = shared.tag || "tag:mindflock";
-	const m = shared.machine;
-	const admin = shared.admin;
-	switch (step.id) {
-		case "operator":
-			if (shared.error_kind === "missing") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Install it from",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-						href: "https://tailscale.com/download",
-						target: "_blank",
-						rel: "noopener noreferrer",
-						children: "tailscale.com/download"
-					}),
-					", sign in, then press Re-check."
-				]
-			});
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Lets MindFlock run ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tailscale serve" }),
-					" as you. Run once in a terminal, then press Re-check:"
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
-				text: shared.operator_fix || "sudo tailscale set --operator=$USER",
-				what: "Command"
-			})] });
-		case "tag": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"In the admin console's Machines page, open",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m?.dns || m?.hostname || "this device" }),
-					m?.ip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						" ",
-						"(",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.ip }),
-						")"
-					] }) : null,
-					" ",
-					"→ ⋯ → Edit ACL tags → add ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
-					". Then ⋯ → ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Disable key expiry" }),
-					": tagging a device after it signed in keeps its key expiry, and when the key expires the device silently drops off the link."
-				]
-			}),
-			m?.duplicate_of && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint sl-note",
-				children: [
-					"Tailscale named this device ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.dns.split(".")[0] }),
-					" because another device is already ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.duplicate_of }),
-					" — match it by its IP."
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
-				href: admin?.machines,
-				children: "Open Machines"
-			})
-		] });
-		case "define": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"On the Services page, add a service named ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: name }),
-				" (",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-				") with port ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
-				"."
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
-			href: admin?.services,
-			children: "Open Services"
-		})] });
-		case "policy": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"One block for your access policy: every ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
-					" device is approved as a host of ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-					" without a click, and your own devices and phone may reach each other's MindFlock (needed under any custom policy, such as ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autogroup:self" }),
-					") — you only, not everyone else on the tailnet. If it says REPLACE, put your Tailscale login where it shows the placeholder. No ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tagOwners" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autoApprovers" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "grants" }),
-					" or",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tests" }),
-					" in your policy yet? Paste it whole. Already have one? Move the lines inside it into yours: a key can't appear twice."
-				]
-			}),
-			shared.policy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
-				text: shared.policy,
-				what: "Policy"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
-				href: admin?.policy,
-				children: "Open Access controls"
-			})
-		] });
-		case "approval":
-			if (step.state === "ok") return null;
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
-				children: [
-					"Approve this device under Services → ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
-					", or rely on the policy above. Re-check re-advertises this device, which is what the auto-approver reacts to."
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
-				href: admin?.services,
-				children: "Open Services"
-			})] });
-		case "phone": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [qrSvg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "qr-card sl-qr",
-			dangerouslySetInnerHTML: { __html: qrSvg }
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"With Tailscale on, open",
-				" ",
-				shared.url ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-					href: shared.url,
-					target: "_blank",
-					rel: "noopener noreferrer",
-					children: shared.url
-				}) : "the shared URL",
-				" ",
-				"on your phone. If it times out, Re-check here first."
-			]
-		})] });
-		default: return null;
-	}
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx
@@ -68999,7 +71103,7 @@ function PeerLinks(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
-			children: "Work with someone"
+			children: "People"
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
@@ -69205,7 +71309,7 @@ function PeerLinks(_) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 						className: "set-subtitle",
-						children: "Join with a code"
+						children: "Join a peer"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "set-row",
@@ -69309,7 +71413,7 @@ function PeerLinks(_) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Work with someone"
+							children: "Peer links"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 							className: "ca-switch",
@@ -69909,83 +72013,6 @@ function PeerLinkCard(props) {
 	});
 }
 //#endregion
-//#region src/components/settings/screens/Connections.tsx
-var CONN_PILL = {
-	connected: "Connected",
-	attention: "Action needed",
-	not_connected: "Not connected"
-};
-function Connections({ gotoScreen }) {
-	const [conns, setConns] = (0, import_react.useState)(null);
-	const [summary, setSummary] = (0, import_react.useState)("");
-	const [error, setError] = (0, import_react.useState)("");
-	(0, import_react.useEffect)(() => {
-		(async () => {
-			try {
-				const data = await api("/api/connections?refresh=1");
-				const list = data?.connections || [];
-				setConns(list);
-				const sum = data?.summary || {};
-				setSummary(list.length ? `${sum.connected || 0}/${sum.total || list.length} connected` : "");
-			} catch {
-				setError("Could not load connections.");
-			}
-		})();
-	}, []);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-			className: "set-section-title",
-			children: ["Connections ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				id: "settings-connections-summary",
-				className: "muted",
-				children: summary
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "The outside services MindFlock talks to — your coding agent, GitHub, ticketing and phone access. Configure opens that service's setup."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			id: "settings-connections-list",
-			className: "conn-list",
-			children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				children: error
-			}) : conns === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: "Checking…"
-			}) : conns.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "conn-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "conn-main",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "conn-head",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "conn-name",
-								children: c.name
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "conn-detail muted",
-							children: c.detail || c.purpose || ""
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "conn-pill conn-" + (c.status || "not_connected"),
-						children: CONN_PILL[c.status || ""] || c.status || ""
-					}),
-					c.settings_screen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn conn-configure",
-						onClick: () => gotoScreen(c.settings_screen),
-						children: "Configure"
-					})
-				]
-			}, c.name))
-		})
-	] });
-}
-//#endregion
 //#region src/components/settings/screens/Notifications.tsx
 var NOTIFY_KEY = "mindflock.notify.enabled";
 function notifApi() {
@@ -70291,7 +72318,7 @@ function Ntfy() {
 					value: click,
 					autoComplete: "off",
 					spellCheck: false,
-					placeholder: "optional — e.g. your phone URL from Settings → Mobile",
+					placeholder: "optional — e.g. your phone URL from Settings → Your phone",
 					onChange: (e) => setClick(e.target.value),
 					onBlur: () => click.trim() !== (view.click_url || "") && save({ click_url: click.trim() }),
 					onKeyDown: (e) => e.key === "Enter" && e.target.blur()
@@ -70416,6 +72443,65 @@ function RuleRow({ rule }) {
 	});
 }
 //#endregion
+//#region src/lib/providerRows.ts
+function signInState(p) {
+	if (!p.installed) return "not-installed";
+	if (p.authenticated) return "signed-in";
+	if (p.has_login === false) return "none";
+	if (p.auth_probe) return "not-signed-in";
+	return "unknown";
+}
+var SIGN_IN_LABEL = {
+	"signed-in": "signed in",
+	"not-signed-in": "not signed in",
+	unknown: "sign-in unknown",
+	none: "no sign-in needed",
+	"not-installed": ""
+};
+function signInDetail(p, state) {
+	if (state === "signed-in") return p.auth_detail || "login found";
+	if (state === "none") return "reads API keys or has no login step — nothing to sign in to";
+	if (state === "not-signed-in") return "CLI is installed but no sign of a login was found";
+	if (state === "unknown") return "this CLI keeps its login where MindFlock doesn't look — check inside the CLI";
+	return "";
+}
+function providerRow(p) {
+	const state = signInState(p);
+	return {
+		kind: "provider",
+		name: p.name,
+		isDefault: !!p.is_default,
+		installed: !!p.installed,
+		installLabel: p.installed ? "installed" : "not installed",
+		installTitle: p.installed ? p.path || "on PATH" : p.binary_override ? `${p.binary_override} is not an executable file` : "not found on PATH",
+		installHint: !p.installed ? p.install_hint || "" : "",
+		launchHint: !p.installed ? p.launch_hint || "" : "",
+		signIn: state,
+		signInLabel: SIGN_IN_LABEL[state],
+		signInDetail: signInDetail(p, state),
+		canSignIn: !!p.installed && !!p.has_login && !p.authenticated,
+		binaryPath: p.binary_override || "",
+		binaryPinnedBy: p.binary_override_env || ""
+	};
+}
+function errorRow(e) {
+	return {
+		kind: "error",
+		file: e.file,
+		error: e.error
+	};
+}
+function providerRows(statuses, errors) {
+	return [...statuses.map(providerRow), ...(errors || []).map(errorRow)];
+}
+function pickerOptions(statuses) {
+	return statuses.map((p) => ({
+		name: p.name,
+		disabled: !p.installed,
+		label: p.installed ? p.name : `${p.name} — not installed`
+	}));
+}
+//#endregion
 //#region src/components/settings/screens/CodingCli.tsx
 function CodingCli(_) {
 	const s = useSettings();
@@ -70424,6 +72510,7 @@ function CodingCli(_) {
 	const [flags, setFlags] = (0, import_react.useState)("");
 	const flagsMap = (0, import_react.useRef)({});
 	const [agentTest, setAgentTest] = (0, import_react.useState)({ testing: false });
+	const [testProvider, setTestProvider] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => {
 		(async () => {
 			let provs = [];
@@ -70466,7 +72553,10 @@ function CodingCli(_) {
 	const runAgentTest = async () => {
 		setAgentTest({ testing: true });
 		try {
-			const r = await api("/api/settings/test/agent", { method: "POST" });
+			const r = await api("/api/settings/test/agent", {
+				method: "POST",
+				json: { provider: testProvider || selected }
+			});
 			const bits = [];
 			if (r?.cli?.detail) bits.push(r.cli.detail);
 			if (r?.auth?.detail) bits.push(r.auth.detail);
@@ -70499,10 +72589,11 @@ function CodingCli(_) {
 					id: "default-provider-select",
 					value: selected,
 					onChange: (e) => pickProvider(e.target.value),
-					children: providers.filter((p) => p.installed).map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: p.name,
-						children: p.name
-					}, p.name))
+					children: pickerOptions(providers).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: o.name,
+						disabled: o.disabled,
+						children: o.label
+					}, o.name))
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "hidden",
@@ -70512,9 +72603,13 @@ function CodingCli(_) {
 					value: selected,
 					readOnly: true
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
-					children: "Program new sessions launch by default — only installed agent CLIs are listed."
+					children: [
+						"Program new sessions launch by default. A CLI that isn't installed can't be picked — install or sign in to it under ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent providers" }),
+						"."
+					]
 				})
 			]
 		}),
@@ -70564,21 +72659,37 @@ function CodingCli(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "test-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "agent-test-btn",
-						className: "test-btn",
-						onClick: runAgentTest,
-						children: "Test agent CLI"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						id: "agent-test-result",
-						className: "test-result" + (agentTest.msg ? agentTest.ok ? " ok" : " bad" : ""),
-						children: agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""
-					})]
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+							id: "agent-test-provider",
+							"aria-label": "Provider to test",
+							value: testProvider || selected,
+							onChange: (e) => {
+								setTestProvider(e.target.value);
+								setAgentTest({ testing: false });
+							},
+							children: providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+								value: p.name,
+								children: [p.name, p.name === selected ? " (default)" : ""]
+							}, p.name))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "agent-test-btn",
+							className: "test-btn",
+							onClick: runAgentTest,
+							children: "Test agent CLI"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							id: "agent-test-result",
+							className: "test-result" + (agentTest.msg ? agentTest.ok ? " ok" : " bad" : ""),
+							children: agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""
+						})
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Probes the configured CLI binary and its login state."
+					children: "Probes that CLI's binary and its login state — any known provider, not just the default."
 				})
 			]
 		}),
@@ -70937,32 +73048,43 @@ function Accounts(_) {
 								})
 							]
 						}),
-						p.kind === "account" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "set-hint",
-							children: [
-								"Lives in ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.resolved_config_dir || p.config_dir || "…" }),
-								". Log it in by running this in a terminal (the CLI's own sign-in flow, scoped to this account):"
-							]
-						}), p.login_command && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "set-hint",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.login_command }),
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						p.kind === "account" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "set-hint",
+								children: [
+									"Lives in ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.resolved_config_dir || p.config_dir || "…" }),
+									"."
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "prov-conn-actions setup-acct-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+									provider: p.provider || "claude",
+									profile: p.id,
+									label: "Sign in",
+									onDone: () => void refreshAuthProfiles()
+								}), p.login_command && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: "linklike",
 									onClick: () => {
 										navigator.clipboard?.writeText(p.login_command || "");
 										toast("Login command copied");
 									},
-									children: "Copy"
-								}),
-								" ",
-								"— or ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", { children: ["mindflock accounts login ", p.id] })
-							]
-						})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									children: "Copy login command"
+								})]
+							}),
+							p.login_command && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "set-hint",
+								children: [
+									"In a terminal: ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.login_command }),
+									" — or",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", { children: ["mindflock accounts login ", p.id] })
+								]
+							})
+						] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 							className: "set-row",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-label",
@@ -71643,7 +73765,7 @@ function Workspace({ gotoScreen }) {
 					className: "set-hint",
 					children: [
 						"Branch the ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Make PR" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Open PR" }),
 						" button targets. Set it to e.g. ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "staging" }),
 						" ",
@@ -71704,7 +73826,7 @@ function Workspace({ gotoScreen }) {
 						},
 						{
 							value: "pr",
-							label: "Open a PR"
+							label: "Open PR"
 						},
 						{
 							value: "merge",
@@ -71945,8 +74067,61 @@ function toForm(p) {
 		skip: p.skip_perms_flag || ""
 	};
 }
+function BinaryPathField({ row, onSaved }) {
+	const [value, setValue] = (0, import_react.useState)(row.binaryPath);
+	const [warning, setWarning] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => setValue(row.binaryPath), [row.binaryPath]);
+	const save = async () => {
+		const path = value.trim();
+		if (path === row.binaryPath) return;
+		try {
+			const r = await api("/api/providers/" + encodeURIComponent(row.name) + "/binary-path", {
+				method: "PUT",
+				json: { path }
+			});
+			setWarning(r?.warning || "");
+			toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
+			if (r?.status) onSaved(r.status);
+			window.reloadProviderPicker?.();
+			refreshProviders();
+		} catch (err) {
+			setWarning(err.message || "save failed");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row prov-binary-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Binary path"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "prov-binary-input",
+				"data-provider": row.name,
+				autoComplete: "off",
+				placeholder: row.installed ? "on PATH — set to use another build" : "/full/path/to/" + row.name,
+				value,
+				onChange: (e) => setValue(e.target.value),
+				onBlur: () => void save(),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") e.target.blur();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: row.binaryPinnedBy ? `Pinned by ${row.binaryPinnedBy} in the server's environment, which wins over this field.` : "This device only — never synced to your other devices. Leave empty to use PATH."
+			}),
+			warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "prov-launch-hint",
+				children: warning
+			})
+		]
+	});
+}
 function Providers(_) {
 	const [statuses, setStatuses] = (0, import_react.useState)([]);
+	const [loadErrors, setLoadErrors] = (0, import_react.useState)([]);
 	const [managed, setManaged] = (0, import_react.useState)({});
 	const [form, setForm] = (0, import_react.useState)(EMPTY_FORM);
 	const [editing, setEditing] = (0, import_react.useState)(null);
@@ -71956,6 +74131,7 @@ function Providers(_) {
 		const [s, m] = await Promise.allSettled([api("/api/providers/status"), api("/api/providers/manage")]);
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
+		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
 		const byName = {};
 		if (m.status === "fulfilled") for (const p of m.value?.providers || []) byName[p.name] = p;
 		setManaged(byName);
@@ -72034,6 +74210,8 @@ function Providers(_) {
 	const copyInstall = async (cmd) => {
 		if (await copyText(cmd)) toast("Copied install command");
 	};
+	const replaceStatus = (fresh) => setStatuses((list) => list.map((p) => p.name === fresh.name ? fresh : p));
+	const rows = providerRows(statuses, loadErrors);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -72041,23 +74219,49 @@ function Providers(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			children: "Agent CLIs new sessions can launch. Install a CLI to make it available — it'll prompt you to sign in on its own the first time a session opens it."
+			children: "Agent CLIs new sessions can launch. Install a CLI to make it available, then sign in here — or point MindFlock at a build that isn't on PATH."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
-			children: statuses.map((p) => {
-				const mgr = managed[p.name];
+			children: rows.map((row) => {
+				if (row.kind === "error") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "prov-conn prov-conn-error",
+					"data-error-file": row.file,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "prov-conn-head",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "prov-name error",
+								children: row.file
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "prov-badge prov-badge-src",
+								children: "custom"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "prov-dot bad",
+								title: "this provider TOML did not load",
+								children: "failed to load"
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "error",
+						children: row.error
+					})]
+				}, "error:" + row.file);
+				const mgr = managed[row.name];
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "prov-conn",
+					"data-provider": row.name,
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "prov-conn-head",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-name",
-									children: p.name
+									children: row.name
 								}),
-								p.is_default && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								row.isDefault && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge",
 									children: "default"
 								}),
@@ -72066,38 +74270,55 @@ function Providers(_) {
 									children: mgr.source
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "prov-dot " + (p.installed ? "ok" : "bad"),
-									title: p.installed ? p.path || "on PATH" : "not found on PATH",
-									children: p.installed ? "installed" : "not installed"
+									className: "prov-dot " + (row.installed ? "ok" : "bad"),
+									title: row.installTitle,
+									children: row.installLabel
+								}),
+								row.signInLabel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "prov-dot prov-signin " + (row.signIn === "signed-in" ? "ok" : row.signIn === "not-signed-in" ? "bad" : "unknown"),
+									title: row.signInDetail,
+									children: row.signInLabel
 								})
 							]
 						}),
-						!p.installed && p.install_hint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						row.installed && row.installTitle && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "set-hint prov-path",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.installTitle }), row.signIn === "signed-in" && row.signInDetail && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · signed in: ", row.signInDetail] })]
+						}),
+						row.installHint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "prov-install",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.install_hint }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.installHint }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: () => copyInstall(p.install_hint),
+								onClick: () => copyInstall(row.installHint),
 								children: "Copy"
 							})]
 						}),
-						!p.installed && p.launch_hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						row.launchHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "prov-launch-hint",
-							children: p.launch_hint
+							children: row.launchHint
 						}),
-						mgr?.editable && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BinaryPathField, {
+							row,
+							onSaved: replaceStatus
+						}),
+						(row.canSignIn || mgr?.editable) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "prov-conn-actions",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							children: [row.canSignIn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+								provider: row.name,
+								label: "Sign in",
+								onDone: () => void load()
+							}), mgr?.editable && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								onClick: () => edit(mgr),
 								children: "Edit"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: () => del(p.name),
+								onClick: () => del(row.name),
 								children: "Delete"
-							})]
+							})] })]
 						})
 					]
-				}, p.name);
+				}, row.name);
 			})
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -72197,74 +74418,11 @@ async function fetchAuthToken() {
 	}
 	return authTokenCache;
 }
-function TailnetTrustRows() {
-	const s = useSettings();
-	const [info, setInfo] = (0, import_react.useState)(null);
-	const stored = s.get("general", "tailnet_trusted_logins");
-	const trusted = Array.isArray(stored) ? stored : [];
-	(0, import_react.useEffect)(() => {
-		let live = true;
-		api("/api/settings/tailnet-trust").then((r) => live && setInfo(r || null)).catch(() => live && setInfo(null));
-		return () => {
-			live = false;
-		};
-	}, []);
-	const choices = [.../* @__PURE__ */ new Set([...info?.logins || [], ...trusted])].sort();
-	const toggle = (login, on) => {
-		const next = new Set(trusted);
-		if (on) next.add(login);
-		else next.delete(login);
-		s.saveField("general", "tailnet_trusted_logins", [...next]);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		id: "tailnet-trust-row",
-		title: "Requests from these Tailscale accounts' own (untagged) devices need no access token.",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Trusted Tailscale accounts"
-			}),
-			info === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: "Checking Tailscale…"
-			}) : !info.available && !choices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				id: "tailnet-trust-unavailable",
-				children: "Tailscale isn't running on this device."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "tailnet-trust-logins",
-				children: choices.map((login) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "checkbox",
-							"data-login": login,
-							checked: trusted.includes(login),
-							onChange: (e) => toggle(login, e.target.checked)
-						}),
-						login,
-						login === info.self_login ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: " (this device's owner)"
-						}) : null
-					]
-				}, login))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint",
-				id: "tailnet-trust-hint",
-				children: ["Your own phone and laptops, signed in to Tailscale as a ticked account, open MindFlock here without the access token. Tagged devices and devices shared in from other accounts still need it.", info && !info.shared_link_supported ? " On this OS that only covers this device's own address — requests through the shared phone link still ask for the token." : ""]
-			})
-		]
-	});
-}
-function Security(_) {
+function Security(p) {
 	const s = useSettings();
 	const [shown, setShown] = (0, import_react.useState)(false);
 	const [tokenText, setTokenText] = (0, import_react.useState)(AUTH_TOKEN_MASK);
 	const authMode = String(s.get("general", "auth_mode") ?? "auto") || "auto";
-	const remote = String(s.get("general", "remote_control") ?? "");
 	const [confirmOff, setConfirmOff] = (0, import_react.useState)(false);
 	const [confirmRotate, setConfirmRotate] = (0, import_react.useState)(false);
 	const [rotating, setRotating] = (0, import_react.useState)(false);
@@ -72344,6 +74502,8 @@ function Security(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
+			id: "auth-token-row",
+			"data-control": "access-token",
 			title: "The token another MindFlock device enters to control this one, and the browser sign-in token.",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -72415,86 +74575,920 @@ function Security(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: "Enter this on another MindFlock device (\"Pair a device you don't own\", below, on that one) to let it control this one, or at the browser sign-in page when the token gate is on. Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices (Settings → Devices) move to a new shared key."
+					children: "Enter this at the browser sign-in page when the token gate is on, or on another MindFlock to let it control this one (Your devices → Advanced → Pair by pasted token, there). Regenerate if the token may have leaked — every signed-in browser and token-paired device must then sign in with the new token, your phone must scan the QR again, and your devices move to a new shared key."
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailnetTrustRows, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-			className: "set-section-title",
-			children: "Remote control"
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			title: "Whether MindFlock devices you paired by access token may list and drive this device's sessions. Your devices (Settings → Devices) always can.",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint set-block-hint",
+			id: "security-devices-pointer",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Allow remote control"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					"data-group": "general",
-					"data-field": "remote_control",
-					value: remote,
-					onChange: (e) => s.saveField("general", "remote_control", e.target.value),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "",
-						children: "Off (default) — only your devices can control this one"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "on",
-						children: "On — devices paired by token can control it too"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					id: "remote-control-hint",
-					children: "Other MindFlock devices you paired by token. Your devices (Settings → Devices) can always reach each other. With this on, a MindFlock that holds this device's access token shows its sessions in its sidebar and drives them (terminal, prompts, commits). To cut off one of your own devices, remove it in Settings → Devices."
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PairByToken, {})
-	] });
-}
-function PairByToken() {
-	const { data } = useDevices();
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const rows = (data?.devices || []).filter((d) => d.reachable && !d.member && d.needs_token);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		id: "pair-by-token",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Pair a device you don't own"
-			}),
-			rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "devices-actions",
-				children: rows.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				"Trusting your own devices lives in",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "test-btn",
-					"data-pair": d.device,
-					onClick: () => openDialogFor("device", d.device),
-					children: [
-						"Pair ",
-						d.host || d.device,
-						"…"
-					]
-				}, d.device))
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "Someone else's MindFlock on your tailnet: paste its access token to see and drive its sessions (it needs Allow remote control on). For your own computers use Settings → Devices instead — they share settings and need no token."
-			})
-		]
-	});
+					className: "linklike",
+					id: "security-open-devices",
+					onClick: () => p.gotoScreen("devices"),
+					children: "Your devices"
+				}),
+				": pair by code, Make reachable, settings sync, and under Advanced the trusted Tailscale accounts, Allow remote control and pairing by pasted token."
+			]
+		})
+	] });
 }
 //#endregion
 //#region src/lib/gateOn.ts
-var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Mobile.";
+var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Your phone.";
 async function turnGateOn(call = api) {
 	const t = await call("/api/settings/auth-token");
 	if (t?.token) await call("/api/auth", { json: { token: t.token } });
 	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
+}
+//#endregion
+//#region src/components/settings/useServerRestart.ts
+var RESTART_TIMEOUT_MS = 3e4;
+var POLL_INTERVAL_MS = 1e3;
+function useServerRestart() {
+	const [restarting, setRestarting] = (0, import_react.useState)(false);
+	const [timedOut, setTimedOut] = (0, import_react.useState)(false);
+	const timer = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => () => {
+		if (timer.current) clearInterval(timer.current);
+	}, []);
+	return {
+		restarting,
+		timedOut,
+		restart: (0, import_react.useCallback)((opts) => {
+			if (timer.current) clearInterval(timer.current);
+			setRestarting(true);
+			setTimedOut(false);
+			if (!opts?.alreadyRequested) api("/api/server/restart", { method: "POST" }).catch(() => {});
+			const t0 = Date.now();
+			const finish = (didTimeOut) => {
+				if (timer.current) clearInterval(timer.current);
+				timer.current = null;
+				if (!didTimeOut && opts?.reload) {
+					window.location.reload();
+					return;
+				}
+				setRestarting(false);
+				setTimedOut(didTimeOut);
+				opts?.onBack?.();
+			};
+			timer.current = setInterval(async () => {
+				try {
+					await api("/api/mobile");
+				} catch {
+					if (Date.now() - t0 > RESTART_TIMEOUT_MS) finish(true);
+					return;
+				}
+				finish(false);
+			}, POLL_INTERVAL_MS);
+		}, [])
+	};
+}
+//#endregion
+//#region src/components/settings/useMakeReachable.ts
+function reachableFields(opts) {
+	const g = {};
+	if (opts.reach) {
+		g.serve_mode = "tailscale";
+		g.auth_mode = "on";
+	}
+	if (opts.sharedLink) g.shared_link = opts.sharedLink;
+	return g;
+}
+async function keepSignedIn() {
+	try {
+		const r = await api("/api/settings/auth-token");
+		if (r?.token) await api("/api/auth", { json: { token: r.token } });
+	} catch {}
+}
+function useMakeReachable(onBack) {
+	const { restarting, timedOut, restart } = useServerRestart();
+	const [saving, setSaving] = (0, import_react.useState)(false);
+	const apply = (0, import_react.useCallback)(async (opts) => {
+		const general = reachableFields(opts);
+		if (!Object.keys(general).length) return null;
+		setSaving(true);
+		try {
+			if (opts.reach) await keepSignedIn();
+			const res = await api("/api/settings", { json: { general } });
+			if (res?.restarting) restart({
+				alreadyRequested: true,
+				onBack
+			});
+			else onBack?.();
+			return res;
+		} finally {
+			setSaving(false);
+		}
+	}, [restart, onBack]);
+	return {
+		busy: saving || restarting,
+		restarting,
+		timedOut,
+		apply
+	};
+}
+//#endregion
+//#region src/components/settings/screens/PersonCard.tsx
+var FIELDS = [
+	"name",
+	"git_name",
+	"git_email"
+];
+function draftOf(p) {
+	return {
+		name: p?.name || "",
+		git_name: p?.git_name || "",
+		git_email: p?.git_email || ""
+	};
+}
+function patchOf(saved, draft) {
+	const base = draftOf(saved);
+	const out = {};
+	for (const k of FIELDS) {
+		const v = draft[k].trim();
+		if (v !== base[k]) out[k] = v;
+	}
+	return out;
+}
+function draftProblem(d) {
+	const email = d.git_email.trim();
+	if (email && !/^[^\s<>@]+@[^\s<>@]+$/.test(email)) return "That git email doesn't look like one.";
+	if (!d.git_name.trim() !== !email) return "Set both the git name and email (or neither) — MindFlock uses them together.";
+	return "";
+}
+function PersonCardView({ person, draft, busy, error, onChange, onSave, onCopyId }) {
+	if (!person) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "person-card",
+		id: "person-card",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "You"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: error || "Loading…"
+		})]
+	});
+	const problem = draftProblem(draft);
+	const dirty = Object.keys(patchOf(person, draft)).length > 0;
+	const set = (k) => (e) => onChange?.({
+		...draft,
+		[k]: e.target.value
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "person-card",
+		id: "person-card",
+		"data-person": person.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "You"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "One person across all of your devices — sessions, claims and MindFlock's own commits are stamped with it. It identifies you; it never signs anything in."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Name"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					value: draft.name,
+					placeholder: "Your name",
+					onChange: set("name")
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Git author name"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					value: draft.git_name,
+					placeholder: "Ada Lovelace",
+					onChange: set("git_name")
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Git author email"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						value: draft.git_email,
+						placeholder: "ada@example.com",
+						onChange: set("git_email")
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "What MindFlock's own commits (fast-track, team-run merges, peer exports) are authored as. Blank: the repo's git config decides. Your agents' commits are never changed."
+					})
+				]
+			}),
+			(problem || error) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint person-error",
+				role: "alert",
+				children: problem || error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "set-row person-actions",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "person-save",
+					disabled: busy || !dirty || !!problem,
+					onClick: onSave,
+					children: busy ? "Saving…" : "Save"
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint person-id",
+				children: [
+					"Person id ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: person.id || "not made yet" }),
+					" ",
+					person.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "person-copy-id",
+						onClick: onCopyId,
+						children: "Copy"
+					})
+				]
+			})
+		]
+	});
+}
+function PersonCard() {
+	const [person, setPerson] = (0, import_react.useState)(null);
+	const [draft, setDraft] = (0, import_react.useState)(draftOf(null));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/person").then((p) => {
+			if (!live) return;
+			setPerson(p);
+			setDraft(draftOf(p));
+		}).catch((e) => live && setError(e.message || "Couldn't load"));
+		return () => {
+			live = false;
+		};
+	}, []);
+	const save = (0, import_react.useCallback)(async () => {
+		const patch = patchOf(person, draft);
+		if (!Object.keys(patch).length) return;
+		setBusy(true);
+		setError("");
+		try {
+			const p = await api("/api/person", { json: patch });
+			setPerson(p);
+			setDraft(draftOf(p));
+			toast("Saved — your other devices pick it up shortly");
+		} catch (e) {
+			setError(e.message || "Couldn't save");
+		} finally {
+			setBusy(false);
+		}
+	}, [person, draft]);
+	const copyId = (0, import_react.useCallback)(() => {
+		if (!person?.id) return;
+		copyText(person.id).then((ok) => toast(ok ? "Person id copied" : "Copy failed"));
+	}, [person]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCardView, {
+		person,
+		draft,
+		busy,
+		error,
+		onChange: setDraft,
+		onSave: save,
+		onCopyId: copyId
+	});
+}
+//#endregion
+//#region src/components/settings/screens/SharedLink.tsx
+function CopyButton({ text, what }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		onClick: () => copyText(text).then((ok) => toast(ok ? what + " copied" : "Copy failed")),
+		children: "Copy"
+	});
+}
+function Snippet({ text, what }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-snippet",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: text }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CopyButton, {
+			text,
+			what
+		})]
+	});
+}
+function AdminLink({ href, children }) {
+	if (!href) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+		className: "sl-admin-link",
+		href,
+		target: "_blank",
+		rel: "noopener noreferrer",
+		children: [children, " ↗"]
+	});
+}
+var DEFAULT_SHARED_NAME = "mindflock";
+function SharedLinkCard({ active, revision = 0 }) {
+	const [data, setData] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setData(await api("/api/mobile"));
+			setError("");
+		} catch {
+			setError("Could not load the shared link.");
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (active) load();
+	}, [
+		active,
+		revision,
+		load
+	]);
+	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error",
+		children: error
+	});
+	if (!data) return null;
+	const shared = data.shared || {};
+	const sharedQr = data.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : void 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLink, {
+		shared,
+		qrSvg: sharedQr,
+		onChanged: load,
+		onData: setData
+	});
+}
+function SharedLink({ shared, qrSvg, onChanged, onData }) {
+	const [name, setName] = (0, import_react.useState)(shared.name || DEFAULT_SHARED_NAME);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		if (shared.name) setName(shared.name);
+	}, [shared.name]);
+	const save = async (value) => {
+		setBusy(true);
+		setError("");
+		try {
+			await api("/api/settings", { json: { general: { shared_link: value } } });
+		} catch (e) {
+			setError(e.message || "Could not save.");
+		}
+		setBusy(false);
+		onChanged();
+	};
+	const recheck = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			onData(await api("/api/mobile/shared/recheck", { method: "POST" }));
+		} catch (e) {
+			setError(e.message || "Could not re-check.");
+		}
+		setBusy(false);
+	};
+	const on = !!shared.enabled;
+	(0, import_react.useEffect)(() => {
+		if (!on) return;
+		const t = window.setInterval(onChanged, 6e4);
+		return () => window.clearInterval(t);
+	}, [on, onChanged]);
+	const others = shared.devices || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			id: "devices-shared-link",
+			children: "One link for all devices"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Turn this on with the same name on each of your machines. The phone then keeps one URL, and it opens on whichever machine is running, so it still works when this one is off."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			title: "Advertise this device as a host of the shared Tailscale Service",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Shared link"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					checked: on,
+					disabled: busy,
+					onChange: (e) => save(e.target.checked ? name || DEFAULT_SHARED_NAME : "")
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Name"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					value: name,
+					disabled: busy,
+					placeholder: DEFAULT_SHARED_NAME,
+					onChange: (e) => setName(e.target.value.trim().toLowerCase()),
+					onBlur: () => on && name && name !== shared.name && save(name),
+					onKeyDown: (e) => e.key === "Enter" && on && name && name !== shared.name && save(name)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Use the same name on every device."
+				})
+			]
+		}),
+		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error",
+			children: error
+		}),
+		on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			shared.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: [{
+				label: "Shared URL",
+				url: shared.url
+			}] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChecklist, {
+				shared,
+				qrSvg,
+				busy,
+				onRecheck: recheck
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					others.length ? "Also on this link: " + others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") + "." : "No other device on this link yet. Turn it on, with the same name, on each machine.",
+					" ",
+					"Signing in once covers your devices and devices paired under Allow remote control (Advanced, below): the QR carries their keys too."
+				]
+			})
+		] })
+	] });
+}
+var MARK = {
+	ok: "✓",
+	fail: "✗",
+	unknown: "?"
+};
+var MARK_LABEL = {
+	ok: "done",
+	fail: "needs fixing",
+	unknown: "unknown"
+};
+function SetupChecklist({ shared, qrSvg, busy, onRecheck }) {
+	const steps = shared.steps || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sl-setup",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sl-setup-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Setup"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy,
+				onClick: onRecheck,
+				children: busy ? "Checking…" : "Re-check"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+			className: "sl-steps",
+			children: steps.map((s, i) => {
+				const fix = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepFix, {
+					step: s,
+					shared,
+					qrSvg
+				});
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sl-step sl-" + s.state,
+					"data-step": s.id,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sl-mark",
+						title: MARK_LABEL[s.state],
+						"aria-label": MARK_LABEL[s.state],
+						children: MARK[s.state] || "?"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sl-body",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "sl-title",
+								children: [
+									i + 1,
+									". ",
+									s.title
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "set-hint sl-reason",
+								children: s.reason
+							}),
+							s.state === "ok" && s.id !== "phone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+								className: "sl-fix",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Show how" }), fix]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sl-fix",
+								children: fix
+							})
+						]
+					})]
+				}, s.id);
+			})
+		})]
+	});
+}
+function StepFix({ step, shared, qrSvg }) {
+	const svc = shared.service || "svc:" + (shared.name || DEFAULT_SHARED_NAME);
+	const name = shared.name || DEFAULT_SHARED_NAME;
+	const tag = shared.tag || "tag:mindflock";
+	const m = shared.machine;
+	const admin = shared.admin;
+	switch (step.id) {
+		case "operator":
+			if (shared.error_kind === "missing") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Install it from",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						href: "https://tailscale.com/download",
+						target: "_blank",
+						rel: "noopener noreferrer",
+						children: "tailscale.com/download"
+					}),
+					", sign in, then press Re-check."
+				]
+			});
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Lets MindFlock run ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tailscale serve" }),
+					" as you. Run once in a terminal, then press Re-check:"
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
+				text: shared.operator_fix || "sudo tailscale set --operator=$USER",
+				what: "Command"
+			})] });
+		case "tag": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"In the admin console's Machines page, open",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: m?.dns || m?.hostname || "this device" }),
+					m?.ip ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" ",
+						"(",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.ip }),
+						")"
+					] }) : null,
+					" ",
+					"→ ⋯ → Edit ACL tags → add ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
+					". Then ⋯ → ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Disable key expiry" }),
+					": tagging a device after it signed in keeps its key expiry, and when the key expires the device silently drops off the link."
+				]
+			}),
+			m?.duplicate_of && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint sl-note",
+				children: [
+					"Tailscale named this device ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.dns.split(".")[0] }),
+					" because another device is already ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: m.duplicate_of }),
+					" — match it by its IP."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.machines,
+				children: "Open Machines"
+			})
+		] });
+		case "define": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"On the Services page, add a service named ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: name }),
+				" (",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+				") with port ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tcp:443" }),
+				"."
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+			href: admin?.services,
+			children: "Open Services"
+		})] });
+		case "policy": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"One block for your access policy: every ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tag }),
+					" device is approved as a host of ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+					" without a click, and your own devices and phone may reach each other's MindFlock (needed under any custom policy, such as ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autogroup:self" }),
+					") — you only, not everyone else on the tailnet. If it says REPLACE, put your Tailscale login where it shows the placeholder. No ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tagOwners" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "autoApprovers" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "grants" }),
+					" or",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "tests" }),
+					" in your policy yet? Paste it whole. Already have one? Move the lines inside it into yours: a key can't appear twice."
+				]
+			}),
+			shared.policy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Snippet, {
+				text: shared.policy,
+				what: "Policy"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.policy,
+				children: "Open Access controls"
+			})
+		] });
+		case "approval":
+			if (step.state === "ok") return null;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Approve this device under Services → ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: svc }),
+					", or rely on the policy above. Re-check re-advertises this device, which is what the auto-approver reacts to."
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdminLink, {
+				href: admin?.services,
+				children: "Open Services"
+			})] });
+		case "phone": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [qrSvg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "qr-card sl-qr",
+			dangerouslySetInnerHTML: { __html: qrSvg }
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"With Tailscale on, open",
+				" ",
+				shared.url ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+					href: shared.url,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: shared.url
+				}) : "the shared URL",
+				" ",
+				"on your phone. If it times out, Re-check here first."
+			]
+		})] });
+		default: return null;
+	}
+}
+//#endregion
+//#region src/components/settings/screens/DevicesAdvanced.tsx
+function TailnetTrustRows() {
+	const s = useSettings();
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const stored = s.get("general", "tailnet_trusted_logins");
+	const trusted = Array.isArray(stored) ? stored : [];
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/settings/tailnet-trust").then((r) => live && setInfo(r || null)).catch(() => live && setInfo(null));
+		return () => {
+			live = false;
+		};
+	}, []);
+	const choices = [.../* @__PURE__ */ new Set([...info?.logins || [], ...trusted])].sort();
+	const toggle = (login, on) => {
+		const next = new Set(trusted);
+		if (on) next.add(login);
+		else next.delete(login);
+		s.saveField("general", "tailnet_trusted_logins", [...next]);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row",
+		id: "tailnet-trust-row",
+		"data-control": "trusted-accounts",
+		title: "Requests from these Tailscale accounts' own (untagged) devices need no access token.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Trusted Tailscale accounts"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint devices-when",
+				children: "Still useful for a phone or laptop that doesn't run MindFlock: signed in to Tailscale as a ticked account, its browser opens this device without the access token."
+			}),
+			info === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: "Checking Tailscale…"
+			}) : !info.available && !choices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				id: "tailnet-trust-unavailable",
+				children: "Tailscale isn't running on this device."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "tailnet-trust-logins",
+				children: choices.map((login) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							"data-login": login,
+							checked: trusted.includes(login),
+							onChange: (e) => toggle(login, e.target.checked)
+						}),
+						login,
+						login === info.self_login ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: " (this device's owner)"
+						}) : null
+					]
+				}, login))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				id: "tailnet-trust-hint",
+				children: ["Tagged devices and devices shared in from other accounts still need the token.", info && !info.shared_link_supported ? " On this OS that only covers this device's own address — requests through the shared phone link still ask for the token." : ""]
+			})
+		]
+	});
+}
+function RemoteControlRow() {
+	const s = useSettings();
+	const remote = String(s.get("general", "remote_control") ?? "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "remote-control-row",
+		title: "Whether MindFlock devices you paired by access token may list and drive this device's sessions. Your devices always can.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Allow remote control"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint devices-when",
+				children: "Still useful for a MindFlock too old to join your devices, or one you don't own: with this on, a MindFlock that holds this device's access token (Settings → Security) shows its sessions in its sidebar and drives them."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				"data-group": "general",
+				"data-field": "remote_control",
+				value: remote,
+				onChange: (e) => s.saveField("general", "remote_control", e.target.value),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: "Off (default) — only your devices can control this one"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "on",
+					children: "On — devices paired by token can control it too"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				id: "remote-control-hint",
+				children: "To cut off one of your own devices, remove it from the roster above instead."
+			})
+		]
+	});
+}
+function PairByToken({ focusDevice }) {
+	const { data } = useDevices();
+	const rows = (data?.devices || []).filter((d) => d.reachable && !d.member && d.needs_token);
+	const [device, setDevice] = (0, import_react.useState)("");
+	const [token, setToken] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (focusDevice) setDevice(focusDevice);
+	}, [focusDevice]);
+	const chosen = device || rows[0]?.device || "";
+	const submit = async () => {
+		if (!chosen || !token.trim() || busy) return;
+		setErr("");
+		setBusy(true);
+		try {
+			const devices = await api(`/api/devices/${encodeURIComponent(chosen)}/connect`, { json: { token: token.trim() } });
+			queryClient.setQueryData(["devices"], devices);
+			setToken("");
+			toast("Connected to " + chosen);
+			refreshInstances();
+		} catch (e) {
+			setErr(e.message || "could not connect");
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "set-row",
+		id: "pair-by-token",
+		onSubmit: (e) => {
+			e.preventDefault();
+			submit();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Pair by pasted token"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint devices-when",
+				children: [
+					"Still useful for someone else's MindFlock on your tailnet, or one too old to join: paste its access token (Settings → Security there, or ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock token" }),
+					") to see and drive its sessions. It needs Allow remote control on. Your own computers join above instead — no token to paste."
+				]
+			}),
+			rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "devices-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "pair-by-token-device",
+						value: chosen,
+						disabled: busy,
+						onChange: (e) => setDevice(e.target.value),
+						children: rows.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: d.device,
+							children: d.host || d.device
+						}, d.device))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "password",
+						id: "device-token-input",
+						autoComplete: "off",
+						spellCheck: false,
+						placeholder: "Paste the access token",
+						value: token,
+						disabled: busy,
+						onChange: (e) => setToken(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						className: "test-btn",
+						id: "pair-by-token-connect",
+						disabled: busy || !token.trim(),
+						children: busy ? "Connecting…" : "Connect"
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				id: "pair-by-token-none",
+				children: "No MindFlock on your tailnet is asking for a token right now."
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				id: "device-dialog-err",
+				className: "dialog-err",
+				children: err
+			})
+		]
+	});
+}
+function DevicesAdvanced({ focusDevice }) {
+	const { data } = useDevices();
+	const legacy = !!focusDevice && (data?.devices || []).some((d) => d.device === focusDevice && !d.member && d.needs_token);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (legacy) setOpen(true);
+	}, [legacy]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "devices-advanced",
+		id: "devices-advanced",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+				className: "set-section-title",
+				children: "Advanced — other ways to trust a machine"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint set-block-hint",
+				children: "Pairing by code (above) covers your own computers. These remain for what it doesn't."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailnetTrustRows, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RemoteControlRow, {}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PairByToken, { focusDevice: legacy ? focusDevice : void 0 })
+		]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/DeviceReadiness.tsx
@@ -72557,7 +75551,7 @@ function NewComputerLine({ code }) {
 						rel: "noopener noreferrer",
 						children: "download it"
 					}),
-					", then Settings → Devices → Paste a code: ",
+					", then Settings → Your devices → Paste a code: ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: b.desktop.paste }),
 					". If setting up takes longer than the code lives, the new computer asks this one to approve instead."
 				]
@@ -72629,7 +75623,7 @@ function SyncedAgentInstall({ onDone }) {
 //#region src/components/settings/screens/Devices.tsx
 var POLL_MS = 3e3;
 var JOIN_POLL_MS = 2e3;
-function errText(e) {
+function errText$1(e) {
 	return e instanceof Error ? e.message : String(e);
 }
 function Devices(p) {
@@ -72656,7 +75650,7 @@ function Devices(p) {
 			setSt(await api("/api/fleet"));
 			setLoadErr("");
 		} catch (e) {
-			setLoadErr(errText(e));
+			setLoadErr(errText$1(e));
 		}
 	}, []);
 	const loadSync = (0, import_react.useCallback)(async () => {
@@ -72671,6 +75665,12 @@ function Devices(p) {
 		loadSync();
 	}, [loadFleet, loadSync]);
 	const reach = useMakeReachable(loadAll);
+	const settings = useSettings();
+	const serveMode = String(settings.get("general", "serve_mode") ?? "");
+	const tailscaleMode = serveMode === "tailscale";
+	const srv = useServerRestart();
+	const [modeBusy, setModeBusy] = (0, import_react.useState)(false);
+	const [linkRev, setLinkRev] = (0, import_react.useState)(0);
 	(0, import_react.useEffect)(() => {
 		const apply = (f) => {
 			if (!f) return;
@@ -72775,7 +75775,7 @@ function Devices(p) {
 			await fn();
 			if (ok) toast(ok);
 		} catch (e) {
-			toast(errText(e));
+			toast(errText$1(e));
 		} finally {
 			setBusy("");
 			loadAll();
@@ -72843,10 +75843,28 @@ function Devices(p) {
 		try {
 			await reach.apply({ reach: true });
 			setReachAsk(false);
+			settings.reload();
 		} catch (e) {
-			toast(errText(e));
+			toast(errText$1(e));
 		}
 	})();
+	const makeLocalOnly = async () => {
+		setModeBusy(true);
+		let restarting = false;
+		try {
+			restarting = !!(await api("/api/settings", { json: { general: { serve_mode: "local" } } }))?.restarting;
+		} catch (e) {
+			toast(errText$1(e));
+		}
+		setModeBusy(false);
+		settings.reload();
+		if (restarting) srv.restart({
+			alreadyRequested: true,
+			onBack: loadAll
+		});
+		else loadAll();
+	};
+	const modePending = !!serveMode && tailscaleMode === local;
 	const reachConfirm = reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		id: "devices-reach-confirm",
 		title: "Make this device reachable?",
@@ -72857,8 +75875,14 @@ function Devices(p) {
 		onCancel: () => setReachAsk(false)
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "devices-you-intro",
+			children: "You — the same on every device you pair."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TailscaleCard, { active: p.active }),
-		here && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: local ? "devices-warn" : "devices-this",
 			id: "devices-this-device",
 			ref: thisRef,
@@ -72868,17 +75892,45 @@ function Devices(p) {
 					className: "devices-this-title",
 					children: "Your other devices can't reach this one"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: here }),
-				local && !reachAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn devices-primary",
-					id: "devices-make-reachable",
-					disabled: reach.busy,
-					onClick: () => setReachAsk(true),
-					children: "Make reachable"
+				here && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: here }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row set-switch-row",
+					id: "devices-reachable-row",
+					"data-control": "tailscale-mode",
+					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Make reachable — from your other devices and phone, over Tailscale"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "ca-switch",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "devices-make-reachable",
+								"data-group": "general",
+								"data-field": "serve_mode",
+								checked: tailscaleMode,
+								disabled: modeBusy || reach.busy,
+								onChange: (e) => e.target.checked ? setReachAsk(true) : void makeLocalOnly()
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Tailscale mode with the access gate on; MindFlock restarts once to apply. Off, it listens on this computer only."
+						})
+					]
 				}),
 				reachConfirm,
-				reach.timedOut && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				modePending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn devices-restart",
+					id: "devices-restart-apply",
+					disabled: srv.restarting,
+					onClick: () => srv.restart({ onBack: loadAll }),
+					children: srv.restarting ? "Restarting…" : "Restart server to apply"
+				}),
+				(reach.timedOut || srv.timedOut) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "devices-note warn",
 					children: "MindFlock hasn't come back yet — reload in a moment."
 				})
@@ -72897,7 +75949,7 @@ function Devices(p) {
 			className: "devices-warn",
 			id: "devices-gate-warning",
 			role: "alert",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device's access gate is off and it's reachable on your tailnet — anyone there can control it, and through it your other devices. With the gate on, your other devices keep working (they use your devices' key); a phone signs in again with the QR in Mobile." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "This device's access gate is off and it's reachable on your tailnet — anyone there can control it, and through it your other devices. With the gate on, your other devices keep working (they use your devices' key); a phone signs in again with the QR in Your phone." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "devices-actions",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -72947,7 +75999,7 @@ function Devices(p) {
 				conflicts.length > 1 ? "each of them" : conflicts[0].host || conflicts[0].key,
 				", use \"Ask ",
 				selfHost,
-				" to rejoin\" in Settings → Devices."
+				" to rejoin\" in Settings → Your devices."
 			] })
 		}),
 		removals.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -73178,7 +76230,7 @@ function Devices(p) {
 						"Still to do here for the phone link:",
 						" ",
 						matchLeft.map((m) => m.title + (m.reason ? " (" + m.reason + ")" : "")).join("; "),
-						" — see Settings → Mobile."
+						" — see One link for all devices, below."
 					]
 				})]
 			}), !matchAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -73203,13 +76255,15 @@ function Devices(p) {
 						sharedLink: st.match?.shared_link || ""
 					});
 					setMatchAsk(false);
+					settings.reload();
+					setLinkRev((n) => n + 1);
 					setMatchLeft((res?.shared_link?.steps || []).filter((x) => x.state === "fail").map((x) => ({
 						id: x.id,
 						title: x.title,
 						reason: x.reason
 					})));
 				} catch (e) {
-					toast(errText(e));
+					toast(errText$1(e));
 				}
 			})(),
 			onCancel: () => setMatchAsk(false)
@@ -73225,7 +76279,7 @@ function Devices(p) {
 				className: "test-btn",
 				id: "devices-phone-host-here",
 				disabled: !!busy,
-				onClick: () => void run("host-here", () => api("/api/settings", { json: { general: { shared_link: st.phone_link?.name || "" } } }), "This device answers your phone link too — Settings → Mobile shows what's left"),
+				onClick: () => void run("host-here", () => api("/api/settings", { json: { general: { shared_link: st.phone_link?.name || "" } } }), "This device answers your phone link too — One link for all devices, below, shows what's left").then(() => setLinkRev((n) => n + 1)),
 				children: "Host here"
 			})]
 		}),
@@ -73321,7 +76375,7 @@ function Devices(p) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
 					children: [
-						"On the new computer: Settings → Devices → choose ",
+						"On the new computer: Settings → Your devices → choose ",
 						selfHost,
 						" → Enter code (or run the command). Works once · expires in",
 						" ",
@@ -73499,7 +76553,7 @@ function Devices(p) {
 									children: [
 										"The code ",
 										name,
-										" shows under Settings → Devices → Add a device."
+										" shows under Settings → Your devices → Add a device."
 									]
 								})
 							]
@@ -73569,7 +76623,7 @@ function Devices(p) {
 				pasted.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint devices-join-note",
 					id: "devices-paste-note",
-					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (Work with someone), not to your devices." : joinSettingsNote("")
+					children: routeCode(pasted).kind === "peer" ? "That's an invite from another person — Join links you to them (People), not to your devices." : joinSettingsNote("")
 				})
 			]
 		}),
@@ -73578,7 +76632,12 @@ function Devices(p) {
 			sync,
 			setSync,
 			reload: loadSync
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedLinkCard, {
+			active: p.active,
+			revision: linkRev
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice })
 	] });
 }
 function SettingsSyncRows(props) {
@@ -73596,7 +76655,7 @@ function SettingsSyncRows(props) {
 			else await reload();
 			if (ok) toast(ok);
 		} catch (e) {
-			toast("Settings sync: " + errText(e));
+			toast("Settings sync: " + errText$1(e));
 		} finally {
 			setBusy("");
 		}
@@ -74166,6 +77225,12 @@ function EngineUpdate() {
 	return window.mfengine ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShellEngineUpdate, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ServerEngineUpdate, {});
 }
 var NEW_BUILD_WAIT_MS = 18e4;
+var METHOD_WORDS = {
+	"uv-tool": "uv tool",
+	pipx: "pipx",
+	editable: "a development checkout (editable)",
+	other: "an installer MindFlock doesn’t recognise"
+};
 function ServerEngineUpdate() {
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -74246,6 +77311,8 @@ function ServerEngineUpdate() {
 	const blocked = info?.blocked || "";
 	const version = info?.current ? "v" + info.current : "unknown";
 	const last = info?.last || {};
+	const editable = info?.kind === "editable";
+	const method = METHOD_WORDS[info?.kind || ""] || info?.kind || "";
 	const installing = info?.state === "started";
 	const lastNote = error || pending || waiting ? "" : info?.state === "rolled_back" ? "v" + (last.version || "?") + " didn’t start, so v" + (last.from_version || "?") + " was put back (Settings → System logs has the installer output)." : info?.state === "failed" && last.error === "interrupted" ? "The last update was interrupted — try again." : info?.state === "failed" ? "The last update failed — Settings → System logs has the installer output." : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -74274,9 +77341,33 @@ function ServerEngineUpdate() {
 						")"
 					] }) : null
 				] }) : info && !info.checked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: " · couldn’t reach GitHub to check for a newer one" }) : null,
+				method ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					" ",
+					"· installed with ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: method }),
+					info?.method_source === "install.json" ? " (per install.json)" : ""
+				] }) : null,
 				"."
 			]
 		}),
+		editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			id: "upd-editable",
+			children: [
+				"This is a development checkout",
+				info?.checkout ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					" ",
+					"(",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: info.checkout }),
+					")"
+				] }) : null,
+				", so the update comes from git — run these there, then the server restarts onto it:"
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+			className: "upd-log",
+			id: "upd-editable-commands",
+			children: (info?.editable_commands || []).join("\n")
+		})] }) : null,
 		pending || waiting ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			id: "upd-restarting",
@@ -74293,10 +77384,10 @@ function ServerEngineUpdate() {
 				last.version ? " to v" + last.version : "",
 				" is installing…"
 			]
-		}) : blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		}) : blocked && !editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: blocked
-		}) : info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		}) : editable ? null : info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: "Updating downloads the new engine, replaces this install, and restarts the server — your sessions are tmux sessions, so nothing running is lost. This window reloads on its own once the server answers again."
 		}) : info?.checked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -74349,74 +77440,101 @@ function ShellEngineUpdate() {
 	const mfengine = window.mfengine;
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [failed, setFailed] = (0, import_react.useState)(false);
+	const [run, setRun] = (0, import_react.useState)(null);
+	const timer = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!mfengine?.updateInfo) return;
 		let alive = true;
 		mfengine.updateInfo().then((i) => alive && setInfo(i)).catch(() => {});
 		return () => {
 			alive = false;
+			if (timer.current) clearInterval(timer.current);
 		};
 	}, [mfengine]);
 	if (!mfengine?.updateInfo) return null;
 	const update = () => {
 		if (busy || !mfengine.install) return;
 		setBusy(true);
-		setFailed(false);
+		setRun(null);
 		mfengine.install().catch(() => {});
-		const timer = setInterval(async () => {
+		if (timer.current) clearInterval(timer.current);
+		timer.current = setInterval(async () => {
 			try {
 				const st = await mfengine.installState?.();
 				if (!st) return;
-				if (st.state === "done") clearInterval(timer);
-				else if (st.state === "failed") {
-					clearInterval(timer);
+				setRun(st);
+				if (st.state === "done" || st.state === "failed") {
+					if (timer.current) clearInterval(timer.current);
+					timer.current = null;
 					setBusy(false);
-					setFailed(true);
+					if (st.state === "done") mfengine.updateInfo?.().then(setInfo).catch(() => {});
 				}
 			} catch {}
 		}, 1e3);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-		className: "set-section-title",
-		children: "Engine updates"
-	}), info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+	const failed = run?.state === "failed";
+	const done = run?.state === "done";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Engine updates"
+		}),
+		info?.skew && !info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			id: "upd-skew",
+			children: info.skew
+		}) : null,
+		info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"A new engine (",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: info.latest }),
+					") is available — you’re on ",
+					info.current,
+					".",
+					info.appUpdate ? " The app is behind too: Update installs the engine first, then the app, and restarts." : " Update installs just the engine (a small download), restarts the server, and this window reconnects on its own."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy,
+				onClick: update,
+				children: busy ? "Updating…" : done ? "Done" : failed ? "Retry" : `Update to ${info.latest}`
+			}),
+			run?.message ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: failed ? "error" : "set-hint",
+				id: "upd-run",
+				children: run.message
+			}) : null,
+			failed && !run?.message && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: "The update didn’t finish. Try again, or check Settings → System logs."
+			}),
+			(run?.lines || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "upd-fold",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Installer output" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+					className: "upd-log",
+					children: (run?.lines || []).join("\n")
+				})]
+			})
+		] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
 			children: [
-				"A new engine (",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: info.latest }),
-				") is available — you’re on ",
-				info.current,
-				". This updates just the engine (a small download), not the app; the server restarts and this window reconnects on its own."
+				"Couldn’t check for engine updates right now",
+				info.current ? ` (this engine is ${info.current})` : "",
+				". Try again in a minute."
 			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "test-btn",
-			disabled: busy,
-			onClick: update,
-			children: busy ? "Updating…" : `Update engine to ${info.latest}`
-		}),
-		failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "error",
-			children: "The update didn’t finish. Try again, or check Settings → System logs."
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"The engine is up to date",
+				info?.current ? ` (${info.current})` : "",
+				"."
+			]
 		})
-	] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "set-hint",
-		children: [
-			"Couldn’t check for engine updates right now",
-			info.current ? ` (this engine is ${info.current})` : "",
-			". Try again in a minute."
-		]
-	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-		className: "set-hint",
-		children: [
-			"The engine is up to date",
-			info?.current ? ` (${info.current})` : "",
-			"."
-		]
-	})] });
+	] });
 }
 function UninstallSection() {
 	const shell = window.mfshell;
@@ -74459,11 +77577,28 @@ function UninstallSection() {
 function readDisabled(raw) {
 	return Array.isArray(raw) ? raw.map((x) => String(x)) : void 0;
 }
+function readLoadFailures(raw) {
+	const list = raw && typeof raw === "object" ? raw.failed : void 0;
+	if (!Array.isArray(list)) return [];
+	return list.filter((f) => f && typeof f === "object").map((f) => ({
+		id: String(f.id || ""),
+		file: String(f.file || ""),
+		error: String(f.error || "")
+	}));
+}
 function Extensions(_) {
 	const s = useSettings();
 	const { data: extensions, isLoading, isError } = useExtensions();
 	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
 	const disabled = readDisabled(s.get("extensions", "disabled"));
+	const [failed, setFailed] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/addons").then((d) => live && setFailed(readLoadFailures(d))).catch(() => void 0);
+		return () => {
+			live = false;
+		};
+	}, []);
 	const setEnabled = async (ext, on) => {
 		const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
 		const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
@@ -74556,6 +77691,38 @@ function Extensions(_) {
 					]
 				}, ext.id);
 			})
+		}),
+		failed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "prov-conn-list",
+			id: "ext-failed-list",
+			children: failed.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prov-conn ext-failed",
+				"data-extension-failed": f.id,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "prov-conn-head ext-row-head",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "prov-name",
+							children: f.id
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "prov-badge",
+							children: "failed to load"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint ext-row-error",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: f.file }),
+							": ",
+							f.error
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "set-hint",
+						children: "Extensions are discovered once at startup: fix it, then restart MindFlock to load it."
+					})
+				]
+			}, f.id))
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced ext-create-fold",
@@ -75574,12 +78741,6 @@ var SCREENS = [
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ide, { ...p })
 	},
 	{
-		key: "devices",
-		label: "Devices",
-		group: "This device",
-		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Devices, { ...p })
-	},
-	{
 		key: "security",
 		label: "Security",
 		group: "This device",
@@ -75592,16 +78753,28 @@ var SCREENS = [
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Appearance, { ...p })
 	},
 	{
+		key: "devices",
+		label: "Your devices",
+		group: "Devices and people",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Devices, { ...p })
+	},
+	{
 		key: "mobile",
-		label: "Mobile",
-		group: "This device",
+		label: "Your phone",
+		group: "Devices and people",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mobile, { ...p })
 	},
 	{
 		key: "peer",
-		label: "Work with someone",
-		group: "This device",
+		label: "People",
+		group: "Devices and people",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinks, { ...p })
+	},
+	{
+		key: "extensions",
+		label: "Extensions",
+		group: "Extensions",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Extensions, { ...p })
 	},
 	{
 		key: "doctor",
@@ -75622,12 +78795,6 @@ var SCREENS = [
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Advanced, { ...p })
 	},
 	{
-		key: "extensions",
-		label: "Extensions",
-		group: "Troubleshooting",
-		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Extensions, { ...p })
-	},
-	{
 		key: "traffic",
 		label: "Site traffic",
 		group: "Troubleshooting",
@@ -75642,10 +78809,11 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	const model = useSettingsModel(open);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const screens = (0, import_react.useMemo)(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
+	const keys = (0, import_react.useMemo)(() => screens.map((s) => s.key), [screens]);
 	const gotoScreen = (name) => {
 		const tab = LEGACY_SCREEN_TABS[name];
 		if (tab) openDialogFor("intake", tab);
-		else setScreen(screens.some((s) => s.key === name) ? name : "general");
+		else setScreen(resolveScreenKey(name, keys) || "general");
 	};
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -75654,12 +78822,12 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 			openDialogFor("intake", tab);
 			return;
 		}
-		setScreen(target && screens.some((s) => s.key === target) ? target : "general");
+		setScreen(resolveScreenKey(target, keys) || "general");
 	}, [
 		open,
 		target,
 		openDialogFor,
-		screens
+		keys
 	]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -75720,7 +78888,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 						children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 							className: "set-screen" + (screen === s.key ? " active" : ""),
 							"data-screen": s.key,
-							"data-caps-need": s.key === "mobile" ? "tailscale" : s.key === "workspace" ? "git" : void 0,
+							"data-caps-need": s.key === "workspace" ? "git" : void 0,
 							children: screen === s.key && s.el(props)
 						}, s.key))
 					})]
@@ -75779,6 +78947,8 @@ function SidebarBarsPicker() {
 	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
 	const barOrder = useUi((s) => s.barOrder);
 	const openDialogFor = useUi((s) => s.openDialogFor);
+	const showFilter = useUi((s) => s.showFilter);
+	const setShowFilter = useUi((s) => s.setShowFilter);
 	const extBars = useExtensionBarDefs();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "customize-sidebar",
@@ -75820,6 +78990,35 @@ function SidebarBarsPicker() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cz-foot muted",
 				children: "Drag a bar's ⠿ grip in the sidebar to reorder it."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "cz-heading",
+				children: "Session list"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-bar-list",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "cz-bar",
+					"data-bar": "session-filter",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "cz-bar-check",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: showFilter,
+							onChange: () => setShowFilter(!showFilter)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cz-bar-name",
+							children: "Filter box"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cz-bar-note muted",
+						children: [
+							"Filter sessions by name or branch · hidden, ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+							" still opens it"
+						]
+					})]
+				})
 			})
 		]
 	});
@@ -76281,7 +79480,7 @@ var CHECK_LABEL = {
 	pass: "Passed",
 	fail: "Failed",
 	cant: "You couldn't check this",
-	yours: "Waiting on you",
+	yours: "Needs you",
 	pending: "Not checked yet"
 };
 function answerLabel(result) {
@@ -78037,11 +81236,19 @@ function CommitDialog() {
 		closeDialog();
 		useUi.getState().setLastTab(title, "shell");
 		selectSession(title);
-		try {
-			await instApi(title, "/commit", { json: { message: m } });
+		const commit = async (proceed) => {
+			await instApi(title, "/commit", { json: {
+				message: m,
+				...proceed ? { proceed_anyway: true } : {}
+			} });
 			if (chosen.lane !== "leave") await pickFastTrack(title, useUi.getState().aliases[title] || title, chosen.lane, chosen.askFirst, { message: m });
+		};
+		try {
+			await commit(false);
 		} catch (err) {
-			toast("Commit failed: " + errMsg(err), { duration: 7e3 });
+			const rz = redZoneBreaches(err);
+			if (rz) warnZones(title, rz, () => void commit(true).then(() => void freshStage(title), (e) => toast("Commit failed: " + errMsg(e), { duration: 7e3 })));
+			else toast("Commit failed: " + errMsg(err), { duration: 7e3 });
 		}
 		freshStage(title);
 	}
@@ -78141,6 +81348,23 @@ function CommitDialog() {
 			]
 		})
 	});
+}
+function warnZones(title, breaches, proceed) {
+	const n = breaches.length;
+	const green = breaches.every((b) => b.kind === "green");
+	const shown = breaches.slice(0, 5).map((b) => b.path + (b.pattern && b.pattern !== b.path && !green ? " (" + b.pattern + ")" : "")).join(" · ");
+	errorPop(green ? "Commit — changes outside the green zone" : "Commit — red zone changed", `${n} file${n === 1 ? "" : "s"} ${green ? "outside the scope" : "in a keep-out zone"}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". The zone is your team's rule for this repo; agents are stopped there. Commit anyway, or leave these out first.", [{
+		label: "Open map",
+		run: () => {
+			selectSession(title);
+			useUi.getState().setLastTab(title, "map");
+		}
+	}, {
+		label: "Commit anyway",
+		primary: true,
+		title: "Commit these changes despite the zone",
+		run: proceed
+	}]);
 }
 //#endregion
 //#region src/components/dialogs/MakePrDialog.tsx
@@ -78252,7 +81476,7 @@ function MakePrDialog() {
 				submit();
 			},
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Open pull request" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Open PR" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
 					"Merge",
 					" ",
@@ -78340,10 +81564,13 @@ function RenameDialog() {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const setAlias = useUi((s) => s.setAlias);
 	const [value, setValue] = (0, import_react.useState)("");
+	const [shown, setShown] = (0, import_react.useState)("");
 	const inputRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (open && target) {
-			setValue(useUi.getState().aliases[target] || "");
+			const current = windowName(target);
+			setShown(current);
+			setValue(current);
 			setTimeout(() => {
 				inputRef.current?.focus();
 				inputRef.current?.select();
@@ -78351,11 +81578,17 @@ function RenameDialog() {
 		}
 	}, [open, target]);
 	if (!open || !target) return null;
+	const next = value.trim();
+	const taken = next && next !== shown ? nameTakenBy(target, next) : "";
 	const submit = () => {
-		const alias = value.trim();
-		setAlias(target, alias);
+		if (taken) return;
+		if (!next || next === shown) {
+			closeDialog();
+			return;
+		}
+		setAlias(target, next);
 		closeDialog();
-		toast(alias ? `Renamed to “${alias}”` : "Reset to real title");
+		toast(`Renamed to “${next}”`);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "rename-dialog",
@@ -78374,28 +81607,25 @@ function RenameDialog() {
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Rename session" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-					"Display name for ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						id: "rename-real",
-						className: "muted",
-						children: [
-							"“",
-							target,
-							"”"
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "rename-input",
-						ref: inputRef,
-						autoComplete: "off",
-						spellCheck: false,
-						placeholder: "Leave blank to reset to the real title",
-						value,
-						onChange: (e) => setValue(e.target.value)
-					})
-				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["New name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					id: "rename-input",
+					ref: inputRef,
+					autoComplete: "off",
+					spellCheck: false,
+					"aria-invalid": !!taken,
+					value,
+					onChange: (e) => setValue(e.target.value)
+				})] }),
+				taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "rename-taken",
+					role: "alert",
+					children: [
+						"Another session is already named “",
+						next,
+						"”."
+					]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -78405,100 +81635,9 @@ function RenameDialog() {
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
+						disabled: !!taken || !next,
 						children: "Rename"
 					})]
-				})
-			]
-		})
-	});
-}
-//#endregion
-//#region src/components/dialogs/DeviceDialog.tsx
-function DeviceDialog() {
-	const open = useUi((s) => s.openDialog === "device");
-	const device = useUi((s) => s.dialogTarget);
-	const closeDialog = useUi((s) => s.closeDialog);
-	const [token, setToken] = (0, import_react.useState)("");
-	const [err, setErr] = (0, import_react.useState)("");
-	const inputRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (open) {
-			setToken("");
-			setErr("");
-			setTimeout(() => inputRef.current?.focus(), 0);
-		}
-	}, [open]);
-	if (!open || !device) return null;
-	const submit = async () => {
-		setErr("");
-		try {
-			const devices = await api(`/api/devices/${encodeURIComponent(device)}/connect`, { json: { token: token.trim() } });
-			queryClient.setQueryData(["devices"], devices);
-			closeDialog();
-			toast("Connected to " + device);
-			refreshInstances();
-		} catch (e) {
-			setErr(e.message || "could not connect");
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "device-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") closeDialog();
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-			id: "device-form",
-			onSubmit: (e) => {
-				e.preventDefault();
-				submit();
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Connect to device" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Access token for ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					id: "device-dialog-name",
-					children: device
-				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "password",
-					id: "device-token-input",
-					ref: inputRef,
-					autoComplete: "off",
-					spellCheck: false,
-					placeholder: "Paste the access token",
-					value: token,
-					onChange: (e) => setToken(e.target.value)
-				})] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "muted device-dialog-hint",
-					children: [
-						"Find it on that device under Settings → Security (or run ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock token" }),
-						" ",
-						"there). That device also needs “Allow remote control” turned on."
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "modal-actions",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							id: "device-dialog-err",
-							className: "dialog-err",
-							children: err
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "device-cancel",
-							onClick: closeDialog,
-							children: "Cancel"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "submit",
-							children: "Connect"
-						})
-					]
 				})
 			]
 		})
@@ -78740,6 +81879,18 @@ var SORTS = [
 		desc: "largest first"
 	}
 ];
+function reasonText(e) {
+	const reason = (e.reason || "").trim();
+	if (!reason) return "";
+	if (reason === "workspace missing") {
+		const head = "Workspace missing — removed at startup.";
+		if (e.branch_exists && e.branch) return `${head} Branch ${e.branch} is still in the repo — check it out to recover the work.`;
+		if (e.branch_exists) return `${head} Its branch is still in the repo.`;
+		if (e.branch_exists === false) return `${head} Its branch is gone too.`;
+		return head;
+	}
+	return reason.charAt(0).toUpperCase() + reason.slice(1) + ".";
+}
 function deletable(e) {
 	return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
@@ -78931,7 +82082,7 @@ function RecentDialog() {
 		}
 		setBusy(false);
 		toast(prunedMessage(done));
-		if (done.failed?.length) setError(`Could not remove: ${done.failed.join(", ")}`);
+		if (done.failed?.length) setError(`Could not delete: ${done.failed.join(", ")}`);
 		await load(!!done.failed?.length);
 		refreshInstances();
 		refreshRecentlyClosed();
@@ -78968,7 +82119,7 @@ function RecentDialog() {
 							title: `Delete every worktree no session is using and nothing has touched in ${Math.round(data?.stale_days ?? 7)} days. Repositories and clones are never touched.`,
 							disabled: busy,
 							onClick: pruneUnused,
-							children: ["Remove unused worktrees", staleCount ? ` (${staleCount})` : ""]
+							children: ["Delete unused worktrees", staleCount ? ` (${staleCount})` : ""]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -79100,71 +82251,78 @@ function RecentDialog() {
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "recent-info",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "recent-name",
-										title: [
-											a ? "Saved name: " + a : "",
-											e.branch ? "Branch: " + e.branch : "",
-											e.title ? "Session: " + e.title : "",
-											e.path || ""
-										].filter(Boolean).join("\n"),
-										children: label(e)
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "recent-sub",
-										children: [
-											a && e.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "recent-slug muted",
-												children: e.branch
-											}),
-											e.title && (a || e.branch) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "recent-slug muted",
-												children: e.title
-											}),
-											dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "recent-slug muted",
-												children: dirNote(e, a)
-											}),
-											e.kind && e.kind !== "in-place" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "ws-badge kind",
-												children: e.kind
-											}),
-											e.in_place && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "ws-badge kind",
-												children: "in-place"
-											}),
-											e.provisioned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "ws-badge kind",
-												children: "provisioned"
-											}),
-											gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "ws-badge gone",
-												children: "worktree gone"
-											}),
-											e.active_session && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-												className: "ws-badge active",
-												title: "A running session is still working in this directory",
-												children: ["in use: ", e.active_session]
-											}),
-											e.stale && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-												className: "ws-badge stale",
-												title: "No session is using this and nothing has touched it for over a week — Remove unused worktrees would take it",
-												children: [
-													"unused ",
-													days,
-													"d"
-												]
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "recent-when muted",
-												title: whenTitle(e),
-												children: whenText(e)
-											}),
-											e.size_bytes != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "recent-size muted",
-												children: humanSize(e.size_bytes)
-											})
-										]
-									})]
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "recent-name",
+											title: [
+												a ? "Saved name: " + a : "",
+												e.branch ? "Branch: " + e.branch : "",
+												e.title ? "Session: " + e.title : "",
+												e.path || ""
+											].filter(Boolean).join("\n"),
+											children: label(e)
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "recent-sub",
+											children: [
+												a && e.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-slug muted",
+													children: e.branch
+												}),
+												e.title && (a || e.branch) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-slug muted",
+													children: e.title
+												}),
+												dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-slug muted",
+													children: dirNote(e, a)
+												}),
+												e.kind && e.kind !== "in-place" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "ws-badge kind",
+													children: e.kind
+												}),
+												e.in_place && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "ws-badge kind",
+													children: "in-place"
+												}),
+												e.provisioned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "ws-badge kind",
+													children: "provisioned"
+												}),
+												gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "ws-badge gone",
+													children: "worktree gone"
+												}),
+												e.active_session && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "ws-badge active",
+													title: "A running session is still working in this directory",
+													children: ["in use: ", e.active_session]
+												}),
+												e.stale && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "ws-badge stale",
+													title: "No session is using this and nothing has touched it for over a week — Delete unused worktrees would take it",
+													children: [
+														"unused ",
+														days,
+														"d"
+													]
+												}),
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-when muted",
+													title: whenTitle(e),
+													children: whenText(e)
+												}),
+												e.size_bytes != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "recent-size muted",
+													children: humanSize(e.size_bytes)
+												})
+											]
+										}),
+										reasonText(e) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "recent-sub recent-reason muted",
+											children: reasonText(e)
+										})
+									]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "recent-actions",
@@ -79237,6 +82395,440 @@ function RecentDialog() {
 			]
 		})
 	});
+}
+//#endregion
+//#region src/components/dialogs/ConnectGitHub.tsx
+function errText(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function GhSignInWindow({ onClose }) {
+	const hostRef = (0, import_react.useRef)(null);
+	const state = useWsTerm(hostRef, "/api/github/gh-login-terminal", true);
+	const closeRef = (0, import_react.useRef)(onClose);
+	closeRef.current = onClose;
+	const close = async () => {
+		try {
+			await api("/api/github/gh-login-close", { method: "POST" });
+		} catch {}
+		closeRef.current();
+	};
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, []);
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "gh-signin-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) close();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "prov-login-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Sign in to GitHub" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: state === "streaming" ? "copy the code it shows, press Enter, sign in in the browser — then close this window" : state
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-signin-close",
+						onClick: () => void close(),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prov-login-term",
+				ref: hostRef
+			})]
+		})
+	}), document.body);
+}
+function ConnectGitHub({ onChange }) {
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [flow, setFlow] = (0, import_react.useState)(null);
+	const [ghOpen, setGhOpen] = (0, import_react.useState)(false);
+	const [token, setToken] = (0, import_react.useState)("");
+	const [name, setName] = (0, import_react.useState)("");
+	const [email, setEmail] = (0, import_react.useState)("");
+	const [push, setPush] = (0, import_react.useState)(null);
+	const [test, setTest] = (0, import_react.useState)(null);
+	const changeRef = (0, import_react.useRef)(onChange);
+	changeRef.current = onChange;
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const s = await api("/api/github/status");
+			notifyConnectionsChanged();
+			setSt(s);
+			setErr("");
+			if (s.flow && s.flow.state === "pending") setFlow(s.flow);
+			setName((v) => v || s.identity?.name || s.identity_suggested?.name || "");
+			setEmail((v) => v || s.identity?.email || s.identity_suggested?.email || "");
+		} catch (e) {
+			setErr(errText(e));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	const connected = (0, import_react.useCallback)(async (login) => {
+		toast(login ? "GitHub connected — @" + login : "GitHub connected");
+		await load();
+		changeRef.current?.();
+	}, [load]);
+	(0, import_react.useEffect)(() => {
+		if (!flow || flowFinished(flow)) return;
+		const t = setTimeout(async () => {
+			try {
+				const f = await api("/api/github/device/poll", { method: "POST" });
+				setFlow(f);
+				if (f.state === "done") connected(f.login);
+			} catch (e) {
+				setFlow({
+					...flow,
+					state: "error",
+					error: errText(e)
+				});
+			}
+		}, pollDelay(flow) * 1e3);
+		return () => clearTimeout(t);
+	}, [flow, connected]);
+	const run = async (what, fn) => {
+		setBusy(what);
+		try {
+			await fn();
+		} catch (e) {
+			toast(errText(e), { duration: 8e3 });
+		} finally {
+			setBusy("");
+		}
+	};
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "error",
+		children: ["GitHub status failed: ", err]
+	});
+	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "muted",
+		children: "Checking GitHub…"
+	});
+	const method = primaryGithubMethod(st);
+	const pasteBox = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "setup-acct-row gh-token-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+				href: st.token_url,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				className: "gh-token-link",
+				children: "Make a token on GitHub"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "password",
+				className: "gh-token-input",
+				placeholder: "…then paste it here",
+				autoComplete: "off",
+				value: token,
+				onChange: (e) => setToken(e.target.value),
+				onClick: (e) => e.stopPropagation()
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "gh-token-save",
+				disabled: !!busy || !token.trim(),
+				onClick: (e) => {
+					e.stopPropagation();
+					run("token", async () => {
+						const r = await api("/api/github/token", { json: { token: token.trim() } });
+						setToken("");
+						if (r.error) toast(r.error);
+						await connected(r.login);
+					});
+				},
+				children: busy === "token" ? "Checking…" : "Save"
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "connect-github",
+		id: "connect-github",
+		children: [
+			st.connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "gh-connected",
+				id: "gh-connected",
+				children: [
+					"✓ Connected",
+					st.login ? " as @" + st.login : "",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "muted",
+						children: [" · ", st.source === "gh-cli" ? "via gh" : st.source]
+					}),
+					st.user_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "error",
+						children: [" — ", st.user_error]
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				method === "device" && (flow && flow.state === "pending" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "gh-device",
+					id: "gh-device",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Enter this code at GitHub:" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+							className: "gh-user-code",
+							children: flow.user_code
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: (e) => {
+								e.stopPropagation();
+								copyText(flow.user_code).then((ok) => toast(ok ? "Code copied" : "Copy failed"));
+							},
+							children: "Copy"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+							href: flow.verification_uri,
+							target: "_blank",
+							rel: "noopener noreferrer",
+							children: ["Open ", flow.verification_uri.replace(/^https?:\/\//, "")]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "waiting for you to approve…"
+						})
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "setup-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-device-start",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("device", async () => {
+								const f = await api("/api/github/device/start", { method: "POST" });
+								setFlow(f);
+							});
+						},
+						children: "Sign in with GitHub"
+					}), flow && flow.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "error",
+						children: flow.error
+					})]
+				})),
+				!(st.methods || []).includes("device") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted gh-device-unconfigured",
+					id: "gh-device-unconfigured",
+					children: DEVICE_FLOW_UNCONFIGURED
+				}),
+				method === "gh" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "setup-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-cli-signin",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							setGhOpen(true);
+						},
+						children: "Sign in to GitHub"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "opens GitHub in your browser (through the gh CLI)"
+					})]
+				}),
+				method === "token" ? pasteBox : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "gh-token-fold",
+					onClick: (e) => e.stopPropagation(),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or paste a token" }), pasteBox]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted setup-hint",
+					children: "Recommended, not required: other forges push over your own remote as usual."
+				})
+			] }),
+			needsIdentity(st) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "gh-identity",
+				id: "gh-identity",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Your name and email for commits"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "setup-acct-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "gh-ident-name",
+								placeholder: "Your Name",
+								value: name,
+								onChange: (e) => setName(e.target.value),
+								onClick: (e) => e.stopPropagation()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "gh-ident-email",
+								placeholder: "you@example.com",
+								value: email,
+								onChange: (e) => setEmail(e.target.value),
+								onClick: (e) => e.stopPropagation()
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "gh-ident-save",
+								disabled: !!busy || !name.trim() || !email.trim(),
+								onClick: (e) => {
+									e.stopPropagation();
+									run("identity", async () => {
+										await api("/api/github/identity", { json: {
+											name: name.trim(),
+											email: email.trim()
+										} });
+										toast("git now knows who you are");
+										await load();
+										changeRef.current?.();
+									});
+								},
+								children: "Use these"
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Saved in your global git config (~/.gitconfig) when you click — the @users.noreply address keeps your real email private."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-acct-row gh-test-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-connection-test",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("test", async () => {
+								const r = await api("/api/settings/test/github", { method: "POST" });
+								setTest(describeConnectionTest(r));
+							});
+						},
+						children: busy === "test" ? "Testing…" : "Test"
+					}),
+					test && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "test-result " + (test.ok ? "ok" : "bad"),
+						id: "gh-connection-test-result",
+						children: (test.ok ? "✓ " : "✗ ") + test.msg
+					}),
+					!test && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "asks GitHub who this token is, and whether it reaches your first repository"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-acct-row gh-push-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-push-check",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("push", async () => setPush(await api("/api/github/push-check", { method: "POST" })));
+						},
+						children: busy === "push" ? "Checking…" : "Check I can push"
+					}),
+					push && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "test-result " + (push.ok ? "ok" : push.ok === false ? "bad" : ""),
+						children: [(push.ok ? "✓ " : push.ok === false ? "✗ " : "") + (push.message || ""), push.ok === false && push.fix ? " — " + push.fix : ""]
+					}),
+					push?.ok === false && push.id === "https_auth" && st.connected && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "gh-git-credential",
+						disabled: !!busy,
+						onClick: (e) => {
+							e.stopPropagation();
+							run("cred", async () => {
+								toast((await api("/api/github/git-credential", { method: "POST" })).helper === "gh" ? "git pushes through gh now" : "git pushes with your GitHub sign-in now");
+								setPush(await api("/api/github/push-check", { method: "POST" }));
+							});
+						},
+						children: "Let git push with this sign-in"
+					})
+				]
+			}),
+			ghOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhSignInWindow, { onClose: () => {
+				setGhOpen(false);
+				run("gh", async () => {
+					try {
+						const r = await api("/api/github/import-gh", { method: "POST" });
+						await connected(r.login);
+					} catch {
+						await load();
+					}
+				});
+			} })
+		]
+	});
+}
+function ConnectGitHubDialog() {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		const on = () => setOpen(true);
+		window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
+		return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			setOpen(false);
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [open]);
+	if (!open) return null;
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "modal",
+		id: "connect-github-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) setOpen(false);
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "connect-github-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Connect GitHub" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "one sign-in for PR review, issue handling and Open PR"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "connect-github-close",
+						onClick: () => setOpen(false),
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, {})]
+		})
+	}), document.body);
 }
 //#endregion
 //#region src/components/dialogs/TodoDialog.tsx
@@ -79622,7 +83214,9 @@ function RedZonesDialog() {
 			if (!r || !r.repo || !r.repo.id) continue;
 			const cur = sr[r.repo.id] || {
 				label: r.repo.label,
-				sessions: []
+				sessions: [],
+				shared: r.shared || [],
+				sharedError: r.shared_error || ""
 			};
 			cur.sessions.push(title);
 			sr[r.repo.id] = cur;
@@ -79663,7 +83257,9 @@ function RedZonesDialog() {
 				label: d?.label || s?.label || id,
 				zones: d?.zones || [],
 				plan_first: !!d?.plan_first,
-				sessions: s?.sessions || []
+				sessions: s?.sessions || [],
+				shared: s?.shared || [],
+				sharedError: s?.sharedError || ""
 			});
 		}
 		out.sort((a, b) => Number(b.zones.length > 0) - Number(a.zones.length > 0) || Number(b.sessions.length > 0) - Number(a.sessions.length > 0) || a.label.localeCompare(b.label));
@@ -79756,6 +83352,48 @@ function RepoCard({ row, onRepos }) {
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [err, setErr] = (0, import_react.useState)("");
 	const aliases = useUi((s) => s.aliases);
+	const [target, setTarget] = (0, import_react.useState)(row.sessions[0] || "");
+	const [shared, setShared] = (0, import_react.useState)({
+		zones: row.shared,
+		error: row.sharedError
+	});
+	(0, import_react.useEffect)(() => {
+		setShared({
+			zones: row.shared,
+			error: row.sharedError
+		});
+		setTarget((t) => row.sessions.includes(t) ? t : row.sessions[0] || "");
+	}, [
+		row.shared,
+		row.sharedError,
+		row.sessions
+	]);
+	const sharedCall = async (what, fn) => {
+		setBusy(what);
+		setErr("");
+		try {
+			const r = await fn();
+			setShared({
+				zones: r.shared || [],
+				error: r.shared_error || ""
+			});
+		} catch (x) {
+			setErr(errMsg(x));
+		} finally {
+			setBusy("");
+		}
+	};
+	const pickTarget = (t) => {
+		setTarget(t);
+		sharedCall("shared", () => instApi(t, "/shared-zones"));
+	};
+	const addToRepo = (z) => void sharedCall("share:" + z.id, () => instApi(target, "/shared-zones", { json: {
+		pattern: z.pattern,
+		kind: z.kind || "red",
+		note: z.note || "",
+		name: z.name || ""
+	} }));
+	const removeShared = (z) => void sharedCall("unshare:" + z.id, () => instApi(target, "/shared-zones/remove", { json: { id: z.id } }));
 	const call = async (what, fn) => {
 		setBusy(what);
 		setErr("");
@@ -79849,6 +83487,18 @@ function RepoCard({ row, onRepos }) {
 							})
 						]
 					}),
+					inShared(z, shared.zones) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rzd-chip rzd-in-repo",
+						title: "Also in " + SHARED_FILE + " — shared with the repo",
+						children: "in repo"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rzd-share",
+						disabled: !target || busy === "share:" + z.id,
+						title: target ? "Write this zone into " + SHARED_FILE + " in " + (aliases[target] || displayName(target)) + "'s worktree — commit it and it reaches everyone on the repo" : "Open a session on this repo first — the file is written into its worktree so it rides that branch",
+						onClick: () => addToRepo(z),
+						children: busy === "share:" + z.id ? "Adding…" : "Add to repo"
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "rzd-x",
@@ -79904,11 +83554,127 @@ function RepoCard({ row, onRepos }) {
 				className: "error rzd-err",
 				children: err
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedZonesView, {
+				zones: shared.zones,
+				error: shared.error,
+				target,
+				sessions: row.sessions,
+				sessionName: (t) => aliases[t] || displayName(t),
+				busy,
+				onTarget: pickTarget,
+				onRemove: removeShared
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Companions, {
 				repoId: row.id,
 				label: row.label
 			})
 		]
+	});
+}
+var SHARED_FILE = ".mindflock/zones.toml";
+function sharedKey(z) {
+	return (z.kind === "green" ? "green" : "red") + ":" + (z.pattern || "").replace(/\/+$/, "");
+}
+function inShared(z, shared) {
+	const k = sharedKey(z);
+	return shared.some((s) => sharedKey(s) === k);
+}
+function sharedAuthorLine(z) {
+	const who = (z.author || "").trim();
+	const when = (z.added || "").trim();
+	if (who) return "added by " + who + (when ? " · " + when : "");
+	return when ? "added " + when : "";
+}
+function SharedZonesView({ zones, error, target, sessions, sessionName, busy, onTarget, onRemove }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "rzd-shared",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "rzd-shared-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "rzd-shared-title",
+				children: "Shared with the repo (committed)"
+			}), sessions.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+				className: "rzd-shared-target",
+				"aria-label": "Which session's worktree to read and write the shared zones in",
+				value: target,
+				onChange: (e) => onTarget(e.target.value),
+				children: sessions.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: t,
+					children: sessionName(t)
+				}, t))
+			}) : target ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "muted rzd-shared-where",
+				children: [
+					"in ",
+					sessionName(target),
+					"'s worktree"
+				]
+			}) : null]
+		}), !target ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "muted rzd-none",
+			children: [
+				"Open a session on this repo to see and add shared zones — they live in ",
+				SHARED_FILE,
+				" in its worktree."
+			]
+		}) : error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "error rzd-err",
+			children: [
+				SHARED_FILE,
+				" is being ignored: ",
+				error
+			]
+		}) : zones.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "muted rzd-none",
+			children: [
+				"None yet. “Add to repo” on a zone above writes it to ",
+				SHARED_FILE,
+				" — commit it and teammates get it."
+			]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "rzd-zones rzd-shared-zones",
+			children: zones.map((z) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rzd-kind " + (z.kind === "green" ? "green" : "red"),
+					title: z.kind === "green" ? "Only here" : "Keep out",
+					children: z.kind === "green" ? "✓" : "⛔"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "rzd-zone-main",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rzd-zone-pattern",
+							children: z.pattern
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rzd-zone-name",
+							children: z.kind === "green" ? "only here" : "keep out"
+						}),
+						z.name && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rzd-zone-name",
+							children: z.name
+						}),
+						z.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rzd-zone-note muted",
+							children: z.note
+						}),
+						sharedAuthorLine(z) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rzd-zone-author muted",
+							children: sharedAuthorLine(z)
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rzd-x",
+					"aria-label": "Remove shared zone " + (z.name || z.pattern),
+					title: "Remove it from " + SHARED_FILE + " (commit the change to share it)",
+					disabled: busy === "unshare:" + z.id,
+					onClick: () => onRemove(z),
+					children: "×"
+				})
+			] }, z.id))
+		})]
 	});
 }
 function Companions({ repoId, label }) {
@@ -80059,10 +83825,10 @@ var SLIDES = [
 			", ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Push" }),
 			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Make PR" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open PR" }),
 			". ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }),
-			" takes those steps for you, as far as you choose, and can ask first. Anything waiting on you — a question or an approval — shows under the",
+			" takes those steps for you, as far as you choose, and can ask first. Anything that needs you — a question or an approval — shows under the",
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bell" }),
 			"."
@@ -80520,26 +84286,15 @@ function App() {
 	const ui = useUi();
 	useDoctorAutoShow();
 	useIntakeWarm(!!config?.caps?.ticketing);
-	const tourDecided = (0, import_react.useRef)(false);
-	(0, import_react.useEffect)(() => {
-		if (tourDecided.current) return;
-		const decision = tourDecision({
-			tourDone: ui.tourDone,
-			hintsEnabled: ui.hintsEnabled,
-			onboarded: config?.onboarded
-		});
-		if (decision === "wait") return;
-		tourDecided.current = true;
-		if (decision === "open") ui.openTour();
-	}, [
-		config?.onboarded,
-		ui.tourDone,
-		ui.hintsEnabled,
-		ui.openTour
-	]);
 	(0, import_react.useEffect)(() => {
 		const aliases = useUi.getState().aliases;
-		if (Object.keys(aliases).length) api("/api/aliases", { json: { aliases } }).catch(() => {});
+		api("/api/aliases", { json: { aliases } }).then((r) => {
+			if (!r?.aliases) return;
+			try {
+				localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
+			} catch {}
+			useUi.setState({ aliases: r.aliases });
+		}).catch(() => {});
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const caps = config?.caps;
@@ -80615,7 +84370,11 @@ function App() {
 		return {
 			togglePalette: () => toggleDialog("palette"),
 			toggleShortcuts: () => toggleDialog("shortcuts"),
-			focusFilter: () => document.getElementById("session-filter")?.focus(),
+			focusFilter: () => {
+				const box = document.getElementById("session-filter");
+				if (box) box.focus();
+				else useUi.getState().setFilterPeek(true);
+			},
 			cycleWindow: (dir) => {
 				const keys = stableKeys();
 				if (!keys.length) return;
@@ -80647,9 +84406,9 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHubDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),

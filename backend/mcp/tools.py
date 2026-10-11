@@ -115,7 +115,9 @@ _D_WHOAMI = (
     "Who you are in MindFlock: your session (title, branch, folder, status), "
     "whether you are an external client (not inside a MindFlock session), your "
     "scope (readonly | children | all — what you may steer), your parent, your "
-    "children and your unread message count. Call this first."
+    "children, your unread message count and the person you work for "
+    "(person: {id, name} — shared by all of that person's devices). Call this "
+    "first."
 )
 _D_LIST = (
     "List MindFlock sessions as compact rows: title, status (running | ready | "
@@ -265,7 +267,7 @@ _D_FENCE = (
     "(its tests and lockfiles stay writable in its own worktree). "
     "keep_out=[globs]: these are read-only for it. Enforced by MindFlock's "
     "guard on every edit, for that session alone (never you, never a person's "
-    "window in the same folder), and shown on the Code Map. Replaces its "
+    "session in the same folder), and shown on the Code Map. Replaces its "
     "fence; clear=true lifts it. A running worker is told; a held one gets it "
     "in front of its task. Prefer spawn_session(only=..., keep_out=...), "
     "which fences it before it starts."
@@ -572,7 +574,22 @@ _COMPACT_KEYS = (
     "last_turn",
 )
 #: Compact-row keys shown only when set (most sessions have neither).
-_COMPACT_OPTIONAL = ("autopilot", "pr_url")
+#: ``person``: the id of the person the session was created for (rows of
+#: sessions that predate people carry none). ``owner`` / ``driver`` /
+#: ``viewers``: who it belongs to, who holds its keyboard, and who has it
+#: open (``{person id: {name, device, since, typing}}``) — docs/people.md.
+#: ``shared_branch``: it works ON a pushed branch others push to too;
+#: ``behind``: commits that remote branch has that the session lacks.
+_COMPACT_OPTIONAL = (
+    "autopilot",
+    "pr_url",
+    "person",
+    "owner",
+    "driver",
+    "viewers",
+    "shared_branch",
+    "behind",
+)
 _MESSAGE_KEYS = ("id", "kind", "from", "ts", "text", "data", "reply_to", "state")
 
 
@@ -907,13 +924,35 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
             "children": self._children(flock),
             "unread": self._unread_count(me) if me else None,
             "server": self.api.describe(),
+            "person": self._person(),
         }
+        # Whether this server's person holds the keyboard of the session the
+        # agent runs in: true (they drive it), false (someone else does — a
+        # typed-into-terminal tool aimed at it is refused), None (nobody does,
+        # or no session / person to compare).
+        row = flock.local.get(me) if me else None
+        person = out["person"]
+        if isinstance(row, dict) and person and row.get("driver"):
+            out["you_drive"] = row.get("driver") == person["id"]
+        else:
+            out["you_drive"] = None
         note = self.policy.scope_note(me)
         if me is None and self.identity.reason and self.identity.managed:
             note = (note + "; " if note else "") + self.identity.reason
         if note:
             out["note"] = note
         return out
+
+    def _person(self) -> Optional[dict]:
+        """``{id, name}`` of the person this server belongs to (``GET
+        /api/person``), or None from a server that predates people."""
+        try:
+            resp = self.api.get("/api/person")
+        except (client.ApiError, ToolError):
+            return None
+        if not isinstance(resp, dict) or not resp.get("id"):
+            return None
+        return {"id": str(resp["id"]), "name": str(resp.get("name") or "")}
 
     def list_sessions(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()
@@ -965,6 +1004,10 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
         out["children"] = flock.children_of(title)
         out["is_self"] = title == flock.self_title
         out["managed"] = self.policy.is_managed(flock, title)
+        # Always present (an older server's row has neither): whether it works
+        # on a shared pushed branch, and how far that branch has moved on.
+        out["shared_branch"] = bool(row.get("shared_branch"))
+        out["behind"] = int(row.get("behind") or 0)
         return {"session": out}
 
     def read_output(self, args: dict, ctx: ToolContext) -> dict:
@@ -1656,6 +1699,18 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
                 "this CLI takes no start prompt: the task is queued and typed in "
                 "once the agent is idle"
             )
+        if args.get("model") and not args.get("account"):
+            try:
+                from backend.providers import auth_profiles as _ap
+
+                prog = str(created.get("program") or args.get("program") or "")
+                if prog and not _ap.model_route(prog):
+                    warnings.append(
+                        "model %r was recorded but %s has no known model flag; "
+                        "pass it in launch_args instead" % (args["model"], prog)
+                    )
+            except Exception:  # noqa: BLE001 — a warning must not fail a spawn
+                pass
         if warnings:
             out["warnings"] = warnings
         if not ready:
@@ -1969,6 +2024,12 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
                     'looked at it. Call read_output(view="screen") again '
                     "before answering." % title
                 ) from None
+            if err.status == 409 and "driven by" in err.message:
+                raise ToolError(
+                    "answer_prompt(%s) refused: the session is %s — a person "
+                    "holds its keyboard. Ask your user, or wait until they "
+                    "release it." % (title, err.message)
+                ) from None
             if err.status == 409 and "just answered" in err.message:
                 raise ToolError(
                     "answer_prompt(%s) refused: that prompt was just answered "
@@ -2279,7 +2340,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "set_autopilot",
-            "Arm a session's autopilot",
+            "Arm a session's fast-track",
             _ship.D_AUTOPILOT,
             _ship.S_AUTOPILOT,
             box.set_autopilot,

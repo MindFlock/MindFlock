@@ -48,7 +48,7 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
       {group.lane && !group.done && <span className="rg-lane">{group.lane}</span>}
       <span className="rg-sp" />
       {group.needs > 0 && (
-        <span className="dev-badge rg-needs" title={group.needs + " waiting on you"}>
+        <span className="dev-badge rg-needs" title={group.needs + (group.needs === 1 ? " needs you" : " need you")}>
           {group.needs}
         </span>
       )}
@@ -243,7 +243,7 @@ function RunGroupMenu({
               <button
                 type="button"
                 disabled={busy}
-                title="Take it out of the group — it never starts"
+                title="Take it out of the team run — it never starts"
                 onClick={() => go(() => runAct("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t)))}
               >
                 Remove
@@ -260,10 +260,10 @@ function RunGroupMenu({
           disabled={!summary}
           title={
             summary
-              ? "Copy what this group did, as Markdown"
+              ? "Copy what this team run did, as Markdown"
               : looking
-                ? "Looking for this group's summary…"
-                : "MindFlock has no summary for this group"
+                ? "Looking for this team run's summary…"
+                : "MindFlock has no summary for this team run"
           }
           onClick={async () => {
             if (!summary) return;
@@ -286,7 +286,7 @@ function RunGroupMenu({
                 disabled={busy}
                 onClick={() => go(() => cancelRun(id, group.name))}
               >
-                Cancel group
+                Cancel team run
               </button>
               <button type="button" onClick={() => setMode("")}>
                 Keep going
@@ -310,7 +310,7 @@ export function QueuedRow({ task, pos, groupName }: { task: RunTask; pos: number
     <li
       className="inst run-queued"
       data-queued={task.id}
-      title={title + "\nQueued in " + groupName + " — it starts as a slot frees up. Start it now or remove it from the group's ⋯ menu."}
+      title={title + "\nQueued in " + groupName + " — it starts as a slot frees up. Start it now or remove it from the team run's ⋯ menu."}
     >
       <div className="inst-row">
         <span className="idx" />
@@ -332,7 +332,7 @@ export function QueuedRow({ task, pos, groupName }: { task: RunTask; pos: number
  * least one group header. */
 export function OwnHeader() {
   return (
-    <li className="device-group run-group-head run-own" title="Sessions not started in a group">
+    <li className="device-group run-group-head run-own" title="Sessions not started in a team run">
       <span className="dev-caret" />
       <span className="dev-name">On their own</span>
     </li>

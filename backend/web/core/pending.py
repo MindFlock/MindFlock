@@ -178,6 +178,8 @@ def rows(engine=None) -> list:
                 "provisioned": True,
                 "workspace_strategy": meta.get("workspace_strategy", "clone"),
                 "in_place": False,
+                "hidden_by": "",
+                "person": "",
                 # Intake starts are human-side roots — unless an agent started
                 # the item as its own worker (the MCP's spawn_ticket_session),
                 # which the start route records here so the provisioning row

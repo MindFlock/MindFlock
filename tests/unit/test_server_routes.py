@@ -365,7 +365,8 @@ def test_cleanup_rmtrees_worktree_and_drops_instance(
     removed = []
     monkeypatch.setattr(server.shutil, "rmtree", lambda p, **k: removed.append(p))
     r = client.post("/api/instances/cl-1/cleanup")
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "title": "cl-1", "wiped": True, "children": []}
     assert "kill" in inst.calls
     assert removed == [str(wt)]
     assert "cl-1" not in server.ENGINE.instances
@@ -392,12 +393,128 @@ def test_close_records_closed_and_keeps_worktree(
     wt.mkdir()
     registered("cl-3", wt=str(wt))
     recorded = []
-    monkeypatch.setattr(server, "_record_closed", lambda i: recorded.append(i.Title))
+    monkeypatch.setattr(
+        server, "_record_closed", lambda i, **kw: recorded.append(i.Title)
+    )
     r = client.post("/api/instances/cl-3/close")
     assert r.status_code == 200
     assert recorded == ["cl-3"]
     assert os.path.isdir(wt)  # worktree kept
     assert "cl-3" not in server.ENGINE.instances
+
+
+def test_close_records_closed_reports_wiped_false(
+    registered, _stub_lifecycle, monkeypatch, tmp_path
+):
+    registered("cl-4", wt=str(tmp_path))
+    monkeypatch.setattr(server, "_record_closed", lambda i, **kw: None)
+    r = client.post("/api/instances/cl-4/close")
+    assert r.json() == {"ok": True, "title": "cl-4", "wiped": False, "children": []}
+
+
+def test_delete_lands_in_recently_closed(
+    registered, _stub_lifecycle, monkeypatch, tmp_path
+):
+    """DELETE used to skip the undo store; every way of ending a session now
+    records it."""
+    inst = registered("del-rc", wt=str(tmp_path / "gone"))
+    recorded = []
+    monkeypatch.setattr(
+        server, "_record_closed", lambda i, **kw: recorded.append(i.Title)
+    )
+    monkeypatch.setattr(server._red_zone_monitor, "forget", lambda *a, **k: None)
+    monkeypatch.setattr(server._red_zone_monitor, "after_kill", lambda *a, **k: None)
+    r = client.delete("/api/instances/del-rc")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "title": "del-rc", "wiped": True, "children": []}
+    assert recorded == ["del-rc"]
+    assert "kill" in inst.calls
+    assert "del-rc" not in server.ENGINE.instances
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("delete", "/api/instances/fu-1"), ("post", "/api/instances/fu-1/cleanup")],
+)
+def test_wipe_is_refused_while_a_sibling_shares_the_folder(
+    registered, _stub_lifecycle, monkeypatch, tmp_path, method, path
+):
+    """A copy (Duplicate session) runs in place in its origin's worktree:
+    removing the folder would pull it out from under the copy. 409, and
+    nothing changes — not even the undo record."""
+    wt = tmp_path / "shared"
+    wt.mkdir()
+    # The copy sees the folder through a symlink: the check compares real paths.
+    link = tmp_path / "link"
+    link.symlink_to(wt)
+    origin = registered("fu-1", wt=str(wt))
+    copy = registered("fu-1-copy", wt=str(link))
+    copy.InPlace = True
+    recorded = []
+    monkeypatch.setattr(
+        server, "_record_closed", lambda i, **kw: recorded.append(i.Title)
+    )
+    removed = []
+    monkeypatch.setattr(server.shutil, "rmtree", lambda p, **k: removed.append(p))
+    r = getattr(client, method)(path)
+    assert r.status_code == 409, r.text
+    assert r.json() == {"error": "folder in use", "sessions": ["fu-1-copy"]}
+    assert origin.calls == [] and recorded == [] and removed == []
+    assert "fu-1" in server.ENGINE.instances and "fu-1-copy" in server.ENGINE.instances
+    assert wt.is_dir()
+
+
+def test_close_is_allowed_while_a_sibling_shares_the_folder(
+    registered, _stub_lifecycle, monkeypatch, tmp_path
+):
+    """Keeping the worktree endangers nobody: /close goes through, and the
+    sibling keeps its folder."""
+    wt = tmp_path / "shared"
+    wt.mkdir()
+    registered("cs-1", wt=str(wt))
+    registered("cs-1-copy", wt=str(wt))
+    monkeypatch.setattr(server, "_record_closed", lambda i, **kw: None)
+    r = client.post("/api/instances/cs-1/close")
+    assert r.status_code == 200, r.text
+    assert "cs-1" not in server.ENGINE.instances
+    assert "cs-1-copy" in server.ENGINE.instances and wt.is_dir()
+
+
+def test_delete_hands_children_to_the_grandparent_and_reports_them(
+    registered, _stub_lifecycle, monkeypatch, tmp_path
+):
+    registered("grand", wt=str(tmp_path / "g"))
+    orch = registered("orch", wt=str(tmp_path / "o"))
+    orch.Parent = "grand"
+    kid_a = registered("kid-a", wt=str(tmp_path / "a"))
+    kid_a.Parent = "orch"
+    kid_b = registered("kid-b", wt=str(tmp_path / "b"))
+    kid_b.Parent = "orch"
+    other = registered("other", wt=str(tmp_path / "x"))
+    other.Parent = "grand"
+    monkeypatch.setattr(server, "_record_closed", lambda i, **kw: None)
+    monkeypatch.setattr(server._red_zone_monitor, "forget", lambda *a, **k: None)
+    monkeypatch.setattr(server._red_zone_monitor, "after_kill", lambda *a, **k: None)
+    r = client.delete("/api/instances/orch")
+    assert r.status_code == 200, r.text
+    assert r.json()["children"] == ["kid-a", "kid-b"]
+    # The children keep running, one step up the chain.
+    assert kid_a.Parent == "grand" and kid_b.Parent == "grand"
+    assert other.Parent == "grand"
+    assert "kid-a" in server.ENGINE.instances and "kid-b" in server.ENGINE.instances
+
+
+def test_close_detaches_children_when_the_parent_was_a_root(
+    registered, _stub_lifecycle, monkeypatch, tmp_path
+):
+    registered("root-o", wt=str(tmp_path / "o"))
+    kid = registered("root-kid", wt=str(tmp_path / "k"))
+    kid.Parent = "root-o"
+    monkeypatch.setattr(server, "_record_closed", lambda i, **kw: None)
+    r = client.post("/api/instances/root-o/close")
+    assert r.status_code == 200, r.text
+    assert r.json()["children"] == ["root-kid"]
+    assert kid.Parent == ""
 
 
 def test_copy_409_when_source_workspace_missing(registered):
@@ -2451,6 +2568,46 @@ def test_update_check_passes_the_block_through(monkeypatch):
     monkeypatch.setattr(server._self_update, "install_kind", lambda: "editable")
     body = client.get("/api/update/check").json()
     assert body["kind"] == "editable"
+    assert "development checkout" in body["blocked"]
+
+
+def test_update_check_classifies_a_pipx_install_as_pipx(monkeypatch):
+    # pipx is a release install the updater knows how to replace — `pipx`,
+    # never `other` (which the screen renders as "re-run install.sh").
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    monkeypatch.setattr(server._self_update, "_detected_kind", lambda: "other")
+    monkeypatch.setattr(
+        server._self_update, "read_install_json", lambda: {"method": "pipx"}
+    )
+    monkeypatch.setattr(server._self_update.shutil, "which", lambda n: "/usr/bin/" + n)
+    body = client.get("/api/update/check").json()
+    assert body["kind"] == "pipx" and body["blocked"] == ""
+    assert body["method_source"] == "install.json"
+    assert body["available"] is True and body["editable_commands"] == []
+
+
+def test_update_check_gives_a_checkout_its_git_commands(monkeypatch):
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    monkeypatch.setattr(server._self_update, "_detected_kind", lambda: "editable")
+    monkeypatch.setattr(server._self_update, "install_checkout", lambda: "/src/mf")
+    body = client.get("/api/update/check").json()
+    assert body["kind"] == "editable" and body["method_source"] == "detected"
+    assert body["checkout"] == "/src/mf"
+    assert body["editable_commands"] == [
+        "cd /src/mf",
+        "git fetch --tags origin",
+        "git checkout v9.9.9",
+        "uv sync --group web",
+        "mindflock restart",
+    ]
     assert "development checkout" in body["blocked"]
 
 

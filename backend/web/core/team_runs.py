@@ -211,10 +211,10 @@ _LANE_CLAUSE = {
 }
 #: The server-owned brief every task's prompt ends with (≤600 chars).
 RUN_BRIEF = (
-    '---\nThis session is one of {n} in the MindFlock group "{name}". Do only '
+    '---\nThis session is one of {n} in the MindFlock team run "{name}". Do only '
     "the task above, in this workspace. When it is done and its tests pass, "
-    "stop and say in a few lines what changed. {lane} Do not push, open pull "
-    "requests or merge yourself, and do not start other sessions."
+    "stop and say in a few lines what changed. {lane} Don't push, open pull "
+    "requests or merge yourself, and don't start other sessions."
 )
 
 #: A one-for-all member's lane clause (it stops at a commit; the group ships
@@ -223,14 +223,14 @@ _TOGETHER_CLAUSE = (
     "Commit it on this branch when it is done and tested, then call "
     '{report}(status="done", summary=<what changed>, '
     'details="Tests: <command> — <result>") if you have it. MindFlock merges '
-    "this branch with the group's other lines into one branch for a single PR."
+    "this branch with the team run's other lines into one branch for one PR."
 )
 
 # --- split / one-for-all briefs (server → agent; plain text, no CLI flags) --
 #: Appended to a split lead's task (≤600 chars, see the test). The lead only
 #: PROPOSES; the server validates, the user approves, the server starts.
 LEAD_BRIEF = (
-    '---\nMindFlock split: you lead group "{name}" (run {run}). Read the code, '
+    '---\nMindFlock split: you lead team run "{name}" (run {run}). Read the code, '
     "then call {propose}(run_id={run}, pieces=[{{title, "
     "prompt, paths}}], why) with 2-{max} pieces whose path globs don't overlap; "
     "each prompt must stand on its own. Commit any shared groundwork first: "
@@ -241,7 +241,7 @@ LEAD_BRIEF = (
 #: An OPTIONAL split's lead (the New dialog's "Auto-split into up to N"): it
 #: decides first, and pieces=[] means "no split — I'll do it myself".
 LEAD_OPTIONAL_BRIEF = (
-    '---\nMindFlock auto-split: you lead group "{name}" (run {run}). Read the '
+    '---\nMindFlock auto-split: you lead team run "{name}" (run {run}). Read the '
     "code, then decide. Small, or won't cut cleanly? Call {propose}(run_id="
     "{run}, pieces=[], why) and do the task yourself here. Worth splitting? "
     "Call it with 2-{max} pieces [{{title, prompt, paths}}] whose path globs "
@@ -252,7 +252,7 @@ LEAD_OPTIONAL_BRIEF = (
 )
 #: A one-for-all group's lead: an integration point, idle until a conflict.
 INTEGRATOR_BRIEF = (
-    'MindFlock group "{name}" (run {run}): {n} lines, one PR. You are its '
+    'MindFlock team run "{name}" (run {run}): {n} lines, one PR. You are its '
     "integration session. MindFlock starts the lines as your workers, merges "
     "each finished branch into yours and runs the checks. Do nothing until it "
     "asks you to resolve a merge conflict: then resolve it, commit, and call "
@@ -285,7 +285,7 @@ CHECK_FIX_TEXT = (
 )
 #: "Ask for a different split".
 REPLAN_TEXT = (
-    'The user asked for a different split of group "{name}". {note}Propose '
+    'The user asked for a different split of team run "{name}". {note}Propose '
     'again with {propose}(run_id="{run}", …).'
 )
 #: How many times a conflict is handed to the lead before it asks you.
@@ -671,7 +671,7 @@ def _normalize(d) -> dict:
     return {
         "v": VERSION,
         "id": _s(d.get("id")),
-        "name": _s(d.get("name")) or "Group",
+        "name": _s(d.get("name")) or "Team run",
         "created_at": _f(d.get("created_at")),
         "created_by": _s(d.get("created_by")) or "user",
         "state": state if state in RUN_STATES else "running",
@@ -1173,7 +1173,7 @@ def name_suggestion(items: List[dict]) -> str:
         if len(items) > 1:
             name += " + %d more" % (len(items) - 1)
         return name[:60]
-    return "%d items" % len(items) if items else "Group"
+    return "%d items" % len(items) if items else "Team run"
 
 
 def tools_for(provider: str = "") -> dict:
@@ -1558,7 +1558,9 @@ def release_title(run: dict) -> str:
         title = cand
         if more == 0:
             break
-    return _clip_words(title, 120) or _clip_words(_trim_dangling(name), 120) or "Group"
+    return (
+        _clip_words(title, 120) or _clip_words(_trim_dangling(name), 120) or "Team run"
+    )
 
 
 _DANGLING = re.compile(
@@ -2361,7 +2363,7 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         )
         if armed in LANES and armed != "leave":
             acts.append(_act("seen", t, fields={"lane": armed}))
-            acts.append(_act("log", t, text="lane changed to %s by you" % armed))
+            acts.append(_act("log", t, text="fast-track changed to %s by you" % armed))
             return acts
     if lane == "leave":
         ended = float(o.get("turn_ended_at") or 0.0)
@@ -2378,7 +2380,7 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         # Disarmed by someone other than the run (⏩ off, lane → leave): the
         # user's act wins — this task's lane is now "leave it".
         acts.append(_act("seen", t, fields={"lane": "leave"}))
-        acts.append(_act("log", t, text="lane changed to leave it by you"))
+        acts.append(_act("log", t, text="fast-track turned off by you"))
         return acts
     ap_state = _s(rec.get("state"))
     step = _s(rec.get("step"))
@@ -2636,15 +2638,19 @@ def _sf_blocker(run: dict, lo: dict) -> str:
     if not lo.get("present"):
         if lo.get("pending"):
             return ""
-        return "the group's lead %s is gone — bring it back or cancel the group" % (
-            title
+        return (
+            "the team run's lead %s is gone — bring it back or cancel the team run"
+            % (title)
         )
     if lo.get("ready") and not lo.get("on_branch", True):
-        return "%s is on %s, not the group's branch %s — check out %s, then Retry" % (
-            title,
-            _s(lo.get("live_branch")) or "a detached HEAD",
-            pinned,
-            pinned,
+        return (
+            "%s is on %s, not the team run's branch %s — check out %s, then Retry"
+            % (
+                title,
+                _s(lo.get("live_branch")) or "a detached HEAD",
+                pinned,
+                pinned,
+            )
         )
     if lo.get("merging") or lo.get("operation"):
         return (
@@ -2825,16 +2831,19 @@ def _merge_blocker(run: dict, lo: dict, handed: bool = False) -> str:
         if lo.get("pending"):
             return ""
         return (
-            "the group's lead %s is gone — %s keeps what was merged; cancel the "
-            "group (its sessions are kept) or bring the lead back"
+            "the team run's lead %s is gone — %s keeps what was merged; cancel the "
+            "team run (its sessions are kept) or bring the lead back"
             % (title, ("its branch " + pinned) if pinned else "its branch")
         )
     if lo.get("ready") and not lo.get("on_branch", True):
-        return "%s is on %s, not the group's branch %s — check out %s, then Retry" % (
-            title,
-            _s(lo.get("live_branch")) or "a detached HEAD",
-            pinned,
-            pinned,
+        return (
+            "%s is on %s, not the team run's branch %s — check out %s, then Retry"
+            % (
+                title,
+                _s(lo.get("live_branch")) or "a detached HEAD",
+                pinned,
+                pinned,
+            )
         )
     if lo.get("operation"):
         return "%s is in the middle of a %s — finish or abort it, then Retry" % (
@@ -3009,7 +3018,7 @@ def _plan_integration(run: dict, obs: dict, now: float, acts: List[dict]) -> Lis
                     state="release_ready",
                     release={
                         "state": "ready",
-                        "detail": "the lead's lane was turned off — nothing was shipped",
+                        "detail": "the lead's fast-track was turned off — nothing was shipped",
                     },
                 )
             )
@@ -3078,7 +3087,7 @@ def lead_gone(run: dict, now: float) -> str:
     if not since or run["state"] in RUN_FINISHED or now - since < MERGE_BLOCKED_S:
         return ""
     return (
-        "its lead %s is gone — cancel the group (its sessions and branches are "
+        "its lead %s is gone — cancel the team run (its sessions and branches are "
         "kept) or bring the lead back" % (lead.get("title") or "")
     )
 

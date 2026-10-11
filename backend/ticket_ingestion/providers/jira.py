@@ -52,6 +52,9 @@ _ISSUE_FIELDS = (
     "assignee",
     "created",
     "status",
+    # The claim mirror reads the claim label off the issue
+    # (backend.ticket_ingestion.tracker_claims).
+    "labels",
 )
 
 # Jira status categories -> the workflow-state ``type`` vocabulary the
@@ -262,6 +265,7 @@ class JiraProvider(TicketProvider):
             # tell whether the issue sits in the source's ingest state.
             state=str((fields.get("status") or {}).get("name") or ""),
             state_id=str((fields.get("status") or {}).get("id") or ""),
+            labels=[str(x) for x in fields.get("labels") or [] if x],
         )
 
     async def _search(self, jql: str) -> list[Ticket]:
@@ -512,6 +516,48 @@ class JiraProvider(TicketProvider):
                         f"(HTTP {resp.status}): {text[:200]}"
                     )
 
+    # --- claim mirror (tracker_claims) -------------------------------- #
+
+    can_claim = True
+
+    async def _put_issue(self, path: str, body: dict, what: str) -> None:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.put(
+                self._api(path), json=body, headers=self._headers()
+            ) as resp:
+                if resp.status not in (200, 204):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not {what} (HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def assign_to(self, ticket_id: str, member: str) -> None:
+        """Jira issues have ONE assignee: this sets it to ``member`` (an
+        accountId). The caller only assigns a ticket nobody else holds."""
+        member = (member or "").strip()
+        if not member:
+            raise ProviderError("no Jira accountId to assign")
+        await self._put_issue(
+            f"/rest/api/3/issue/{ticket_id}/assignee",
+            {"accountId": member},
+            f"assign issue {ticket_id}",
+        )
+
+    async def add_label(self, ticket_id: str, label: str) -> None:
+        # `update.labels.add` is idempotent on Jira's side.
+        await self._put_issue(
+            f"/rest/api/3/issue/{ticket_id}",
+            {"update": {"labels": [{"add": label}]}},
+            f"label issue {ticket_id}",
+        )
+
+    async def remove_label(self, ticket_id: str, label: str) -> None:
+        await self._put_issue(
+            f"/rest/api/3/issue/{ticket_id}",
+            {"update": {"labels": [{"remove": label}]}},
+            f"unlabel issue {ticket_id}",
+        )
+
     async def add_comment(self, ticket_id: str, body: str) -> None:
         doc = {"type": "doc", "version": 1, "content": text_to_adf(body)}
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
@@ -624,8 +670,8 @@ class JiraProvider(TicketProvider):
         """
         if not (self.cfg.project or "").strip():
             return (
-                "This Jira source has no project to file into — set its Project "
-                "field to the project key (e.g. ENG) first."
+                "This Jira source has no project to file into — set its "
+                "Project key field (e.g. ENG) first."
             )
         return ""
 

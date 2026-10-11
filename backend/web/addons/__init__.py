@@ -28,6 +28,7 @@ import importlib.util
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -56,6 +57,7 @@ from .doctor import DoctorAddon
 from .fleet import FleetAddon
 from .notify import NotifyAddon
 from .onboarding import OnboardingAddon
+from .optimizer import OptimizerAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
@@ -76,6 +78,8 @@ __all__ = [
     "build_addons",
     "discover_extensions",
     "extensions_dir",
+    "load_failures",
+    "registered_addons",
     "register_addons",
     "validate_extension_spec",
 ]
@@ -121,6 +125,28 @@ RESERVED_EXTENSION_IDS = frozenset(
 )
 
 
+#: The user extensions that failed to load at the last discovery, as
+#: ``[{"id", "file", "error", "at"}]`` in dir-name order. Containment used to
+#: mean a log line and nothing else: an extension that was not there looked
+#: exactly like one never installed. Settings → Extensions and Connections
+#: read this (:func:`load_failures`) so a broken one is a visible row.
+_LOAD_FAILURES: List[dict] = []
+
+#: Every addon :func:`register_addons` mounted, built-ins first — what
+#: Connections lists as "loaded extensions" (:func:`registered_addons`).
+_REGISTERED: List[Addon] = []
+
+
+def load_failures() -> List[dict]:
+    """Copies of the recorded extension load failures (see ``_LOAD_FAILURES``)."""
+    return [dict(f) for f in _LOAD_FAILURES]
+
+
+def registered_addons() -> List[Addon]:
+    """The addons the running server registered (empty before startup)."""
+    return list(_REGISTERED)
+
+
 def build_addons(ctx: AppContext) -> List[Addon]:
     """The ordered list of registered addons. One line per addon — the only
     edit needed to add a new one."""
@@ -139,6 +165,8 @@ def build_addons(ctx: AppContext) -> List[Addon]:
         OnboardingAddon(ctx),
         # The first Addon API v3 extension (sidebar bar + dialog/pane surfaces).
         DbClientAddon(ctx),
+        # Usage Optimizer: capacity score, window pacing, uptime vs. attended time.
+        OptimizerAddon(ctx),
     ]
 
 
@@ -196,6 +224,8 @@ def discover_extensions(
     """
     taken = set(taken_ids or ())
     root = extensions_dir()
+    # A rediscovery reports what THIS sweep found, never a stale failure.
+    _LOAD_FAILURES.clear()
     try:
         subdirs = sorted(
             (d for d in root.iterdir() if d.is_dir()), key=lambda d: d.name
@@ -225,6 +255,14 @@ def discover_extensions(
                     raise ValueError("invalid ExtensionSpec: " + "; ".join(problems))
         except Exception as err:  # noqa: BLE001 — containment IS the contract
             _logger.warning("extension %s failed to load: %s", ext_dir.name, err)
+            _LOAD_FAILURES.append(
+                {
+                    "id": ext_dir.name,
+                    "file": str(ext_dir / "extension.py"),
+                    "error": str(err) or type(err).__name__,
+                    "at": time.time(),
+                }
+            )
             continue
         # Stamped by the registrar, not declared by the extension: origin is a
         # fact about where the code came from, and the manifest reports it.
@@ -272,8 +310,14 @@ def register_addons(app: FastAPI, ctx: AppContext) -> List[Addon]:
                 name=f"ext-{addon.id}",
             )
 
+    _REGISTERED[:] = addons
+
     @app.get("/api/addons")
     def addons_manifest() -> JSONResponse:
-        return JSONResponse({"addons": [a.manifest() for a in addons]})
+        # ``failed``: user extensions skipped at startup (Settings → Extensions
+        # lists them with the restart note; Connections shows a row each).
+        return JSONResponse(
+            {"addons": [a.manifest() for a in addons], "failed": load_failures()}
+        )
 
     return addons

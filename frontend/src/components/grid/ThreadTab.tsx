@@ -763,7 +763,7 @@ function FinishedItem({ f }: { f: FinishedChild }) {
           <div className="th-w-acts">
             {f.pr_url && (
               <button type="button" className="th-btn" onClick={() => window.open(f.pr_url, "_blank")}>
-                Open PR ↗
+                View PR ↗
               </button>
             )}
             {f.how === "closed" && (

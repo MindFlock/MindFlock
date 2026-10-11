@@ -6,7 +6,7 @@
  * upgrade keeps every user's layout, order, aliases, and bindings. */
 
 import { create } from "zustand";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import {
   BREAK_DEFAULT_MINUTES,
   clampBreakMinutes,
@@ -15,6 +15,7 @@ import {
 } from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
 import { notePrefWrite } from "../lib/prefs";
+import { toast } from "../lib/toast";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -109,7 +110,6 @@ export type DialogName =
   | "commit"
   | "make-pr"
   | "rename"
-  | "device"
   // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
   // Customize → Prompts: the saved-prompt library.
@@ -121,6 +121,9 @@ export type DialogName =
   | "shortcuts"
   // Repo-level red zones + Plan-first, managed outside any one session.
   | "red-zones"
+  // The templates manager (TemplatesDialog): New → Templates → Manage…, or
+  // the palette's "Templates…". dialogTarget "new" = reopen New on close.
+  | "templates"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
   | "extension";
@@ -169,8 +172,14 @@ interface UiState {
    * lists every open window with its ✕ while other components open them.
    * Not persisted, same reasoning as verifyPanes. */
   specialOpen: SpecialKind[];
-  /** Bulk-selected titles (sidebar checkboxes). */
+  /** Select mode: a plain click on a rail row picks it instead of focusing it.
+   * Entered by Ctrl/⌘-click, Shift-click or a row menu's "Select"; the bulk
+   * bar at the top of the list shows while it is on. */
+  bulkMode: boolean;
+  /** Picked titles — highlighted on the rail rows themselves. */
   bulkSelected: Set<string>;
+  /** The last row picked: where a Shift-click range starts. */
+  bulkAnchor: string | null;
   /** Display aliases: title -> custom label. */
   aliases: Record<string, string>;
   /** Collapsed device groups in the sidebar. */
@@ -185,6 +194,11 @@ interface UiState {
   collapsedFamilies: Set<string>;
   /** Sidebar bars hidden via the footer Customize menu (keys in BAR_KEYS). */
   hiddenBars: Set<string>;
+  /** Customize → "Filter box": show the session filter above the list. Off,
+   * "/" still opens it for one search (filterPeek). */
+  showFilter: boolean;
+  /** The filter box was summoned by "/" while Customize hides it. */
+  filterPeek: boolean;
   /** User drag order of the sidebar bars (keys; see barDefs.ts). Empty = default. */
   barOrder: string[];
   /** Reduce motion: while an agent is running, cover its terminal with a static
@@ -206,10 +220,14 @@ interface UiState {
   hintsEnabled: boolean;
   /** Hint keys the user has dismissed (hidden even while hints are enabled). */
   dismissedHints: Set<string>;
-  /** True once the user has finished/skipped the welcome walkthrough. */
-  tourDone: boolean;
-  /** The walkthrough overlay is currently open (transient, not persisted). */
+  /** The walkthrough overlay is currently open (transient, not persisted).
+   * It never opens by itself: the palette's "Tour", the ? sheet and
+   * Settings → General's Replay open it. */
   tourOpen: boolean;
+  /** The Map tab's tour has been seen (synced pref `map_tour`): it opens itself on a first Map only until then. */
+  mapTourSeen: boolean;
+  /** Remember the Map tour as seen (Done / Skip / Esc). */
+  markMapTourSeen(): void;
   /** Per-session last active tab (agent | terminal | diff | queue). */
   lastTab: Record<string, string>;
   /** The open modal, if any (one at a time, like the vanilla app). */
@@ -260,8 +278,16 @@ interface UiState {
   retitleExtPane(key: string, title: string): void;
   /** Toggle one of the fixed special windows (logs / system logs / chat). */
   toggleSpecial(kind: SpecialKind): void;
+  /** Open / close the bulk bar; closing also drops the selection. */
+  setBulkMode(on: boolean): void;
   toggleBulk(title: string): void;
+  setBulk(titles: string[], on: boolean): void;
+  /** Pick a row from the rail: Ctrl/⌘ toggles it, Shift picks the range from
+   * the last pick (rail order). Either way select mode turns on. */
+  pickRow(title: string, range: boolean): void;
   clearBulk(): void;
+  setShowFilter(on: boolean): void;
+  setFilterPeek(on: boolean): void;
   setAlias(title: string, alias: string): void;
   toggleDeviceCollapsed(device: string): void;
   toggleRunCollapsed(runId: string): void;
@@ -282,9 +308,9 @@ interface UiState {
   setHintsEnabled(on: boolean): void;
   /** Dismiss a single hint by key (persisted). */
   dismissHint(key: string): void;
-  /** Open the welcome walkthrough (first run or a manual replay). */
+  /** Open the welcome walkthrough (a manual replay — never automatic). */
   openTour(): void;
-  /** Close the walkthrough and remember it's been seen. */
+  /** Close the walkthrough. */
   finishTour(): void;
   setLastTab(title: string, tab: string): void;
   openDialogFor(name: DialogName, target?: string | null): void;
@@ -340,7 +366,9 @@ export const useUi = create<UiState>((set, get) => ({
   verifyPanes: [],
   extPanes: [],
   specialOpen: [],
+  bulkMode: false,
   bulkSelected: new Set<string>(),
+  bulkAnchor: null,
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
   collapsedRuns: new Set(load<string[]>("mf_runcollapse", [])),
@@ -352,6 +380,8 @@ export const useUi = create<UiState>((set, get) => ({
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load<string[]>("mf_hiddenbars", [])
   ),
   barOrder: load<string[]>("mf_barorder", []),
+  showFilter: load<boolean>("mf_show_filter", true),
+  filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
   breakReminder: load<boolean>("mf_break_on", false),
   breakEveryMin: clampBreakMinutes(load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)),
@@ -359,8 +389,8 @@ export const useUi = create<UiState>((set, get) => ({
   idleFlockAfterMin: clampIdleMinutes(load<number>("mf_idle_after", IDLE_DEFAULT_MINUTES)),
   hintsEnabled: load<boolean>("mf_hints", true),
   dismissedHints: new Set(load<string[]>("mf_hints_seen", [])),
-  tourDone: load<boolean>("mf_tour_done", false),
   tourOpen: false,
+  mapTourSeen: load<boolean>("mf_map_tour", false) === true,
   lastTab: load<Record<string, string>>("cs_lasttab", {}),
   openDialog: null,
   dialogTarget: null,
@@ -459,24 +489,60 @@ export const useUi = create<UiState>((set, get) => ({
       specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind],
     });
   },
+  setBulkMode: (on) =>
+    set(on ? { bulkMode: true } : { bulkMode: false, bulkSelected: new Set(), bulkAnchor: null }),
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);
     else next.add(title);
+    set({ bulkSelected: next, bulkAnchor: title, bulkMode: true });
+  },
+  pickRow: (title, range) => {
+    const { bulkAnchor, railOrder, bulkSelected } = get();
+    const from = range && bulkAnchor ? railOrder.indexOf(bulkAnchor) : -1;
+    const to = railOrder.indexOf(title);
+    if (from < 0 || to < 0) {
+      get().toggleBulk(title);
+      return;
+    }
+    // A range adds; it never un-picks what was picked outside it. Window
+    // rows ride in railOrder as sentinels — only sessions are picked.
+    const next = new Set(bulkSelected);
+    const [a, b] = from < to ? [from, to] : [to, from];
+    for (const k of railOrder.slice(a, b + 1)) if (!k.startsWith("\u0000")) next.add(k);
+    set({ bulkSelected: next, bulkAnchor: title, bulkMode: true });
+  },
+  setBulk: (titles, on) => {
+    const next = new Set(get().bulkSelected);
+    for (const t of titles) {
+      if (on) next.add(t);
+      else next.delete(t);
+    }
     set({ bulkSelected: next });
   },
-  clearBulk: () => set({ bulkSelected: new Set() }),
+  clearBulk: () => set({ bulkSelected: new Set(), bulkAnchor: null }),
+  setShowFilter: (on) => {
+    save("mf_show_filter", on);
+    set({ showFilter: on, filterPeek: false });
+  },
+  setFilterPeek: (on) => set({ filterPeek: on }),
   setAlias: (title, alias) => {
-    const aliases = { ...get().aliases };
-    if (alias) aliases[title] = alias;
-    else delete aliases[title];
-    save("mf_aliases", aliases);
-    set({ aliases });
-    // Mirror the rename to the server (fire-and-forget delta): the browser
-    // stays the source of truth for rendering, but ntfy pushes are formatted
-    // server-side and would otherwise name sessions by their raw titles.
-    api("/api/aliases", { json: { title, alias: alias || "" } }).catch(() => {
-      /* offline / older server: the push just keeps the raw title */
+    const prev = get().aliases[title] || "";
+    const write = (value: string) => {
+      const aliases = { ...get().aliases };
+      if (value) aliases[title] = value;
+      else delete aliases[title];
+      save("mf_aliases", aliases);
+      set({ aliases });
+    };
+    write(alias);
+    // Mirror the rename to the server: it serves the name to the phone and to
+    // pushes, and it refuses a name another session already has (409) — the
+    // rename is then undone here too, so no two windows share a name.
+    api("/api/aliases", { json: { title, alias: alias || "" } }).catch((err) => {
+      if (!(err instanceof ApiError) || err.status !== 409) return; // offline: keep it
+      if ((get().aliases[title] || "") === alias) write(prev);
+      toast(err.message || `Another session is already named “${alias}”`);
     });
   },
   toggleDeviceCollapsed: (device) => {
@@ -549,11 +615,13 @@ export const useUi = create<UiState>((set, get) => ({
     save("mf_hints_seen", [...next]);
     set({ dismissedHints: next });
   },
-  openTour: () => set({ tourOpen: true }),
-  finishTour: () => {
-    save("mf_tour_done", true);
-    set({ tourOpen: false, tourDone: true });
+  markMapTourSeen: () => {
+    if (get().mapTourSeen) return;
+    save("mf_map_tour", true);
+    set({ mapTourSeen: true });
   },
+  openTour: () => set({ tourOpen: true }),
+  finishTour: () => set({ tourOpen: false }),
   setLastTab: (title, tab) => {
     const lastTab = { ...get().lastTab, [title]: tab };
     save("cs_lasttab", lastTab);
@@ -606,34 +674,95 @@ export function displayName(title: string): string {
   return useUi.getState().aliases[title] || title;
 }
 
-export type TourDecision = "open" | "skip" | "wait";
+// --- New session: the last-used choice, per repo ---------------------------- //
 
-/** Should the welcome walkthrough open itself on this load?
- *
- * `tourDone` alone used to answer this, which is how a returning user who
- * cleared their browser storage — or opened the desktop app on a second machine
- * — got the twelve slides replayed at them. The server already knows better
- * (`general.onboarded`, from /api/config: true once a session has ever
- * existed), so it gets the deciding vote.
- *
- * `onboarded` is undefined until that request resolves, and the answer then is
- * "wait", never "open": popping the tour on a guess is the exact bug. The local
- * flags are still consulted first, so someone who has finished the tour or
- * turned hints off is left alone without waiting on the network.
- *
- * A returning user has by definition created a session, so the server's flag
- * covers the case that matters. What it does not cover is someone who watched the
- * slides, started nothing, and then opened a second device — they see the tour
- * again. That is the accepted price of never reporting the tour itself: the
- * frontend used to POST general.onboarded when the slideshow closed, and since
- * that flag means "this user is running sessions", it silently retired the grid's
- * setup card and the dependency checklist for a user who had neither. */
-export function tourDecision(opts: {
-  tourDone: boolean;
-  hintsEnabled: boolean;
-  onboarded: boolean | undefined;
-}): TourDecision {
-  if (opts.tourDone || !opts.hintsEnabled) return "skip";
-  if (opts.onboarded === undefined) return "wait";
-  return opts.onboarded ? "skip" : "open";
+/** What Name → Enter reuses: the template, agent and account the last
+ * session in that folder was started with. Per browser (this is a hand's
+ * habit, not a setting), keyed by the folder's path; `folder` is the last
+ * folder used anywhere, for the moment before the server's own suggestion
+ * lands. */
+export interface NewSessionChoice {
+  template: string;
+  program: string;
+  profile_id: string;
+}
+
+export const LAST_NEW_SESSION_KEY = "mf_new_session_last";
+
+interface LastNewSession {
+  folder: string;
+  byRepo: Record<string, NewSessionChoice>;
+}
+
+type KV = { getItem(k: string): string | null; setItem(k: string, v: string): void };
+
+function readLastNew(kv: KV | null): LastNewSession {
+  try {
+    const raw = kv ? JSON.parse(kv.getItem(LAST_NEW_SESSION_KEY) || "null") : null;
+    if (raw && typeof raw === "object")
+      return {
+        folder: typeof raw.folder === "string" ? raw.folder : "",
+        byRepo: raw.byRepo && typeof raw.byRepo === "object" ? raw.byRepo : {},
+      };
+  } catch {
+    /* unreadable = never set */
+  }
+  return { folder: "", byRepo: {} };
+}
+
+function lsKV(): KV | null {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The remembered choice for `repo` (else for the last folder used, else
+ * null), and the last folder. */
+export function lastNewSessionChoice(
+  repo: string,
+  kv: KV | null = lsKV()
+): { folder: string; choice: NewSessionChoice | null } {
+  const last = readLastNew(kv);
+  const key = (repo || "").trim() || last.folder;
+  return { folder: last.folder, choice: (key && last.byRepo[key]) || null };
+}
+
+/** Forget the remembered account for `repo` (resolved the way
+ * lastNewSessionChoice reads it) — it was removed, and pre-filling it would
+ * post an id the server refuses. The rest of the entry stays. */
+export function forgetNewSessionProfile(repo: string, kv: KV | null = lsKV()): void {
+  if (!kv) return;
+  const last = readLastNew(kv);
+  const key = (repo || "").trim() || last.folder;
+  const choice = key ? last.byRepo[key] : null;
+  if (!choice || !choice.profile_id) return;
+  const byRepo = { ...last.byRepo, [key]: { ...choice, profile_id: "" } };
+  try {
+    kv.setItem(LAST_NEW_SESSION_KEY, JSON.stringify({ folder: last.folder, byRepo }));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Record what a session was just started with. Only 32 folders are kept:
+ * a habit per repo, not a log. */
+export function rememberNewSessionChoice(
+  repo: string,
+  choice: NewSessionChoice,
+  kv: KV | null = lsKV()
+): void {
+  const folder = (repo || "").trim();
+  if (!folder || !kv) return;
+  const last = readLastNew(kv);
+  const byRepo: Record<string, NewSessionChoice> = { ...last.byRepo };
+  delete byRepo[folder];
+  const entries = Object.entries(byRepo).slice(-31);
+  entries.push([folder, { template: choice.template || "", program: choice.program || "", profile_id: choice.profile_id || "" }]);
+  try {
+    kv.setItem(LAST_NEW_SESSION_KEY, JSON.stringify({ folder, byRepo: Object.fromEntries(entries) }));
+  } catch {
+    /* storage unavailable */
+  }
 }

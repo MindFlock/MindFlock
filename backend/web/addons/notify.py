@@ -5,7 +5,7 @@ The reference implementation of the *generic* extension path — manifest →
 itself in ``window.mindflockAddons`` → ``init(ctx)`` subscribes to the client
 event bus (``window.mindflock.events``). See docs/extensions.md.
 
-What it does: notifies you when a session needs your input (activity →
+What it does: notifies you when a session needs you (activity →
 ``clarify``), when its open PR leaves the review stage (merged / closed), when it
 blows its cost budget, and a few opt-in transitions besides. One rule list
 (:data:`NOTIFY_RULES`), two delivery channels:
@@ -56,12 +56,27 @@ from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 #: emoji shortcodes, kept to widely-supported names.
 NOTIFY_RULES: List[dict] = [
     {
+        # The rail's Offline state (sessionState.ts names this rule id for
+        # its toast and badge gating): the agent process is gone and the chip
+        # offers Restart.
+        "id": "session_offline",
+        "label": "A session went offline",
+        "event": "session.activity_changed",
+        "old": None,
+        "new": "offline",
+        "title": "{session} is offline",
+        "body": "The agent process is gone — Restart it from the rail.",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["zzz"],
+    },
+    {
         "id": "needs_input",
-        "label": "A session needs your input",
+        "label": "A session needs you (Question)",
         "event": "session.activity_changed",
         "old": None,
         "new": "clarify",
-        "title": "{session} needs your input",
+        "title": "{session} needs you: Question",
         "body": "The agent is waiting on a clarification.",
         "default_enabled": True,
         "priority": 4,
@@ -203,11 +218,11 @@ NOTIFY_RULES: List[dict] = [
         # The emitter writes the whole sentence into ``detail`` ("Q4
         # payments: PAY-421 hooks failed twice").
         "id": "run_needs_you",
-        "label": "A group needs you",
+        "label": "A team run needs you",
         "event": "run.needs_you",
         "old": None,
         "new": None,
-        "title": "A group needs you",
+        "title": "A team run needs you",
         "body": "{detail}",
         "default_enabled": True,
         "priority": 4,
@@ -218,11 +233,11 @@ NOTIFY_RULES: List[dict] = [
         # never repeats it; a group that finished while the server was down
         # announces once after the boot quiet window).
         "id": "run_finished",
-        "label": "A group finishes",
+        "label": "A team run finishes",
         "event": "run.finished",
         "old": None,
         "new": None,
-        "title": "A group finished",
+        "title": "A team run finished",
         "body": "{detail}",
         "default_enabled": True,
         "priority": 3,
@@ -232,7 +247,7 @@ NOTIFY_RULES: List[dict] = [
         # Opt-in: every member that reaches its lane. Its rail row and the
         # bell already show these; a push per PR is ambient, not actionable.
         "id": "run_task_shipped",
-        "label": "A group member ships",
+        "label": "A team run member ships",
         "event": "run.task_shipped",
         "old": None,
         "new": None,
@@ -902,6 +917,21 @@ def _ntfy_view() -> dict:
         "subscribe_url": cfg.subscribe_url,
         "last": ntfy.last_result(),
         "suggested_topic": ntfy.random_topic(),
-        # Same renderer as the Settings → Mobile QR; None when segno is absent.
+        # Same renderer as the Settings → Your phone QR; None when segno is absent.
         "qr_svg": mobile_access.qr_svg(cfg.subscribe_url) if cfg.topic else None,
+    }
+
+
+def ntfy_status() -> dict:
+    """The ntfy channel's state for Settings → Connections — never the token
+    or the topic: ``{enabled, configured, active, server, last}`` where
+    ``last`` is :func:`ntfy.last_result` (``{}`` before the first push)."""
+    cfg = ntfy.load()
+    return {
+        "enabled": bool(cfg.enabled),
+        "configured": bool(cfg.configured),
+        "active": bool(cfg.active),
+        # Never userinfo a person typed into the server URL.
+        "server": str(cfg.host or "").rsplit("@", 1)[-1],
+        "last": ntfy.last_result(),
     }

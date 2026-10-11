@@ -26,10 +26,7 @@ import {
 } from "./laneActions";
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
-
-/** Longest `failed_step` that still reads as a hook NAME rather than a line of
- * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
-const STEP_BADGE_MAX = 24;
+import { deriveSessionState, type SessionState } from "./sessionState";
 
 const STAGE_META: Record<string, { label: string }> = {
   provisioning: { label: "provisioning" },
@@ -154,49 +151,11 @@ export function resetStep(inst: Partial<Instance>): NextStep | null {
   };
 }
 
-// --- Live agent activity, debounced across 2 polls (events push instantly) --
-
-const actShown = new Map<string, string>();
-const actPending = new Map<string, { value: string; count: number }>();
-
-export function noteActivity(inst: Instance) {
-  const title = inst.title;
-  const raw = inst.activity || "idle";
-  if (!actShown.has(title)) {
-    actShown.set(title, raw);
-    return;
-  }
-  if (actShown.get(title) === raw) {
-    actPending.delete(title);
-    return;
-  }
-  const p = actPending.get(title);
-  if (p && p.value === raw) {
-    p.count += 1;
-    if (p.count >= 2) {
-      actShown.set(title, raw);
-      actPending.delete(title);
-    }
-  } else {
-    actPending.set(title, { value: raw, count: 1 });
-  }
-}
-
-/** Authoritative push from the event stream — no debounce. */
-export function forceActivity(title: string, value: string) {
-  if (!title) return;
-  actShown.set(title, value || "idle");
-  actPending.delete(title);
-}
-
-export function dropActivity(title: string) {
-  actShown.delete(title);
-  actPending.delete(title);
-}
-
-export function effectiveActivity(inst: Partial<Instance>): string {
-  return actShown.get(inst.title || "") || inst.activity || "idle";
-}
+// --- Live agent activity ------------------------------------------------------
+// The 2-poll debounce moved to lib/sessionState.ts (it is the input every
+// session state reads); re-exported here so the ship ladder's callers keep
+// their import.
+export { noteActivity, forceActivity, dropActivity, effectiveActivity } from "./sessionState";
 
 // --- The one persistent chip -------------------------------------------------
 
@@ -206,81 +165,46 @@ export interface ChipState {
   title: string;
 }
 
+/** The CSS class a session state paints its chip with. The class names are
+ * the old activity words (Pane.tsx keys its reduce-motion cover on
+ * `s-running`); the colour comes from the tone class beside it. */
+const STATE_CLS: Record<SessionState["state"], string> = {
+  starting: "s-provisioning",
+  working: "s-running",
+  needs_you: "s-clarify",
+  idle: "s-idle",
+  limit: "s-limit",
+  offline: "s-offline",
+};
+
+/** The chip for a derived session state alone — no git stage. */
+export function stateChip(ss: SessionState): ChipState {
+  let cls = STATE_CLS[ss.state];
+  if (ss.label === "Paused") cls = "s-paused";
+  else if (ss.label === "Missing") cls = "s-missing";
+  return { label: ss.label, cls: cls + " tone-" + ss.tone, title: ss.hint || ss.label };
+}
+
 /** The pill for a live agent state, on its own — no session, no stage.
  *
  * Split out of `chipState` so a window that has an AGENT but is not a session
- * (the Assistant) is painted from the same five words with the same class and
- * the same tooltip. Two copies of this vocabulary would drift, and the drift
- * would be invisible: both say "running", one of them just says it in the
- * wrong colour.
- */
+ * (the Assistant) is painted from the same words with the same class and the
+ * same tooltip as a session's row: both read `deriveSessionState`. */
 export function activityChip(act: string): ChipState {
-  if (act === "working") return { label: "running", cls: "s-running", title: "Agent is working" };
-  // The word is "question", not the activity value "clarify" (which stays
-  // the value everywhere it is stored or compared, and the class).
-  if (act === "clarify")
-    return {
-      label: "question",
-      cls: "s-clarify",
-      title: "The agent asked you a question — answer it in its pane or from the bell",
-    };
-  if (act === "limit")
-    return {
-      label: "limit",
-      cls: "s-limit",
-      title:
-        "Usage limit reached — the queue waits out the window and auto-resumes when it resets",
-    };
-  if (act === "offline") return { label: "offline", cls: "s-offline", title: "Agent offline" };
-  return { label: "idle", cls: "s-idle", title: "Agent is idle — waiting for input" };
+  return stateChip(deriveSessionState({ title: "", activity: act }, { activity: act }));
 }
 
-export function chipState(inst: Partial<Instance>): ChipState {
-  if (inst.workspace_missing)
-    return {
-      label: "missing",
-      cls: "s-missing",
-      title: "Workspace directory no longer exists — clean up this session",
-    };
-  if (inst.status === "loading")
-    return { label: "provisioning", cls: "s-provisioning", title: "Provisioning workspace" };
-  if (inst.status === "paused")
-    return { label: "paused", cls: "s-paused", title: "Session paused" };
-  if (inst.setup && inst.setup.state === "failed")
-    return {
-      label: "setup ✗",
-      cls: "s-interrupt",
-      title:
-        "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)",
-    };
-  if (inst.setup && inst.setup.state === "running")
-    return {
-      label: "setting up",
-      cls: "s-provisioning",
-      title:
-        "Worktree setup running (deps / env files) — queued prompts are held until it finishes",
-    };
-  const act = effectiveActivity(inst);
-  if (act === "working" || act === "clarify" || act === "limit") return activityChip(act);
+/** The one persistent chip: the session state (lib/sessionState) while the
+ * agent is starting, working, waiting on you, limited or offline; the ship
+ * stage (committed / pushed / PR open / pre-commit) while it sits idle on a
+ * finished branch. Pass the row's already-derived `ss` so the dot beside the
+ * chip is painted from the SAME object. */
+export function chipState(inst: Partial<Instance>, ss: SessionState = deriveSessionState(inst)): ChipState {
+  if (ss.state !== "idle" || ss.label !== "Idle") return stateChip(ss);
   const stage = guidedStage(inst);
-  if (stage === "agent") return activityChip(act === "offline" ? "offline" : "idle");
-  if (stage === "interrupt") {
-    const step = (inst.failed_step || "").trim();
-    // A pre-commit hook NAME is pill-sized ("ruff", "Run Tests (+3)"), and that
-    // is what the badge is for. The server's generic fallback can instead hand
-    // back a whole line of hook output (up to 80 chars) — real detail, but not a
-    // pill: badging it would either overflow the row or force the chip to be
-    // truncated, and a truncated pill is exactly what we don't want. So long
-    // details ride in the tooltip and the badge stays generic.
-    const badgeable = !!step && step.length <= STEP_BADGE_MAX;
-    return {
-      label: badgeable ? "✗ " + step : "pre-commit ✗",
-      cls: "s-interrupt",
-      title: step ? "Pre-commit failed at: " + step : "Pre-commit failed",
-    };
-  }
+  if (stage === "agent" || stage === "interrupt") return stateChip(ss);
   const m = stageMeta(stage);
-  return { label: m.label, cls: "s-" + stage, title: m.label };
+  return { label: m.label, cls: "s-" + stage, title: ss.reason === "stuck" && ss.hint ? ss.hint : m.label };
 }
 
 /** O3 verification-gate chip descriptor (second, smaller chip) or null. */
@@ -685,9 +609,9 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
       // to GitHub's compare page, so the step stays clickable either way; it
       // just renders as a hint that says where the click will land.
       return hasPrSupport(caps)
-        ? { label: "Make PR", run: () => makePrSession(title) }
+        ? { label: "Open PR", run: () => makePrSession(title) }
         : {
-            label: "Make PR ↗",
+            label: "Open PR ↗",
             hint: true,
             title: PR_FALLBACK_HINT,
             run: () => makePrSession(title),
@@ -722,7 +646,7 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url
-        ? { label: "Open PR ↗", run: () => window.open(inst.pr_url!, "_blank") }
+        ? { label: "View PR ↗", run: () => window.open(inst.pr_url!, "_blank") }
         : null;
     default:
       return null; // precommit (running), provisioning

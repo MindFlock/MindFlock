@@ -436,6 +436,32 @@ class ClaudeProvider(BaseProvider):
 
         return dialogs.parse_claude(screen_text)
 
+    def input_holds(self, screen_text: str, sent: str) -> Optional[bool]:
+        # The input box is the last pair of full-width rules on the screen,
+        # with the prompt glyph opening its first row:
+        #     ────────────
+        #     ❯ text the user is composing
+        #       (continuation rows indented)
+        #     ────────────
+        #       ⏵⏵ bypass permissions on …
+        # A long paste shows as "[Pasted text #1 +40 lines]", not its text.
+        lines = (screen_text or "").splitlines()
+        rules = [i for i, ln in enumerate(lines) if ln.strip().startswith("──")]
+        if len(rules) < 2 or rules[-1] - rules[-2] < 2:
+            return None
+        box = lines[rules[-2] + 1 : rules[-1]]
+        first = box[0].strip()
+        if not first.startswith(("❯", ">")):
+            return None
+        held = " ".join([first[1:]] + box[1:]).replace("\xa0", " ")
+        held = " ".join(held.split())
+        if not held:
+            return False
+        want = " ".join(str(sent or "").replace("\xa0", " ").split())
+        if "[Pasted text" in held or (want and want[:40] in held):
+            return True
+        return None
+
     def working_pane_patterns(self) -> tuple:
         # Claude Code renders an interrupt hint on its status line for the whole
         # duration of a live turn — thinking, generating, or running a tool —
