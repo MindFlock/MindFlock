@@ -20,7 +20,7 @@ come from this device's own tag. A source checkout (no release version) pins
 ``main`` and says so.
 
 Desktop users get the same thing as two steps: the app for this version, then
-paste ``<device> <CODE>`` into Settings → Devices → Paste a code
+paste ``<device> <CODE>`` into Settings → Your devices → Paste a code
 (``fleet.classify_code`` reads the device from it).
 """
 

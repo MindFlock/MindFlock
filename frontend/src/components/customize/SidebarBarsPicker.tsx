@@ -50,6 +50,8 @@ export function SidebarBarsPicker() {
   const toggleBarHidden = useUi((s) => s.toggleBarHidden);
   const barOrder = useUi((s) => s.barOrder);
   const openDialogFor = useUi((s) => s.openDialogFor);
+  const showFilter = useUi((s) => s.showFilter);
+  const setShowFilter = useUi((s) => s.setShowFilter);
   // Extension bars appear here too — same defs the sidebar renders, so the
   // list order mirrors the live order, extensions included.
   const extBars = useExtensionBarDefs();
@@ -90,6 +92,22 @@ export function SidebarBarsPicker() {
         })}
       </ul>
       <p className="cz-foot muted">Drag a bar's ⠿ grip in the sidebar to reorder it.</p>
+      <h3 className="cz-heading">Session list</h3>
+      <ul className="cz-bar-list">
+        <li className="cz-bar" data-bar="session-filter">
+          <label className="cz-bar-check">
+            <input
+              type="checkbox"
+              checked={showFilter}
+              onChange={() => setShowFilter(!showFilter)}
+            />
+            <span className="cz-bar-name">Filter box</span>
+          </label>
+          <span className="cz-bar-note muted">
+            Filter sessions by name or branch · hidden, <kbd>/</kbd> still opens it
+          </span>
+        </li>
+      </ul>
     </div>
   );
 }

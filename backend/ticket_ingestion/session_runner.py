@@ -45,6 +45,7 @@ from backend.ticket_ingestion.pr_provisioner import PRProvisioner
 from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 from backend.ticket_ingestion.provisioner import _branch_name_for
 from backend.ticket_ingestion.start_state import move_started, source_key_of
+from backend.ticket_ingestion.tracker_claims import mirror_started
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,9 @@ class SessionRunner:
         # is already live — neither can fail the launch.
         await self._post_start(inst, story)
         await move_started(story, self.config)
+        # …and say on the ticket who is on it, for teammates whose MindFlock
+        # isn't paired with this one (tracker_claims; best-effort).
+        await mirror_started(story, self.config, title=title)
         logger.info(
             "Ticket %s is live in MindFlock session 'mindflock_%s'. "
             "Attach via the MindFlock UI or: tmux attach -t mindflock_%s",

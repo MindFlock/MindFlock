@@ -53,7 +53,7 @@ describe("workerLine leads with the lane", () => {
     expect(
       workerLine({ ...base, activity: "working", activity_since: NOW - 60 }, { nested: true, parentName: "orch", now: NOW }).text
     ).toBe("→ PR · working · 1m");
-    expect(workerLine({ ...base, activity: "clarify" }, { nested: true, parentName: "orch" }).text).toBe("? needs your answer");
+    expect(workerLine({ ...base, activity: "clarify" }, { nested: true, parentName: "orch" }).text).toBe("? needs you · question");
     expect(workerLine({ title: "w2", activity: "working" }, { nested: true, parentName: "orch" }).text).toBe("working");
   });
 });

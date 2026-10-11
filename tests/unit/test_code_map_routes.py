@@ -907,9 +907,16 @@ def test_row_carries_the_monitor_summary(sess, repo):
 
 
 def test_delete_forgets_red_zone_state_before_kill():
-    src = inspect.getsource(server.delete_instance)
+    # DELETE ends the session through core.session_end.end_session: pin the
+    # order there, where the Kill now lives.
+    from backend.web.core import session_end
+
+    assert "_end_session_response(title, wipe=True)" in inspect.getsource(
+        server.delete_instance
+    )
+    src = inspect.getsource(session_end.end_session)
     assert "_red_zone_monitor.forget" in src
-    assert src.index("_red_zone_monitor.forget") < src.index("to_thread(inst.Kill)")
+    assert src.index("_red_zone_monitor.forget") < src.index("inst.Kill()")
 
 
 def test_loop_is_off_under_pytest_unless_asked(monkeypatch):
@@ -1653,3 +1660,156 @@ def test_search_and_entry_points_routes(sess, repo):
     http = [i for i in ep["items"] if i["kind"] == "http"]
     assert http and http[0]["route"] == "/items" and http[0]["method"] == "GET"
     assert http[0]["path"] == "svc/api.py" and ep["total"] >= 1
+
+
+# --------------------------------------------------------------------------- #
+# The boot warmer: the first GET /code-map after a restart is a cache hit
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def no_gap(monkeypatch):
+    monkeypatch.setattr(server, "_CODE_MAP_WARM_GAP_S", 0)
+
+
+def test_warm_all_builds_every_sessions_snapshot(sess, repo, monkeypatch, no_gap):
+    # a second session with no worktree is skipped, not fatal
+    server.ENGINE.instances["bare"] = _FakeInst("bare", str(repo / "missing"))
+    res = server._code_map_warm_all(budget_s=30)
+    assert res["warmed"] == 1 and res["skipped"] == 1 and res["partial"] == []
+    assert code_map.last_graph_partial(str(repo)) is False
+    # the route now answers from the caches: no file is read again
+    real = code_map._read_head
+    n = [0]
+
+    def counting(path):
+        n[0] += 1
+        return real(path)
+
+    monkeypatch.setattr(code_map, "_read_head", counting)
+    r = client.get("/api/instances/rzt/code-map")
+    assert r.status_code == 200 and r.json()["edges"]
+    assert n[0] == 0
+    # with the fingerprint the client holds, it is one "unchanged"
+    r2 = client.get("/api/instances/rzt/code-map?fp=" + r.json()["fingerprint"])
+    assert r2.json() == {"unchanged": True, "fingerprint": r.json()["fingerprint"]}
+
+
+def test_warm_all_is_off_under_pytest_and_by_env(monkeypatch):
+    assert server._code_map_warm_on_start_enabled() is False
+    monkeypatch.setattr(server._restart, "_under_pytest", lambda: False)
+    assert server._code_map_warm_on_start_enabled() is True
+    monkeypatch.setenv("MINDFLOCK_CODE_MAP_WARM", "0")
+    assert server._code_map_warm_on_start_enabled() is False
+
+
+def test_warm_all_with_no_budget_skips_everything(sess, repo, no_gap, monkeypatch):
+    monkeypatch.setattr(
+        server, "_code_map_snapshot", lambda *a: pytest.fail("built past the budget")
+    )
+    server.ENGINE.instances["two"] = _FakeInst("two", str(repo))
+    res = server._code_map_warm_all(budget_s=0)
+    assert res == {"warmed": 0, "skipped": 2, "partial": []}
+
+
+def test_warm_all_without_git_never_touches_the_engine(monkeypatch):
+    monkeypatch.setattr(server, "git_available", lambda: False)
+
+    class _Boom(dict):
+        def __iter__(self):
+            raise AssertionError("enumerated ENGINE.instances without git")
+
+    monkeypatch.setattr(server.ENGINE, "instances", _Boom(), raising=False)
+    assert server._code_map_warm_all() == {"warmed": 0, "skipped": 0, "partial": []}
+
+
+def test_warm_all_skips_a_failing_build_and_carries_on(sess, repo, no_gap, monkeypatch):
+    # REPLACED, never extended: the order matters and so does hermeticity
+    monkeypatch.setattr(
+        server.ENGINE, "instances", {"bad": _FakeInst("bad", str(repo)), "rzt": sess}
+    )
+    real = server._code_map_snapshot
+    seen = []
+
+    def snap(inst, wt, fp=""):
+        seen.append(inst.Title)
+        if inst.Title == "bad":
+            raise RuntimeError("boom")
+        return real(inst, wt, fp)
+
+    monkeypatch.setattr(server, "_code_map_snapshot", snap)
+    res = server._code_map_warm_all(budget_s=30)
+    assert seen == ["bad", "rzt"]
+    assert res == {"warmed": 1, "skipped": 1, "partial": []}
+
+
+def test_warm_all_names_the_sessions_left_partial(sess, repo, no_gap, monkeypatch):
+    monkeypatch.setattr(code_map, "GRAPH_BUDGET_S", -1.0)  # nothing new is read
+    res = server._code_map_warm_all(budget_s=30)
+    assert res == {"warmed": 1, "skipped": 0, "partial": ["rzt"]}
+
+
+class _Log:
+    def __init__(self):
+        self.lines = []
+
+    def Printf(self, fmt, *args):  # noqa: N802
+        self.lines.append(fmt % args)
+
+
+def test_warm_on_start_logs_once_and_swallows_failures(monkeypatch):
+    logger = _Log()
+    monkeypatch.setattr(server.log, "ErrorLog", logger)
+    monkeypatch.setattr(server, "_CODE_MAP_WARM_DELAY_S", 0)
+    monkeypatch.setattr(
+        server,
+        "_code_map_warm_all",
+        lambda: {"warmed": 2, "skipped": 0, "partial": ["big"]},
+    )
+    asyncio.run(server._code_map_warm_on_start())
+    assert logger.lines == ["code map warmed for 2 session(s) (partial: big)"]
+
+    # nothing warmed: nothing logged
+    logger.lines.clear()
+    monkeypatch.setattr(
+        server, "_code_map_warm_all", lambda: {"warmed": 0, "skipped": 3, "partial": []}
+    )
+    asyncio.run(server._code_map_warm_on_start())
+    assert logger.lines == []
+
+    def boom():
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(server, "_code_map_warm_all", boom)
+    asyncio.run(server._code_map_warm_on_start())  # does not raise
+    assert logger.lines == []
+
+
+def test_warm_on_start_lets_cancellation_through(monkeypatch):
+    monkeypatch.setattr(server, "_CODE_MAP_WARM_DELAY_S", 60)
+    monkeypatch.setattr(
+        server, "_code_map_warm_all", lambda: pytest.fail("warmed after cancel")
+    )
+
+    async def run():
+        t = asyncio.ensure_future(server._code_map_warm_on_start())
+        await asyncio.sleep(0)
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+
+    asyncio.run(run())
+
+
+def test_lifespan_does_not_start_the_warmer_under_pytest(monkeypatch):
+    names = []
+
+    def record(coro):
+        names.append(getattr(coro, "__name__", ""))
+        coro.close()
+
+    monkeypatch.setattr(server, "_register_task", record)
+    with TestClient(server.app):
+        pass
+    assert names, "the lifespan registered nothing — the recorder never ran"
+    assert "_code_map_warm_on_start" not in names

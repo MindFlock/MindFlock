@@ -370,7 +370,7 @@ describe("Sidebar: run groups never renumber the rail", () => {
     const by = (t: string) => r.find((x) => x.title === t)!.html;
     expect(by("c")).toContain('<span class="sl-lead">→ PR</span>');
     expect(by("solo")).toContain('<span class="sl-lead">→ commit, asks first</span>');
-    expect(by("d")).toContain('<span class="sl-lead">? needs your answer</span>');
+    expect(by("d")).toContain('<span class="sl-lead">? needs you · question</span>');
     // d is in no family, but it is in a group: its prompt is answerable in place
     // (the strip's dialog loads client-side; the focus stop is the SSR tell).
     expect(by("d")).toContain('tabindex="0"');

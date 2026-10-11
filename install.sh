@@ -23,7 +23,9 @@
 #      you get). uv fetches a suitable Python by itself, builds in an isolated
 #      venv, and links the `mindflock` command into ~/.local/bin. Re-running
 #      upgrades in place — and restarts a MindFlock server already running on
-#      this machine so it serves the new version (step 5).
+#      this machine so it serves the new version (step 5). What was installed
+#      (method, ref, commit, Python, time) is recorded in
+#      ~/.mindflock/install.json so `mindflock update` follows the same path.
 #   4. Runs `mindflock doctor` so you immediately see which runtime
 #      dependencies (git, tmux, your agent CLI — plus the optional gh) still need
 #      installing — with the exact install command for your platform. gh is
@@ -59,9 +61,14 @@ set -eu
 # Bump both together (sha256 of https://astral.sh/uv/<version>/install.sh).
 UV_PINNED_VERSION="0.11.29"
 UV_INSTALLER_SHA256="504a79fd2ed0dcd47e7f04f0792cfd0871f62e24a7fe40fa8ae0f563a369f2bd"  # pragma: allowlist secret
+# The interpreter uv pins the tool venv to. Kept in step with INSTALL_PYTHON in
+# backend/web/core/self_update.py (the in-app updater runs the same install).
+INSTALL_PYTHON="3.12"
 
 say()  { printf '\033[1;36m[mindflock]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[mindflock] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+# A value as the inside of a JSON string (backslashes and quotes escaped).
+json_str() { printf %s "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 JOIN=""
 while [ $# -gt 0 ]; do
@@ -188,8 +195,20 @@ latest_release_tag() {
   case "$tag" in v[0-9]*) printf %s "$tag" ;; esac
 }
 
+# Shaped like a release tag (v0.7.5) — the same rule as is_release_tag() in
+# backend/web/core/self_update.py.
+is_release_tag() {
+  printf %s "$1" | grep -Eq '^v?[0-9]+(\.[0-9]+){1,3}$'
+}
+
+PINNED=""
 if [ -n "${MINDFLOCK_INSTALL_LOCAL:-}" ]; then
   SPEC="mindflock[web] @ file://$MINDFLOCK_INSTALL_LOCAL"
+  # The record below names the checkout's commit when it is a git checkout
+  # (CI's cold-install job asserts it is the one under test).
+  REF="local"
+  PINNED="$(git -C "$MINDFLOCK_INSTALL_LOCAL" rev-parse HEAD 2>/dev/null || true)"
+  SOURCE_FIELD="\"path\":\"$(json_str "$MINDFLOCK_INSTALL_LOCAL")\""
   say "installing MindFlock from local checkout $MINDFLOCK_INSTALL_LOCAL…"
 else
   # Resolve the branch/tag to a full commit SHA and install THAT, so the ref
@@ -202,10 +221,16 @@ else
       say "newest release: $REF (set MINDFLOCK_INSTALL_REF=main for unreleased code)"
     else
       REF="main"
-      say "WARNING: couldn't find the newest release — installing main instead"
+      say "WARNING: couldn't find the newest release — installing main instead:"
+      say "         an unreleased build; the desktop app pins releases"
     fi
+  elif ! is_release_tag "$REF"; then
+    # A branch or a bare commit was asked for: say so, because the desktop
+    # app installs the release matching its own version and an engine AHEAD
+    # of it is what its downgrade path trips over.
+    say "WARNING: MINDFLOCK_INSTALL_REF=$REF is not a release tag — installing an unreleased build; the desktop app pins releases"
   fi
-  PINNED=""
+  SOURCE_FIELD="\"repo\":\"$(json_str "$REPO")\""
   if [ "${#REF}" -eq 40 ] && [ -z "$(printf %s "$REF" | tr -d '0-9a-f')" ]; then
     PINNED="$REF"
   fi
@@ -224,12 +249,38 @@ else
   say "installing MindFlock from $REPO@$REF (commit $PINNED)…"
 fi
 # --force makes re-runs an in-place upgrade instead of an error (idempotent).
-uv tool install --force --python 3.12 "$SPEC"
+# An engine first installed with pipx stays a pipx install: `mindflock update`
+# and the desktop updater both come through here and must not turn it into a
+# second, uv-tool copy under the same `mindflock` shim.
+INSTALL_METHOD="uv-tool"
+if [ -r "$HOME/.mindflock/install.json" ] && grep -q '"method": *"pipx"' "$HOME/.mindflock/install.json" 2>/dev/null && command -v pipx >/dev/null 2>&1; then
+  say "this engine was installed with pipx — keeping it that way"
+  pipx install --force "$SPEC"
+  INSTALL_METHOD="pipx"
+else
+  uv tool install --force --python "$INSTALL_PYTHON" "$SPEC"
+fi
 
 command -v mindflock >/dev/null 2>&1 || fail "install finished but \`mindflock\` is not on PATH.
 Add ~/.local/bin to PATH (uv prints the exact line), then re-run: mindflock doctor"
 MF="$(command -v mindflock)"
 say "installed: $MF ($("$MF" --version 2>/dev/null || echo mindflock))"
+
+# Record what was installed, next to the engine's own state (state.json,
+# update.json live in ~/.mindflock — the engine's config dir honours $HOME and
+# nothing else, backend/config/config.py GetConfigDir). `mindflock update`
+# reads it to follow the same path — method, ref, commit, Python — and detects
+# the install when the file is missing, so failing to write it is a warning,
+# not a failure.
+STATE_DIR="$HOME/.mindflock"
+INSTALL_RECORD="$STATE_DIR/install.json"
+if mkdir -p "$STATE_DIR" 2>/dev/null && printf '{"method":"'"$INSTALL_METHOD"'","ref":"%s","sha":"%s","python":"%s","at":"%s",%s}\n' \
+    "$(json_str "$REF")" "$(json_str "$PINNED")" "$INSTALL_PYTHON" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SOURCE_FIELD" > "$INSTALL_RECORD" 2>/dev/null; then
+  say "recorded the install in $INSTALL_RECORD"
+else
+  say "WARNING: couldn't write $INSTALL_RECORD — mindflock update will detect this install instead"
+fi
 
 # Make sure FUTURE shells find it too: `uv tool update-shell` appends the
 # ~/.local/bin PATH line to the shell rc if (and only if) it's missing.
@@ -298,9 +349,11 @@ say ""
 if has_tty; then
   say "Done. Next steps:"
   say "  1. fix anything ✗ above (re-run: $MF doctor --fix — installs it all in one go)"
-  say "  2. cd into a git repo you want to work on"
+  say "  2. run: $MF init    →  guided first run: dependencies, your agent's sign-in,"
+  say "     GitHub, your first repo (in a new terminal, plain \`mindflock init\` works too)"
   say "  3. run: $MF serve   →  open http://127.0.0.1:$PORT_"
-  say "     (in a new terminal, plain \`mindflock\` works too)"
+  say "     Prefer an app? The desktop app does all of this for you:"
+  say "     https://github.com/MindFlock/MindFlock/releases/latest"
 else
   say "Done."
 fi

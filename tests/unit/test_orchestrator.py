@@ -83,6 +83,16 @@ def _no_pre_launch_recheck(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_tracker_claim_check(monkeypatch):
+    """``process_story`` also asks the tracker whether a teammate is on the
+    ticket (tracker_claims) — another doomed network read with these fake
+    tokens. tests/unit/test_tracker_claims.py covers it."""
+    monkeypatch.setattr(
+        PipelineOrchestrator, "_tracker_claim_now", AsyncMock(return_value=None)
+    )
+
+
 @pytest.fixture
 def config(tmp_path):
     """Create a test PipelineConfig."""

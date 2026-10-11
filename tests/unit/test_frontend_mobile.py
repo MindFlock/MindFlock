@@ -299,11 +299,13 @@ def test_mobile_js_updateactions_gates_on_instance():
 
 def test_mobile_js_dopush_soft_gate_override():
     # O3 soft gate: if the server rejects with the "checks haven't passed"
-    # message, confirm then retry with force — exactly the desktop pushSession
-    # flow. Any other error just flashes status.
+    # message, ask on the inline sheet then retry with force for the SAME
+    # session — exactly the desktop pushSession flow. Any other error just
+    # flashes status.
     js = client.get("/mobile.js").text
     assert 'err.message === "checks haven\'t passed for this commit"' in js
-    assert "doPush(true);" in js
+    assert '"Push anyway",' in js
+    assert "doPush(true, title, overrideRz);" in js
     assert 'flashStatus("push failed: " + err.message)' in js
 
 
@@ -316,7 +318,7 @@ def test_mobile_js_submit_commit_behavior():
     assert 'switchTab("shell");' in js
     assert 'commitText.value = "";' in js
     # POST {message} to the commit endpoint.
-    assert 'postAction("commit", { message: msg })' in js
+    assert 'postAction("commit", body)' in js and "proceed_anyway: true" in js
 
 
 def test_mobile_js_postaction_contract():
@@ -324,7 +326,7 @@ def test_mobile_js_postaction_contract():
     # server's {error} message on a non-ok response (same contract app.js speaks).
     js = client.get("/mobile.js").text
     assert (
-        'if (!r.ok) throw new Error((j && j.error) || "request failed (" + r.status + ")");'
+        'if (!r.ok) throw apiError((j && j.error) || "request failed (" + r.status + ")", r.status, j);'
         in js
     )
     assert "return j;" in js

@@ -3,6 +3,7 @@ output/exit codes, missing-web-deps hint, and the source-repo CWD guard."""
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
@@ -255,6 +256,35 @@ class TestDoctorFix:
         assert len(ran) == 2
         assert "npm i codex" in ran[0]
         assert ran[1] == "codex login"
+
+    def test_a_per_provider_login_gets_the_hint_and_a_reprobe(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        # "agent-auth-<name>" rows (a CLI some other setting launches) get the
+        # same "/exit to come back" hint as the default's, and are re-probed
+        # one CLI at a time — CHECKS_BY_ID has no entry for them.
+        row = Check(
+            "agent-auth-codex", "agent auth (codex — PR review)", "warn", cmd="codex"
+        )
+        monkeypatch.setattr(doctor, "run_checks", lambda: [row])
+        probed = []
+
+        def _probe(cid, name, label):
+            probed.append((cid, name, label))
+            return Check(cid, label, "ok", "signed in")
+
+        monkeypatch.setattr(doctor, "_agent_auth_check", _probe)
+        monkeypatch.setattr(
+            cli.subprocess,
+            "run",
+            lambda cmd, shell: type("P", (), {"returncode": 0})(),
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+        cli.main(["doctor", "--fix"])
+        out = capsys.readouterr().out
+        assert "to come back here" in out
+        assert probed == [("agent-auth-codex", "codex", row.label)]
+        assert "signed in" in out
 
     def test_checks_without_cmd_are_not_offered(self, monkeypatch, capsys, tty_stdin):
         monkeypatch.setattr(
@@ -878,7 +908,8 @@ class TestStdoutTty:
 
 
 class TestRmCommand:
-    """L10: `mindflock rm TITLE [--yes]` → DELETE /api/instances/{title}."""
+    """`mindflock rm TITLE... [--yes]` → POST /api/instances/{title}/close
+    (agent stops, worktree + branch kept); `--wipe` → POST .../cleanup."""
 
     _LISTING = [
         {"title": "fix-auth"},
@@ -887,7 +918,8 @@ class TestRmCommand:
     ]
 
     @pytest.fixture()
-    def deleted(self, monkeypatch):
+    def posted(self, monkeypatch):
+        """Record every POST path; DELETE must never be used by rm any more."""
         calls = []
         monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
         monkeypatch.setattr(
@@ -895,57 +927,105 @@ class TestRmCommand:
         )
         monkeypatch.setattr(
             client,
+            "post",
+            lambda base, path, payload=None, timeout=None: calls.append(path)
+            or {"ok": True},
+        )
+        monkeypatch.setattr(
+            client,
             "delete",
-            lambda base, path, timeout=None: calls.append(path) or {"ok": True},
+            lambda *a, **k: pytest.fail("rm must not DELETE (that wipes the worktree)"),
         )
         return calls
 
-    def test_yes_flag_skips_prompt(self, deleted, monkeypatch, capsys):
+    @pytest.fixture()
+    def tty_stdin(self, monkeypatch):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    @pytest.fixture()
+    def no_tty_stdin(self, monkeypatch):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+    # -- default: close (keeps the worktree + branch) -------------------------
+
+    def test_yes_flag_closes_without_prompt(self, posted, monkeypatch, capsys):
         monkeypatch.setattr(
             "builtins.input", lambda *a: pytest.fail("must not prompt with --yes")
         )
         assert cli.main(["rm", "docs", "--yes"]) == 0
-        assert deleted == ["/api/instances/docs"]
+        assert posted == ["/api/instances/docs/close"]
         out = capsys.readouterr().out
-        assert "removed session docs" in out
-        assert "worktree kept" in out
+        assert "closed session docs" in out
+        assert "worktree and branch kept" in out
+        assert "Recently closed" in out
 
-    def test_prompt_accepts_y(self, deleted, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    def test_prompt_says_what_happens_and_accepts_y(self, posted, monkeypatch):
+        seen = {}
+
+        def _input(prompt):
+            seen["prompt"] = prompt
+            return "y"
+
+        monkeypatch.setattr("builtins.input", _input)
         assert cli.main(["rm", "fix-auth"]) == 0
-        assert deleted == ["/api/instances/fix-auth"]
+        assert posted == ["/api/instances/fix-auth/close"]
+        assert "'fix-auth'" in seen["prompt"]
+        assert "worktree and branch are kept" in seen["prompt"]
+        assert "[y/N]" in seen["prompt"]
 
-    def test_prompt_declined_deletes_nothing(self, deleted, monkeypatch, capsys):
+    def test_prompt_declined_ends_nothing(self, posted, monkeypatch, capsys):
         monkeypatch.setattr("builtins.input", lambda prompt: "n")
         assert cli.main(["rm", "fix-auth"]) == 0
-        assert deleted == []
+        assert posted == []
         assert "aborted" in capsys.readouterr().out
 
-    def test_prompt_eof_aborts_with_error(self, deleted, monkeypatch, capsys):
+    def test_prompt_eof_aborts_with_error(self, posted, monkeypatch, capsys):
         def _eof(prompt):
             raise EOFError
 
         monkeypatch.setattr("builtins.input", _eof)
         assert cli.main(["rm", "fix-auth"]) == 1
-        assert deleted == []
+        assert posted == []
         assert "aborted" in capsys.readouterr().err
 
-    def test_unambiguous_prefix_resolves(self, deleted, monkeypatch):
+    def test_several_titles_one_prompt(self, posted, monkeypatch):
+        prompts = []
+
+        def _input(prompt):
+            prompts.append(prompt)
+            return "y"
+
+        monkeypatch.setattr("builtins.input", _input)
+        assert cli.main(["rm", "docs", "fix-auth"]) == 0
+        assert posted == ["/api/instances/docs/close", "/api/instances/fix-auth/close"]
+        assert len(prompts) == 1
+        assert "'docs'" in prompts[0] and "'fix-auth'" in prompts[0]
+
+    def test_unambiguous_prefix_resolves(self, posted, monkeypatch):
         monkeypatch.setattr("builtins.input", lambda prompt: "yes")
         assert cli.main(["rm", "do"]) == 0
-        assert deleted == ["/api/instances/docs"]
+        assert posted == ["/api/instances/docs/close"]
 
-    def test_ambiguous_prefix_lists_candidates(self, deleted, capsys):
+    def test_duplicate_titles_collapse(self, posted):
+        assert cli.main(["rm", "do", "docs", "--yes"]) == 0
+        assert posted == ["/api/instances/docs/close"]
+
+    def test_ambiguous_prefix_lists_candidates(self, posted, capsys):
         assert cli.main(["rm", "fix", "--yes"]) == 1
         err = capsys.readouterr().err
         assert "fix-auth" in err and "fix-tests" in err
-        assert deleted == []
+        assert posted == []
 
-    def test_unknown_title_friendly_error(self, deleted, capsys):
+    def test_unknown_title_friendly_error(self, posted, capsys):
         assert cli.main(["rm", "nope", "--yes"]) == 1
         err = capsys.readouterr().err
         assert "no session named" in err and "mindflock ls" in err
-        assert deleted == []
+        assert posted == []
+
+    def test_one_bad_title_ends_none_of_them(self, posted, capsys):
+        # All titles resolve before anything is ended: a typo costs nothing.
+        assert cli.main(["rm", "docs", "nope", "--yes"]) == 1
+        assert posted == []
 
     def test_no_server_exits_one_with_hint(self, monkeypatch, capsys):
         monkeypatch.setattr(
@@ -955,6 +1035,123 @@ class TestRmCommand:
         )
         assert cli.main(["rm", "docs", "--yes"]) == 1
         assert "mindflock serve" in capsys.readouterr().err
+
+    def test_help_text_names_both_outcomes(self):
+        parser = cli._build_parser()
+        rm = next(
+            a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
+        ).choices["rm"]
+        text = " ".join(rm.format_help().split())
+        assert "worktree and branch stay on disk" in text
+        assert "Recently closed" in text
+        assert "--wipe" in text and "delete" in text
+        # …and the one-liner in the top-level command list says the same.
+        top = " ".join(parser.format_help().split())
+        assert "keep the worktree and branch" in top
+
+    # -- --wipe: cleanup (deletes the worktree + branch) ----------------------
+
+    def test_wipe_yes_hits_cleanup_route(self, posted, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: pytest.fail("must not prompt with --yes")
+        )
+        assert cli.main(["rm", "--wipe", "docs", "--yes"]) == 0
+        assert posted == ["/api/instances/docs/cleanup"]
+        out = capsys.readouterr().out
+        assert "deleted session docs" in out
+
+    def test_wipe_on_tty_asks_y_n_naming_the_loss(self, posted, monkeypatch, tty_stdin):
+        seen = {}
+
+        def _input(prompt):
+            seen["prompt"] = prompt
+            return "y"
+
+        monkeypatch.setattr("builtins.input", _input)
+        assert cli.main(["rm", "--wipe", "fix-auth", "docs"]) == 0
+        assert posted == [
+            "/api/instances/fix-auth/cleanup",
+            "/api/instances/docs/cleanup",
+        ]
+        assert "[y/N]" in seen["prompt"]
+        assert "DELETES the worktree and branch" in seen["prompt"]
+        assert "'fix-auth'" in seen["prompt"] and "'docs'" in seen["prompt"]
+
+    def test_wipe_declined_wipes_nothing(self, posted, monkeypatch, tty_stdin, capsys):
+        monkeypatch.setattr("builtins.input", lambda prompt: "")
+        assert cli.main(["rm", "--wipe", "docs"]) == 0
+        assert posted == []
+        assert "aborted" in capsys.readouterr().out
+
+    def test_wipe_without_tty_and_without_yes_refuses(
+        self, posted, monkeypatch, no_tty_stdin, capsys
+    ):
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: pytest.fail("must not prompt off a TTY")
+        )
+        assert cli.main(["rm", "--wipe", "docs"]) == 1
+        assert posted == []
+        err = capsys.readouterr().err
+        assert "--yes" in err and "terminal" in err and "'docs'" in err
+
+    def test_wipe_without_tty_but_with_yes_proceeds(self, posted, no_tty_stdin):
+        assert cli.main(["rm", "--wipe", "docs", "--yes"]) == 0
+        assert posted == ["/api/instances/docs/cleanup"]
+
+    def test_wipe_409_prints_sessions_and_exits_one(self, monkeypatch, capsys):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            calls.append(path)
+            if path == "/api/instances/docs/cleanup":
+                raise client.ApiError(
+                    409,
+                    "folder in use",
+                    {"error": "folder in use", "sessions": ["docs-copy", "docs-2"]},
+                )
+            return {"ok": True}
+
+        monkeypatch.setattr(client, "post", _post)
+        # The other title is still wiped; the exit code reports the refusal.
+        assert cli.main(["rm", "--wipe", "docs", "fix-auth", "--yes"]) == 1
+        assert calls == [
+            "/api/instances/docs/cleanup",
+            "/api/instances/fix-auth/cleanup",
+        ]
+        captured = capsys.readouterr()
+        assert "docs-copy" in captured.err and "docs-2" in captured.err
+        assert "'docs'" in captured.err
+        assert "deleted session fix-auth" in captured.out
+
+    def test_wipe_409_with_title_rows(self, monkeypatch, capsys):
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            raise client.ApiError(409, "in use", {"sessions": [{"title": "docs-copy"}]})
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["rm", "--wipe", "docs", "--yes"]) == 1
+        assert "docs-copy" in capsys.readouterr().err
+
+    def test_wipe_other_api_error_is_a_plain_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            raise client.ApiError(404, "no such session")
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["rm", "--wipe", "docs", "--yes"]) == 1
+        assert "no such session" in capsys.readouterr().err
 
 
 class TestClientDelete:

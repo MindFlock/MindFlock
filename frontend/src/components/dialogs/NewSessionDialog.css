@@ -1679,3 +1679,288 @@
 .preset-name-row .muted {
   font-size: 11.5px;
 }
+
+/* --- Templates dialog (TemplatesDialog.tsx) ------------------------------- */
+/* The same card as #rename-form (smallDialogs.css), wider: a template's
+   prompt is a paragraph, and its folder a path. Lives here rather than in a
+   file of its own because it is the New dialog's manager and shares its
+   chips' vocabulary (.new-templates). */
+#templates-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(600px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text);
+}
+
+.tpl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tpl-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#templates-close,
+.tpl-btn,
+.tpl-new {
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+#templates-close:hover,
+.tpl-btn:hover:not(:disabled),
+.tpl-new:hover {
+  border-color: var(--accent);
+}
+
+.tpl-btn:disabled {
+  opacity: .6;
+  cursor: default;
+}
+
+.tpl-del {
+  color: var(--red);
+}
+
+.tpl-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.tpl-new {
+  align-self: flex-start;
+}
+
+.tpl-empty {
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.tpl-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tpl-card-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tpl-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.tpl-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* The prompt, clipped to three lines: the card is a list row, not the editor. */
+.tpl-prompt {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.tpl-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* The inline "delete?" row — IN the card, never a browser dialog (Electron
+   has none). Tinted so the question is unmistakably about this card. */
+.tpl-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.tpl-confirm > span {
+  flex: 1 1 auto;
+}
+
+.tpl-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-card-editing {
+  border-color: var(--accent);
+}
+
+.tpl-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tpl-editor label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.tpl-editor input,
+.tpl-editor textarea,
+.tpl-editor select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tpl-editor input:focus,
+.tpl-editor textarea:focus,
+.tpl-editor select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tpl-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .tpl-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tpl-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.tpl-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+}
+
+.tpl-row-actions button[type=submit] {
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+
+/* --- New dialog: the describe row on the form, and the Base branch picker -- */
+/* "Describe it instead…" — the secondary door to the model-filled form. A
+   quiet row until opened; the box it opens is the same strip page 1 used to
+   be, in the card the Templates strip wears. */
+.nf-describe-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#new-describe-open {
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+#new-describe-open:hover {
+  border-color: var(--accent);
+}
+
+.nf-describe-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.nf-base-branch {
+  margin-top: 8px;
+}
+
+.nf-base-branch select {
+  max-width: 100%;
+}
+
+/* The fold's summary carries the choice it hides, so a closed fold still
+   reports where the session will run and what it is cut from. */
+.nf-advanced > summary .nf-fold-sum {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 4px;
+}

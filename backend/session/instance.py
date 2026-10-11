@@ -534,8 +534,12 @@ class Instance:
             self._git_worktree = git_worktree
             self.Branch = branch_name
 
-    def _configure_launch_command(self) -> None:
+    def _configure_launch_command(self, resume: bool = False) -> None:
         """Resolve the coding provider and set the tmux launch command.
+
+        ``resume=True`` (a Resume relaunch into the kept worktree) asks the
+        provider for its resume form of the command, so the agent picks the
+        conversation back up instead of re-sending the seed prompt.
 
         Called from :meth:`Start` after the git worktree is set up and before
         the tmux session is created. Reads ``self.Program``/``Prompt``/
@@ -553,7 +557,7 @@ class Instance:
         # Best-effort: a failure here just falls back to running program.
         if getattr(self, "PeerShare", ""):
             # A shared-folder session: sandboxed, or not started (raises).
-            self._configure_peer_launch_command(resume=False)
+            self._configure_peer_launch_command(resume=resume)
             return
         from backend import providers as _providers
         from backend.providers import LaunchContext as _LaunchContext
@@ -563,8 +567,8 @@ class Instance:
         _ctx = _LaunchContext(
             program=self.Program,
             workdir=_wt_path,
-            prompt=self.Prompt,
-            resume=False,
+            prompt="" if resume else self.Prompt,
+            resume=resume,
             skip_permissions=False,
             in_place=bool(getattr(self, "InPlace", False)),
             session_name=self._tmux_session.sanitized_name,
@@ -892,12 +896,17 @@ class Instance:
         return self.Status == Status.Paused
 
     def Pause(self) -> None:
-        """Stop the tmux session and remove the worktree, keeping the branch.
+        """Stop the agent and keep the worktree and branch exactly as they are.
 
-        Mirrors Go ``Pause`` exactly, including the orphaned-worktree fast path,
-        the dirty-changes commit (message uses RFC822 time), early returns on
-        commit/remove/prune failure, and copying the branch name to the
-        clipboard before returning.
+        Kills the tmux session (the PTY goes with it) and marks the instance
+        ``Paused``. Nothing is committed and nothing is removed: a paused
+        session is the same folder and the same branch with no agent in it,
+        and :meth:`Resume` relaunches the agent there. The branch name is
+        copied to the clipboard, as before.
+
+        (The old scheme committed the dirty tree under the user's identity and
+        removed the checkout; both lost work. Sessions paused that way still
+        resume — see the legacy branch of :meth:`Resume`.)
         """
         if not self._started:
             raise RuntimeError("cannot pause instance that has not been started")
@@ -905,98 +914,14 @@ class Instance:
             raise RuntimeError("instance is already paused")
 
         errs: List[BaseException] = []
-
-        # Orphaned-worktree handling: if the path or .git is missing, git can't
-        # operate on it. Skip dirty check + Remove, prune metadata, then pause.
-        valid = None
-        try:
-            valid = self._git_worktree.IsValidWorktree()
-        except Exception as err:  # noqa: BLE001
-            errs.append(RuntimeError("failed to validate worktree: {}".format(err)))
-            if log.ErrorLog is not None:
-                log.ErrorLog.Print(err)
-
-        if valid is False:
-            self._pause_orphaned_worktree(errs)
-            combined = self._combine_errors(errs)
-            if combined is not None:
-                raise combined
-            return
-
-        # Check if there are any changes to commit.
-        dirty = None
-        try:
-            dirty = self._git_worktree.IsDirty()
-        except Exception as err:  # noqa: BLE001
+        cerr = self._tmux_session.close()
+        if cerr is not None:
             errs.append(
-                RuntimeError("failed to check if worktree is dirty: {}".format(err))
+                RuntimeError("failed to close tmux session: {}".format(_err_text(cerr)))
             )
             if log.ErrorLog is not None:
-                log.ErrorLog.Print(err)
-
-        if dirty:
-            # Commit changes locally (without pushing to GitHub).
-            commit_msg = "[mindflock] update from '{}' on {} (paused)".format(
-                self.Title, _format_rfc822(_datetime.datetime.now().astimezone())
-            )
-            try:
-                self._git_worktree.CommitChanges(commit_msg)
-            except Exception as err:  # noqa: BLE001
-                errs.append(RuntimeError("failed to commit changes: {}".format(err)))
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(err)
-                # Return early if we can't commit to avoid corrupted state.
-                combined = self._combine_errors(errs)
-                if combined is not None:
-                    raise combined
-                return
-
-        # Detach from tmux instead of closing to preserve session output.
-        derr = self._tmux_session.detach_safely()
-        if derr is not None:
-            errs.append(
-                RuntimeError(
-                    "failed to detach tmux session: {}".format(_err_text(derr))
-                )
-            )
-            if log.ErrorLog is not None:
-                log.ErrorLog.Print(derr)
-            # Continue with pause process even if detach fails.
-
-        # Check if worktree exists before trying to remove it.
-        path_exists = True
-        try:
-            os.stat(self._git_worktree.GetWorktreePath())
-        except OSError:
-            path_exists = False
-        if path_exists:
-            # Remove worktree but keep branch.
-            try:
-                self._git_worktree.Remove()
-            except Exception as err:  # noqa: BLE001
-                errs.append(
-                    RuntimeError("failed to remove git worktree: {}".format(err))
-                )
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(err)
-                combined = self._combine_errors(errs)
-                if combined is not None:
-                    raise combined
-                return
-
-            # Only prune if remove was successful.
-            try:
-                self._git_worktree.Prune()
-            except Exception as err:  # noqa: BLE001
-                errs.append(
-                    RuntimeError("failed to prune git worktrees: {}".format(err))
-                )
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(err)
-                combined = self._combine_errors(errs)
-                if combined is not None:
-                    raise combined
-                return
+                log.ErrorLog.Print(cerr)
+            # The agent may be gone already (a tmux that died); pause anyway.
 
         self.SetStatus(Status.Paused)
         _clipboard_write(self._git_worktree.GetBranchName())
@@ -1007,67 +932,63 @@ class Instance:
                 log.ErrorLog.Print(combined)
             raise combined
 
-    def _pause_orphaned_worktree(self, errs: List[BaseException]) -> None:
-        """Pause a session whose worktree is orphaned (path or ``.git`` missing).
+    def _worktree_present(self) -> bool:
+        """Whether the paused session's checkout is still on disk and usable.
 
-        Git cannot operate on the worktree, so the dirty check and ``Remove``
-        are skipped: detach tmux, drop any leftover directory (unless the
-        worktree preserves it across pause, e.g. clone mode), prune the stale
-        worktree metadata, mark the instance ``Paused`` and copy the branch name
-        to the clipboard. Any failures are appended to ``errs`` (and logged); the
-        caller combines and raises them.
+        True for a session paused under the current scheme (the worktree was
+        kept) and for a clone-strategy workspace paused under the old one (its
+        directory survived); False for an old-scheme pause, which removed the
+        checkout. A stat error counts as absent: the legacy path's ``Setup``
+        is the one that can report it properly.
         """
-        if log.WarningLog is not None:
-            log.WarningLog.Printf(
-                "worktree at %s is orphaned; skipping dirty check and remove",
-                self._git_worktree.GetWorktreePath(),
-            )
-        derr = self._tmux_session.detach_safely()
-        if derr is not None:
-            errs.append(
-                RuntimeError(
-                    "failed to detach tmux session: {}".format(_err_text(derr))
-                )
-            )
-            if log.ErrorLog is not None:
-                log.ErrorLog.Print(derr)
-        # Drop any leftover directory so a future Resume's `git worktree
-        # add` won't conflict — UNLESS this worktree preserves its directory
-        # across pause (clone mode: the branch + work live in the standalone
-        # clone, so blowing it away would lose work and force a re-clone).
-        keeps_dir = getattr(self._git_worktree, "keeps_dir_across_pause", None)
-        if not (callable(keeps_dir) and keeps_dir()):
-            try:
-                _remove_all(self._git_worktree.GetWorktreePath())
-            except Exception as err:  # noqa: BLE001
-                errs.append(
-                    RuntimeError(
-                        "failed to remove orphaned worktree directory: {}".format(err)
-                    )
-                )
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(err)
         try:
-            self._git_worktree.Prune()
+            return bool(self._git_worktree.IsValidWorktree())
         except Exception as err:  # noqa: BLE001
-            errs.append(RuntimeError("failed to prune git worktrees: {}".format(err)))
             if log.ErrorLog is not None:
                 log.ErrorLog.Print(err)
-        self.SetStatus(Status.Paused)
-        _clipboard_write(self._git_worktree.GetBranchName())
+            return False
 
     def Resume(self) -> None:
-        """Recreate the worktree and restart the tmux session (Go ``Resume``).
+        """Relaunch the agent in the paused session's worktree (Go ``Resume``).
 
-        Raises if not started, not paused, or the branch is already checked out.
-        Attempts to restore the existing tmux session, falling back to starting
-        a new one (cleaning up the worktree on failure).
+        Raises if not started or not paused. With the worktree on disk (the
+        current pause keeps it) the agent is simply started again there —
+        reattaching the tmux session when one is still alive, else launching
+        a new one; the worktree is never touched, and a failed launch leaves
+        it alone.
+
+        LEGACY: a session paused under the old scheme has no worktree (it was
+        removed, with a ``[mindflock] … (paused)`` commit on the branch when
+        the tree was dirty — that commit is the other fingerprint, but a clean
+        tree left none, so the missing checkout is what decides). That path is
+        kept as it was: refuse if the branch is checked out elsewhere, re-run
+        ``Setup()`` (provisioned workspaces are re-provisioned), then reattach
+        or restart tmux, cleaning the fresh worktree up if the launch fails.
         """
         if not self._started:
             raise RuntimeError("cannot resume instance that has not been started")
         if self.Status != Status.Paused:
             raise RuntimeError("can only resume paused instances")
 
+        if self._worktree_present():
+            # Current scheme: the checkout is right where the agent left it.
+            if self._tmux_session.does_session_exist():
+                rerr = self._tmux_session.restore()
+                if rerr is not None:
+                    if log.ErrorLog is not None:
+                        log.ErrorLog.Print(rerr)
+                    self._configure_launch_command(resume=True)
+                    self._start_tmux_or_cleanup(cleanup=False)
+            else:
+                # Pause killed the agent: relaunch with the provider's RESUME
+                # command so the conversation continues (the first-start
+                # command would re-send the seed prompt into a fresh agent).
+                self._configure_launch_command(resume=True)
+                self._start_tmux_or_cleanup(cleanup=False)
+            self.SetStatus(Status.Running)
+            return
+
+        # Legacy pause (worktree removed, branch kept): rebuild the checkout.
         # Check if branch is checked out.
         try:
             checked = self._git_worktree.IsBranchCheckedOut()
@@ -1104,11 +1025,14 @@ class Instance:
 
         self.SetStatus(Status.Running)
 
-    def _start_tmux_or_cleanup(self) -> None:
-        """Start a new tmux session, cleaning up the worktree on failure.
+    def _start_tmux_or_cleanup(self, cleanup: bool = True) -> None:
+        """Start a new tmux session; with ``cleanup`` (the legacy resume, whose
+        worktree was just rebuilt) remove the worktree again on failure.
 
-        Helper for :meth:`Resume`'s two start paths (which are identical in Go).
+        Helper for :meth:`Resume`'s start paths (which are identical in Go).
         Raises ``"failed to start new session: ..."`` chaining any cleanup error.
+        ``cleanup=False`` is the current resume: the worktree holds the user's
+        work and a launch that failed is no reason to lose it.
         """
         if self.ExtraEnv:
             self._tmux_session.extra_env = dict(self.ExtraEnv)
@@ -1129,7 +1053,8 @@ class Instance:
             if log.ErrorLog is not None:
                 log.ErrorLog.Print(start_err)
             try:
-                self._git_worktree.Cleanup()
+                if cleanup:
+                    self._git_worktree.Cleanup()
             except Exception as cleanup_err:  # noqa: BLE001
                 start_err = Exception(
                     "{} (cleanup error: {})".format(

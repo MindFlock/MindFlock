@@ -444,13 +444,13 @@ export function RunOptions({
               oneForAll
                 ? {
                     leave:
-                      "One PR for all commits each line into the group's branch — Commit keeps it all on this machine",
+                      "One PR for all commits each line into the team run's branch — Commit keeps it all on this machine",
                   }
                 : undefined
             }
             askReason={
               oneForAll
-                ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish"
+                ? "One PR for all always asks you before the one PR — its lines are committed into the team run's branch as they finish"
                 : undefined
             }
           />
@@ -507,11 +507,11 @@ export function RunOptions({
                   +
                 </button>
               </div>
-              <span className="rt-hint">the rest wait in the group, not in your grid</span>
+              <span className="rt-hint">the rest wait in the team run, not in your grid</span>
             </div>
           </div>
           <div className="rt-row">
-            <span className="rt-label">Group as</span>
+            <span className="rt-label">Team run name</span>
             <div className="rt-ctl">
               <input
                 id="new-group-name"

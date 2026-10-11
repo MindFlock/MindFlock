@@ -58,7 +58,7 @@ describe("the vocabulary", () => {
       "Off",
       "Commit",
       "Push",
-      "Open a PR",
+      "Open PR",
       "Merge when green",
     ]);
     expect(L.LANE_CHOICES.map((l) => L.LANE_SHORT[l])).toEqual(["off", "Commit", "Push", "PR", "Merge"]);
@@ -138,7 +138,7 @@ describe("the ⏩ picker's model", () => {
     const lead = lockOf({ run: { id: "r1", name: "G", task: "", role: "lead", grouping: "together" } });
     expect(lead.every((w) => /release/.test(w))).toBe(true);
     const piece = lockOf({ run: { id: "r1", name: "G", task: "t1", role: "piece", grouping: "together" } });
-    expect(piece.every((w) => /one PR — move it out of the group to fast-track it on its own/.test(w))).toBe(
+    expect(piece.every((w) => /one PR — move it out of the team run to fast-track it on its own/.test(w))).toBe(
       true
     );
     // Its own target, or a member of an each-their-own group: not locked.
@@ -148,7 +148,7 @@ describe("the ⏩ picker's model", () => {
   });
 
   it("the sentence a pick is confirmed with names fast-track, never a lane", () => {
-    expect(L.fastTrackSaid("api", "pr", true)).toBe("api: fast-track → Open a PR, asks first");
+    expect(L.fastTrackSaid("api", "pr", true)).toBe("api: fast-track → Open PR, asks first");
     expect(L.fastTrackSaid("api", "push", false)).toBe("api: fast-track → Push");
     expect(L.fastTrackSaid("api", "leave", true)).toMatch(/^api: fast-track off/);
   });
@@ -280,7 +280,7 @@ describe("the calls", () => {
   it("…says the server's other refusals, and never calls for Off", async () => {
     instApi.mockRejectedValueOnce(new ApiError(400, "unknown lane", null));
     expect(await L.setLaneWhenReady("api", "pr", false, [0])).toBe(false);
-    expect(String(toast.mock.calls[0][0])).toMatch(/^Couldn't fast-track api to “Open a PR”/);
+    expect(String(toast.mock.calls[0][0])).toMatch(/^Couldn't fast-track api to “Open PR”/);
     instApi.mockReset();
     expect(await L.setLaneWhenReady("api", "leave", false)).toBe(true);
     expect(instApi).not.toHaveBeenCalled();

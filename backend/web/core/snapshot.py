@@ -24,6 +24,10 @@ from typing import Dict, Optional
 from backend import config, providers, session
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.web.core import hidden_sessions as _hidden_sessions
+from backend.web.core import ownership as _ownership
+from backend.web.core import person_sessions as _person_sessions
+from backend.web.core import shared_branch as _shared_branch
 
 
 def _server():
@@ -436,6 +440,27 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # its first prompt — the rail shows its prompts' answer strip before
         # it has a child). "" for none.
         "playbook": getattr(inst, "Playbook", "") or "",
+        # The feature that owns this session and keeps it off the rail
+        # ("verify" for a checklist run), "" for the user's own work. Web
+        # metadata (core.hidden_sessions), never the engine's Instance JSON.
+        "hidden_by": _hidden_sessions.hidden_by(inst.Title),
+        # The person the session was created for (core.person_sessions; web
+        # metadata like hidden_by), "" for one that predates people.
+        "person": _person_sessions.person(inst.Title),
+        # "shared_branch": working ON someone's pushed branch (core.
+        # shared_branch, web metadata); "behind": commits the remote branch
+        # has that HEAD lacks, from the last fetch (never a fetch here).
+        **_shared_branch.row_fields(
+            inst.Title,
+            folder if inst.Started() and not workspace_missing else "",
+            inst.Branch or "",
+            cheap,
+        ),
+        # Owner / driver / viewers (core.ownership): who the session belongs
+        # to, who holds its keyboard ("" = nobody) and who has it open —
+        # {"owner", "driver", "driver_name", "viewers"}. The listing
+        # re-overlays them fresh on every poll (presence outruns the tick).
+        **_ownership.row_fields(inst.Title),
         # A shared-folder (peer-link) session: sandboxed, and the host-side
         # features (ship, shell, IDE, spawn, rename, …) are refused for it.
         "peer_share": bool(getattr(inst, "PeerShare", "") or ""),

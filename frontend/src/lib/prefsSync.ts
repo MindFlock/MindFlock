@@ -89,6 +89,9 @@ function applyLive(fields: Partial<Prefs>) {
       case "hints":
         st.hintsEnabled = v !== false;
         break;
+      case "map_tour":
+        st.mapTourSeen = v === true;
+        break;
       case "keymap":
         reloadKeymap();
         break;

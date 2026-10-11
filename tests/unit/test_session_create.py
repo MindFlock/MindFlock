@@ -29,7 +29,9 @@ def reg(monkeypatch):
 
 def test_the_route_is_a_thin_wrapper():
     src = inspect.getsource(server.create_instance)
-    assert "return await _session_create.create(payload)" in src
+    assert "return await _session_create.create(" in src
+    # …stamping the person the request is for, never one named in the payload.
+    assert "person=_auth.request_person(request)" in src
 
 
 def test_create_result_claims_the_title_and_answers_202(reg, monkeypatch):

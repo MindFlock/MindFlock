@@ -353,3 +353,39 @@ button.linklike {
 .connect-github .setup-acct-row {
   flex-wrap: wrap;
 }
+
+/* The standalone Connect GitHub dialog (ConnectGitHubDialog): the same step
+   Setup shows, in its own card. */
+.connect-github-panel {
+  background: var(--bg, #1e1e1e);
+  color: inherit;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 14px 16px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connect-github-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.connect-github-panel .ws-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.connect-github-panel .ws-head button {
+  margin-left: auto;
+}
+
+.gh-device-unconfigured {
+  margin: 0;
+  font-size: 12px;
+}

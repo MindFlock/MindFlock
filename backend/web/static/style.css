@@ -1,3 +1,251 @@
+/* Settings → Connections dashboard (Connections.tsx). The base row/pill
+   styles live in ticketingConnections.css; this adds the groups, the
+   three-state pills, the action column, the fix line and the Test result. */
+
+.conn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conn-group + .conn-group {
+  margin-top: 10px;
+}
+
+.conn-group-title {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.conn-pill.conn-needs_attention {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 15%, transparent);
+}
+
+.conn-pill.conn-off {
+  color: var(--muted);
+  background: transparent;
+}
+
+.conn-badge {
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--muted);
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.conn-fix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.conn-fix code {
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.conn-copy {
+  flex: none;
+}
+
+.conn-test-result {
+  margin-top: 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.conn-test-result.ok {
+  color: var(--green);
+}
+
+.conn-test-result.bad {
+  color: var(--red);
+}
+
+.conn-docs {
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .conn-row {
+    flex-wrap: wrap;
+  }
+  .conn-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+/* --------------------------------------------------------------------------- *
+ * The first-run checklist (components/setup): the five steps as drawn on the
+ * empty grid's card and in the Setup modal, and the compact "Setup 3/5" chip.
+ * The shared step/doctor rules (.setup-step, .setup-actions, .doctor-list…)
+ * stay in dialogs/SetupDialog.css; this file adds what is new.
+ * --------------------------------------------------------------------------- */
+.setup-progress {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.setup-step .setup-state {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.setup-step .setup-state.st-done {
+  color: var(--ok, #4caf50);
+}
+
+.setup-step.st-done > h3 .setup-num,
+.setup-step.st-skipped > h3 .setup-num {
+  color: var(--muted);
+}
+
+.setup-step.st-skipped > h3 {
+  opacity: 0.7;
+}
+
+.setup-fold > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.setup-fold > summary:hover {
+  color: var(--text);
+}
+
+.setup-logins {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setup-login {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.setup-login-name {
+  font-weight: 600;
+  min-width: 90px;
+}
+
+.setup-login.st-ok .setup-login-state {
+  color: var(--ok, #4caf50);
+}
+
+.setup-login.st-todo .setup-login-state {
+  color: #e8a13c;
+}
+
+.setup-login.st-unknown .setup-login-state {
+  color: var(--muted);
+}
+
+.setup-actions .setup-skip {
+  align-self: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-actions .setup-skip:hover {
+  color: var(--text);
+}
+
+.setup-qr {
+  width: 180px;
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 8px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.setup-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.setup-phone code {
+  font-size: 12px;
+  user-select: all;
+}
+
+.setup-report {
+  margin-top: 14px;
+  font-size: 12px;
+}
+
+.setup-report > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.setup-report > summary:hover {
+  color: var(--text);
+}
+
+.setup-report pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* The compact chip: the sidebar footer, beside the doctor's warning. */
+.setup-chip {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 11px;
+  color: #e8a13c;
+  background: rgba(232, 161, 60, 0.12);
+  border: 1px solid rgba(232, 161, 60, 0.5);
+  border-radius: 999px;
+}
+
+.setup-chip:hover {
+  background: rgba(232, 161, 60, 0.22);
+}
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
 
@@ -220,7 +468,7 @@
   line-height: 1.5;
 }
 
-/* Settings → Mobile: phone setup in order (Mobile.tsx PhoneSteps). */
+/* Settings → Your phone: phone setup in order (Mobile.tsx PhoneSteps). */
 .mobile-phone-steps {
   margin: 0;
   padding-left: 18px;
@@ -238,7 +486,7 @@
   width: 120px;
   height: 120px;
 }
-/* Settings → Devices ("Your devices"). Rows are a dot + name/status stack +
+/* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */
 
@@ -661,6 +909,37 @@
    launch"): let them wrap on a phone instead of pushing the row wide. */
 .devices-badge[data-update-chip] {
   white-space: normal;
+}
+
+/* Make reachable (the Tailscale-mode switch) sits in the This-device block;
+   its "Restart server to apply" fallback hugs the left like Mobile's did. */
+.devices-this > .devices-restart,
+.devices-warn > .devices-restart {
+  align-self: flex-start;
+}
+
+/* Advanced — other ways to trust a machine: a fold, each row leading with
+   the one line that says when you would still use it. */
+.devices-advanced {
+  margin-top: 14px;
+}
+
+.devices-advanced > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.devices-advanced .devices-when {
+  display: block;
+  margin: 2px 0 6px;
+}
+
+.devices-advanced #pair-by-token .devices-actions {
+  flex-wrap: wrap;
+}
+
+.devices-advanced #pair-by-token input {
+  min-width: 240px;
 }
 /* The welcome walkthrough card. Rides the shared .modal overlay. */
 
@@ -1228,6 +1507,23 @@
      with `background:` and text over it takes the pair. */
   --gold-fill: #ffd700;
   --gold-ink: #1a1a1a;
+  /* Session-state tones (lib/sessionState.ts) — the SIX colours a session's
+     dot and chip are painted with, defined once: muted (starting, paused),
+     working (green), attention (gold — needs you), neutral (idle), waiting
+     (blue — a usage limit that auto-resumes; it is NOT red) and broken (red —
+     offline). `-ink` is the text that goes over the tone as a fill. */
+  --tone-muted: #8a90a2;
+  --tone-muted-ink: #ffffff;
+  --tone-working: #51bd73;
+  --tone-working-ink: #0b1a10;
+  --tone-attention: #ffd700;
+  --tone-attention-ink: #1a1a1a;
+  --tone-neutral: #a3abbe;
+  --tone-neutral-ink: #0f1117;
+  --tone-waiting: #4ea8de;
+  --tone-waiting-ink: #ffffff;
+  --tone-broken: #de613e;
+  --tone-broken-ink: #ffffff;
   /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
      surface theme (theme.css html[data-surface=…] blocks override these). */
   --term-bg: #0f1117;
@@ -1287,6 +1583,18 @@
      9:1 here) instead of contrasting with the page. */
   --gold-fill: #f0b429;
   --gold-ink: #1a1a1a;
+  --tone-muted: #8a90a2;
+  --tone-muted-ink: #ffffff;
+  --tone-working: #2e9e54;
+  --tone-working-ink: #ffffff;
+  --tone-attention: #f0b429;
+  --tone-attention-ink: #1a1a1a;
+  --tone-neutral: #6b7385;
+  --tone-neutral-ink: #ffffff;
+  --tone-waiting: #1d6fa5;
+  --tone-waiting-ink: #ffffff;
+  --tone-broken: #d6451f;
+  --tone-broken-ink: #ffffff;
   --term-bg: #ffffff;
   --term-fg: #1b2030;
 }
@@ -1797,6 +2105,23 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
    the right (status-bar-style help affordance). */
 #sidebar-footer .foot-row.foot-tools {
   justify-content: space-between;
+}
+
+/* Setup: the doctor's warning + the "Setup 3/5" chip. Either can be absent;
+   with both gone the row takes no space. */
+#sidebar-footer .foot-row.foot-setup {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#sidebar-footer .foot-row.foot-setup:empty {
+  display: none;
+}
+
+#sidebar-footer .foot-setup #doctor-warn {
+  margin: 0;
+  flex: 1 1 auto;
 }
 
 #sidebar-footer .foot-link {
@@ -4158,25 +4483,78 @@ p.set-hint {
   color: var(--accent);
 }
 
+/* The status dot: painted from the SAME session state as the chip beside it
+   (lib/sessionState.ts) — `tone-*` is the colour, `st-*` the state. The six
+   tones are tokens (styles/tokens.css); nothing here names a colour. */
 .inst .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--tone-neutral);
   flex: none;
 }
 
-.inst .dot.paused {
-  background: var(--muted);
+.inst .dot.tone-muted {
+  background: var(--tone-muted);
 }
 
-.inst .dot.loading {
-  background: var(--gold);
+.inst .dot.tone-working {
+  background: var(--tone-working);
 }
 
+.inst .dot.tone-attention {
+  background: var(--tone-attention);
+}
+
+.inst .dot.tone-neutral {
+  background: var(--tone-neutral);
+}
+
+.inst .dot.tone-waiting {
+  background: var(--tone-waiting);
+}
+
+.inst .dot.tone-broken {
+  background: var(--tone-broken);
+}
+
+/* Starting: a grey pulse — nobody acts yet. */
+.inst .dot.st-starting {
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+/* The browser's socket to this pane's terminal dropped — a connectivity
+   signal on top of the agent state, cleared the moment it reconnects. */
 .inst .dot.disconnected {
-  background: var(--red);
-  box-shadow: 0 0 6px var(--red);
+  background: var(--tone-broken);
+  box-shadow: 0 0 6px var(--tone-broken);
+}
+
+/* Offline's remedy, on the chip: "Offline ↻ Restart" is one button. */
+.inst .stagechip.chip-restart {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.inst .stagechip.chip-restart .chip-act {
+  opacity: 0.85;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .stagechip.chip-restart:hover .chip-act {
+  opacity: 1;
+}
+
+.inst .stagechip.chip-restart:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .inst .chevron {
@@ -4594,35 +4972,97 @@ p.set-hint {
   background: rgba(222, 97, 62, 0.14);
 }
 
-/* "Delete + wipe worktree", armed: the question and its two answers in place
-   of the item (the desktop app has no confirm()). */
-.inst-actions .wipe-confirm {
+/* The two end verbs. Close carries a sub-line (what it keeps, where it goes). */
+.inst-actions button.end-close {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.inst-actions .end-verb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inst-actions .end-verb .kbd {
+  margin-left: auto;
+}
+
+.inst-actions .end-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* "Delete…", armed: a neutral confirm strip in place of the item (the desktop
+   app has no confirm()). The question is calm; only the answer that deletes
+   is red. */
+.inst-actions .del-confirm {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: rgba(222, 97, 62, 0.1);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
   font-size: 12px;
 }
 
-.inst-actions .wipe-q {
+.inst-actions .del-q {
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.inst-actions .wipe-acts {
+.inst-actions .del-acts {
   display: flex;
   gap: 6px;
 }
 
-.inst-actions .wipe-acts button {
+.inst-actions .del-acts button {
   padding: 4px 10px;
   border: 1px solid var(--border);
 }
 
-.inst-actions .wipe-acts button.danger {
+.inst-actions .del-acts button.danger {
   border-color: var(--red);
+}
+
+/* "Folder in use by …" — the 409 a Delete gets while a Duplicate session runs
+   in the same folder. Under the row, outside the menu, until dismissed. */
+.inst-tail .folder-in-use {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  background: var(--panel-2);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.inst-tail .fiu-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-tail .fiu-x {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.inst-tail .fiu-x:hover {
+  color: var(--text);
 }
 
 .inst-actions .menu-sep {
@@ -4822,6 +5262,56 @@ p.set-hint {
 }
 .stagechip.peerchip:focus-visible {
   outline: 1px solid var(--accent);
+}
+
+/* Presence (lib/presence.ts, components/presence): who else is on the
+   session — up to three initials dots, the driver's ringed. Drawn only once
+   someone besides you watches or drives it. */
+.inst .presence {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 4px;
+}
+
+.inst .presence-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+.inst .presence-dot + .presence-dot {
+  margin-left: -4px;
+}
+
+.inst .presence-dot.driving {
+  border: 2px solid var(--accent);
+}
+
+.inst .presence-dot.typing {
+  background: rgba(var(--accent-rgb), 0.25);
+}
+
+.inst .shared-branch-mark {
+  margin-left: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.inst .presence-more {
+  margin-left: 3px;
+  font-size: 9px;
+  color: var(--muted);
 }
 }
 
@@ -6192,6 +6682,105 @@ p.set-hint {
   border-color: var(--red);
   color: var(--red);
 }
+
+/* Select mode: a strip pinned to the top of the list — the count, then the
+   verbs, then (when asked) an inline confirm strip. The picked sessions are
+   the rail rows themselves (.inst.bulk-picked, below). */
+#bulk-bar.bulk-open {
+  flex-direction: column;
+  align-items: stretch;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  margin: 0 6px 4px;
+}
+
+#bulk-bar .bulk-done {
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+#bulk-bar .bulk-done:hover {
+  color: var(--text);
+}
+
+/* A picked rail row: tinted, with a ✓ where its slot number was. */
+.inst.bulk-picked .inst-row {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.inst.bulk-picked .idx {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#bulk-bar .bulk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+#bulk-bar .bulk-verbs {
+  justify-content: flex-start;
+}
+
+#bulk-bar .bulk-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The question is neutral; only Delete's answer is red (via .danger). */
+#bulk-bar .bulk-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#bulk-bar .bulk-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-acts button.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#bulk-bar .bulk-held {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 6px;
+  background: var(--panel);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-held-x {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+#bulk-bar .bulk-held-x:hover {
+  color: var(--text);
+}
 }
 
 /* 110 */
@@ -6765,6 +7354,17 @@ p.set-hint {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* How far the remote branch moved on past this session (row.behind). */
+.pane-head .pane-behind {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--warn, #d9a441);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
 }
 
 /* Which tailnet device a remote session runs on — a quiet tag beside the
@@ -7569,6 +8169,58 @@ p.set-hint {
 .pane.verify-pane .pane-term {
   cursor: default;
 }
+
+/* The one drive control (components/presence): "Driving" / "Watching — take
+   control", shown only once someone else is on the session. A button, not a
+   .stagechip — DiffTab.css hides those in a pane header. */
+.pane-head .drive-ctl {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pane-head .drive-ctl.driving {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pane-head .drive-ctl.watching {
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.15);
+}
+
+/* "<name> is driving — take control to type" (lib/wsTerm.ts showTermNotice):
+   one line over the bottom of a terminal a watcher tried to type into. */
+.term-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: calc(100% - 24px);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+.term-notice.gone {
+  opacity: 0;
+}
 }
 
 /* 140 */
@@ -7589,8 +8241,14 @@ p.set-hint {
   text-overflow: ellipsis;
 }
 
-.stagechip.s-provisioning {
-  color: var(--gold);
+/* The session-state chips (lib/sessionState.ts) take their colour from the
+   same six tone tokens the rail dot uses (styles/tokens.css): a filled chip for
+   the states that act or wait on you, a tint for the quiet ones. The s-* class
+   is the state, the tone-* class beside it is the colour. */
+.stagechip.s-provisioning,
+.stagechip.tone-muted {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
 }
 
 .stagechip.s-agent {
@@ -7598,38 +8256,45 @@ p.set-hint {
   background: rgba(var(--accent-rgb), 0.16);
 }
 
-.stagechip.s-running {
-  color: #fff;
-  background: rgba(var(--accent-rgb), 0.5);
+.stagechip.s-running,
+.stagechip.tone-working {
+  color: var(--tone-working-ink);
+  background: var(--tone-working);
   animation: cs-pulse 1.4s ease-in-out infinite;
 }
 
-.stagechip.s-idle {
-  color: var(--gold);
-  background: rgba(255, 215, 0, 0.14);
+.stagechip.s-idle,
+.stagechip.tone-neutral {
+  color: var(--tone-neutral);
+  background: color-mix(in srgb, var(--tone-neutral) 16%, transparent);
+  animation: none;
 }
 
-.stagechip.s-offline {
-  color: var(--muted);
-  background: var(--panel-2);
-  opacity: 0.75;
-}
-
-.stagechip.s-clarify {
-  color: #fff;
-  background: rgba(14, 165, 233, 0.55);
+.stagechip.s-clarify,
+.stagechip.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
   animation: cs-pulse 1.4s ease-in-out infinite;
 }
 
-.stagechip.s-limit {
-  color: #fff;
-  background: rgba(239, 68, 68, 0.7);
-  animation: cs-pulse 1.4s ease-in-out infinite;
+.stagechip.s-limit,
+.stagechip.tone-waiting {
+  color: var(--tone-waiting-ink);
+  background: var(--tone-waiting);
+  animation: none;
+}
+
+.stagechip.s-offline,
+.stagechip.tone-broken {
+  color: var(--tone-broken-ink);
+  background: var(--tone-broken);
+  animation: none;
 }
 
 .stagechip.s-paused {
-  color: var(--muted);
-  background: var(--panel-2);
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
+  animation: none;
 }
 
 @keyframes cs-pulse {
@@ -10950,6 +11615,200 @@ button.ct-chip:hover {
 .cm-fence-why {
   color: var(--muted);
   margin-left: 2px;
+}
+
+/* --- Calmer default surface (the toolbar's Rules group, the folder list cap) --- */
+
+/* The rule tools read as one group: "Rules [⛔ Keep out][✓ Only here][+ Zone]". */
+.ct-rules {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding-left: 10px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.ct-rules-k {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Each changed folder's ⛔ / ✓ stay visible (the caption explains them) but
+   quiet until the row is pointed at or focused, or a rule is on. */
+.ct-bix-folder .ct-bix-zb:not(.on) {
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+.ct-bix-folder:hover .ct-bix-zb,
+.ct-bix-folder:focus-within .ct-bix-zb {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .ct-bix-folder .ct-bix-zb:not(.on) {
+    opacity: 1;
+  }
+}
+
+.ct-bix-allf {
+  display: block;
+  margin: 4px 10px 2px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-bix-allf:hover {
+  text-decoration: underline;
+}
+
+@container (max-width: 760px) {
+  .ct-rules-k {
+    display: none;
+  }
+
+  .ct-rules {
+    padding-left: 6px;
+  }
+}
+
+/* --- The Map tour (codemap/MapTour.tsx): a coach mark over the live map --- */
+
+.mt-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.mt-ring {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 0 9999px rgba(0, 0, 0, 0.28);
+  transition:
+    left 200ms ease,
+    top 200ms ease,
+    width 200ms ease,
+    height 200ms ease;
+}
+
+.mt-card {
+  position: absolute;
+  width: min(320px, calc(100% - 16px));
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+  animation: mt-in 160ms ease-out;
+}
+
+@keyframes mt-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.mt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.mt-step {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mt-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.mt-skip:hover {
+  color: var(--text);
+}
+
+.mt-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mt-body {
+  margin: 0 0 10px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.mt-body kbd {
+  font: 600 10.5px/1 var(--cm-mono);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+.mt-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mt-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.mt-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.mt-dots i.on {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mt-card {
+    animation: none;
+  }
+
+  .mt-ring {
+    transition: none;
+  }
 }
 }
 
@@ -14510,6 +15369,291 @@ button.ct-chip:hover {
 .preset-name-row .muted {
   font-size: 11.5px;
 }
+
+/* --- Templates dialog (TemplatesDialog.tsx) ------------------------------- */
+/* The same card as #rename-form (smallDialogs.css), wider: a template's
+   prompt is a paragraph, and its folder a path. Lives here rather than in a
+   file of its own because it is the New dialog's manager and shares its
+   chips' vocabulary (.new-templates). */
+#templates-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(600px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text);
+}
+
+.tpl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tpl-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#templates-close,
+.tpl-btn,
+.tpl-new {
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+#templates-close:hover,
+.tpl-btn:hover:not(:disabled),
+.tpl-new:hover {
+  border-color: var(--accent);
+}
+
+.tpl-btn:disabled {
+  opacity: .6;
+  cursor: default;
+}
+
+.tpl-del {
+  color: var(--red);
+}
+
+.tpl-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.tpl-new {
+  align-self: flex-start;
+}
+
+.tpl-empty {
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.tpl-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tpl-card-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tpl-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.tpl-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* The prompt, clipped to three lines: the card is a list row, not the editor. */
+.tpl-prompt {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.tpl-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* The inline "delete?" row — IN the card, never a browser dialog (Electron
+   has none). Tinted so the question is unmistakably about this card. */
+.tpl-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.tpl-confirm > span {
+  flex: 1 1 auto;
+}
+
+.tpl-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpl-card-editing {
+  border-color: var(--accent);
+}
+
+.tpl-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tpl-editor label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.tpl-editor input,
+.tpl-editor textarea,
+.tpl-editor select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tpl-editor input:focus,
+.tpl-editor textarea:focus,
+.tpl-editor select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tpl-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .tpl-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tpl-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.tpl-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+}
+
+.tpl-row-actions button[type=submit] {
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+
+/* --- New dialog: the describe row on the form, and the Base branch picker -- */
+/* "Describe it instead…" — the secondary door to the model-filled form. A
+   quiet row until opened; the box it opens is the same strip page 1 used to
+   be, in the card the Templates strip wears. */
+.nf-describe-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#new-describe-open {
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+#new-describe-open:hover {
+  border-color: var(--accent);
+}
+
+.nf-describe-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.nf-base-branch {
+  margin-top: 8px;
+}
+
+.nf-base-branch select {
+  max-width: 100%;
+}
+
+/* The fold's summary carries the choice it hides, so a closed fold still
+   reports where the session will run and what it is cut from. */
+.nf-advanced > summary .nf-fold-sum {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 4px;
+}
 }
 
 /* 170 */
@@ -14771,9 +15915,15 @@ button.ct-chip:hover {
   color: var(--muted);
 }
 
-#rename-form #rename-real {
-  display: inline;
+#rename-form .rename-taken {
+  margin: 0;
+  font-size: 12px;
+  color: var(--red);
   overflow-wrap: anywhere;
+}
+
+#rename-form input[aria-invalid="true"] {
+  border-color: var(--red);
 }
 
 #rename-form input {
@@ -15525,6 +16675,45 @@ button.ct-chip:hover {
   flex: 1 1 200px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
+
+/* Shared with the repo (committed): .mindflock/zones.toml in a worktree. */
+.rzd-shared {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.rzd-shared-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rzd-shared-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.rzd-shared-where,
+.rzd-zone-author {
+  font-size: 11.5px;
+}
+
+.rzd-share {
+  flex: none;
+  font-size: 11.5px;
+  padding: 1px 8px;
+}
+
+.rzd-chip.rzd-in-repo {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}
 }
 
 /* 185 */
@@ -15730,6 +16919,27 @@ body.conn-lost #cs-errors {
 
 #cs-toast.clickable:hover {
   background: var(--panel);
+}
+
+
+/* A question (confirmPop) wears the same card without the alarm: neutral rule,
+   plain title, and an accent-coloured answer — nothing has gone wrong yet. */
+#cs-errors .cs-error.cs-confirm {
+  border-color: var(--border);
+  border-top-color: var(--accent);
+}
+
+#cs-errors .cs-confirm .cs-error-head {
+  color: var(--text);
+}
+
+#cs-errors .cs-confirm .cs-error-act.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#cs-errors .cs-confirm .cs-error-act.primary:hover {
+  background: rgba(120, 160, 255, 0.12);
 }
 }
 
@@ -16161,6 +17371,42 @@ button.linklike {
 
 .connect-github .setup-acct-row {
   flex-wrap: wrap;
+}
+
+/* The standalone Connect GitHub dialog (ConnectGitHubDialog): the same step
+   Setup shows, in its own card. */
+.connect-github-panel {
+  background: var(--bg, #1e1e1e);
+  color: inherit;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 14px 16px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connect-github-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.connect-github-panel .ws-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.connect-github-panel .ws-head button {
+  margin-left: auto;
+}
+
+.gh-device-unconfigured {
+  margin: 0;
+  font-size: 12px;
 }
 }
 
@@ -17571,6 +18817,88 @@ button.linklike {
 
 .ik-pickbar .linklike {
   margin-left: auto;
+}
+
+/* --- Ticket source cards: tested state ------------------------------------
+   A source is "connected" only once its stored configuration has been seen to
+   work (Test, run by hand or automatically after a save). The pill says which
+   of the three states the card is in; the message beside it says why. */
+.ik-source-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.ik-source-pill.connected {
+  color: var(--ok, #3fb950);
+  border-color: var(--ok, #3fb950);
+}
+.ik-source-pill.needs_attention {
+  color: var(--warn, #d29922);
+  border-color: var(--warn, #d29922);
+}
+.ik-source-pill.off {
+  opacity: 0.7;
+}
+.tk-head .ik-source-pill {
+  margin-left: auto;
+  flex: none;
+}
+.tk-source .test-row .ik-source-message {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* A required marker next to the label, and the inline error the server sent
+   back for the field. The error replaces the hint's slot so the row never
+   grows a second line of small print. */
+.ik-field-marker {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ik-field-marker.required {
+  color: var(--danger, #e5534b);
+}
+.ik-field-error {
+  color: var(--danger, #e5534b);
+  font-size: 12px;
+}
+
+/* A secret with a stored value gets a Clear control beside its input. */
+.ik-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ik-secret-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ik-secret-clear {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ik-secret-clear:hover {
+  color: var(--text);
 }
 }
 
@@ -19358,13 +20686,18 @@ span.pr-open-ref.ob-ref {
   margin: 12px 0 0 8px;
   font-size: 11.5px;
 }
+
+/* A second group under the bars (Session list): set apart from the drag hint. */
+.cz-foot + .cz-heading {
+  margin-top: 18px;
+}
 }
 
 /* 258 —
    the frame the Sidebar and Prompts panels sit in; after Outbox.css */
 
 @layer components{
-/* Settings → Mobile: white QR card + URL rows.
+/* Settings → Your phone: white QR card + URL rows.
    .qr-card is shared with Settings → Notifications (the ntfy subscribe QR) —
    a QR must stay dark-on-white to scan, whatever the app theme is doing. */
 #mobile-qr,
@@ -19943,7 +21276,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   opacity: 0.7;
 }
 
-/* "yours": one of Your devices (Settings → Devices) — connected through the
+/* "yours": one of Your devices (Settings → Your devices) — connected through the
    shared device key, so it has no Disconnect ✕. */
 .device-group .dev-member {
   font-size: 10px;
@@ -21336,19 +22669,9 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
    with dark ink, correct in both themes), and white text on that amber is ~2:1.
    The override has to go WITH the token change, not after it. */
 
-/* White chip text on 50%-alpha backgrounds washes out on light — go solid. */
-.light .stagechip.s-running {
-  background: var(--accent);
-}
-
-.light .stagechip.s-clarify {
-  background: #0e7490;
-}
-
-.light .stagechip.s-limit {
-  background: #dc2626;
-}
-
+/* The session-state chips (s-running / s-clarify / s-limit / s-offline) need
+   no light override: their colours are the tone tokens, which tokens.css
+   re-declares under .light. */
 .light .stagechip.s-pr {
   background: var(--green);
 }

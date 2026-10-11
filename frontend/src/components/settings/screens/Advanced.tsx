@@ -141,7 +141,13 @@ type UpdateCheck = {
   release_url?: string;
   checked?: boolean;
   available?: boolean;
+  /** How this engine is installed: uv-tool · pipx · editable · other. */
   kind?: string;
+  /** Where `kind` came from: install.sh's install.json, or the running package's path. */
+  method_source?: string;
+  /** For an editable install: the checkout, and the git commands that update it. */
+  checkout?: string;
+  editable_commands?: string[];
   blocked?: string;
   repo?: string;
   /** The last update's state: idle · started · done · failed · rolled_back. */
@@ -156,6 +162,14 @@ type UpdateState = { state?: string; code?: number; error?: string; log?: string
 
 /** How long to wait for the server to come back on a finished install. */
 const NEW_BUILD_WAIT_MS = 180000;
+
+/** `kind` from /api/update/check, as a sentence reads it. */
+const METHOD_WORDS: Record<string, string> = {
+  "uv-tool": "uv tool",
+  pipx: "pipx",
+  editable: "a development checkout (editable)",
+  other: "an installer MindFlock doesn’t recognise",
+};
 
 function ServerEngineUpdate() {
   const [info, setInfo] = useState<UpdateCheck | null>(null);
@@ -258,6 +272,8 @@ function ServerEngineUpdate() {
   const blocked = info?.blocked || "";
   const version = info?.current ? "v" + info.current : "unknown";
   const last = info?.last || {};
+  const editable = info?.kind === "editable";
+  const method = METHOD_WORDS[info?.kind || ""] || info?.kind || "";
   const installing = info?.state === "started";
   // What happened last time, when it didn't end well (and isn't on screen as
   // this visit's own error already).
@@ -295,8 +311,32 @@ function ServerEngineUpdate() {
         ) : info && !info.checked ? (
           <> · couldn’t reach GitHub to check for a newer one</>
         ) : null}
+        {method ? (
+          <>
+            {" "}
+            · installed with <strong>{method}</strong>
+            {info?.method_source === "install.json" ? " (per install.json)" : ""}
+          </>
+        ) : null}
         .
       </p>
+      {editable ? (
+        <>
+          <p className="set-hint" id="upd-editable">
+            This is a development checkout
+            {info?.checkout ? (
+              <>
+                {" "}
+                (<code>{info.checkout}</code>)
+              </>
+            ) : null}
+            , so the update comes from git — run these there, then the server restarts onto it:
+          </p>
+          <pre className="upd-log" id="upd-editable-commands">
+            {(info?.editable_commands || []).join("\n")}
+          </pre>
+        </>
+      ) : null}
       {pending || waiting ? (
         <p className="set-hint" id="upd-restarting">
           Installed{last.version ? " v" + last.version : ""} — restarting onto it… This window
@@ -306,9 +346,9 @@ function ServerEngineUpdate() {
         <p className="set-hint" id="upd-installing">
           An update{last.version ? " to v" + last.version : ""} is installing…
         </p>
-      ) : blocked ? (
+      ) : blocked && !editable ? (
         <p className="set-hint">{blocked}</p>
-      ) : info?.available ? (
+      ) : editable ? null : info?.available ? (
         <p className="set-hint">
           Updating downloads the new engine, replaces this install, and restarts the server —
           your sessions are tmux sessions, so nothing running is lost. This window reloads on
@@ -354,26 +394,40 @@ function ServerEngineUpdate() {
   );
 }
 
-/** The desktop shell's own updater, unchanged: polls electron/main.js for
- * whether the installed engine is behind the latest released one and, if so,
- * offers a one-click update that pulls just the small engine package (not the
- * app) and self-restarts the server. */
+/** The desktop shell's updater: ONE run shared with the app toast and the
+ * engine toast (electron/main.js `updateEverything`). The click installs the
+ * engine (and the app, if a newer one is downloaded), stops the old server,
+ * waits for the port to be released, starts the new one and reports the
+ * version it answers with — this screen only polls that run's state
+ * (`engine:install-state` → {state, step, message, code, lines}), so a
+ * finished install can never leave the button on "Updating…". */
 // `checked` comes from shells that report whether the check succeeded; older
 // shells omit it, and keep the old wording.
-type EngineInfo = { available?: boolean; checked?: boolean; current?: string; latest?: string };
+type EngineInfo = {
+  available?: boolean;
+  checked?: boolean;
+  current?: string;
+  latest?: string;
+  /** The app is behind too: its toast's Update does both halves. */
+  appUpdate?: boolean;
+  /** The engine has run ahead of this app (one line, nothing to click). */
+  skew?: string;
+};
+type EngineRun = { state?: string; step?: string; message?: string; code?: number | null; lines?: string[] };
 function ShellEngineUpdate() {
   const mfengine = (
     window as unknown as {
       mfengine?: {
         updateInfo?: () => Promise<EngineInfo>;
         install?: () => Promise<unknown>;
-        installState?: () => Promise<{ state?: string; code?: number }>;
+        installState?: () => Promise<EngineRun>;
       };
     }
   ).mfengine;
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [run, setRun] = useState<EngineRun | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!mfengine?.updateInfo) return;
@@ -381,6 +435,7 @@ function ShellEngineUpdate() {
     mfengine.updateInfo().then((i) => alive && setInfo(i)).catch(() => {});
     return () => {
       alive = false;
+      if (timer.current) clearInterval(timer.current);
     };
   }, [mfengine]);
 
@@ -389,19 +444,21 @@ function ShellEngineUpdate() {
   const update = () => {
     if (busy || !mfengine.install) return;
     setBusy(true);
-    setFailed(false);
+    setRun(null);
     mfengine.install().catch(() => {});
-    const timer = setInterval(async () => {
+    if (timer.current) clearInterval(timer.current);
+    timer.current = setInterval(async () => {
       try {
         const st = await mfengine.installState?.();
         if (!st) return;
-        // On success the shell restarts the server and reloads this window, so
-        // there's nothing more to do here but stop polling.
-        if (st.state === "done") clearInterval(timer);
-        else if (st.state === "failed") {
-          clearInterval(timer);
+        setRun(st);
+        // The shell owns the whole run: once it reports done the new server
+        // is answering (and this window is reloaded by the shell itself).
+        if (st.state === "done" || st.state === "failed") {
+          if (timer.current) clearInterval(timer.current);
+          timer.current = null;
           setBusy(false);
-          setFailed(true);
+          if (st.state === "done") mfengine.updateInfo?.().then(setInfo).catch(() => {});
         }
       } catch {
         /* transient — keep polling */
@@ -409,23 +466,42 @@ function ShellEngineUpdate() {
     }, 1000);
   };
 
+  const failed = run?.state === "failed";
+  const done = run?.state === "done";
   return (
     <>
       <h3 className="set-section-title">Engine updates</h3>
+      {info?.skew && !info?.available ? (
+        <p className="set-hint" id="upd-skew">
+          {info.skew}
+        </p>
+      ) : null}
       {info?.available ? (
         <>
           <p className="set-hint">
             A new engine (<strong>{info.latest}</strong>) is available — you’re on {info.current}.
-            This updates just the engine (a small download), not the app; the server restarts and
-            this window reconnects on its own.
+            {info.appUpdate
+              ? " The app is behind too: Update installs the engine first, then the app, and restarts."
+              : " Update installs just the engine (a small download), restarts the server, and this window reconnects on its own."}
           </p>
           <button type="button" className="test-btn" disabled={busy} onClick={update}>
-            {busy ? "Updating…" : `Update engine to ${info.latest}`}
+            {busy ? "Updating…" : done ? "Done" : failed ? "Retry" : `Update to ${info.latest}`}
           </button>
-          {failed && (
+          {run?.message ? (
+            <p className={failed ? "error" : "set-hint"} id="upd-run">
+              {run.message}
+            </p>
+          ) : null}
+          {failed && !run?.message && (
             <p className="error">
               The update didn’t finish. Try again, or check Settings → System logs.
             </p>
+          )}
+          {(run?.lines || []).length > 0 && (
+            <details className="upd-fold">
+              <summary>Installer output</summary>
+              <pre className="upd-log">{(run?.lines || []).join("\n")}</pre>
+            </details>
           )}
         </>
       ) : info?.checked === false ? (

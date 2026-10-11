@@ -122,6 +122,17 @@
   text-overflow: ellipsis;
 }
 
+/* How far the remote branch moved on past this session (row.behind). */
+.pane-head .pane-behind {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--warn, #d9a441);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
 /* Which tailnet device a remote session runs on — a quiet tag beside the
    name, dropped first when the head is squeezed (the tooltip keeps it). */
 .pane-head .title-device {
@@ -923,4 +934,56 @@
 
 .pane.verify-pane .pane-term {
   cursor: default;
+}
+
+/* The one drive control (components/presence): "Driving" / "Watching — take
+   control", shown only once someone else is on the session. A button, not a
+   .stagechip — DiffTab.css hides those in a pane header. */
+.pane-head .drive-ctl {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pane-head .drive-ctl.driving {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pane-head .drive-ctl.watching {
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.15);
+}
+
+/* "<name> is driving — take control to type" (lib/wsTerm.ts showTermNotice):
+   one line over the bottom of a terminal a watcher tried to type into. */
+.term-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: calc(100% - 24px);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+.term-notice.gone {
+  opacity: 0;
 }

@@ -429,7 +429,7 @@ def test_join_keeps_a_different_source_under_the_same_id_separate(devices, clock
     assert _id_project_token() == [("sc", "home", "h")]
     st = settings_sync.status()
     assert "ticketing.sources#sc" in st["pinned"]
-    # Who it's kept separate from (Settings → Devices' Unpin confirm).
+    # Who it's kept separate from (Settings → Your devices' Unpin confirm).
     assert st["separate"] == {"ticketing.sources#sc": "Rig"}
     assert any(
         "“sc” differs between Rig and this device — kept separate" in w
@@ -1977,7 +1977,7 @@ def test_a_scan_that_clears_most_of_this_device_pauses(devices, clock, tmp_path)
         assert [s for s, _ in _sources()] == ["a", "b"]
         assert settings_sync.status()["devices"][0]["error"] == (
             "Laptop paused sync — its settings look reset; answer it in "
-            "Settings → Devices there"
+            "Settings → Your devices there"
         )
     assert devices.get("github", "token") == ""  # nothing adopted while paused
 
@@ -2031,7 +2031,7 @@ def test_a_pause_is_announced_once(devices, clock, tmp_path):
     paused = [e for e in seen if e["event"] == "settings.sync_paused"]
     assert len(paused) == 1
     assert paused[0]["data"]["cleared"] == 8 and paused[0]["data"]["held"] == 8
-    assert "Settings → Devices" in paused[0]["data"]["detail"]
+    assert "Settings → Your devices" in paused[0]["data"]["detail"]
 
 
 _BULK_CLEAR = {

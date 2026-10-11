@@ -5,7 +5,7 @@
  * that succeeds. Hence the poll: stay busy until a cheap endpoint answers,
  * and give up after a bounded wait rather than spinning forever.
  *
- * Shared by Settings → Mobile (restart to apply a serve-mode change) and
+ * Shared by Settings → Your phone (restart to apply a serve-mode change) and
  * Settings → Advanced (restart on demand).
  */
 

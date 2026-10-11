@@ -64,10 +64,10 @@ DEFAULT_RUN_WAIT_S = 600
 
 D_START_RUN = (
     "Start a TEAM RUN: MindFlock works on several things at once for your "
-    "user, one session per item, and carries each one as far as its lane "
-    "says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
-    "IDs is that many tickets) and/or task lines (one thing per line). lane: "
-    "leave (no commit) | commit | push | pr (one PR per item) | merge (merges "
+    "user, one session per item, and carries each one as far as its "
+    "fast-track says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
+    "IDs is that many tickets) and/or task lines (one thing per line). lane "
+    "(the fast-track): leave (no commit) | commit | push | pr (one PR per item) | merge (merges "
     "once CI is green; needs confirm_merge=true); default: your user's "
     "fast-track setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
     "the rest wait in a queue. MindFlock owns these sessions, not you: you "
@@ -104,8 +104,8 @@ D_CONTROL_RUN = (
     "kept), and per task (task_id): retry (fresh=true starts a new title on a "
     "new branch and keeps the old), start_now (past the concurrency cap "
     "once), skip (a queued task is removed; a running one is detached), "
-    "release (a one-for-all group's one PR, once it is ready). resume and "
-    "release are refused on a group your user started: those are theirs. "
+    "release (a one-for-all team run's one PR, once it is ready). resume and "
+    "release are refused on a team run your user started: those are theirs. "
     "Never answers an agent's prompt for your user. Returns the run summary."
 )
 
@@ -119,7 +119,7 @@ D_PROPOSE_PLAN = (
     "server validates and returns problems to fix; when ok, your user "
     "approves and MindFlock starts, fences and merges the workers itself — "
     "do not spawn sessions. An auto-split's lead (its brief says so) may "
-    "instead pass pieces=[] with why: no split — the group dissolves and you "
+    "instead pass pieces=[] with why: no split — the team run dissolves and you "
     "do the task yourself."
 )
 D_REPORT_INTEGRATED = (
@@ -332,7 +332,7 @@ class RunTools:
         by = str(run.get("created_by") or "user")
         if by == "user" and me and action in USER_ONLY_ACTIONS:
             raise ToolError(
-                "control_run(%s) refused: group %r was started by your user, and "
+                "control_run(%s) refused: team run %r was started by your user, and "
                 "only they can %s it (its card in MindFlock). Tell them it is "
                 "ready instead." % (action, run.get("name"), action)
             )
@@ -340,7 +340,7 @@ class RunTools:
             return
         if by != "agent:" + me:
             raise ToolError(
-                "control_run(%s) refused: group %r was started by %s, not by you"
+                "control_run(%s) refused: team run %r was started by %s, not by you"
                 % (action, run.get("name"), by[len("agent:") :] or by)
             )
 
@@ -351,8 +351,8 @@ class RunTools:
         lane = args.get("lane")
         if lane == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "lane merge merges every item's PR with no one looking: pass "
-                "confirm_merge=true only when that was clearly asked for"
+                "lane=merge (fast-track to Merge) merges every item's PR with no one "
+                "looking: pass confirm_merge=true only when that was clearly asked for"
             )
         items = [str(i).strip() for i in args["items"] if str(i).strip()]
         if not items:
@@ -522,12 +522,12 @@ class RunTools:
         )
         if not me:
             raise ToolError(
-                "%s needs a MindFlock session identity — only the group's lead "
+                "%s needs a MindFlock session identity — only the team run's lead "
                 "calls it" % action
             )
         if not lead or me != lead:
             raise ToolError(
-                "%s refused: you are not the lead of group %r (its lead is %s)"
+                "%s refused: you are not the lead of team run %r (its lead is %s)"
                 % (action, run.get("name"), lead or "none")
             )
         return me
@@ -562,7 +562,7 @@ class RunTools:
                 "ok": True,
                 "problems": [],
                 "split": False,
-                "note": "no split — the group is dissolved and this is an ordinary "
+                "note": "no split — the team run is dissolved and this is an ordinary "
                 "session now. Do the whole task yourself, here"
                 + (
                     "; when your turn ends MindFlock fast-tracks it (%s)" % lane

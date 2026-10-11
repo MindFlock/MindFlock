@@ -1,4 +1,4 @@
-/** Work with someone (peer links): the wording every surface shares — the
+/** People (peer links): the wording every surface shares — the
  * bell/toast line per peer.* event, the invite countdown, the rail chip — and
  * the code / reconnect parsing the join and Reconnect boxes run. */
 

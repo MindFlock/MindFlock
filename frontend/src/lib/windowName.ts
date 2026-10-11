@@ -99,9 +99,7 @@ export function slotNumber(title: string): string {
       }
       return idx >= 0 && idx < 9 ? String(idx + 1) : "";
     }
-    const listed = (snapshot() as Instance[]).filter(
-      (i) => i && !isVerifySession(String(i.title || ""))
-    );
+    const listed = (snapshot() as Instance[]).filter((i) => i && !isVerifySession(i));
     const { rows } = orderedInstances(listed, ui.order);
     const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
     const local = filtered.filter((i) => !(i as { device?: string }).device);
@@ -113,6 +111,24 @@ export function slotNumber(title: string): string {
   } catch {
     return "";
   }
+}
+
+/** The session already CALLED `name` — by its title or by what it shows
+ * (`windowName`) — other than `title` itself; "" when the name is free.
+ *
+ * A rename is the session's name everywhere (the rail, the phone, a push), so
+ * two windows may not share one. Exact match, as typed. This device's sessions
+ * only, like the server's twin (core/aliases.owner_of), which has the last
+ * word: it refuses the rename with a 409 this check merely gets ahead of. */
+export function nameTakenBy(title: string, name: string): string {
+  const n = String(name || "").trim();
+  if (!n) return "";
+  for (const i of snapshot()) {
+    const t = i?.title;
+    if (!t || t === title || (i as { device?: string }).device) continue;
+    if (n === t || n === windowName(t)) return t;
+  }
+  return "";
 }
 
 /** Publish on the extension API, next to `mf.toast`. `core/events.js` creates

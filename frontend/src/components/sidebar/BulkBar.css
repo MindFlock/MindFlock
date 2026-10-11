@@ -46,3 +46,102 @@
   border-color: var(--red);
   color: var(--red);
 }
+
+/* Select mode: a strip pinned to the top of the list — the count, then the
+   verbs, then (when asked) an inline confirm strip. The picked sessions are
+   the rail rows themselves (.inst.bulk-picked, below). */
+#bulk-bar.bulk-open {
+  flex-direction: column;
+  align-items: stretch;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  margin: 0 6px 4px;
+}
+
+#bulk-bar .bulk-done {
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+#bulk-bar .bulk-done:hover {
+  color: var(--text);
+}
+
+/* A picked rail row: tinted, with a ✓ where its slot number was. */
+.inst.bulk-picked .inst-row {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.inst.bulk-picked .idx {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#bulk-bar .bulk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+#bulk-bar .bulk-verbs {
+  justify-content: flex-start;
+}
+
+#bulk-bar .bulk-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The question is neutral; only Delete's answer is red (via .danger). */
+#bulk-bar .bulk-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#bulk-bar .bulk-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-acts button.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#bulk-bar .bulk-held {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 6px;
+  background: var(--panel);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-held-x {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+#bulk-bar .bulk-held-x:hover {
+  color: var(--text);
+}

@@ -66,6 +66,7 @@ describe("PREF_MAP", () => {
       mf_idle_flock: "idle_flock",
       mf_idle_after: "idle_after",
       mf_hints: "hints",
+      mf_map_tour: "map_tour",
     });
     // Every prefs field is mapped, and nothing else is.
     expect(PREF_MAP.map((p) => p.field).sort()).toEqual(Object.keys(PREF_DEFAULTS).sort());
@@ -624,17 +625,12 @@ describe("saving a prompt whose name differs only in case", () => {
     else g.localStorage = prevLS;
   });
 
-  it("replaces the old one and reports it, instead of keeping both for the server to drop one", async () => {
-    const { upsertUserPreset, loadUserPresets, saveUserPresets } = await import("../lib/presets");
-    const kv = memKV({ "mindflock.prompt_presets": JSON.stringify([{ name: "Deploy", prompt: "old" }]) });
-    g.localStorage = kv;
-    const r = upsertUserPreset("deploy", "new");
-    expect(r.replaced).toBe("Deploy");
-    expect(loadUserPresets()).toEqual([{ name: "deploy", prompt: "new" }]);
-    // Same spelling: a plain overwrite, nothing to report.
-    expect(upsertUserPreset("deploy", "newer").replaced).toBeNull();
-    // A list handed in with both keeps the newer (later) one.
-    expect(saveUserPresets([{ name: "X", prompt: "1" }, { name: "x", prompt: "2" }])).toEqual(["X"]);
-    expect(loadUserPresets()).toEqual([{ name: "x", prompt: "2" }]);
+  it("the saved-prompt store is the templates list now — see presetsMigration.test.ts", async () => {
+    // What this block used to pin (upsert replacing a case-variant, a list
+    // folding to one name) is pinned there against the server-backed store;
+    // the legacy localStorage key is only the migration's source.
+    const { PRESET_STORE_KEY } = await import("../lib/presets");
+    const { OLD_PRESETS_STORAGE_KEY } = await import("../lib/templates");
+    expect(PRESET_STORE_KEY).toBe(OLD_PRESETS_STORAGE_KEY);
   });
 });

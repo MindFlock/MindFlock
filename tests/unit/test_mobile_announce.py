@@ -9,7 +9,7 @@ say so instead of pretending.
 
 Covers :func:`mobile_access.tailnet_url`, :mod:`backend.web.core.mobile_announce`
 and the three moments that fire it (server startup, the ntfy channel coming on,
-Settings → Mobile's tailscale toggle).
+Settings → Your phone's tailscale toggle).
 """
 
 from __future__ import annotations

@@ -35,11 +35,12 @@ def test_manifest_lists_migrated_addons():
         "fleet",
         "onboarding",
         "dbclient",
+        "optimizer",
     ]
     # Each UI addon contributes a frontend descriptor with a known slot. The
     # "connections" addon is API-only (its list renders inline in the Settings →
     # Connections screen), so it has no frontend descriptor; nor has "fleet"
-    # (Settings → Devices reads /api/fleet directly).
+    # (Settings → Your devices reads /api/fleet directly).
     api_only = {"connections", "fleet", "onboarding"}
     for a in data["addons"]:
         if a["id"] in api_only:

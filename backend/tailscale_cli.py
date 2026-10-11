@@ -27,7 +27,7 @@ window, whoever asks first; concurrent askers wait for it). :func:`health`
 reads that snapshot into what a person needs to know: signed in or not, to
 which tailnet, as which device, MagicDNS/HTTPS, key expiry, and the one next
 step for whatever is wrong (``issues``). The doctor, ``GET
-/api/tailscale/health`` and Settings → Devices' "Tailscale on this device"
+/api/tailscale/health`` and Settings → Your devices' "Tailscale on this device"
 card all render the same list. :func:`start_login` is the one write: it
 starts ``tailscale login`` (or ``up``) in the background and hands back the
 sign-in URL; it never waits for the person to finish.

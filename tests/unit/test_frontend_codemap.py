@@ -397,7 +397,8 @@ def test_zones_dialog_is_a_modal(js):
     """Delete on a zone's x button, or Ctrl+W in its pattern input, must not
     end the session behind the dialog; Escape closes it with focus anywhere."""
     km = _region(js, "src/lib/keymap.ts")
-    assert '"red-zones"' in km and '"red-zones-dialog"' in km
+    # Every store dialog (the zones dialog included) holds the end shortcuts.
+    assert "function overlayOpen()" in km and "OVERLAY_SELECTOR" in km
     dlg = _region(js, "src/components/dialogs/RedZonesDialog.tsx")
     assert in_bundle('document.addEventListener("keydown", onKey)', dlg)
 

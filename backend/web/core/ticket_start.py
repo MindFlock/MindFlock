@@ -302,10 +302,13 @@ async def list_assigned_tickets() -> dict:
         # park them behind the Add menu by default — they typically dwarf the
         # actionable ones.
         states_by_id: dict = {}
+        started_type_ids: set = set()
         try:
             for st in await provider.list_states():
                 name = st.get("name") or str(st.get("id"))
                 states_by_id[str(st.get("id"))] = name
+                if str(st.get("type") or "") == "started":
+                    started_type_ids.add(str(st.get("id")))
                 if name and name not in bucket_order:
                     bucket_order.append(name)
                 if name and str(st.get("type") or "") == "done":
@@ -356,6 +359,12 @@ async def list_assigned_tickets() -> dict:
         # and a client-side list of "providers that support merging" is a second
         # copy of that fact waiting to disagree with the first.
         merge_ready = bool(getattr(provider, "can_merge", False))
+        # Tickets a teammate is on, as the tracker says (tracker_claims): who
+        # "me" is here and which states are started-type, once per source.
+        from backend.ticket_ingestion import tracker_claims as _tracker
+
+        claim_me = await _tracker.me_for(provider, source_key)
+        started = frozenset(started_type_ids)
         for story in stories:
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
@@ -369,6 +378,17 @@ async def list_assigned_tickets() -> dict:
                 failures=failures,
                 ingest_labels=ingest_label_list(src),
             )
+            claimed = _tracker.claimed_by_other(
+                story, src, me=claim_me, started_ids=started
+            )
+            if (
+                claimed
+                and claimed["why"] == "label"
+                and _tracker._mirrored_here(source_key, story)
+            ):
+                claimed = None  # the label this device put on it
+            if claimed:
+                reasons = [_tracker.describe(claimed), *reasons]
             bucket = story.state or NO_STATE_BUCKET
             if bucket not in bucket_order:
                 bucket_order.append(bucket)
@@ -402,6 +422,13 @@ async def list_assigned_tickets() -> dict:
                     "mine": (not any_assignee)
                     or bool(src.member_id and src.member_id in story.owner_ids),
                     "assignee": ", ".join(story.owner_names),
+                    # A teammate the tracker says is on it: Intake reads
+                    # "<name> is on this" and Begin work needs an Override.
+                    **(
+                        {"claimed_by": {"name": claimed["name"], "why": claimed["why"]}}
+                        if claimed
+                        else {}
+                    ),
                 }
             )
     # Only buckets that actually hold tickets; No state sinks to the end.
@@ -499,6 +526,14 @@ async def move_to_start_state(story) -> str:
     return await move_started(story, _load_config())
 
 
+async def mirror_claim(story, title: str = "") -> dict:
+    """Assign + label the ticket for this session (best-effort) — see
+    :func:`backend.ticket_ingestion.tracker_claims.mirror_started`."""
+    from backend.ticket_ingestion.tracker_claims import mirror_started
+
+    return await mirror_started(story, _load_config(), title=title)
+
+
 def record_started(story) -> None:
     """In-flight ledger marker — from here concurrent pipeline scans treat the
     ticket as taken (same guard as the orchestrator's). A team run's
@@ -567,6 +602,7 @@ async def launch(
     lineage: Optional[dict] = None,
     extra_prompt: str = "",
     run_id: str = "",
+    override_claim: bool = False,
 ) -> dict:
     """Start a coding session for one ticket and return the 202 body.
 
@@ -585,9 +621,14 @@ async def launch(
     * ``lineage``: ``{parent, spawned, report_back, note}`` from
       ``server._intake_lineage`` (all-empty for the Intake panel and runs).
     * ``extra_prompt``: appended after the ticket text (a run's brief).
+    * ``override_claim``: start it although the TRACKER says a teammate is on
+      it (the owner's "Override"; the route decides who may ask). A paired
+      device's claim is never overridable here.
 
     Raises :class:`LaunchError` (404 unknown ticket / source, 409 a session
-    for it already exists, 502 the tracker failed).
+    for it already exists, another of your devices has it, or the tracker
+    says someone else is on it — ``claimed_by`` + ``override`` in the body —
+    502 the tracker failed).
     """
     srv = _server()
     lineage = dict(lineage or _NO_LINEAGE)
@@ -656,6 +697,25 @@ async def launch(
                 "elsewhere": elsewhere,
             },
         )
+    # …or a teammate whose MindFlock isn't paired with this one: the ticket
+    # itself says so (assigned to them + the claim label, or started by them).
+    if not override_claim:
+        from backend.ticket_ingestion import tracker_claims as _tracker
+
+        claimed = await _tracker.tracker_holder(story)
+        if claimed:
+            srv._pending_drop(early)
+            srv._pending_drop(title)
+            raise LaunchError(
+                409,
+                {
+                    "error": "%s: %s" % (title, _tracker.describe(claimed)),
+                    "title": title,
+                    "claimed_by": claimed,
+                    # What the owner re-POSTs to start it anyway.
+                    "override": "override_claim",
+                },
+            )
     branch = branch or branch_for(story)
     # The branch is known now, so the row can read as the ticket it is rather
     # than a bare slug (add() keeps the original `since`).
@@ -794,6 +854,9 @@ async def launch(
                 srv.log.InfoLog.Printf(
                     "ticket %s moved to its source's start state (%s)", title, moved
                 )
+            # …and say on the ticket who is on it, for teammates whose
+            # MindFlock isn't paired with this one (tracker_claims).
+            await mirror_claim(story, title)
             if srv.log.InfoLog is not None:
                 srv.log.InfoLog.Printf("forced ticket session %s live", title)
         except Exception as err:  # noqa: BLE001

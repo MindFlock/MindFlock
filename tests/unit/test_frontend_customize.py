@@ -49,7 +49,7 @@ def test_customize_is_the_sidebar_picker_and_prompts_is_its_own_dialog():
     assert "<CustomizeDialog />" in app and "<PromptsDialog />" in app
     assert "OutboxDialog" not in app
     keymap = _src("lib/keymap.ts")
-    assert '"prompts-dialog",' in keymap
+    assert "OVERLAY_SELECTOR" in keymap  # any dialog holds the end shortcuts
     store = _src("state/store.ts")
     assert '| "customize"' in store
     assert '| "outbox"' not in store
@@ -113,7 +113,7 @@ def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     assert '"mf-open-bell"' in src and '"mf-close-bell"' in src
     # The badge counts the merged list; the heading keeps its name.
     assert "attn.length > 99" in src and "attn.length === 0" in src
-    assert "Needs attention" in src
+    assert "Needs you" in src
     # Every clarify row answers in place; only a family's can redirect.
     assert 'variant="bell"' in src
     # A run toast that needs you opens the bell; a finished one shows its
@@ -228,8 +228,8 @@ def test_the_palette_lists_commands_before_focus_rows():
     for label in (
         'label: "Prompts…", hint: "manage saved prompts"',
         'label: "Assistant agent file…"',
-        'label: "Recently closed…", hint: "reopen or clean up closed sessions"',
-        "label: `Make PR — ${t}`",
+        'label: "Recently closed…", hint: "reopen or delete closed sessions"',
+        "label: `Open PR — ${t}`",
         "label: `Merge PR — ${t}`",
         'label: "Verify — check what shipped"',
         'label: "Customize…", hint: "choose sidebar bars"',
@@ -319,4 +319,7 @@ def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
 
 def test_new_page_two_templates_strip_says_what_a_template_is():
     src = _src("components/dialogs/NewSessionDialog.tsx")
-    assert '<span title="Saved New-session setups">Templates</span>' in src
+    assert (
+        '<span title="Saved New-session setups — one list on every device">Templates</span>'
+        in src
+    )

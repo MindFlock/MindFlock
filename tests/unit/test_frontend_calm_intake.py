@@ -3,7 +3,7 @@
 What these hold in place:
 
 - ONE Fast-track ladder. The pane's ⏩, the row › menu and New's Options read
-  Off / Commit / Push / Open a PR / Merge when green; Intake's pickers used to
+  Off / Commit / Push / Open PR / Merge when green; Intake's pickers used to
   add a sixth word ("Agent only") for what Off already does. The intake rows
   offer an explicit ``off`` (the start routes accept it) and the source / repo
   defaults show a stored ``agent`` as Off.
@@ -187,7 +187,7 @@ def test_security_and_accounts_never_call_a_native_confirm():
 
 
 def test_devices_screen_asks_inline_and_owns_settings_sync():
-    """Settings → Devices: Remove / Leave ask with InlineConfirm and codes are
+    """Settings → Your devices: Remove / Leave ask with InlineConfirm and codes are
     typed into inline inputs — the desktop app has no native confirm/prompt,
     so either would silently do nothing there. Settings sync moved here from
     Security (it only runs between your own devices)."""
@@ -210,7 +210,9 @@ def test_devices_screen_asks_inline_and_owns_settings_sync():
     sec = _code(_SETTINGS / "screens" / "Security.tsx")
     assert "SettingsSyncRows" not in sec
     assert "/api/settings/sync" not in sec
-    assert "TailnetTrustRows" in sec
+    # Trusted Tailscale accounts moved under Your devices → Advanced.
+    assert "TailnetTrustRows" not in sec
+    assert "TailnetTrustRows" in _code(_SETTINGS / "screens" / "DevicesAdvanced.tsx")
 
 
 def _screens_block() -> str:
@@ -236,15 +238,15 @@ def test_settings_nav_order_and_groups():
         "orchestration",
         "workspace",
         "ide",
-        "devices",
         "security",
         "appearance",
+        "devices",
         "mobile",
         "peer",
+        "extensions",
         "doctor",
         "logs",
         "advanced",
-        "extensions",
         "traffic",
     ]
     for k in ("general", "connections", "notifications"):
@@ -253,11 +255,14 @@ def test_settings_nav_order_and_groups():
         assert groups[k] == "Agents", k
     for k in ("workspace", "ide"):
         assert groups[k] == "Code", k
-    # "Devices" (your other computers, settings sync) leads "This device":
-    # it is where a second computer becomes one of yours.
-    for k in ("devices", "security", "appearance", "mobile", "peer"):
+    for k in ("security", "appearance"):
         assert groups[k] == "This device", k
-    for k in ("doctor", "logs", "advanced", "extensions", "traffic"):
+    # Your devices, Your phone and People: the machines and people you work with.
+    for k in ("devices", "mobile", "peer"):
+        assert groups[k] == "Devices and people", k
+    # Extensions are something you add, not a fault: their own group.
+    assert groups["extensions"] == "Extensions"
+    for k in ("doctor", "logs", "advanced", "traffic"):
         assert groups[k] == "Troubleshooting", k
     # `group` comes AFTER label, so `{ key: "coding", label: "Agent CLI"` stays
     # one contiguous phrase.

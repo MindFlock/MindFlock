@@ -27,10 +27,13 @@ REST API with a token, then to a browser URL).
 |---|---|
 | `backend/session/` | Engine: Instance lifecycle, git worktrees, tmux/PTY, provisioning |
 | `backend/providers/` | Per-CLI launch/resume/classification/usage; add a CLI with a TOML, no Python |
-| `backend/web/` | FastAPI server (`server.py` = routes + loops only; helpers in `core/`, one module per concern — see server.py's docstring map), `addons/`, `static/` (no-build frontend) |
+| `backend/web/` | FastAPI server (`server.py` = routes + loops only; helpers in `core/`, one module per concern — see server.py's docstring map), `addons/`, `static/` (committed build output of `frontend/` — rebuild with `npm run build` in `frontend/` in the same commit) |
+| `frontend/` | The React + TypeScript source (Vite) of the web UI; vitest tests in `src/__tests__/`, run by CI with `npm test` |
+| `electron/` | The desktop app: a thin shell (`main.js`, `preload.js`, `offline.html`) that auto-starts the server and installs the engine on first launch |
 | `backend/ticket_ingestion/` | Ticket/PR ingestion pipeline (Shortcut/Jira/Linear/GitHub Issues/Asana) |
-| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 25 agent-to-agent tools over the HTTP API, identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/` |
-| `docs/` | architecture, session-engine, web-api, web-ui, providers, extensions, configuration, cli, mcp, development, ingestion-pipeline |
+| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 27 agent-to-agent tools over the HTTP API (plus 7 peer-only tools in peer mode), identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/` |
+| `backend/peer/` | Peer links: pair-code invites, the pinned-key TLS handshake, the relay/tunnel carriers, the sandboxed shared folder and its agent API |
+| `docs/` | architecture, session-engine, web-api, web-ui, providers, extensions, configuration, cli, mcp, team-runs, peer-link, accounts, development, ingestion-pipeline |
 
 ## Conventions
 

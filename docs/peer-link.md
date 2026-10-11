@@ -11,8 +11,8 @@ two people's agents code together.
 You and a collaborator each run MindFlock. One of you **invites**, the other
 **joins**; then each of you may **share one folder** with that link.
 
-1. **Invite.** Settings → Work with someone (or the command palette's *Work
-   with someone…*) → **Create invite**, or `mindflock peer invite`. There is
+1. **Invite.** Settings → People (once "People"; or the command
+   palette's *People…*) → **Create invite**, or `mindflock peer invite`. There is
    nothing to turn on or configure first: inviting turns peer links on. Without
    cloudflared the screen first asks where the other person is — *on my
    network or tailnet* (a direct invite now) or *somewhere else* (install
@@ -24,7 +24,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    moment they join. The listener only runs while an invite or a link that you
    accepted exists.
 2. **Join.** The other person pastes the message — all of it, or just the
-   code — into Work with someone → **Join**, the palette's *Join with a
+   code — into People → **Join a peer**, the palette's *Paste a
    code…*, or `mindflock peer join <code>`. Joining turns peer links on too,
    and needs nothing installed. A relay join can take up to a minute (a new
    tunnel's name has to appear in DNS); the screen shows each stage, and a
@@ -56,7 +56,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    no shared session exists here waits in Messages, and is handed to the
    shared session once you share a folder.
 5. **Verify the safety number.** Both sides show one like `482-019-337-5`
-   (Work with someone, `mindflock peer links`). Read it to each other by
+   (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
    middle: **unlink now**.
 6. **Share a folder.** On the link: repo path, optional branch, the agent
@@ -69,7 +69,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    `peer_get_diff`, `peer_read_file`, `peer_list_files`, `checkpoint`,
    `whoami`); the peer's messages are typed in as `[MindFlock PEER message …]`
    and framed as untrusted input. Steer it from its terminal like any session.
-   Its shell pane, IDE, ship / push / PR buttons, autopilot, spawning, rename
+   Its shell pane, IDE, ship / push / PR buttons, Fast-track, spawning, rename
    and team runs are switched off. The sidebar row says **Shared with
    *B*** (with their connection state), the actions it refuses aren't
    offered, and the link card's **Open session** jumps to it.
@@ -90,8 +90,17 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
     gives you both a new safety number to compare. The box also takes a bare
     `wss://…` or `host:port` address.
 
-> Status: design spec + implementation contract. Sections marked **CONTRACT**
-> are the interfaces the modules must implement exactly; the rest explains why.
+> Status: **shipped.** Pair codes, the pinned-key handshake, the sandboxed
+> shared folder and the peer MCP tools landed in 0.7.0; invites and joins
+> that turn peer links on by themselves, `peer.relay = auto` (a Cloudflare
+> quick tunnel whenever `cloudflared` is installed) and any sandbox-capable
+> agent CLI landed in 0.7.1 (see the CHANGELOG). Still open: the sandbox
+> needs Linux + bubblewrap, so shared sessions run only there (the sandbox
+> check returns "peer sandbox needs Linux + bubblewrap" on any other OS);
+> aider can't take the peer tools (no MCP client); and across networks the
+> only carriers are the Cloudflare quick tunnel or your own WebSocket-capable
+> `wss://` proxy. Sections marked **CONTRACT** are the interfaces the modules
+> implement exactly; the rest explains why.
 
 ## Threat model
 
@@ -123,7 +132,7 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Peer prompt-injecting our agent → escape | Our shared-folder agent runs under **bubblewrap**: its own mount, PID, IPC, UTS and network namespaces, all capabilities dropped, a tmpfs `/home` and `/tmp`, only `work/` and its own `home/` writable, and no tmux socket, D-Bus, SSH agent or host loopback. Network goes only through an allow-listed CONNECT proxy on a unix socket. |
 | Escaped agent driving MindFlock | The sandbox cannot reach `127.0.0.1:8765` (separate netns) or read the settings/auth token (hidden). Its MCP runs in **peer mode**: only peer tools, talking to a per-share unix socket that accepts only peer ops for that one share. |
 | Agent planting git config to run code on the host | The folder's `.git` is a gitfile pointing to `repo.git/`, which is **read-only inside the sandbox**. Both the gitfile and `repo.git` are bind-mounted read-only, so they can't be replaced. Host git on the share runs with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, hooks off, fsmonitor off, and submodules ignored. `repo.git/info/attributes` unsets filter/diff/merge drivers for every path, so a planted `.gitattributes` can't name one. The engine's own git calls on a share folder (status polling, diff stats) add `--ignore-submodules=all` and the same `-c` hardening, and refuse `add`. The trusted index never holds a gitlink: stripped at creation and at every checkpoint. |
-| Host features executing folder content | Shared sessions refuse: ship/push/PR/autopilot, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
+| Host features executing folder content | Shared sessions refuse: ship/push/PR/Fast-track, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
 | An untrusted relay in the path (`peer.relay`) | The same pinned-key TLS 1.3 runs end to end *inside* the relay's WebSocket; the relay's own TLS is not trusted. A 128-bit ingress token in the relay path keeps scanners off the handshake, and everything else gets one constant `404`. See [Connecting across networks](#connecting-across-networks). |
 | Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and stops that link's shared session (the folder is kept). Links have an idle expiry (30 days). |
 
@@ -572,7 +581,7 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   peer-mode env (no host, port, token or session title) and auto-approves the
   peer tool names.
 - Refused for `PeerShare` sessions (server-side 409):
-  - ship, push, PR, merge, autopilot, team runs;
+  - ship, push, PR, merge, Fast-track, team runs;
   - spawn from it;
   - worktree setup scripts, IDE/editor launch, the companion shell pane
     (or sandbox it), and rename.

@@ -3414,10 +3414,31 @@ def sweeper(monkeypatch):
     monkeypatch.setattr(server, "close_instance", _close)
     monkeypatch.setattr(server.ENGINE, "instances", {})
 
-    def register(title, inst):
+    # Verify runs are the sessions the flag names (run_test_plan stamps them;
+    # the startup backfill covers runs that predate the flag). A user's own
+    # `verify-foo` has no flag and is never swept.
+    from backend.web.core import hidden_sessions as _hs
+
+    flags = {}
+    monkeypatch.setattr(_hs, "hidden_by", lambda title: flags.get(title, ""))
+
+    def register(title, inst, hidden=None):
         monkeypatch.setitem(server.ENGINE.instances, title, inst)
+        if hidden is None:
+            hidden = "verify" if title.startswith("verify-") else ""
+        if hidden:
+            flags[title] = hidden
 
     return closed, register
+
+
+def test_sweep_never_closes_a_users_own_verify_titled_session(sweeper):
+    closed, register = sweeper
+    register("verify-mine", _verify_inst(), hidden="")
+
+    _sweep()
+
+    assert closed == []
 
 
 def _sweep():

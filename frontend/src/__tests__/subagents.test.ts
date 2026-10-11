@@ -226,7 +226,8 @@ describe("the bird index", () => {
     expect(sum.folders[0].label).toMatch(/^backend › /);
     expect(sum.folders[0].cols).toEqual([h.ag.color]);
     const html = renderToStaticMarkup(createElement(BirdIndex, { ...base, size: "wide", followKey: null }));
-    expect(html).toContain("this session <b>1</b> + other sessions <b>0</b>");
+    // no other session changed anything: the split would only repeat the total
+    expect(html).not.toContain("other sessions");
     expect(html).toContain("<b>1</b> in all");
     expect(html).toContain('aria-label="Keep out on ' + sum.folders[0].label + '"');
     expect(html).toContain('aria-label="Only here on ' + sum.folders[0].label + '"');

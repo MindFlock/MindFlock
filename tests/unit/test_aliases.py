@@ -194,3 +194,96 @@ def test_browser_notify_channel_asks_the_app_what_the_window_is_called():
 def test_spa_syncs_renames_to_server():
     js = client.get("/app.js").text
     assert "/api/aliases" in js  # setAlias delta + boot-time bulk seed
+
+
+# --------------------------------------------------------------------------- #
+# A rename is the session's name everywhere, so names are unique
+# --------------------------------------------------------------------------- #
+class _Inst:
+    def __init__(self, title, branch=""):
+        self.Title = title
+        self.Branch = branch
+
+
+@pytest.fixture
+def two_sessions(monkeypatch):
+    insts = {
+        "alpha": _Inst("alpha"),
+        "sc-12345": _Inst("sc-12345", "feature/sc-12345/dark-mode"),
+    }
+    # setattr, never setitem: the real engine may hold the owner's sessions.
+    monkeypatch.setattr(server.ENGINE, "instances", insts)
+    return insts
+
+
+def test_owner_of_matches_titles_renames_and_labels():
+    branches = {"alpha": "", "sc-12345": "feature/sc-12345/dark-mode"}
+    aliases.set_alias("alpha", "Login fix")
+    assert aliases.owner_of("Login fix", branches) == "alpha"
+    assert aliases.owner_of("alpha", branches) == "alpha"
+    # The label the rail shows an unrenamed ticket session is its name too.
+    assert aliases.owner_of("(tix) dark-mode/sc-12345", branches) == "sc-12345"
+    # A session never collides with itself, and the match is exact.
+    assert aliases.owner_of("Login fix", branches, exclude="alpha") == ""
+    assert aliases.owner_of("login fix", branches) == ""
+    assert aliases.owner_of("", branches) == ""
+
+
+def test_rename_to_another_sessions_name_is_409(two_sessions):
+    client.post("/api/aliases", json={"title": "alpha", "alias": "Login fix"})
+    r = client.post("/api/aliases", json={"title": "sc-12345", "alias": "Login fix"})
+    assert r.status_code == 409
+    assert r.json()["session"] == "alpha"
+    assert aliases.label_for("sc-12345") == "sc-12345"
+    # Another session's raw title is taken just the same.
+    assert (
+        client.post(
+            "/api/aliases", json={"title": "sc-12345", "alias": "alpha"}
+        ).status_code
+        == 409
+    )
+    # Renaming a session to its own current name is not a collision.
+    assert (
+        client.post(
+            "/api/aliases", json={"title": "alpha", "alias": "Login fix"}
+        ).status_code
+        == 200
+    )
+
+
+def test_a_closed_sessions_old_rename_does_not_hold_the_name(two_sessions):
+    aliases.set_alias("long-gone", "Login fix")  # not in ENGINE.instances
+    r = client.post("/api/aliases", json={"title": "alpha", "alias": "Login fix"})
+    assert r.status_code == 200
+
+
+def test_new_session_may_not_take_a_renamed_sessions_name(two_sessions):
+    aliases.set_alias("alpha", "Login fix")
+    r = client.post("/api/instances", json={"title": "Login fix", "program": "bash"})
+    assert r.status_code == 409
+    assert "already named" in r.json()["error"]
+
+
+def test_untitled_numbering_skips_a_renamed_name(two_sessions):
+    aliases.set_alias("alpha", "untitled")
+    assert server._free_untitled() == "untitled-2"
+
+
+def test_instances_listing_carries_the_name(two_sessions):
+    aliases.set_alias("alpha", "Login fix")
+    rows = [
+        {"title": "alpha"},
+        {"title": "sc-12345", "branch": "feature/sc-12345/dark-mode"},
+        {"title": "rig::alpha", "device": "rig", "name": "theirs"},
+    ]
+    aliases.overlay(rows)
+    assert rows[0]["name"] == "Login fix"
+    assert rows[1]["name"] == "(tix) dark-mode/sc-12345"
+    # Another device's row keeps the name its own server gave it.
+    assert rows[2]["name"] == "theirs"
+
+
+def test_phone_renders_the_name_not_the_title():
+    js = client.get("/mobile.js").text
+    assert "name.textContent = inst.name || title;" in js
+    assert "function nameOf(title)" in js

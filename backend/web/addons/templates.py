@@ -2,9 +2,12 @@
 
 A template bundles the New-session inputs a user repeats — program, repo,
 provisioning, and a seed prompt — under a name, so a power user launches a
-familiar run in one click instead of re-filling the dialog. It's opt-in (a
-sidebar bar newcomers can ignore): calm by default, power as you get
-comfortable.
+familiar run in one click instead of re-filling the dialog. The New dialog's
+Templates strip applies one (and remembers the last one used per repo, so
+Name → Enter reuses it); a template that is only a prompt is what the
+sidebar Prompts bar and the Prompt fold's "Saved prompt…" list show. The
+list is one list everywhere: settings sync carries it between devices as the
+``store:templates`` unit (:mod:`backend.web.core.sync_stores`).
 
 Storage is a small JSON file (``~/.mindflock/session_templates.json``), atomic
 writes, tolerant of a missing/corrupt file — the same pattern as
@@ -211,12 +214,12 @@ class TemplatesAddon(Addon):
                 id="templates",
                 label="Templates",
                 where="dialog",
-                module="/addons/templates.js",
                 api_base="/api/templates",
                 order=35,
-                # where="dialog": no sidebar bar. slots.js still imports the
-                # module (it keys on `module`, not `where`), which builds the
-                # modal and exposes window.mindflockAddons.templates.open().
-                # Templates are surfaced from the + New dialog.
+                # No module and no sidebar bar: the manager is the SPA's own
+                # TemplatesDialog (New → Templates → Manage…, or the command
+                # palette's "Templates…"), which talks to this router
+                # directly. builtin_ui keeps slots.js from looking for one.
+                builtin_ui=True,
             )
         ]

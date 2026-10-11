@@ -20,7 +20,7 @@ import { useServerRestart } from "./useServerRestart";
 
 export interface MakeReachableResult {
   restarting?: boolean;
-  /** Settings → Mobile's shared-link status, when the save named a link:
+  /** Settings → Your phone's shared-link status, when the save named a link:
    * its checklist (`steps`) is what still needs doing on this device. */
   shared_link?: { steps?: { id: string; title: string; state: string; reason: string }[] };
 }

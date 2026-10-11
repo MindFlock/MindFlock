@@ -116,11 +116,11 @@ def _devices(dev: dict, ts_ready: bool) -> dict:
         return _step(
             "devices",
             "ok",
-            "this is your first computer — add others later (Settings → Devices)",
+            "this is your first computer — add others later (Settings → Your devices)",
             choice="first",
         )
     if choice == "join":
-        reason = "paste the code your other computer shows (Settings → Devices → Add a device)"
+        reason = "paste the code your other computer shows (Settings → Your devices → Add a device)"
         if not ts_ready:
             reason += " — after Tailscale is signed in here (below)"
         return _step(

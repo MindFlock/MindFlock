@@ -18,6 +18,7 @@ import {
   NO_ORIGIN_CMD,
   NO_ORIGIN_ALT,
 } from "../lib/stage";
+import { deriveSessionState } from "../lib/sessionState";
 
 const inst = (o: Partial<Instance>): Instance => o as unknown as Instance;
 
@@ -31,51 +32,53 @@ afterEach(() => queryClient.removeQueries({ queryKey: ["config"] }));
 
 describe("chipState (persistent status chip)", () => {
   it("prioritizes lifecycle states over activity/stage", () => {
-    expect(chipState(inst({ title: "s1", workspace_missing: true })).label).toBe("missing");
-    expect(chipState(inst({ title: "s2", status: "loading" })).cls).toBe("s-provisioning");
-    expect(chipState(inst({ title: "s3", status: "paused" })).label).toBe("paused");
-    expect(chipState(inst({ title: "s4", setup: { state: "failed" } })).label).toBe("setup ✗");
-    expect(chipState(inst({ title: "s5", setup: { state: "running" } })).label).toBe("setting up");
+    expect(chipState(inst({ title: "s1", workspace_missing: true })).label).toBe("Missing");
+    expect(chipState(inst({ title: "s2", status: "loading" })).cls).toContain("s-provisioning");
+    expect(chipState(inst({ title: "s3", status: "paused" })).label).toBe("Paused");
+    expect(chipState(inst({ title: "s4", setup: { state: "failed" } })).label).toBe("Setup failed");
+    expect(chipState(inst({ title: "s5", setup: { state: "running" } })).label).toBe("Starting");
   });
 
-  it("reflects live activity, then falls back to the workflow stage", () => {
-    expect(chipState(inst({ title: "a1", activity: "working" })).label).toBe("running");
-    // The chip says "question"; the activity value and the class stay "clarify".
+  it("reflects the session state, then falls back to the ship stage", () => {
+    // The words are lib/sessionState's — the same ones the bell and the toasts
+    // use; the class stays the activity word (CSS, Pane's reduce-motion cover).
+    const run = chipState(inst({ title: "a1", activity: "working" }));
+    expect(run.label).toBe("Working");
+    expect(run.cls).toBe("s-running tone-working");
     const ask = chipState(inst({ title: "a2", activity: "clarify" }));
-    expect(ask.label).toBe("question");
-    expect(ask.cls).toBe("s-clarify");
+    expect(ask.label).toBe("Question");
+    expect(ask.cls).toBe("s-clarify tone-attention");
     expect(ask.title).toContain("answer it in its pane or from the bell");
     const lim = chipState(inst({ title: "a2b", activity: "limit" }));
-    expect(lim.label).toBe("limit");
-    expect(lim.cls).toBe("s-limit");
-    expect(chipState(inst({ title: "a3", stage: "agent", activity: "idle" })).label).toBe("idle");
-    expect(chipState(inst({ title: "a4", stage: "agent", activity: "offline" })).label).toBe(
-      "offline"
-    );
+    expect(lim.label).toBe("Waiting on limit");
+    expect(lim.cls).toBe("s-limit tone-waiting");
+    expect(chipState(inst({ title: "a3", stage: "agent", activity: "idle" })).label).toBe("Idle");
+    const off = chipState(inst({ title: "a4", stage: "agent", activity: "offline" }));
+    expect(off.label).toBe("Offline");
+    expect(off.cls).toBe("s-offline tone-broken");
     expect(chipState(inst({ title: "a5", stage: "committed", activity: "idle" })).cls).toBe(
       "s-committed"
     );
-    expect(chipState(inst({ title: "a6", stage: "interrupt", activity: "idle", failed_step: "typecheck" })).label).toBe(
-      "✗ typecheck"
-    );
+    const pc = chipState(inst({ title: "a6", stage: "interrupt", activity: "idle", failed_step: "typecheck" }));
+    expect(pc.label).toBe("Pre-commit failed");
+    expect(pc.title).toBe("Pre-commit failed at: typecheck");
   });
 
-  it("badges a hook NAME but keeps a line of hook output in the tooltip", () => {
-    // The server's generic fallback can return a whole output line (up to 80
-    // chars). Pills are never truncated, so a sentence has to stay out of one.
+  it("keeps the failing hook — a name or a whole line of output — in the tooltip", () => {
     const line =
       "branch 'feature/sc-20834/token-saving-and-traffic-reduction' set up to track ...";
     const c = chipState(
       inst({ title: "a7", stage: "interrupt", activity: "idle", failed_step: line })
     );
-    expect(c.label).toBe("pre-commit ✗");
+    expect(c.label).toBe("Pre-commit failed");
     expect(c.title).toContain(line);
+  });
 
-    // "Run Tests (+3)" is a name, spaces and all — it still gets badged.
-    expect(
-      chipState(inst({ title: "a8", stage: "interrupt", activity: "idle", failed_step: "Run Tests (+3)" }))
-        .label
-    ).toBe("✗ Run Tests (+3)");
+  it("paints the dot's object: the same state the caller derived", () => {
+    const row = inst({ title: "same", activity: "offline" });
+    const ss = deriveSessionState(row);
+    expect(chipState(row, ss)).toEqual(chipState(row));
+    expect(chipState(row, ss).cls).toContain("tone-" + ss.tone);
   });
 });
 
@@ -95,7 +98,7 @@ describe("nextStep (guided next action)", () => {
     expect(step({ title: "n1", stage: "agent" })?.label).toBe("Commit…");
     expect(step({ title: "n2", stage: "interrupt" })?.label).toBe("Re-commit");
     expect(step({ title: "n3", stage: "committed" })?.label).toBe("Push");
-    expect(step({ title: "n4", stage: "pushed" })?.label).toBe("Make PR");
+    expect(step({ title: "n4", stage: "pushed" })?.label).toBe("Open PR");
     expect(step({ title: "n5", stage: "pr" })?.label).toBe("Merge");
   });
 
@@ -117,11 +120,11 @@ describe("nextStep (guided next action)", () => {
     const pr = step({ title: "g1", stage: "pushed" });
     // Still runnable — it degrades to GitHub's prefilled compare page — but
     // rendered as a hint that says where the click lands.
-    expect(pr?.label).toBe("Make PR ↗");
+    expect(pr?.label).toBe("Open PR ↗");
     expect(pr?.hint).toBe(true);
     expect(typeof pr?.run).toBe("function");
     expect(pr?.title).toContain(
-      "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
+      "add a GitHub token in Settings → Connections → GitHub → Connect, or install the GitHub CLI"
     );
     const merge = step({ title: "g2", stage: "pr", pr_url: "https://github.com/o/r/pull/7" });
     expect(merge?.label).toBe("Merge on GitHub ↗");
@@ -132,7 +135,7 @@ describe("nextStep (guided next action)", () => {
 
   it("uses the plain PR labels when the server can open PRs itself", () => {
     setCaps({ github: true });
-    expect(step({ title: "g4", stage: "pushed" })?.label).toBe("Make PR");
+    expect(step({ title: "g4", stage: "pushed" })?.label).toBe("Open PR");
     expect(step({ title: "g5", stage: "pushed" })?.hint).toBeUndefined();
     expect(step({ title: "g6", stage: "pr" })?.label).toBe("Merge");
   });
@@ -141,7 +144,7 @@ describe("nextStep (guided next action)", () => {
     // Feature-detected against an explicit false: an older server that omits
     // `github` must not lose its Make PR button.
     setCaps({});
-    expect(step({ title: "g7", stage: "pushed" })?.label).toBe("Make PR");
+    expect(step({ title: "g7", stage: "pushed" })?.label).toBe("Open PR");
     expect(step({ title: "g8", stage: "pr" })?.label).toBe("Merge");
   });
 
@@ -164,7 +167,7 @@ describe("back-to-idle pin", () => {
       activity: "idle",
     });
     expect(nextStep(pinned)?.label).toBe("Commit…");
-    expect(chipState(pinned).label).toBe("idle");
+    expect(chipState(pinned).label).toBe("Idle");
     // Released (a new commit landed): the real stage takes over again with no
     // client-side bookkeeping involved.
     expect(nextStep(inst({ title: "sr1", status: "running", stage: "pr" }))?.label).toBe("Merge");
@@ -175,7 +178,7 @@ describe("back-to-idle pin", () => {
     markLoopReset("loopy");
     // Echo: the header flips on the click, before the round trip lands.
     expect(nextStep(row)?.label).toBe("Commit…");
-    expect(chipState(row).label).toBe("idle");
+    expect(chipState(row).label).toBe("Idle");
     // A row that does NOT yet carry the pin must not cancel the echo — that is
     // exactly the in-flight window the echo exists for.
     reconcileLoopReset(row);
@@ -225,12 +228,12 @@ describe("activityChip (the Assistant window's pill)", () => {
   });
 
   it("distinguishes a parked agent from one that isn't running", () => {
-    expect(activityChip("idle").label).toBe("idle");
-    expect(activityChip("offline").label).toBe("offline");
+    expect(activityChip("idle").label).toBe("Idle");
+    expect(activityChip("offline").label).toBe("Offline");
     // Anything the server hasn't taught it is parked, never "running": a chip
     // that invents work is worse than one that under-reports it.
-    expect(activityChip("").label).toBe("idle");
-    expect(activityChip("something-new").label).toBe("idle");
+    expect(activityChip("").label).toBe("Idle");
+    expect(activityChip("something-new").label).toBe("Idle");
   });
 });
 

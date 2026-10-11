@@ -606,7 +606,7 @@ def test_disconnect_on_a_member_is_409(monkeypatch, tmp_path):
     r = c.post("/api/devices/rig/disconnect")
     assert r.status_code == 409
     assert r.json()["error"] == (
-        "Rig is one of your devices — remove it in Settings → Devices"
+        "Rig is one of your devices — remove it in Settings → Your devices"
     )
     assert remote.token_for("rig") == "pasted-token-0123456789"
 

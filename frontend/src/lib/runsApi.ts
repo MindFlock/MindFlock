@@ -46,12 +46,12 @@ export async function runAction(what: string, path: string, body: unknown = {}, 
 /** A budget row's "Raise to $N" (the bell): a budget pause is lifted by resuming with the
  * new budget — one call, never a separate PUT. */
 export function raiseBudget(runId: string, usd: number, name = ""): Promise<boolean> {
-  return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
+  return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The team run") + " resumed with a $" + usd + " budget");
 }
 
 /** The bell's "Stop" on a budget item, and the group menu's Cancel. */
 export function cancelRun(runId: string, name = ""): Promise<boolean> {
-  return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
+  return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The team run") + " cancelled — its sessions and branches are kept");
 }
 
 /** A raise to suggest: the next round number past what was spent (at least

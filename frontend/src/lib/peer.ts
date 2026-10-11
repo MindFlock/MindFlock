@@ -1,4 +1,4 @@
-/** Peer links ("Work with someone", docs/peer-link.md): the shapes /api/peer
+/** Peer links ("People", docs/peer-link.md): the shapes /api/peer
  * returns, the one join call every surface shares, and the pure wording —
  * countdowns, the bell/toast line per peer.* event, the rail chip. No DOM, so
  * the wording is tested in node (peer.test.ts).
@@ -157,9 +157,9 @@ export function carrierText(carrier: string | undefined): string {
 }
 
 /** The tooltip on every action a shared (sandboxed) session can't take. */
-export const PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in Work with someone";
+export const PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in People";
 
-/** The settings screen key of "Work with someone" (kept as "peer" so old deep
+/** The settings screen key of "People" (kept as "peer" so old deep
  * links still route). */
 export const PEER_SCREEN = "peer";
 
@@ -187,7 +187,7 @@ export function peerChip(inst: {
     title:
       (name ? "A shared folder with " + name : "A shared folder") +
       state +
-      ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in Work with someone.",
+      ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in People.",
   };
 }
 

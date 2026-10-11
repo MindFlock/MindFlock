@@ -152,7 +152,7 @@ def _norm_mode(raw: Optional[str]) -> str:
 
 
 def _settings_serve_mode() -> str:
-    """The persisted Settings → Mobile serve mode, or ``""``. Never raises —
+    """The persisted Settings → Your phone serve mode, or ``""``. Never raises —
     an unreadable settings store must not stop the server from booting."""
     try:
         from backend.config.settings import load_settings
@@ -176,7 +176,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     # Mode + port from env first, then CLI tokens (either order); a bare
     # `run.py 9000` means port 9000. When neither the CLI nor the env
-    # picks a mode, the persisted Settings → Mobile choice
+    # picks a mode, the persisted Settings → Your phone choice
     # (general.serve_mode) decides — that's how the desktop app's bare
     # `mindflock serve` auto-start comes up in tailscale mode after the user
     # flips the toggle. Final default is local (bind 127.0.0.1): exposure
@@ -341,7 +341,17 @@ def main(argv: Optional[List[str]] = None) -> None:
                 # below rather than running those probes a second time.
                 buf = io.StringIO()
                 init_wizard.report(buf, serving=True)
-                sys.stdout.write("\n" + buf.getvalue())
+                text = buf.getvalue()
+                # Keep it for GET /api/setup: when the desktop app starts this
+                # server the text lands in ~/.mindflock/desktop-server.log,
+                # which nobody reads — the checklist shows it instead.
+                try:
+                    from backend.web.core import setup_steps
+
+                    setup_steps.set_first_run_report(text)
+                except Exception:  # noqa: BLE001 — the report is advice
+                    pass
+                sys.stdout.write("\n" + text)
                 return
             # Every other boot gets just the checks a session can't start
             # without. A failure prints what's wrong, why the tool needs it, and

@@ -31,9 +31,11 @@ import { HistoryOverlay } from "./HistoryOverlay";
 import { PaneFindBar, type FindMode } from "./PaneFindBar";
 import { QueueTab } from "./QueueTab";
 import { ThreadTab } from "./ThreadTab";
-import { CodeMapTab } from "./CodeMapTab";
+import { CodeMapTab, prefetchCodeMap } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
+import { DriveButton } from "../presence/Presence";
+import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
@@ -44,6 +46,8 @@ type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
+/** Idle before the focused pane warms its Map (a click-through of several panes must not start several). */
+const MAP_PREFETCH_MS = 1500;
 
 /** Tabs this pane can draw a body for. A saved or requested tab outside it
  * shows the Agent tab instead of an empty pane. */
@@ -385,6 +389,15 @@ export function Pane({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [focused, missing, loading, histPane, paneFind, tab, title]);
 
+  // The Map is warmed for the pane you are looking at (focused, git, not
+  // already on the Map tab) after a short idle, so clicking Map paints at
+  // once — nine panes may exist, so never for all of them at once.
+  useEffect(() => {
+    if (!focused || !caps.git || missing || loading || tab === "map") return;
+    const t = setTimeout(() => void prefetchCodeMap(title), MAP_PREFETCH_MS);
+    return () => clearTimeout(t);
+  }, [focused, caps.git, missing, loading, tab, title]);
+
   const showTab = (t: Tab) => {
     // A tab click while the full-history overlay covers the body is
     // navigation, not a request to switch under glass: without this the
@@ -463,6 +476,7 @@ export function Pane({
   useEffect(() => {
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
+  const me = useMe(); // before the early returns: hooks run every render
 
   if (missing) {
     return (
@@ -506,7 +520,7 @@ export function Pane({
                 cleanupMissing(title);
               }}
             >
-              Clean up
+              Delete
             </button>
           </div>
         </div>
@@ -611,6 +625,12 @@ export function Pane({
             {deviceName}
           </span>
         )}
+        {(inst.behind || 0) > 0 && (
+          // Not a .stagechip: those render 0x0 inside a pane head.
+          <span className="pane-behind" title={`${inst.behind} commit(s) on the remote branch that this session doesn't have — Push offers to rebase`}>
+            ↓{inst.behind} behind
+          </span>
+        )}
         {hasDiffStat && <CtxLine inst={inst} />}
         <div className="tabs">
           <button data-tab="agent" className={tab === "agent" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("agent"); }}>
@@ -669,7 +689,7 @@ export function Pane({
               className={"thread-tab" + (tab === "thread" ? " active" : "")}
               title={
                 "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
-                (badge.needs ? `\n${badge.needs} waiting on your answer` : "") +
+                (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") +
                 (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
               }
               onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
@@ -792,6 +812,9 @@ export function Pane({
         </div>
         <AccountChip inst={inst} />
         <SessionUsageChip inst={inst} />
+        {/* The keyboard is one person's at a time (lib/presence): "Driving"
+            / "Watching — take control", only once someone else is here. */}
+        <DriveButton inst={inst} me={me} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
         {/* Pinned right even when the header scrolls: history and hide stay
             reachable without scrolling to the end of a long header. Copy-all
@@ -937,7 +960,7 @@ export function Pane({
             }}
           />
         )}
-        {reduceMotion && chip.cls === "s-running" && tab === "agent" && (
+        {reduceMotion && chip.cls.split(" ").includes("s-running") && tab === "agent" && (
           <RunningCover paneRef={paneRef} />
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}

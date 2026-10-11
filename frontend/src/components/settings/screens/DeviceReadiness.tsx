@@ -1,4 +1,4 @@
-/** Settings → Devices pieces that get a new computer ready to work.
+/** Settings → Your devices pieces that get a new computer ready to work.
  *
  *  - NewComputerLine: beside a live "Add a device" code, one copyable line
  *    that installs MindFlock on a brand-new computer (pinned to THIS device's
@@ -80,7 +80,7 @@ export function NewComputerLine({ code }: { code: string }) {
         <a href={b.desktop.download} target="_blank" rel="noopener noreferrer">
           download it
         </a>
-        , then Settings → Devices → Paste a code: <code>{b.desktop.paste}</code>. If
+        , then Settings → Your devices → Paste a code: <code>{b.desktop.paste}</code>. If
         setting up takes longer than the code lives, the new computer asks this one to approve instead.
       </span>
     </div>

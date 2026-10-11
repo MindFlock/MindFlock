@@ -5,7 +5,7 @@ The pane's fork-icon menu was first "Work with other sessions" (four
 playbooks that PASTED a prompt), then "Ship & split" (lanes, ship now, split,
 move out, Message…). Both are gone. Fast-track is now one control under one
 name: the pane head's ⏩ button names the target and opens the picker
-(grid/FastTrackMenu.tsx — Off / Commit / Push / Open a PR / Merge when
+(grid/FastTrackMenu.tsx — Off / Commit / Push / Open PR / Merge when
 green, and "Ask me before it ships"), every item a ``POST
 /api/instances/{t}/lane``. The row › menu (sidebar/SessionRowItems.tsx), the
 palette and Ctrl+K F open that same picker; Split into parallel pieces… and
@@ -213,7 +213,7 @@ def test_fast_track_split_and_move_out_are_server_calls(js):
     assert pick.count("patchInstance(title,") == 3
     # A copy window / a lead / a one-for-all member is locked in the picker.
     lock = _function(js, "laneLockReason")
-    assert "drives this branch — set its fast-track from that window" in lock
+    assert "drives this branch — set its fast-track from that session" in lock
     # Every run route goes through lib/runsApi's one path builder.
     out = _function(js, "moveOutOfGroup")
     assert 'taskPath(runId, taskId, "skip")' in out
@@ -305,7 +305,7 @@ def test_the_picker_offers_every_rung_and_ask_first(js):
         ("leave", "Off", "O"),
         ("commit", "Commit", "C"),
         ("push", "Push", "U"),
-        ("pr", "Open a PR", "P"),
+        ("pr", "Open PR", "P"),
         ("merge", "Merge when green", "M"),
     ):
         assert f'{lane}: "{label}"' in labels, lane
@@ -320,7 +320,7 @@ def test_the_picker_offers_every_rung_and_ask_first(js):
 
 def test_the_picker_holds_the_keyboard_like_a_modal(js):
     keymap = _region(js, "src/lib/keymap.ts")
-    ids = keymap[keymap.find("MODAL_DOM_IDS = [") :]
+    ids = keymap[keymap.find("POPOVER_IDS = [") :]
     ids = ids[: ids.find("];")]
     assert '"fast-track-menu"' in ids
     assert '"ship-menu"' not in ids
@@ -330,7 +330,7 @@ def test_the_bell_holds_the_keyboard_like_a_modal(js):
     """The waiting rows (Retry / Skip / Commit) live in the bell's popover; a Delete or Ctrl+W on one of its buttons ended the focused
     session behind it until the popover joined the modal guard."""
     keymap = _region(js, "src/lib/keymap.ts")
-    ids = keymap[keymap.find("MODAL_DOM_IDS = [") :]
+    ids = keymap[keymap.find("POPOVER_IDS = [") :]
     ids = ids[: ids.find("];")]
     assert '"notif-pop"' in ids
     bell = _region(js, "src/components/NotificationsBell.tsx")
@@ -492,7 +492,7 @@ def test_settings_holds_the_one_default_off_out_of_the_box(js):
     for value, label in (
         ("commit", "Commit"),
         ("push", "Push"),
-        ("pr", "Open a PR"),
+        ("pr", "Open PR"),
         ("merge", "Merge when green"),
     ):
         assert in_bundle(f'value: "{value}", label: "{label}"', ws), value

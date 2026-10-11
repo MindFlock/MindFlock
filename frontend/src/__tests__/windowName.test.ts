@@ -6,10 +6,10 @@
  * under that name is the one mistake this channel cannot make.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { slotNumber, windowName, publishWindowName } from "../lib/windowName";
+import { nameTakenBy, slotNumber, windowName, publishWindowName } from "../lib/windowName";
 import { useUi } from "../state/store";
 
-type Row = { title: string; branch?: string; display_title?: string };
+type Row = { title: string; branch?: string; display_title?: string; device?: string };
 
 function withSessions(rows: Row[]) {
   (globalThis as unknown as { mindflock?: Record<string, unknown> }).mindflock = {
@@ -154,5 +154,66 @@ describe("slotNumber", () => {
     publishWindowName();
     const w = globalThis as unknown as { mindflock?: Record<string, unknown> };
     expect(typeof w.mindflock?.slotNumber).toBe("function");
+  });
+});
+
+describe("nameTakenBy — a rename is the name everywhere, so names are unique", () => {
+  it("finds another session by its rename, its title or its rail label", () => {
+    useUi.setState({ aliases: { alpha: "Login fix" } });
+    withSessions([
+      { title: "alpha" },
+      { title: "sc-12345", branch: "feature/sc-12345/dark-mode" },
+      { title: "beta" },
+    ]);
+    expect(nameTakenBy("beta", "Login fix")).toBe("alpha");
+    expect(nameTakenBy("beta", "alpha")).toBe("alpha");
+    expect(nameTakenBy("beta", "(tix) dark-mode/sc-12345")).toBe("sc-12345");
+  });
+
+  it("never collides a session with itself, and matches exactly", () => {
+    useUi.setState({ aliases: { alpha: "Login fix" } });
+    withSessions([{ title: "alpha" }, { title: "beta" }]);
+    expect(nameTakenBy("alpha", "Login fix")).toBe("");
+    expect(nameTakenBy("beta", "login fix")).toBe("");
+    expect(nameTakenBy("beta", "  ")).toBe("");
+  });
+
+  it("ignores another device's rows (the server checks this device only)", () => {
+    withSessions([{ title: "rig::alpha", display_title: "alpha", device: "rig" } as Row]);
+    expect(nameTakenBy("beta", "rig::alpha")).toBe("");
+  });
+});
+
+describe("pickRow — selecting rail rows in place", () => {
+  beforeEach(() => useUi.getState().setBulkMode(false));
+
+  it("Ctrl-click toggles one row and turns select mode on", () => {
+    useUi.setState({ railOrder: ["a", "b", "c"] });
+    useUi.getState().pickRow("b", false);
+    expect(useUi.getState().bulkMode).toBe(true);
+    expect([...useUi.getState().bulkSelected]).toEqual(["b"]);
+    useUi.getState().pickRow("b", false);
+    expect(useUi.getState().bulkSelected.size).toBe(0);
+  });
+
+  it("Shift-click adds the range from the last pick, skipping window rows", () => {
+    useUi.setState({ railOrder: ["a", "\u0000verify:x", "b", "c", "d"] });
+    useUi.getState().pickRow("a", false);
+    useUi.getState().pickRow("c", true);
+    expect([...useUi.getState().bulkSelected].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("Shift-click with nothing picked yet just picks that row", () => {
+    useUi.setState({ railOrder: ["a", "b", "c"] });
+    useUi.getState().pickRow("c", true);
+    expect([...useUi.getState().bulkSelected]).toEqual(["c"]);
+  });
+
+  it("leaving select mode drops the picks and the anchor", () => {
+    useUi.setState({ railOrder: ["a", "b"] });
+    useUi.getState().pickRow("a", false);
+    useUi.getState().setBulkMode(false);
+    expect(useUi.getState().bulkSelected.size).toBe(0);
+    expect(useUi.getState().bulkAnchor).toBe(null);
   });
 });

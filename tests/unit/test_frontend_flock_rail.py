@@ -110,7 +110,7 @@ def test_indent_moves_the_dot_onwards_never_the_number():
 def test_worker_status_and_rollup_phrases_ship():
     js = _js()
     for phrase in (
-        '"? needs your answer"',
+        '"? needs you · question"',
         '"✓ reported"',
         '"idle — no report"',
         '"working · "',

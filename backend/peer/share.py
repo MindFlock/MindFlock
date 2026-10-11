@@ -41,7 +41,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from backend.peer import paths
 
@@ -945,13 +945,29 @@ def sanitize_message(message) -> str:
     return text or "peer checkpoint"
 
 
-def _author_env() -> dict:
+def _author_env(author: Optional[Tuple[str, str]] = None) -> dict:
+    """Who a share commit is by: ``author`` (name, email) when given, else
+    the anonymous :data:`AUTHOR_NAME` — a checkpoint the peer's agent asked
+    for is nobody's in particular."""
+    name, email = author or (AUTHOR_NAME, AUTHOR_EMAIL)
     return {
-        "GIT_AUTHOR_NAME": AUTHOR_NAME,
-        "GIT_AUTHOR_EMAIL": AUTHOR_EMAIL,
-        "GIT_COMMITTER_NAME": AUTHOR_NAME,
-        "GIT_COMMITTER_EMAIL": AUTHOR_EMAIL,
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
     }
+
+
+def _export_author() -> Optional[Tuple[str, str]]:
+    """The person's git identity (docs/people.md) for the export commit — an
+    export is the person's own act into their own repo — or None when it
+    isn't set (the anonymous peer author, as before). Never raises."""
+    try:
+        from backend.web.core import person as _person
+
+        return _person.git_author()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _head(share: Share) -> str:
@@ -997,7 +1013,9 @@ def _drop_gitlinks(share: Share) -> bool:
     return bool(gitlinks)
 
 
-def _checkpoint_locked(share: Share, msg: str) -> str:
+def _checkpoint_locked(
+    share: Share, msg: str, author: Optional[Tuple[str, str]] = None
+) -> str:
     git(share, "add", "-A", "--", timeout=120)
     _drop_gitlinks(share)
     changed = git(
@@ -1024,7 +1042,7 @@ def _checkpoint_locked(share: Share, msg: str) -> str:
         "-F",
         "-",
         input=msg.encode("utf-8"),
-        extra_env=_author_env(),
+        extra_env=_author_env(author),
         timeout=120,
     )
     return _head(share)
@@ -1092,7 +1110,9 @@ def export(share: Share, target_repo: str, branch_name: str) -> dict:
             raise ShareError("branch %s is checked out in the target" % branch_name)
 
     with _lock(share):  # HEAD can't move between the commit and the fetch
-        sha = _checkpoint_locked(share, "peer export to %s" % branch_name)
+        sha = _checkpoint_locked(
+            share, "peer export to %s" % branch_name, author=_export_author()
+        )
         fetch = _target_git(
             target,
             "fetch",

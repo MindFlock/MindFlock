@@ -153,7 +153,7 @@ def test_the_settings_copy_and_the_button_say_the_same_thing():
 def test_break_screen_counts_as_a_modal_for_the_keymap():
     """Ctrl+W / Delete must not reach the session running behind the card."""
     js = _js()
-    ids = js[js.index("MODAL_DOM_IDS") : js.index("MODAL_DOM_IDS") + 500]
+    ids = js[js.index("POPOVER_IDS") : js.index("POPOVER_IDS") + 500]
     assert "break-screen" in ids
 
 

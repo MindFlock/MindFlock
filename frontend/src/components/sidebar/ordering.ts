@@ -2,8 +2,7 @@
  * sections 9's ordered()/_matchesFilter()/attentionItems()). */
 
 import type { Instance } from "../../api/types";
-import { relTime } from "../../lib/format";
-import { effectiveActivity } from "../../lib/stage";
+import { attentionPriority, attentionReason, deriveSessionState } from "../../lib/sessionState";
 import { laneOf } from "../../lib/agentMessages";
 
 /** Arrange `keys` by the saved drag order: known keys in saved order first,
@@ -293,8 +292,6 @@ export function placeNewRunMembers(
   return order;
 }
 
-export const SEARCH_MIN = 6;
-
 /** Match only the session's own identifiers — name, alias, branch. NOT repo
  * or path (every worktree of one repo shares those). */
 export function matchesFilter(
@@ -310,9 +307,6 @@ export function matchesFilter(
   return hay.indexOf(filter) >= 0;
 }
 
-/** Idle-with-unfinished-work threshold before a session counts as wedged. */
-const WEDGE_IDLE_S = 20 * 60;
-
 export interface AttentionItem {
   p: number;
   title: string;
@@ -321,54 +315,31 @@ export interface AttentionItem {
 }
 
 /** O1: the prioritized "which session needs me" list (bell popover + mobile).
- * 0 waiting on your answer · 1 broken · 2 checks failing · 3 ready to move. */
+ * 0 waiting on your answer · 1 broken (pre-commit / setup failed, offline,
+ * stuck) · 2 checks failing · 3 ready to move.
+ *
+ * Every row but "ready to move" is the session's ONE state (lib/sessionState):
+ * the bell lists exactly the states whose `inBell` is true, worded with the
+ * same label the row's chip and the toast use. "Pushed — ready for PR" is a
+ * ship-stage fact, not an agent state, so it stays here. */
 export function attentionItems(instances: Instance[]): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const inst of instances || []) {
     if (inst.workspace_missing || inst.status === "paused") continue;
-    const act = effectiveActivity(inst);
-    if (act === "clarify")
-      items.push({ p: 0, title: inst.title, reason: "needs your answer", snippet: inst.last_turn || "" });
-    else if (inst.stage === "interrupt")
+    const ss = deriveSessionState(inst);
+    if (ss.inBell) {
+      const step = ss.reason === "precommit_failed" ? (inst.failed_step || "").trim() : "";
       items.push({
-        p: 1,
+        p: attentionPriority(ss),
         title: inst.title,
-        reason: "pre-commit failed" + (inst.failed_step ? " at " + inst.failed_step : ""),
+        reason: attentionReason(ss) + (step ? " at " + step : ""),
+        snippet: ss.reason === "question" || ss.reason === "stuck" ? inst.last_turn || "" : undefined,
       });
-    else if (inst.setup && inst.setup.state === "failed")
-      items.push({ p: 1, title: inst.title, reason: "worktree setup failed" });
-    else if (inst.check && inst.check.state === "failed" && !(inst.check as { stale?: boolean }).stale)
-      items.push({ p: 2, title: inst.title, reason: "checks failing" });
-    else if (inst.stage === "pushed") {
+    } else if (ss.state === "idle" && inst.stage === "pushed") {
       // A session whose lane STOPS at push is finished there, by your own
       // choice — "ready for PR" would nag about a PR you said you didn't want.
       if (laneOf(inst)?.target !== "push")
         items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
-    }
-    else if (act === "idle" && Number(inst.activity_since) > 0) {
-      // Wedged-session watchdog: calm-looking but sitting on unfinished work.
-      //
-      // This branch had never once rendered: `activity_since` read a key nothing
-      // wrote, so it was 0 for every session and the condition was dead. Now that
-      // it is populated, "unfinished" has to mean what the row says. A COMMITTED
-      // branch is not unfinished work — git considers it done and the header is
-      // simply asking you to push — and counting it flagged every session anyone
-      // had committed and walked away from as "possibly stuck", on the bell's
-      // attention badge. Uncommitted output with nobody typing is the real
-      // signal: an agent stopped in the middle of something.
-      const idleFor = Date.now() / 1000 - Number(inst.activity_since);
-      const un = (inst.diff_stat || ({} as never))?.uncommitted || ({} as { additions?: number; deletions?: number });
-      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
-      if (idleFor > WEDGE_IDLE_S && unfinished)
-        items.push({
-          p: 1,
-          title: inst.title,
-          reason:
-            "idle " +
-            relTime(Number(inst.activity_since)).replace(" ago", "") +
-            " with unfinished work — possibly stuck",
-          snippet: inst.last_turn || "",
-        });
     }
   }
   return items.sort((a, b) => a.p - b.p || a.title.localeCompare(b.title));

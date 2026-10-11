@@ -154,6 +154,11 @@ _MEMBER_FLEET_ROUTES = frozenset(
 # a request bearing the current fleet key is a member's, and passes.
 _REMOTE_HEADER = b"x-mindflock-remote"
 
+#: The person the relaying device belongs to (docs/people.md), lower-case for
+#: the ASGI header list. Recorded on the request (:func:`request_person`);
+#: an identifier only — it never lets anything through this gate.
+_PERSON_HEADER = b"x-mindflock-person"
+
 #: Most ``mf_auth*`` cookies / ``?token=`` values one request is checked
 #: against — one per device on the shared link, with room to spare. A bound,
 #: so a request stuffed with candidates can't turn each check into a loop.
@@ -438,7 +443,7 @@ def _from_this_machine(scope) -> bool:
 
 def may_see_own_token(scope, *, open_gate: bool = False) -> bool:
     """Whether a route may hand this request THIS device's own access token
-    (Settings → Security's reveal, Settings → Mobile's QR, the answer to a
+    (Settings → Security's reveal, Settings → Your phone's QR, the answer to a
     rotate): the request presents that own token (cookie or bearer), or it
     comes straight from this machine and isn't relayed by another MindFlock.
     ``open_gate``: also yes while the gate is off and nothing beyond this
@@ -939,6 +944,42 @@ def _public_fleet_route(scope) -> bool:
     return method == "GET" and _PUBLIC_FLEET_POLL.fullmatch(path) is not None
 
 
+def _record_person(scope, headers: list) -> None:
+    """Put the relaying device's person (``X-MindFlock-Person``, only beside
+    the remote marker) on the request state as ``person`` — ``""`` for
+    anything else. Read it with :func:`request_person`. Never raises."""
+    pid = ""
+    try:
+        if any(k == _REMOTE_HEADER for k, _ in headers):
+            from backend.config import settings as _settings
+
+            pid = _settings.person_id(_header_value(headers, _PERSON_HEADER)[:64])
+        state = scope.setdefault("state", {})
+        if isinstance(state, dict):
+            state["person"] = pid
+    except Exception:  # noqa: BLE001 — never break a request over a label
+        pass
+
+
+def request_person(request) -> str:
+    """Who a request is FOR: the person id another of the person's devices
+    sent with it (:func:`_record_person`), else this device's own person —
+    a browser or CLI here is this device's person. An identifier for
+    stamping and display; it never authorizes anything. Takes a Request,
+    a WebSocket or an ASGI scope. Never raises."""
+    try:
+        scope = getattr(request, "scope", request)
+        state = scope.get("state") if isinstance(scope, dict) else None
+        pid = state.get("person") if isinstance(state, dict) else ""
+        if pid:
+            return str(pid)
+        from backend.web.core import person as _person
+
+        return _person.known_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 class AuthMiddleware:
     """Pure-ASGI gate covering HTTP and websocket scopes alike."""
 
@@ -952,6 +993,7 @@ class AuthMiddleware:
 
         path = scope.get("path", "")
         headers = scope.get("headers") or []
+        _record_person(scope, headers)
         public = path in _PUBLIC_PATHS or _public_fleet_route(scope)
         member_route = _member_fleet_route(scope)
 

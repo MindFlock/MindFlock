@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
+import { ApiError, api } from "../../api/client";
 import {
   putTicketingSources,
   refreshConfig,
@@ -34,6 +34,7 @@ import { startTogetherText } from "../../lib/runStart";
 import {
   AutomationSwitch,
   SourceCard,
+  SourcePill,
   TestButton,
   useListFilter,
   WorkGroup,
@@ -44,7 +45,24 @@ import {
   reopenIntakeItem,
   useToggleSet,
   type ItemWorkspace,
+  type TestResult,
 } from "./kit";
+import {
+  TEST_STATE_LABELS,
+  clearSecretPatch,
+  fieldErrorsFrom,
+  hasSecret,
+  lastTestOf,
+  putBody,
+  requiredMarker,
+  savedStates,
+  shouldAutoTest,
+  sourceTestState,
+  splitForSave,
+  withLastTest,
+  workspaceChoices,
+  type FieldErrors,
+} from "./sourceForm";
 import {
   NO_STATE_BUCKET,
   loadMineOnly,
@@ -65,9 +83,12 @@ import type { TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
 import type {
+  TicketClaimedBy,
   TicketingCatalogEntry,
   TicketingCatalogField,
+  TicketingLastTest,
   TicketingSource,
+  TicketingWorkflowState,
 } from "../../api/types";
 
 // The catalog and source shapes live in api/types, shared with the query cache
@@ -172,7 +193,17 @@ export function TicketsTab(_: TabProps) {
     () => new Set((savedSources.data || []).map((s) => s.id))
   );
   const seeded = useRef(savedSources.data !== undefined);
+  // The ids the server has stored, as of the last load or save: a card outside
+  // it that is still missing a typed required field is not sent (splitForSave).
+  const storedIds = useRef<Set<string>>(
+    new Set((savedSources.data || []).map((s) => s.id))
+  );
   const seq = useRef(0);
+  // Per source: what the server refused on the last save (shown inline, and
+  // the card reads "not saved" until it passes), and what its Test is doing
+  // or last said — one line for a click's test and a save's test alike.
+  const [errors, setErrors] = useState<Record<string, FieldErrors>>({});
+  const [tests, setTests] = useState<Record<string, TestResult>>({});
 
   useEffect(() => {
     if (seeded.current) return;
@@ -187,35 +218,134 @@ export function TicketsTab(_: TabProps) {
       return;
     }
     seeded.current = true;
+    storedIds.current = new Set(savedSources.data.map((s) => s.id));
     setSources(savedSources.data);
     setCollapsed(new Set(savedSources.data.map((s) => s.id)));
   }, [savedSources.data, savedSources.isError]);
 
+  /** Run Test on a SAVED source and record the verdict on it (the server
+   * stamps `last_test`, fills the member id / Asana workspace, and hands the
+   * source back). The card's pill is derived from that stored verdict, so a
+   * test that passes here is what turns it green. */
+  const runTest = useCallback(async (src: Source, meta: CatalogEntry | null) => {
+    const payload: Record<string, unknown> = {
+      id: src.id,
+      provider: src.provider,
+      record: true,
+    };
+    for (const f of meta?.fields || []) {
+      const v = src[f.key];
+      if (f.secret && (!v || v === "•••set")) continue; // stored secret stays server-side
+      if (v != null) payload[f.key] = v;
+    }
+    if (src.repo_url) payload.repo_url = src.repo_url;
+    setTests((prev) => ({ ...prev, [src.id]: { testing: true } }));
+    try {
+      const r = await api<{
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        source?: Source;
+      }>("/api/settings/test/ticketing", { json: payload });
+      const verdict = r?.source ? lastTestOf(r.source) : null;
+      if (r?.source) {
+        const srv = r.source;
+        setSources((prev) =>
+          (prev || []).map((s) =>
+            s.id === srv.id
+              ? withLastTest(
+                  {
+                    ...s,
+                    member_id: srv.member_id || s.member_id || "",
+                    project: srv.project || s.project || "",
+                  },
+                  verdict
+                )
+              : s
+          )
+        );
+      }
+      const msg = String(r?.message || r?.error || (r?.ok ? "Connected" : "test failed"));
+      setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: !!r?.ok, msg } }));
+      if (!r?.ok) throw new Error(msg);
+      refreshConfig();
+      return msg;
+    } catch (err) {
+      const msg = (err as Error).message || "test failed";
+      setTests((prev) => ({ ...prev, [src.id]: { testing: false, ok: false, msg } }));
+      throw err;
+    }
+  }, []);
+
   const persist = useCallback(
-    async (list: Source[]) => {
+    async (
+      list: Source[],
+      opts: { nulls?: Record<string, string[]>; autoTest?: string } = {}
+    ) => {
       const mySeq = ++seq.current;
-      const missingRepo = list.filter((s) => !(s.repo_url || "").trim()).length;
+      // A new card still missing a typed required field stays local with its
+      // inline errors; the rest of the list saves without it.
+      const { send, held } = splitForSave(list, catalog, storedIds.current);
+      const heldCount = Object.keys(held).length;
+      if (!send.length && !storedIds.current.size) {
+        // Nothing stored and nothing ready: no request to make.
+        setErrors(held);
+        return;
+      }
+      const missingRepo = send.filter((s) => !(s.repo_url || "").trim()).length;
       try {
-        await api("/api/settings/ticketing/sources", { method: "PUT", json: { sources: list } });
+        const r = await api<{ sources?: Source[] }>("/api/settings/ticketing/sources", {
+          method: "PUT",
+          json: putBody(send, opts.nulls),
+        });
         if (mySeq !== seq.current) return;
+        storedIds.current = new Set((r?.sources || send).map((s) => s.id));
+        setErrors(held);
+        // The server decides whether a source's stored test still vouches for
+        // it (unchanged tested fields keep it; a changed token drops it), so
+        // the verdict on each card comes back from the save, not from memory.
+        const byId = new Map((r?.sources || []).map((s) => [s.id, s]));
+        const stamp = (s: Source) =>
+          byId.has(s.id) ? withLastTest(s, lastTestOf(byId.get(s.id))) : s;
+        const saved = list.map(stamp);
+        setSources((prev) => (prev || []).map(stamp));
         // Keep the shared cache in step, so the next open of this tab shows what
         // was saved instead of refetching to be told the same thing.
-        putTicketingSources(list);
+        putTicketingSources(r?.sources || send);
         toast(
-          missingRepo
-            ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest`
-            : "Saved ticketing sources"
+          heldCount
+            ? `Saved — ${heldCount} new source(s) wait for their required fields`
+            : missingRepo
+              ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest`
+              : "Saved ticketing sources"
         );
         // Connecting/removing a source flips the ticketing capability.
         refreshConfig();
+        if (opts.autoTest) {
+          const src = saved.find((s) => s.id === opts.autoTest);
+          if (src) {
+            const meta = catalog.find((p) => p.id === src.provider) || null;
+            runTest(src, meta).catch(() => {
+              /* the verdict is on the card already */
+            });
+          }
+        }
       } catch (err) {
+        const fieldErrors = err instanceof ApiError && err.status === 400 ? fieldErrorsFrom(err.body) : {};
+        if (Object.keys(fieldErrors).length) {
+          // Not saved: the fields are marked on their cards, which stay as
+          // typed — the next blur retries the whole list.
+          if (mySeq === seq.current) setErrors({ ...held, ...fieldErrors });
+          toast("Not saved — fix the marked fields");
+          return;
+        }
         errorPop(
           "Ticketing sources not saved",
           (err as Error).message || "the server rejected the ticketing settings"
         );
       }
     },
-    []
+    [catalog, runTest]
   );
 
   if (sources === null) return <p className="set-hint">Loading…</p>;
@@ -244,21 +374,43 @@ export function TicketsTab(_: TabProps) {
     return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
   };
 
-  const update = (id: string, patch: Record<string, string>) => {
+  const update = (id: string, patch: Record<string, string | null>) => {
     setSources((prev) => {
       const list = prev || [];
+      // A null clears the field (a secret's Clear control): locally it reads
+      // as blank, and the PUT sends the null so the server clears it rather
+      // than keeping the stored value, which is what a blank secret means.
+      const nulls: Record<string, string[]> = {};
+      const strings: Record<string, string> = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null) (nulls[id] ||= []).push(k);
+        strings[k] = v ?? "";
+      }
+      let autoTest: string | undefined;
       const next = list.map((s) => {
         if (s.id !== id) return s;
-        const merged = { ...s, ...patch } as Source;
+        const merged = { ...s, ...strings } as Source;
         // Switching the provider of a card whose id is still the seeded one
         // re-seeds it, or "Add source → pick Jira" branches Jira tickets under
         // whatever provider the card happened to open on.
         if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) {
           merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+          // Still the stored source under a new id: it is sent (and judged by
+          // the server) rather than held, or holding it would drop the stored one.
+          if (storedIds.current.has(s.id)) storedIds.current.add(merged.id);
+          if (nulls[id]) {
+            nulls[merged.id] = nulls[id];
+            delete nulls[id];
+          }
         }
+        // A change to something a test looks at, on a card complete enough to
+        // try: the save is followed by a Test, so "saved" and "works" arrive
+        // together instead of the card sitting on a token nobody checked.
+        const meta = catalog.find((p) => p.id === merged.provider) || null;
+        if (shouldAutoTest(meta, merged, patch)) autoTest = merged.id;
         return merged;
       });
-      persist(next);
+      persist(next, { nulls, autoTest });
       return next;
     });
   };
@@ -335,6 +487,9 @@ export function TicketsTab(_: TabProps) {
                   return next;
                 })
               }
+              fieldErrors={errors[src.id]}
+              test={tests[src.id]}
+              onTest={() => runTest(src, catalog.find((p) => p.id === src.provider) || null)}
               onChange={(patch) => update(src.id, patch)}
               onRemove={() => remove(src.id)}
             />
@@ -362,7 +517,7 @@ function StatePicker({
 }: {
   field: CatalogField;
   source: Source;
-  states: Array<{ id: string | number; name?: string }>;
+  states: TicketingWorkflowState[];
   loadStates(): void;
   onChange(patch: Record<string, string>): void;
 }) {
@@ -415,9 +570,9 @@ function StatePicker({
         className="tk-state"
         data-tk-field={field.key}
         value=""
-        onFocus={() => {
-          if (!states.length) loadStates();
-        }}
+        // Opens with what the last Test saw; every focus asks the tracker
+        // again, so a column added this morning is there without a retest.
+        onFocus={loadStates}
         onChange={(e) => {
           if (e.target.value) commit([...selected, e.target.value]);
         }}
@@ -452,7 +607,7 @@ function StartStatePicker({
 }: {
   field: CatalogField;
   source: Source;
-  states: Array<{ id: string | number; name?: string }>;
+  states: TicketingWorkflowState[];
   loadStates(): void;
   onChange(patch: Record<string, string>): void;
 }) {
@@ -468,9 +623,7 @@ function StartStatePicker({
         className="tk-state-one"
         data-tk-field={field.key}
         value={current}
-        onFocus={() => {
-          if (!states.length) loadStates();
-        }}
+        onFocus={loadStates}
         onChange={(e) => onChange({ [field.key]: e.target.value })}
       >
         <option value="">Leave it where it is</option>
@@ -490,18 +643,22 @@ function StartStatePicker({
 function ChoicePicker({
   field,
   source,
+  error,
   onChange,
 }: {
   field: CatalogField;
   source: Source;
+  /** The server's objection (Anyone's without an ingest state lands here). */
+  error?: string;
   onChange(patch: Record<string, string>): void;
 }) {
   return (
     <label className="set-row">
-      <span className="set-label">{field.label}</span>
+      <FieldLabel field={field} />
       <select
-        className="tk-choice"
+        className={"tk-choice" + (error ? " field-missing" : "")}
         data-tk-field={field.key}
+        aria-invalid={error ? true : undefined}
         value={source[field.key] || ""}
         onChange={(e) => onChange({ [field.key]: e.target.value })}
       >
@@ -511,9 +668,19 @@ function ChoicePicker({
           </option>
         ))}
       </select>
+      {/* The hint stays under the error: the rule is worth reading either way. */}
+      {error ? <span className="ik-field-error" data-tk-error={field.key}>{error}</span> : null}
       {field.hint ? <span className="set-hint">{field.hint}</span> : null}
     </label>
   );
+}
+
+/** The teammate a 409 from POST /api/tickets/start names (the tracker says
+ * they are on the ticket — tracker_claims), or null for any other failure. */
+export function claimedBy(err: unknown): TicketClaimedBy | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const body = err.body as { claimed_by?: TicketClaimedBy } | null;
+  return body && body.claimed_by && body.claimed_by.name ? body.claimed_by : null;
 }
 
 interface AssignedTicket {
@@ -529,6 +696,9 @@ interface AssignedTicket {
   has_session?: boolean;
   /** Set when another of the user's devices already holds this ticket. */
   elsewhere?: { device: string; label: string; kind: string };
+  /** Set when the TRACKER says a teammate is on it ("<name> is on this" leads
+   * the reasons); Begin work then needs the owner's Override. */
+  claimed_by?: TicketClaimedBy;
   eligible?: boolean;
   reasons?: string[];
   /** False only on a source that ingests anyone's tickets. Absent = yours. */
@@ -1083,15 +1253,43 @@ function AssignedTicketRow({
         return title;
       }}
       onStart={async ({ agent, depth, effort }) => {
-        const r = await api<{ title?: string }>("/api/tickets/start", {
-          json: {
-            source: t.source,
-            id: t.id,
-            ...(agent ? { agent } : {}),
-            ...(depth ? { depth } : {}),
-            ...(effort ? { effort } : {}),
-          },
-        });
+        const start = (override: boolean) =>
+          api<{ title?: string }>("/api/tickets/start", {
+            json: {
+              source: t.source,
+              id: t.id,
+              ...(agent ? { agent } : {}),
+              ...(depth ? { depth } : {}),
+              ...(effort ? { effort } : {}),
+              ...(override ? { override_claim: true } : {}),
+            },
+          });
+        let r: { title?: string };
+        try {
+          r = await start(false);
+        } catch (err) {
+          // The tracker says a teammate is on it: the same card the row's
+          // failure raises (same title + text, so it is drawn once), with the
+          // owner's Override on it.
+          if (claimedBy(err))
+            errorPop("Begin work failed — " + t.slug, (err as Error).message, [
+              {
+                label: "Override",
+                primary: true,
+                title: "Start it here anyway — the ticket stays assigned to them",
+                run: () =>
+                  void start(true).then(
+                    (ok) => {
+                      refreshInstances();
+                      setTimeout(onStarted, 5000);
+                      toast("Session " + (ok?.title || t.slug) + " — provisioning, see the sidebar");
+                    },
+                    (e) => errorPop("Begin work failed — " + t.slug, (e as Error).message || "error")
+                  ),
+              },
+            ]);
+          throw err;
+        }
         // The server already has a provisioning row for it: pull it now
         // instead of leaving the sidebar blank until the next poll.
         refreshInstances();
@@ -1107,6 +1305,9 @@ function TicketSourceCard({
   catalog,
   agents,
   collapsed,
+  fieldErrors,
+  test,
+  onTest,
   onToggle,
   onChange,
   onRemove,
@@ -1115,11 +1316,27 @@ function TicketSourceCard({
   catalog: CatalogEntry[];
   agents: AgentChoices;
   collapsed: boolean;
+  /** What the server refused on the last save, per field — the card is unsaved. */
+  fieldErrors?: FieldErrors;
+  /** The Test in flight or its last word (a click's or a save's). */
+  test?: TestResult;
+  /** Test the SAVED source and record the verdict on it. */
+  onTest(): Promise<string>;
   onToggle(): void;
-  onChange(patch: Record<string, string>): void;
+  /** A null value clears the field (secrets); strings set it. */
+  onChange(patch: Record<string, string | null>): void;
   onRemove(): void;
 }) {
   const meta = catalog.find((p) => p.id === source.provider) || null;
+  const errs = fieldErrors || {};
+  const unsaved = Object.keys(errs).length > 0;
+  // The pill: the server's rule over the stored verdict — except that a card
+  // the server refused to save is "not saved", whatever its old verdict said.
+  const verdict = sourceTestState(source, meta);
+  const pillState = unsaved ? "needs_attention" : verdict.state;
+  const pillLabel = unsaved ? "Not saved" : TEST_STATE_LABELS[verdict.state];
+  const pillMessage = unsaved ? "fix the marked fields" : verdict.message;
+  const stored: TicketingLastTest | null = lastTestOf(source);
   // Which CLI this source's tickets will actually run on, so the effort picker
   // below can name THAT CLI's ceiling rather than the ladder's. The empty choice
   // in the Agent picker means "app default", which is what `agents.fallback`
@@ -1130,7 +1347,15 @@ function TicketSourceCard({
   const effortCaps = useProviderEfforts().data;
   const effortCap = effortCaps ? effortCaps[effortProvider] : undefined;
   const effortUsable = supportsEffort(effortCap);
-  const [states, setStates] = useState<Array<{ id: string | number; name?: string }>>([]);
+  // The pickers open on what the last Test listed and refresh on focus.
+  const [states, setStates] = useState<TicketingWorkflowState[]>(() => savedStates(source));
+  const savedStateKey = stored?.at || "";
+  useEffect(() => {
+    const fresh = savedStates(source);
+    if (fresh.length) setStates(fresh);
+    // Re-seed when a new verdict lands (its `at` changes), not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedStateKey]);
 
   const provName = meta?.label || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
@@ -1152,6 +1377,10 @@ function TicketSourceCard({
   const summary =
     base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
   const repoMissing = !(source.repo_url || "").trim();
+  // A GitHub Issues source saved before the one GitHub credential path still
+  // carries its own token (the server masks it as "•••set"): still read, as
+  // the last fallback, this release only.
+  const ownGithubToken = source.provider === "github_issues" && source.api_token === "•••set";
 
   const testPayload = () => {
     const payload: Record<string, string> = { id: source.id, provider: source.provider };
@@ -1166,13 +1395,13 @@ function TicketSourceCard({
 
   const loadStates = async () => {
     try {
-      const r = await api<{ ok?: boolean; states?: Array<{ id: string | number; name?: string }> }>(
+      const r = await api<{ ok?: boolean; states?: TicketingWorkflowState[] }>(
         "/api/settings/ticketing/states",
         { json: testPayload() }
       );
       if (r?.ok && Array.isArray(r.states) && r.states.length) setStates(r.states);
     } catch {
-      /* keep the stored value; Test connection to populate */
+      /* keep what the last Test listed */
     }
   };
 
@@ -1180,22 +1409,17 @@ function TicketSourceCard({
     <SourceCard
       sourceId={source.id}
       summary={summary}
+      badge={<SourcePill state={pillState} label={pillLabel} message={pillMessage} />}
       collapsed={collapsed}
       onToggle={onToggle}
       footer={
         <>
-          <TestButton
-            onTest={async () => {
-              const r = await api<Record<string, unknown>>("/api/settings/test/ticketing", {
-                json: testPayload(),
-              });
-              if (!r?.ok) throw new Error(String(r?.error || "test failed"));
-              if (r.member_id && source.member_id !== r.member_id)
-                onChange({ member_id: String(r.member_id) });
-              loadStates(); // creds known-good — populate the state picker live
-              return "Connected" + (r.name ? " — " + r.name : "");
-            }}
-          />
+          <TestButton label={stored ? "Retest" : "Test connection"} onTest={onTest} result={test} />
+          {!test?.msg && !test?.testing ? (
+            <span className="ik-source-message" title={pillMessage}>
+              {pillMessage}
+            </span>
+          ) : null}
           <button type="button" className="test-btn tk-remove" onClick={onRemove}>
             Remove
           </button>
@@ -1217,6 +1441,12 @@ function TicketSourceCard({
         </select>
         <span className="set-hint tk-blurb">{meta?.blurb || ""}</span>
       </label>
+      {ownGithubToken && (
+        <p className="set-hint tk-own-token" role="note" data-tk-notice="own-token">
+          This source still has its own token — move it to Settings → Connections → GitHub →
+          Connect (read as a fallback this release, ignored from the next)
+        </p>
+      )}
       <label className="set-row">
         <span className="set-label">Label (optional)</span>
         <input
@@ -1358,30 +1588,131 @@ function TicketSourceCard({
               onChange={onChange}
             />
           ) : f.type === "choice" ? (
-            <ChoicePicker key={f.key} field={f} source={source} onChange={onChange} />
+            <ChoicePicker key={f.key} field={f} source={source} onChange={onChange} error={errs[f.key]} />
           ) : (
-            <label className="set-row" key={f.key}>
-              <span className="set-label">{f.label}</span>
-              <input
-                type={f.secret ? "password" : "text"}
-                autoComplete="off"
-                data-tk-field={f.key}
-                placeholder={
-                  f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || ""
-                }
-                defaultValue={f.secret ? "" : source[f.key] || ""}
-                onBlur={(e) => {
-                  // Blank password => keep stored secret (omit from patch).
-                  if (f.secret && e.target.value === "") return;
-                  if (e.target.value !== (source[f.key] || ""))
-                    onChange({ [f.key]: e.target.value });
-                }}
-              />
-              {f.hint ? <span className="set-hint">{f.hint}</span> : null}
-            </label>
+            <CatalogInput
+              key={f.key}
+              field={f}
+              source={source}
+              error={errs[f.key]}
+              onChange={onChange}
+            />
           )
         )}
       </div>
     </SourceCard>
+  );
+}
+
+/** The label of a catalog field with its data-driven marker: the catalog's
+ * `required` says which fields the server refuses a save without, and `auto`
+ * which of those Test fills in rather than the user. */
+function FieldLabel({ field }: { field: CatalogField }) {
+  const marker = requiredMarker(field);
+  return (
+    <span className="set-label">
+      {field.label}
+      {marker ? (
+        <span
+          className={"ik-field-marker" + (marker === "required" ? " required" : "")}
+          data-marker={marker}
+        >
+          {marker === "required" ? "*" : marker}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The hint under a field, or the server's objection to it in its place. */
+function FieldNote({ field, error }: { field: CatalogField; error?: string }) {
+  if (error) return <span className="ik-field-error" data-tk-error={field.key}>{error}</span>;
+  return field.hint ? <span className="set-hint">{field.hint}</span> : null;
+}
+
+/** A plain catalog field: text, or a password with a Clear control once a
+ * value is stored (sending `null` — a blank password means "keep"). An Asana
+ * workspace the token could not pick alone is offered as a list instead. */
+function CatalogInput({
+  field: f,
+  source,
+  error,
+  onChange,
+}: {
+  field: CatalogField;
+  source: Source;
+  error?: string;
+  onChange(patch: Record<string, string | null>): void;
+}) {
+  const choices = f.key === "project" && f.auto ? workspaceChoices(source) : [];
+  if (choices.length) {
+    return (
+      <label className="set-row">
+        <FieldLabel field={f} />
+        <select
+          className="tk-choice"
+          data-tk-field={f.key}
+          data-tk-workspaces={choices.length}
+          value=""
+          onChange={(e) => {
+            if (e.target.value) onChange({ [f.key]: e.target.value });
+          }}
+        >
+          <option value="">Pick a workspace…</option>
+          {choices.map((w) => (
+            <option key={w.gid} value={w.gid}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+        <FieldNote field={f} error={error} />
+      </label>
+    );
+  }
+  const stored = hasSecret(source, f);
+  const input = (
+    <input
+      // A cleared secret remounts the (uncontrolled) input, so the old
+      // characters don't linger in a field the server no longer holds.
+      key={f.secret ? (stored ? "set" : "empty") : undefined}
+      type={f.secret ? "password" : "text"}
+      autoComplete="off"
+      data-tk-field={f.key}
+      className={error ? "field-missing" : ""}
+      aria-invalid={error ? true : undefined}
+      placeholder={f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || ""}
+      defaultValue={f.secret ? "" : source[f.key] || ""}
+      onBlur={(e) => {
+        // Blank password => keep stored secret (omit from patch); Clear is
+        // the one way to drop it.
+        if (f.secret && e.target.value === "") return;
+        if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
+      }}
+    />
+  );
+  return (
+    <label className="set-row">
+      <FieldLabel field={f} />
+      {f.secret && stored ? (
+        <span className="ik-secret-row">
+          {input}
+          <button
+            type="button"
+            className="ik-secret-clear"
+            data-tk-clear={f.key}
+            title={"Forget the stored " + f.label.toLowerCase()}
+            onClick={(e) => {
+              e.preventDefault();
+              onChange(clearSecretPatch(f.key));
+            }}
+          >
+            Clear
+          </button>
+        </span>
+      ) : (
+        input
+      )}
+      <FieldNote field={f} error={error} />
+    </label>
   );
 }

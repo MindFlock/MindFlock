@@ -77,10 +77,10 @@ function doWaitAction(key: WaitAction["key"], w: OutboxWaiting, runId: string, t
     case "approve":
       return act("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
     case "release":
-      return act("Open the PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the group");
+      return act("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
     case "release_merge":
       return act(
-        "Open the PR",
+        "Open PR",
         runPath(runId, "/release"),
         { merge_when_green: true },
         "Opening the PR — it merges once checks pass"
@@ -219,7 +219,7 @@ export function WaitingRow({
  * or stop it (`cancel`). The amount is typed inline (Electron has no prompt). */
 function BudgetRow({ w, runInfo }: { w: OutboxWaiting; runInfo?: RunInfo }) {
   const runId = w.run?.id || "";
-  const name = w.run?.name || runInfo?.name || "The group";
+  const name = w.run?.name || runInfo?.name || "The team run";
   const budget = Number(runInfo?.budget_usd) || 0;
   const spent = Number(runInfo?.cost_usd) || 0;
   const [usd, setUsd] = useState(() => String(suggestedBudget(budget, spent)));
@@ -239,7 +239,7 @@ function BudgetRow({ w, runInfo }: { w: OutboxWaiting; runInfo?: RunInfo }) {
       <div className="pr-open-main">
         <span className="pr-open-ref ob-ref">{name}</span>
         <span className="pr-open-title">
-          {w.reason || "the group's budget is used up"}
+          {w.reason || "the team run's budget is used up"}
           {budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""}
         </span>
       </div>
@@ -268,7 +268,7 @@ function BudgetRow({ w, runInfo }: { w: OutboxWaiting; runInfo?: RunInfo }) {
               type="button"
               className="btn-primary pr-review-btn"
               disabled={busy || !valid}
-              title={valid ? "Raise the budget and resume the group" : "More than it has spent ($" + spent.toFixed(2) + ")"}
+              title={valid ? "Raise the budget and resume the team run" : "More than it has spent ($" + spent.toFixed(2) + ")"}
               onClick={() => go(() => raiseBudget(runId, amount, name))}
             >
               Raise to ${valid ? amount : "…"}
@@ -280,7 +280,7 @@ function BudgetRow({ w, runInfo }: { w: OutboxWaiting; runInfo?: RunInfo }) {
             type="button"
             className="test-btn"
             disabled={busy}
-            title="Cancel the group — nothing new starts or ships; sessions and branches stay"
+            title="Cancel the team run — nothing new starts or ships; sessions and branches stay"
             onClick={() => go(() => cancelRun(runId, name))}
           >
             Stop

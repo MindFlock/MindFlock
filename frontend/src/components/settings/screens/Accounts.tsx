@@ -13,6 +13,7 @@ import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
 import { refreshAuthProfiles, useAuthProfiles } from "../../../state/queries";
+import { AgentSignIn } from "../../dialogs/AgentSignIn";
 import { InlineConfirm, SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -209,12 +210,18 @@ export function Accounts(_: ScreenProps) {
                 <>
                   <p className="set-hint">
                     Lives in <code>{p.resolved_config_dir || p.config_dir || "…"}</code>.
-                    Log it in by running this in a terminal (the CLI's own sign-in flow,
-                    scoped to this account):
                   </p>
-                  {p.login_command && (
-                    <p className="set-hint">
-                      <code>{p.login_command}</code>{" "}
+                  {/* The CLI's own sign-in, scoped to this account's config dir
+                      (`?profile=`), in an in-app terminal — the command stays
+                      as the copyable fallback for a terminal of your own. */}
+                  <div className="prov-conn-actions setup-acct-row">
+                    <AgentSignIn
+                      provider={p.provider || "claude"}
+                      profile={p.id}
+                      label="Sign in"
+                      onDone={() => void refreshAuthProfiles()}
+                    />
+                    {p.login_command && (
                       <button
                         type="button"
                         className="linklike"
@@ -223,9 +230,14 @@ export function Accounts(_: ScreenProps) {
                           toast("Login command copied");
                         }}
                       >
-                        Copy
-                      </button>{" "}
-                      — or <code>mindflock accounts login {p.id}</code>
+                        Copy login command
+                      </button>
+                    )}
+                  </div>
+                  {p.login_command && (
+                    <p className="set-hint">
+                      In a terminal: <code>{p.login_command}</code> — or{" "}
+                      <code>mindflock accounts login {p.id}</code>
                     </p>
                   )}
                 </>

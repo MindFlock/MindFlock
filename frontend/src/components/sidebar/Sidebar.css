@@ -128,6 +128,23 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   justify-content: space-between;
 }
 
+/* Setup: the doctor's warning + the "Setup 3/5" chip. Either can be absent;
+   with both gone the row takes no space. */
+#sidebar-footer .foot-row.foot-setup {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#sidebar-footer .foot-row.foot-setup:empty {
+  display: none;
+}
+
+#sidebar-footer .foot-setup #doctor-warn {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
 #sidebar-footer .foot-link {
   background: none;
   border: 0;

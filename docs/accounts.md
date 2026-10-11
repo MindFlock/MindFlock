@@ -1,5 +1,10 @@
 # Accounts (auth profiles)
 
+> Not to be confused with the **person** ([people.md](people.md)): an auth
+> profile is which agent-CLI login a session runs under; the person is who
+> all of your devices belong to, stamped on sessions, claims and MindFlock's
+> own commits.
+
 Run different sessions as different identities — a personal Claude
 subscription next to a work one, or an OpenRouter key with its own model —
 without logging any CLI out. An **auth profile** names one identity; every
@@ -32,9 +37,12 @@ so — rather than launched with invented env.
 
 **Web UI** — Settings → **Accounts**: add a profile, pick the default, test an
 OpenRouter key (the Test button reports the key's real spend and lists the
-models it can reach, turning the model field into a picker). For an
-`account`-kind profile the card shows the login command to copy into a
-terminal — the CLI's own OAuth flow is interactive, so it runs there.
+models it can reach, turning the model field into a picker). An
+`account`-kind profile's card has a **Sign in** button: the CLI's own
+interactive login, in an in-app terminal, scoped to that account's config dir
+(`WS /api/providers/{name}/login-terminal?profile=<id>`, the same window
+Setup's and the Providers screen's sign-in use). The login command stays
+next to it as a copyable fallback for a terminal of your own.
 
 **CLI** — the same store, scriptable:
 
@@ -75,9 +83,9 @@ app-wide default; there is no per-ticketing-source account setting.
 A swap persists the pin and restarts the agent tmux session under the new
 identity; the worktree, shell pane and diff survive.
 
-**One conversation per account, per window.** A conversation belongs to the
+**One conversation per account, per session.** A conversation belongs to the
 account that created it — its transcript lives under that identity's config dir
-and the other one cannot open it. So each window keeps a thread per identity:
+and the other one cannot open it. So each session keeps a thread per identity:
 `backend/providers/thread_markers.py` writes `<window>@<account>.thread`
 alongside the current marker (the in-session activity hook reads
 `$MINDFLOCK_PROFILE_ID` to know which account it is running as), and a swap

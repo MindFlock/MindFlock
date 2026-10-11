@@ -462,7 +462,7 @@ LEAVE_TIMEOUT_S = 25.0
 
 async def _leave_async() -> List[str]:
     """Find the other devices on the tailnet, then leave the group the way
-    Settings → Devices → Leave does (:func:`backend.web.core.fleet
+    Settings → Your devices → Leave does (:func:`backend.web.core.fleet
     .leave_fleet`: a tombstone for this device goes to every member that
     answers). Returns the members that were reachable to be told."""
     from backend.web.core import fleet, remote

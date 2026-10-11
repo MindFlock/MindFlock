@@ -4,10 +4,13 @@ Ingests issues assigned to you in a single repository. This is the source that
 should cost a new user nothing to connect, so **both** of its inputs resolve
 themselves:
 
-* **Credential** — the shared GitHub auth chain: an explicit
-  ``ticketing.api_token``, else ``github.token`` in settings, else
+* **Credential** — the one GitHub chain (:mod:`backend.ticket_ingestion.
+  github_auth`): Connect GitHub's ``github.token``, else
   ``$GH_TOKEN``/``$GITHUB_TOKEN``, else ``gh auth token``. Anyone who has ever
-  run ``gh auth login`` (or connected GitHub for PR review) is already done.
+  run ``gh auth login`` (or connected GitHub) is already done. A per-source
+  ``api_token`` from an older release is still honoured as the LAST fallback
+  for one release, with a notice to move it to Connect GitHub; the field is
+  no longer offered on the card.
 * **Repository** — :meth:`GithubIssuesProvider.resolve_repo` walks
   ``ticketing.project`` -> the source's own ``repo_url`` -> the global
   ``[repository].url`` -> this checkout's ``origin`` remote. So on a machine
@@ -26,7 +29,7 @@ from typing import Any
 
 import aiohttp
 
-from backend.config.secrets import resolve_secret
+from backend.ticket_ingestion import github_auth as _github_auth
 from backend.ticket_ingestion.models import Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
@@ -45,23 +48,14 @@ _API = "https://api.github.com"
 _MAX_ISSUES = 50
 
 
-async def _gh_auth_token() -> str | None:
-    import asyncio
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "gh",
-            "auth",
-            "token",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError:
-        return None
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-    return (stdout.decode(errors="replace").strip()) or None
+#: Said once per process: a per-source token still in settings works, but it
+#: is the deprecated path and goes away next release.
+_PER_SOURCE_TOKEN_NOTICED = False
+PER_SOURCE_TOKEN_NOTICE = (
+    "GitHub Issues source still has its own Token (deprecated): move it to "
+    "Settings → Connections → GitHub → Connect. It is read as a last fallback "
+    "this release and ignored from the next."
+)
 
 
 class GithubIssuesProvider(TicketProvider):
@@ -71,25 +65,27 @@ class GithubIssuesProvider(TicketProvider):
 
     def __init__(self, cfg) -> None:
         super().__init__(cfg)
-        self._token: str | None = None
 
     async def _resolve_token(self) -> str:
-        if self._token:
-            return self._token
-        token = await resolve_secret(
-            explicit=self.cfg.api_token,
-            settings_getter=lambda s: s.github.token,
-            env_vars=("GH_TOKEN", "GITHUB_TOKEN"),
-            cli_fallback=_gh_auth_token,
-        )
-        if not token:
+        """The shared chain (memoized a minute by github_auth, so a token
+        pasted into Connect GitHub reaches the next poll — no per-provider
+        cache for the life of the process any more), then the deprecated
+        per-source ``api_token`` as the last fallback."""
+        global _PER_SOURCE_TOKEN_NOTICED
+        per_source = (self.cfg.api_token or "").strip()
+        if per_source and not _PER_SOURCE_TOKEN_NOTICED:
+            _PER_SOURCE_TOKEN_NOTICED = True
+            _logger.warning(PER_SOURCE_TOKEN_NOTICE)
+        try:
+            return await _github_auth.resolve_token(None)
+        except _github_auth.GithubAuthError:
+            if per_source:
+                return per_source
             raise ProviderError(
-                "No GitHub token available — set this source's Token on its "
-                "card (Intake → Tickets), paste one under Intake → Pull requests → "
-                "Advanced options, export GH_TOKEN, or run `gh auth login`."
+                "No GitHub token available — connect GitHub under Settings → "
+                "Connections → GitHub → Connect, export GH_TOKEN, or run "
+                "`gh auth login`."
             )
-        self._token = token
-        return token
 
     async def _headers(self) -> dict[str, str]:
         return {
@@ -220,6 +216,11 @@ class GithubIssuesProvider(TicketProvider):
             provider="github_issues",
             slug=self.make_slug(number),
             source_label=self.label,
+            labels=[
+                str(lab.get("name"))
+                for lab in issue.get("labels") or []
+                if isinstance(lab, dict) and lab.get("name")
+            ],
         )
 
     async def search_assigned(self, since: datetime) -> list[Ticket]:
@@ -350,6 +351,68 @@ class GithubIssuesProvider(TicketProvider):
                         f"GitHub could not update issue {ticket_id} "
                         f"(HTTP {resp.status}): {text[:200]}"
                     )
+
+    # --- claim mirror (tracker_claims) -------------------------------- #
+
+    can_claim = True
+
+    async def claim_identity(self) -> str:
+        """The token's login (``member_id`` when the source names one)."""
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            return await self._login(session, headers)
+
+    async def _issue_call(
+        self, method: str, suffix: str, body: dict | None, ok: tuple, what: str
+    ) -> None:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        url = f"{_API}/repos/{owner}/{repo}/issues/{suffix}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            call = session.delete if method == "DELETE" else session.post
+            kwargs = {"headers": headers}
+            if body is not None:
+                kwargs["json"] = body
+            async with call(url, **kwargs) as resp:
+                if resp.status not in ok:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub could not {what} (HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def assign_to(self, ticket_id: str, member: str) -> None:
+        member = (member or "").strip()
+        if not member:
+            raise ProviderError("no GitHub login to assign")
+        await self._issue_call(
+            "POST",
+            f"{ticket_id}/assignees",
+            {"assignees": [member]},
+            (200, 201),
+            f"assign issue {ticket_id}",
+        )
+
+    async def add_label(self, ticket_id: str, label: str) -> None:
+        # GitHub creates a label it doesn't know yet on the way.
+        await self._issue_call(
+            "POST",
+            f"{ticket_id}/labels",
+            {"labels": [label]},
+            (200, 201),
+            f"label issue {ticket_id}",
+        )
+
+    async def remove_label(self, ticket_id: str, label: str) -> None:
+        from urllib.parse import quote
+
+        # 404 = the label is not on the issue: already done.
+        await self._issue_call(
+            "DELETE",
+            f"{ticket_id}/labels/{quote(label, safe='')}",
+            None,
+            (200, 204, 404),
+            f"unlabel issue {ticket_id}",
+        )
 
     async def add_comment(self, ticket_id: str, body: str) -> None:
         owner, repo = self._repo()

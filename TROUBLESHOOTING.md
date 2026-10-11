@@ -17,31 +17,38 @@ distro's shell, and run the installer there. The optional
 [Electron shell](electron/README.md) then gives you a native-Windows window
 onto the WSL-hosted server.
 
-### `MindFlock: the WSL setup did not finish` (Windows installer)
+### Windows: the app opens on "Finish setting up WSL", "WSL isn't installed" or "One more step"
 
-The `.exe` installs the app **and** runs `install.sh` inside your default WSL
-distro. That second half is deliberately non-fatal, so the app is installed
-either way — click **Show details** in the installer to see why it stopped.
-The usual causes:
+The `.exe` installs only the app. It checks that `wsl.exe` exists and
+otherwise does nothing inside WSL — the engine is installed by the app on its
+**first launch**, from the offline page, with a live transcript (see
+[Window stuck on the offline page](#window-stuck-on-the-offline-page) for
+every state that page can show). So a Windows install problem shows up in
+the app, not in the installer:
 
-- **No WSL.** Run `wsl --install` in PowerShell, reboot, then re-run the
-  MindFlock installer (re-running is a safe in-place upgrade).
-- **WSL only half-set-up.** `wsl --install` needs a **reboot** to finish, and a
-  distro must actually be installed and launched once. Run `wsl -l -v`: if it
-  lists no distro, run `wsl --install -d Ubuntu`, reboot if asked, then open the
-  distro once (it creates your Linux user) before re-running. A partially set-up
-  WSL is the most common Windows install failure.
-- **No `curl` in the distro.** `sudo apt install curl`, then re-run.
-- **It installed into the wrong distro.** The installer uses your *default*
-  distro, and so does the app — but only if `MINDFLOCK_WSL_DISTRO` is unset.
-  `wsl -l -v` shows which is default; `wsl -s <name>` changes it.
+- **"WSL isn't installed"** — `wsl.exe` is missing. Run `wsl --install` in
+  PowerShell, reboot, reopen MindFlock.
+- **"Finish setting up WSL"** — WSL is present but has no working distro.
+  `wsl --install` needs a **reboot** to finish, and a distro must actually be
+  installed and launched once. Run `wsl -l -v`: if it lists no distro, run
+  `wsl --install -d Ubuntu`, reboot if asked, then run `wsl` once (it creates
+  your Linux user). When `wsl` drops you into a Linux shell, reopen
+  MindFlock. A partially set-up WSL is the most common Windows install
+  failure, and restarting WSL cannot fix it.
+- **"One more step"** — WSL works but the engine isn't there yet. Click
+  **Set up MindFlock on this computer**; the install runs inside WSL and the
+  page streams its output. If it fails (no `curl` in the distro is the usual
+  cause: `sudo apt install curl`), the page keeps the transcript, offers
+  **Try again**, and shows the manual command. That command — run in a shell
+  of the right distro — is always equivalent to the button:
 
-You never have to re-run the installer to fix this. Opening a shell in the
-right distro and running what it would have run is equivalent:
+  ```bash
+  curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
+  ```
 
-```bash
-curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
-```
+- **It installed into the wrong distro.** The app installs into, and later
+  launches, your *default* distro — unless `MINDFLOCK_WSL_DISTRO` pins
+  another one. `wsl -l -v` shows which is default; `wsl -s <name>` changes it.
 
 ### `install finished but 'mindflock' is not on PATH`
 
@@ -71,11 +78,16 @@ install docs: <https://docs.astral.sh/uv/getting-started/installation/>
 
 ## Doctor failures (`mindflock doctor` / the ✗ lines at `serve` startup)
 
-### `git` — `not found on PATH — sessions fork git worktrees, so git is required`
+### `git` — `not found (optional — sessions run in plain folders; diff/commit/PR and isolated worktrees need git)`
 
-Install git: `sudo apt install git` (Debian/Ubuntu), `sudo dnf install git`
-(Fedora), `sudo pacman -S git` (Arch), `xcode-select --install` or
-`brew install git` (macOS). Doctor prints the right one for your machine.
+Reported as *info*, not a failure: the doctor still exits 0 and `serve` still
+starts. Without git a session runs in a plain folder, with no isolated
+worktree, Diff tab, commit, push or PR — which is nearly everything people use
+MindFlock for, so it stays in the doctor's install plan (`mindflock doctor
+--fix` installs it). To install it yourself: `sudo apt install git`
+(Debian/Ubuntu), `sudo dnf install git` (Fedora), `sudo pacman -S git` (Arch),
+`xcode-select --install` or `brew install git` (macOS). Doctor prints the
+right one for your machine.
 
 ### `git … is too old — 'git worktree remove' needs git ≥ 2.17`
 
@@ -135,6 +147,37 @@ back to PATH lookup.
 Claude Code is installed but has never logged in. Run `claude` once in any
 terminal and complete the login; MindFlock then finds the credential state in
 `~/.claude.json` / `~/.claude/.credentials.json` (or set `ANTHROPIC_API_KEY`).
+
+---
+
+## Ticket sources (Intake → Tickets)
+
+### A source saves fine but ingests nothing
+
+Saving a source card stores the token; it does **not** test it. Press the
+card's **Test connection** (`POST /api/settings/test/ticketing`) — it checks
+the credentials, fills in your member id for Shortcut, and populates the
+ingest-state picker. A source that was never tested can sit with a bad token
+or no state and never match a ticket.
+
+### `Configuration error: Invalid configuration … Missing or invalid fields: - <source>.member_id (your Shortcut member id)`
+
+The ingestion pipeline (`python -m backend.ticket_ingestion`, started by the
+**Automated ingestion** switch) validates every source on startup and exits 1
+when any source is missing a required field, listing every missing field: for Shortcut that is the API token and
+**your member id**, for Jira the token, email and site URL, for Asana the
+token and workspace gid. Nothing is ingested from *any* source until it is
+fixed. **Test connection** on the Shortcut card fills the member id in for
+you; then flip **Automated ingestion** off and on again.
+
+### I changed a token and the pipeline keeps using the old one
+
+The pipeline is a separate process with its own settings cache, and a save
+in the app does not restart it. After changing a token, ingest state or any
+other source field, flip **Automated ingestion** off and on (Intake →
+Tickets, or the sidebar's **Tickets** bar) so the pipeline restarts and
+re-reads the store. The Assigned-tickets list in the app itself reads the new
+value straight away; only the poller lags.
 
 ---
 
@@ -345,7 +388,7 @@ the token. Force the gate: `MINDFLOCK_AUTH=1` (on) / `MINDFLOCK_AUTH=0` (off).
 
 `tailscale` isn't installed or isn't up — phone access needs the machine on a
 tailnet (`curl -fsSL https://tailscale.com/install.sh | sh`, then
-`sudo tailscale up`). The desktop app works without it. Settings → Devices'
+`sudo tailscale up`). The desktop app works without it. Settings → Your devices'
 **Tailscale on this device** card (and `mindflock doctor`) says which: not
 installed, signed out (**Sign in** there shows the sign-in link and a QR),
 turned off, or a key about to expire.
@@ -383,7 +426,7 @@ hasn't been tested on mirrored networking.
 
 ### A device dropped off Tailscale after a few months
 
-Its node key expired. Settings → Devices warns 30 days ahead. In the admin
+Its node key expired. Settings → Your devices warns 30 days ahead. In the admin
 console's Machines page, open the device → ⋯ → **Disable key expiry**. A tag
 added in the console after the device signed in does **not** turn expiry
 off (only a tag applied at sign-in does), so tagged MindFlock hosts need
@@ -411,14 +454,17 @@ case you're in:
   this, which is why this is its own screen rather than "WSL isn't responding".
 - **"WSL isn't installed"** (Windows) — run `wsl --install` in PowerShell,
   reboot, reopen MindFlock.
-- **"One more step" / the engine isn't installed** — click **Install the
-  engine**. The app runs the bundled `install.sh` for you (inside WSL on
-  Windows, on this machine otherwise) and streams the output into the window;
-  it opens by itself when the install finishes. If it fails, the page keeps
-  the transcript, offers **Try again**, and shows the manual command as a last
-  resort. On macOS the usual first-run failure is the missing Xcode Command
-  Line Tools (they provide `git`) — the app opens Apple's installer for you;
-  finish it and press **Install** again.
+- **"One more step" / the engine isn't installed** — click **Set up
+  MindFlock on this computer**. The app runs the bundled `install.sh` for you
+  (inside WSL on Windows, on this machine otherwise) and streams the output
+  into the window ("Installing the MindFlock engine…"); it opens by itself
+  when the install finishes. If it fails, the page keeps the transcript,
+  offers **Try again**, and shows the manual command as a last resort. On
+  macOS the usual first-run stop is the missing Xcode Command Line Tools
+  (they provide `git`): the app opens Apple's installer and *waits* for it
+  ("Apple is installing developer tools (git)…", up to 30 minutes), then
+  carries on by itself; if that window was closed, run
+  `xcode-select --install` and press **Try again**.
 - **"Starting the MindFlock server…" that never connects** — the server is
   crashing on boot; check the logs below. On Windows also check the distro:
   the app launches into your **default** WSL distro; if MindFlock lives in

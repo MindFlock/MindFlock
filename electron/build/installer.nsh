@@ -12,8 +12,68 @@
 ; section), and looked hung — so the wizard now only checks that WSL is present
 ; and hands off to the app.
 ;
-; Deliberately written in core NSIS only (no LogicLib/FileFunc macros) so it
-; cannot collide with whatever electron-builder's own template already included.
+; Deliberately written in core NSIS only (no LogicLib/FileFunc macros) wherever
+; possible, so it cannot collide with whatever electron-builder's own template
+; already included. LogicLib + ${isUpdated} ARE in scope (the template defines
+; them) and are used only where the update path has to be told apart.
+
+; Preflight, BEFORE any file is copied (.onInit): an app installed onto a
+; machine without WSL 2 and a Linux distro is a shell with nothing behind it,
+; and its first launch could only show "WSL isn't installed". Say so here,
+; once, and stop — so the user isn't left with a broken install to remove.
+;
+; Two checks, in order: wsl.exe exists (WSL is installed at all), then
+; `wsl -l -q` exits 0 with at least one distro listed (`wsl --install` done AND
+; the reboot it needs taken). The output is UTF-16, which NSIS reads as a string
+; cut at the first NUL — only its non-emptiness matters here, and that survives.
+;
+; Skipped for silent runs and for the in-app updater's `--updated` reinstall:
+; neither has a user at the keyboard to read a box, and an update must never be
+; blocked by a WSL that is merely asleep (the app's own page handles that).
+!macro customInit
+  IfSilent mf_init_end
+  ${if} ${isUpdated}
+    Goto mf_init_end
+  ${endif}
+  Push $0
+  Push $1
+
+  ; wsl.exe lives in the real System32. A 32-bit installer on 64-bit Windows
+  ; sees SysWOW64 as $SYSDIR (no wsl.exe there), so try the $WINDIR\Sysnative
+  ; alias first, then the plain path (64-bit installer, or 32-bit Windows).
+  StrCpy $1 "$WINDIR\Sysnative\wsl.exe"
+  IfFileExists "$1" mf_init_have_wsl 0
+  StrCpy $1 "$SYSDIR\wsl.exe"
+  IfFileExists "$1" mf_init_have_wsl mf_init_no_wsl
+
+  mf_init_have_wsl:
+  ; A wedged WSL can hang `wsl -l`; give it 20 s, and on a timeout let the
+  ; install proceed (we can't tell, and the app's offline page has a "Restart
+  ; WSL" button for exactly that case).
+  nsExec::ExecToStack /TIMEOUT=20000 '"$1" -l -q'
+  Pop $0   ; exit code, or "error" / "timeout"
+  Pop $1   ; the distro list (UTF-16 → effectively its first character)
+  StrCmp $0 "timeout" mf_init_ok 0
+  StrCmp $0 "0" 0 mf_init_no_wsl
+  StrCmp $1 "" mf_init_no_wsl mf_init_ok
+
+  mf_init_no_wsl:
+  MessageBox MB_YESNO|MB_ICONSTOP \
+    "MindFlock needs WSL 2 with a Linux distro.$\r$\n$\r$\nInstall it with `wsl --install`, reboot, then run this installer again.$\r$\n$\r$\nOpen the setup guide in your browser now?" \
+    /SD IDNO IDYES mf_init_open_guide
+  Goto mf_init_quit
+  mf_init_open_guide:
+  ExecShell "open" "https://github.com/MindFlock/MindFlock#installation"
+  mf_init_quit:
+  Pop $1
+  Pop $0
+  Quit
+
+  mf_init_ok:
+  Pop $1
+  Pop $0
+  mf_init_end:
+!macroend
 
 !macro customInstall
   Push $0

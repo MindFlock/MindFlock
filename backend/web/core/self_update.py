@@ -20,7 +20,14 @@ Three things make that safe to do from inside the process being replaced:
   * a **dev checkout is refused outright**. ``uv tool install --force`` would
     replace a developer's editable install with a release build, and no button
     in a settings screen should be able to quietly do that to someone's working
-    tree — see :func:`install_kind`.
+    tree — see :func:`install_kind`. The screen gets the git commands instead
+    (:func:`editable_update_commands`).
+
+How the engine was installed comes from ``install.sh``'s ``install.json``
+(:func:`read_install_json`: ``uv-tool`` or ``pipx``), the running package's
+own path deciding otherwise. :func:`install_command` is THE install line per
+method — the server's script, ``mindflock update`` and the fleet rollout all
+run it — and :func:`latest_release_tag` the one resolver for "newest release".
 
 The restart itself is deliberately NOT the installer's job. Having the script
 call back into the API would mean teaching it the auth token, so the server
@@ -49,7 +56,7 @@ import sys
 import sysconfig
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from backend import log
 from backend.config import config as _config
@@ -64,6 +71,11 @@ INSTALL_REPO = os.environ.get(
 
 #: The interpreter uv pins the tool venv to (kept in step with ``install.sh``).
 INSTALL_PYTHON = "3.12"
+
+#: The install methods ``install.json`` may name (what ``install.sh`` writes:
+#: ``{"method", "ref", "sha", "python", "at"}``) and :func:`install_kind`
+#: answers. ``other`` is the fallback for an install none of them describes.
+INSTALL_METHODS = ("uv-tool", "pipx", "editable")
 
 #: How long a release lookup is reused. GitHub's unauthenticated limit is 60
 #: requests an hour and this endpoint is polled by every open settings screen,
@@ -192,16 +204,59 @@ def is_newer(latest: str, current: str) -> bool:
     return a > b
 
 
-def install_kind() -> str:
-    """How this engine is installed: ``uv-tool``, ``editable`` or ``other``.
+def install_json_path() -> Path:
+    """Where ``install.sh`` records how it installed this engine: the engine's
+    own config dir (``~/.mindflock/install.json``, the same ``GetConfigDir``
+    the rest of the state uses). ``MINDFLOCK_HOME`` overrides it (tests, a
+    scratch home); under the pytest home guard with no override there is no
+    file to read and nothing is written."""
+    home = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if home:
+        return Path(os.path.expanduser(home)) / "install.json"
+    try:
+        from backend.config import config as _config
 
-    ``editable`` is the one that matters, and it is why this is a path check
-    rather than a metadata check: an editable install leaves ``backend`` OUTSIDE
-    site-packages (a ``.pth`` points at the developer's checkout), so the import
-    that is running right now is the surest evidence of what kind of install
-    this is. Reinstalling over it would swap that checkout for a release build
-    and silently end the dev loop, so the update refuses.
-    """
+        return Path(_config.GetConfigDir()) / "install.json"
+    except Exception:  # noqa: BLE001 — the home guard refused the real home
+        return Path(os.devnull)
+
+
+def read_install_json() -> dict:
+    """The ``install.json`` contract (``method``, ``ref``, ``sha``, ``python``,
+    ``at``), or ``{}`` when there is none or it is unreadable. A ``method``
+    outside :data:`INSTALL_METHODS` is dropped, so a corrupt file falls back
+    to detection rather than naming an installer nobody has."""
+    try:
+        data = json.loads(install_json_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {k: v for k, v in data.items() if isinstance(k, str)}
+    if str(out.get("method") or "") not in INSTALL_METHODS:
+        out.pop("method", None)
+    return out
+
+
+def write_install_json(**fields) -> bool:
+    """Refresh ``install.json`` after an update this process ran (the CLI):
+    the existing fields are kept, ``fields`` replace them. Best-effort."""
+    data = read_install_json()
+    data.update({k: v for k, v in fields.items() if v is not None})
+    path = install_json_path()
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def _detected_kind() -> str:
+    """How this engine is installed, judged from where the running package
+    is: ``editable``, ``uv-tool``, ``pipx`` or ``other``."""
     try:
         import backend
 
@@ -215,7 +270,109 @@ def install_kind() -> str:
     if purelib not in pkg.parents:
         return "editable"
     prefix = str(Path(sys.prefix).resolve()).replace(os.sep, "/")
-    return "uv-tool" if "/uv/tools/" in prefix else "other"
+    if "/uv/tools/" in prefix:
+        return "uv-tool"
+    if "/pipx/venvs/" in prefix:
+        return "pipx"
+    return "other"
+
+
+def install_kind() -> str:
+    """How this engine is installed: ``uv-tool``, ``pipx``, ``editable`` or
+    ``other``.
+
+    ``editable`` is the one that matters, and it is why this starts as a path
+    check rather than a metadata check: an editable install leaves ``backend``
+    OUTSIDE site-packages (a ``.pth`` points at the developer's checkout), so
+    the import that is running right now is the surest evidence of what kind
+    of install this is. Reinstalling over it would swap that checkout for a
+    release build and silently end the dev loop, so the update refuses — even
+    when a stale ``install.json`` from an earlier release install says
+    otherwise.
+
+    For a release install, ``install.json`` (written by ``install.sh``) names
+    the installer: ``uv-tool`` or ``pipx``. Without it the venv's path decides
+    (``…/uv/tools/…``, ``…/pipx/venvs/…``), and anything else is ``other``.
+    """
+    detected = _detected_kind()
+    if detected == "editable":
+        return detected
+    method = str(read_install_json().get("method") or "")
+    if method in ("uv-tool", "pipx"):
+        return method
+    return detected
+
+
+def install_checkout() -> str:
+    """The developer checkout an editable install runs from (the directory
+    holding ``backend/``), "" when this isn't one."""
+    if _detected_kind() != "editable":
+        return ""
+    try:
+        import backend
+
+        return str(Path(str(backend.__file__)).resolve().parent.parent)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def install_spec(target: str) -> str:
+    """The pip requirement for ``target`` (a commit or a tag) on the install
+    repo — what ``install.sh`` installs: ``mindflock[web] @ git+<repo>@<t>``."""
+    return "mindflock[web] @ git+{}@{}".format(INSTALL_REPO, target)
+
+
+def install_command(method: str, target: str) -> Optional[List[str]]:
+    """THE install command for ``method`` — the one ``install.sh``, the
+    server's updater and ``mindflock update`` all run — as an argv, or None
+    for a method that has none (``editable`` updates come from git, see
+    :func:`editable_update_commands`; ``other`` is unknown).
+
+    ``target`` is what gets installed: the resolved commit for ``uv-tool``
+    (a tag moves, a commit doesn't) or a release tag for ``pipx``.
+    """
+    if method == "uv-tool":
+        return [
+            "uv",
+            "tool",
+            "install",
+            "--force",
+            "--python",
+            INSTALL_PYTHON,
+            install_spec(target),
+        ]
+    if method == "pipx":
+        return ["pipx", "install", "--force", install_spec(target)]
+    return None
+
+
+def editable_update_commands(ref: str = "", checkout: str = "") -> List[str]:
+    """The git commands that update a development checkout to ``ref`` (the
+    newest release tag, or ``main`` when none is known) — printed, never run:
+    a settings button or a CLI must not move someone's working tree."""
+    import shlex
+
+    checkout = checkout or install_checkout()
+    ref = str(ref or "").strip() or "main"
+    out = []
+    if checkout:
+        out.append("cd %s" % shlex.quote(checkout))
+    out.append("git fetch --tags origin")
+    out.append("git checkout %s" % shlex.quote(ref))
+    out.append("uv sync --group web")
+    out.append("mindflock restart")
+    return out
+
+
+async def latest_release_tag(force: bool = False) -> str:
+    """The newest release's tag (``v0.7.5``), "" when GitHub can't say.
+    One resolver for every updater (the server routes, ``mindflock update``,
+    the fleet rollout) — see :func:`latest_release`."""
+    try:
+        release = await latest_release(force=force)
+    except Exception:  # noqa: BLE001
+        release = None
+    return str((release or {}).get("tag") or "")
 
 
 def blocked_reason() -> str:
@@ -234,12 +391,13 @@ def blocked_reason() -> str:
         )
     if kind == "other":
         return (
-            "This engine was not installed with `uv tool install`, so the "
-            "in-app updater doesn't know how to replace it. Re-run install.sh, "
-            "or update it the way it was installed."
+            "This engine was not installed with `uv tool install` or pipx, so "
+            "the in-app updater doesn't know how to replace it. Re-run "
+            "install.sh, or update it the way it was installed."
         )
-    if shutil.which("uv") is None:
-        return "`uv` is not on the server's PATH, so the installer can't run."
+    tool = "pipx" if kind == "pipx" else "uv"
+    if shutil.which(tool) is None:
+        return "`%s` is not on the server's PATH, so the installer can't run." % tool
     return ""
 
 
@@ -510,6 +668,7 @@ def _script(
     health_poll: int = HEALTH_POLL_S,
     down_probes: int = HEALTH_DOWN_PROBES,
     relaunch: str = "",
+    method: str = "",
 ) -> str:
     """The installer, as a shell script.
 
@@ -536,12 +695,13 @@ def _script(
     whole window to come back; and a rollback needs ``down_probes``
     consecutive failed looks after that, never a single miss.
     """
-    spec = "mindflock[web] @ git+{}@{}".format(INSTALL_REPO, commit)
-    prev_spec = (
-        "mindflock[web] @ git+{}@{}".format(INSTALL_REPO, prev_commit)
-        if prev_commit
-        else ""
-    )
+    # ``method`` picks the installer (uv tool / pipx — :func:`install_command`,
+    # the same line ``mindflock update`` runs); the default is this install's.
+    method = method or install_kind()
+    if method not in ("uv-tool", "pipx"):
+        method = "uv-tool"
+    install_argv = install_command(method, commit) or []
+    prev_argv = install_command(method, prev_commit) if prev_commit else None
     keep = json.dumps(
         {
             "commit": commit,
@@ -550,7 +710,10 @@ def _script(
             "started_at": started_at,
         }
     )[1:-1]
-    install = "uv tool install --force --python %s" % INSTALL_PYTHON
+    import shlex
+
+    install_line = " ".join(shlex.quote(a) for a in install_argv)
+    rollback_line = " ".join(shlex.quote(a) for a in (prev_argv or []))
     return "\n".join(
         [
             "#!/bin/sh",
@@ -578,7 +741,7 @@ def _script(
             ' "$KEEP" "${3:-}" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"',
             "}",
             'hello() { curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null; }',
-            '%s %s >> "$LOG" 2>&1' % (install, _sh_quote(spec)),
+            '%s >> "$LOG" 2>&1' % install_line,
             "code=$?",
             'if [ "$code" -ne 0 ]; then',
             '  put failed "$code"',
@@ -631,7 +794,7 @@ def _script(
             "      exit 1",
             "    fi",
             '    printf "=== the server did not come back on %s; putting %s back ===\\n" "$REF" "$PREV" >> "$LOG"',
-            '    %s %s >> "$LOG" 2>&1' % (install, _sh_quote(prev_spec)),
+            '    %s >> "$LOG" 2>&1' % (rollback_line or "false"),
             "    rc=$?",
             '    if [ "$rc" -ne 0 ]; then',
             '      put failed "$rc" \',"error":"the new version did not start, and putting the previous one back failed"\'',

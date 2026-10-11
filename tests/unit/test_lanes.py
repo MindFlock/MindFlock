@@ -275,7 +275,7 @@ class TestShipNow:
         monkeypatch.setattr(server, "_fasttrack_depth", lambda: "merge")
         monkeypatch.setattr(server, "_fasttrack_default", lambda: "merge")
         code, body = _run(server.instance_ship_now("ln-session", {}))
-        assert code == 409 and "no lane of its own" in body["error"]
+        assert code == 409 and "no fast-track of its own" in body["error"]
         assert ap.get("ln-session") is None
         # An explicit lane (what the row showed) is what ships.
         code, body = _run(server.instance_ship_now("ln-session", {"lane": "commit"}))

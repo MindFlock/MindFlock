@@ -60,7 +60,7 @@ export function shipVerb(step: string | undefined): string {
       return "Push";
     case "pr":
     case "make_pr":
-      return "Open the PR";
+      return "Open PR";
     case "merge":
       return "Merge";
     default:
@@ -96,7 +96,7 @@ export function waitingChip(w: OutboxWaiting): { text: string; cls: string } {
   if (w.kind === "stray") return { text: w.reason || "changes no piece owns in the lead's folder", cls: "warn" };
   if (w.kind === "approve")
     return {
-      text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
+      text: "ready to " + shipVerb(w.step).toLowerCase().replace("open pr", "open the PR") + " — you asked to see it first",
       cls: "",
     };
   return { text: w.reason || "needs you", cls: "bad" };
@@ -186,9 +186,9 @@ export function waitingActions(
     if (a.has("cancel_group") && can.run)
       out.push({
         key: "cancel_group",
-        label: "Cancel the group",
+        label: "Cancel the team run",
         primary: true,
-        title: "Stop the group — its sessions and branches are kept",
+        title: "Stop the team run — its sessions and branches are kept",
       });
     return out;
   }
@@ -203,7 +203,7 @@ export function waitingActions(
     out.push({ key: "retry_fresh", label: "Retry fresh", primary: false, title: "Start it again on a new branch; the old one is kept" });
   if (can.row) out.push({ key: "open", label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗", primary: false });
   if (a.has("skip") && can.run && can.task)
-    out.push({ key: "skip", label: "Skip", primary: false, title: "Take it out of the group — its session and branch stay" });
+    out.push({ key: "skip", label: "Skip", primary: false, title: "Take it out of the team run — its session and branch stay" });
   return out;
 }
 

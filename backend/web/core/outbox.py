@@ -504,7 +504,7 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
             )
         if stray_commits:
             parts.append(
-                "a commit no piece made is on the group's branch (%s)"
+                "a commit no piece made is on the team run's branch (%s)"
                 % ", ".join(c[:9] for c in stray_commits[:3])
             )
         return dict(

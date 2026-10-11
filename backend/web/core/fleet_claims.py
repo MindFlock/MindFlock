@@ -24,6 +24,19 @@ remote control already has (:mod:`backend.web.core.remote`):
   side reads after its own write, so at least one of two racers sees the
   other and backs off.
 
+**Who.** Every claim names the person it is for (docs/people.md): a
+session's stamped person, else the device's own. A device that predates
+people sends none — read as ``""``, never refused.
+
+**Teammates.** Pairing only reaches one person's own devices. A teammate's
+MindFlock is seen through the TRACKER instead
+(:mod:`backend.ticket_ingestion.tracker_claims`): a started ticket is assigned
+to its person and labelled ``mindflock:working``, and :func:`holder_for`
+checks the paired devices first and then the ticket itself — so the
+flock-wide check works with zero pairing. A tracker claim is
+``{"kind": "tracker", "name", "label", "why", …}`` and :func:`describe`
+words it ``"<name> is on this"``.
+
 Best-effort by design: an unreachable device holds nothing, so a dead
 laptop never blocks the queue (the pushed-branch check still applies).
 """
@@ -63,12 +76,33 @@ def _ts(value) -> float:
     return 0.0
 
 
+def _person_id() -> str:
+    try:
+        from backend.web.core import person as _person
+
+        return _person.known_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _person(value) -> str:
+    """A claim's ``person`` as a well-formed id, or ``""`` (an older device
+    sends none; junk is dropped, never refused)."""
+    from backend.config import settings as _settings
+
+    return _settings.person_id(value)
+
+
 def local_claims() -> Dict[str, dict]:
-    """``{slug: {"kind", "since"}}`` for every ticket this device holds."""
+    """``{slug: {"kind", "since", "person"}}`` for every ticket this device
+    holds — ``person`` is the session's stamped person, else this device's."""
     from backend.web import server as srv
     from backend.web.core import pending as _pending
+    from backend.web.core import person_sessions as _person_sessions
     from backend.web.core import ticket_start as _ticket_start
     from backend.ticket_ingestion.state import in_flight_stories
+
+    me = _person_id()
 
     claims: Dict[str, dict] = {}
     now = time.time()
@@ -81,24 +115,40 @@ def local_claims() -> Dict[str, dict]:
         reserved = bool(entry.get("reserved_by"))
         if not reserved and since and now - since > MARKER_MAX_AGE:
             continue
-        claims[slug] = {"kind": "reserved" if reserved else "in_flight", "since": since}
+        claims[slug] = {
+            "kind": "reserved" if reserved else "in_flight",
+            "since": since,
+            "person": me,
+        }
     for title, meta in _pending.snapshot().items():
         if meta.get("kind") == "tix":
-            claims[title] = {"kind": "starting", "since": _ts(meta.get("since"))}
+            claims[title] = {
+                "kind": "starting",
+                "since": _ts(meta.get("since")),
+                "person": me,
+            }
     for title, inst in list(srv.ENGINE.instances.items()):
         branch = str(getattr(inst, "Branch", "") or "")
         if _pending.session_kind(title, branch) != "tix":
             continue
         created = getattr(inst, "CreatedAt", None)
         since = created.timestamp() if hasattr(created, "timestamp") else 0.0
-        claims[title] = {"kind": "session", "since": since}
+        claims[title] = {
+            "kind": "session",
+            "since": since,
+            "person": _person_sessions.person(title) or me,
+        }
     return claims
 
 
 def claims_json() -> dict:
     from backend.web.core import remote as _remote
 
-    return {"device": _remote.self_identity()["key"], "claims": local_claims()}
+    return {
+        "device": _remote.self_identity()["key"],
+        "person": _person_id(),
+        "claims": local_claims(),
+    }
 
 
 def _claims_from_instances(dev: dict) -> Dict[str, dict]:
@@ -112,7 +162,11 @@ def _claims_from_instances(dev: dict) -> Dict[str, dict]:
             continue
         title = str(row.get("title") or "")
         if _pending.session_kind(title, str(row.get("branch") or "")) == "tix":
-            out[title] = {"kind": "session", "since": 0.0}
+            out[title] = {
+                "kind": "session",
+                "since": 0.0,
+                "person": _person(row.get("person")),
+            }
     return out
 
 
@@ -129,8 +183,10 @@ async def _device_claims(dev: dict, fresh: bool) -> Dict[str, dict]:
         and isinstance(body, dict)
         and isinstance(body.get("claims"), dict)
     ):
+        # A claim without its own person is the answering device's person.
+        who = _person(body.get("person"))
         claims = {
-            str(k): v
+            str(k): {**v, "person": _person(v.get("person")) or who}
             for k, v in body["claims"].items()
             if isinstance(v, dict) and v.get("kind")
         }
@@ -161,7 +217,7 @@ def _claim_peers() -> List[dict]:
 
 
 async def fleet_claims(fresh: bool = False) -> Dict[str, List[dict]]:
-    """``{slug: [{"device", "label", "kind", "since"}, …]}`` across the
+    """``{slug: [{"device", "label", "kind", "since", "person"}, …]}`` across the
     devices this one has a credential relationship with (this one excluded):
     see :func:`_claim_peers`."""
     devs = _claim_peers()
@@ -177,6 +233,7 @@ async def fleet_claims(fresh: bool = False) -> Dict[str, List[dict]]:
                     "label": dev.get("host") or dev["key"],
                     "kind": str(c.get("kind")),
                     "since": _ts(c.get("since")),
+                    "person": _person(c.get("person")),
                 }
             )
     return out
@@ -209,8 +266,33 @@ async def holder(
     return None
 
 
+async def holder_for(
+    slug: str,
+    story=None,
+    *,
+    own_since: Optional[float] = None,
+    fresh: bool = False,
+    tracker: bool = True,
+) -> Optional[dict]:
+    """Who already has the ticket, from both sources: a paired device
+    (:func:`holder`) first, then — given the ticket as the tracker has it
+    now (``story``) — a teammate the tracker says is on it (assigned to
+    someone else + the claim label, or a started state). None when nobody;
+    ``tracker=False`` skips the tracker (the owner overrode it)."""
+    claim = await holder(slug, own_since=own_since, fresh=fresh)
+    if claim is not None or story is None or not tracker:
+        return claim
+    from backend.ticket_ingestion import tracker_claims as _tracker
+
+    return await _tracker.tracker_holder(story)
+
+
 def describe(claim: dict) -> str:
     """The Intake chip / 409 wording for a claim."""
+    if claim.get("kind") == "tracker":
+        from backend.ticket_ingestion import tracker_claims as _tracker
+
+        return _tracker.describe(claim)
     where = claim.get("label") or claim.get("device") or "another device"
     if claim.get("kind") == "session":
         return "running on " + where

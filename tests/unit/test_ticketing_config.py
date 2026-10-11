@@ -226,20 +226,23 @@ assignee_scope = "anyone"
     assert cfg.ticketing.assignee_scope == "anyone"
 
 
-def test_anyone_on_a_provider_that_cannot_do_it_is_a_problem(tmp_path):
-    with pytest.raises(ConfigError, match="not supported"):
-        load_config(
-            _write(
-                tmp_path,
-                """
+def test_anyone_on_asana_parses_and_stands_on_its_sections(tmp_path):
+    # Asana's section listing takes no assignee, so "anyone" is a real scope
+    # there (bounded by the ingest sections) — no provider refuses it now.
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
 [ticketing]
 provider = "asana"
 api_token = "pat"
 project = "ws1"
 assignee_scope = "anyone"
+workflow_state = "123"
 """ + COMMON,
-            )
         )
+    )
+    assert cfg.ticketing.assignee_scope == "anyone"
 
 
 def test_anyone_with_only_an_ingest_label_parses(tmp_path):
@@ -496,17 +499,18 @@ member_id = "m"
 
 
 def test_start_state_on_a_provider_that_cannot_move_a_ticket_is_a_problem(tmp_path):
-    # A source switched from Jira to Asana keeps the old key; say so rather than
-    # silently ignoring it, which reads as "my tickets stopped moving".
+    # A source switched from Jira to GitHub Issues keeps the old key; say so
+    # rather than silently ignoring it, which reads as "my tickets stopped
+    # moving".
     with pytest.raises(ConfigError, match="start_state"):
         load_config(
             _write(
                 tmp_path,
                 """
 [ticketing]
-provider = "asana"
+provider = "github_issues"
 api_token = "tok"
-project = "ws"
+project = "org/repo"
 start_state = "Doing"
 """ + COMMON,
             )

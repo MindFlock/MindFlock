@@ -183,7 +183,7 @@ describe("workerLine (the worker's rail status line)", () => {
     });
     expect(line(row("w", { activity: "idle", last_report: report("blocked") })).text).toBe("✗ blocked");
     expect(line(row("w", { activity: "idle", last_report: report("failed") })).cls).toBe("rep-blocked");
-    expect(line(row("w", { activity: "clarify" }))).toMatchObject({ text: "? needs your answer", cls: "rep-ask" });
+    expect(line(row("w", { activity: "clarify" }))).toMatchObject({ text: "? needs you · question", cls: "rep-ask" });
     expect(line(row("w", { activity: "working", activity_since: NOW - 360 })).text).toBe("working · 6m");
     expect(line(row("w", { activity: "idle" }))).toMatchObject({ text: "idle — no report", cls: "rep-idle" });
   });
@@ -241,7 +241,7 @@ describe("rollup (the orchestrator's sub-line), most urgent first", () => {
 
   it("names every worker in the tooltip and is null without workers", () => {
     const r = rollup(kids(["clarify"], ["idle", "done"]), id, undefined, NOW)!;
-    expect(r.title).toContain("w0 — ? needs your answer");
+    expect(r.title).toContain("w0 — ? needs you · question");
     expect(r.title).toContain("w1 — ✓ reported");
     expect(r.title).toContain("Thread");
     expect(rollup([], id)).toBeNull();
@@ -370,7 +370,7 @@ describe("Sidebar: family nesting leaves rail order and numbering alone", () => 
     expect(by("w2")).toContain('tabindex="0"');
     // A session outside any family keeps today's row: no strip, no focus stop.
     expect(by("loner")).not.toContain("tabindex");
-    expect(by("w2")).toContain("? needs your answer");
+    expect(by("w2")).toContain("? needs you · question");
     expect(by("w1")).toContain("✓ reported");
     // api idle with a worker out → the dashed "waiting" chip, and the roll-up.
     expect(by("api")).toContain('class="stagechip s-waiting"');

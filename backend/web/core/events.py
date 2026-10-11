@@ -155,6 +155,15 @@ EVENT_NAMES = (
     # chars, sanitised to one line, "delivery": "delivered"|"pending"|"held" —
     # typed already, waiting for the agent to be idle, or kept in the inbox}).
     "session.message",
+    # Owner / driver / viewers (core.ownership): someone opened or closed a
+    # terminal on the session, started typing, took or released its keyboard,
+    # or it changed owner (data: {"owner", "driver", "driver_name",
+    # "viewers"} — the row fields). And the keyboard changed hands: ``old`` /
+    # ``new`` are person ids ("" = nobody), data: {"reason":
+    # "take"|"attach"|"input"|"release"|"left"|"idle", "name",
+    # "previous_name"} — how the previous driver hears they lost it.
+    "session.presence_changed",
+    "session.driver_changed",
     # Red zones (core.red_zone_monitor). All three are SEEDED rather than
     # boot-gated: the loop's first sight of a session/worktree records what is
     # already there without emitting, so a restart never re-announces.
@@ -232,7 +241,7 @@ EVENT_NAMES = (
     # Settings sync paused itself here: a background scan would have cleared
     # most of this device's settings at once (a reset or replaced
     # settings.json), so nothing is shared until the person chooses whose
-    # values to keep in Settings → Devices (data: {"cleared": n, "held": n,
+    # values to keep in Settings → Your devices (data: {"cleared": n, "held": n,
     # "detail"}). Once per pause.
     "settings.sync_paused",
     # Peer links (backend.peer.service is their one emitter; ``session`` is

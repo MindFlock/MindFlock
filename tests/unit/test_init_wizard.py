@@ -888,18 +888,32 @@ class TestFirstRunPlan:
         out = capsys.readouterr().out
         assert "mindflock devices join DEVICE CODE" in out
         assert "Your setup, in order:" in out
-        # The plan lines, in the shared order.
-        idx = [
-            out.index(t)
-            for t in (
-                "Dependencies",
-                "First computer",
-                "Sign in to your agent",
-                "Connect GitHub",
-            )
-        ]
+        # The five steps, by the names the web UI uses, in the shared order
+        # (backend.web.core.setup_steps is the one definition).
+        from backend.web.core import setup_steps
+
+        idx = [out.index(s["title"]) for s in setup_steps.STEPS]
         assert idx == sorted(idx)
-        assert "sign-ins stay on each computer" in out
+
+    def test_the_checklist_shows_the_stored_state(
+        self, monkeypatch, tmp_path, no_prompts, capsys
+    ):
+        """Done and skipped steps print as such — the same state the app's
+        checklist reads, so the terminal never says "to do" about a step the
+        app shows ticked."""
+        from backend.config import settings as S
+        from backend.web.core import setup_steps
+
+        monkeypatch.setattr(doctor, "run_checks", lambda: [_GIT_OK])
+        monkeypatch.setattr(init_wizard, "_plan", lambda checks: _canned_plan())
+        _candidates(monkeypatch, _entry(tmp_path))
+        S.update_settings(general={"onboarded": True})  # old flag → repo done
+        setup_steps.skip("phone")
+        assert init_wizard.run(assume_yes=True) == 0
+        out = capsys.readouterr().out
+        assert "✓ 3. Pick a repo" in out
+        assert "– 5. Your phone" in out and "skipped" in out
+        assert "• 4. Connect a tracker and GitHub" in out
 
     def test_joining_holds_the_agent_sign_in_back(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)

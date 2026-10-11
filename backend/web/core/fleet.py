@@ -375,8 +375,43 @@ def _emit(event: str, **data) -> None:
     try:
         from backend.web.core import events as _events
 
+        # Beside the device that acted: the person the group belongs to. Not
+        # for a join REQUEST — the asking device isn't one of theirs (yet).
+        if event != "device.join_requested":
+            data.setdefault("person", _person_id())
+
         _events.BUS.emit(event, data=data)
     except Exception:  # noqa: BLE001 — an event must never break a join
+        pass
+
+
+def _person_id() -> str:
+    try:
+        from backend.web.core import person as _person
+
+        return _person.known_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _person_handshake() -> dict:
+    """The inviter's person, carried in every pairing payload (``"person"``
+    beside the bundle) — the joiner adopts its id (:func:`_adopt_person`)."""
+    try:
+        from backend.web.core import person as _person
+
+        return _person.handshake()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _adopt_person(payload, source: str) -> None:
+    """The joining side: take the inviter's person id. Never raises."""
+    try:
+        from backend.web.core import person as _person
+
+        _person.adopt(payload, source)
+    except Exception:  # noqa: BLE001 — a join stands without it
         pass
 
 
@@ -567,6 +602,8 @@ def bundle_for(device: str, host: str, dns: str = "") -> dict:
     tmp = {"members": out["members"], "removed": out["removed"]}
     _put_member(tmp, device, host, _self_key(), dns)
     _note_admit(device, out["members"][device]["added_at"])
+    # Who the group belongs to: the joiner adopts this id (people.md).
+    out["person"] = _person_handshake()
     return out
 
 
@@ -742,7 +779,7 @@ def remove_member(key: str) -> None:
 
 
 def allow(key: str) -> dict:
-    """The person lets ``key`` back in HERE (Settings → Devices, "Allow it
+    """The person lets ``key`` back in HERE (Settings → Your devices, "Allow it
     here" on a device another member re-admitted — status
     ``readmitted_elsewhere``): this device's tombstone for it goes and it is
     a member again, added now by this device, so the tombstones the other
@@ -1220,7 +1257,7 @@ def probe_reason(
 ) -> str:
     """Why ``host`` isn't one this device can talk to, as one line — what
     discovery's probe found (:func:`backend.web.core.remote._probe_peer`).
-    Settings → Devices and ``mindflock devices list`` both print it, so the
+    Settings → Your devices and ``mindflock devices list`` both print it, so the
     wording lives here once. "" when it answered."""
     outcome = str(outcome or "")
     if outcome in ("", "ok"):
@@ -1232,7 +1269,8 @@ def probe_reason(
     if outcome == "refused":
         return (
             "connection refused on :%d — MindFlock isn't running there, or it's "
-            "local-only (Settings → Devices → Make reachable, on %s)" % (port, host)
+            "local-only (Settings → Your devices → Make reachable, on %s)"
+            % (port, host)
         )
     if outcome == "timeout":
         return (
@@ -1569,7 +1607,7 @@ def decide_as_member(rid: str, code: str, decision: str) -> dict:
 # requests held for another member (approve from wherever you are)
 # --------------------------------------------------------------------------- #
 #: Join requests waiting on ANOTHER member, copied here so the person can
-#: approve from this device too (its bell, Settings → Devices, the phone):
+#: approve from this device too (its bell, Settings → Your devices, the phone):
 #: ``(held by, asked device, request id) -> row``. ``held by`` is this
 #: device's own key when the copy arrived (one process may play several
 #: devices in tests). Memory only, like the requests themselves.
@@ -2407,6 +2445,8 @@ async def _finish_join(dev: dict, b: dict, runs: Optional[bool] = None) -> None:
     except ValueError as err:
         _set_join(state="error", error=str(err))
         return
+    # Before settings sync starts: the inviter's person is this device's now.
+    _adopt_person(b.get("person") if isinstance(b, dict) else None, dev["key"])
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
@@ -2466,6 +2506,7 @@ async def add_paired(device: str) -> dict:
             {
                 "bundle": bundle(),
                 "from": {"key": me, "host": _self_host(), "dns": _self_dns()},
+                "person": _person_handshake(),
             },
             bearer=tok,
         )
@@ -2515,6 +2556,8 @@ async def adopt_from_peer(body: dict, presented_own_token: bool) -> dict:
         raise ValueError("bad 'from' device")
     runs = runs_automation()  # before the group (and its settings) arrive
     exposed = adopt_bundle(body.get("bundle"))
+    # ``src`` invited this device into its group: its person is ours now.
+    _adopt_person(body.get("person"), src)
     try:
         _enable_remote_control()
     except Exception as err:  # noqa: BLE001
@@ -3022,7 +3065,7 @@ def _automation_runner() -> str:
 
 
 def status(privileged: bool) -> dict:
-    """Settings → Devices. Without ``privileged`` (a relayed or untrusted
+    """Settings → Your devices. Without ``privileged`` (a relayed or untrusted
     caller) nothing that lets someone in is included: no invite codes, no
     pending requests, no join code."""
     from backend import __version__

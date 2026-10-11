@@ -76,7 +76,7 @@ describe("the ladder", () => {
   });
 
   it("falls back to the raw value for an unknown label", () => {
-    expect(depthLabel("pr")).toBe("Open a PR");
+    expect(depthLabel("pr")).toBe("Open PR");
     expect(depthLabel("")).toBe("Off");
   });
 });
@@ -113,8 +113,8 @@ describe("atOrPastDepth", () => {
 
 describe("chip text", () => {
   it("names the target while running", () => {
-    expect(autopilotChipLabel(run({ depth: "pr" }))).toBe("auto → Open a PR");
-    expect(autopilotChipTitle(run({ depth: "pr" }))).toContain("Open a PR");
+    expect(autopilotChipLabel(run({ depth: "pr" }))).toBe("auto → Open PR");
+    expect(autopilotChipTitle(run({ depth: "pr" }))).toContain("Open PR");
   });
 
   it("always explains a halt", () => {
@@ -159,7 +159,7 @@ describe("the ⏩ control: THE per-session fast-track control", () => {
     expect(s!.lane).toBe("pr");
     expect(s!.active).toBe(true);
     expect(s!.halted).toBe(false);
-    expect(s!.title).toContain("Fast-track → Open a PR");
+    expect(s!.title).toContain("Fast-track → Open PR");
     expect(s!.title).toContain("change it or turn it off");
   });
 
@@ -197,7 +197,7 @@ describe("the ⏩ control: THE per-session fast-track control", () => {
         lane: { target, ask_first: true, owner: "t" },
       })!;
     expect(ask("pr").askFirst).toBe(true);
-    expect(ask("pr").title).toContain("Open a PR, asks first");
+    expect(ask("pr").title).toContain("Open PR, asks first");
     expect(ask("leave").askFirst).toBe(false);
   });
 

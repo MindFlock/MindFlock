@@ -616,7 +616,7 @@ def test_linear_refuses_to_guess_between_teams():
         pytest.raises(ProviderError) as err,
     ):
         _run(p._create_team_id())
-    assert "Project field" in str(err.value)
+    assert "Team key field" in str(err.value)
 
 
 def test_linear_uses_the_only_team_when_there_is_only_one():
@@ -943,7 +943,7 @@ def test_linear_names_the_key_and_the_field_when_no_team_matches_it():
     ):
         _run(p._create_team_id())
     assert "NOPE" in str(err.value)
-    assert "Project field" in str(err.value)
+    assert "Team key field" in str(err.value)
 
 
 def test_linear_says_so_when_the_account_can_see_no_teams_at_all():

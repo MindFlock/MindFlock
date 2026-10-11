@@ -136,7 +136,7 @@
   line-height: 1.5;
 }
 
-/* Settings → Mobile: phone setup in order (Mobile.tsx PhoneSteps). */
+/* Settings → Your phone: phone setup in order (Mobile.tsx PhoneSteps). */
 .mobile-phone-steps {
   margin: 0;
   padding-left: 18px;

@@ -1,4 +1,4 @@
-/** Settings → Devices ("Your devices"): the computers one person owns.
+/** Settings → Your devices (screen key "devices"): the computers one person owns.
  *
  * A device joins by holding the fleet key, and only members talk to each
  * other for settings sync, sign-in and ticket claims — a MindFlock that is
@@ -11,13 +11,21 @@
  *    for ("Add to my devices").
  * Settings sync lives here too (it used to sit under Security): it only ever
  * runs between these devices, so turning it on belongs next to adding them.
+ * So do the shared phone link (SharedLink.tsx — one URL every device
+ * answers) and, under Advanced (DevicesAdvanced.tsx), the older ways to
+ * trust a machine: trusted Tailscale accounts, Allow remote control and
+ * pairing by pasted token. Each trust control is on this screen once and
+ * nowhere else (tests/settingsScreens.test.ts pins that); Security keeps
+ * only the access token and the gate.
  *
  * Reachability comes first: a device the others can't reach (bound to
  * 127.0.0.1) can still make a code nobody can use and still join, then sit
  * "offline" on every other screen — so "This device" says where it listens,
- * and Make reachable (Tailscale mode + the access gate, one save) fixes it
- * wherever it matters: before a code is made, after a join, and in "Match my
- * other devices". When no other MindFlock shows, each tailnet device says
+ * and Make reachable — the one Tailscale-mode switch (Tailscale mode + the
+ * access gate, one save; off = this computer only, with "Restart server to
+ * apply" when the server didn't restart by itself) — fixes it wherever it
+ * matters: before a code is made, after a join, and in "Match my other
+ * devices". When no other MindFlock shows, each tailnet device says
  * why (refused, timed out, asleep …) instead of one sentence for all.
  *
  * Everything is /api/fleet* and /api/settings/sync*. Polls every 3 s while
@@ -74,11 +82,15 @@ import { DEVICES_FOCUS_EVENT, joinPeerInvite, takePendingDevicesFocus } from "..
 import type { DevicesFocus } from "../../../lib/deviceActions";
 import { GATE_ON_NOTE, turnGateOn } from "../../../lib/gateOn";
 import { fetchSettingsDoc, refreshConfig } from "../../../state/queries";
-import { InlineConfirm } from "../useSettings";
+import { InlineConfirm, useSettings } from "../useSettings";
 import { useMakeReachable } from "../useMakeReachable";
+import { useServerRestart } from "../useServerRestart";
 import type { MakeReachableResult } from "../useMakeReachable";
 import type { ScreenProps } from "../SettingsDialog";
+import PersonCard from "./PersonCard";
 import { TailscaleCard } from "./TailscaleCard";
+import { SharedLinkCard } from "./SharedLink";
+import { DevicesAdvanced } from "./DevicesAdvanced";
 import { NewComputerLine, ReadinessLine, SyncedAgentInstall, useFleetReadiness } from "./DeviceReadiness";
 import "./devices.css";
 
@@ -140,6 +152,17 @@ export function Devices(p: ScreenProps) {
     void loadSync();
   }, [loadFleet, loadSync]);
   const reach = useMakeReachable(loadAll);
+  // The Tailscale-mode switch reads the saved choice (general.serve_mode);
+  // whether it is live is st.self_reachable. Off goes through its own
+  // save + restart wait, so it needs a restart handle of its own.
+  const settings = useSettings();
+  const serveMode = String(settings.get("general", "serve_mode") ?? "");
+  const tailscaleMode = serveMode === "tailscale";
+  const srv = useServerRestart();
+  const [modeBusy, setModeBusy] = useState(false);
+  /** Bumped when something here changed the shared phone link, so its
+   * card refetches. */
+  const [linkRev, setLinkRev] = useState(0);
 
   // Opened aimed at something (lib/deviceActions): a candidate's row, or a
   // code for the paste box.
@@ -371,10 +394,30 @@ export function Devices(p: ScreenProps) {
       try {
         await reach.apply({ reach: true });
         setReachAsk(false);
+        void settings.reload();
       } catch (e) {
         toast(errText(e));
       }
     })();
+  // The switch's off half: back to listening on this computer only. The
+  // server restarts by itself when the bind changes (`restarting: true`);
+  // otherwise the saved choice waits for "Restart server to apply".
+  const makeLocalOnly = async () => {
+    setModeBusy(true);
+    let restarting = false;
+    try {
+      const res = await api<{ restarting?: boolean }>("/api/settings", { json: { general: { serve_mode: "local" } } });
+      restarting = !!res?.restarting;
+    } catch (e) {
+      toast(errText(e));
+    }
+    setModeBusy(false);
+    void settings.reload();
+    if (restarting) srv.restart({ alreadyRequested: true, onBack: loadAll });
+    else loadAll();
+  };
+  // Saved choice not live yet (an explicit choice only — "" never nags).
+  const modePending = !!serveMode && tailscaleMode === local;
   const reachConfirm = reachAsk && (
     <InlineConfirm
       id="devices-reach-confirm"
@@ -389,35 +432,63 @@ export function Devices(p: ScreenProps) {
 
   return (
     <>
+      {/* The person behind every device here, first: it is what pairing shares. */}
+      <p className="set-hint" id="devices-you-intro">
+        You — the same on every device you pair.
+      </p>
+      <PersonCard />
       <TailscaleCard active={p.active} />
-      {/* 0. This device: where it listens, and the fix when the others
-          can't reach it. */}
-      {here && (
+      {/* 0. This device: where it listens, and the ONE Tailscale-mode switch
+          ("Make reachable") — the fix when the others can't reach it. */}
+      <div
+        className={local ? "devices-warn" : "devices-this"}
+        id="devices-this-device"
+        ref={thisRef}
+        role={local ? "alert" : undefined}
+      >
+        {local && st.in_fleet && <p className="devices-this-title">Your other devices can't reach this one</p>}
+        {here && <p>{here}</p>}
         <div
-          className={local ? "devices-warn" : "devices-this"}
-          id="devices-this-device"
-          ref={thisRef}
-          role={local ? "alert" : undefined}
+          className="set-row set-switch-row"
+          id="devices-reachable-row"
+          data-control="tailscale-mode"
+          title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
         >
-          {local && st.in_fleet && <p className="devices-this-title">Your other devices can't reach this one</p>}
-          <p>{here}</p>
-          {local && !reachAsk && (
-            <button
-              type="button"
-              className="test-btn devices-primary"
+          <span className="set-label">Make reachable — from your other devices and phone, over Tailscale</span>
+          {/* label wraps only the switch, so clicking the row text doesn't flip it */}
+          <label className="ca-switch">
+            <input
+              type="checkbox"
               id="devices-make-reachable"
-              disabled={reach.busy}
-              onClick={() => setReachAsk(true)}
-            >
-              Make reachable
-            </button>
-          )}
-          {reachConfirm}
-          {reach.timedOut && (
-            <p className="devices-note warn">MindFlock hasn't come back yet — reload in a moment.</p>
-          )}
+              data-group="general"
+              data-field="serve_mode"
+              checked={tailscaleMode}
+              disabled={modeBusy || reach.busy}
+              onChange={(e) => (e.target.checked ? setReachAsk(true) : void makeLocalOnly())}
+            />
+            <span className="ca-slider" />
+          </label>
+          <span className="set-hint">
+            Tailscale mode with the access gate on; MindFlock restarts once to apply. Off, it
+            listens on this computer only.
+          </span>
         </div>
-      )}
+        {reachConfirm}
+        {modePending && (
+          <button
+            type="button"
+            className="test-btn devices-restart"
+            id="devices-restart-apply"
+            disabled={srv.restarting}
+            onClick={() => srv.restart({ onBack: loadAll })}
+          >
+            {srv.restarting ? "Restarting…" : "Restart server to apply"}
+          </button>
+        )}
+        {(reach.timedOut || srv.timedOut) && (
+          <p className="devices-note warn">MindFlock hasn't come back yet — reload in a moment.</p>
+        )}
+      </div>
       {unreachable.length > 0 && (
         <div className="devices-warn" id="devices-unreachable-joiners" role="alert">
           {unreachable.map((a) => (
@@ -433,7 +504,7 @@ export function Devices(p: ScreenProps) {
           <p>
             This device's access gate is off and it's reachable on your tailnet — anyone there can
             control it, and through it your other devices. With the gate on, your other devices
-            keep working (they use your devices' key); a phone signs in again with the QR in Mobile.
+            keep working (they use your devices' key); a phone signs in again with the QR in Your phone.
           </p>
           <div className="devices-actions">
             <button
@@ -490,7 +561,7 @@ export function Devices(p: ScreenProps) {
             {conflicts.length > 1 ? "have" : "has"} a different key for your devices — the two
             halves were set up apart. Rejoin one from the other: on{" "}
             {conflicts.length > 1 ? "each of them" : conflicts[0].host || conflicts[0].key}, use
-            "Ask {selfHost} to rejoin" in Settings → Devices.
+            "Ask {selfHost} to rejoin" in Settings → Your devices.
           </p>
         </div>
       )}
@@ -740,7 +811,7 @@ export function Devices(p: ScreenProps) {
               <span className="set-hint devices-hint-warn" id="devices-match-left">
                 Still to do here for the phone link:{" "}
                 {matchLeft.map((m) => m.title + (m.reason ? " (" + m.reason + ")" : "")).join("; ")} — see
-                Settings → Mobile.
+                One link for all devices, below.
               </span>
             )}
           </span>
@@ -777,6 +848,8 @@ export function Devices(p: ScreenProps) {
                   sharedLink: st.match?.shared_link || "",
                 });
                 setMatchAsk(false);
+                void settings.reload();
+                setLinkRev((n) => n + 1);
                 setMatchLeft(
                   (res?.shared_link?.steps || [])
                     .filter((x) => x.state === "fail")
@@ -803,8 +876,8 @@ export function Devices(p: ScreenProps) {
                 void run(
                   "host-here",
                   () => api("/api/settings", { json: { general: { shared_link: st.phone_link?.name || "" } } }),
-                  "This device answers your phone link too — Settings → Mobile shows what's left"
-                )
+                  "This device answers your phone link too — One link for all devices, below, shows what's left"
+                ).then(() => setLinkRev((n) => n + 1))
               }
             >
               Host here
@@ -912,7 +985,7 @@ export function Devices(p: ScreenProps) {
             </button>
           </div>
           <span className="set-hint">
-            On the new computer: Settings → Devices → choose {selfHost} → Enter code (or run the
+            On the new computer: Settings → Your devices → choose {selfHost} → Enter code (or run the
             command). Works once · expires in{" "}
             <span id="devices-invite-countdown">{fmtCountdown(invite.expires_at, now)}</span>.
           </span>
@@ -1091,7 +1164,7 @@ export function Devices(p: ScreenProps) {
                       Join
                     </button>
                     <span className="set-hint">
-                      The code {name} shows under Settings → Devices → Add a device.
+                      The code {name} shows under Settings → Your devices → Add a device.
                     </span>
                   </div>
                 )}
@@ -1165,7 +1238,7 @@ export function Devices(p: ScreenProps) {
         {pasted.trim() && (
           <span className="set-hint devices-join-note" id="devices-paste-note">
             {routeCode(pasted).kind === "peer"
-              ? "That's an invite from another person — Join links you to them (Work with someone), not to your devices."
+              ? "That's an invite from another person — Join links you to them (People), not to your devices."
               : joinSettingsNote("")}
           </span>
         )}
@@ -1173,6 +1246,10 @@ export function Devices(p: ScreenProps) {
 
       {/* 6. Settings sync. */}
       <SettingsSyncRows st={st} sync={sync} setSync={setSync} reload={loadSync} />
+      {/* 7. The shared phone link: one URL every device answers. */}
+      <SharedLinkCard active={p.active} revision={linkRev} />
+      {/* 8. The older ways to trust a machine, folded. */}
+      <DevicesAdvanced focusDevice={focusDevice} />
     </>
   );
 }

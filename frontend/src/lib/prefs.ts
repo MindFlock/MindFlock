@@ -40,6 +40,8 @@ export interface Prefs {
   idle_flock: boolean | null;
   idle_after: number | null;
   hints: boolean | null;
+  /** The Map tab's first-open tour has been seen (true) — on any device. */
+  map_tour: boolean | null;
 }
 
 export type PrefField = keyof Prefs;
@@ -59,6 +61,7 @@ export const PREF_DEFAULTS: Prefs = {
   idle_flock: null,
   idle_after: null,
   hints: null,
+  map_tour: null,
 };
 
 type Kind = "json-object" | "json-list" | "json-bool" | "json-number" | "raw";
@@ -90,6 +93,7 @@ export const PREF_MAP: PrefKey[] = [
   { ls: "mf_idle_flock", field: "idle_flock", kind: "json-bool" },
   { ls: "mf_idle_after", field: "idle_after", kind: "json-number" },
   { ls: "mf_hints", field: "hints", kind: "json-bool" },
+  { ls: "mf_map_tour", field: "map_tour", kind: "json-bool" },
 ];
 
 const BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));

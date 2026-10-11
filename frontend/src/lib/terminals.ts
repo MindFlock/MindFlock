@@ -18,6 +18,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
 import { agentCopyText } from "./agentCopy";
+import { controlNotice, showTermNotice } from "./wsTerm";
 
 export type TermKind = "agent" | "shell";
 
@@ -577,7 +578,18 @@ function makeTerm(
         handle.doFit();
       };
       sock.onmessage = (ev) => {
-        if (!booted) {
+        // The driver/readonly control frames arrive before any PTY bytes: they
+        // must not lift the "Loading session…" cover.
+        let control = false;
+        if (typeof ev.data === "string") {
+          try {
+            const t = JSON.parse(ev.data)?.type;
+            control = t === "driver" || t === "readonly";
+          } catch {
+            control = false;
+          }
+        }
+        if (!booted && !control) {
           booted = true;
           handle.onBoot?.();
         }
@@ -586,6 +598,12 @@ function makeTerm(
             const j = JSON.parse(ev.data);
             if (j.type === "error") {
               term.write("\r\n[error] " + j.message + "\r\n");
+              return;
+            }
+            // Another person drives (core.ownership): say so over the pane.
+            const ctl = controlNotice(j);
+            if (ctl) {
+              if (ctl.notice) showTermNotice(container, ctl.notice);
               return;
             }
           } catch {

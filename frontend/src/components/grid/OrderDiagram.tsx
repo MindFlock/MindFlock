@@ -124,7 +124,7 @@ export function OrderDiagram({
 export function StagesDiagram({ stages }: { stages: Stage[] }) {
   if (!stages.length) return null;
   return (
-    <ol className="od-stages" aria-label="The order this group runs in">
+    <ol className="od-stages" aria-label="The order this team run runs in">
       {stages.map((s, i) => (
         <li key={s.key} className={"od-stage is-" + s.state}>
           {i > 0 && (

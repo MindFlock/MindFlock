@@ -81,6 +81,48 @@ export function isStarting(code: number): boolean {
   return code === NOT_YET || code === NOT_READY;
 }
 
+/** How long the "<name> is driving" line stays up, in ms. */
+export const NOTICE_MS = 3000;
+
+/** One line drawn over the bottom of a terminal — "Alice is driving — take
+ * control to type" when a watcher's keystroke was dropped. An overlay, never
+ * written into the xterm: the screen belongs to the agent's TUI, and a line
+ * printed into it would be painted over (or worse, scroll it). Reuses one
+ * element per host and restarts its timer, so a burst of keystrokes is one
+ * notice. */
+export function showTermNotice(host: HTMLElement, text: string): void {
+  let el = host.querySelector<HTMLElement>(":scope > .term-notice");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "term-notice";
+    el.setAttribute("role", "status");
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    host.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.remove("gone");
+  const prev = (el as HTMLElement & { _t?: ReturnType<typeof setTimeout> })._t;
+  if (prev) clearTimeout(prev);
+  (el as HTMLElement & { _t?: ReturnType<typeof setTimeout> })._t = setTimeout(
+    () => el!.classList.add("gone"),
+    NOTICE_MS,
+  );
+}
+
+/** A session terminal's own control frames (backend core.ownership), or null
+ * for anything else: `{"type": "readonly", "message"}` — a keystroke was
+ * dropped because another person drives (show `message`); `{"type":
+ * "driver", "driving", "driver", "driver_name"}` — who holds the keyboard,
+ * sent on attach and on every change (the pane header reads the same fact
+ * from the session row, so nothing needs drawing). */
+export function controlNotice(frame: unknown): { notice: string } | { notice: null } | null {
+  if (!frame || typeof frame !== "object") return null;
+  const j = frame as { type?: unknown; message?: unknown };
+  if (j.type === "readonly") return { notice: typeof j.message === "string" ? j.message : "" };
+  if (j.type === "driver") return { notice: null };
+  return null;
+}
+
 /** A ws-streamed terminal over a fixed path.
  *
  * `reconnect` makes the socket survive a session that is not up yet. It is off
@@ -174,6 +216,11 @@ export function useWsTerm(
             const j = JSON.parse(ev.data);
             if (j.type === "error") {
               term.write("\r\n[error] " + j.message + "\r\n");
+              return;
+            }
+            const ctl = controlNotice(j);
+            if (ctl) {
+              if (ctl.notice) showTermNotice(host, ctl.notice);
               return;
             }
           } catch {

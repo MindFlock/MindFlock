@@ -74,7 +74,7 @@ describe("waiting rows: say it before it happens", () => {
   it("names the approve button for the step it will take", () => {
     expect(shipVerb("commit")).toBe("Commit");
     expect(shipVerb(undefined)).toBe("Commit");
-    expect(shipVerb("make_pr")).toBe("Open the PR");
+    expect(shipVerb("make_pr")).toBe("Open PR");
     expect(shipVerb("push")).toBe("Push");
   });
 

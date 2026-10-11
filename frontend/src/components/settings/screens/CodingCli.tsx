@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
 import { useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
@@ -13,7 +14,7 @@ interface Provider {
   name: string;
   aliases?: string[];
   command?: string;
-  installed?: boolean;
+  installed: boolean;
   path?: string;
 }
 
@@ -26,6 +27,8 @@ export function CodingCli(_: ScreenProps) {
   const [agentTest, setAgentTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
     testing: false,
   });
+  /** Which CLI "Test agent CLI" probes; "" = the default provider above. */
+  const [testProvider, setTestProvider] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -104,7 +107,7 @@ export function CodingCli(_: ScreenProps) {
     try {
       const r = await api<{ ok?: boolean; cli?: { detail?: string }; auth?: { detail?: string } }>(
         "/api/settings/test/agent",
-        { method: "POST" }
+        { method: "POST", json: { provider: testProvider || selected } }
       );
       const bits: string[] = [];
       if (r?.cli?.detail) bits.push(r.cli.detail);
@@ -125,13 +128,14 @@ export function CodingCli(_: ScreenProps) {
       <label className="set-row">
         <span className="set-label">Default provider</span>
         <select id="default-provider-select" value={selected} onChange={(e) => pickProvider(e.target.value)}>
-          {providers
-            .filter((p) => p.installed)
-            .map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-              </option>
-            ))}
+          {/* Every known CLI, the absent ones disabled with the reason — you
+              can't launch what isn't there, but hiding them made "where's
+              codex?" a mystery (install it under Agent providers). */}
+          {pickerOptions(providers).map((o) => (
+            <option key={o.name} value={o.name} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         <input
           type="hidden"
@@ -142,7 +146,8 @@ export function CodingCli(_: ScreenProps) {
           readOnly
         />
         <span className="set-hint">
-          Program new sessions launch by default — only installed agent CLIs are listed.
+          Program new sessions launch by default. A CLI that isn't installed can't be picked —
+          install or sign in to it under <b>Agent providers</b>.
         </span>
       </label>
       <label className="set-row">
@@ -175,6 +180,22 @@ export function CodingCli(_: ScreenProps) {
       <div className="set-row">
         <span className="set-label">Agent CLI check</span>
         <span className="test-row">
+          <select
+            id="agent-test-provider"
+            aria-label="Provider to test"
+            value={testProvider || selected}
+            onChange={(e) => {
+              setTestProvider(e.target.value);
+              setAgentTest({ testing: false });
+            }}
+          >
+            {providers.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+                {p.name === selected ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
           <button type="button" id="agent-test-btn" className="test-btn" onClick={runAgentTest}>
             Test agent CLI
           </button>
@@ -185,7 +206,9 @@ export function CodingCli(_: ScreenProps) {
             {agentTest.testing ? "testing…" : agentTest.msg ? (agentTest.ok ? "✓ " : "✗ ") + agentTest.msg : ""}
           </span>
         </span>
-        <span className="set-hint">Probes the configured CLI binary and its login state.</span>
+        <span className="set-hint">
+          Probes that CLI's binary and its login state — any known provider, not just the default.
+        </span>
       </div>
       <WindowRefresh />
     </>

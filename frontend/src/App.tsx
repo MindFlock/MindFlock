@@ -4,10 +4,10 @@
  * extension — open state lives in the UI store; the sidebar's Windows rows
  * close them), and feeding the extension host its enabled set. */
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { api } from "./api/client";
 import { useConfig, useExtensions, useInstances, useIntakeWarm } from "./state/queries";
-import { tourDecision, useUi, type SpecialKind } from "./state/store";
+import { useUi, type SpecialKind } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectRailKey } from "./lib/sessionActions";
@@ -31,9 +31,9 @@ import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
-import { DeviceDialog } from "./components/dialogs/DeviceDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
+import { ConnectGitHubDialog } from "./components/dialogs/ConnectGitHub";
 import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
@@ -51,44 +51,33 @@ export default function App() {
   // dialog has anything to show at all.
   useIntakeWarm(!!config?.caps?.ticketing);
 
-  // First-run onboarding: pop the welcome walkthrough once, for a user who is
-  // new by the SERVER's reckoning and still has hints enabled — tourDecision()
-  // holds the rule. Until /api/config resolves it answers "wait" and this decides
-  // nothing, which is why the flags stay in the deps while the latch is a
-  // separate ref: the config query refetches on its own and re-arming hints from
-  // Settings re-runs this effect, and neither should be able to restart the
-  // twelve slides mid-session. finishTour() flips tourDone so it never reopens on
-  // its own — a replay is an explicit action from Settings.
-  //
-  // Watching the tour is deliberately NOT reported back. general.onboarded means
-  // "this user has a session", which is why the server sets it on a create and
-  // nowhere else; a POST from here wrote it for anyone who merely clicked past the
-  // slideshow, and it took both first-run surfaces down with it — the grid's setup
-  // card and the auto-opening dependency checklist — for a user who still had no
-  // tmux and so could not create a session at all.
-  const tourDecided = useRef(false);
-  useEffect(() => {
-    if (tourDecided.current) return;
-    const decision = tourDecision({
-      tourDone: ui.tourDone,
-      hintsEnabled: ui.hintsEnabled,
-      onboarded: config?.onboarded,
-    });
-    if (decision === "wait") return;
-    tourDecided.current = true;
-    if (decision === "open") ui.openTour();
-  }, [config?.onboarded, ui.tourDone, ui.hintsEnabled, ui.openTour]);
-
+  // First-run: ONE surface. The checklist card on the empty grid (TerminalGrid)
+  // while a required step is to do, the "Setup 3/5" chip (below) after, and
+  // the Setup modal when either opens it. The welcome tour no longer opens by
+  // itself — it is a "Tour" entry in the palette and the ? sheet, and
+  // Settings → General's Replay.
   // Seed the server's alias mirror once per load: renames made before the
   // mirror existed live only in this browser's localStorage, and ntfy pushes
   // are formatted server-side. Merge-only on the server, so this cannot erase
   // renames another browser synced. Fire-and-forget — an older server without
   // the endpoint just keeps naming pushes by raw title.
   useEffect(() => {
+    // The answer is the merged map: adopt it, so a rename made in another
+    // browser is this one's name for the session too.
     const aliases = useUi.getState().aliases;
-    if (Object.keys(aliases).length) {
-      api("/api/aliases", { json: { aliases } }).catch(() => {});
-    }
+    api<{ aliases?: Record<string, string> }>("/api/aliases", {
+      json: { aliases },
+    })
+      .then((r) => {
+        if (!r?.aliases) return;
+        try {
+          localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
+        } catch {
+          /* storage off: still adopt it for this load */
+        }
+        useUi.setState({ aliases: r.aliases });
+      })
+      .catch(() => {});
   }, []);
 
   // Capability gating: body classes drive the caps-gate CSS (and addon CSS).
@@ -229,8 +218,12 @@ export default function App() {
     return {
       togglePalette: () => toggleDialog("palette"),
       toggleShortcuts: () => toggleDialog("shortcuts"),
-      focusFilter: () =>
-        (document.getElementById("session-filter") as HTMLInputElement | null)?.focus(),
+      focusFilter: () => {
+        const box = document.getElementById("session-filter") as HTMLInputElement | null;
+        // Hidden by Customize: summon it — it mounts focused (SessionFilter).
+        if (box) box.focus();
+        else useUi.getState().setFilterPeek(true);
+      },
       cycleWindow: (dir) => {
         const keys = stableKeys();
         if (!keys.length) return;
@@ -271,9 +264,9 @@ export default function App() {
       <CommitDialog />
       <MakePrDialog />
       <RenameDialog />
-      <DeviceDialog />
       <RecentDialog />
       <SetupDialog />
+      <ConnectGitHubDialog />
       <TodoDialog />
       <AssistantAgentDialog />
       <RedZonesDialog />

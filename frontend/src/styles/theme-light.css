@@ -55,19 +55,9 @@
    with dark ink, correct in both themes), and white text on that amber is ~2:1.
    The override has to go WITH the token change, not after it. */
 
-/* White chip text on 50%-alpha backgrounds washes out on light — go solid. */
-.light .stagechip.s-running {
-  background: var(--accent);
-}
-
-.light .stagechip.s-clarify {
-  background: #0e7490;
-}
-
-.light .stagechip.s-limit {
-  background: #dc2626;
-}
-
+/* The session-state chips (s-running / s-clarify / s-limit / s-offline) need
+   no light override: their colours are the tone tokens, which tokens.css
+   re-declares under .light. */
 .light .stagechip.s-pr {
   background: var(--green);
 }

@@ -106,25 +106,78 @@
   color: var(--accent);
 }
 
+/* The status dot: painted from the SAME session state as the chip beside it
+   (lib/sessionState.ts) — `tone-*` is the colour, `st-*` the state. The six
+   tones are tokens (styles/tokens.css); nothing here names a colour. */
 .inst .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--tone-neutral);
   flex: none;
 }
 
-.inst .dot.paused {
-  background: var(--muted);
+.inst .dot.tone-muted {
+  background: var(--tone-muted);
 }
 
-.inst .dot.loading {
-  background: var(--gold);
+.inst .dot.tone-working {
+  background: var(--tone-working);
 }
 
+.inst .dot.tone-attention {
+  background: var(--tone-attention);
+}
+
+.inst .dot.tone-neutral {
+  background: var(--tone-neutral);
+}
+
+.inst .dot.tone-waiting {
+  background: var(--tone-waiting);
+}
+
+.inst .dot.tone-broken {
+  background: var(--tone-broken);
+}
+
+/* Starting: a grey pulse — nobody acts yet. */
+.inst .dot.st-starting {
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+/* The browser's socket to this pane's terminal dropped — a connectivity
+   signal on top of the agent state, cleared the moment it reconnects. */
 .inst .dot.disconnected {
-  background: var(--red);
-  box-shadow: 0 0 6px var(--red);
+  background: var(--tone-broken);
+  box-shadow: 0 0 6px var(--tone-broken);
+}
+
+/* Offline's remedy, on the chip: "Offline ↻ Restart" is one button. */
+.inst .stagechip.chip-restart {
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.inst .stagechip.chip-restart .chip-act {
+  opacity: 0.85;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .stagechip.chip-restart:hover .chip-act {
+  opacity: 1;
+}
+
+.inst .stagechip.chip-restart:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .inst .chevron {
@@ -542,35 +595,97 @@
   background: rgba(222, 97, 62, 0.14);
 }
 
-/* "Delete + wipe worktree", armed: the question and its two answers in place
-   of the item (the desktop app has no confirm()). */
-.inst-actions .wipe-confirm {
+/* The two end verbs. Close carries a sub-line (what it keeps, where it goes). */
+.inst-actions button.end-close {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.inst-actions .end-verb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inst-actions .end-verb .kbd {
+  margin-left: auto;
+}
+
+.inst-actions .end-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* "Delete…", armed: a neutral confirm strip in place of the item (the desktop
+   app has no confirm()). The question is calm; only the answer that deletes
+   is red. */
+.inst-actions .del-confirm {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 6px 10px;
   border-radius: 6px;
-  background: rgba(222, 97, 62, 0.1);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
   font-size: 12px;
 }
 
-.inst-actions .wipe-q {
+.inst-actions .del-q {
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.inst-actions .wipe-acts {
+.inst-actions .del-acts {
   display: flex;
   gap: 6px;
 }
 
-.inst-actions .wipe-acts button {
+.inst-actions .del-acts button {
   padding: 4px 10px;
   border: 1px solid var(--border);
 }
 
-.inst-actions .wipe-acts button.danger {
+.inst-actions .del-acts button.danger {
   border-color: var(--red);
+}
+
+/* "Folder in use by …" — the 409 a Delete gets while a Duplicate session runs
+   in the same folder. Under the row, outside the menu, until dismissed. */
+.inst-tail .folder-in-use {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  background: var(--panel-2);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.inst-tail .fiu-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-tail .fiu-x {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.inst-tail .fiu-x:hover {
+  color: var(--text);
 }
 
 .inst-actions .menu-sep {
@@ -770,4 +885,54 @@
 }
 .stagechip.peerchip:focus-visible {
   outline: 1px solid var(--accent);
+}
+
+/* Presence (lib/presence.ts, components/presence): who else is on the
+   session — up to three initials dots, the driver's ringed. Drawn only once
+   someone besides you watches or drives it. */
+.inst .presence {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 4px;
+}
+
+.inst .presence-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+.inst .presence-dot + .presence-dot {
+  margin-left: -4px;
+}
+
+.inst .presence-dot.driving {
+  border: 2px solid var(--accent);
+}
+
+.inst .presence-dot.typing {
+  background: rgba(var(--accent-rgb), 0.25);
+}
+
+.inst .shared-branch-mark {
+  margin-left: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.inst .presence-more {
+  margin-left: 3px;
+  font-size: 9px;
+  color: var(--muted);
 }

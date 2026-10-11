@@ -5,15 +5,16 @@
  * per watched repository, then every open PR grouped by the repository it came
  * from with a chip saying why auto review has or hasn't taken it.
  *
- * This tab additionally owns the shared GitHub credential — the Issues tab
- * authenticates as the same account and links here for it. */
+ * The GitHub credential is NOT here any more: it has one home, the Connect
+ * GitHub dialog (Settings → Connections → GitHub → Connect), and this tab only
+ * offers the button that opens it. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { refreshInstances, usePanelQuery } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
-import { runGithubTest } from "../dialogs/SetupDialog";
+import { openConnectGitHub } from "../../lib/githubConnect";
 import {
   AutomationSwitch,
   useListFilter,
@@ -102,10 +103,6 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
       : prsQuery.data?.login_error
         ? "GitHub login unknown — force review may still work"
         : "");
-
-  const [ghTest, setGhTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
-    testing: false,
-  });
 
   const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
     s.saveGroup("github", patch, okMsg);
@@ -334,7 +331,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         <div className="pr-advanced-body">
           <p className="set-hint set-block-hint">
             The defaults every repository card inherits, plus the settings that are
-            genuinely one-per-app (the poll loop and the GitHub credential).
+            genuinely one-per-app (the poll loop).
           </p>
           <AgentPicker
             label="Agent CLI"
@@ -396,40 +393,24 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
               want acted on, not a list of authors to skip. A repository card can override it.
             </span>
           </label>
-          <label className="set-row">
-            <span className="set-label">Token</span>
-            <SettingField group="github" field="token" type="password" placeholder="optional — else $GH_TOKEN / gh auth" />
-            <span className="set-hint">
-              Shared with issue handling — it authenticates the same account. Also what
-              lets MindFlock open and merge PRs for you without the gh CLI. Falls back to
-              $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never needs it — that is
-              plain git over your own remote.
-            </span>
-          </label>
           <div className="set-row">
+            <span className="set-label">GitHub connection</span>
             <span className="test-row">
               <button
                 type="button"
-                id="gh-test-btn"
+                id="gh-connect-btn"
                 className="test-btn"
-                onClick={async () => {
-                  setGhTest({ testing: true });
-                  setGhTest(await runGithubTest());
-                }}
+                onClick={() => openConnectGitHub()}
               >
-                Test GitHub
+                Connect GitHub
               </button>
-              <span
-                id="gh-test-result"
-                className={"test-result" + (ghTest.msg ? (ghTest.ok ? " ok" : " bad") : "")}
-              >
-                {ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""}
-              </span>
             </span>
             <span className="set-hint">
-              Shows where a token would come from. A token is all this needs — gh is
-              reported too, but it is optional. Use a card's <strong>Test access</strong>
-              {" "}to check one repository.
+              One sign-in for PR review, issue handling and Open PR, shared with your other
+              devices (Settings → Connections → GitHub → Connect). Its <strong>Test</strong>{" "}
+              asks GitHub who the token is and whether it reaches your first repository; a
+              card's <strong>Test access</strong> checks one repository. Pushing never needs
+              it — that is plain git over your own remote.
             </span>
           </div>
         </div>

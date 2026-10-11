@@ -20,6 +20,8 @@ export interface TargetRow {
   title?: string;
   status?: string;
   started?: boolean;
+  /** The row's `hidden_by` (a verify run is `"verify"`); see `isVerifySession`. */
+  hidden_by?: string;
 }
 
 export interface PromptTarget {
@@ -36,7 +38,7 @@ export interface PromptTarget {
  * hides them, so a paste there could never be followed by your Enter. */
 export function isRunningTarget(row: TargetRow | null | undefined): boolean {
   if (!row || !row.title) return false;
-  if (isVerifySession(String(row.title))) return false;
+  if (isVerifySession(row)) return false;
   if (row.status === "paused") return false;
   return row.status === "running" || !!row.started;
 }

@@ -1,18 +1,25 @@
-/** Setup's "Connect GitHub" step: one sign-in for opening PRs and for pushing.
+/** Connect GitHub: THE one place the GitHub credential is set — Setup's step
+ * and, through `ConnectGitHubDialog` (opened by `openConnectGitHub()` from
+ * Intake's tabs, Settings → Connections' Configure, or anything else), a
+ * standalone dialog.
  *
- * The GitHub token used to be a field under Intake → Pull requests → Advanced
- * with no way to make one; a fresh machine also had no git name/email and no
- * push credential, so the first push failed in a shell pane. This step (all
- * `/api/github/*`, backend/web/core/github_auth.py) offers the best way this
- * computer has, first:
- *  - GitHub's device flow when an OAuth App is configured: a code to type at
- *    github.com/login/device, nothing to copy;
+ * The token used to have four doors (Setup, a raw field under Intake → Pull
+ * requests → Advanced, a per-source Token on GitHub Issues cards, env/gh) and
+ * two resolvers that disagreed. Now this step (all `/api/github/*`,
+ * backend/web/core/github_auth.py) offers the best way this computer has:
+ *  - GitHub's device flow when an OAuth App client id is configured (the
+ *    build's constant, `github.oauth_client_id` or MINDFLOCK_GITHUB_CLIENT_ID):
+ *    a code to type at github.com/login/device, nothing to copy — and a plain
+ *    sentence, not a dead button, while no client id ships;
  *  - else `gh auth login --web` in a sign-in terminal, when gh is installed;
  *  - else a pre-filled "make a token" page and a paste box (always offered as
  *    the fallback).
- * Then git's name/email (pre-filled from the account, written to the global
- * git config only on "Use these") and a push check that asks the remote. No
- * native prompt/confirm anywhere (the desktop app has neither). */
+ * **Test** is real: POST /api/settings/test/github does a GET /user with the
+ * token the one chain resolves plus one repo-access check against the first
+ * configured repository. Then git's name/email (pre-filled from the account,
+ * written to the global git config only on "Use these") and a push check that
+ * asks the remote. No native prompt/confirm anywhere (the desktop app has
+ * neither). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -26,8 +33,16 @@ import {
   type GithubFlow,
   type GithubStatus,
 } from "../../lib/onboarding";
+import {
+  DEVICE_FLOW_UNCONFIGURED,
+  OPEN_CONNECT_GITHUB_EVENT,
+  describeConnectionTest,
+  type ConnectionTest,
+  type TestLine,
+} from "../../lib/githubConnect";
 import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
+import { notifyConnectionsChanged } from "../settings/screens/Connections";
 
 interface PushCheck {
   ok: boolean | null;
@@ -105,12 +120,14 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [push, setPush] = useState<PushCheck | null>(null);
+  const [test, setTest] = useState<TestLine | null>(null);
   const changeRef = useRef(onChange);
   changeRef.current = onChange;
 
   const load = useCallback(async () => {
     try {
       const s = await api<GithubStatus>("/api/github/status");
+      notifyConnectionsChanged();
       setSt(s);
       setErr("");
       if (s.flow && s.flow.state === "pending") setFlow(s.flow);
@@ -251,6 +268,11 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
                 {flow && flow.error && <span className="error">{flow.error}</span>}
               </div>
             ))}
+          {!(st.methods || []).includes("device") && (
+            <p className="muted gh-device-unconfigured" id="gh-device-unconfigured">
+              {DEVICE_FLOW_UNCONFIGURED}
+            </p>
+          )}
           {method === "gh" && (
             <div className="setup-actions">
               <button
@@ -323,6 +345,31 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
         </div>
       )}
 
+      <div className="setup-acct-row gh-test-row">
+        <button
+          type="button"
+          id="gh-connection-test"
+          disabled={!!busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            void run("test", async () => {
+              const r = await api<ConnectionTest>("/api/settings/test/github", { method: "POST" });
+              setTest(describeConnectionTest(r));
+            });
+          }}
+        >
+          {busy === "test" ? "Testing…" : "Test"}
+        </button>
+        {test && (
+          <span className={"test-result " + (test.ok ? "ok" : "bad")} id="gh-connection-test-result">
+            {(test.ok ? "✓ " : "✗ ") + test.msg}
+          </span>
+        )}
+        {!test && (
+          <span className="set-hint">asks GitHub who this token is, and whether it reaches your first repository</span>
+        )}
+      </div>
+
       <div className="setup-acct-row gh-push-row">
         <button
           type="button"
@@ -381,5 +428,52 @@ export function ConnectGitHub({ onChange }: { onChange?(): void }) {
         />
       )}
     </div>
+  );
+}
+
+/** The standalone Connect GitHub dialog. Mounted once (App); opens on the
+ * `mf:open-connect-github` window event (`openConnectGitHub()` in
+ * lib/githubConnect.ts), so Intake's tabs, Settings → Connections and
+ * extensions all reach the same step without props. */
+export function ConnectGitHubDialog() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const on = () => setOpen(true);
+    window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
+    return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+  if (!open) return null;
+  return createPortal(
+    <div
+      className="modal"
+      id="connect-github-dialog"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
+      <div className="connect-github-panel">
+        <div className="ws-head">
+          <h2>Connect GitHub</h2>
+          <span className="muted">one sign-in for PR review, issue handling and Open PR</span>
+          <button type="button" id="connect-github-close" onClick={() => setOpen(false)}>
+            Close
+          </button>
+        </div>
+        <ConnectGitHub />
+      </div>
+    </div>,
+    document.body
   );
 }

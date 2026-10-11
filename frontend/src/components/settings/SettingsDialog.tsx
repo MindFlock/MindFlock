@@ -6,12 +6,21 @@
  * somewhere you configure once — and what is left is genuinely set-and-forget.
  * Their old screen keys still route: `gotoScreen("ticketing" | "repo" |
  * "issues")` opens Intake on the matching tab instead of a blank pane, which
- * matters because the server hands those keys back on Connections cards. */
+ * matters because the server hands those keys back on Connections cards.
+ *
+ * Trusting another machine has two ways and each control one screen (the
+ * "Devices and people" group): Your devices (key "devices") holds pairing,
+ * the fleet key, Make reachable, the shared phone link, settings sync and
+ * an Advanced fold with the older routes; Your phone ("mobile") is the QR
+ * and /m link; People ("peer") is peer links; Security keeps the access
+ * token and the gate. Keys never changed — screenKeys.ts maps the new
+ * names and the moved controls' names onto them. */
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
+import { resolveScreenKey } from "./screenKeys";
 import { isDevShell } from "../../lib/shell";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
@@ -64,17 +73,18 @@ const SCREENS: Array<{
   { key: "orchestration", label: "Agent orchestration", group: "Agents", el: (p) => <AgentOrchestration {...p} /> },
   { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
   { key: "ide", label: "IDE", group: "Code", el: (p) => <Ide {...p} /> },
-  { key: "devices", label: "Devices", group: "This device", el: (p) => <Devices {...p} /> },
   { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
-  { key: "mobile", label: "Mobile", group: "This device", el: (p) => <Mobile {...p} /> },
-  // Person-to-person work (peer links), named for what it does. The key stays
-  // "peer" so old deep links and the palette keep routing.
-  { key: "peer", label: "Work with someone", group: "This device", el: (p) => <PeerLinks {...p} /> },
+  // Other machines and other people. Keys stay "devices" / "mobile" / "peer"
+  // (old deep links, the palette, docs) — screenKeys.ts maps the new names.
+  { key: "devices", label: "Your devices", group: "Devices and people", el: (p) => <Devices {...p} /> },
+  { key: "mobile", label: "Your phone", group: "Devices and people", el: (p) => <Mobile {...p} /> },
+  { key: "peer", label: "People", group: "Devices and people", el: (p) => <PeerLinks {...p} /> },
+  // Extensions are a thing you add, not a fault to chase: their own group.
+  { key: "extensions", label: "Extensions", group: "Extensions", el: (p) => <Extensions {...p} /> },
   { key: "doctor", label: "Doctor", group: "Troubleshooting", el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", group: "Troubleshooting", el: (p) => <SystemLogs {...p} /> },
   { key: "advanced", label: "Advanced", group: "Troubleshooting", el: (p) => <Advanced {...p} /> },
-  { key: "extensions", label: "Extensions", group: "Troubleshooting", el: (p) => <Extensions {...p} /> },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.
@@ -95,10 +105,11 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   // A retired screen key hands off to Intake rather than selecting nothing (which
   // rendered a blank right-hand pane, since .set-screen.active would match no
   // section). Unknown keys still fall back to General.
+  const keys = useMemo(() => screens.map((s) => s.key), [screens]);
   const gotoScreen = (name: string) => {
     const tab = LEGACY_SCREEN_TABS[name];
     if (tab) openDialogFor("intake", tab);
-    else setScreen(screens.some((s) => s.key === name) ? name : "general");
+    else setScreen(resolveScreenKey(name, keys) || "general");
   };
 
   useEffect(() => {
@@ -109,8 +120,8 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
       openDialogFor("intake", tab);
       return;
     }
-    setScreen(target && screens.some((s) => s.key === target) ? target : "general");
-  }, [open, target, openDialogFor, screens]);
+    setScreen(resolveScreenKey(target, keys) || "general");
+  }, [open, target, openDialogFor, keys]);
 
   useEffect(() => {
     if (!open) return;
@@ -179,9 +190,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
                   key={s.key}
                   className={"set-screen" + (screen === s.key ? " active" : "")}
                   data-screen={s.key}
-                  data-caps-need={
-                    s.key === "mobile" ? "tailscale" : s.key === "workspace" ? "git" : undefined
-                  }
+                  data-caps-need={s.key === "workspace" ? "git" : undefined}
                 >
                   {screen === s.key && s.el(props)}
                 </section>

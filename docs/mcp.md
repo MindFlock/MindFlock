@@ -392,7 +392,7 @@ skip-permissions**:
   `merge` merge them. Their annotations say so (`destructiveHint` and
   `openWorldHint` true).
 - `start_team_run` starts sessions that MindFlock then commits, pushes and
-  opens PRs for; `control_run` cancels, retries and releases a group
+  opens PRs for; `control_run` cancels, retries and releases a team run
   (`openWorldHint` true).
 
 So an orchestrator launched **without** skip-permissions stops on a
@@ -409,8 +409,14 @@ first result per 10 minutes skips the rate limit (see
 ### `whoami`
 
 No arguments. → `{session, external, scope, parent, children, unread, server,
-note?}`. `session` is self's compact row (see `list_sessions`), or `null` for
-an external client. `scope` is the effective scope. `note` explains a scope
+person, you_drive, note?}`. `session` is self's compact row (see `list_sessions`), or `null` for
+an external client. `person` is `{id, name}` of the person this MindFlock
+belongs to — the same on all of their devices ([people.md](people.md)) — or
+`null` from a server that predates people. `you_drive` says whether that
+person holds the keyboard of your own session: `true`, `false` (another person
+drives it — your user's typed-into-terminal routes are theirs until they let
+go), or `null` (nobody drives it, or there's no session or person to compare;
+[people.md](people.md#owner-driver-viewers)). `scope` is the effective scope. `note` explains a scope
 narrower than configured. Call it first.
 
 ### `list_sessions`
@@ -426,14 +432,17 @@ narrower than configured. Call it first.
 (`working|idle|clarify|limit|offline`), `activity_since`, `stage`, `program`,
 `branch`, `folder`, `parent`, `spawned`, `last_turn`, `is_self`, `managed`,
 plus `remote`/`pending` when true, and `autopilot` (depth, state, step,
-reason, url) and `pr_url` when set. Sessions you manage come first. Remote
+reason, url), `pr_url`, `person` (the id of the person the session was
+created for), `owner` (who it belongs to), `driver` (who holds its keyboard)
+and `viewers` (`{person id: {name, device, devices, since, typing}}` — who has
+a terminal open on it) when set ([people.md](people.md#owner-driver-viewers)). Sessions you manage come first. Remote
 `device::title` rows are listed but are never managed. Don't poll this to wait
 for workers. Use `wait_for_session`.
 
 ### `get_session`
 
 `title` → `{session: <full /api/instances row> + parent, children, is_self,
-managed}`.
+managed}` — the row includes `owner`, `driver`, `driver_name` and `viewers`.
 
 ### `read_output`
 
@@ -644,6 +653,10 @@ choice prompt) or `limit` (the usage-limit menu) — or its provider must parse
 a dialog on the visible screen, which counts whatever the activity reads. `text` is typed literally
 **without** Enter, then each key is pressed in order, e.g. `keys: ["2",
 "Enter"]`. → `{ok, activity_before, hint}`. Never allowed on your own session.
+Refused while **another person** holds the session's keyboard ("the session
+is driven by <name> — a person holds its keyboard"): the agent can't take it;
+ask your user. Your messages (`send_message`) are not keyboard input and are
+never refused this way.
 Look first with `read_output(view="screen")`. When unsure what to approve, ask
 your user.
 
@@ -792,7 +805,7 @@ commit, already pushed, a PR already open), `started` (`wait: false`),
 `running` (on timeout) or `handoff` (see below).
 
 It ships **now**, through the same routes as the session's own Commit, Push,
-Make PR and Merge buttons, in order, and stops at `depth`:
+Open PR and Merge buttons, in order, and stops at `depth`:
 
 1. **commit** — skipped on a clean tree. The message is yours, else the
    message of an earlier attempt the hooks blocked (so a retry keeps its
@@ -847,7 +860,7 @@ pointer to `wait_for_session` or `set_autopilot`. Shipping **yourself** skips
 this check: you are mid-turn by definition, and you decide when your work is
 done.
 
-**It never races the autopilot.** A session whose autopilot is armed and
+**It never races Fast-track.** A session whose Fast-track is armed and
 running (its row's `autopilot.state` is `running`) is refused, yourself
 included: two drivers typing into one shell would commit and push twice.
 Disarm it with `set_autopilot(depth="off")` first. A finished or halted run
@@ -864,16 +877,16 @@ doesn't count.
 | `confirm_merge` | false | required for `merge` |
 
 → `{title, autopilot: {depth, state, step, reason, note, url, …}, hint}`, or
-`{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own autopilot
+`{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own Fast-track
 (`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
-`off`). The autopilot waits until the agent's turn has ended and stayed idle
+`off`). Fast-track waits until the agent's turn has ended and stayed idle
 for 30 s with nothing queued, then ships it up to `depth` through the same
 buttons, retries (then skips) a pre-commit hook Settings allow-lists, runs
 a gating check before the push, waits for CI before a merge, and halts with a reason on anything that
 needs a human (a failing test hook, a red zone, a merge blocker). Arming works
 while the agent is still working; that is the point. The state shows on the
 session's row as `autopilot`, in `get_session` and in `list_sessions`' compact
-rows. See [web-ui.md](web-ui.md) for the autopilot itself.
+rows. See [web-ui.md](web-ui.md) for Fast-track itself.
 
 Use `ship_session` for a worker that has reported and is idle, and
 `set_autopilot` for one that is still working (or for yourself, to ship after
@@ -882,23 +895,23 @@ your current turn).
 ### `start_team_run`
 
 "Work on PAY-412, PAY-415 and the webhook rate limit, 3 at a time, PR each"
-is one call. A **team run** is a server-driven group: one session per item,
-at most `concurrency` at a time with the rest queued, each carried along its
-**lane** by MindFlock's autopilot. See [team-runs.md](team-runs.md) for what
+is one call. A **team run** is a server-driven set of sessions: one per item,
+at most `concurrency` at a time with the rest queued, each carried to its
+**Fast-track** depth by MindFlock. See [team-runs.md](team-runs.md) for what
 the server does on its own (queueing, retries, nudges, restart safety) and what
 it surfaces to the user.
 
 | Argument | Default | Meaning |
 |---|---|---|
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
-| `name` | suggested | the group's name |
+| `name` | suggested | the team run's name |
 | `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
 | `ask_first` | false | stop before each item's first commit / push and wait for the user's go (in MindFlock's bell) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |
 | `program` | the tickets' / the default CLI | the agent CLI for every item |
 | `repo_path` | your session's repo | where task lines run; tickets use their own repository |
-| `budget_usd` | — | pause the group when its members have spent this much |
+| `budget_usd` | — | pause the team run when its members have spent this much |
 | `split` | false | not available yet |
 | `confirm_merge` | false | required for `lane: merge` |
 
@@ -906,17 +919,17 @@ It previews first (`POST /api/runs/preview`): a ticket that resolves in no
 source is an error naming it — never silently turned into a task. Then
 `POST /api/runs` with `created_by: "agent:<you>"`. → `{run_id, name, lane,
 tasks: [{id, ref, title, state}], warnings, note}`. A ticket that already has a
-session is added to the group, not restarted (a warning says so).
+session is added to the team run, not restarted (a warning says so).
 
 **The sessions are MindFlock's, not yours.** They have no parent, never enter
 your managed set, and don't report to you: you cannot answer, steer or kill
 them, so an orchestrator cannot override what the run decided. The user sees
-them as an ordinary group in the rail, with every row's status line leading
-with its lane. Whatever the group needs from them — an ask-first approval, a
+them as an ordinary team run in the rail, with every row's status line leading
+with its Fast-track depth. Whatever the team run needs from them — an ask-first approval, a
 stuck line, a budget pause, the plan or the release — waits in MindFlock's
-bell; the group's own controls (queued lines, Pause, Cancel, and a finished
-group's **Copy summary**) are on its rail header's ⋯ menu, or on its lead's
-Thread tab for a split or one-for-all group.
+bell; the team run's own controls (queued lines, Pause, Cancel, and a finished
+team run's **Copy summary**) are on its rail header's ⋯ menu, or on its lead's
+Thread tab for a split or one-for-all team run.
 
 ### `get_run`
 
@@ -945,12 +958,12 @@ budget in the same call), `cancel` (stop starting and shipping; sessions and
 branches stay; queued tickets go back to ingestion), and per task `retry`
 (`fresh: true` starts `<title>-2` on a new branch and keeps the old one),
 `start_now` (past the concurrency cap once) and `skip` (a queued task is
-removed; a running one is detached and keeps its session and lane). `release`
-opens a one-for-all group's one PR once it is `release_ready` (the user's
-click does the same; it opens the PR and never merges — a push group pushes
-its branch). Only a group
+removed; a running one is detached and keeps its session and Fast-track). `release`
+opens a one-for-all team run's one PR once it is `release_ready` (the user's
+click does the same; it opens the PR and never merges — a push team run pushes
+its branch). Only a team run
 you started, or one your user started, can be steered — never another
-agent's — and on a group **your user** started, `release` and `resume` are
+agent's — and on a team run **your user** started, `release` and `resume` are
 refused: the one outward step and lifting a pause (or the budget stop) are
 theirs. It never answers an agent's prompt: that stays the user's (the rail
 strip or the bell).
@@ -963,9 +976,9 @@ server). The lead does not spawn workers: it proposes 2–8 pieces (fewer when
 the user capped the split at N), each a self-contained prompt plus the path
 globs it may change. An **auto-split**'s lead (New's "Auto-split into up to N
 sessions if it's worth it"; the run's `optional`, and its brief says so) may
-instead pass `pieces: []` with `why`: no split. The group dissolves and the
+instead pass `pieces: []` with `why`: no split. The team run dissolves and the
 answer is `{ok: true, split: false, note}` telling it to do the whole task
-itself in its own session; the note names the fast-track lane MindFlock armed
+itself in its own session; the note names the Fast-track depth MindFlock armed
 for when its turn ends, if any. The tool's schema allows `pieces: []` for
 every lead (`minItems: 0`) — the server is the gate: on any other split
 `pieces: []` is refused like a one-piece plan. The server checks
@@ -979,7 +992,7 @@ worktrees** (the default): every piece a worker of the lead, forked from its
 last commit, fenced to its paths, committed, merged back, then the check; a
 lead that works directly in its folder or sits on its trunk is not merged
 into — MindFlock starts a new lead (`<lead>-split`) from its last commit and
-the group runs on that one. **In this folder**: every piece an extra agent in
+the team run continues on that one. **In this folder**: every piece an extra agent in
 the lead's own folder, fenced to its paths per session, and MindFlock commits
 each piece's paths itself (one commit per piece, nothing to merge); the
 lead's folder must be on its own branch. Commit shared groundwork before
@@ -989,7 +1002,7 @@ into a piece. See [team-runs.md](team-runs.md#splitting-one-task).
 ### `report_integrated`
 
 `{run_id, task_id, head_sha}` → `{ok, verified, note?}`. **The lead of a split
-(or a one-for-all group) only.** When a merge conflicts, MindFlock aborts it
+(or a one-for-all team run) only.** When a merge conflicts, MindFlock aborts it
 and messages the lead with the files and the task id; the lead merges that
 branch itself, resolves, commits, and reports its new HEAD. The server never
 takes the word for it: `verified` is true only when the worker's branch head is
@@ -1036,7 +1049,7 @@ typed into it a minute later.
   It shares the lane's other safety gates: not while a long-poll is open on
   the inbox, not within 20 s of the prompt queue relaunching the agent, not
   unless the agent itself holds the pane, and not while someone has typed in
-  that window in the last 45 s. In those cases the message stays `pending` for
+  that session in the last 45 s. In those cases the message stays `pending` for
   the lane, and `detail` says why.
 
 The `POST` response's `delivery` is what happened: `delivered`, `pending` or
@@ -1074,7 +1087,7 @@ message per pass, oldest first, and only when every gate passes:
   deliberate quit a provisioned launcher drops to `bash -i`, and whatever the
   user starts there (`vim`, `ssh prod`, `psql`) is not the agent: typing into
   it would edit a buffer or run the line on another host. The message waits.
-- **Nobody is typing**: no keystrokes in that window for 45 s, from the web
+- **Nobody is typing**: no keystrokes in that session for 45 s, from the web
   terminal or a raw `tmux attach`.
 - **No dialog on screen** (the screen-evidence guard, checked last on a fresh
   capture): the session's provider sees no live dialog at the bottom of the
@@ -1190,7 +1203,7 @@ fence is in place, so it is never unfenced for a moment) or later
   `reason`), the mechanism a split's "in this folder" pieces use. The guard
   hook, which resolves the session that fired it from its own pane, enforces
   it for **that session only**: never for you, and never for a person's
-  window that shares the folder. An in-place worker in your folder can be
+  session that shares the folder. An in-place worker in your folder can be
   fenced without fencing you.
 - `only` replaces the folder's green scope for that session. In its **own**
   worktree, the repo's companions (lockfiles, snapshots, the tests that
@@ -1233,13 +1246,13 @@ has nothing to hold: it runs at once (its fence still lands). What decides its t
 
 A worker is **done** when it reports `done` (since it started) or is gone
 (closed or deleted) — a report counts from the mailbox, so it still does
-after your window closes. One that reports `blocked` or `failed` frees its slot
+after your session closes. One that reports `blocked` or `failed` frees its slot
 but the workers after it stay held until it reports `done` — or you
 `set_order(start_now=[…])`. The user can start a held worker by hand by
 switching its queue on (its Queue tab) — MindFlock then releases it on its
 next pass, once its fence is in place. `after` may not name your own session
 (an orchestrator never reports), and `fence_session` refuses a team run's
-member (its group fences it to the plan's paths).
+member (its team run fences it to the plan's paths).
 
 **Starting from the work it waited for.** When a held worker in its own
 worktree is released with its branch untouched (no commits, a clean tree, an
@@ -1254,11 +1267,11 @@ merge; in-place and provisioned workers are never moved.
 
 `wait_for_session` treats a held worker as not started: it never reads its
 idle agent as finished. Its row carries `order: {state, word, detail, after,
-fence}` (`state`: `held`, `running`, `done`, `stopped`); the fast-track
-autopilot treats a held task as pending. The order is kept per orchestrator
+fence}` (`state`: `held`, `running`, `done`, `stopped`); Fast-track
+treats a held task as pending. The order is kept per orchestrator
 in `~/.mindflock/worker_order.json` (`MINDFLOCK_WORKER_ORDER_FILE`) and
 carried out by a loop every 3 s (`backend/web/core/worker_order_driver.py`);
-it keeps going if the orchestrator's window closes.
+it keeps going if the orchestrator's session closes.
 
 The orchestrator's **Thread** shows the order as a diagram — see [The rows
 and the thread](#the-rows-and-the-thread).
@@ -1354,12 +1367,12 @@ user's call.
 
 **The user's choice wins, whatever the scope.** `ship_session` and
 `set_autopilot` refuse a session that belongs to a team run (a member or a
-lead — MindFlock ships it with the group, and the user steers the group); a
-session whose lane the user set with "ask me before it ships" (only the user
+lead — MindFlock ships it with the team run, and the user steers the team run); a
+session whose Fast-track the user set with "ask me before it ships" (only the user
 approves it, in the bell — `depth: "off"` is still allowed); and any depth
-past a lane the user set (a lane an agent set — the row's `lane.by` is
+past a Fast-track the user set (a Fast-track an agent set — the row's `lane.by` is
 `agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
-on the lane it arms.
+on the Fast-track it arms.
 
 An unknown scope value, or an auto-attached server that can't confirm its
 session, runs `readonly`.
@@ -1627,7 +1640,7 @@ up), or one of the other lane gates holds:
 
 - An open long-poll on its inbox holds typing. The poll will hand the message
   over itself.
-- Someone typed in that window in the last 45 s (the web terminal, or a raw
+- Someone typed in that session in the last 45 s (the web terminal, or a raw
   `tmux attach`). The lane waits for them to stop.
 - No agent CLI holds the pane: the agent quit and its launcher dropped to a
   shell, or the user is running `vim`, `ssh` or `psql` there. Restart the
@@ -1676,7 +1689,8 @@ else.
 
 **`ship_session` returns a `handoff`.** Neither the `gh` CLI nor a GitHub token
 is available, so the PR (or the merge) is one click on GitHub instead. Add a
-token in Intake → Pull requests, or install `gh`, to let it finish on its own.
+token with Settings → Connections → GitHub → **Connect**, or install `gh`, to
+let it finish on its own.
 
 **`spawn_ticket_session` can't find the ticket.** It matches against the
 Intake ticket list (`list_tickets`). For a ticket that isn't listed (not
@@ -1782,7 +1796,7 @@ refuses a `from` starting with `peer:`.
 | MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
-| Autopilot | `backend/web/core/autopilot.py` and the driver in `server.py`; route `/api/instances/{title}/fast-track` |
+| Fast-track | `backend/web/core/autopilot.py` and the driver in `server.py`; route `/api/instances/{title}/fast-track` |
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
 | Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |

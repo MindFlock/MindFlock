@@ -202,6 +202,37 @@ def display_name(title: str, branch: str = "") -> str:
         return str(title or "")
 
 
+def owner_of(name: str, branches: Dict[str, str], exclude: str = "") -> str:
+    """The session already CALLED ``name`` — by its title or by what it shows
+    (:func:`display_name`) — among ``branches`` (``title -> branch``, the live
+    sessions), ignoring ``exclude``; ``""`` when the name is free.
+
+    A rename is the session's name everywhere, so two sessions may not share
+    one: the sidebar, the phone and a push would all point at two windows.
+    Exact match, as typed — "Foo" and "foo" are different names.
+    """
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    for title, branch in branches.items():
+        if title == exclude:
+            continue
+        if name == title or name == display_name(title, branch):
+            return title
+    return ""
+
+
+def overlay(rows) -> None:
+    """Stamp ``name`` — what the session is called, :func:`display_name` — on
+    this device's own rows of an instances listing, in place. The listing serves
+    a cached snapshot and a rename must show on the next poll, not the next
+    tick. Rows another device sent (``device`` set) keep the name their own
+    server gave them."""
+    for r in rows:
+        if isinstance(r, dict) and r.get("title") and not r.get("device"):
+            r["name"] = display_name(str(r["title"]), str(r.get("branch") or ""))
+
+
 def all_aliases() -> Dict[str, str]:
     with _LOCK:
         return dict(_load())

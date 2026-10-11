@@ -937,7 +937,7 @@ class TestAutomationShown:
         out = capsys.readouterr().out
         assert "none of your devices runs PR review" in out
         # There's no "on" switch any more: the runner is moved with Run here.
-        assert "choose Run here (Settings → Devices)" in out
+        assert "choose Run here (Settings → Your devices)" in out
         assert "turn it on" not in out
 
     def test_several_running_warns(self, monkeypatch, capsys):
@@ -946,7 +946,7 @@ class TestAutomationShown:
         out = capsys.readouterr().out
         assert "Laptop, Mac-Mini all run PR review" in out
         # ...and no "off" switch: point at Run here on the one to keep.
-        assert "choose Run here (Settings → Devices)" in out
+        assert "choose Run here (Settings → Your devices)" in out
         assert "turn it off" not in out
 
     def test_old_server_without_the_field_says_nothing(self, srv, capsys):

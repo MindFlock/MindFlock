@@ -3,14 +3,15 @@
  * own opt-in toggle (github.issues_enabled — absent = OFF, unlike review).
  *
  * Same anatomy as the other two tabs (see ./kit.tsx). The GitHub credential is
- * shared with review and lives on that tab; this one links there. */
+ * shared with review and has one home, the Connect GitHub dialog (Settings →
+ * Connections → GitHub → Connect); this tab only offers the button. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { refreshInstances, usePanelQuery } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
-import { runGithubTest } from "../dialogs/SetupDialog";
+import { openConnectGitHub } from "../../lib/githubConnect";
 import {
   AutomationSwitch,
   useListFilter,
@@ -88,10 +89,6 @@ export function IssuesTab({ gotoTab }: TabProps) {
     error: issuesError,
     fetching: issuesQuery.isFetching,
     loaded: !!issues,
-  });
-
-  const [ghTest, setGhTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
-    testing: false,
   });
 
   const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
@@ -360,33 +357,22 @@ export function IssuesTab({ gotoTab }: TabProps) {
             </span>
           </label>
           <div className="set-row">
-            <span className="set-label">GitHub token</span>
+            <span className="set-label">GitHub connection</span>
             <span className="test-row">
               <button
                 type="button"
-                id="gh-issue-test-btn"
+                id="gh-issue-connect-btn"
                 className="test-btn"
-                onClick={async () => {
-                  setGhTest({ testing: true });
-                  setGhTest(await runGithubTest());
-                }}
+                onClick={() => openConnectGitHub()}
               >
-                Test GitHub
+                Connect GitHub
               </button>
-              <span
-                id="gh-issue-test-result"
-                className={"test-result" + (ghTest.msg ? (ghTest.ok ? " ok" : " bad") : "")}
-              >
-                {ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""}
-              </span>
             </span>
             <span className="set-hint">
-              The GitHub credential is shared with PR review — it authenticates the same
-              account. Set or change it on the{" "}
-              <button type="button" className="linklike" onClick={() => gotoTab("prs")}>
-                Pull requests tab
-              </button>
-              ; the button above checks the current connection.
+              The same sign-in PR review uses — it authenticates the same account (Settings →
+              Connections → GitHub → Connect). A GitHub Issues source from an older release
+              that still carries its own token keeps working this release with a notice in
+              Settings → Connections; move it here.
             </span>
           </div>
         </div>

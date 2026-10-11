@@ -295,7 +295,7 @@ class TestShippableGuard:
         )
         with pytest.raises(ToolError) as err:
             box.ship_session({"title": "w1", "depth": "push"}, _ctx(clock))
-        assert "autopilot armed" in err.value.message
+        assert "fast-track armed" in err.value.message
         assert 'depth="off"' in err.value.message
         assert sim.posts == []
         # A finished or halted run no longer drives anything.
@@ -717,7 +717,7 @@ class TestSetAutopilot:
         api.routes[("POST", "fast-track")] = lambda t, p, q: {}
         with pytest.raises(ToolError) as err:
             box.set_autopilot({"depth": "pr"}, FakeCtx(clock))
-        assert "part of group" in str(err.value)
+        assert "part of team run" in str(err.value)
         with pytest.raises(ToolError):
             box.ship_session({"depth": "pr", "wait": False}, FakeCtx(clock))
 

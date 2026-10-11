@@ -54,7 +54,7 @@
   opacity: 0.7;
 }
 
-/* "yours": one of Your devices (Settings → Devices) — connected through the
+/* "yours": one of Your devices (Settings → Your devices) — connected through the
    shared device key, so it has no Disconnect ✕. */
 .device-group .dev-member {
   font-size: 10px;

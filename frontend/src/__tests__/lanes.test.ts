@@ -70,9 +70,9 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(merged.rest).toBe(" · PR #9");
   });
 
-  it("puts a prompt first: ? needs your answer", () => {
+  it("puts a prompt first: ? needs you · question", () => {
     const l = shipLine(row({ lane: lane("pr"), stage: "pr", activity: "clarify" }))!;
-    expect(l.lead).toBe("? needs your answer");
+    expect(l.lead).toBe("? needs you · question");
     expect(l.cls).toBe("rep-ask");
   });
 

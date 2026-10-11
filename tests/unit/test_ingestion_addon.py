@@ -215,7 +215,9 @@ class TestAutomationHere:
         )
         addon = ti.TicketIngestionAddon()
         reconciled = []
-        monkeypatch.setattr(addon, "_reconcile_process", lambda: reconciled.append(1))
+        monkeypatch.setattr(
+            addon, "_reconcile_process", lambda *a: reconciled.append(1)
+        )
         asyncio.run(addon.on_startup(Ctx()))
         assert {"device.joined", "device.removed"} <= set(subs)
         subs["device.joined"]({"event": "device.joined"})  # still alone
@@ -226,15 +228,6 @@ class TestAutomationHere:
 
         time.sleep(0.1)
         assert reconciled == [1]
-
-
-class TestTicketingConfigured:
-    def test_false_when_no_source(self):
-        assert ti._ticketing_configured() is False
-
-    def test_true_when_a_source_has_provider(self):
-        S.set_ticketing_sources([{"id": "j", "provider": "jira"}])
-        assert ti._ticketing_configured() is True
 
 
 class TestIngestionRepoAvailable:
@@ -258,57 +251,30 @@ class TestIngestionRepoAvailable:
 # _process_wanted / _reconcile_process (toggle -> process reconciliation)
 # --------------------------------------------------------------------------- #
 class TestProcessWanted:
-    def _patch(self, monkeypatch, *, desired, repo, pr, issues, ticketing):
+    def _patch(self, monkeypatch, *, desired, repo, pr, issues):
         monkeypatch.setattr(ti, "_desired_running", lambda: desired)
         monkeypatch.setattr(ti, "_ingestion_repo_available", lambda: repo)
         monkeypatch.setattr(ti, "_pr_review_enabled", lambda: pr)
         monkeypatch.setattr(ti, "_issue_handling_enabled", lambda: issues)
-        monkeypatch.setattr(ti, "_ticketing_configured", lambda: ticketing)
 
     def test_tickets_on_needs_a_repo(self, monkeypatch):
-        self._patch(
-            monkeypatch,
-            desired=True,
-            repo=False,
-            pr=False,
-            issues=False,
-            ticketing=True,
-        )
+        self._patch(monkeypatch, desired=True, repo=False, pr=False, issues=False)
         assert ti.TicketIngestionAddon._process_wanted() is False
-        self._patch(
-            monkeypatch, desired=True, repo=True, pr=False, issues=False, ticketing=True
-        )
+        self._patch(monkeypatch, desired=True, repo=True, pr=False, issues=False)
         assert ti.TicketIngestionAddon._process_wanted() is True
 
-    def test_pr_only_needs_a_ticketing_source(self, monkeypatch):
-        self._patch(
-            monkeypatch,
-            desired=False,
-            repo=False,
-            pr=True,
-            issues=False,
-            ticketing=False,
-        )
-        assert ti.TicketIngestionAddon._process_wanted() is False
-        self._patch(
-            monkeypatch,
-            desired=False,
-            repo=False,
-            pr=True,
-            issues=False,
-            ticketing=True,
-        )
+    def test_pr_review_boots_the_pipeline_with_zero_ticket_sources(self, monkeypatch):
+        """PR review (and issue handling) used to need a ticketing source to
+        exist just so the config would load — a PR-only user with no tracker
+        never got a pipeline. The layered config loads with none."""
+        assert S.load_settings().ticketing.sources == []
+        self._patch(monkeypatch, desired=False, repo=False, pr=True, issues=False)
+        assert ti.TicketIngestionAddon._process_wanted() is True
+        self._patch(monkeypatch, desired=False, repo=False, pr=False, issues=True)
         assert ti.TicketIngestionAddon._process_wanted() is True
 
     def test_nothing_on(self, monkeypatch):
-        self._patch(
-            monkeypatch,
-            desired=False,
-            repo=True,
-            pr=False,
-            issues=False,
-            ticketing=True,
-        )
+        self._patch(monkeypatch, desired=False, repo=True, pr=False, issues=False)
         assert ti.TicketIngestionAddon._process_wanted() is False
 
 

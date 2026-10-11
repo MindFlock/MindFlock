@@ -200,3 +200,23 @@ body.conn-lost #cs-errors {
   background: var(--panel);
 }
 
+
+/* A question (confirmPop) wears the same card without the alarm: neutral rule,
+   plain title, and an accent-coloured answer — nothing has gone wrong yet. */
+#cs-errors .cs-error.cs-confirm {
+  border-color: var(--border);
+  border-top-color: var(--accent);
+}
+
+#cs-errors .cs-confirm .cs-error-head {
+  color: var(--text);
+}
+
+#cs-errors .cs-confirm .cs-error-act.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#cs-errors .cs-confirm .cs-error-act.primary:hover {
+  background: rgba(120, 160, 255, 0.12);
+}

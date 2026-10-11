@@ -1698,3 +1698,92 @@ def test_loopback_is_privileged_without_a_token(monkeypatch):
     # A non-loopback caller with the gate off is NOT privileged.
     c2 = TestClient(server.app, client=("100.64.0.7", 50000))
     assert c2.post("/api/fleet/invite").status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# the person (docs/people.md): a joiner adopts the inviter's id
+# --------------------------------------------------------------------------- #
+def _person_of(world, key):
+    from backend.web.core import person
+
+    with world.on(key):
+        return person.current()
+
+
+def _give_person(world, key, **fields):
+    from backend.web.core import person
+
+    with world.on(key):
+        person.ensure_id()
+        if fields:
+            person.update(**fields)
+        return person.current()
+
+
+async def test_a_code_join_adopts_the_inviters_person(world):
+    lap = _give_person(world, "laptop", name="Ada", git_email="ada@example.com")
+    rig = _give_person(world, "rig", git_email="rig@example.com")
+    assert lap["id"] != rig["id"]
+    status, out = await _join_by_code(world, "rig", "laptop")
+    assert status == 200, out
+    got = _person_of(world, "rig")
+    assert got["id"] == lap["id"]  # the device others paired to wins
+    assert got["name"] == "Ada"  # a blank here is filled…
+    assert got["git_email"] == "rig@example.com"  # …a set one is kept
+    assert _person_of(world, "laptop")["id"] == lap["id"]  # inviter unchanged
+
+
+async def test_ask_approve_adopts_the_inviters_person(world):
+    lap = _give_person(world, "laptop")
+    _give_person(world, "rig")
+    with world.on("rig"):
+        status, out = await world.ui("POST", "/api/fleet/request", {"device": "laptop"})
+        assert status == 200, out
+    with world.on("laptop"):
+        _, st = await world.ui("GET", "/api/fleet")
+        [req] = st["requests"]
+        await world.ui("POST", "/api/fleet/requests/%s/approve" % req["id"])
+    with world.on("rig"):
+        final = await _wait_join()
+        assert final["state"] == "joined", final
+    assert _person_of(world, "rig")["id"] == lap["id"]
+
+
+async def test_add_paired_hands_over_this_devices_person(world, monkeypatch):
+    monkeypatch.setattr(fleet, "_spawn", lambda coro: coro.close())
+    lap = _give_person(world, "laptop")
+    _give_person(world, "rig")
+    remote.set_token("rig", world.own_tokens["rig"])
+    with world.on("laptop"):
+        status, out = await world.ui("POST", "/api/fleet/add-paired", {"device": "rig"})
+    assert status == 200, out
+    assert _person_of(world, "rig")["id"] == lap["id"]
+
+
+async def test_an_inviter_without_people_changes_nothing(world, monkeypatch):
+    """A bundle from a build that predates people carries no person."""
+    monkeypatch.setattr(fleet, "_person_handshake", lambda: {})
+    rig = _give_person(world, "rig")
+    status, out = await _join_by_code(world, "rig", "laptop")
+    assert status == 200, out
+    assert _person_of(world, "rig")["id"] == rig["id"]
+
+
+def test_bundle_for_carries_the_person_but_bundle_stays_the_roster():
+    from backend.web.core import person
+
+    fleet.create()
+    b = fleet.bundle_for("rig", "Rig")
+    assert b["person"]["id"] == person.known_id() != ""
+    assert "person" not in fleet.bundle()
+
+
+def test_fleet_events_record_the_person(events):
+    from backend.web.core import person
+
+    pid = person.ensure_id()
+    fleet._emit("device.joined", device="rig", host="Rig", detail="x")
+    fleet._emit("device.join_requested", device="stranger", host="S", detail="y")
+    joined, asked = events[-2:]
+    assert joined["data"]["person"] == pid and joined["data"]["device"] == "rig"
+    assert "person" not in asked["data"]  # not one of theirs (yet)

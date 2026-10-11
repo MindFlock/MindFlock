@@ -144,7 +144,7 @@ export function MakePrDialog() {
           submit();
         }}
       >
-        <h2>Open pull request</h2>
+        <h2>Open PR</h2>
         <label>
           Merge{" "}
           <span className="muted">

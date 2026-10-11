@@ -31,6 +31,7 @@ from backend.providers import config as provider_config
 from backend.web.core import auth as _web_auth
 from backend.web.core import mobile_announce, restart, shared_link
 from backend.web.core import settings_hooks as _settings_hooks
+from backend.web.core import setup_steps as _setup_steps
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -121,9 +122,7 @@ def _masked_view() -> dict:
 #: gate/bind/remote-control switches, agent binaries and accounts, the IDE
 #: and terminal commands, peer links — needs the owner. An allow-list, so a
 #: new field is guarded until someone decides otherwise.
-_OPEN_FIELDS = frozenset(
-    {"general.onboarded", "general.last_repo_path", "ui.surface", "ui.accent"}
-)
+_OPEN_FIELDS = frozenset({"general.last_repo_path", "ui.surface", "ui.accent"})
 
 
 #: ``prefs`` fields ``POST /api/prefs`` takes only from a caller
@@ -173,6 +172,10 @@ def _apply_post(payload: dict) -> list:
             continue  # a list of sources — managed via the dedicated CRUD endpoints
         if not isinstance(fields, dict):
             continue
+        if group == "person":
+            # The id is agreed between the devices (core.person), never set
+            # by a save — POST /api/person edits the rest with validation.
+            fields = {k: v for k, v in fields.items() if k != "id"}
         if group == "auth_profiles":
             # The profiles LIST is managed via its dedicated CRUD endpoint;
             # the group's scalars (default_profile) stay settable here.
@@ -207,11 +210,10 @@ def _apply_post(payload: dict) -> list:
             patches[group] = clean
     if patches:
         settings_store.update_settings(**patches)
-    # A new GitHub token has to reach the code that uses it. github_auth caches
-    # the resolved token for the life of the process, so without this every
-    # consumer (PR review, issue handling, Make PR, the per-repo access test)
-    # kept using the old one until a restart — which reads exactly like the
-    # paste not having been saved.
+    # A new GitHub token has to reach the code that uses it. github_auth memoizes
+    # the resolved token for a minute, so without this every consumer in THIS
+    # process (Make PR, the per-repo access test) would keep the old one for up
+    # to a minute — which reads exactly like the paste not having been saved.
     if "token" in (patches.get("github") or {}):
         try:
             from backend.ticket_ingestion import github_auth
@@ -360,6 +362,7 @@ def _provider_status(p, default_name: str) -> dict:
             return fallback
 
     evidence = _safe(p.auth_evidence)
+    env_var, _env_val = provider_config.env_binary_override(name)
     return {
         "name": name,
         "aliases": list(getattr(p, "program_aliases", ()) or ()),
@@ -371,8 +374,21 @@ def _provider_status(p, default_name: str) -> dict:
         "authenticated": bool(evidence),
         "auth_detail": evidence,
         "auth_known": bool(evidence),
+        # Whether a miss MEANS anything: a provider that named its credential
+        # files / env vars and has none is probably logged out; one that named
+        # nothing keeps its token where we never look (doctor doctrine).
+        "auth_probe": bool(_safe(lambda: doctor._declares_auth_sources(p), False)),
         "login_command": _safe(p.login_command),
+        # A login step the provider DECLARED (codex login, claude's first run);
+        # false = "no sign-in needed" (aider reads API keys), so the screen
+        # never offers a Sign in button that would just open the agent's REPL.
+        "has_login": bool(_safe(lambda: doctor._declared_login_command(p))),
         "install_hint": _safe(p.install_hint),
+        # This device's saved binary path (coding_cli.binary_paths — LOCAL,
+        # never synced) and the env var pinning one, if any: what the Binary
+        # path field edits, and why an edit would seem to have no effect.
+        "binary_override": provider_config.settings_binary_path(name),
+        "binary_override_env": env_var,
         # Why a CUSTOM provider's CLI can't be found (built-ins ship an install
         # command instead, which is the more useful answer for them).
         "launch_hint": (
@@ -427,6 +443,42 @@ def _provider_toml(body: dict) -> str:
         lines.append("[classify]")
         lines.extend(classify)
     return "\n".join(lines) + "\n"
+
+
+def _provider_updates(body: dict) -> dict:
+    """The ``{table: {key: value}}`` patch a provider-management body means —
+    ONLY the keys it carries (:func:`provider_config.patch_toml_tables` keeps
+    everything else). An empty string / list clears a key (``None``), as the
+    create path omits it; ``program`` is one string or a list of aliases."""
+    up: dict = {}
+
+    def put(table: str, key: str, value) -> None:
+        up.setdefault(table, {})[key] = value
+
+    if "program" in body:
+        tokens = str(body.get("program") or "").split()
+        put("provider", "program", tokens[0] if len(tokens) == 1 else tokens or None)
+    for table, key, field in (
+        ("provider", "command", "command"),
+        ("provider", "binary_path", "binary_path"),
+        ("launch", "resume_flag", "resume_flag"),
+        ("launch", "skip_perms_flag", "skip_perms_flag"),
+        ("classify", "idle_pattern", "idle_pattern"),
+        ("classify", "trust_keystroke", "trust_keystroke"),
+    ):
+        if field in body:
+            val = str(body.get(field, "") or "").strip()
+            put(table, key, val or None)
+    if "launch_args" in body:
+        args = list(provider_config.validate_launch_args(body.get("launch_args", ())))
+        put("launch", "args", args or None)
+    if "resume_fallback" in body:
+        put("launch", "resume_fallback", bool(body["resume_fallback"]))
+    if "trust_patterns" in body:
+        pats = body.get("trust_patterns")
+        pats = [str(x) for x in pats] if isinstance(pats, (list, tuple)) else []
+        put("classify", "trust_patterns", pats or None)
+    return up
 
 
 def _provider_body_error(body: dict) -> str:
@@ -524,37 +576,16 @@ def _stored_shortcut_token() -> str:
 
 
 def _github_token_source() -> str:
-    """Where a GitHub token would come from, mirroring
-    :mod:`backend.ticket_ingestion.github_auth` (settings → env → gh CLI)
-    without ever returning the token itself."""
+    """Where a GitHub token would come from — the first two rungs of the one
+    chain (:mod:`backend.web.core.github_auth`: settings → env → gh CLI →
+    config.toml) without shelling out to gh (the doctor reports gh on its
+    own) and without ever returning the token itself."""
     if settings_store.load_settings().github.token:
         return "settings"
     for var in ("GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(var):
             return f"env:{var}"
     return ""
-
-
-def _repo_test_config():
-    """A minimal ``GithubConfig`` carrying only the stored token, for the
-    per-repo access test.
-
-    The shared resolver wants a config object to read ``[github].token`` from
-    and then walks env → ``gh auth token`` on its own. Building a bare one here
-    (rather than loading the whole pipeline config) means the test works on a
-    machine that has never configured ticket ingestion — which is exactly the
-    machine someone is testing a repo on.
-    """
-    from backend.ticket_ingestion.config import GithubConfig
-
-    return GithubConfig(
-        base_branch="",
-        min_age_minutes=15,
-        poll_interval_seconds=60,
-        enabled=True,
-        skip_authors=[],
-        token=(settings_store.load_settings().github.token or "").strip(),
-    )
 
 
 def _gh_cli_status() -> Tuple[bool, bool, str]:
@@ -634,6 +665,216 @@ def _source_cfg_from_body(body: dict):
     )
 
 
+async def _run_ticketing_test(cfg, get_provider, ProviderError) -> dict:
+    """One connection test: the provider's own ``test_connection``, then —
+    when it passed — its state list, so the card's pickers have something to
+    offer without a second round trip. Never echoes a token. Shape::
+
+        {ok, message, member_id, name, states?, project?, workspaces?}
+        {ok: False, error, message}
+
+    ``message`` is the one line the card and Connections both show. A state
+    listing that fails does not fail the test (the credentials worked); the
+    pickers simply stay empty and the message says so."""
+    try:
+        prov = get_provider(cfg)
+    except ProviderError as err:
+        return {"ok": False, "error": str(err), "message": str(err)}
+    identity, error = await prov.test_connection()
+    if identity is None:
+        return {"ok": False, "error": error, "message": error}
+    name = str(identity.get("name") or "")
+    out: dict = {
+        "ok": True,
+        "member_id": str(identity.get("member_id", "") or ""),
+        "name": name,
+        "message": "Connected" + (f" — {name}" if name else ""),
+    }
+    for key in ("project", "project_name", "workspaces", "repo"):
+        if identity.get(key):
+            out[key] = identity[key]
+    if out.get("workspaces"):
+        out["message"] += " — pick a workspace"
+    elif out.get("project_name"):
+        out["message"] += f" · {out['project_name']}"
+    try:
+        states = await prov.list_states()
+    except Exception as err:  # noqa: BLE001 — the credentials already worked
+        if not (cfg.provider == "asana" and not cfg.project):
+            out["message"] += f" (states not listed: {str(err)[:120]})"
+        states = []
+    if states:
+        out["states"] = [
+            {
+                k: v
+                for k, v in st.items()
+                if k in ("id", "name", "type", "group", "label")
+            }
+            for st in states
+            if isinstance(st, dict)
+        ]
+    return out
+
+
+def _body_matches_stored_source(body: dict) -> bool:
+    """Whether the configuration a ``record`` test ran on IS the stored source
+    named by ``body["id"]``: every test-sensitive field the body carries
+    resolves (the way :func:`_source_cfg_from_body` resolves it — blank, or a
+    masked secret, means the stored value) to what is stored. A body that
+    differs tested something else, so its verdict must not be stamped onto the
+    stored source. ``True`` when no stored source has that id (nothing to
+    record on, so nothing to protect)."""
+    from backend.ticket_ingestion.providers import test_sensitive_keys
+
+    try:
+        current = settings_store.load_settings().ticketing.sources
+    except Exception:  # noqa: BLE001
+        return True
+    src_id = str(body.get("id", "") or "")
+    stored = next((s.to_dict() for s in current if s.id == src_id), None)
+    if stored is None:
+        return True
+    keys = test_sensitive_keys(str(stored.get("provider") or ""))
+    candidate = dict(stored)
+    for key in keys:
+        v = body.get(key)
+        if isinstance(v, str):
+            v = v.strip()
+        if v in (None, "") or (key == "api_token" and v == _MASK):
+            continue
+        candidate[key] = str(v).lower() if key == "provider" else v
+    # Normalized the way a save stores it, so a value spelled differently
+    # (an "on" flag, a padded claim label) is not mistaken for a change.
+    normalized = settings_store.TicketingSource.from_dict(candidate).to_dict()
+    return all(
+        str(normalized.get(k) or "").strip() == str(stored.get(k) or "").strip()
+        for k in keys
+    )
+
+
+def _record_ticketing_test(src_id: str, result: dict) -> Optional[dict]:
+    """Stamp ``result`` onto the stored source ``src_id`` as its ``last_test``
+    and fill in what Test resolved (a blank ``member_id``; a blank Asana
+    workspace when the token sees exactly one). Returns the masked source, or
+    ``None`` when no stored source has that id (nothing to record on)."""
+    from datetime import datetime, timezone
+
+    try:
+        current = settings_store.load_settings().ticketing.sources
+    except Exception:  # noqa: BLE001
+        return None
+    rows = [s.to_dict() for s in current]
+    target = next((r for r in rows if str(r.get("id", "")) == src_id), None)
+    if target is None:
+        return None
+    verdict: dict = {
+        "ok": bool(result.get("ok")),
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "message": str(result.get("message") or result.get("error") or ""),
+    }
+    if result.get("ok"):
+        if result.get("member_id"):
+            verdict["member_id"] = str(result["member_id"])
+            if str(target.get("member_id") or "") != str(result["member_id"]):
+                # Test resolved the token's own identity: a stale id (the token
+                # was swapped to another account) would make ingestion search
+                # by the wrong owner while the card said Connected.
+                target["member_id"] = str(result["member_id"])
+        if result.get("project") and not target.get("project"):
+            target["project"] = str(result["project"])
+        if result.get("workspaces") and not target.get("project"):
+            verdict["workspaces"] = list(result["workspaces"])
+        if result.get("states"):
+            verdict["states"] = list(result["states"])
+    target["last_test"] = verdict
+    try:
+        settings_store.set_ticketing_sources(rows)
+    except Exception:  # noqa: BLE001 — unreadable file: the test still answers
+        return None
+    _stamp_for_sync("ticketing.sources")
+    out = dict(target)
+    out["api_token"] = _MASK if out.get("api_token") else ""
+    return out
+
+
+def _clean_ticketing_sources(incoming: list) -> tuple[list, dict]:
+    """The sources list as it will be stored, and the per-source field errors
+    that forbid storing it.
+
+    Per source: the secret is resolved (absent / ``""`` / the mask keep the
+    stored token, ``None`` clears it), a field Test fills in (``auto``) sent
+    blank keeps its stored value, the body's ``last_test`` is discarded
+    and the stored one carried over only while none of the provider's
+    test-sensitive fields changed, then the source is validated — unless it is
+    byte-for-byte what is already stored, so a source saved before a rule
+    existed never blocks edits to its neighbours (Connections still reports it
+    as needing attention through its stale or missing ``last_test``)."""
+    from backend.ticket_ingestion.providers import (
+        provider_meta,
+        test_sensitive_keys,
+        validate_source,
+    )
+
+    # Strict: a file that won't parse is the caller's 409, never a 400 about
+    # fields in a list that was never going to be written.
+    stored = {
+        s.id: s.to_dict()
+        for s in settings_store.load_settings_strict().ticketing.sources
+    }
+    clean: list = []
+    errors: dict = {}
+    for raw in incoming:
+        if not isinstance(raw, dict) or not raw.get("provider"):
+            continue
+        s = dict(raw)
+        sid = str(s.get("id", "") or "")
+        prev = stored.get(sid) or {}
+        cleared = "api_token" in s and s["api_token"] is None
+        if cleared:
+            # An explicit null clears the secret. The source is kept — "off"
+            # (no credentials yet) on Connections and the card — instead of a
+            # 400 that would silently keep the old token ingesting.
+            s["api_token"] = ""
+        else:
+            tok = str(s.get("api_token", "") or "").strip()
+            if tok in ("", _MASK):
+                s["api_token"] = prev.get("api_token", "")
+        if prev and str(s.get("provider") or "") == str(prev.get("provider") or ""):
+            # Fields Test fills in are Test's: a blank one in the body is a
+            # card that has not seen Test's answer yet (a blur racing the
+            # post-save test), not a user clearing it — keep the stored value
+            # rather than wiping it and the verdict that came with it.
+            for f in (provider_meta(str(s.get("provider") or "")) or {}).get(
+                "fields", []
+            ):
+                key = f["key"]
+                if (
+                    f.get("auto")
+                    and not f.get("override")
+                    and not str(s.get(key) or "").strip()
+                ):
+                    if prev.get(key):
+                        s[key] = prev[key]
+        s.pop("last_test", None)
+        prev_test = prev.get("last_test")
+        if prev_test and all(
+            str(s.get(k) or "").strip() == str(prev.get(k) or "").strip()
+            for k in test_sensitive_keys(str(s.get("provider") or ""))
+        ):
+            s["last_test"] = prev_test
+        normalized = settings_store.TicketingSource.from_dict(s).to_dict()
+        if normalized == prev:
+            clean.append(s)
+            continue
+        field_errors = validate_source(normalized)
+        if cleared:
+            field_errors.pop("api_token", None)
+        if field_errors:
+            errors[sid or f"#{len(clean)}"] = field_errors
+        clean.append(s)
+    return clean, errors
+
+
 class SettingsAddon(Addon):
     id = "settings"
     label = "Settings"
@@ -698,7 +939,7 @@ class SettingsAddon(Addon):
 
         @router.get("/settings/sync")
         def get_settings_sync() -> JSONResponse:
-            """Settings → Devices → Settings sync: on/off, where this device
+            """Settings → Your devices → Settings sync: on/off, where this device
             started from, each fleet device's last pass, what's pinned here,
             what's held back (an agent CLI not installed) and the pinnable
             choices."""
@@ -1018,34 +1259,19 @@ class SettingsAddon(Addon):
             return await run_in_threadpool(_save_settings, payload)
 
         def _save_settings(payload: dict) -> JSONResponse:
-            # The automated-PR-review / issue-handling toggles (github.enabled,
-            # github.issues_enabled) are only read when the pipeline process
-            # boots, so snapshot them before applying and, on a real flip, emit
-            # an event the ingestion addon uses to restart a live pipeline.
-            # enabled is Optional[bool]; the UI treats unset/None as "on" for
-            # PR review but as "off" for issue handling (opt-in), so compare
-            # the normalized on/off states (not raw values).
-            # github.automation_device (synced: which of your devices runs
-            # them) gates both halves the same way, so moving it reconciles too.
-            def _toggle_states() -> tuple[bool, bool, bool]:
-                from backend.web.core import settings_hooks
-
-                gh = settings_store.load_settings().github
-                return (
-                    gh.enabled is not False,
-                    gh.issues_enabled is True,
-                    settings_hooks.automation_here(),
-                )
-
-            gh_in = payload.get("github")
-            watch_toggle = isinstance(gh_in, dict) and (
-                "enabled" in gh_in
-                or "issues_enabled" in gh_in
-                or "automation_device" in gh_in
+            # Everything the ticket pipeline reads at boot (the PR-review /
+            # issue-handling switches, repos, token, which device runs them…)
+            # lives under github.*: snapshot its restart signature before
+            # applying so `after_settings_change` can restart a live pipeline
+            # when — and only when — the save moved it (debounced: a form that
+            # saves on every blur restarts once).
+            sig_before = (
+                _settings_hooks.pipeline_signature()
+                if isinstance(payload.get("github"), dict)
+                else None
             )
-            before = _toggle_states() if watch_toggle else None
 
-            # Settings → Mobile's tailscale-mode switch (general.serve_mode).
+            # Settings → Your phone's tailscale-mode switch (general.serve_mode).
             # Turning it ON is the moment a phone URL starts to exist, so it is
             # also the moment worth pushing that URL to the phone.
             def _serve_mode() -> str:
@@ -1058,7 +1284,7 @@ class SettingsAddon(Addon):
             gen_in = payload.get("general")
             watch_serve = isinstance(gen_in, dict) and "serve_mode" in gen_in
             serve_before = _serve_mode() if watch_serve else None
-            # Settings → Mobile's shared phone link (general.shared_link): the
+            # Settings → Your phone's shared phone link (general.shared_link): the
             # name must be a valid Tailscale Service name, and a change takes
             # effect right here — `tailscale serve` needs no restart.
             watch_shared = isinstance(gen_in, dict) and "shared_link" in gen_in
@@ -1082,12 +1308,10 @@ class SettingsAddon(Addon):
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync(*wrote)
-            if watch_toggle and self.ctx is not None:
-                if _toggle_states() != before:
-                    try:
-                        self.ctx.emit("settings.github_toggled")
-                    except Exception:  # noqa: BLE001 — never let the bus break a save
-                        pass
+            if sig_before is not None and wrote:
+                _settings_hooks.after_settings_change(
+                    wrote, source="", pipeline_before=sig_before
+                )
 
             view = {"settings": _masked_view()}
             # A changed name applies; the same one saved again reconciles —
@@ -1248,23 +1472,31 @@ class SettingsAddon(Addon):
                 get_provider,
             )
 
+            body = body or {}
             if await _stored_secret_refused(request, body, "api_token"):
                 return _web_auth.configure_refused()
-            cfg = _source_cfg_from_body(body or {})
-            try:
-                prov = get_provider(cfg)
-            except ProviderError as err:
-                return JSONResponse({"ok": False, "error": str(err)})
-            identity, error = await prov.test_connection()
-            if identity is None:
-                return JSONResponse({"ok": False, "error": error})
-            return JSONResponse(
-                {
-                    "ok": True,
-                    "member_id": str(identity.get("member_id", "") or ""),
-                    "name": str(identity.get("name") or ""),
-                }
-            )
+            # ``record: true`` writes the verdict onto the stored source named
+            # by ``id`` (and fills the fields Test resolves: member id, the
+            # Asana workspace) — that is what "connected" is derived from, so
+            # it is a configure, owner only. Without it the test is a look.
+            record = bool(body.get("record"))
+            if record and not await _web_auth.may_configure(request.scope):
+                return _web_auth.configure_refused()
+            cfg = _source_cfg_from_body(body)
+            result = await _run_ticketing_test(cfg, get_provider, ProviderError)
+            if record and not _body_matches_stored_source(body):
+                # The body overrode a tested field, so this verdict is about
+                # an unsaved configuration: stamping it onto the stored source
+                # would mark that one connected without ever testing it.
+                result["recorded"] = False
+                result["message"] = (
+                    str(result.get("message") or "") + " — save first to record it"
+                )
+            elif record:
+                src = _record_ticketing_test(str(body.get("id", "") or ""), result)
+                if src is not None:
+                    result["source"] = src
+            return JSONResponse(result)
 
         @router.post("/settings/ticketing/states")
         async def ticketing_states(
@@ -1312,9 +1544,16 @@ class SettingsAddon(Addon):
             body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
         ) -> JSONResponse:
             """Replace the whole sources list. A source whose ``api_token`` is
-            empty or the mask sentinel keeps its previously-stored token (matched
-            by ``id``), so re-saving the form never wipes a secret the UI never
-            received. Blank ``provider`` entries are dropped. Owner only
+            absent, empty or the mask sentinel keeps its previously-stored
+            token (matched by ``id``), so re-saving the form never wipes a
+            secret the UI never received; an explicit ``null`` clears it. Blank
+            ``provider`` entries are dropped. Every source that is new or
+            changed is validated against the provider catalog
+            (:func:`validate_source`): a miss is a **400** naming each field —
+            ``{error, errors: {<id>: {<field>: <message>}}}`` — and nothing is
+            written. ``last_test`` is never taken from the body: the stored
+            verdict is carried over while the tested fields are unchanged and
+            dropped otherwise (:func:`_clean_ticketing_sources`). Owner only
             (``auth.may_configure``): a source decides which tickets start
             agent sessions, and settings sync spreads it."""
             if not allowed:
@@ -1324,26 +1563,32 @@ class SettingsAddon(Addon):
                 return JSONResponse(
                     {"error": 'expected {"sources": [...]}'}, status_code=400
                 )
-            prev = {
-                s.id: s.api_token
-                for s in settings_store.load_settings().ticketing.sources
-            }
-            clean: list = []
-            for raw in incoming:
-                if not isinstance(raw, dict) or not raw.get("provider"):
-                    continue
-                s = dict(raw)
-                tok = str(s.get("api_token", "") or "").strip()
-                if tok in ("", _MASK):
-                    s["api_token"] = prev.get(str(s.get("id", "")), "")
-                clean.append(s)
+            sig_before = _settings_hooks.pipeline_signature()
             try:
+                clean, errors = _clean_ticketing_sources(incoming)
+                if errors:
+                    return JSONResponse(
+                        {
+                            "error": "Some sources are missing or have invalid fields",
+                            "errors": errors,
+                        },
+                        status_code=400,
+                    )
                 settings_store.set_ticketing_sources(clean)
             except settings_store.SettingsUnreadable:
                 return _unreadable_response()
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync("ticketing.sources")
+            if clean:
+                _setup_steps.mark(
+                    "tracker"
+                )  # first-run checklist: a tracker is connected
+            # A local edit reaches the running pipeline the way a synced one
+            # does: restart it (debounced) when any field of any source moved.
+            _settings_hooks.after_settings_change(
+                ["ticketing.sources"], source="", pipeline_before=sig_before
+            )
             return JSONResponse({"sources": _masked_sources()})
 
         # --- auth profiles CRUD (multiple identities per CLI) ---------------
@@ -1627,23 +1872,29 @@ class SettingsAddon(Addon):
             return JSONResponse(ap.probe_openrouter(key, base_url))
 
         @router.post("/settings/test/github")
-        def test_github() -> JSONResponse:
-            """Report where a GitHub token would come from (settings / env /
-            gh CLI, per the github_auth resolution order) and whether the gh
-            CLI is installed + authenticated. Never returns the token."""
-            source = _github_token_source()
-            gh_installed, gh_authenticated, gh_detail = _gh_cli_status()
-            if not source and gh_authenticated:
-                source = "gh-cli"
-            return JSONResponse(
-                {
-                    "ok": bool(source),
-                    "token_source": source or "none",
-                    "gh_installed": gh_installed,
-                    "gh_authenticated": gh_authenticated,
-                    "detail": gh_detail,
-                }
+        async def test_github() -> JSONResponse:
+            """The Connect GitHub dialog's **Test**: a real ``GET /user`` with
+            the token the one chain resolves (settings → env → gh CLI →
+            config.toml), plus one repo-access check against the first
+            configured repo. Also reports the gh CLI (optional). Never the
+            token. ``ok`` is the whole verdict; ``token_source`` /
+            ``gh_installed`` / ``gh_authenticated`` / ``detail`` keep the
+            shape older callers render."""
+            from backend.web.core import github_auth as web_auth
+
+            out = await asyncio.to_thread(web_auth.test_connection)
+            gh_installed, gh_authenticated, gh_detail = await asyncio.to_thread(
+                _gh_cli_status
             )
+            out["gh_installed"] = gh_installed
+            out["gh_authenticated"] = gh_authenticated
+            out["gh_detail"] = gh_detail
+            # Connections' GitHub row reads the last verdict (lazy: that
+            # module imports this one).
+            from . import connections as _connections
+
+            _connections.note_github_test(out)
+            return JSONResponse(out)
 
         @router.post("/settings/test/github-repo")
         async def test_github_repo(body: Optional[dict] = None) -> JSONResponse:
@@ -1661,20 +1912,19 @@ class SettingsAddon(Addon):
                 return JSONResponse({"ok": False, "error": "repo must be owner/name"})
             from backend.ticket_ingestion import github_auth
 
-            # Resolve afresh: a cached token from before the user pasted a new
-            # one would make this button answer about the wrong credential.
+            # Resolve afresh: a memoized token from before the user pasted a
+            # new one would make this button answer about the wrong credential.
             github_auth.invalidate()
             try:
-                token = (await github_auth.resolve_token(_repo_test_config())).strip()
+                token = (await github_auth.resolve_token(None)).strip()
             except github_auth.GithubAuthError:
-                # Its message is a five-line config walkthrough aimed at
-                # config.toml; on a card, one sentence naming this screen is
-                # more use.
+                # One sentence naming where the credential lives.
                 return JSONResponse(
                     {
                         "ok": False,
-                        "error": "no GitHub token available — set one under "
-                        "Advanced options, or sign in with the gh CLI",
+                        "error": "no GitHub token available — connect GitHub "
+                        "under Settings → Connections → GitHub → Connect, or "
+                        "sign in with the gh CLI",
                     }
                 )
             except Exception as err:  # noqa: BLE001 — never 500 a probe
@@ -1728,11 +1978,14 @@ class SettingsAddon(Addon):
             )
 
         @router.post("/settings/test/agent")
-        def test_agent() -> JSONResponse:
-            """Probe the configured agent CLI: binary resolvable + (for the
-            claude family) best-effort login evidence."""
-            cli = doctor.check_agent_cli()
-            auth = doctor.check_agent_auth()
+        def test_agent(body: Optional[dict] = None) -> JSONResponse:
+            """Probe an agent CLI: binary resolvable + best-effort login
+            evidence. ``{"provider": name}`` picks one; the default otherwise
+            (Settings → Agent CLI's picker). The rows keep their ``agent-cli``
+            / ``agent-auth`` ids so the Sign in button reads them as usual."""
+            name = str((body or {}).get("provider") or "").strip().lower()
+            cli = doctor.check_agent_cli_for(name)
+            auth = doctor.check_agent_auth_for(name)
             ok = cli.status == "ok" and auth.status in ("ok", "info")
             return JSONResponse(
                 {"ok": ok, "cli": cli.to_dict(), "auth": auth.to_dict()}
@@ -1757,7 +2010,60 @@ class SettingsAddon(Addon):
                 for p in providers.all_providers()
                 if p.name != "generic"  # the catch-all fallback isn't a choice
             ]
-            return JSONResponse({"providers": out, "default": default_name})
+            return JSONResponse(
+                {
+                    "providers": out,
+                    "default": default_name,
+                    # Custom TOMLs that didn't load — a red row each, instead
+                    # of a provider that silently isn't there.
+                    "errors": provider_config.load_errors(),
+                }
+            )
+
+        @router.put("/providers/{name}/binary-path")
+        def set_provider_binary_path(
+            name: str, body: dict, allowed: bool = Depends(_web_auth.configure_allowed)
+        ) -> JSONResponse:
+            """Set (or, with an empty ``path``, clear) THIS device's binary path
+            for provider ``name`` — ``coding_cli.binary_paths[name]``, the
+            override the launcher honours for built-ins and custom CLIs alike.
+            Device-local: settings sync never carries it (``settings_sync.LOCAL``),
+            because a path is about this machine. Owner only: it is a command
+            line sessions run. A path that isn't an executable file is saved
+            with a ``warning`` (the CLI may be installed next), not refused.
+            An env override (``MINDFLOCK_PROVIDER_BIN_<NAME>``) still wins; the
+            answer names it so the edit's silence is explained."""
+            if not allowed:
+                return _web_auth.configure_refused()
+            name = (name or "").strip().lower()
+            p = providers.get(name)
+            if p is None or p.name != name or name == "generic":
+                return JSONResponse(
+                    {"error": f"unknown provider '{name}'"}, status_code=404
+                )
+            path = str((body or {}).get("path", "") or "").strip()
+            paths = dict(settings_store.load_settings().coding_cli.binary_paths)
+            if path:
+                paths[name] = path
+            else:
+                paths.pop(name, None)
+            # An empty map clears the field outright (update_settings pops "").
+            settings_store.update_settings(coding_cli={"binary_paths": paths or ""})
+            env_var, _env_val = provider_config.env_binary_override(name)
+            warning = _binary_warning(path, True) if path else ""
+            if env_var:
+                warning = (
+                    f"{env_var} is set in the server's environment and wins over "
+                    f"this path. " + warning
+                ).strip()
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "binary_path": path,
+                    "warning": warning,
+                    "status": _provider_status(p, _default_provider_name()),
+                }
+            )
 
         @router.websocket("/providers/{name}/login-terminal")
         async def provider_login_terminal(
@@ -1880,14 +2186,42 @@ class SettingsAddon(Addon):
             err = _provider_body_error(body)
             if err:
                 return JSONResponse({"error": err}, status_code=400)
-            target.write_text(_provider_toml(body), encoding="utf-8")
+            if target.exists():
+                # Patch the user's file: only the keys the form sent change.
+                # Re-rendering from the form used to drop every key it didn't
+                # know (prompt_arg, oneshot_args, effort, [usage], [activity],
+                # [connect], [peer]) — and sync then spread the loss.
+                import tomllib
+
+                text = target.read_text(encoding="utf-8")
+                try:
+                    tomllib.loads(text)
+                except Exception as exc:  # noqa: BLE001 — report, don't guess
+                    return JSONResponse(
+                        {
+                            "error": f"{target.name} does not parse ({exc}) — fix "
+                            "the file by hand before editing it here"
+                        },
+                        status_code=409,
+                    )
+                text = provider_config.patch_toml_tables(text, _provider_updates(body))
+            else:
+                text = _provider_toml(body)
+            target.write_text(text, encoding="utf-8")
             providers.rebuild_registry()
             _stamp_for_sync("store:providers")
             p = providers.get(name)
+            # The launch warning reads the SAVED provider, not just the body:
+            # a patched file keeps a command the form never sent.
+            view = _provider_view(p) if p else None
+            probe = dict(body)
+            if view:
+                probe.setdefault("command", view.get("command", ""))
+                probe.setdefault("binary_path", view.get("binary_path", ""))
             return JSONResponse(
                 {
-                    "provider": _provider_view(p) if p else None,
-                    "warning": _provider_launch_warning(body),
+                    "provider": view,
+                    "warning": _provider_launch_warning(probe),
                 }
             )
 

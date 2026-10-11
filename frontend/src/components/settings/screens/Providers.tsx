@@ -1,37 +1,25 @@
-/** Settings → Agent providers: see which agent CLIs are installed + manage
- * custom ones.
- *
- * Top section is the *connection* view — for every provider (built-in and
- * custom) show whether its CLI is installed and, when missing, a copy-paste
- * install command. Sign-in lives where a missing login is reported — Setup ②
- * and the doctor's agent-auth row offer "Sign in to <agent>" (the CLI's own
- * login in a terminal window; see dialogs/AgentSignIn). It used to be left to
- * each CLI's first session, but it was the last onboarding step that still
- * needed a terminal. Below it, the manager to add / remove custom providers. */
+/** Settings → Agent providers: one row per agent CLI MindFlock knows (built-in
+ * and custom) — installed (with the resolved path), signed in (from the status
+ * API's login evidence) with a **Sign in** button that opens the CLI's own
+ * login in an in-app terminal (dialogs/AgentSignIn), the install command when
+ * the CLI is missing, and a **Binary path** field for every provider that
+ * writes this device's `coding_cli.binary_paths[name]` (never synced: a path
+ * is about this machine). A custom TOML that failed to load is a red row with
+ * the file and the parse error, instead of a provider that silently isn't
+ * there. Below it, the manager to add / edit / remove custom providers; an
+ * edit patches only the fields the form shows, so a hand-written TOML keeps
+ * its other tables. Row shapes are derived in lib/providerRows (unit-tested). */
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
+import type { ProviderStatus, ProvidersStatusResponse } from "../../../api/types";
 import { copyText } from "../../../lib/clipboard";
+import { providerRows, type ProviderRow, type Row } from "../../../lib/providerRows";
 import { toast } from "../../../lib/toast";
 import { refreshProviders } from "../../../state/queries";
+import { AgentSignIn } from "../../dialogs/AgentSignIn";
 import { joinTokens, tokenize } from "../../dialogs/FlagChips";
 import type { ScreenProps } from "../SettingsDialog";
-
-interface ProviderStatus {
-  name: string;
-  aliases?: string[];
-  binary?: string;
-  installed: boolean;
-  path?: string;
-  authenticated: boolean;
-  auth_known: boolean;
-  auth_detail?: string;
-  login_command?: string;
-  install_hint?: string;
-  /** Why a custom provider's CLI can't be resolved (shell alias, bad path). */
-  launch_hint?: string;
-  is_default?: boolean;
-}
 
 interface ManagedProvider {
   name: string;
@@ -72,8 +60,68 @@ function toForm(p: ManagedProvider): Form {
   };
 }
 
+/** This device's binary path for one provider. Saves on blur / Enter when the
+ *  value changed; an emptied field clears the override (PUT with ""). The
+ *  server answers with the row's fresh status, so "installed" flips at once. */
+function BinaryPathField({
+  row,
+  onSaved,
+}: {
+  row: ProviderRow;
+  onSaved(status: ProviderStatus): void;
+}) {
+  const [value, setValue] = useState(row.binaryPath);
+  const [warning, setWarning] = useState("");
+  // A reload (another window saved, the row re-rendered) resets the draft.
+  useEffect(() => setValue(row.binaryPath), [row.binaryPath]);
+
+  const save = async () => {
+    const path = value.trim();
+    if (path === row.binaryPath) return;
+    try {
+      const r = await api<{ warning?: string; status?: ProviderStatus }>(
+        "/api/providers/" + encodeURIComponent(row.name) + "/binary-path",
+        { method: "PUT", json: { path } }
+      );
+      setWarning(r?.warning || "");
+      toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
+      if (r?.status) onSaved(r.status);
+      window.reloadProviderPicker?.();
+      void refreshProviders();
+    } catch (err) {
+      setWarning((err as Error).message || "save failed");
+    }
+  };
+
+  return (
+    <label className="set-row prov-binary-row">
+      <span className="set-label">Binary path</span>
+      <input
+        type="text"
+        className="prov-binary-input"
+        data-provider={row.name}
+        autoComplete="off"
+        placeholder={row.installed ? "on PATH — set to use another build" : "/full/path/to/" + row.name}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+      <span className="set-hint">
+        {row.binaryPinnedBy
+          ? `Pinned by ${row.binaryPinnedBy} in the server's environment, which wins over this field.`
+          : "This device only — never synced to your other devices. Leave empty to use PATH."}
+      </span>
+      {warning && <span className="prov-launch-hint">{warning}</span>}
+    </label>
+  );
+}
+
 export function Providers(_: ScreenProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
+  const [loadErrors, setLoadErrors] = useState<ProvidersStatusResponse["errors"]>([]);
   const [managed, setManaged] = useState<Record<string, ManagedProvider>>({});
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   /** null = the Add form; a name = editing that existing provider (PUT). */
@@ -86,11 +134,12 @@ export function Providers(_: ScreenProps) {
     // server that predates it (not yet restarted) the manage list must still
     // render instead of the whole screen blanking to "add a provider".
     const [s, m] = await Promise.allSettled([
-      api<{ providers?: ProviderStatus[] }>("/api/providers/status"),
+      api<ProvidersStatusResponse>("/api/providers/status"),
       api<{ providers?: ManagedProvider[] }>("/api/providers/manage"),
     ]);
     const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
     setStatuses(statusList);
+    setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
     const byName: Record<string, ManagedProvider> = {};
     if (m.status === "fulfilled") {
       for (const p of m.value?.providers || []) byName[p.name] = p;
@@ -189,35 +238,78 @@ export function Providers(_: ScreenProps) {
     if (await copyText(cmd)) toast("Copied install command");
   };
 
+  /** One row's fresh status (after a binary-path save), in place. */
+  const replaceStatus = (fresh: ProviderStatus) =>
+    setStatuses((list) => list.map((p) => (p.name === fresh.name ? fresh : p)));
+
+  const rows: Row[] = providerRows(statuses, loadErrors);
+
   return (
     <>
       <h3 className="set-section-title">Agent providers</h3>
       <p className="set-hint">
-        Agent CLIs new sessions can launch. Install a CLI to make it available —
-        it'll prompt you to sign in on its own the first time a session opens it.
+        Agent CLIs new sessions can launch. Install a CLI to make it available,
+        then sign in here — or point MindFlock at a build that isn't on PATH.
       </p>
 
       <div className="prov-conn-list">
-        {statuses.map((p) => {
-          const mgr = managed[p.name];
+        {rows.map((row) => {
+          if (row.kind === "error") {
+            // A TOML in the providers dir that didn't load: say which and why,
+            // so the fix is a file edit rather than a hunt for a missing CLI.
+            return (
+              <div className="prov-conn prov-conn-error" key={"error:" + row.file} data-error-file={row.file}>
+                <div className="prov-conn-head">
+                  <span className="prov-name error">{row.file}</span>
+                  <span className="prov-badge prov-badge-src">custom</span>
+                  <span className="prov-dot bad" title="this provider TOML did not load">
+                    failed to load
+                  </span>
+                </div>
+                <p className="error">{row.error}</p>
+              </div>
+            );
+          }
+          const mgr = managed[row.name];
           return (
-            <div className="prov-conn" key={p.name}>
+            <div className="prov-conn" key={row.name} data-provider={row.name}>
               <div className="prov-conn-head">
-                <span className="prov-name">{p.name}</span>
-                {p.is_default && <span className="prov-badge">default</span>}
+                <span className="prov-name">{row.name}</span>
+                {row.isDefault && <span className="prov-badge">default</span>}
                 {mgr?.source && <span className="prov-badge prov-badge-src">{mgr.source}</span>}
                 <span
-                  className={"prov-dot " + (p.installed ? "ok" : "bad")}
-                  title={p.installed ? p.path || "on PATH" : "not found on PATH"}
+                  className={"prov-dot " + (row.installed ? "ok" : "bad")}
+                  title={row.installTitle}
                 >
-                  {p.installed ? "installed" : "not installed"}
+                  {row.installLabel}
                 </span>
+                {row.signInLabel && (
+                  <span
+                    className={
+                      "prov-dot prov-signin " +
+                      (row.signIn === "signed-in" ? "ok" : row.signIn === "not-signed-in" ? "bad" : "unknown")
+                    }
+                    title={row.signInDetail}
+                  >
+                    {row.signInLabel}
+                  </span>
+                )}
               </div>
 
-              {!p.installed && p.install_hint && (
+              {/* Where the CLI was found — the path the launcher will run. */}
+              {row.installed && row.installTitle && (
+                <p className="set-hint prov-path">
+                  <code>{row.installTitle}</code>
+                  {row.signIn === "signed-in" && row.signInDetail && (
+                    <> · signed in: {row.signInDetail}</>
+                  )}
+                </p>
+              )}
+
+              {row.installHint && (
                 <div className="prov-install">
-                  <code>{p.install_hint}</code>
-                  <button type="button" onClick={() => copyInstall(p.install_hint!)}>
+                  <code>{row.installHint}</code>
+                  <button type="button" onClick={() => copyInstall(row.installHint)}>
                     Copy
                   </button>
                 </div>
@@ -225,18 +317,25 @@ export function Providers(_: ScreenProps) {
 
               {/* Why a custom CLI can't be found — usually a shell alias, which
                   the non-interactive launch shell cannot see. */}
-              {!p.installed && p.launch_hint && (
-                <p className="prov-launch-hint">{p.launch_hint}</p>
-              )}
+              {row.launchHint && <p className="prov-launch-hint">{row.launchHint}</p>}
 
-              {mgr?.editable && (
+              <BinaryPathField row={row} onSaved={replaceStatus} />
+
+              {(row.canSignIn || mgr?.editable) && (
                 <div className="prov-conn-actions">
-                  <button type="button" onClick={() => edit(mgr)}>
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => del(p.name)}>
-                    Delete
-                  </button>
+                  {row.canSignIn && (
+                    <AgentSignIn provider={row.name} label="Sign in" onDone={() => void load()} />
+                  )}
+                  {mgr?.editable && (
+                    <>
+                      <button type="button" onClick={() => edit(mgr)}>
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => del(row.name)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

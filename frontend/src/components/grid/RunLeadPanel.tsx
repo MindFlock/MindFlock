@@ -80,7 +80,7 @@ export function RunLeadPanel({
     return (
       <header className="thread-head">
         <h2 className="thread-title">{myName}'s workers</h2>
-        <p className="thread-sub">Loading its group…</p>
+        <p className="thread-sub">Loading its team run…</p>
       </header>
     );
   }
@@ -186,7 +186,7 @@ export function RunLeadPanel({
   const release = (merge: boolean) =>
     act(
       merge ? "merge" : "release",
-      pushOnly ? "Push the branch" : "Open the PR",
+      pushOnly ? "Push the branch" : "Open PR",
       "/release",
       { merge_when_green: merge },
       merge ? "Opening the PR — it merges once checks pass" : pushOnly ? "Pushing the branch" : "Opening the PR",
@@ -243,7 +243,7 @@ export function RunLeadPanel({
                 " — no piece's commit takes them; commit or discard them yourself."
               : ""}
             {run.stray?.commits?.length
-              ? " A commit no piece made is on the group's branch (" +
+              ? " A commit no piece made is on the team run's branch (" +
                 run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") +
                 ") — it ships with the PR unless you undo it."
               : ""}
@@ -255,7 +255,7 @@ export function RunLeadPanel({
               type="button"
               className="th-btn rb-copy-summary"
               disabled={!summary}
-              title={summary ? "Copy what this group did, as Markdown" : "MindFlock has no summary for this group"}
+              title={summary ? "Copy what this team run did, as Markdown" : "MindFlock has no summary for this team run"}
               onClick={async () => {
                 if (!summary) return;
                 toast((await copyText(summary)) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
@@ -586,7 +586,7 @@ export function RunLeadPanel({
                           type="button"
                           className="th-btn rb-remove"
                           disabled={!!busy}
-                          title="Take it out of the group — it never starts"
+                          title="Take it out of the team run — it never starts"
                           onClick={() => pieceAct(t, "skip")}
                         >
                           Remove

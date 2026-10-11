@@ -46,6 +46,7 @@ _ISSUE_FIELDS = """
   createdAt
   assignee { id name }
   state { id name team { key } }
+  labels(first: 50) { nodes { name } }
   comments(first: 50) { nodes { body user { name } createdAt } }
   attachments(first: 50) { nodes { url title } }
 """
@@ -194,6 +195,11 @@ class LinearProvider(TicketProvider):
             source_label=self.label,
             state=_state_label(issue.get("state")),
             state_id=str((issue.get("state") or {}).get("id") or ""),
+            labels=[
+                str(n.get("name"))
+                for n in (issue.get("labels") or {}).get("nodes") or []
+                if isinstance(n, dict) and n.get("name")
+            ],
         )
 
     async def _assigned(self, since: datetime, *, with_state: bool) -> list[Ticket]:
@@ -323,6 +329,100 @@ class LinearProvider(TicketProvider):
             raise ProviderError(f"Linear issue {ticket_id} not found")
         return issue
 
+    # --- claim mirror (tracker_claims) -------------------------------- #
+
+    can_claim = True
+
+    async def _update(self, ticket_id: str, fields: str, variables: dict, what: str):
+        data = await self._gql(
+            "mutation($id: String!%s) { issueUpdate(id: $id, input: { %s })"
+            " { success } }"
+            % (
+                "".join(", $%s: %s" % (k, t) for k, (t, _v) in variables.items()),
+                fields,
+            ),
+            {"id": ticket_id, **{k: v for k, (_t, v) in variables.items()}},
+        )
+        if not ((data.get("issueUpdate") or {}).get("success")):
+            raise ProviderError(f"Linear would not {what} issue {ticket_id}")
+
+    async def assign_to(self, ticket_id: str, member: str) -> None:
+        """Linear issues have ONE assignee: set it to ``member`` (a user id)."""
+        member = (member or "").strip()
+        if not member:
+            raise ProviderError("no Linear user to assign")
+        await self._update(
+            ticket_id, "assigneeId: $a", {"a": ("String!", member)}, "assign"
+        )
+
+    async def _issue_labels(self, ticket_id: str) -> dict:
+        data = await self._gql(
+            "query($id: String!) { issue(id: $id) { id team { id }"
+            " labels(first: 100) { nodes { id name } } } }",
+            {"id": ticket_id},
+        )
+        issue = data.get("issue")
+        if not issue or not issue.get("id"):
+            raise ProviderError(f"Linear issue {ticket_id} not found")
+        return issue
+
+    async def add_label(self, ticket_id: str, label: str) -> None:
+        """Labels are objects in Linear: find the label by name (workspace or
+        the issue's team), create it on the team when there is none, then add
+        it by id (``addedLabelIds`` keeps the issue's other labels)."""
+        issue = await self._issue_labels(ticket_id)
+        low = label.casefold()
+        for n in (issue.get("labels") or {}).get("nodes") or []:
+            if str(n.get("name") or "").casefold() == low:
+                return
+        team = str((issue.get("team") or {}).get("id") or "")
+        found = await self._gql(
+            "query($name: String!) { issueLabels(first: 20, filter:"
+            " { name: { eqIgnoreCase: $name } }) { nodes { id team { id } } } }",
+            {"name": label},
+        )
+        nodes = ((found.get("issueLabels") or {}).get("nodes")) or []
+        # A team label is only usable on its own team's issues.
+        usable = [
+            n
+            for n in nodes
+            if not (n.get("team") or {}).get("id")
+            or str((n.get("team") or {}).get("id")) == team
+        ]
+        if usable:
+            label_id = str(usable[0].get("id") or "")
+        else:
+            made = await self._gql(
+                "mutation($name: String!, $team: String) { issueLabelCreate("
+                "input: { name: $name, teamId: $team }) { success issueLabel { id } } }",
+                {"name": label, "team": team or None},
+            )
+            label_id = str(
+                (((made.get("issueLabelCreate") or {}).get("issueLabel")) or {}).get(
+                    "id"
+                )
+                or ""
+            )
+        if not label_id:
+            raise ProviderError(f"Linear would not create the label {label!r}")
+        await self._update(
+            issue["id"], "addedLabelIds: $l", {"l": ("[String!]", [label_id])}, "label"
+        )
+
+    async def remove_label(self, ticket_id: str, label: str) -> None:
+        issue = await self._issue_labels(ticket_id)
+        low = label.casefold()
+        ids = [
+            str(n.get("id"))
+            for n in (issue.get("labels") or {}).get("nodes") or []
+            if str(n.get("name") or "").casefold() == low and n.get("id")
+        ]
+        if not ids:
+            return
+        await self._update(
+            issue["id"], "removedLabelIds: $l", {"l": ("[String!]", ids)}, "unlabel"
+        )
+
     async def append_description(self, ticket_id: str, addition: str) -> None:
         issue = await self._resolve(ticket_id)
         data = await self._gql(
@@ -414,8 +514,9 @@ class LinearProvider(TicketProvider):
 
         Linear has no workspace-level issue: every issue belongs to a team, and
         the id is not something a person has ever seen — they know the KEY
-        (``ENG``), which is what this source's ``project`` field holds and what
-        :meth:`_assigned` already filters by. So the key is translated here.
+        (``ENG``), which is what this source's ``project`` field (labelled
+        "Team key" on the card) holds and what :meth:`_assigned` already
+        filters by. So the key is translated here.
 
         A source that names no team is not an error when there is only one team
         to mean: a single-team workspace is the common small setup, and refusing
@@ -434,7 +535,7 @@ class LinearProvider(TicketProvider):
             if not nodes:
                 raise ProviderError(
                     f"Linear has no team with the key {key!r} — this source's "
-                    "Project field is the team key a new issue is filed under."
+                    "Team key field is the team a new issue is filed under."
                 )
             return str(nodes[0].get("id") or "")
         data = await self._gql("query { teams(first: 2) { nodes { id key } } }", {})
@@ -445,8 +546,8 @@ class LinearProvider(TicketProvider):
             raise ProviderError("This Linear account can see no teams to file into.")
         raise ProviderError(
             "This Linear workspace has more than one team, so MindFlock cannot "
-            "guess which one to file into — set this source's Project field to "
-            "the team key (e.g. ENG)."
+            "guess which one to file into — set this source's Team key field "
+            "(e.g. ENG)."
         )
 
     async def create_ticket(self, name: str, description: str) -> Ticket:

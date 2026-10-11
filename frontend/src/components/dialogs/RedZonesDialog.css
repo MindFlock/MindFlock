@@ -271,3 +271,42 @@
   flex: 1 1 200px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
+
+/* Shared with the repo (committed): .mindflock/zones.toml in a worktree. */
+.rzd-shared {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.rzd-shared-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rzd-shared-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.rzd-shared-where,
+.rzd-zone-author {
+  font-size: 11.5px;
+}
+
+.rzd-share {
+  flex: none;
+  font-size: 11.5px;
+  padding: 1px 8px;
+}
+
+.rzd-chip.rzd-in-repo {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}

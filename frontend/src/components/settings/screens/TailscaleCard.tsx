@@ -1,4 +1,4 @@
-/** "Tailscale on this device": the top of Settings → Devices (and the Mobile
+/** "Tailscale on this device": the top of Settings → Your devices (and the Mobile
  * screen's no-Tailscale state). Everything here is GET /api/tailscale/health
  * (backend/tailscale_cli.py) — signed in as whom, to which tailnet, as which
  * device, and each problem with its one fix, worst first — plus the one
