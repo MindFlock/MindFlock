@@ -3155,7 +3155,14 @@ A few screens got quieter:
 - **Advanced → Version & updates** — one section with two transports, picked by
   which one can actually do the work. Inside the Electron shell `window.mfengine`
   owns it (`engine:update-info` / `engine:install`): the shell can install while
-  nothing of *its* own is being replaced. In any other browser — one on the
+  nothing of *its* own is being replaced. There the section also carries
+  **Install updates automatically** (on by default): releases install
+  themselves once you've been away 10 minutes (or locked the screen) and no
+  agent is mid-turn, honouring "Skip this version" — see
+  [electron/README.md](../electron/README.md#automatic-updates). A shell
+  **running from source** (the dev shell, or any unpackaged run) shows no
+  shell updater at all: a one-line *running from source — update the checkout
+  with git* note under the engine's own view. In any other browser — one on the
   tailnet, a second machine — the shell object is absent and the **server
   updates itself** over `/api/update/*` (see
   [web-api.md](web-api.md#engine-updates)). The version line reads *This engine

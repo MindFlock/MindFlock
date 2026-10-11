@@ -77098,6 +77098,18 @@ function SystemLogs({ onOpenSysLogsPane }) {
 	] });
 }
 //#endregion
+//#region src/lib/shellUpdate.ts
+function shellUpdateMode(info) {
+	return info?.source ? "source" : "shell";
+}
+function showAutoUpdateSwitch(info) {
+	return !info?.source && typeof info?.autoUpdate === "boolean";
+}
+var SOURCE_RUN_NOTE = "This desktop app is running from source (a dev run), so it never updates itself — update the checkout with git. Nothing here offers or installs a release.";
+function autoUpdateHint(on) {
+	return on ? "New releases download in the background and install themselves once you’ve been away for 10 minutes (or the screen is locked) and no agent is mid-turn — waiting at most 2 hours for that. The app restarts onto the new version and says what it updated. “Skip this version” is still honoured." : "Updates are only offered: the toast’s Update button (or the one below) installs them when you choose.";
+}
+//#endregion
 //#region src/components/settings/screens/Advanced.tsx
 function onWindows() {
 	if (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent || "")) return true;
@@ -77438,6 +77450,7 @@ function ServerEngineUpdate() {
 }
 function ShellEngineUpdate() {
 	const mfengine = window.mfengine;
+	const mfupdate = window.mfupdate;
 	const [info, setInfo] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [run, setRun] = (0, import_react.useState)(null);
@@ -77452,6 +77465,22 @@ function ShellEngineUpdate() {
 		};
 	}, [mfengine]);
 	if (!mfengine?.updateInfo) return null;
+	if (shellUpdateMode(info) === "source") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ServerEngineUpdate, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		id: "upd-source",
+		children: SOURCE_RUN_NOTE
+	})] });
+	const auto = info?.autoUpdate !== false;
+	const setAuto = (on) => {
+		setInfo((i) => ({
+			...i || {},
+			autoUpdate: on
+		}));
+		mfupdate?.setAuto?.(on).then((r) => setInfo((i) => ({
+			...i || {},
+			autoUpdate: r?.autoUpdate !== false
+		}))).catch(() => {});
+	};
 	const update = () => {
 		if (busy || !mfengine.install) return;
 		setBusy(true);
@@ -77479,6 +77508,25 @@ function ShellEngineUpdate() {
 			className: "set-section-title",
 			children: "Engine updates"
 		}),
+		showAutoUpdateSwitch(info) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Install updates automatically"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "upd-auto",
+					checked: auto,
+					disabled: !mfupdate?.setAuto,
+					onChange: (e) => setAuto(e.target.checked)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: autoUpdateHint(auto)
+		})] }),
 		info?.skew && !info?.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			id: "upd-skew",

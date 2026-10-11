@@ -6,6 +6,13 @@ import { SettingField, useSettings } from "../useSettings";
 import { useServerRestart } from "../useServerRestart";
 import { api } from "../../../api/client";
 import type { ScreenProps } from "../SettingsDialog";
+import {
+  autoUpdateHint,
+  shellUpdateMode,
+  showAutoUpdateSwitch,
+  SOURCE_RUN_NOTE,
+  type ShellUpdateFlags,
+} from "../../../lib/shellUpdate";
 
 /** Whether this viewer is on Windows: a Windows browser (the UA says so even
  * when the server runs inside WSL), or the desktop shell on win32 — read off
@@ -402,8 +409,9 @@ function ServerEngineUpdate() {
  * (`engine:install-state` → {state, step, message, code, lines}), so a
  * finished install can never leave the button on "Updating…". */
 // `checked` comes from shells that report whether the check succeeded; older
-// shells omit it, and keep the old wording.
-type EngineInfo = {
+// shells omit it, and keep the old wording. `source` / `autoUpdate`: see
+// lib/shellUpdate.
+type EngineInfo = ShellUpdateFlags & {
   available?: boolean;
   checked?: boolean;
   current?: string;
@@ -424,6 +432,9 @@ function ShellEngineUpdate() {
       };
     }
   ).mfengine;
+  const mfupdate = (
+    window as unknown as { mfupdate?: { setAuto?: (on: boolean) => Promise<{ autoUpdate?: boolean }> } }
+  ).mfupdate;
   const [info, setInfo] = useState<EngineInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [run, setRun] = useState<EngineRun | null>(null);
@@ -440,6 +451,30 @@ function ShellEngineUpdate() {
   }, [mfengine]);
 
   if (!mfengine?.updateInfo) return null; // web build / not the desktop shell
+
+  // A run from source (dev shell / unpackaged): nothing to offer from the
+  // shell — no app update can apply to a checkout, and its button would only
+  // open a download page. The engine's own view still shows what the server
+  // is and, for an editable engine, the git commands that update it.
+  if (shellUpdateMode(info) === "source") {
+    return (
+      <>
+        <ServerEngineUpdate />
+        <p className="set-hint" id="upd-source">
+          {SOURCE_RUN_NOTE}
+        </p>
+      </>
+    );
+  }
+
+  const auto = info?.autoUpdate !== false;
+  const setAuto = (on: boolean) => {
+    setInfo((i) => ({ ...(i || {}), autoUpdate: on }));
+    mfupdate
+      ?.setAuto?.(on)
+      .then((r) => setInfo((i) => ({ ...(i || {}), autoUpdate: r?.autoUpdate !== false })))
+      .catch(() => {});
+  };
 
   const update = () => {
     if (busy || !mfengine.install) return;
@@ -471,6 +506,24 @@ function ShellEngineUpdate() {
   return (
     <>
       <h3 className="set-section-title">Engine updates</h3>
+      {showAutoUpdateSwitch(info) && (
+        <>
+          <div className="set-row set-switch-row">
+            <span className="set-label">Install updates automatically</span>
+            <label className="ca-switch">
+              <input
+                type="checkbox"
+                id="upd-auto"
+                checked={auto}
+                disabled={!mfupdate?.setAuto}
+                onChange={(e) => setAuto(e.target.checked)}
+              />
+              <span className="ca-slider" />
+            </label>
+          </div>
+          <p className="set-hint">{autoUpdateHint(auto)}</p>
+        </>
+      )}
       {info?.skew && !info?.available ? (
         <p className="set-hint" id="upd-skew">
           {info.skew}

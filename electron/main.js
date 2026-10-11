@@ -10,7 +10,7 @@
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
 // that is hand-rolled (which is what fought us under WSLg/Wayland).
 
-const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification, clipboard } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification, clipboard, powerMonitor } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
@@ -51,6 +51,16 @@ const DEV_AUMID = 'ai.mindflock.desktop.dev'
 // What Windows should PRINT above a dev notification: prod's product name with
 // the suffix this build already wears everywhere else. See ensureDevToastName().
 const DEV_TOAST_NAME = 'MindFlock-dev'
+// A run from SOURCE: the dev shell, or any unpackaged `electron .` run (what
+// the dev launcher starts on Windows: electron.exe "\\wsl.localhost\…\electron"
+// --mindflock-dev). Such a shell is a git checkout, not a release build: it
+// can't swap itself (electron-updater needs an installed app), and a release
+// download would replace the checkout rather than update it. So it never
+// offers, announces or auto-installs an app update, and never offers the
+// engine one either (the engine beside it is the developer's own) — Settings
+// → Advanced says "running from source — update with git" instead. Checks
+// are logged as skipped, not silently absent.
+const SOURCE_RUN = DEV || !app.isPackaged
 if (DEV) {
   app.setAppUserModelId(DEV_AUMID) // own taskbar group + icon
   try {
@@ -1325,7 +1335,9 @@ const UPDATE_RELEASES_URL = 'https://github.com/' + UPDATE_REPO + '/releases/lat
 // interval so a long-lived app still learns about releases without nagging.
 const UPDATE_FIRST_DELAY_MS = 20 * 1000
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000     // 6h
-// Where "skip this version" is remembered across restarts.
+// Where "skip this version", the automatic-updates switch and the "what just
+// got updated" record are remembered across restarts (and across the swap: an
+// app update keeps userData).
 const updateStorePath = () => path.join(app.getPath('userData'), 'update-state.json')
 
 let updateAvailable = null   // { version, url, notes } once a newer release is seen
@@ -1335,9 +1347,17 @@ function readUpdateStore() {
   try { return JSON.parse(fs.readFileSync(updateStorePath(), 'utf8')) || {} }
   catch (e) { return {} }
 }
-function writeUpdateStore(obj) {
-  try { fs.writeFileSync(updateStorePath(), JSON.stringify(obj)) } catch (e) {}
+// MERGES `patch` into the stored object (a key set to undefined is dropped):
+// the store holds several independent things now, and writing just one of
+// them must not wipe the others (Skip used to write `{ skippedVersion }`
+// whole).
+function writeUpdateStore(patch) {
+  const next = Object.assign({}, readUpdateStore(), patch || {})
+  try { fs.writeFileSync(updateStorePath(), JSON.stringify(next)) } catch (e) {}
 }
+// Automatic updates: ON unless the person turned them off (an absent key is
+// the default, so every existing install gets them).
+function autoUpdateEnabled() { return readUpdateStore().autoUpdate !== false }
 
 // Compare dotted numeric versions. >0 if a newer than b, <0 older, 0 equal.
 // Lives in electron/update.js (pure, node --test'able) with the skew verdict.
@@ -1376,7 +1396,7 @@ function fetchLatestRelease() {
 
 // The pending update to show, or null (nothing newer, or the user skipped it).
 function pendingUpdate() {
-  if (!updateAvailable) return null
+  if (SOURCE_RUN || !updateAvailable) return null
   if (updateAvailable.version === skippedVersion) return null
   return updateAvailable
 }
@@ -1388,6 +1408,8 @@ function updatePayload() {
   if (!p) return null
   return Object.assign({}, p, {
     auto: appUpd.state,
+    // The toast says it will install itself (see autoUpdateTick) when it can.
+    autoInstall: autoUpdateEnabled() && !!autoUpdater && appUpd.state !== 'error',
     skew: engineSkew && engineSkew.appUpdate ? engineSkew.message : '',
   })
 }
@@ -1400,6 +1422,7 @@ function pushUpdateToRenderer() {
 }
 
 async function checkForUpdates() {
+  if (SOURCE_RUN) return               // a git checkout: no app toast, no OS notice
   const rel = await fetchLatestRelease()
   if (!rel || !rel.tag_name) return
   const latest = String(rel.tag_name).replace(/^v/i, '').trim()
@@ -1423,7 +1446,22 @@ async function checkForUpdates() {
 }
 
 function startUpdateChecks() {
-  skippedVersion = readUpdateStore().skippedVersion || ''
+  if (SOURCE_RUN) {
+    // No release checks at all: there is nothing a release could do for a
+    // checkout. Logged so "why no update toast?" has an answer in main.log.
+    console.log('[mindflock] running from source (' + (DEV ? 'dev shell' : 'unpackaged') +
+      ') — update checks off; update this checkout with git')
+    return
+  }
+  const store = readUpdateStore()
+  skippedVersion = store.skippedVersion || ''
+  // The relaunch after an update (or the engine-only run's own record): say
+  // once what happened. updatedNotice drops a swap that didn't land.
+  if (store.updated) {
+    updatedNote = upd.updatedNotice(store.updated, app.getVersion())
+    writeUpdateStore({ updated: undefined })
+    console.log('[mindflock] last update:', updatedNote ? updatedNote.message : 'did not land (' + store.updated.to + ')')
+  }
   initAutoUpdater()
   const tick = () => {
     checkForUpdates().catch(() => {})     // a newer release? (drives the toast)
@@ -1432,6 +1470,7 @@ function startUpdateChecks() {
   }
   setTimeout(tick, UPDATE_FIRST_DELAY_MS)
   setInterval(tick, UPDATE_INTERVAL_MS)
+  setInterval(() => { autoUpdateTick().catch(() => {}) }, AUTO_TICK_MS)
 }
 
 // ---------------------------------------------------------------------------
@@ -1457,7 +1496,8 @@ function startUpdateChecks() {
 // ONE path: the app toast's Update, the engine toast's Update engine and the
 // Settings → Advanced button all call updateEverything({engine, app}) and
 // poll the same run state (engineRunState) — there is no second installer
-// call site to drift from it.
+// call site to drift from it. Automatic updates (autoUpdateTick, below) are
+// that same call with `auto: true`, made for the person while they're away.
 let autoUpdater = null
 // state: off | idle | downloading | ready | error
 let appUpd = { state: 'off', version: '', percent: 0, error: '' }
@@ -1473,8 +1513,9 @@ function initAutoUpdater() {
     return
   }
   autoUpdater.autoDownload = true
-  // Never swap the app on a plain quit: the engine has to move with it, which
-  // only the button does.
+  // Never swap the app on a plain quit: the engine has to move with it (and
+  // first), which only updateEverything does — the button, or the automatic
+  // run while the person is away (autoUpdateTick). Quitting stays instant.
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.logger = {
     info: (m) => console.log('[updater]', m),
@@ -1525,7 +1566,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // (uv tool) is touched: a developer's checkout (MINDFLOCK_REPO, or the engine
 // reporting `editable`) and anything we can't identify are left alone.
 async function enginePlan(target) {
-  if (WSL_REPO) return { needed: false, why: 'developer checkout (MINDFLOCK_REPO)' }
+  if (WSL_REPO) return { needed: false, dev: true, why: 'developer checkout (MINDFLOCK_REPO)' }
   const current = await localEngineVersion()
   if (!current || !target) return { needed: false, why: 'engine version unknown' }
   if (cmpVersion(target, current) < 0) {
@@ -1540,7 +1581,7 @@ async function enginePlan(target) {
   // installed (install.json); an editable checkout or an unknown install is
   // left alone.
   if (kind && kind !== 'uv-tool' && kind !== 'pipx') {
-    return { needed: false, why: 'engine is a ' + kind + ' install — update it yourself' }
+    return { needed: false, dev: kind === 'editable', why: 'engine is a ' + kind + ' install — update it yourself' }
   }
   if (!kind) return { needed: false, why: "couldn't confirm the engine is a release install" }
   return { needed: true, current, ref: 'v' + target }
@@ -1561,8 +1602,14 @@ async function waitForEngine(target, timeoutMs) {
 // `opts.engine` / `opts.app` (default both): which halves this click may
 // touch. Each half still only runs when it is actually behind.
 async function updateEverything(opts) {
-  const want = Object.assign({ engine: true, app: true }, opts || {})
+  const want = Object.assign({ engine: true, app: true, auto: false }, opts || {})
   if (updateRun.state === 'running') return updateRun
+  if (SOURCE_RUN) {
+    // No button reaches here from a source run (nothing offers one), but a
+    // stale page could still call it: never install a release over a checkout.
+    updateRun = { state: 'idle', step: 'manual', message: 'Running from source \u2014 update this checkout with git.' }
+    return updateRun
+  }
   updateRun = { state: 'running', step: 'engine', message: 'Checking the engine…' }
   try {
     const target = (appUpd.version || (updateAvailable && updateAvailable.version)
@@ -1585,6 +1632,9 @@ async function updateEverything(opts) {
       engineUpdated = true
     } else {
       console.log('[mindflock] engine step skipped:', plan.why)
+      // A developer's engine: nothing here will ever update it, so stop
+      // offering to (the engine toast, Settings, the automatic run).
+      if (plan.dev) { engineNotice = null; engineIsDev = true }
     }
 
     const appNewer = want.app && (
@@ -1607,12 +1657,21 @@ async function updateEverything(opts) {
       // engine just installed.
       if (engineUpdated) await stopEngineServer()
       else await sleep(300)
+      // The relaunched app reads this back and says once what happened.
+      writeUpdateStore({ updated: { kind: 'app', to: appUpd.version, from: app.getVersion(), auto: !!want.auto } })
       autoUpdater.quitAndInstall(true, true)   // silent install, relaunch after
       return updateRun
     }
     if (appNewer) {
       // The app can't swap itself here — finish the engine, then the page.
+      // Never a browser tab nobody asked for: an automatic run only starts
+      // with the download 'ready' (upd.autoUpdateVerdict), so landing here
+      // means the swap fell through — leave the page to the toast's button.
       if (engineUpdated) await restartServer()
+      if (want.auto) {
+        updateRun = { state: 'idle', step: 'manual', message: 'The app update couldn\u2019t install itself \u2014 use the Update button.' }
+        return updateRun
+      }
       shell.openExternal((updateAvailable && updateAvailable.url) || UPDATE_RELEASES_URL).catch(() => {})
       updateRun = {
         state: 'idle', step: 'manual',
@@ -1629,6 +1688,7 @@ async function updateEverything(opts) {
       updateRun = { state: 'running', step: 'restart', message: 'Restarting the engine…' }
       await restartServer()
       const v = await waitForEngine(target, 90 * 1000)
+      if (v) setUpdatedNote(upd.updatedNotice({ kind: 'engine', to: v, auto: !!want.auto }, app.getVersion()))
       updateRun = v
         ? { state: 'idle', step: 'done', message: 'Engine ' + v + ' is running.' }
         : {
@@ -1658,6 +1718,117 @@ ipcMain.on('update:skip', (_e, version) => {
   skippedVersion = String(version || (updateAvailable && updateAvailable.version) || '')
   writeUpdateStore({ skippedVersion })
 })
+// Settings → Advanced's "Install updates automatically" switch.
+ipcMain.handle('update:set-auto', (_e, on) => {
+  writeUpdateStore({ autoUpdate: !!on })
+  console.log('[mindflock] automatic updates', on ? 'on' : 'off')
+  autoVerdictLogged = ''               // the next tick logs its verdict afresh
+  return { autoUpdate: autoUpdateEnabled() }
+})
+// The "Updated to X" note, taken ONCE: the page that shows it consumes it.
+ipcMain.handle('update:done', () => { const n = updatedNote; updatedNote = null; return n })
+
+// ---------------------------------------------------------------------------
+// Automatic updates: the same updateEverything() the button runs, started by
+// the shell itself when it can't interrupt anyone.
+//
+// Why "when away", and not "on quit": electron-updater's autoInstallOnAppQuit
+// stays false (see initAutoUpdater) because the engine has to move WITH the
+// app, before it — an engine install is a multi-second-to-minutes shell run
+// inside WSL/the user's home that a quitting app can't reliably wait for, and
+// quitting the app must stay instant. Installing at an arbitrary moment isn't
+// acceptable either: the swap relaunches the window, and the engine restart
+// drops every open terminal stream for a few seconds.
+//
+// So once a minute autoUpdateTick asks upd.autoUpdateVerdict (pure, pinned in
+// electron/test/update.test.js) whether to go now: something is ready (the
+// app release fully downloaded, or — app current — an engine behind the
+// newest release); not skipped, not off, not a source run; the person has
+// been away ≥ 10 min (system idle, or the screen locked; for an engine-only
+// update a minimized/hidden window counts too, since nothing relaunches);
+// and no agent turn on this machine is 'working' — waiting at most 2 h for
+// that, so an overnight loop can't hold every update off forever. Each
+// version is attempted at most once per run of the app; a failed run leaves
+// the toast and Settings → Advanced to the person. After it lands, the next
+// page load says "Updated … to X while you were away" once (updatedNote).
+const AUTO_TICK_MS = 60 * 1000
+let updatedNote = null       // { version, auto, message } until a page takes it
+let autoTried = []           // versions auto-attempted this run of the app
+let autoWaitSince = 0        // when 'working' sessions first held off an update
+let autoHiddenSince = 0      // when the window was first seen minimized/hidden
+let autoVerdictLogged = ''   // last verdict logged (log changes, not every minute)
+let autoTicking = false
+
+function setUpdatedNote(n) {
+  updatedNote = n
+  if (!n) return
+  console.log('[mindflock]', n.message)
+  // The page already loaded (the engine-only run reloads it before the new
+  // server answers): tell it there's a note to take. A page that isn't the
+  // app ignores this and the next app load takes it instead.
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('update:done-ready')
+}
+
+// What the person is doing, from the OS: seconds since the last input
+// anywhere, and whether the screen is locked. powerMonitor is main-process
+// only and needs app 'ready' (the tick starts after it). Some Linux sessions
+// (Wayland without the idle protocol) always report 0 — never "away", which
+// is the safe failure: the toast still offers the update.
+function systemIdle() {
+  try {
+    const idleSec = powerMonitor.getSystemIdleTime()
+    const locked = powerMonitor.getSystemIdleState(upd.AUTO_IDLE_SEC) === 'locked'
+    return { idleSec, locked }
+  } catch (e) { return { idleSec: 0, locked: false } }
+}
+
+// This machine's sessions with an agent turn running, or null (server down,
+// or the token-gated read refused). Only asked once everything else says go.
+async function workingSessions() {
+  const token = await readEngineToken().catch(() => '')
+  return upd.workingCount(await fetchLocalJSON('/api/instances', 8000, token))
+}
+
+async function autoUpdateTick() {
+  if (autoTicking || SOURCE_RUN) return
+  autoTicking = true
+  try {
+    const now = Date.now()
+    const hidden = !!(win && !win.isDestroyed() && (win.isMinimized() || !win.isVisible()))
+    autoHiddenSince = hidden ? (autoHiddenSince || now) : 0
+    const st = Object.assign({
+      source: SOURCE_RUN,
+      enabled: autoUpdateEnabled(),
+      running: updateRun.state === 'running' || install.state === 'running',
+      appCurrent: app.getVersion(),
+      appState: appUpd.state,
+      appVersion: appUpd.version,
+      release: updateAvailable ? updateAvailable.version : '',
+      engineCurrent: engineNotice ? engineNotice.current : '',
+      engineLatest: engineNotice ? engineNotice.latest : '',
+      skipped: skippedVersion,
+      tried: autoTried,
+      hiddenSec: autoHiddenSince ? (now - autoHiddenSince) / 1000 : 0,
+      working: 0,
+      waitedMs: autoWaitSince ? now - autoWaitSince : 0,
+    }, systemIdle())
+    let v = upd.autoUpdateVerdict(st)
+    // Everything else says go: only now pay for the sessions read.
+    if (v.go) v = upd.autoUpdateVerdict(Object.assign(st, { working: await workingSessions() }))
+    autoWaitSince = v.wait ? (autoWaitSince || now) : 0
+    const line = v.why + (v.version ? ' (' + v.kind + ' ' + v.version + ')' : '')
+    if (line !== autoVerdictLogged) {
+      autoVerdictLogged = line
+      console.log('[mindflock] auto-update:', v.go ? 'installing now —' : 'not now —', line)
+    }
+    if (!v.go) return
+    autoTried.push(v.version)
+    const run = await updateEverything({ engine: true, app: v.kind === 'app', auto: true })
+    console.log('[mindflock] auto-update finished:', run.state, run.step, run.message)
+  } finally {
+    autoTicking = false
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Engine / app version drift.
@@ -1690,6 +1861,9 @@ let engineSkew = null        // { kind: 'skew', engine, app, appUpdate, message 
 // What the last check actually learned, so Settings can tell "up to date"
 // apart from "couldn't tell" (which it used to report as up to date).
 let engineCheck = { checked: false, current: '' }
+// The engine is a developer checkout (enginePlan's `dev`): true / false once
+// known, null until then. See checkEngineVersion.
+let engineIsDev = null
 
 // GET a JSON document from the local server, or null on ANY failure. Never
 // throws: an engine check must never be able to break app startup.
@@ -1740,7 +1914,7 @@ async function checkEngineVersion() {
   // release can drop mid-session, and a re-check after an update clears the
   // notice. Every failure path is silent — an engine check must never break
   // startup, and "offline / no release / server booting" simply tries later.
-  if (!app.isPackaged) return          // dev: Electron's own version is noise
+  if (SOURCE_RUN) return               // dev: Electron's own version is noise
   // The PUBLIC identity ping first: with the access-token gate on (Tailscale
   // mode) /api/doctor 401s this tokenless request, and every check silently
   // ended in "up to date". /api/doctor stays as the fallback for engines that
@@ -1771,6 +1945,20 @@ async function checkEngineVersion() {
     engineNotice = null                // up to date (or couldn't tell) — no nag
     return
   }
+  // A developer's engine (MINDFLOCK_REPO, or an editable install) is never
+  // offered an update nothing here can do — the button would only say
+  // "update it yourself". Asked once per run of the app (enginePlan reads
+  // /api/update/check with the token), and only once an update exists.
+  if (engineIsDev == null) {
+    const plan = await enginePlan(latest)
+    if (plan.dev) engineIsDev = true
+    else if (plan.needed) engineIsDev = false
+  }
+  if (engineIsDev) {
+    engineNotice = null
+    console.log('[mindflock] engine', current, '< release', latest, '— a developer checkout, not offered')
+    return
+  }
   engineNotice = { current, latest, ref: 'v' + latest }
   console.log('[mindflock] engine update available:', current, '->', latest)
   pushEngineNotice()
@@ -1795,7 +1983,10 @@ ipcMain.handle('engine:update-info', () => Object.assign(
     ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
     : { available: false, checked: engineCheck.checked, current: engineCheck.current },
   // The app-update toast is the one button when the app is behind too.
-  { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' }
+  { appUpdate: !!pendingUpdate(), skew: engineSkew ? engineSkew.message : '' },
+  // A run from source: Settings says "update with git" instead of a button.
+  // Otherwise the automatic-updates switch (on unless turned off).
+  SOURCE_RUN ? { source: true } : { autoUpdate: autoUpdateEnabled() }
 ))
 // The engine toast and Settings → Advanced: the SAME run as the app toast's
 // Update (engine first, then the app if one is downloaded), so an engine-only
@@ -1819,7 +2010,7 @@ const UPDATE_CSS = `
   align-items: flex-end; pointer-events: none;
 }
 #mf-toast-stack > * { pointer-events: auto; }
-#mf-update-toast, #mf-engine-toast, #mf-skew-note {
+#mf-update-toast, #mf-engine-toast, #mf-skew-note, #mf-done-note {
   position: relative;
   width: 300px; max-width: calc(100vw - 36px);
   background: #171b24; color: #d7dae3;
@@ -1830,8 +2021,10 @@ const UPDATE_CSS = `
 }
 /* Drift is a "your install is inconsistent" state, not a new-release nudge. */
 #mf-engine-toast, #mf-skew-note { border-left: 3px solid #d6a53c; }
-#mf-skew-note { padding-right: 34px; }
-#mf-skew-note .mf-up-body { margin-bottom: 0; }
+#mf-skew-note, #mf-done-note { padding-right: 34px; }
+#mf-skew-note .mf-up-body, #mf-done-note .mf-up-body { margin-bottom: 0; }
+/* "Updated to X" after an update (automatic or not): done, nothing to click. */
+#mf-done-note { border-left: 3px solid #3fb27f; }
 #mf-engine-toast .mf-up-title { color: #e2b658; }
 #mf-engine-toast .mf-up-log {
   margin: 0 0 10px; padding: 8px 10px; max-height: 120px; overflow-y: auto;
@@ -1952,8 +2145,20 @@ const UPDATE_JS = `
       + 'MindFlock ' + info.version + ' is available'
       + (info.current && info.current !== info.version
           ? ' \\u2014 you\\u2019re on ' + info.current : '')
-      + '. Update installs it and restarts — the engine too.'));
+      + '. Update installs it and restarts — the engine too.'
+      + (info.autoInstall ? ' Or leave it: it installs itself once you\u2019ve been away for a while.' : '')));
     c.appendChild(status); c.appendChild(row); c.appendChild(skip);
+  }
+
+  // --- what the last update did ("Updated MindFlock to 0.8.1") -------------
+  // Taken once from main (update:done hands it out a single time), and only
+  // by the app itself — not the offline page shown while the engine restarts,
+  // which would swallow it a second before the app replaces it.
+  function showDone(note) {
+    if (!note || !note.message) return;
+    var c = card('mf-done-note');
+    c.appendChild(closeBtn(c));
+    c.appendChild(el('div', 'mf-up-body', note.message));
   }
 
   // --- engine update available -------------------------------------------
@@ -2026,6 +2231,11 @@ const UPDATE_JS = `
   if (window.mfupdate) {
     window.mfupdate.onAvailable(show);
     window.mfupdate.get().then(function (info) { if (info) show(info); }).catch(function () {});
+    if (window.mfupdate.done && /^https?:$/.test(location.protocol)) {
+      var takeDone = function () { window.mfupdate.done().then(showDone).catch(function () {}); };
+      if (window.mfupdate.onDone) window.mfupdate.onDone(takeDone);
+      takeDone();
+    }
   }
   if (window.mfengine) {
     window.mfengine.onNotice(showEngine);
@@ -2398,6 +2608,8 @@ ipcMain.handle('notify:show', (_e, o) => {
   // update toast, or its own notification below).
   const version = String(opts.version || '').replace(/^v/i, '')
   if (version) {
+    // A run from source never announces a release (see SOURCE_RUN).
+    if (SOURCE_RUN) return { ok: false }
     if (!claimUpdateNotice(version)) return { ok: false }
   }
   return { ok: showNotification(opts.title, opts.body, target) }
