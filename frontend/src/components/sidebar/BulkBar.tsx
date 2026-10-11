@@ -1,22 +1,24 @@
 /** Bulk session actions bar (port of renderBulkBar/bulkAction, section 9).
  *
- * Opened from the sidebar footer's **Select…** (store `bulkMode`). The rail's
- * rows carry no checkboxes — tests/unit/test_frontend_bulk.py pins that — so
- * the bar lists the sessions itself, as a checklist, and fans the per-session
- * endpoints out over the ticked titles. The two end verbs are the row menu's:
+ * Select mode (store `bulkMode`) starts from the rail itself: Ctrl/⌘-click a
+ * row, Shift-click a range, or a row menu's **Select**. The picked rows are
+ * highlighted where they sit — no checkboxes (tests/unit/test_frontend_bulk.py
+ * pins that) and no second copy of the list — and this strip at the top of the
+ * list fans the per-session endpoints out over them. Esc leaves select mode.
+ * The two end verbs are the row menu's:
  * **Close** (keeps worktrees) and **Delete…** (removes worktrees and branches),
  * each asked on an inline strip — never a native confirm(), which the desktop
  * app does not implement (it silently meant "no" and the bar did nothing). */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { queryClient, refreshInstances, useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
+import { isEditingTarget } from "../../lib/keymap";
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { releaseTerms } from "../../lib/terminals";
-import { sessionLabel } from "../../lib/sessionLabel";
 import {
   folderInUse,
   folderInUseText,
@@ -30,11 +32,22 @@ export function BulkBar() {
   const { data: instances = [] } = useInstances();
   const bulkMode = useUi((s) => s.bulkMode);
   const bulkSelected = useUi((s) => s.bulkSelected);
-  const aliases = useUi((s) => s.aliases);
   const [ask, setAsk] = useState<Ask>(null);
   const [busy, setBusy] = useState(false);
   // Sessions holding a folder the last Delete could not remove (409).
   const [held, setHeld] = useState<string[]>([]);
+  useEffect(() => {
+    if (!bulkMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || isEditingTarget(e.target as Element)) return;
+      if (useUi.getState().openDialog) return;
+      e.preventDefault();
+      setAsk(null);
+      useUi.getState().setBulkMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bulkMode]);
   if (!bulkMode) return null;
 
   // A provisioning row has nothing to act on yet; everything else is listed.
@@ -44,7 +57,6 @@ export function BulkBar() {
   const selected = rows.filter((i) => bulkSelected.has(i.title)).map((i) => i.title);
   const n = selected.length;
   const anyMissing = rows.some((i) => selected.includes(i.title) && i.workspace_missing);
-  const nameOf = (i: Instance) => aliases[i.title] || sessionLabel(i.title, i.branch || "").text;
 
   const finish = (titles: string[]) => {
     const s = useUi.getState();
@@ -135,38 +147,23 @@ export function BulkBar() {
     <div id="bulk-bar" className="bulk-open" role="group" aria-label="Bulk session actions">
       <div className="bulk-head">
         <span className="bulk-count">
-          {n} of {rows.length} selected
+          {n ? `${n} selected` : "Click sessions to select them"}
         </span>
         <div className="bulk-acts">
-          <button type="button" onClick={() => setAll(true)} disabled={!rows.length || n === rows.length}>
-            All
+          <button type="button" onClick={() => setAll(n !== rows.length)} disabled={!rows.length}>
+            {n === rows.length && n ? "None" : "All"}
           </button>
-          <button type="button" onClick={() => setAll(false)} disabled={!n}>
-            None
-          </button>
-          <button type="button" title="Close the bulk bar" onClick={() => useUi.getState().setBulkMode(false)}>
-            Done
+          <button
+            type="button"
+            className="bulk-done"
+            title="Leave select mode (Esc)"
+            aria-label="Leave select mode"
+            onClick={() => useUi.getState().setBulkMode(false)}
+          >
+            ✕
           </button>
         </div>
       </div>
-      <ul className="bulk-list">
-        {rows.map((i) => (
-          <li key={i.title}>
-            <label>
-              <input
-                type="checkbox"
-                className="bulk-pick"
-                checked={bulkSelected.has(i.title)}
-                onChange={() => useUi.getState().toggleBulk(i.title)}
-              />
-              <span className="bulk-name">{nameOf(i)}</span>
-              {i.workspace_missing && <span className="bulk-note">workspace gone</span>}
-              {i.status === "paused" && <span className="bulk-note">paused</span>}
-            </label>
-          </li>
-        ))}
-        {!rows.length && <li className="bulk-empty muted">No sessions</li>}
-      </ul>
       {ask ? (
         <div className="bulk-ask" role="group" aria-label={ask === "close" ? "Close selected?" : "Delete selected?"}>
           <span className="bulk-q">

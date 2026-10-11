@@ -102,8 +102,7 @@ it appears once a ticket source is connected), the **Pull requests** and
 list, a **Recently closed (n)** link shows once anything is closed (see
 [Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
 **4** · **9** (one button per grid size, the active one filled), the session
-count, **Select…** (the checklist bar — see
-[Bulk session actions](#bulk-session-actions)), **⚙ Customize** (see [Customize](#customize)) and **⌨ Shortcuts**. The command
+count, **⚙ Customize** (see [Customize](#customize)) and **⌨ Shortcuts**. The command
 palette, Intake, Verify and Settings live in the top bar, not down here, and
 the desktop-notification on/off toggle lives in Settings → Notifications.
 Disk management is not a screen of its own any more: it is the same page as
@@ -1383,20 +1382,23 @@ review finding without leaving the diff.
 
 ## Bulk session actions
 
-**Select…** in the sidebar footer opens a checklist bar above the session list
-(the rows themselves carry no checkboxes): tick sessions — **All** / **None** —
-then **Close** (keeps their worktrees), **Hide**, **Delete missing** (rows
-whose workspace vanished), or **Delete…** (removes their worktrees and
-branches). Close and Delete ask first on an inline strip in the bar (*Close 3
-session(s)? Keeps their worktrees — reopen from Recently closed.* / *Delete 3
-session(s)? Removes their worktrees and branches.*, with the verb and
+Select sessions right on the rail: **Ctrl/⌘-click** a row to pick it,
+**Shift-click** to pick the range from the last pick, or row menu → **Select**
+(also *Select sessions…* in the palette). Picked rows are tinted with a ✓ where
+their slot number was, and while select mode is on a plain click toggles a row
+instead of focusing it. A strip pinned to the top of the list counts the picks
+(**All** / **None**) and offers **Close** (keeps their worktrees), **Hide**,
+**Delete missing** (rows whose workspace vanished), or **Delete…** (removes
+their worktrees and branches). Close and Delete ask first on an inline strip
+(*Close 3 session(s)? Keeps their worktrees — reopen from Recently closed.* /
+*Delete 3 session(s)? Removes their worktrees and branches.*, with the verb and
 **Cancel**) — never a browser `confirm()`, which does nothing in the desktop
 app. Actions fan out over the per-session endpoints and tolerate individual
 failures: the toast counts what landed (*Closed 2/3 session(s)*, plus *N worker
 sessions kept running* when workers stayed up), failures are named on a
 bottom-right card, and a folder another live session holds is reported in the
-bar (*Folder in use by …. Close those first.*). **Done** (or the footer button
-again) closes the bar and drops the selection.
+strip (*Folder in use by …. Close those first.*). **✕** or **Esc** leaves select
+mode and drops the picks.
 
 ## Signing in
 
@@ -1412,14 +1414,20 @@ Authentication section. If the token leaks, regenerate it from Settings →
 
 ## Finding, renaming & attention
 
-- **Filter** — once you have a handful of sessions, a filter box appears above
-  the sidebar list (`/` focuses it, Esc clears). It matches title, alias,
-  branch, and repo, and only narrows the sidebar — the grid is untouched. It
-  stays hidden while you have few sessions, so newcomers never see it.
-- **Rename** — give a session a friendly display label (row menu → *Rename…*,
-  or the palette). It's a client-side alias shown everywhere the title appears
-  (italic, real title in the tooltip); the underlying session/tmux/worktree are
-  never renamed, so nothing can break. **Notifications use the name you see**:
+- **Filter** — a filter box above the sidebar list (`/` focuses it, Esc
+  clears). It matches title, alias, branch, and repo, and only narrows the
+  sidebar — the grid is untouched. Customize → *Session list* → **Filter box**
+  shows or hides it (shown by default); hidden, `/` still opens it for one
+  search.
+- **Rename** — row menu → *Rename…*, the palette, or click the selected row's
+  name. The new name is the session's name everywhere: the rail, the phone page
+  (`/m`, via the `name` field on `GET /api/instances`), and notifications — the
+  old one is not kept around in tooltips. Names are unique: a rename to a name
+  another session already has (its title, its rename, or its rail label) is
+  refused inline, and the server refuses it too (`POST /api/aliases` → 409),
+  as it refuses creating a session under a name another session goes by. The
+  underlying session/tmux/worktree keep their original key, so nothing can
+  break. **Notifications use the name you see**:
   a desktop notification and an ntfy push both call a session by its rename, or
   — for the ones nobody renamed — by the label the rail shows (`(tix)
   add-dark-mode/sc-12345`), never by the machine slug the event carries. A push

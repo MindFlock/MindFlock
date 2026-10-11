@@ -102,6 +102,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Rail: rename, select and filter.** A rename is the session's name
+  everywhere (rail, phone page via the new `name` field on
+  `GET /api/instances`, notifications) and must be unique: `POST /api/aliases`
+  and session create answer 409 when another session already goes by that
+  name; click the selected row's name to rename it. Select sessions straight on
+  the rail — Ctrl/⌘-click a row, Shift-click a range, or row menu → Select —
+  with a strip pinned to the top of the list (All / None, Close, Hide,
+  Delete…; Esc or ✕ leaves select mode); the footer **Select…** button is gone.
+  The filter box is always shown by default; Customize → Session list →
+  **Filter box** hides it (`/` still opens it for one search).
+
 - **One word per thing.** The web UI, phone page, CLI output, MCP tool
   descriptions and docs now say **session** (not instance, or window for a
   session), **Fast-track** (not autopilot, lane or auto-ship), **team run**

@@ -292,8 +292,6 @@ export function placeNewRunMembers(
   return order;
 }
 
-export const SEARCH_MIN = 6;
-
 /** Match only the session's own identifiers — name, alias, branch. NOT repo
  * or path (every worktree of one repo shares those). */
 export function matchesFilter(

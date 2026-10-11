@@ -378,6 +378,17 @@ async def create(
         return JSONResponse(
             {"error": "instance %s already exists" % title}, status_code=409
         )
+    # A renamed session goes by its new name everywhere, so that name is taken
+    # too — a new session may not be called what another one is called.
+    renamed = srv._aliases.owner_of(title, srv._session_branches())
+    if renamed:
+        return JSONResponse(
+            {
+                "error": "another session is already named “%s”" % title,
+                "session": renamed,
+            },
+            status_code=409,
+        )
 
     # --- Sessions based off a user-chosen local repo --------------------------
     # Without this, plain sessions would default to the server's own cwd (the

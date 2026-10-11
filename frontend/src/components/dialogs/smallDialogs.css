@@ -173,9 +173,15 @@
   color: var(--muted);
 }
 
-#rename-form #rename-real {
-  display: inline;
+#rename-form .rename-taken {
+  margin: 0;
+  font-size: 12px;
+  color: var(--red);
   overflow-wrap: anywhere;
+}
+
+#rename-form input[aria-invalid="true"] {
+  border-color: var(--red);
 }
 
 #rename-form input {

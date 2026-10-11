@@ -47,11 +47,38 @@
   color: var(--red);
 }
 
-/* Opened from the footer's Select…: a checklist of sessions above the rail,
-   then the verbs, then (when asked) an inline confirm strip. */
+/* Select mode: a strip pinned to the top of the list — the count, then the
+   verbs, then (when asked) an inline confirm strip. The picked sessions are
+   the rail rows themselves (.inst.bulk-picked, below). */
 #bulk-bar.bulk-open {
   flex-direction: column;
   align-items: stretch;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  margin: 0 6px 4px;
+}
+
+#bulk-bar .bulk-done {
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+#bulk-bar .bulk-done:hover {
+  color: var(--text);
+}
+
+/* A picked rail row: tinted, with a ✓ where its slot number was. */
+.inst.bulk-picked .inst-row {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.inst.bulk-picked .idx {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 #bulk-bar .bulk-head {
@@ -59,49 +86,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-}
-
-#bulk-bar .bulk-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 180px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-}
-
-#bulk-bar .bulk-list li {
-  margin: 0;
-}
-
-#bulk-bar .bulk-list label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-#bulk-bar .bulk-list label:hover {
-  background: var(--panel-2);
-}
-
-#bulk-bar .bulk-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#bulk-bar .bulk-note {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-#bulk-bar .bulk-empty {
-  padding: 4px 8px;
 }
 
 #bulk-bar .bulk-verbs {

@@ -25864,7 +25864,6 @@ function placeNewRunMembers(saved, live) {
 	}
 	return order;
 }
-var SEARCH_MIN = 6;
 function matchesFilter(inst, filter, aliases) {
 	if (!filter) return true;
 	return [
@@ -26632,12 +26631,15 @@ var useUi = create((set, get) => ({
 	specialOpen: [],
 	bulkMode: false,
 	bulkSelected: /* @__PURE__ */ new Set(),
+	bulkAnchor: null,
 	aliases: load$1("mf_aliases", {}),
 	collapsedDevices: new Set(load$1("cs_devcollapse", [])),
 	collapsedRuns: new Set(load$1("mf_runcollapse", [])),
 	collapsedFamilies: new Set(load$1("mf_familycollapse", [])),
 	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
 	barOrder: load$1("mf_barorder", []),
+	showFilter: load$1("mf_show_filter", true),
+	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
 	breakReminder: load$1("mf_break_on", false),
 	breakEveryMin: clampBreakMinutes(load$1("mf_break_every", BREAK_DEFAULT_MINUTES)),
@@ -26743,13 +26745,35 @@ var useUi = create((set, get) => ({
 	},
 	setBulkMode: (on) => set(on ? { bulkMode: true } : {
 		bulkMode: false,
-		bulkSelected: /* @__PURE__ */ new Set()
+		bulkSelected: /* @__PURE__ */ new Set(),
+		bulkAnchor: null
 	}),
 	toggleBulk: (title) => {
 		const next = new Set(get().bulkSelected);
 		if (next.has(title)) next.delete(title);
 		else next.add(title);
-		set({ bulkSelected: next });
+		set({
+			bulkSelected: next,
+			bulkAnchor: title,
+			bulkMode: true
+		});
+	},
+	pickRow: (title, range) => {
+		const { bulkAnchor, railOrder, bulkSelected } = get();
+		const from = range && bulkAnchor ? railOrder.indexOf(bulkAnchor) : -1;
+		const to = railOrder.indexOf(title);
+		if (from < 0 || to < 0) {
+			get().toggleBulk(title);
+			return;
+		}
+		const next = new Set(bulkSelected);
+		const [a, b] = from < to ? [from, to] : [to, from];
+		for (const k of railOrder.slice(a, b + 1)) if (!k.startsWith("\0")) next.add(k);
+		set({
+			bulkSelected: next,
+			bulkAnchor: title,
+			bulkMode: true
+		});
 	},
 	setBulk: (titles, on) => {
 		const next = new Set(get().bulkSelected);
@@ -26757,17 +26781,36 @@ var useUi = create((set, get) => ({
 		else next.delete(t);
 		set({ bulkSelected: next });
 	},
-	clearBulk: () => set({ bulkSelected: /* @__PURE__ */ new Set() }),
+	clearBulk: () => set({
+		bulkSelected: /* @__PURE__ */ new Set(),
+		bulkAnchor: null
+	}),
+	setShowFilter: (on) => {
+		save("mf_show_filter", on);
+		set({
+			showFilter: on,
+			filterPeek: false
+		});
+	},
+	setFilterPeek: (on) => set({ filterPeek: on }),
 	setAlias: (title, alias) => {
-		const aliases = { ...get().aliases };
-		if (alias) aliases[title] = alias;
-		else delete aliases[title];
-		save("mf_aliases", aliases);
-		set({ aliases });
+		const prev = get().aliases[title] || "";
+		const write = (value) => {
+			const aliases = { ...get().aliases };
+			if (value) aliases[title] = value;
+			else delete aliases[title];
+			save("mf_aliases", aliases);
+			set({ aliases });
+		};
+		write(alias);
 		api("/api/aliases", { json: {
 			title,
 			alias: alias || ""
-		} }).catch(() => {});
+		} }).catch((err) => {
+			if (!(err instanceof ApiError) || err.status !== 409) return;
+			if ((get().aliases[title] || "") === alias) write(prev);
+			toast(err.message || `Another session is already named “${alias}”`);
+		});
 	},
 	toggleDeviceCollapsed: (device) => {
 		const next = new Set(get().collapsedDevices);
@@ -27017,6 +27060,16 @@ function slotNumber(title) {
 	} catch {
 		return "";
 	}
+}
+function nameTakenBy(title, name) {
+	const n = String(name || "").trim();
+	if (!n) return "";
+	for (const i of snapshot()) {
+		const t = i?.title;
+		if (!t || t === title || i.device) continue;
+		if (n === t || n === windowName(t)) return t;
+	}
+	return "";
 }
 function publishWindowName() {
 	const w = globalThis;
@@ -35764,6 +35817,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const alias = aliases[inst.title];
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const setAlias = useUi((s) => s.setAlias);
+	const picking = useUi((s) => s.bulkMode);
+	const picked = useUi((s) => s.bulkSelected.has(inst.title));
 	const title = inst.title;
 	const missing = !!inst.workspace_missing;
 	const paused = inst.status === "paused";
@@ -35883,12 +35938,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 			return;
 		}
 		const next = raw.trim();
-		const nextAlias = !next || next === label.text || next === displayTitle(inst) ? "" : next;
-		if (nextAlias === (alias || "")) return;
-		setAlias(title, nextAlias);
-		toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
+		if (!next || next === shown) return;
+		if (nameTakenBy(title, next)) {
+			toast(`Another session is already named “${next}”`);
+			return;
+		}
+		setAlias(title, next === label.text ? "" : next);
+		toast(`Renamed to “${next}”`);
 	};
-	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (dropCue ? ` drop-${dropCue}` : "");
+	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (picked ? " bulk-picked" : "") + (dropCue ? ` drop-${dropCue}` : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: rowCls,
 		"data-title": title,
@@ -35908,8 +35966,16 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		}, !editing),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "inst-row",
-			onClick: () => {
+			onMouseDown: (e) => {
+				if (e.shiftKey) e.preventDefault();
+			},
+			onClick: (e) => {
 				if (editing || Date.now() - editEndedAt.current < 400) return;
+				if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
+					clearRenameTimer();
+					useUi.getState().pickRow(title, e.shiftKey);
+					return;
+				}
 				if (focused !== title) {
 					selectSession(title);
 					return;
@@ -35918,6 +35984,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 			},
 			onDoubleClick: () => {
 				clearRenameTimer();
+				if (picking) return;
 				if (!missing && !pending) ideSession(title, true);
 			},
 			children: [
@@ -35933,7 +36000,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "idx",
 					title: num ? `Ctrl+${num} / Alt+${num} to focus` : "",
-					children: num
+					children: picking ? picked ? "✓" : "" : num
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : ""),
@@ -35974,11 +36041,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "title",
 							title: [
-								alias ? `${alias}  ·  ${label.text}` : label.text,
-								label.kind ? `session: ${displayTitle(inst)}` : "",
+								shown,
+								label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
 								inst.branch ? `branch: ${inst.branch}` : "",
 								wline ? wline.title : lineage ? lineage.title : "",
-								focused === title ? "Click again to rename" : ""
+								focused === title && !picking ? "Click again to rename" : "",
+								picking ? "" : "Ctrl+click or Shift+click to select several"
 							].filter(Boolean).join("\n"),
 							children: shown
 						}),
@@ -36288,6 +36356,16 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								})
 							] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: (e) => act(() => {
+									useUi.getState().pickRow(title, false);
+									setExpanded(false);
+								}, e),
+								children: [picked ? "Unselect" : "Select", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "kbd",
+									children: "Ctrl+click"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: () => hideSession(title),
 								children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "kbd",
@@ -36474,6 +36552,8 @@ function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }) {
 function SessionFilter() {
 	const filter = useUi((s) => s.filter);
 	const setFilter = useUi((s) => s.setFilter);
+	const peek = useUi((s) => s.filterPeek && !s.showFilter);
+	const setFilterPeek = useUi((s) => s.setFilterPeek);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "sidebar-search",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -36484,10 +36564,15 @@ function SessionFilter() {
 			spellCheck: false,
 			"aria-label": "Filter sessions",
 			value: filter,
+			autoFocus: peek,
 			onChange: (e) => setFilter(e.target.value.trim()),
+			onBlur: (e) => {
+				if (peek && !e.target.value.trim()) setFilterPeek(false);
+			},
 			onKeyDown: (e) => {
 				if (e.key === "Escape") {
 					setFilter("");
+					setFilterPeek(false);
 					e.target.blur();
 				}
 			}
@@ -36567,17 +36652,27 @@ function BulkBar() {
 	const { data: instances = [] } = useInstances();
 	const bulkMode = useUi((s) => s.bulkMode);
 	const bulkSelected = useUi((s) => s.bulkSelected);
-	const aliases = useUi((s) => s.aliases);
 	const [ask, setAsk] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [held, setHeld] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		if (!bulkMode) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented || isEditingTarget(e.target)) return;
+			if (useUi.getState().openDialog) return;
+			e.preventDefault();
+			setAsk(null);
+			useUi.getState().setBulkMode(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [bulkMode]);
 	if (!bulkMode) return null;
 	const rows = instances.filter((i) => !i.pending);
 	const live = new Set(rows.map((i) => i.title));
 	const selected = rows.filter((i) => bulkSelected.has(i.title)).map((i) => i.title);
 	const n = selected.length;
 	const anyMissing = rows.some((i) => selected.includes(i.title) && i.workspace_missing);
-	const nameOf = (i) => aliases[i.title] || sessionLabel(i.title, i.branch || "").text;
 	const finish = (titles) => {
 		const s = useUi.getState();
 		s.setBulk(titles, false);
@@ -36653,62 +36748,24 @@ function BulkBar() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "bulk-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "bulk-count",
-					children: [
-						n,
-						" of ",
-						rows.length,
-						" selected"
-					]
+					children: n ? `${n} selected` : "Click sessions to select them"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bulk-acts",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							onClick: () => setAll(true),
-							disabled: !rows.length || n === rows.length,
-							children: "All"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							onClick: () => setAll(false),
-							disabled: !n,
-							children: "None"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							title: "Close the bulk bar",
-							onClick: () => useUi.getState().setBulkMode(false),
-							children: "Done"
-						})
-					]
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
-				className: "bulk-list",
-				children: [rows.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						className: "bulk-pick",
-						checked: bulkSelected.has(i.title),
-						onChange: () => useUi.getState().toggleBulk(i.title)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bulk-name",
-						children: nameOf(i)
-					}),
-					i.workspace_missing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bulk-note",
-						children: "workspace gone"
-					}),
-					i.status === "paused" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bulk-note",
-						children: "paused"
-					})
-				] }) }, i.title)), !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-					className: "bulk-empty muted",
-					children: "No sessions"
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setAll(n !== rows.length),
+						disabled: !rows.length,
+						children: n === rows.length && n ? "None" : "All"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "bulk-done",
+						title: "Leave select mode (Esc)",
+						"aria-label": "Leave select mode",
+						onClick: () => useUi.getState().setBulkMode(false),
+						children: "✕"
+					})]
 				})]
 			}),
 			ask ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -39852,7 +39909,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const cap = viewCap(ui.viewMode);
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
 	const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
-	const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
+	const searchVisible = ui.showFilter || ui.filterPeek || !!ui.filter;
 	const firstRunCard = showSetupCard({
 		sessions: instances.length,
 		status: setup,
@@ -40020,15 +40077,6 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								id: "session-count",
 								children: countHead
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								id: "bulk-btn",
-								type: "button",
-								className: "foot-link" + (ui.bulkMode ? " active" : ""),
-								title: "Select sessions to close, hide or delete together",
-								"aria-pressed": ui.bulkMode,
-								onClick: () => ui.setBulkMode(!ui.bulkMode),
-								children: ui.bulkMode ? "Done" : "Select…"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FooterCustomize, {}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -60928,6 +60976,11 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("customize")
 		});
 		acts.push({
+			label: "Select sessions…",
+			hint: "close, hide or delete several at once · Ctrl+click a row",
+			run: () => ui.setBulkMode(true)
+		});
+		acts.push({
 			label: "Prompts…",
 			hint: "manage saved prompts",
 			run: () => ui.openDialogFor("prompts")
@@ -78516,6 +78569,8 @@ function SidebarBarsPicker() {
 	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
 	const barOrder = useUi((s) => s.barOrder);
 	const openDialogFor = useUi((s) => s.openDialogFor);
+	const showFilter = useUi((s) => s.showFilter);
+	const setShowFilter = useUi((s) => s.setShowFilter);
 	const extBars = useExtensionBarDefs();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "customize-sidebar",
@@ -78557,6 +78612,35 @@ function SidebarBarsPicker() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "cz-foot muted",
 				children: "Drag a bar's ⠿ grip in the sidebar to reorder it."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "cz-heading",
+				children: "Session list"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-bar-list",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "cz-bar",
+					"data-bar": "session-filter",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "cz-bar-check",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: showFilter,
+							onChange: () => setShowFilter(!showFilter)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cz-bar-name",
+							children: "Filter box"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cz-bar-note muted",
+						children: [
+							"Filter sessions by name or branch · hidden, ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+							" still opens it"
+						]
+					})]
+				})
 			})
 		]
 	});
@@ -81102,10 +81186,13 @@ function RenameDialog() {
 	const closeDialog = useUi((s) => s.closeDialog);
 	const setAlias = useUi((s) => s.setAlias);
 	const [value, setValue] = (0, import_react.useState)("");
+	const [shown, setShown] = (0, import_react.useState)("");
 	const inputRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (open && target) {
-			setValue(useUi.getState().aliases[target] || "");
+			const current = windowName(target);
+			setShown(current);
+			setValue(current);
 			setTimeout(() => {
 				inputRef.current?.focus();
 				inputRef.current?.select();
@@ -81113,11 +81200,17 @@ function RenameDialog() {
 		}
 	}, [open, target]);
 	if (!open || !target) return null;
+	const next = value.trim();
+	const taken = next && next !== shown ? nameTakenBy(target, next) : "";
 	const submit = () => {
-		const alias = value.trim();
-		setAlias(target, alias);
+		if (taken) return;
+		if (!next || next === shown) {
+			closeDialog();
+			return;
+		}
+		setAlias(target, next);
 		closeDialog();
-		toast(alias ? `Renamed to “${alias}”` : "Reset to real title");
+		toast(`Renamed to “${next}”`);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "rename-dialog",
@@ -81136,28 +81229,25 @@ function RenameDialog() {
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Rename session" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-					"Display name for ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						id: "rename-real",
-						className: "muted",
-						children: [
-							"“",
-							target,
-							"”"
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "rename-input",
-						ref: inputRef,
-						autoComplete: "off",
-						spellCheck: false,
-						placeholder: "Leave blank to reset to the real title",
-						value,
-						onChange: (e) => setValue(e.target.value)
-					})
-				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["New name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					id: "rename-input",
+					ref: inputRef,
+					autoComplete: "off",
+					spellCheck: false,
+					"aria-invalid": !!taken,
+					value,
+					onChange: (e) => setValue(e.target.value)
+				})] }),
+				taken && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "rename-taken",
+					role: "alert",
+					children: [
+						"Another session is already named “",
+						next,
+						"”."
+					]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -81167,6 +81257,7 @@ function RenameDialog() {
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
+						disabled: !!taken || !next,
 						children: "Rename"
 					})]
 				})
@@ -83819,7 +83910,13 @@ function App() {
 	useIntakeWarm(!!config?.caps?.ticketing);
 	(0, import_react.useEffect)(() => {
 		const aliases = useUi.getState().aliases;
-		if (Object.keys(aliases).length) api("/api/aliases", { json: { aliases } }).catch(() => {});
+		api("/api/aliases", { json: { aliases } }).then((r) => {
+			if (!r?.aliases) return;
+			try {
+				localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
+			} catch {}
+			useUi.setState({ aliases: r.aliases });
+		}).catch(() => {});
 	}, []);
 	(0, import_react.useEffect)(() => {
 		const caps = config?.caps;
@@ -83895,7 +83992,11 @@ function App() {
 		return {
 			togglePalette: () => toggleDialog("palette"),
 			toggleShortcuts: () => toggleDialog("shortcuts"),
-			focusFilter: () => document.getElementById("session-filter")?.focus(),
+			focusFilter: () => {
+				const box = document.getElementById("session-filter");
+				if (box) box.focus();
+				else useUi.getState().setFilterPeek(true);
+			},
 			cycleWindow: (dir) => {
 				const keys = stableKeys();
 				if (!keys.length) return;

@@ -115,3 +115,8 @@
   margin: 12px 0 0 8px;
   font-size: 11.5px;
 }
+
+/* A second group under the bars (Session list): set apart from the drag hint. */
+.cz-foot + .cz-heading {
+  margin-top: 18px;
+}

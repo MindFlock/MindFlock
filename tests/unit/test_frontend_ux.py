@@ -30,8 +30,8 @@ def test_app_js_filter_wiring():
     js = client.get("/app.js").text
     assert "session-filter" in js
     assert "function matchesFilter(" in js
-    # Progressive: box hidden until enough sessions (or a filter is active).
-    assert "SEARCH_MIN" in js
+    # Customize → "Filter box" decides whether it shows (not a session count).
+    assert "mf_show_filter" in js
     # "/" focuses the filter via the global keymap (guarded: not while typing).
     assert 'key: "/"' in js
     # Filtering only re-renders the sidebar (grid untouched).

@@ -119,6 +119,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
+    acts.push({
+      label: "Select sessions…",
+      hint: "close, hide or delete several at once · Ctrl+click a row",
+      run: () => ui.setBulkMode(true),
+    });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
     acts.push({ label: "Templates…", hint: "manage saved New-session setups", run: () => ui.openDialogFor("templates") });
     acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });

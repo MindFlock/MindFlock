@@ -182,7 +182,7 @@
     // just created. So wait, visibly, and let a poll tick attach.
     if (isLoading(title)) {
       awaitingReady = title;
-      setStatus("starting " + title + " — setting up the workspace…");
+      setStatus("starting " + nameOf(title) + " — setting up the workspace…");
     } else {
       connect();
     }
@@ -246,6 +246,14 @@
   }
   function isLoading(title) {
     return statusOf(title) === "loading";
+  }
+  // What a session is CALLED: the server's `name` (the rename, else the label
+  // the desktop rail shows), else the title. Display only — every route below
+  // is still addressed by `title`.
+  function nameOf(title) {
+    for (var i = 0; i < instances.length; i++)
+      if (instances[i].title === title) return instances[i].name || title;
+    return title;
   }
 
   // The `?s=` deep link a notification taps through to. On the shared phone
@@ -349,7 +357,7 @@
     // textContent throughout: titles and repo names are the user's own strings.
     var name = document.createElement("span");
     name.className = "sess-name";
-    name.textContent = title;
+    name.textContent = inst.name || title;
     var sub = document.createElement("span");
     sub.className = "sess-sub";
     var word = document.createElement("span");
@@ -365,7 +373,7 @@
     more.type = "button";
     more.className = "sess-more";
     more.textContent = "⋯";
-    more.setAttribute("aria-label", "Actions for " + title);
+    more.setAttribute("aria-label", "Actions for " + nameOf(title));
     more.addEventListener("click", function () { openActSheet(title); });
     // Long press = ⋯. A timer rather than `contextmenu` alone: iOS Safari never
     // fires contextmenu for a touch, Android Chrome does — both are wired, and
@@ -407,7 +415,7 @@
   // the way the rail paints a row's dot and chip (sessionState.ts).
   function updateDot() {
     var inst = currentInst();
-    pickerTitleEl.textContent = current || (instances.length ? "Sessions" : "no sessions");
+    pickerTitleEl.textContent = current ? nameOf(current) : (instances.length ? "Sessions" : "no sessions");
     if (!inst) {
       dotEl.className = "dot tone-muted";
       stateChipEl.classList.add("hidden");
@@ -508,7 +516,7 @@
     var green = breaches.every(function (b) { return b.kind === "green"; });
     askSheet(
       green ? verb + " blocked — changes outside the green zone" : verb + " blocked — red zone changed",
-      title + " changed " + n + " " +
+      nameOf(title) + " changed " + n + " " +
         (green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")) +
         ": " + shown + (n > 5 ? " · and " + (n - 5) + " more" : "") +
         ". Revert them (the agent can: “revert your changes to …”), or " +
@@ -540,7 +548,7 @@
           setStatus("");
           askSheet(
             "Push blocked — checks haven't passed",
-            title + "'s commit has no passing check run (its state reads Checks failing). Override for this push only?",
+            nameOf(title) + "'s commit has no passing check run (its state reads Checks failing). Override for this push only?",
             "Push anyway",
             function () { doPush(true, title, overrideRz); });
           return;
@@ -599,7 +607,7 @@
     if (!confirmed) {
       askSheet(
         "Merge this PR?",
-        title + "'s pull request merges on GitHub — this can't be undone from MindFlock.",
+        nameOf(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.",
         "Merge PR",
         function () { doMerge(true, title); });
       return;
@@ -898,7 +906,7 @@
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
         var sig = instances.map(function (i) {
-          return attnRank(i) + i.title + "\u0000" + sessionState(i).label;
+          return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label;
         }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
@@ -1975,7 +1983,7 @@
     actListEl.innerHTML = "";
     var title = actFor;
     var inst = title ? instByTitle(title) : null;
-    actTitleEl.textContent = title || "No session open";
+    actTitleEl.textContent = title ? nameOf(title) : "No session open";
     actStateEl.innerHTML = "";
     if (inst) {
       var ss = sessionState(inst);
@@ -1991,13 +1999,13 @@
       }
       if (ss.restartable)
         actListEl.appendChild(actRow("Restart", "relaunches the agent, resuming the conversation",
-          function () { sessionCall(title, "revive", "Restarting " + title + "…", "Restart failed"); }));
+          function () { sessionCall(title, "revive", "Restarting " + nameOf(title) + "…", "Restart failed"); }));
       if (inst.status === "paused")
         actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
-          function () { sessionCall(title, "resume", "Resuming " + title + "…", "Resume failed"); }));
+          function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
       else if (inst.status !== "loading" && !inst.workspace_missing && !inst.peer_share)
         actListEl.appendChild(actRow("Pause", "stops the agent, keeps the worktree",
-          function () { sessionCall(title, "pause", "Paused " + title + " — the worktree is kept", "Pause failed"); }));
+          function () { sessionCall(title, "pause", "Paused " + nameOf(title) + " — the worktree is kept", "Pause failed"); }));
       actListEl.appendChild(actRow("Close", "keeps the worktree; reopen from Recently closed",
         function () { closeSession(title); }));
       // A peer (sandboxed shared-folder) session is unshared, never deleted —
@@ -2071,7 +2079,7 @@
         .then(function (j) {
           actBusy = false;
           closeActSheet();
-          flashStatus("Deleted " + title + " — worktree and branch removed" + keptRunningText(j));
+          flashStatus("Deleted " + nameOf(title) + " — worktree and branch removed" + keptRunningText(j));
           poll();
         })
         .catch(function (err) {

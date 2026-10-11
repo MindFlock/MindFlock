@@ -62,10 +62,22 @@ export default function App() {
   // renames another browser synced. Fire-and-forget — an older server without
   // the endpoint just keeps naming pushes by raw title.
   useEffect(() => {
+    // The answer is the merged map: adopt it, so a rename made in another
+    // browser is this one's name for the session too.
     const aliases = useUi.getState().aliases;
-    if (Object.keys(aliases).length) {
-      api("/api/aliases", { json: { aliases } }).catch(() => {});
-    }
+    api<{ aliases?: Record<string, string> }>("/api/aliases", {
+      json: { aliases },
+    })
+      .then((r) => {
+        if (!r?.aliases) return;
+        try {
+          localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
+        } catch {
+          /* storage off: still adopt it for this load */
+        }
+        useUi.setState({ aliases: r.aliases });
+      })
+      .catch(() => {});
   }, []);
 
   // Capability gating: body classes drive the caps-gate CSS (and addon CSS).
@@ -206,8 +218,12 @@ export default function App() {
     return {
       togglePalette: () => toggleDialog("palette"),
       toggleShortcuts: () => toggleDialog("shortcuts"),
-      focusFilter: () =>
-        (document.getElementById("session-filter") as HTMLInputElement | null)?.focus(),
+      focusFilter: () => {
+        const box = document.getElementById("session-filter") as HTMLInputElement | null;
+        // Hidden by Customize: summon it — it mounts focused (SessionFilter).
+        if (box) box.focus();
+        else useUi.getState().setFilterPeek(true);
+      },
       cycleWindow: (dir) => {
         const keys = stableKeys();
         if (!keys.length) return;

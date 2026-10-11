@@ -113,6 +113,24 @@ export function slotNumber(title: string): string {
   }
 }
 
+/** The session already CALLED `name` — by its title or by what it shows
+ * (`windowName`) — other than `title` itself; "" when the name is free.
+ *
+ * A rename is the session's name everywhere (the rail, the phone, a push), so
+ * two windows may not share one. Exact match, as typed. This device's sessions
+ * only, like the server's twin (core/aliases.owner_of), which has the last
+ * word: it refuses the rename with a 409 this check merely gets ahead of. */
+export function nameTakenBy(title: string, name: string): string {
+  const n = String(name || "").trim();
+  if (!n) return "";
+  for (const i of snapshot()) {
+    const t = i?.title;
+    if (!t || t === title || (i as { device?: string }).device) continue;
+    if (n === t || n === windowName(t)) return t;
+  }
+  return "";
+}
+
 /** Publish on the extension API, next to `mf.toast`. `core/events.js` creates
  * `window.mindflock` before the bundle runs, so this only ever adds a key. */
 export function publishWindowName() {

@@ -1410,7 +1410,8 @@ def _free_untitled() -> str:
     """
     title = "untitled"
     n = 2
-    while title in ENGINE.instances:
+    branches = _session_branches()
+    while title in ENGINE.instances or _aliases.owner_of(title, branches):
         title = "untitled-%d" % n
         n += 1
     return title
@@ -5893,6 +5894,7 @@ def list_instances(request: Request) -> JSONResponse:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
             _fresh_lineage(cached)
             _ownership.overlay(cached)
+            _aliases.overlay(cached)
             return JSONResponse(cached + remote + _pending_rows())
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
@@ -5902,6 +5904,7 @@ def list_instances(request: Request) -> JSONResponse:
     ]
     _lanes.fill_duplicates(snap)
     _ownership.overlay(snap)
+    _aliases.overlay(snap)
     return JSONResponse(snap + remote + _pending_rows())
 
 
@@ -7770,8 +7773,27 @@ def post_aliases(payload: dict) -> JSONResponse:
     peer_err = _peer_guard.title_refusal(title, "renaming")
     if peer_err is not None:
         return peer_err
-    _aliases.set_alias(title, str(payload.get("alias") or "").strip())
+    alias = str(payload.get("alias") or "").strip()
+    taken = _aliases.owner_of(alias, _session_branches(), exclude=title)
+    if taken:
+        return JSONResponse(
+            {
+                "error": "another session is already named “%s”" % alias,
+                "session": taken,
+            },
+            status_code=409,
+        )
+    _aliases.set_alias(title, alias)
     return JSONResponse({"aliases": _aliases.all_aliases()})
+
+
+def _session_branches() -> Dict[str, str]:
+    """``title -> branch`` of every live session: what
+    :func:`core.aliases.owner_of` needs to know which names are taken."""
+    return {
+        t: str(getattr(i, "Branch", "") or "")
+        for t, i in list(ENGINE.instances.items())
+    }
 
 
 @app.delete("/api/instances/{title}")

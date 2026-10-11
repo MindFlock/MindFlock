@@ -302,10 +302,15 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(pal).toMatch(/inst\.status === "paused"\s*\)?\s*\n?\s*acts\.push\(\{ label: `Resume session/);
   });
 
-  it("the bulk bar is reachable (footer Select…) and asks inline with the same two verbs", () => {
+  it("the bulk bar is reachable from the rail rows and asks inline with the same two verbs", () => {
+    // Picked in place — Ctrl/⌘/Shift-click or the row menu's Select — never a
+    // footer button (it read as an afterthought down there).
     const side = read("components/sidebar/Sidebar.tsx");
-    expect(side).toContain('id="bulk-btn"');
-    expect(side).toContain("ui.setBulkMode(!ui.bulkMode)");
+    expect(side).not.toContain('id="bulk-btn"');
+    const row = read("components/sidebar/SidebarRow.tsx");
+    expect(row).toContain("e.ctrlKey || e.metaKey || e.shiftKey || picking");
+    expect(row).toContain("useUi.getState().pickRow(title, e.shiftKey)");
+    expect(row).toContain('{picked ? "Unselect" : "Select"}');
     const bar = read("components/sidebar/BulkBar.tsx");
     expect(bar).toContain("if (!bulkMode) return null;");
     expect(bar).toMatch(/>\s*Close\s*<\/button>/);

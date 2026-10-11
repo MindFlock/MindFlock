@@ -33,7 +33,6 @@ import {
   placeNewWorkers,
   railNesting,
   sameNest,
-  SEARCH_MIN,
   type NestInfo,
 } from "./ordering";
 import { childrenByParent, type ShipTask } from "../../lib/agentMessages";
@@ -446,7 +445,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       ? `${cap} of ${shownCount} shown`
       : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
 
-  const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
+  // Customize → "Filter box" decides; with it off, "/" still summons the box
+  // for one search (filterPeek), and an active filter always keeps it shown.
+  const searchVisible = ui.showFilter || ui.filterPeek || !!ui.filter;
   // The grid's first-run card (the setup checklist) — TerminalGrid's own test,
   // off the same GET /api/setup the footer's Setup chip reads.
   const firstRunCard = showSetupCard({
@@ -633,18 +634,6 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
         </Hint>
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
-          {/* Bulk session actions: opens the checklist bar above the list
-              (BulkBar). The rows themselves carry no checkboxes. */}
-          <button
-            id="bulk-btn"
-            type="button"
-            className={"foot-link" + (ui.bulkMode ? " active" : "")}
-            title="Select sessions to close, hide or delete together"
-            aria-pressed={ui.bulkMode}
-            onClick={() => ui.setBulkMode(!ui.bulkMode)}
-          >
-            {ui.bulkMode ? "Done" : "Select…"}
-          </button>
           <FooterCustomize />
           <button
             id="shortcuts-btn"

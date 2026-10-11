@@ -6,7 +6,7 @@
  * upgrade keeps every user's layout, order, aliases, and bindings. */
 
 import { create } from "zustand";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import {
   BREAK_DEFAULT_MINUTES,
   clampBreakMinutes,
@@ -15,6 +15,7 @@ import {
 } from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
 import { notePrefWrite } from "../lib/prefs";
+import { toast } from "../lib/toast";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -171,11 +172,14 @@ interface UiState {
    * lists every open window with its ✕ while other components open them.
    * Not persisted, same reasoning as verifyPanes. */
   specialOpen: SpecialKind[];
-  /** The sidebar's bulk bar (Select… in the footer) is open. The rows carry
-   * no checkboxes; the bar lists the sessions itself. */
+  /** Select mode: a plain click on a rail row picks it instead of focusing it.
+   * Entered by Ctrl/⌘-click, Shift-click or a row menu's "Select"; the bulk
+   * bar at the top of the list shows while it is on. */
   bulkMode: boolean;
-  /** Bulk-selected titles (the bar's checklist). */
+  /** Picked titles — highlighted on the rail rows themselves. */
   bulkSelected: Set<string>;
+  /** The last row picked: where a Shift-click range starts. */
+  bulkAnchor: string | null;
   /** Display aliases: title -> custom label. */
   aliases: Record<string, string>;
   /** Collapsed device groups in the sidebar. */
@@ -190,6 +194,11 @@ interface UiState {
   collapsedFamilies: Set<string>;
   /** Sidebar bars hidden via the footer Customize menu (keys in BAR_KEYS). */
   hiddenBars: Set<string>;
+  /** Customize → "Filter box": show the session filter above the list. Off,
+   * "/" still opens it for one search (filterPeek). */
+  showFilter: boolean;
+  /** The filter box was summoned by "/" while Customize hides it. */
+  filterPeek: boolean;
   /** User drag order of the sidebar bars (keys; see barDefs.ts). Empty = default. */
   barOrder: string[];
   /** Reduce motion: while an agent is running, cover its terminal with a static
@@ -269,7 +278,12 @@ interface UiState {
   setBulkMode(on: boolean): void;
   toggleBulk(title: string): void;
   setBulk(titles: string[], on: boolean): void;
+  /** Pick a row from the rail: Ctrl/⌘ toggles it, Shift picks the range from
+   * the last pick (rail order). Either way select mode turns on. */
+  pickRow(title: string, range: boolean): void;
   clearBulk(): void;
+  setShowFilter(on: boolean): void;
+  setFilterPeek(on: boolean): void;
   setAlias(title: string, alias: string): void;
   toggleDeviceCollapsed(device: string): void;
   toggleRunCollapsed(runId: string): void;
@@ -350,6 +364,7 @@ export const useUi = create<UiState>((set, get) => ({
   specialOpen: [],
   bulkMode: false,
   bulkSelected: new Set<string>(),
+  bulkAnchor: null,
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
   collapsedRuns: new Set(load<string[]>("mf_runcollapse", [])),
@@ -361,6 +376,8 @@ export const useUi = create<UiState>((set, get) => ({
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load<string[]>("mf_hiddenbars", [])
   ),
   barOrder: load<string[]>("mf_barorder", []),
+  showFilter: load<boolean>("mf_show_filter", true),
+  filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
   breakReminder: load<boolean>("mf_break_on", false),
   breakEveryMin: clampBreakMinutes(load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)),
@@ -467,12 +484,28 @@ export const useUi = create<UiState>((set, get) => ({
       specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind],
     });
   },
-  setBulkMode: (on) => set(on ? { bulkMode: true } : { bulkMode: false, bulkSelected: new Set() }),
+  setBulkMode: (on) =>
+    set(on ? { bulkMode: true } : { bulkMode: false, bulkSelected: new Set(), bulkAnchor: null }),
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);
     else next.add(title);
-    set({ bulkSelected: next });
+    set({ bulkSelected: next, bulkAnchor: title, bulkMode: true });
+  },
+  pickRow: (title, range) => {
+    const { bulkAnchor, railOrder, bulkSelected } = get();
+    const from = range && bulkAnchor ? railOrder.indexOf(bulkAnchor) : -1;
+    const to = railOrder.indexOf(title);
+    if (from < 0 || to < 0) {
+      get().toggleBulk(title);
+      return;
+    }
+    // A range adds; it never un-picks what was picked outside it. Window
+    // rows ride in railOrder as sentinels — only sessions are picked.
+    const next = new Set(bulkSelected);
+    const [a, b] = from < to ? [from, to] : [to, from];
+    for (const k of railOrder.slice(a, b + 1)) if (!k.startsWith("\u0000")) next.add(k);
+    set({ bulkSelected: next, bulkAnchor: title, bulkMode: true });
   },
   setBulk: (titles, on) => {
     const next = new Set(get().bulkSelected);
@@ -482,18 +515,29 @@ export const useUi = create<UiState>((set, get) => ({
     }
     set({ bulkSelected: next });
   },
-  clearBulk: () => set({ bulkSelected: new Set() }),
+  clearBulk: () => set({ bulkSelected: new Set(), bulkAnchor: null }),
+  setShowFilter: (on) => {
+    save("mf_show_filter", on);
+    set({ showFilter: on, filterPeek: false });
+  },
+  setFilterPeek: (on) => set({ filterPeek: on }),
   setAlias: (title, alias) => {
-    const aliases = { ...get().aliases };
-    if (alias) aliases[title] = alias;
-    else delete aliases[title];
-    save("mf_aliases", aliases);
-    set({ aliases });
-    // Mirror the rename to the server (fire-and-forget delta): the browser
-    // stays the source of truth for rendering, but ntfy pushes are formatted
-    // server-side and would otherwise name sessions by their raw titles.
-    api("/api/aliases", { json: { title, alias: alias || "" } }).catch(() => {
-      /* offline / older server: the push just keeps the raw title */
+    const prev = get().aliases[title] || "";
+    const write = (value: string) => {
+      const aliases = { ...get().aliases };
+      if (value) aliases[title] = value;
+      else delete aliases[title];
+      save("mf_aliases", aliases);
+      set({ aliases });
+    };
+    write(alias);
+    // Mirror the rename to the server: it serves the name to the phone and to
+    // pushes, and it refuses a name another session already has (409) — the
+    // rename is then undone here too, so no two windows share a name.
+    api("/api/aliases", { json: { title, alias: alias || "" } }).catch((err) => {
+      if (!(err instanceof ApiError) || err.status !== 409) return; // offline: keep it
+      if ((get().aliases[title] || "") === alias) write(prev);
+      toast(err.message || `Another session is already named “${alias}”`);
     });
   },
   toggleDeviceCollapsed: (device) => {

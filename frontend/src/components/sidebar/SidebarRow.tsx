@@ -44,6 +44,7 @@ import {
   selectSession,
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
+import { nameTakenBy } from "../../lib/windowName";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
 import {
@@ -176,6 +177,8 @@ export const SidebarRow = memo(function SidebarRow({
   const alias = aliases[inst.title];
   const openDialogFor = useUi((s) => s.openDialogFor);
   const setAlias = useUi((s) => s.setAlias);
+  const picking = useUi((s) => s.bulkMode);
+  const picked = useUi((s) => s.bulkSelected.has(inst.title));
 
   const title = inst.title;
   const missing = !!inst.workspace_missing;
@@ -366,13 +369,17 @@ export const SidebarRow = memo(function SidebarRow({
       return;
     }
     const next = raw.trim();
-    // Blank, or typed back to what the row shows by itself, means "drop the
-    // alias" — that's the default label as well as the raw title.
-    const nextAlias =
-      !next || next === label.text || next === displayTitle(inst) ? "" : next;
-    if (nextAlias === (alias || "")) return;
-    setAlias(title, nextAlias);
-    toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
+    // Blank or unchanged keeps the name. A rename is the session's name
+    // everywhere, so a name another session has is refused, not shared.
+    if (!next || next === shown) return;
+    const taken = nameTakenBy(title, next);
+    if (taken) {
+      toast(`Another session is already named “${next}”`);
+      return;
+    }
+    // Typed back to what the row shows by itself: no rename left to keep.
+    setAlias(title, next === label.text ? "" : next);
+    toast(`Renamed to “${next}”`);
   };
 
   const rowCls =
@@ -383,6 +390,7 @@ export const SidebarRow = memo(function SidebarRow({
     (hidden ? " is-hidden" : "") +
     (missing ? " ws-missing" : "") +
     (pending ? " is-pending" : "") +
+    (picked ? " bulk-picked" : "") +
     (dropCue ? ` drop-${dropCue}` : "");
 
   return (
@@ -409,8 +417,19 @@ export const SidebarRow = memo(function SidebarRow({
     >
       <div
         className="inst-row"
-        onClick={() => {
+        onMouseDown={(e) => {
+          // Shift-click picks a range; don't let it select text on the way.
+          if (e.shiftKey) e.preventDefault();
+        }}
+        onClick={(e) => {
           if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
+          // Picking rows for the bulk bar: Ctrl/⌘ toggles one, Shift takes the
+          // range from the last pick, and in select mode a plain click toggles.
+          if (!pending && (e.ctrlKey || e.metaKey || e.shiftKey || picking)) {
+            clearRenameTimer();
+            useUi.getState().pickRow(title, e.shiftKey);
+            return;
+          }
           if (focused !== title) {
             selectSession(title);
             return;
@@ -419,12 +438,15 @@ export const SidebarRow = memo(function SidebarRow({
         }}
         onDoubleClick={() => {
           clearRenameTimer();
+          if (picking) return;
           if (!missing && !pending) ideSession(title, true);
         }}
       >
         {(nested || nest.stem) && <NestLines nest={nest} part="row" />}
         <span className="grip" title="Drag to reorder">⠿</span>
-        <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>{num}</span>
+        <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>
+          {picking ? (picked ? "✓" : "") : num}
+        </span>
         <span
           className={"dot tone-" + ss.tone + " st-" + ss.state + (disconnected ? " disconnected" : "")}
           title={disconnected ? "Terminal socket lost — reconnecting" : ss.label}
@@ -468,13 +490,14 @@ export const SidebarRow = memo(function SidebarRow({
             <span
               className="title"
               title={[
-                alias ? `${alias}  ·  ${label.text}` : label.text,
-                // The real title is the identity behind a reformatted label —
-                // it's what every API path and `tmux attach` is keyed by.
-                label.kind ? `session: ${displayTitle(inst)}` : "",
+                shown,
+                // A ticket/PR label's slug, until the session is renamed: then
+                // the new name is the only name it goes by.
+                label.kind && !alias ? `session: ${displayTitle(inst)}` : "",
                 inst.branch ? `branch: ${inst.branch}` : "",
                 wline ? wline.title : lineage ? lineage.title : "",
-                focused === title ? "Click again to rename" : "",
+                focused === title && !picking ? "Click again to rename" : "",
+                picking ? "" : "Ctrl+click or Shift+click to select several",
               ]
                 .filter(Boolean)
                 .join("\n")}
@@ -829,6 +852,17 @@ export const SidebarRow = memo(function SidebarRow({
                     </button>
                   </>
                 )}
+                <button
+                  onClick={(e) =>
+                    act(() => {
+                      useUi.getState().pickRow(title, false);
+                      setExpanded(false);
+                    }, e)
+                  }
+                >
+                  {picked ? "Unselect" : "Select"}
+                  <span className="kbd">Ctrl+click</span>
+                </button>
                 <button onClick={() => hideSession(title)}>
                   {hidden ? "Show window" : "Hide window"}
                   {!hidden && <span className="kbd">Ctrl+K H</span>}
