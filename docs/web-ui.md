@@ -3609,6 +3609,15 @@ across sessions with a period selector (session / day / week / month / year,
 backed by `/api/usage`). Figures come from Claude Code transcripts and a daily
 pricing feed — rough estimates for awareness, not billing.
 
+The **Usage** bar (the built-in Usage Optimizer extension) goes a step
+further for subscription plans: a capacity score (how much of the plan
+windows you could have filled you actually did), the live window and weekly
+cap with a pace reading and the time the limit would land, advice (cheaper
+model while you are draining hot at the keyboard; queue work when a window
+is about to reset half-empty or unattended hours sat idle), and charts of
+window fill, uptime (working / idle / locked out) and attended vs.
+unattended time. See [extensions.md](extensions.md#worked-example-2-the-usage-optimizer).
+
 ## Voice input
 
 The mic button (🎙, Chromium's `webkitSpeechRecognition`) dictates into the

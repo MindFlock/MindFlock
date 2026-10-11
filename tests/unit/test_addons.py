@@ -35,6 +35,7 @@ def test_manifest_lists_migrated_addons():
         "fleet",
         "onboarding",
         "dbclient",
+        "optimizer",
     ]
     # Each UI addon contributes a frontend descriptor with a known slot. The
     # "connections" addon is API-only (its list renders inline in the Settings →

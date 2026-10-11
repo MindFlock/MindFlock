@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Usage Optimizer** (a built-in Addon API v3 extension, id `optimizer`,
+  bar **Usage**). The thesis: a plan window is use-it-or-lose-it, so the
+  dashboard scores **capacity used** — the share of the windows your plan
+  could have filled that your windows actually reached (a window that reset
+  at 40 % counts 0.4, one you never opened counts 0) — per provider (Claude,
+  Codex, Antigravity) and overall, over 24 h / 7 d / 30 d. Live cards show
+  the active window and the weekly cap with a pace reading (used share vs.
+  elapsed share, the projection at reset, the time the limit lands at the
+  recent burn). Advice follows from it: draining faster than the window
+  while you are at the keyboard says to move routine work to a cheaper model
+  (`/model sonnet`, lower effort) so the lockout does not fall in your
+  working hours; a window about to reset half-empty, or idle unattended
+  hours, say to queue work. Charts: window fill (one bar per reset, tinted
+  by whether you were there), an uptime strip (working / idle / locked out /
+  no sessions, with a "you were here" row) and a time split that separates
+  **attended** time (someone typed into MindFlock in the last 10 minutes)
+  from runs on their own (overnight, after hours, looping queues), plus
+  tokens per hour for Claude. A sampler records one reading per provider per
+  minute (change-driven, 5-minute heartbeat) into
+  `~/.mindflock/usage_optimizer.jsonl` (35-day retention); routes under
+  `/api/optimizer` (`summary`, `sample`, `samples`). Opens as the dialog or
+  as a grid window.
 - **Two people on one pushed branch.** The New dialog's Base branch picker
   offers, for a remote pick `origin/x`, **Work on x itself (shared with
   whoever pushed it)** next to the default new branch: `POST /api/instances`

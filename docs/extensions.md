@@ -15,7 +15,8 @@ MindFlock has four extension seams, from zero-code to full in-process:
    dialog/pane surfaces it renders into host-owned containers, all declared in
    a manifest. Discovered from `~/.mindflock/extensions/`, toggled on
    Settings → Extensions. The built-in **Database Client** is the worked
-   example for section 4.
+   example for section 4; the built-in **Usage Optimizer** is the second
+   (a dashboard with its own background sampler).
 
 All four are fed by the same server-side event bus
 (`backend/web/core/events.py`).
@@ -1043,6 +1044,65 @@ querypad,grid,sql,ui}.js` + `style.css` (entry; the three surfaces; the
 shared grid; pure SQL text utilities; DOM helpers and the monochrome SVG icon
 set). Tests: `tests/unit/test_dbclient.py` (sqlite-backed, every guard above)
 and `frontend/src/__tests__/dbclientSql.test.ts` (the splitter).
+
+### Worked example 2: the Usage Optimizer
+
+`optimizer` (label "Usage Optimizer", bar **Usage**) is the second built-in
+extension, and the one to copy for a *dashboard* rather than a tool: no
+per-instance panes, one dialog surface (`main`) and one single-instance pane
+surface (`board`) rendered by the **same** renderer, so "Open as window" is
+`api.ui.openPane("board")` and nothing else. It also shows an extension that
+owns a background loop: `on_startup` registers `sampler.loop()` through
+`ctx.register_task`, and the loop pushes its probing to a worker thread.
+
+**What it measures.** A subscription plan's window is use-it-or-lose-it, so
+the headline is the **capacity score**: over the selected range a provider
+with an H-hour rolling window could have filled `range / H` windows; the
+score is the share of that ceiling the observed windows reached (a window
+that reset at 40 % counts 0.4, one never opened counts 0; capped at 100,
+and the ceiling counts only the time the optimizer was watching, never
+less than the windows it scored). Around it: the live window and the weekly
+cap with a **pace** reading (share used ÷ share of the window elapsed — 1×
+is "exactly on course to finish the window full"; above it the limit lands
+before the reset, below it capacity goes unused), the projected percent at
+reset and, from the recent burn rate, when the limit would land. **Advice**
+follows from those: draining hot *while attended* is a warning to move
+routine work to a cheaper model so the lockout does not fall in working
+hours; a window about to reset half-empty, or unattended hours that sat
+idle, are tips to queue work (the Queue tab, a looping prompt, a fast-track
+run); a lockout that fell during attended time in the last day is called
+out. **Attended** means someone typed into a MindFlock window in the last
+10 minutes (`server._HUMAN_INPUT_AT`, the stamp every web keystroke, /send
+and queue send-now leaves) — keystrokes through a raw `tmux attach` are
+invisible, so the split errs toward "unattended".
+
+**Charts** (inline SVG, theme tokens, no library — `charts.js`): the window
+fill bars (one per reset, tinted by attended share, the live one outlined),
+the uptime strip (working / idle / locked out / no sessions / not watching,
+with a thin "you were here" row), the attended-vs-unattended time split, and
+tokens per bucket for Claude (its window carries a token count).
+
+**Files.** `backend/web/addons/optimizer/{__init__,sampler,store,analysis}.py`
+— the manifest and routes; the sampler (one sample per watched provider per
+minute from the same window reading the cost panel shows,
+`core.usage_api._usage_window_for`, plus session counts by activity and the
+attended bit; written when something changed and at least every 5 minutes);
+the JSONL store (`~/.mindflock/usage_optimizer.jsonl`, mode 0600, append-only
+with a 35-day compaction; `$MINDFLOCK_OPTIMIZER_FILE` redirects it and
+`tests/conftest.py` does so for every test); and the pure analysis (window
+segmentation by reset time, the score, pace, timeline, time split, token
+rate, advice — all functions of `(samples, now)`, pinned by
+`tests/unit/test_optimizer_addon.py`).
+`backend/web/static/extensions/optimizer/{index,view,charts}.js` +
+`style.css`.
+
+**Routes** (`APIRouter(prefix="/api/optimizer")`):
+
+| Route | Purpose |
+|---|---|
+| `GET /summary?range=24h\|7d\|30d` | `{now, range, period_s, bucket_s, attended_now, overall, providers: [{name, label, mode, window_hours, weekly_hours, score: {score, windows, avg_fill, ceiling, used, basis}, live, weekly, windows, timeline, tokens, split, split_24h, advice}]}`. `basis` is `"estimate"` when any scored window came from the transcript estimate rather than the provider's meter. Never 500s. |
+| `POST /sample` | Record a sample for every watched provider right now (`{ok, written, samples}`). The "Sample now" button and the `optimizer.sample` command. |
+| `GET /samples?provider=&since=` | The raw samples, oldest first. |
 
 ### A minimal third-party extension
 

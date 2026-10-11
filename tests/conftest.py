@@ -99,6 +99,13 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_PROMPT_QUEUE_FILE",
         str(tmp_path / "mindflock" / "prompt_queues.json"),
     )
+    # The Usage Optimizer's sample store (``~/.mindflock/usage_optimizer.jsonl``):
+    # a live server's sampler appends there every minute, and a test that
+    # forces a sample would otherwise land in the owner's real history.
+    monkeypatch.setenv(
+        "MINDFLOCK_OPTIMIZER_FILE",
+        str(tmp_path / "mindflock" / "usage_optimizer.jsonl"),
+    )
     # The ingestion ledger a forced ticket start writes (``<repo root>/
     # state.json``, resolved once at import — in a checkout under the app
     # that is the owner's REAL pipeline ledger): a team run reserves queued

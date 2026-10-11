@@ -57,6 +57,7 @@ from .doctor import DoctorAddon
 from .fleet import FleetAddon
 from .notify import NotifyAddon
 from .onboarding import OnboardingAddon
+from .optimizer import OptimizerAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
@@ -164,6 +165,8 @@ def build_addons(ctx: AppContext) -> List[Addon]:
         OnboardingAddon(ctx),
         # The first Addon API v3 extension (sidebar bar + dialog/pane surfaces).
         DbClientAddon(ctx),
+        # Usage Optimizer: capacity score, window pacing, uptime vs. attended time.
+        OptimizerAddon(ctx),
     ]
 
 
