@@ -239,6 +239,10 @@ class SandboxProfile:
     * ``seed_files`` — files under that directory copied into the sandbox's
       home (login state only — never history, settings or projects).
     * ``env`` — fixed extra env (e.g. turning a self-updater off).
+    * ``tmpdir_env`` — env vars to point at the sandbox's temp dir, for a CLI
+      that keeps scratch files under a fixed ``/tmp`` path unless told
+      otherwise (claude's ``CLAUDE_CODE_TMPDIR``): on macOS the sandbox shares
+      the host's ``/tmp`` and may not write it.
     """
 
     bin: str
@@ -248,6 +252,7 @@ class SandboxProfile:
     config_dir: str = ""
     seed_files: tuple = ()
     env: tuple = ()  # ((name, value), ...)
+    tmpdir_env: tuple = ()
 
 
 class BaseProvider:

@@ -2,9 +2,9 @@
  * docs/peer-link.md): pair
  * this MindFlock with another person's using a one-time invite, then bind ONE
  * shared folder per link — an agent runs in it inside a sandbox and talks to
- * the other person's agent. A side that can't run the sandbox (a Mac, or a
- * Linux box before it shares) still takes part: messages, an inbox, and a
- * read-only view of their changes.
+ * the other person's agent (bubblewrap on Linux, sandbox-exec on macOS). A
+ * side that can't run the sandbox (a Linux box without bubblewrap, say) still
+ * takes part: messages, an inbox, and a read-only view of their changes.
  *
  * Two actions up front — Invite someone, Join a peer — and nothing to set
  * first: inviting or joining turns peer links on. When this computer can only
@@ -506,7 +506,7 @@ export function PeerLinks(_: ScreenProps) {
         <div className="peer-needs" id="peer-needs">
           <p className="set-hint">
             On this computer you can pair, message and view their work; running an agent in a shared
-            folder needs Linux{st.sandbox.reason ? <> (<span className="error">{st.sandbox.reason}</span>)</> : null}.
+            folder needs Linux or macOS{st.sandbox.reason ? <> (<span className="error">{st.sandbox.reason}</span>)</> : null}.
           </p>
           {!cloudflaredMissing && <InstallMissing steps={install} onDone={() => load()} />}
         </div>
@@ -870,7 +870,7 @@ function PeerLinkCard(props: {
         </div>
       ) : (
         <p className="set-hint">
-          Here you can message {link.peer_name} and look at their changes; sharing a folder needs Linux.
+          Here you can message {link.peer_name} and look at their changes; sharing a folder needs Linux or macOS.
         </p>
       )}
 

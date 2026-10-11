@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shared folders on macOS.** A peer-link shared session now runs on a Mac,
+  under a deny-by-default Seatbelt profile (`sandbox-exec`, built into
+  macOS). Linux keeps bubblewrap. The profile gives the agent the same set
+  the Linux sandbox does, at the same paths:
+  - read-only: system code, the agent's own runtime and the repo's git dir;
+  - read-write: `work/` (but not its `.git` file) and its own home (with a
+    private `TMPDIR`);
+  - network: the in-sandbox bridge to the egress proxy, and nothing else.
+    That means no DNS, no other local port (the MindFlock server included)
+    and no other host.
+
+  It also takes back what Apple's baseline profile would leak: other
+  processes' argv and environment (`kern.procargs2`) and process info. The
+  keychain stays unreachable. The agent runs in its own session, so
+  keystroke injection into the pane (`TIOCSTI`) fails, while a small
+  supervisor outside relays resize and signals. The doctor reports the
+  built-in sandbox on macOS, and Settings → People no longer says a Mac can't
+  share a folder. On a Mac, claude's login is read from the keychain. New
+  provider profile field `tmpdir_env` (TOML `[peer] tmpdir_env`): claude
+  sets `CLAUDE_CODE_TMPDIR`, which otherwise uses a fixed `/tmp/claude-<uid>`.
+
+### Fixed
+
+- **A shared session no longer logs Claude Code out on the host computer.**
+  The sandbox used to get a copy of claude's whole login, refresh token
+  included. Refreshing rotates that token, so once the sandboxed claude
+  refreshed, the host's stored copy was dead and every other claude on that
+  computer had to log in again. Only the access token is seeded now (Linux
+  and macOS). `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) and
+  `ANTHROPIC_API_KEY` pass through when the server has them. A launch with
+  no login, or one about to expire, is refused with the fix ("run `claude`
+  here once") instead of starting an agent that can't log in.
+
 ## [0.8.0] - 2026-10-11
 
 ### Added

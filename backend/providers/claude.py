@@ -296,11 +296,13 @@ class ClaudeProvider(BaseProvider):
                 "claude.ai",
                 "statsig.anthropic.com",
             ),
-            passthrough_env=("ANTHROPIC_API_KEY",),
+            # A long-lived `claude setup-token` token rides in when the
+            # server has one; the login itself is seeded by sandbox_extra_seed.
+            passthrough_env=("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
             config_env="CLAUDE_CONFIG_DIR",
             config_dir=".claude",
-            seed_files=(".credentials.json",),
             env=(("DISABLE_AUTOUPDATER", "1"),),
+            tmpdir_env=("CLAUDE_CODE_TMPDIR",),
         )
 
     def sandbox_extra_seed(self, work_dir: str) -> dict:
@@ -309,7 +311,11 @@ class ClaudeProvider(BaseProvider):
         history or settings. ``CLAUDE_CONFIG_DIR`` moves claude's global config
         to ``<dir>/.claude.json``, so both locations are seeded."""
         body = _claude_minimal_json(work_dir)
-        return {".claude.json": body, ".claude/.claude.json": body}
+        out = {".claude.json": body, ".claude/.claude.json": body}
+        creds = _claude_sandbox_credentials()
+        if creds is not None:
+            out[".claude/.credentials.json"] = creds
+        return out
 
     def peer_mcp_args(self, spec) -> tuple:
         """``--mcp-config=<run>/mcp.json --strict-mcp-config
@@ -1718,6 +1724,97 @@ def _transcript_file_tokens(
 
 #: Caps for reading the real ``.claude.json`` (it can be huge: projects map).
 _MAX_SOURCE_JSON = 64 * 1024 * 1024
+
+
+#: Claude Code on macOS keeps its login in the login keychain under this
+#: service, not in ``~/.claude/.credentials.json``.
+_KEYCHAIN_SERVICE = "Claude Code-credentials"
+_MAX_CREDENTIAL = 1024 * 1024
+#: A seeded access token must outlive the launch by at least this long.
+_MIN_TOKEN_LIFE_S = 10 * 60
+
+
+def _claude_host_credentials() -> Optional[bytes]:
+    """The host's claude login as ``.credentials.json`` bytes: the file
+    (``$CLAUDE_CONFIG_DIR`` or ``~/.claude``), else — on macOS — the login
+    keychain entry, read with ``/usr/bin/security`` (which the entry's ACL
+    trusts, so it never prompts). None when neither has one."""
+    import subprocess
+    import sys
+
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip() or os.path.expanduser(
+        "~/.claude"
+    )
+    try:
+        with open(os.path.join(cfg, ".credentials.json"), "rb") as fh:
+            raw = fh.read(_MAX_CREDENTIAL + 1)
+        return raw if len(raw) <= _MAX_CREDENTIAL else None
+    except OSError:
+        pass
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "/usr/bin/security",
+                "find-generic-password",
+                "-s",
+                _KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            capture_output=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    raw = proc.stdout.strip()
+    if proc.returncode != 0 or not raw or len(raw) > _MAX_CREDENTIAL:
+        return None
+    return raw
+
+
+def _claude_sandbox_credentials() -> Optional[bytes]:
+    """The login a peer sandbox gets: the host's ACCESS token only.
+
+    Never the refresh token. Refreshing rotates it, so a sandboxed claude that
+    refreshed would leave the host's stored copy dead — every other claude on
+    this computer logged out. Without it the sandbox's login lasts as long as
+    the access token (hours); a relaunch seeds the host's current one, and a
+    ``claude setup-token`` token (``CLAUDE_CODE_OAUTH_TOKEN``) avoids the limit.
+
+    Raises ``ValueError`` (the launch fails closed, with this message) when
+    there is no usable login and no token/key in the environment, or the
+    host's access token is about to expire.
+    """
+    import json
+    import time
+
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    raw = _claude_host_credentials()
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        data = None
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if not isinstance(oauth, dict) or not isinstance(oauth.get("accessToken"), str):
+        raise ValueError(
+            "Claude Code isn't logged in on this computer — run `claude` here "
+            "and log in, then start the shared session again"
+        )
+    expires = oauth.get("expiresAt")
+    if isinstance(expires, (int, float)) and expires / 1000 - time.time() < (
+        _MIN_TOKEN_LIFE_S
+    ):
+        raise ValueError(
+            "Claude Code's login on this computer needs refreshing — run "
+            "`claude` here once (or set CLAUDE_CODE_OAUTH_TOKEN from "
+            "`claude setup-token`), then start the shared session again"
+        )
+    keep = ("accessToken", "expiresAt", "scopes", "subscriptionType", "rateLimitTier")
+    out = {"claudeAiOauth": {k: oauth[k] for k in keep if k in oauth}}
+    return json.dumps(out).encode()
 
 
 def _claude_minimal_json(work: str) -> bytes:

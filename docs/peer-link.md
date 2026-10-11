@@ -94,10 +94,11 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
 > shared folder and the peer MCP tools landed in 0.7.0; invites and joins
 > that turn peer links on by themselves, `peer.relay = auto` (a Cloudflare
 > quick tunnel whenever `cloudflared` is installed) and any sandbox-capable
-> agent CLI landed in 0.7.1 (see the CHANGELOG). Still open: the sandbox
-> needs Linux + bubblewrap, so shared sessions run only there (the sandbox
-> check returns "peer sandbox needs Linux + bubblewrap" on any other OS);
-> aider can't take the peer tools (no MCP client); and across networks the
+> agent CLI landed in 0.7.1, and the macOS sandbox (Seatbelt, see
+> [macOS](#the-sandbox-on-macos--contract-seatbeltpy)) after 0.8.0 (see the
+> CHANGELOG). Still open: shared sessions run only on Linux (bubblewrap) and
+> macOS (the sandbox check returns "peer sandbox needs Linux (bubblewrap) or
+> macOS (sandbox-exec)" on any other OS); aider can't take the peer tools (no MCP client); and across networks the
 > only carriers are the Cloudflare quick tunnel or your own WebSocket-capable
 > `wss://` proxy. Sections marked **CONTRACT** are the interfaces the modules
 > implement exactly; the rest explains why.
@@ -415,11 +416,13 @@ The other functions:
 ## The sandbox — CONTRACT (`sandbox.py`, `egress.py`, `bridge.py`, `sandbox_exec.py`)
 
 - `sandbox.available() -> (bool, reason)`:
-  - Linux only;
+  - Linux: bubblewrap (below); macOS: `sandbox-exec` (see
+    [macOS](#the-sandbox-on-macos--contract-seatbeltpy));
   - finds `bwrap` via `$MINDFLOCK_BWRAP`, then `PATH`, then
     `~/.local/opt/bwrap/root/usr/bin/bwrap`;
   - verifies it with a real `bwrap --unshare-all --ro-bind / / true`.
-  - On any other OS it returns `(False, "peer sandbox needs Linux + bubblewrap")`.
+  - On any other OS it returns
+    `(False, "peer sandbox needs Linux (bubblewrap) or macOS (sandbox-exec)")`.
   - **Callers fail closed**: no sandbox, no shared session.
 - `sandbox.build_argv(share, inner_argv, provider, env) -> list[str]` returns the
   full `bwrap … -- <inner>` argv:
@@ -514,6 +517,81 @@ The other functions:
     `sh -c 'python3 <run>/bridge.py <run>/egress.sock <port> & exec "$@"' sh <argv…>`;
   - then `os.execvp`s bwrap;
   - refuses (exit 78, message on stderr) when the sandbox is unavailable.
+
+## The sandbox on macOS — CONTRACT (`seatbelt.py`)
+
+macOS has no mount namespaces, so the agent runs on the real filesystem under a
+deny-by-default Seatbelt profile (`sandbox-exec -p`). It allows the same set
+the bwrap binds expose, at the same absolute paths.
+
+- `seatbelt.available()` finds `/usr/bin/sandbox-exec` and proves it enforces:
+  one read through `(allow default)` succeeds, and the same read under a
+  profile that denies the file fails.
+- `sandbox.build_seatbelt(share, inner_argv, provider, env, *, bridge_port,
+  tty)` returns `(argv, env, PATH links)`. It does the same validation,
+  runtime discovery and environment as `build_options`, with three changes:
+  - `PATH` starts with `run/bin` (symlinks written by `install_links`, read-only
+    inside), not `/run/mindflock-bin`;
+  - `TMPDIR` is `home/.tmp`, because `/tmp` is the host's and stays unwritable;
+  - the profile's `tmpdir_env` names point there too, e.g. claude's
+    `CLAUDE_CODE_TMPDIR`.
+- `seatbelt.build_profile(dirs, runtime, bridge_port, tty)`:
+  - `(deny default)` + `(import "system.sb")`. This is Apple's baseline:
+    `/System`, `/usr/lib`, `/usr/share`, dyld, timezone data and a few core
+    mach services. The keychain and launch services are not among them.
+  - **Takes back** what `system.sb` allows that would leak other processes:
+    `sysctl-read` of `kern.procargs*` / `kern.proc.*` (every same-user
+    process's argv and environment, including the server's) and
+    `process-info*` beyond `same-sandbox`.
+  - Read-only:
+    - `/usr/bin`, `/usr/sbin`, `/usr/libexec`, `/bin`, `/sbin`;
+    - `/private/var/select` (the `/bin/sh` shim);
+    - the Command Line Tools (the `/usr/bin/git` shim);
+    - `/private/etc/{ssl,group,hosts,shells,localtime}`;
+    - the runtime paths (the same discovery as Linux, plus Homebrew's
+      `Cellar`/`opt`/`lib` when the CLI or its interpreter lives there);
+    - `work`, `repo.git`, `home` and `run`.
+  - `file-read-metadata` only on the ancestors of those paths, so they can be
+    traversed.
+  - Writes:
+    - `work/` except the `.git` gitfile and the `work` dir itself;
+    - `home/` except the `home` dir itself.
+    - Nothing else: `repo.git` and `run` are read-only, as on Linux.
+  - Network:
+    - bind / accept / connect `localhost:<bridge port>` only;
+    - connect the `run/egress.sock` and `run/agent.sock` unix sockets.
+    - Nothing else. That means no DNS, no other local port (the MindFlock
+      server included) and no other host. HTTPS goes through the bridge and
+      the egress proxy exactly as on Linux.
+  - The pane's tty (`/dev/ttysNNN`, validated) for read/write/ioctl, plus new
+    ptys a tool opens itself.
+  - Hard links into `work/` from outside are refused, because the link source
+    must be readable.
+- `sandbox_exec` on macOS:
+  - picks a free loopback port for the bridge when none is given. Unlike
+    Linux, there is no private network namespace to make the default port
+    safe to share.
+  - forks: the child `setsid()`s, chdirs into `work`, closes inherited fds and
+    execs `sandbox-exec`. Without a controlling tty, `TIOCSTI` into the pane
+    fails (EPERM); this replaces the Linux seccomp filter.
+  - The parent stays outside the sandbox, reads nothing from the tty, relays
+    `SIGWINCH` / `SIGINT` / `SIGQUIT` / `SIGTERM` / `SIGHUP` / `SIGUSR1/2` to
+    the child's process group, and exits with its status.
+- **claude's login on macOS** lives in the login keychain ("Claude
+  Code-credentials"), not in `~/.claude/.credentials.json`.
+  `ClaudeProvider.sandbox_extra_seed` reads it with `/usr/bin/security`, which
+  the entry's ACL trusts, so the server's GUI session reads it without a
+  prompt.
+- **Only the access token is seeded, on Linux and macOS.** The refresh token
+  never enters the sandbox. Refreshing rotates it, so a sandbox that
+  refreshed would leave the host's stored copy dead, logging out every other
+  claude on that computer.
+  - A seeded login therefore lasts as long as the access token (hours), and a
+    relaunch seeds the current one.
+  - `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and
+    `ANTHROPIC_API_KEY` are passed through instead when the server has them.
+  - With neither, a missing login or one expiring within 10 minutes refuses
+    the launch, with the fix in the message.
 
 ## The sandboxed agent's MCP — CONTRACT (`agent_api.py`, `backend/mcp/peer_tools.py`)
 
@@ -659,8 +737,14 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   operator itself can always deny service.
 - **The relay** (only with `peer.relay` on): see
   [Relay residual risks](#relay-residual-risks).
-- **Platform.** The sandbox is Linux-only (bubblewrap + seccomp). Elsewhere
-  sharing a folder is refused (fail closed), so there is no agent to talk to.
+- **Platform.** The sandbox is bubblewrap + seccomp on Linux and a Seatbelt
+  profile on macOS. Elsewhere sharing a folder is refused (fail closed), so
+  there is no agent to talk to. On macOS the agent sees the real filesystem
+  through the profile instead of a private mount tree, so the boundary is
+  only as good as the profile and Apple's enforcement of it, and
+  `sandbox-exec` is deprecated (still shipped and enforced on macOS 26).
+  Names and sizes of files on the ancestor directories of the allowed paths
+  can be `stat`-ed; nothing else outside is visible.
 - **The kernel.** bubblewrap relies on unprivileged user namespaces. A kernel
   LPE inside the sandbox breaks every boundary above.
 
