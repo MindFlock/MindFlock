@@ -595,6 +595,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `prompts/` | Generated ticket prompts (pruned after 1 h) |
 | `.red-zones/<sha1>.json` | Per-worktree zone guard files the tool hook reads at fire time (`v: 2`: red `rules`/`files`/`dirs`/`sym`, green `green_rules` + `companions`; GC'd a day after their worktree stops being live) |
 | `.tool-feed/.snap/<tool_use_id>.json` | The Bash backstop's pre-command snapshot (zoned-file stats + the `git status` dirty set), consumed by the post hook; stale ones GC'd hourly |
+| `.code-map-cache/<sha1>.v1.py<XY>.scan` | The Code Map's per-file import-scan memo for one worktree (`<sha1>` = the first 20 hex digits of sha1(realpath(worktree)); marshal, tagged with the Python version), so a restart re-reads only changed files; ignored and rebuilt when stale or unreadable; not written above 96 MB; the newest 40 are kept and stray `.scan-*` temp files are deleted after an hour. The directory sits beside the tool-feed dir, so `MINDFLOCK_TOOL_FEED_DIR` moves it to that path's parent |
 | `.tool-feed/<session>.jsonl` | Per-session tool feed the hook appends to — the Code Map's live trail; trimmed to its tail past 2 MB. A feed no registered session owns (a manual `claude` in a checkout that keeps MindFlock's hooks, the `_sh` shell pane) is trimmed too and deleted after a day without writes |
 
 ## Environment variables
@@ -629,6 +630,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
+| `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep (sandboxed or scratch servers), whatever `general.revive_on_start` says |
 | `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
@@ -880,7 +882,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   agents and launch args, budgets, agent limits, trusted Tailscale accounts,
   notification rules and ntfy, accent and scroll speed, disabled extensions,
   UI preferences (`prefs`: keymap, prompt presets, theme, diff view, bars,
-  break/idle reminders, hints), session templates, red zones of repos with a
+  break/idle reminders, hints, Map tour seen), session templates, red zones of repos with a
   remote, and user agent-CLI providers (`~/.mindflock/providers/*.toml`; a
   machine's own `coding_cli.binary_paths` still overrides a synced provider's
   `binary_path`). Never shared: paths, binary paths, workspace dir, bind/serve

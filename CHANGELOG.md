@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.mindflock/usage_optimizer.jsonl` (35-day retention); routes under
   `/api/optimizer` (`summary`, `sample`, `samples`). Opens as the dialog or
   as a grid window.
+- **The Map opens fast and explains itself.** The focused pane prefetches its
+  Map, the server warms every session's snapshot at boot, and the import-scan
+  memo is kept on disk (`~/.mindflock-assistant/.code-map-cache/`), so the first click is a cache hit instead of "Growing
+  the tree…" for seconds (3.2 s → 0.4 s with a 3 s snapshot). A six-step tour
+  opens over the first Map you see (synced: `prefs.map_tour`) and replays from
+  **? Guide**. The default surface is calmer: the rule tools sit in one
+  **Rules** group, the guard pill waits for a zone, the bird index lists five
+  changed folders (then **Show all N**), the session split shows only when
+  another session changed something, and an empty Rules list is gone.
+  `MINDFLOCK_CODE_MAP_WARM=0` skips the boot warm-up.
+
 - **Two people on one pushed branch.** The New dialog's Base branch picker
   offers, for a remote pick `origin/x`, **Work on x itself (shared with
   whoever pushed it)** next to the default new branch: `POST /api/instances`

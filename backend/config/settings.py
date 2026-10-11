@@ -1336,9 +1336,11 @@ class PrefsSettings:
     idle_flock: Optional[bool] = None
     idle_after: Optional[int] = None
     hints: Optional[bool] = None
+    # The Map tab's first-open tour: True once seen (here or on any device).
+    map_tour: Optional[bool] = None
 
     _STRS = ("theme", "diff_mode", "diff_base")
-    _BOOLS = ("reduce_motion", "break_on", "idle_flock", "hints")
+    _BOOLS = ("reduce_motion", "break_on", "idle_flock", "hints", "map_tour")
     _INTS = ("break_every", "idle_after")
 
     def to_dict(self) -> dict:
@@ -1379,6 +1381,7 @@ class PrefsSettings:
             idle_flock=_opt_bool(d.get("idle_flock")),
             idle_after=_opt_int(d.get("idle_after")),
             hints=_opt_bool(d.get("hints")),
+            map_tour=_opt_bool(d.get("map_tour")),
         )
 
 

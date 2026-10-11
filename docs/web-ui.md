@@ -834,6 +834,21 @@ isn't available). It answers "what is this code, where is this agent working,
 what depends on what it changed, and what may it touch at all" — as one picture
 of the worktree, the **Code Tree**.
 
+### The Map tour
+
+The first time a Map is shown (on any of your devices: it is the synced
+`prefs.map_tour`), a six-step tour opens over the live map once the tree is laid out (never while
+"Growing the tree…" shows).
+Each step is a small card that rings the part it explains: the tree itself
+(trunk, branches, leaves, roots), what the bright leaves and lit branches mean,
+the agents column, **⚠ Could break**, the toolbar's **Rules** group, and getting
+around (`/`, scroll, drag, ⌂ Whole tree). It is non-modal, so the map keeps
+moving underneath. `→` / `Enter` steps forward, `←` back, and `Esc`, **Skip
+tour** or **Done** end it and mark it seen. **? Guide** at the right of the
+toolbar replays it. Only one pane runs it at a time. Switching tabs mid-tour hides it
+*without* marking it seen, so it comes back the next time that Map shows; a
+device that has never pulled the synced value may show it once more.
+
 ### Reading the tree
 
 - **Trunk = the repo, branch = a folder, leaf = a file.** A branch is as thick
@@ -969,11 +984,13 @@ break, its changed files most-depended-on first); this session's row links its
 **Plan** and any **scope requests** or **breaches** to the Session panel.
 **Changes:** where
 the changes are (`Changes 9 in all`, then `this session 7 + other sessions 2`
-— this session's 7 is the pane header's `7 files` — and `backend 5 · frontend
-4`), **Most at risk · 73 import it — config/settings.py** (click to show its
+— this session's 7 is the pane header's `7 files`; the split is left out while
+no other session has changed anything, since it would only repeat the total —
+and `backend 5 · frontend 4`), **Most at risk · 73 import it — config/settings.py** (click to show its
 importers on the map), **⚠ Could break** (the ranked list + the map layer), a
-caption saying what the row buttons do (`⛔ keep out ✓ only here`), and one
-row per changed folder (`backend › web/core ✎4`, the agents' colour dots, its
+caption saying what the row buttons do (`⛔ keep out ✓ only here`), and a
+row per changed folder (the five with the most changes, plus any a rule covers,
+then **Show all N folders**) (`backend › web/core ✎4`, the agents' colour dots, its
 first files) with **⛔** / **✓** buttons: blocking or allowing an area is one
 click from where you read about it (a second click on the same button removes
 the rule; a folder already inside a rule says so, and with an only-here zone a
@@ -981,7 +998,9 @@ folder of this session's outside it reads `already changed · exempt from ✓`,
 and another session's folder reads `other worktree · not affected` — only
 here binds this session's worktree, so another session's marks on the map are
 never dimmed as if restricted; the row height never
-changes, so nothing reflows under the pointer). **Rules** come last (a rule
+changes, so nothing reflows under the pointer). The row buttons stay quiet
+(half opacity) until the row is pointed at or focused, or the rule is on; on a
+touch screen they are always full. **Rules** come last, once there is one (a rule
 added from a Changes row lands below it): every zone, a click zooms there, ×
 removes it; a rule goes by its short name (`providers`, `web/core`, the full
 path on hover) and says what it stopped in one wording everywhere
@@ -998,7 +1017,8 @@ badges keep off the HUD. Below 760 × 560 px the column becomes a slim left
 cards open as a bottom sheet; the paint-tool hint sits at the bottom, so arming
 a tool never moves what you aim at.
 
-**Painting rules:** **⛔ Keep out** / **✓ Only here** in the toolbar arm a
+**Painting rules:** the toolbar's **Rules** group holds **⛔ Keep out**,
+**✓ Only here** and **+ Zone**. The first two arm a
 tool; click a folder name, a branch or a leaf (a leaf paints its folder unless
 you are zoomed in on single files) and it disarms — `Shift`-click to paint
 several, `Esc` cancels. Each paint is one `POST …/red-zones` (keep-out: repo
@@ -1023,7 +1043,28 @@ the tree) and the reason it gave.
 
 **Cost:** nothing mounts until the tab is first opened, and nothing polls or
 draws unless it is showing and the window is visible (`GET …/code-map/live`
-every 2 s). The layout search runs in a Web Worker (`/codetree-worker.js`)
+every 2 s).
+
+**Preload.** Opening the Map used to pay for everything at once: the server
+listed the files and read every source file for the import graph (about 3 s for
+a 3k-file repo after a restart), then the browser laid the tree out. Now three
+things happen ahead of the click, so the first open is a cache hit:
+
+- **The focused pane prefetches** its Map 1.5 s after it gets focus (git
+  sessions, not already on the Map): `GET …/code-map` once, then the layout, into
+  the same caches the tab reads. Nothing polls until the tab is opened, and
+  only the focused pane does this, never all nine.
+- **The server warms every session at boot**, one worktree at a time, starting
+  45 s after boot (past the 30 s quiet window and the background revive's
+  start, so it never competes with terminals and agents coming up), within 90 s
+  in all (`MINDFLOCK_CODE_MAP_WARM=0` turns it off; it never runs under
+  pytest). A Map opened before then still gets the prefetch below.
+- **The per-file scan memo is kept on disk**
+  (`~/.mindflock-assistant/.code-map-cache/`), so a restart re-reads only the
+  files that changed since.
+
+Measured with a server made to take 3 s for the snapshot: the Map became usable
+3.2 s after the click without the prefetch and 0.4 s after it with the prefetch. The layout search runs in a Web Worker (`/codetree-worker.js`)
 behind a "Growing the tree…" state with progress; its placements are cached
 per repo and data in IndexedDB, so the next open replays them in milliseconds,
 and a changed worktree warm-starts from the previous layout — unchanged
@@ -1086,7 +1127,8 @@ Every edit the guard refuses for being outside the scope is a **scope
 request** with **Allow this file**, which adds an anchored green zone for
 exactly that path and tells the agent.
 
-The **guard pill** says how much the zones hold right now: **Guarded**
+The **guard pill** (in the toolbar once a zone exists; before that it could only
+say "No zones") says how much the zones hold right now: **Guarded**
 (Claude Code: the edit is refused before it happens, subagents included),
 **Arming…** (installed, proven on the next tool call), **Detect-only
 (codex)** (no hook guard for this CLI: breaches are detected, flagged and

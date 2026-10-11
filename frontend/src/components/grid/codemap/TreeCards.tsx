@@ -222,7 +222,7 @@ export function ActivityCard(p: {
         </button>
       </h4>
       <ul className="ct-act-list">
-        {!p.rows.length && <li className="ct-muted">Nothing yet — the agent hasn't touched a file since the map armed.</li>}
+        {!p.rows.length && <li className="ct-muted">Nothing yet. Files the agent reads and edits appear here as it works.</li>}
         {(p.open ? p.rows : p.rows.slice(0, 1)).map((r) => (
           <li key={r.key}>
             <button

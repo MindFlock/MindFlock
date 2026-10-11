@@ -31,7 +31,7 @@ import { HistoryOverlay } from "./HistoryOverlay";
 import { PaneFindBar, type FindMode } from "./PaneFindBar";
 import { QueueTab } from "./QueueTab";
 import { ThreadTab } from "./ThreadTab";
-import { CodeMapTab } from "./CodeMapTab";
+import { CodeMapTab, prefetchCodeMap } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
 import { DriveButton } from "../presence/Presence";
@@ -46,6 +46,8 @@ type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
+/** Idle before the focused pane warms its Map (a click-through of several panes must not start several). */
+const MAP_PREFETCH_MS = 1500;
 
 /** Tabs this pane can draw a body for. A saved or requested tab outside it
  * shows the Agent tab instead of an empty pane. */
@@ -386,6 +388,15 @@ export function Pane({
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
   }, [focused, missing, loading, histPane, paneFind, tab, title]);
+
+  // The Map is warmed for the pane you are looking at (focused, git, not
+  // already on the Map tab) after a short idle, so clicking Map paints at
+  // once — nine panes may exist, so never for all of them at once.
+  useEffect(() => {
+    if (!focused || !caps.git || missing || loading || tab === "map") return;
+    const t = setTimeout(() => void prefetchCodeMap(title), MAP_PREFETCH_MS);
+    return () => clearTimeout(t);
+  }, [focused, caps.git, missing, loading, tab, title]);
 
   const showTab = (t: Tab) => {
     // A tab click while the full-history overlay covers the body is

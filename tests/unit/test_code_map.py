@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,6 +77,7 @@ def _isolate(tmp_path, monkeypatch):
         "_CHANGED_CACHE",
         "_GRAPH_CACHE",
         "_SCAN_MEMO",
+        "_MEMO_LOADED",
         "_JSON_MEMO",
         "_PLAN_LATCH",
         "_TP_LATCH",
@@ -1803,3 +1805,297 @@ def test_attr_uses_ignore_file_names_in_prose():
     uses = cm._attr_uses(text, ["server"])
     assert uses == {"server": ("app", "json", "py")}
     assert cm._attr_uses("see server.py\n", ["server"]) == {}
+
+
+# --------------------------------------------------------------------------- #
+# The scan memo on disk: a restart no longer re-reads every source file
+# --------------------------------------------------------------------------- #
+
+
+def _reads_during(monkeypatch):
+    """Count the files a build actually READS (memo misses)."""
+    real = cm._read_head
+    n = [0]
+
+    def counting(path):
+        n[0] += 1
+        return real(path)
+
+    monkeypatch.setattr(cm, "_read_head", counting)
+    return n
+
+
+def _graph_rels(root):
+    return sorted(
+        str(p.relative_to(root)).replace(os.sep, "/")
+        for p in root.rglob("*")
+        if p.is_file()
+    )
+
+
+def test_scan_memo_survives_a_restart(tmp_path, monkeypatch):
+    """Build once (cold: every file read, the memo written to disk); forget
+    the process memo as a restart would; build again: nothing is re-read and
+    the graph is the same."""
+    root = _graph_repo(tmp_path / "g")
+    rels = _graph_rels(root)
+    n = _reads_during(monkeypatch)
+    g1 = cm.build_graph(str(root), rels, fp="fp1")
+    assert n[0] > 0 and g1["partial"] is False
+    memo_file = cm._memo_file(str(root))
+    assert os.path.isfile(memo_file), "the memo was not written"
+    assert memo_file.startswith(str(tmp_path)), "the memo must live beside the feed dir"
+
+    # "restart": the process caches are gone, the disk is not
+    cm._SCAN_MEMO.clear()
+    cm._GRAPH_CACHE.clear()
+    cm._MEMO_LOADED.clear()
+    n[0] = 0
+    g2 = cm.build_graph(str(root), rels, fp="fp2")
+    assert n[0] == 0, "a restart re-read %d unchanged files" % n[0]
+    assert g2["edges"] == g1["edges"] and g2["partial"] is False
+
+    # an edited file is read again (and only it)
+    (root / "app.py").write_text((root / "app.py").read_text() + "\n# touched\n")
+    os.utime(root / "app.py", None)
+    n[0] = 0
+    g3 = cm.build_graph(str(root), rels, fp="fp3")
+    assert n[0] == 1 and g3["edges"] == g1["edges"]
+
+
+def test_scan_memo_file_is_checked_before_it_is_trusted(tmp_path, monkeypatch):
+    root = _graph_repo(tmp_path / "g")
+    rels = _graph_rels(root)
+    cm.build_graph(str(root), rels, fp="fp1")
+    memo_file = cm._memo_file(str(root))
+    assert os.path.isfile(memo_file)
+
+    def restart():
+        cm._SCAN_MEMO.clear()
+        cm._GRAPH_CACHE.clear()
+        cm._MEMO_LOADED.clear()
+
+    # truncated / garbage: ignored, the build still completes by reading
+    with open(memo_file, "wb") as fh:
+        fh.write(b"\x00garbage")
+    restart()
+    n = _reads_during(monkeypatch)
+    g = cm.build_graph(str(root), rels, fp="fp2")
+    assert n[0] > 0 and g["partial"] is False
+
+    # a memo written for ANOTHER worktree (same file name, moved checkout): ignored
+    other = tmp_path / "elsewhere"
+    import marshal
+
+    with cm._LOCK:
+        recs = dict(cm._SCAN_MEMO)
+    with open(memo_file, "wb") as fh:
+        fh.write(
+            marshal.dumps({"v": cm._MEMO_DISK_VERSION, "wt": str(other), "recs": recs})
+        )
+    restart()
+    assert cm._memo_load(str(root)) == 0
+
+    # the real thing loads
+    cm.build_graph(str(root), rels, fp="fp3")  # re-reads, and rewrites the memo
+    assert cm._memo_save(str(root)) is True
+    restart()
+    assert cm._memo_load(str(root)) > 0
+    # …once per process: a second load is a no-op
+    assert cm._memo_load(str(root)) == 0
+
+
+def test_scan_memo_dir_is_pruned_to_the_newest(tmp_path):
+    d = tmp_path / "memo"
+    d.mkdir()
+    for i in range(5):
+        f = d / ("w%d.v1.py312.scan" % i)
+        f.write_bytes(b"x")
+        os.utime(f, (1000 + i, 1000 + i))
+    stray = d / ".scan-abc"
+    stray.write_bytes(b"x")
+    os.utime(stray, (1, 1))
+    assert cm._memo_prune(str(d), keep=2) == 4
+    assert sorted(p.name for p in d.iterdir()) == [
+        "w3.v1.py312.scan",
+        "w4.v1.py312.scan",
+    ]
+
+
+def _restart_memo():
+    """What a server restart forgets: the process caches, not the disk."""
+    cm._SCAN_MEMO.clear()
+    cm._GRAPH_CACHE.clear()
+    cm._MEMO_LOADED.clear()
+
+
+def _write_memo(path, wt, recs, v=None):
+    import marshal
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(
+            marshal.dumps(
+                {"v": cm._MEMO_DISK_VERSION if v is None else v, "wt": wt, "recs": recs}
+            )
+        )
+
+
+def test_memo_file_is_keyed_on_the_realpath_and_the_interpreter(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert cm._memo_file(str(link)) == cm._memo_file(str(real))
+    tag = "py%d%d" % (sys.version_info[0], sys.version_info[1])
+    assert tag in os.path.basename(cm._memo_file(str(real)))
+    assert cm._memo_file(str(real)).endswith(".scan")
+
+
+def test_memo_load_ignores_an_oversized_file_without_reading_it(tmp_path, monkeypatch):
+    wt = os.path.realpath(str(tmp_path / "w"))
+    os.makedirs(wt)
+    _write_memo(cm._memo_file(wt), wt, {os.path.join(wt, "a.py"): (1, 2, {})})
+    monkeypatch.setattr(cm, "_MEMO_DISK_MAX_BYTES", 4)
+    opened = []
+    real_open = open
+
+    def spy(path, *a, **kw):
+        opened.append(str(path))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", spy)
+    assert cm._memo_load(wt) == 0
+    assert cm._memo_file(wt) not in opened
+    assert cm._SCAN_MEMO == {}
+
+
+def test_memo_load_ignores_a_stale_format(tmp_path):
+    wt = os.path.realpath(str(tmp_path / "w"))
+    os.makedirs(wt)
+    recs = {os.path.join(wt, "a.py"): (1, 2, {})}
+    _write_memo(cm._memo_file(wt), wt, recs, v=cm._MEMO_DISK_VERSION + 1)
+    assert cm._memo_load(wt) == 0 and cm._SCAN_MEMO == {}
+
+
+def test_memo_load_takes_only_well_formed_records_inside_the_worktree(tmp_path):
+    wt = os.path.realpath(str(tmp_path / "w"))
+    os.makedirs(wt)
+    good = os.path.join(wt, "good.py")
+    recs = {
+        good: (10, 20, {"py": []}),
+        os.path.join(wt + "-sibling", "x.py"): (1, 2, {}),  # prefix, not inside
+        "/etc/passwd": (1, 2, {}),
+        os.path.join(wt, "short.py"): (1, 2),
+        os.path.join(wt, "strs.py"): ("1", 2, {}),
+        os.path.join(wt, "list.py"): (1, 2, ["x"]),
+        os.path.join(wt, "notuple.py"): [1, 2, {}],
+    }
+    _write_memo(cm._memo_file(wt), wt, recs)
+    assert cm._memo_load(wt) == 1
+    assert cm._SCAN_MEMO == {good: (10, 20, {"py": []})}
+
+
+def test_memo_load_lets_memory_win_and_respects_the_cap(tmp_path, monkeypatch):
+    wt = os.path.realpath(str(tmp_path / "w"))
+    os.makedirs(wt)
+    a, b, c, d = (os.path.join(wt, n) for n in ("a.py", "b.py", "c.py", "d.py"))
+    _write_memo(
+        cm._memo_file(wt),
+        wt,
+        {a: (1, 1, {"disk": 1}), b: (2, 2, {}), c: (3, 3, {}), d: (4, 4, {})},
+    )
+    cm._SCAN_MEMO[a] = (9, 9, {"mem": 1})
+    monkeypatch.setattr(cm, "_SCAN_MEMO_MAX", 3)
+    took = cm._memo_load(wt)
+    assert took == 2  # a skipped (memory wins), then the cap stops it at 3 entries
+    assert cm._SCAN_MEMO[a] == (9, 9, {"mem": 1})
+    assert len(cm._SCAN_MEMO) == 3
+
+
+def test_memo_save_writes_nothing_for_an_unscanned_worktree(tmp_path):
+    wt = str(tmp_path / "w")
+    os.makedirs(wt)
+    assert cm._memo_save(wt) is False
+    assert not os.path.exists(cm._memo_file(wt))
+
+
+def test_memo_save_cleans_up_its_temp_file_when_replace_fails(tmp_path, monkeypatch):
+    wt = os.path.realpath(str(tmp_path / "w"))
+    os.makedirs(wt)
+    cm._SCAN_MEMO[os.path.join(wt, "a.py")] = (1, 2, {})
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cm.os, "replace", boom)
+    assert cm._memo_save(wt) is False
+    d = cm._memo_dir()
+    assert os.path.isdir(d)
+    assert [n for n in os.listdir(d) if n.startswith(".scan-")] == []
+    assert not os.path.exists(cm._memo_file(wt))
+
+
+def test_a_fully_cached_rebuild_does_not_rewrite_the_memo(tmp_path, monkeypatch):
+    root = _graph_repo(tmp_path / "g")
+    rels = _graph_rels(root)
+    cm.build_graph(str(root), rels, fp="fp1")
+    memo_file = cm._memo_file(str(root))
+    os.utime(memo_file, (1000, 1000))
+    saves = []
+    real_save = cm._memo_save
+    monkeypatch.setattr(cm, "_memo_save", lambda wt: saves.append(wt) or real_save(wt))
+    cm._GRAPH_CACHE.clear()  # force a real build; every record is a memo hit
+    g = cm.graph_detail(str(root), rels, fp="fp2")
+    assert g["reads"] == 0 and g["partial"] is False
+    assert saves == []
+    assert os.stat(memo_file).st_mtime == 1000
+
+
+def test_a_partial_build_saves_what_it_read_and_the_next_process_resumes(
+    tmp_path, monkeypatch
+):
+    root = _graph_repo(tmp_path / "g")
+    rels = _graph_rels(root)
+    n = _reads_during(monkeypatch)
+    cm.build_graph(str(root), rels, fp=None)
+    total = n[0]
+    assert total > 3
+    _restart_memo()
+    os.unlink(cm._memo_file(str(root)))
+
+    # a budget that is spent at once: only the progress floor (2) is read
+    monkeypatch.setattr(cm, "_MIN_FRESH_READS", 2)
+    monkeypatch.setattr(cm, "GRAPH_BUDGET_S", 1e-9)
+    n[0] = 0
+    g = cm.build_graph(str(root), rels, fp="fpA")
+    assert g["partial"] is True and n[0] == 2
+    assert os.path.isfile(cm._memo_file(str(root))), "a partial build must still save"
+
+    # restart: the two records come back from disk, only the rest is read
+    _restart_memo()
+    monkeypatch.setattr(cm, "GRAPH_BUDGET_S", 6.0)
+    n[0] = 0
+    g2 = cm.build_graph(str(root), rels, fp="fpB")
+    assert g2["partial"] is False and n[0] == total - 2
+
+
+def test_memo_prune_defaults_and_spares_young_temps_and_other_files(
+    tmp_path, monkeypatch
+):
+    d = tmp_path / "memo"
+    d.mkdir()
+    monkeypatch.setattr(cm, "_MEMO_DISK_KEEP", 1)
+    for i in range(3):
+        f = d / ("w%d.v1.py312.scan" % i)
+        f.write_bytes(b"x")
+        os.utime(f, (1000 + i, 1000 + i))
+    (d / "README").write_bytes(b"x")
+    os.utime(d / "README", (1, 1))
+    (d / ".scan-young").write_bytes(b"x")  # mtime = now: a save in flight
+    assert cm._memo_prune(str(d)) == 2
+    assert sorted(p.name for p in d.iterdir()) == [
+        ".scan-young",
+        "README",
+        "w2.v1.py312.scan",
+    ]
