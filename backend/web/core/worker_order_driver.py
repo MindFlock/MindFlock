@@ -209,7 +209,7 @@ def set_fence(title: str, payload: Mapping) -> Tuple[int, dict]:
         in_run = False
     if in_run:
         return 409, {
-            "error": "%s belongs to a team run: its group fences it (the plan's "
+            "error": "%s belongs to a team run, which fences it (the plan's "
             "paths) — change the plan, not the session" % title
         }
     by = str(payload.get("by") or "").strip()

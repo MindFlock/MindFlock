@@ -22,6 +22,7 @@ import { isUnder, type Model, type TFile, type TNode } from "../../../lib/codetr
 import { zoneOfFile } from "../../../lib/codetree/zones";
 import type { AgentState, TZone } from "../../../lib/codetree/types";
 import { BirdIcon, LegendCard, dispName, nodeName, subLine } from "./TreeCards";
+import { isShared, sharedWhere } from "./sharedZone";
 
 const clip = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
@@ -296,7 +297,7 @@ function AgentRow({ p, A, subs, open, onToggle }: { p: BirdIndexProps; A: AgentS
               : "in the nest, thinking"
             : A.ag.primary
               ? A.activity === "clarify"
-                ? "waiting for your answer"
+                ? "needs you · question"
                 : "waiting"
               : "editing on its own branch";
   // another session works in its own worktree: only repo-wide keep-outs bind it
@@ -489,12 +490,17 @@ function Rules({ p }: { p: BirdIndexProps }) {
                   <span className="tx" title={full}>
                     {z.name || tailPath(full)}
                   </span>
-                  <small>{z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : "whole repo"}</small>
+                  <small title={isShared(z) ? sharedWhere(z) : undefined}>
+                    {z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : isShared(z) ? "shared" : "whole repo"}
+                  </small>
                   {nb > 0 && <small className="nb">{blockedTxt(nb)}</small>}
                 </button>
-                <button type="button" className="ct-x" aria-label={"Remove rule " + (z.name || z.pattern)} title="Remove this rule" disabled={p.zoneBusy === z.id} onClick={() => p.onRemoveZone(z)}>
-                  ×
-                </button>
+                {/* A shared zone is lifted in the committed file (Zones dialog), not here. */}
+                {!isShared(z) && (
+                  <button type="button" className="ct-x" aria-label={"Remove rule " + (z.name || z.pattern)} title="Remove this rule" disabled={p.zoneBusy === z.id} onClick={() => p.onRemoveZone(z)}>
+                    ×
+                  </button>
+                )}
               </li>
             );
           })}

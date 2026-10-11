@@ -146,7 +146,7 @@ describe("update.available", () => {
     expect(updateNote(d)).toEqual({
       text: d.detail,
       screen: "devices",
-      toast: d.detail + " — Update them in Settings → Devices",
+      toast: d.detail + " — Update them in Settings → Your devices",
     });
     expect(notifFromEvent(env({ data: d }))).toEqual({
       text: d.detail,

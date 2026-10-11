@@ -18,7 +18,9 @@ import {
 } from "./layout";
 import { Pane } from "./Pane";
 import { SpecialPane } from "./SpecialPane";
-import { SetupChecklist } from "../dialogs/SetupDialog";
+import { SetupChecklist } from "../setup/SetupChecklist";
+import { showSetupCard } from "../setup/setupModel";
+import { useSetup } from "../setup/useSetup";
 import { isVerifySession } from "../dialogs/verify";
 
 export interface SpecialPaneDesc {
@@ -60,7 +62,7 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
   // Verify dialog. Without this filter it would appear twice — once as a
   // terminal you could type into, which is exactly what it must not be.
   const workable = useMemo(
-    () => (instances || []).filter((i) => !isVerifySession(i.title)),
+    () => (instances || []).filter((i) => !isVerifySession(i)),
     [instances]
   );
   const specialByKey = useMemo(
@@ -165,7 +167,14 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
   const booting = !isSuccess;
   const noneAtAll = (instances || []).length === 0;
   const showEmpty = !booting && visible.length === 0 && specialPanes.length === 0;
-  const firstRun = noneAtAll && config && !config.onboarded;
+  // The first-run card: while a required checklist step is still to do (the
+  // server's GET /api/setup; its onboarded flag stands in until that lands).
+  const { data: setup } = useSetup(!booting && noneAtAll);
+  const firstRun = showSetupCard({
+    sessions: instances ? instances.length : -1,
+    status: setup,
+    onboarded: config?.onboarded,
+  });
 
   return (
     <main
@@ -209,12 +218,10 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
         (firstRun ? (
           <div id="empty" data-mode="setup">
             <div className="setup-card">
-              {/* Not "Welcome": the tour opening over this card already says
-                  that, and one welcome at a time is plenty. */}
               <h2>Get set up</h2>
-              <p className="muted">Three steps to a running agent.</p>
+              <p className="muted">Five steps — three to a running agent, two you can skip.</p>
               <div className="setup-body">
-                <SetupChecklist standalone />
+                <SetupChecklist />
               </div>
             </div>
           </div>

@@ -1,4 +1,4 @@
-/** lib/gateOn.ts — Settings → Devices' "Turn the gate on": sign this
+/** lib/gateOn.ts — Settings → Your devices' "Turn the gate on": sign this
  * browser in before the gate goes on, never after; a withheld token skips
  * the sign-in and lets the save's refusal surface. */
 

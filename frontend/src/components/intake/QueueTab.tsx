@@ -86,7 +86,7 @@ interface IngestionStatus {
   pr_enabled?: boolean;
   issues_enabled?: boolean;
   /** False when PR review and issue handling run on another of your devices
-   * (Settings → Devices); `automation_device` names it ("" when unknown).
+   * (Settings → Your devices); `automation_device` names it ("" when unknown).
    * Missing from an older server: read as "here". */
   automation_here?: boolean;
   automation_device?: string;
@@ -137,7 +137,7 @@ function StalledNote({ s }: { s: Section }) {
       <div className="ik-queue-stalled" data-runs-on={s.runsOn || ""}>
         {runsOnText(s.runsOn)} — {s.runsOn || "that device"} starts{" "}
         {many ? "these" : "this one"} on its own; this computer doesn't (to move them here, choose{" "}
-        <strong>Run here</strong> in Settings → Devices). You can
+        <strong>Run here</strong> in Settings → Your devices). You can
         still start {many ? "any of them" : "it"} here, with <strong>Start now</strong>.
       </div>
     );

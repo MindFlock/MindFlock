@@ -6,7 +6,7 @@ Owns everything behind "how do I reach MindFlock from my phone?":
 * Tailscale node discovery (:func:`_tailscale_info`) and whether
   ``tailscale serve`` fronts this port (:func:`_tailscale_serves_port`),
 * QR rendering — terminal half-blocks for the startup banner
-  (:func:`_qr_lines`) and inline SVG for Settings → Mobile (:func:`_mobile_svg`),
+  (:func:`_qr_lines`) and inline SVG for Settings → Your phone (:func:`_mobile_svg`),
 * the startup banner text (:func:`_mobile_banner`) and the ``/api/mobile``
   payload (:func:`_mobile_info`), which mirror each other: both encode the best
   URL a phone on the tailnet can actually reach, with the access token baked
@@ -103,7 +103,7 @@ def tailnet_url() -> Tuple[Optional[str], bool]:
     """``(the phone URL for this machine, whether it works right now)``.
 
     The same "best URL a phone on the tailnet can reach" the banner and the
-    Settings → Mobile QR advertise — but deliberately **without** ``?token=``:
+    Settings → Your phone QR advertise — but deliberately **without** ``?token=``:
     this one is handed to a third party (the ntfy push in
     :mod:`backend.web.core.mobile_announce`), and the access token is not
     theirs to store. Same call ``ntfy.strip_token_param`` makes for the
@@ -216,7 +216,7 @@ def _local_only_mode() -> bool:
 
 
 def _serve_mode_setting() -> str:
-    """The persisted Settings → Mobile serve mode (``general.serve_mode``),
+    """The persisted Settings → Your phone serve mode (``general.serve_mode``),
     normalized to ``"tailscale"`` / ``"local"`` / ``""``. Never raises."""
     try:
         from backend.config.settings import load_settings
@@ -326,7 +326,7 @@ def _banner_signin(srv, qr_url, for_log: bool, *, shared: bool) -> list:
 def qr_svg(data: str):
     """``data`` as an inline, scannable SVG QR (dark-on-white), or None.
 
-    The one QR renderer any settings screen shares — Settings → Mobile's phone
+    The one QR renderer any settings screen shares — Settings → Your phone's phone
     URL and the notify addon's ntfy subscribe URL both come through here.
     """
     try:
@@ -354,7 +354,7 @@ def qr_svg(data: str):
         svg = buf.getvalue().decode("utf-8")
         # segno emits fixed width/height with NO viewBox, so any CSS size larger
         # than that intrinsic size leaves the QR pinned top-left with dead space
-        # around it (visible on the Settings → Mobile card, esp. on phones).
+        # around it (visible on the Settings → Your phone card, esp. on phones).
         # Replace the fixed dimensions with a viewBox so the QR scales to fill
         # whatever box the CSS gives it. Match on the <svg …> open tag only.
         m = re.match(r"(<svg\b)([^>]*)>", svg)
@@ -377,7 +377,7 @@ _mobile_svg = qr_svg
 
 
 def _mobile_info(include_tokens: bool = True) -> dict:
-    """Mobile (/m) URLs + a scannable QR + access token for Settings → Mobile.
+    """Mobile (/m) URLs + a scannable QR + access token for Settings → Your phone.
 
     Mirrors the startup banner (:func:`_mobile_banner`): the QR encodes the best
     tailnet URL a phone can actually reach (with ``?token=`` baked in when the

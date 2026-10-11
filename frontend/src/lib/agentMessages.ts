@@ -232,7 +232,7 @@ export function workerLine(
   let text: string;
   let cls: string;
   if (state === "ask") {
-    text = "? needs your answer";
+    text = "? needs you · question";
     cls = "rep-ask";
   } else if (state === "blocked" || state === "failed") {
     text = "✗ " + state;
@@ -522,7 +522,7 @@ export function escalationText(reason: string): string {
     case "conflict":
       return "merge conflict";
     case "budget":
-      return "the group's budget is used up";
+      return "the team run's budget is used up";
     case "restart":
       return "couldn't pick it back up after a restart";
     case "":
@@ -565,7 +565,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   const ap = row.autopilot || null;
   const stage = String(row.stage || "");
   const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
-  const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
+  const copy = lane?.owner && lane.owner !== row.title ? "\nThis session shares its branch with “" + lane.owner + "”, which carries it." : "";
   const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
   const base = { restCls: "", title: (means ? "Fast-track: " + means + "." : "") + copy };
   const line = (lead: string, rest: string, cls: string, state: ShipLine["state"], why = ""): ShipLine => ({
@@ -577,7 +577,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
     title: (why ? why + "\n" : "") + base.title,
   });
 
-  if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
+  if (act === "clarify") return line("? needs you · question", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the bell, or in its pane.");
   const tstate = String(task?.state || "");
   const reason = String(task?.reason || "");
   if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve")

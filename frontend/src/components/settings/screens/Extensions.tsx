@@ -10,7 +10,9 @@
  * settings file — so there is exactly one place that can tear an extension
  * down, and it cannot disagree with what the server says is enabled. */
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { api } from "../../../api/client";
+import type { ExtensionLoadFailure } from "../../../api/types";
 import { extActivationError, hostVersion, subscribeHost } from "../../../extensions/host";
 import type { ExtensionInfo } from "../../../extensions/types";
 import { refreshExtensions, useExtensions } from "../../../state/queries";
@@ -24,6 +26,20 @@ function readDisabled(raw: unknown): string[] | undefined {
   return Array.isArray(raw) ? raw.map((x) => String(x)) : undefined;
 }
 
+/** The `failed` list of GET /api/addons: user extensions skipped at startup
+ * (an older server has no such key — read as none). */
+export function readLoadFailures(raw: unknown): ExtensionLoadFailure[] {
+  const list = raw && typeof raw === "object" ? (raw as { failed?: unknown }).failed : undefined;
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((f) => f && typeof f === "object")
+    .map((f) => ({
+      id: String((f as ExtensionLoadFailure).id || ""),
+      file: String((f as ExtensionLoadFailure).file || ""),
+      error: String((f as ExtensionLoadFailure).error || ""),
+    }));
+}
+
 export function Extensions(_: ScreenProps) {
   const s = useSettings();
   const { data: extensions, isLoading, isError } = useExtensions();
@@ -31,6 +47,16 @@ export function Extensions(_: ScreenProps) {
   // the rows re-render on host changes rather than reading a stale snapshot.
   useSyncExternalStore(subscribeHost, hostVersion);
   const disabled = readDisabled(s.get("extensions", "disabled"));
+  const [failed, setFailed] = useState<ExtensionLoadFailure[]>([]);
+  useEffect(() => {
+    let live = true;
+    api<unknown>("/api/addons")
+      .then((d) => live && setFailed(readLoadFailures(d)))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const setEnabled = async (ext: ExtensionInfo, on: boolean) => {
     const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
@@ -98,6 +124,26 @@ export function Extensions(_: ScreenProps) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {failed.length > 0 && (
+        <div className="prov-conn-list" id="ext-failed-list">
+          {failed.map((f) => (
+            <div className="prov-conn ext-failed" key={f.id} data-extension-failed={f.id}>
+              <div className="prov-conn-head ext-row-head">
+                <span className="prov-name">{f.id}</span>
+                <span className="prov-badge">failed to load</span>
+              </div>
+              <p className="set-hint ext-row-error">
+                <code>{f.file}</code>: {f.error}
+              </p>
+              <p className="set-hint">
+                Extensions are discovered once at startup: fix it, then restart MindFlock to load
+                it.
+              </p>
+            </div>
+          ))}
         </div>
       )}
 

@@ -11,7 +11,7 @@ are reported too, but as ``info``/``warn`` — never as a blocker.
 prompt has somewhere to go.
 
 ``/api/tailscale/health`` and ``/api/tailscale/login`` live here too: the
-"Tailscale on this device" card (Settings → Devices) is the tailscale row of
+"Tailscale on this device" card (Settings → Your devices) is the tailscale row of
 the doctor, in more detail and with a Sign in button.
 
 Results are cached for ~30s (the checks shell out to ``git``/``tmux``, plus the

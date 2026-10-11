@@ -118,7 +118,7 @@ describe("runStages", () => {
       ["check", "next"],
       ["release", "next"],
     ]);
-    expect(s[0].detail).toBe("2 pieces — waiting for you");
+    expect(s[0].detail).toBe("2 pieces — needs you");
   });
 
   it("counts pieces and merges, same folder commits", () => {
@@ -139,7 +139,7 @@ describe("runStages", () => {
     const s = runStages(run({ split: false, state: "release_ready", check: { state: "ok", summary: "12 passed" } }));
     expect(s.map((x) => x.key)).toEqual(["pieces", "merge", "check", "release"]);
     expect(s[2]).toMatchObject({ state: "done", detail: "12 passed" });
-    expect(s[3]).toMatchObject({ state: "now", detail: "waiting for you" });
+    expect(s[3]).toMatchObject({ state: "now", detail: "needs you" });
   });
 });
 

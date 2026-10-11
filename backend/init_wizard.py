@@ -28,18 +28,20 @@ check that already carries a runnable command, and a second copy of that
 confirm-run-re-probe dance would drift from the first one the day a fix line
 changes.
 
-Between the dependency table and the folder, :func:`run` walks the shared
-first-run plan (:mod:`backend.onboarding` — the same ordered steps Setup
-shows in the web UI): it asks "first computer, or join one you already
-have?" BEFORE offering the agent sign-in, because joining brings the default
-agent, the GitHub token and ticket sources along (not the sign-in itself —
-accounts stay on each computer), and then prints every step with its one
-next command.
+Between the dependency table and the folder, :func:`run` asks "first
+computer, or join one you already have?" (:mod:`backend.onboarding`) BEFORE
+offering the agent sign-in, because joining brings the default agent, the
+GitHub token and ticket sources along (not the sign-in itself — accounts stay
+on each computer). It then prints the SAME five-step checklist the web UI
+shows (:mod:`backend.web.core.setup_steps` — one definition of the step names
+and of what done/skipped mean, read from the same stored state), so the
+terminal and the app can never disagree about where setup stands.
 
-Nothing here sets ``general.onboarded``. In this codebase that flag means "has
-created a session" and gates the desktop app's own first-run surfaces; setting
-it at the end of a wizard would silently suppress the welcome tour for someone
-who has not started anything yet.
+Nothing here marks a checklist step by hand. Each step is marked by the
+backend hook that observes the thing itself — the doctor run this wizard
+performs marks "Engine and tools" and "Sign in to your agent"; the first
+session create marks "Pick a repo" — so finishing the wizard without starting
+anything leaves the app's own first-run surfaces in place.
 """
 
 from __future__ import annotations
@@ -209,14 +211,12 @@ def _git_note(candidate: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# The shared first-run plan (backend.onboarding)
+# The devices question (backend.onboarding) + the shared five-step checklist
 # --------------------------------------------------------------------------- #
-_PLAN_GLYPHS = {"ok": "✓", "todo": "•", "skip": "–"}
-
-
 def _plan(checks: List["Check"]) -> Optional[dict]:
-    """The first-run plan for these checks, or ``None`` when it can't be
-    built. Never asks GitHub who the token is (no network from here)."""
+    """The devices plan for these checks, or ``None`` when it can't be built
+    (only its ``devices`` step is read). Never asks GitHub who the token is
+    (no network from here)."""
     try:
         from backend import onboarding
 
@@ -227,19 +227,28 @@ def _plan(checks: List["Check"]) -> Optional[dict]:
         return None
 
 
-def _print_plan(plan: dict, out: Optional[TextIO] = None) -> None:
-    """Every step, in order, with its reason — and the command for each one
-    still to do (Setup in the web UI has a button for each instead)."""
+def _checklist_lines() -> List[str]:
+    """The five steps as the web UI shows them, with their stored state — or
+    ``[]`` when the checklist can't be read (no web extras, a broken store)."""
+    try:
+        from backend.web.core import setup_steps
+
+        return setup_steps.format_lines()
+    except Exception:  # noqa: BLE001 — advice only
+        return []
+
+
+def _print_checklist(out: Optional[TextIO] = None) -> None:
+    """``Your setup, in order:`` + one line per step (✓ done, – skipped,
+    • still to do), the same names and state as the app's checklist."""
+    lines = _checklist_lines()
+    if not lines:
+        return
     out = out if out is not None else sys.stdout
-    width = max(len(s["title"]) for s in plan["steps"])
-    for step in plan["steps"]:
-        glyph = _PLAN_GLYPHS.get(step["status"], "?")
-        print(
-            "  %s %s  %s" % (glyph, step["title"].ljust(width), step["reason"]),
-            file=out,
-        )
-        if step["status"] == "todo" and step.get("cli"):
-            print("    %s  run: %s" % (" " * width, step["cli"]), file=out)
+    print("", file=out)
+    print("Your setup, in order:", file=out)
+    for line in lines:
+        print(line, file=out)
 
 
 def _devices_step(plan: Optional[dict]) -> dict:
@@ -277,7 +286,9 @@ def _ask_devices(plan: Optional[dict]) -> str:
         pass
     if choice == "join":
         print()
-        print("  On your other computer: Settings → Devices → Add a device (or run")
+        print(
+            "  On your other computer: Settings → Your devices → Add a device (or run"
+        )
         print("  `mindflock devices bootstrap` there). It shows a code; then, here:")
         print("    mindflock devices join DEVICE CODE")
     return choice
@@ -428,9 +439,12 @@ def run(assume_yes: bool = False, *, serving: bool = False) -> int:
         if joining:
             # Sign the agent in after joining: the join may change which
             # agent is the default here.
-            later = [c for c in checks if c.id == "agent-auth"]
+            later = [c for c in checks if c.id.startswith("agent-auth")]
             checks = (
-                cli._fix_checks([c for c in checks if c.id != "agent-auth"]) + later
+                cli._fix_checks(
+                    [c for c in checks if not c.id.startswith("agent-auth")]
+                )
+                + later
             )
         else:
             checks = cli._fix_checks(checks)
@@ -440,11 +454,9 @@ def run(assume_yes: bool = False, *, serving: bool = False) -> int:
             "  --yes never runs an installer unwatched — the fix lines above are the list."
         )
 
-    plan = _plan(checks) if plan is not None else None
-    if plan is not None:
-        print()
-        print("Your setup, in order:")
-        _print_plan(plan)
+    # The same five steps the app shows, in the same state: the doctor run
+    # above already marked what it could (tools, the agent login).
+    _print_checklist()
 
     print()
     repo = _pick_repo(_candidate_repos(), assume_yes)

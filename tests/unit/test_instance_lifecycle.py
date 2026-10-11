@@ -636,76 +636,43 @@ def test_pause_raises_when_already_paused():
     assert "instance is already paused" in str(ei.value)
 
 
-def test_pause_clean_worktree_removes_and_prunes(monkeypatch):
-    inst = _started_instance()
-    inst._git_worktree = FakeWorktree(valid=True, dirty=False)
-    # Path exists so Remove is attempted.
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    inst.Pause()
-    assert inst.Status == Status.Paused
-    assert "Remove" in inst._git_worktree.calls
-    assert "Prune" in inst._git_worktree.calls
-    assert "detach_safely" in inst._tmux_session.calls
-
-
-def test_pause_dirty_worktree_commits_first(monkeypatch):
+def test_pause_keeps_the_worktree_and_makes_no_commit():
+    """Pause stops the agent and leaves the folder and branch exactly as they
+    are: a dirty tree is neither committed nor removed."""
     inst = _started_instance()
     inst.Title = "demo"
-    inst._git_worktree = FakeWorktree(valid=True, dirty=True)
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    inst.Pause()
-    assert inst.Status == Status.Paused
-    # A commit was made before removal, with the [mindflock] ... (paused) msg.
-    commit_calls = [c for c in inst._git_worktree.calls if isinstance(c, tuple)]
-    assert commit_calls and commit_calls[0][0] == "CommitChanges"
-    assert "[mindflock] update from 'demo'" in commit_calls[0][1]
-    assert "(paused)" in commit_calls[0][1]
-
-
-def test_pause_commit_failure_returns_early(monkeypatch):
-    inst = _started_instance()
     wt = FakeWorktree(valid=True, dirty=True)
-    wt.commit_exc = RuntimeError("commit boom")
     inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to commit changes: commit boom" in str(ei.value)
-    # Removal never attempted because commit failed.
-    assert "Remove" not in wt.calls
+    inst.Pause()
+    assert inst.Status == Status.Paused
+    # The agent's tmux session is killed (not merely detached).
+    assert "close" in inst._tmux_session.calls
+    assert "detach_safely" not in inst._tmux_session.calls
+    # No commit, no removal, no prune: the worktree is untouched.
+    assert wt.calls == []
 
 
-def test_pause_orphaned_worktree_skips_dirty_and_removes_dir(monkeypatch):
+def test_pause_stops_the_agent_even_when_the_worktree_is_orphaned(monkeypatch):
+    """An orphaned checkout (path or .git gone) is still only paused: nothing
+    is deleted or pruned — Resume's legacy path rebuilds it."""
     inst = _started_instance()
     wt = FakeWorktree(valid=False)
     inst._git_worktree = wt
-    removed = {}
-    monkeypatch.setattr(
-        inst_mod, "_remove_all", lambda p: removed.__setitem__("path", p)
-    )
+    removed = []
+    monkeypatch.setattr(inst_mod, "_remove_all", lambda p: removed.append(p))
     inst.Pause()
     assert inst.Status == Status.Paused
-    # Orphaned path: detach + prune, and the leftover dir is removed.
-    assert "detach_safely" in inst._tmux_session.calls
-    assert "Prune" in wt.calls
-    assert removed["path"] == "/wt"
-    # IsDirty / Remove were skipped for the orphaned worktree.
-    assert "Remove" not in wt.calls
+    assert "close" in inst._tmux_session.calls
+    assert removed == [] and wt.calls == []
 
 
-def test_pause_orphaned_worktree_keeps_dir_when_flagged(monkeypatch):
+def test_pause_copies_the_branch_name(monkeypatch):
+    copied = []
+    monkeypatch.setattr(inst_mod, "_clipboard_write", lambda t: copied.append(t))
     inst = _started_instance()
-    wt = FakeWorktree(valid=False)
-    wt.keeps_dir_across_pause = lambda: True
-    inst._git_worktree = wt
-    calls = {"removed": False}
-    monkeypatch.setattr(
-        inst_mod, "_remove_all", lambda p: calls.__setitem__("removed", True)
-    )
+    inst._git_worktree = FakeWorktree(branch="feat/kept")
     inst.Pause()
-    assert inst.Status == Status.Paused
-    # keeps_dir_across_pause() True -> the directory is preserved.
-    assert calls["removed"] is False
+    assert copied == ["feat/kept"]
 
 
 # ---------------------------------------------------------------------------
@@ -725,19 +692,69 @@ def test_resume_raises_when_not_paused():
     assert "can only resume paused instances" in str(ei.value)
 
 
-def test_resume_raises_when_branch_checked_out():
+def test_resume_relaunches_the_agent_in_the_kept_worktree():
+    """The current scheme: the checkout is on disk, so Resume starts the agent
+    there — no branch check, no Setup, no worktree change."""
     inst = _started_instance()
     inst.Status = Status.Paused
-    inst._git_worktree = FakeWorktree(checked_out=True)
+    inst.ExtraEnv = {"PORT": "9001"}
+    wt = FakeWorktree(valid=True, checked_out=True)  # our own checkout holds it
+    inst._git_worktree = wt
+    tmuxs = inst._tmux_session
+    tmuxs.exists = False  # Pause killed it
+    inst.Resume()
+    assert inst.Status == Status.Running
+    assert any(isinstance(c, tuple) and c[0] == "start" for c in tmuxs.calls)
+    assert wt.calls == []
+    # ExtraEnv is re-applied to the tmux session on the new-session path.
+    assert tmuxs.extra_env == {"PORT": "9001"}
+
+
+def test_resume_reattaches_a_live_tmux_in_the_kept_worktree():
+    inst = _started_instance()
+    inst.Status = Status.Paused
+    wt = FakeWorktree(valid=True)
+    inst._git_worktree = wt
+    tmuxs = inst._tmux_session
+    tmuxs.exists = True
+    tmuxs.restore_err = None
+    inst.Resume()
+    assert inst.Status == Status.Running
+    assert "restore" in tmuxs.calls
+    assert wt.calls == []
+
+
+def test_resume_launch_failure_keeps_the_worktree():
+    """A failed relaunch is no reason to lose the work in the folder."""
+    inst = _started_instance()
+    inst.Status = Status.Paused
+    wt = FakeWorktree(valid=True)
+    inst._git_worktree = wt
+    tmuxs = inst._tmux_session
+    tmuxs.exists = False
+    tmuxs.start_err = Exception("start boom")
+    with pytest.raises(RuntimeError) as ei:
+        inst.Resume()
+    assert "failed to start new session: start boom" in str(ei.value)
+    assert "Cleanup" not in wt.calls
+    assert inst.Status == Status.Paused
+
+
+def test_legacy_paused_session_raises_when_branch_checked_out():
+    inst = _started_instance()
+    inst.Status = Status.Paused
+    inst._git_worktree = FakeWorktree(valid=False, checked_out=True)
     with pytest.raises(RuntimeError) as ei:
         inst.Resume()
     assert "cannot resume: branch is checked out" in str(ei.value)
 
 
-def test_resume_restore_success():
+def test_legacy_paused_session_rebuilds_the_worktree_then_restores():
+    """Paused under the old scheme (worktree removed, branch kept): Setup
+    recreates the checkout, then the surviving tmux is reattached."""
     inst = _started_instance()
     inst.Status = Status.Paused
-    inst._git_worktree = FakeWorktree(checked_out=False)
+    inst._git_worktree = FakeWorktree(valid=False, checked_out=False)
     tmuxs = inst._tmux_session
     tmuxs.exists = True
     tmuxs.restore_err = None
@@ -747,25 +764,34 @@ def test_resume_restore_success():
     assert "restore" in tmuxs.calls
 
 
-def test_resume_starts_new_session_when_absent():
+def test_legacy_paused_session_starts_new_tmux_when_absent():
     inst = _started_instance()
     inst.Status = Status.Paused
     inst.ExtraEnv = {"PORT": "9001"}
-    inst._git_worktree = FakeWorktree(checked_out=False)
+    inst._git_worktree = FakeWorktree(valid=False, checked_out=False)
     tmuxs = inst._tmux_session
     tmuxs.exists = False  # no existing session -> start a new one
     tmuxs.start_err = None
     inst.Resume()
     assert inst.Status == Status.Running
+    assert "Setup" in inst._git_worktree.calls
     assert any(isinstance(c, tuple) and c[0] == "start" for c in tmuxs.calls)
-    # ExtraEnv is re-applied to the tmux session on the new-session path.
     assert tmuxs.extra_env == {"PORT": "9001"}
+
+
+def test_worktree_present_treats_a_stat_error_as_absent(_errorlog):
+    inst = _started_instance()
+    wt = FakeWorktree(valid=True)
+    wt.valid_exc = RuntimeError("stat boom")
+    inst._git_worktree = wt
+    assert inst._worktree_present() is False
+    assert _errorlog.msgs
 
 
 def test_resume_setup_failure_raises(_errorlog):
     inst = _started_instance()
     inst.Status = Status.Paused
-    wt = FakeWorktree(checked_out=False)
+    wt = FakeWorktree(valid=False, checked_out=False)
     wt.setup_exc = RuntimeError("setup boom")
     inst._git_worktree = wt
     with pytest.raises(RuntimeError) as ei:
@@ -775,9 +801,10 @@ def test_resume_setup_failure_raises(_errorlog):
 
 
 def test_resume_new_session_start_failure_cleans_up():
+    """LEGACY resume only: the worktree Setup just rebuilt is removed again."""
     inst = _started_instance()
     inst.Status = Status.Paused
-    wt = FakeWorktree(checked_out=False)
+    wt = FakeWorktree(valid=False, checked_out=False)
     inst._git_worktree = wt
     tmuxs = inst._tmux_session
     tmuxs.exists = False
@@ -1264,114 +1291,19 @@ def _errorlog(monkeypatch):
     return cap
 
 
-def test_pause_validate_failure_is_collected(monkeypatch, _errorlog):
+def test_pause_close_failure_still_pauses(monkeypatch, _errorlog):
+    """A tmux that is already gone must not keep the session un-pausable: the
+    error is surfaced, but the status is Paused and nothing else was done."""
     inst = _started_instance()
-    wt = FakeWorktree(valid=True, dirty=False)
-    wt.valid_exc = RuntimeError("validate boom")
+    wt = FakeWorktree(valid=True, dirty=True)
     inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
+    inst._tmux_session.close_err = Exception("close boom")
     with pytest.raises(RuntimeError) as ei:
         inst.Pause()
-    assert "failed to validate worktree: validate boom" in str(ei.value)
-
-
-def test_pause_orphaned_detach_failure_collected(monkeypatch, _errorlog):
-    inst = _started_instance()
-    inst._git_worktree = FakeWorktree(valid=False)
-    inst._tmux_session.detach_err = Exception("detach boom")
-    monkeypatch.setattr(inst_mod, "_remove_all", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to detach tmux session: detach boom" in str(ei.value)
-
-
-def test_pause_orphaned_remove_dir_failure_collected(monkeypatch, _errorlog):
-    inst = _started_instance()
-    inst._git_worktree = FakeWorktree(valid=False)
-
-    def _boom(_p):
-        raise OSError("rm boom")
-
-    monkeypatch.setattr(inst_mod, "_remove_all", _boom)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to remove orphaned worktree directory" in str(ei.value)
-
-
-def test_pause_orphaned_prune_failure_collected(monkeypatch, _errorlog):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=False)
-    wt.prune_exc = RuntimeError("prune boom")
-    inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod, "_remove_all", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to prune git worktrees: prune boom" in str(ei.value)
-
-
-def test_pause_dirty_check_failure_collected(monkeypatch, _errorlog):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=True)
-    wt.dirty_exc = RuntimeError("dirty boom")
-    inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to check if worktree is dirty: dirty boom" in str(ei.value)
-
-
-def test_pause_remove_failure_returns_early(monkeypatch, _errorlog):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=True, dirty=False)
-    wt.remove_exc = RuntimeError("remove boom")
-    inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to remove git worktree: remove boom" in str(ei.value)
-    # Prune not attempted after a failed Remove.
-    assert "Prune" not in wt.calls
-
-
-def test_pause_prune_failure_returns_early(monkeypatch, _errorlog):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=True, dirty=False)
-    wt.prune_exc = RuntimeError("prune boom")
-    inst._git_worktree = wt
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    assert "failed to prune git worktrees: prune boom" in str(ei.value)
-
-
-def test_pause_normal_detach_failure_still_pauses(monkeypatch, _errorlog):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=True, dirty=False)
-    inst._git_worktree = wt
-    inst._tmux_session.detach_err = Exception("detach boom")
-    monkeypatch.setattr(inst_mod.os, "stat", lambda p: None)
-    with pytest.raises(RuntimeError) as ei:
-        inst.Pause()
-    # The detach error is surfaced, but the pause otherwise proceeds
-    # (remove+prune ran) and the status was set to Paused before raising.
-    assert "failed to detach tmux session: detach boom" in str(ei.value)
-    assert "Remove" in wt.calls and "Prune" in wt.calls
+    assert "failed to close tmux session: close boom" in str(ei.value)
     assert inst.Status == Status.Paused
-
-
-def test_pause_missing_path_skips_remove(monkeypatch):
-    inst = _started_instance()
-    wt = FakeWorktree(valid=True, dirty=False)
-    inst._git_worktree = wt
-
-    def _stat(_p):
-        raise OSError("gone")
-
-    monkeypatch.setattr(inst_mod.os, "stat", _stat)
-    inst.Pause()
-    assert inst.Status == Status.Paused
-    # Path did not exist -> Remove/Prune skipped.
-    assert "Remove" not in wt.calls
+    assert wt.calls == []
+    assert _errorlog.msgs
 
 
 # ---------------------------------------------------------------------------
@@ -1380,7 +1312,7 @@ def test_pause_missing_path_skips_remove(monkeypatch):
 def test_resume_branch_check_failure_wrapped(_errorlog):
     inst = _started_instance()
     inst.Status = Status.Paused
-    wt = FakeWorktree()
+    wt = FakeWorktree(valid=False)
     wt.checked_out_exc = RuntimeError("check boom")
     inst._git_worktree = wt
     with pytest.raises(RuntimeError) as ei:
@@ -1406,7 +1338,7 @@ def test_resume_restore_failure_falls_back_to_new_session(_errorlog):
 def test_resume_start_failure_cleanup_error_is_chained(_errorlog):
     inst = _started_instance()
     inst.Status = Status.Paused
-    wt = FakeWorktree(checked_out=False)
+    wt = FakeWorktree(valid=False, checked_out=False)
     wt.cleanup_exc = RuntimeError("cleanup boom")
     inst._git_worktree = wt
     tmuxs = inst._tmux_session

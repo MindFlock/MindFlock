@@ -162,6 +162,6 @@ describe("RunLeadPanel: a headerless group's ⋯ items, on its lead's Thread", (
     expect(done).not.toMatch(/rb-copy-summary"[^>]*disabled/);
     expect(done).not.toContain("rb-start-now");
     const none = render(dto({ state: "done", summary: null }));
-    expect(none).toMatch(/<button[^>]*disabled=""[^>]*title="MindFlock has no summary for this group"/);
+    expect(none).toMatch(/<button[^>]*disabled=""[^>]*title="MindFlock has no summary for this team run"/);
   });
 });

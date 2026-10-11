@@ -2,7 +2,7 @@
 
 Joining a computer brings the shared settings and the GitHub token, but not
 an agent sign-in (accounts stay on each computer), not git push credentials,
-not the dependencies. Settings → Devices used to show only "online, version
+not the dependencies. Settings → Your devices used to show only "online, version
 X" for a member that couldn't start a session. Each member now reports a
 summary of itself — computed BY that member, about itself — and Devices shows
 it read-only, with the fix to run on that device (never through a remote
@@ -60,7 +60,7 @@ def _summary_from(
     if agent_ok is False:
         fixes.append("sign in to %s (Setup)" % (auth.get("provider") or "the agent"))
     if deferred:
-        fixes.append("install %s (Settings → Devices)" % ", ".join(deferred))
+        fixes.append("install %s (Settings → Your devices)" % ", ".join(deferred))
     if push and push.get("ok") is False:
         fixes.append(push.get("fix") or "connect GitHub (Setup)")
     if exp.get("expired") or exp.get("warn"):

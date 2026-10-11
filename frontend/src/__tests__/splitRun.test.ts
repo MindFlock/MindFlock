@@ -109,7 +109,7 @@ describe("the plan card", () => {
     expect(S.planProblems({ problems: [{ piece: "scopes", error: "overlaps sessions on quickpay/auth/session_scopes.py" }] })).toEqual([
       "scopes: overlaps sessions on quickpay/auth/session_scopes.py",
     ]);
-    expect(S.planProblems({ error: "this group is not a split" })).toEqual(["this group is not a split"]);
+    expect(S.planProblems({ error: "this team run is not a split" })).toEqual(["this team run is not a split"]);
   });
 });
 
@@ -151,14 +151,14 @@ describe("the ship card", () => {
     const ho = S.releaseOutcome(run({ state: "done", release: { state: "handoff", compare_url: "https://x/compare/main...b" } }))!;
     expect(ho.link).toBe("Open the compare page ↗");
     const local = S.releaseOutcome(run({ state: "done", policy: { lane: "commit", ask_first: false, grouping: "together" } }))!;
-    expect(local.text).toMatch(/nothing pushed \(this group is fast-tracked to Commit\)/);
+    expect(local.text).toMatch(/nothing pushed \(this team run is fast-tracked to Commit\)/);
   });
 
   it("a lead whose origin is a folder on this machine: push only, and the outcome never claims a PR", () => {
     const choices = S.releaseChoices("pr", "/home/u/app");
     expect(choices.map((c) => [c.label, c.merge])).toEqual([["Push to the local folder", false]]);
     expect(choices[0].title).toMatch(/\/home\/u\/app — a folder on this machine, not GitHub: no PR can be opened/);
-    expect(S.releaseChoices("pr").map((c) => c.label)).toEqual(["Open the PR", "Open it, merge when checks pass"]);
+    expect(S.releaseChoices("pr").map((c) => c.label)).toEqual(["Open PR", "Open it, merge when checks pass"]);
     expect(S.releaseOutcome(run({ state: "releasing", release: { state: "releasing", local_origin: "/home/u/app" } }))!.text).toBe(
       "Pushing the branch to /home/u/app…"
     );
@@ -301,7 +301,7 @@ describe("the bell's group-level waiting rows", () => {
     const plan = w("plan", ["approve", "open"], { preview: { pieces: [{ title: "a", paths: ["x"] }, { title: "b", paths: ["y"] }] } });
     expect(waitingActions(plan, can).map((a) => a.label)).toEqual(["Start 2 workers", "Open the Thread ↗"]);
     expect(waitingActions(w("release", ["release", "open"], { preview: { lane: "pr" } }), can).map((a) => a.label)).toEqual([
-      "Open the PR",
+      "Open PR",
       "Open it, merge when checks pass",
       "Open the Thread ↗",
     ]);
@@ -320,10 +320,10 @@ describe("the bell's group-level waiting rows", () => {
   it("release buttons follow the group's lane — 'Open the PR' never merges", () => {
     const keys = (lane: string) =>
       waitingActions(w("release", ["release", "open"], { preview: { lane } }), can).map((a) => [a.key, a.label, a.primary]);
-    // A merge group: the primary merges (its lane); "Open the PR only" does not.
+    // A merge group: the primary merges (its lane); "Open PR only" does not.
     expect(keys("merge")).toEqual([
-      ["release_merge", "Open the PR, merge when checks pass", true],
-      ["release", "Open the PR only", false],
+      ["release_merge", "Open PR, merge when checks pass", true],
+      ["release", "Open PR only", false],
       ["open", "Open the Thread ↗", false],
     ]);
     // A push group pushes its branch and opens nothing.
@@ -335,7 +335,7 @@ describe("the bell's group-level waiting rows", () => {
 
   it("a group whose lead is gone offers to cancel it (sessions and branches kept)", () => {
     const acts = waitingActions(w("lead_gone", ["cancel_group"]), { row: false, run: true, task: false });
-    expect(acts.map((a) => [a.key, a.label])).toEqual([["cancel_group", "Cancel the group"]]);
+    expect(acts.map((a) => [a.key, a.label])).toEqual([["cancel_group", "Cancel the team run"]]);
   });
 
   it("only what the row can address: no run → no run buttons", () => {

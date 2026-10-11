@@ -6,7 +6,7 @@
 #   2. `mindflock serve local` from a fresh git repo (background)
 #   3. `mindflock new` — session = git worktree + tmux + agent
 #   4. `mindflock ls` — verify the session reports state
-#   5. `mindflock rm --yes` — tear down cleanly
+#   5. `mindflock rm --wipe --yes` — tear down cleanly (worktree and branch removed)
 #
 # CI runs this with a STUB agent binary (no API credentials needed):
 #   MINDFLOCK_STUB_AGENT=1 sh scripts/quickstart-verify.sh
@@ -103,8 +103,8 @@ tmux has-session -t mindflock_qs-demo 2>/dev/null || fail "tmux session mindfloc
 say "tmux session exists"
 
 # --- 5. teardown ------------------------------------------------------------------
-say "5/5 mindflock rm --yes"
-MINDFLOCK_PORT="$PORT" mindflock rm qs-demo --yes || fail "mindflock rm failed"
+say "5/5 mindflock rm --wipe --yes"
+MINDFLOCK_PORT="$PORT" mindflock rm --wipe qs-demo --yes || fail "mindflock rm --wipe failed"
 MINDFLOCK_PORT="$PORT" mindflock ls --json | grep -q '"qs-demo"' && fail "session still listed after rm"
 
 say "PASS — install → serve → new → ls → rm all verified"

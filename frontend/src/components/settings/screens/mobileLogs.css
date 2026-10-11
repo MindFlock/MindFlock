@@ -1,4 +1,4 @@
-/* Settings → Mobile: white QR card + URL rows.
+/* Settings → Your phone: white QR card + URL rows.
    .qr-card is shared with Settings → Notifications (the ntfy subscribe QR) —
    a QR must stay dark-on-white to scan, whatever the app theme is doing. */
 #mobile-qr,

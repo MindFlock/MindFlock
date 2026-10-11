@@ -137,7 +137,7 @@ describe("worker rows and the header", () => {
     expect(headerSummary(rows).map((p) => p.text)).toEqual([
       "3 workers forked from ",
       "3f2c1a0",
-      "1 needs your answer",
+      "1 needs you",
       "1 reported",
       "1 working",
     ]);
@@ -152,7 +152,7 @@ describe("worker rows and the header", () => {
   it("words each status line", () => {
     const [ask, done, work] = rows;
     expect(workerStatus(ask, "api", NOW)).toEqual({
-      word: "needs your answer",
+      word: "needs you · question",
       cls: "needs",
       detail: "asking for 2m · api is waiting on it",
     });
@@ -382,10 +382,22 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
     }
   });
 
-  it("…while Ctrl+W from the terminal still ends the focused session", () => {
+  it("…and Ctrl+W from the terminal is the shell's delete-word, never a close; from the rail it closes", () => {
     useUi.setState({ focused: "api" } as never);
-    const listeners = fakeDoc(el("TEXTAREA", ".xterm"));
-    const off = installKeymap(host);
+    // Inside xterm's helper textarea: a typing target, so the key falls
+    // through to the PTY (and is not swallowed on the way).
+    let listeners = fakeDoc(el("TEXTAREA", ".xterm-helper-textarea"));
+    let off = installKeymap(host);
+    try {
+      const w = press(listeners, "w", true);
+      expect(killSession).not.toHaveBeenCalled();
+      expect(w.defaultPrevented).toBe(false);
+    } finally {
+      off();
+    }
+    // From a plain button (a rail row, the footer): the focused session closes.
+    listeners = fakeDoc(el("BUTTON", ".foot-link"));
+    off = installKeymap(host);
     try {
       press(listeners, "w", true);
       expect(killSession).toHaveBeenCalledWith("api");

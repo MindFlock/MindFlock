@@ -191,6 +191,17 @@ export function ShortcutsSheet() {
               Restore defaults
             </button>
           )}
+          <button
+            className="shortcuts-tour linklike"
+            type="button"
+            title="A five-slide tour of MindFlock"
+            onClick={() => {
+              closeDialog();
+              useUi.getState().openTour();
+            }}
+          >
+            Tour
+          </button>
           <button className="shortcuts-close" type="button" aria-label="Close" onClick={closeDialog}>
             ✕
           </button>

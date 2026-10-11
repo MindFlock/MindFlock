@@ -61,7 +61,7 @@ displayed/preselected one can differ — see [web-api.md](web-api.md).
 
 The Claude provider launches plain `claude` (Claude Code). It:
 
-- resumes a crashed session with `--resume <thread-id>` when this window's
+- resumes a crashed session with `--resume <thread-id>` when this session's
   conversation id was recorded (via the activity hooks), else `--continue`;
   a failed resume is retried once, then falls back to a plain unseeded launch
   (the seed prompt is never re-sent on resume)
@@ -188,7 +188,7 @@ older than 6 h are ignored outright, and a `working`/`clarify` one older than
 45 s is re-verified against the live pane, while an `idle` one is trusted at any
 age (a Stop hook from two hours ago on a still-running CLI is genuinely idle).
 Age alone is not enough, though — nothing ever deletes a marker file, and it is
-keyed by tmux session name, so a window you closed and re-opened would keep
+keyed by tmux session name, so a session you closed and re-opened would keep
 reporting the *dead* run's state for as long as its age allowed. So the web
 layer also checks the marker against the **current tmux incarnation**
 (`web/core/agent_state._marker_is_current`): a marker written before the running
@@ -226,7 +226,12 @@ User TOML providers opt in with the `[activity]` table (below).
 ## Adding a CLI with a TOML file — no Python
 
 Drop a file in `$MINDFLOCK_PROVIDERS_DIR` (default
-`~/.mindflock-assistant/providers/`):
+`~/.mindflock-assistant/providers/`, i.e. `<MINDFLOCK_ASSISTANT_DIR>/providers`).
+A file that fails to parse or validate is skipped — logged at load time, and
+listed as a red row on Settings → Agent providers with the error — so one bad
+TOML never breaks startup and never vanishes silently either. Editing a
+provider from that screen patches only the fields the form shows; every other
+key and table in the file is kept as written:
 
 ```toml
 [provider]
@@ -542,14 +547,29 @@ foreground.
 
 ## Connection: install detection and sign-in
 
-Settings → **Agent providers** surfaces a **connection** view for every
-registered provider (built-in and custom): whether its binary is installed
-(with the resolved path) and, when it's missing, a copy-paste install command
-(see [web-ui.md](web-ui.md)). MindFlock never stores credentials. It does read
-Claude Code's *existing* OAuth token read-only, solely to display live plan
-usage (see **Live usage & limit state** below). Install detection is the same
-`shutil.which` / explicit-path check the backend uses to gate the default
-provider (below).
+Settings → **Agent providers** shows one row per registered provider (built-in
+and custom), from `GET /api/providers/status`: whether its binary is installed
+(with the resolved path), whether it looks **signed in** (the provider's own
+`auth_evidence`, with the evidence spelled out; *no sign-in needed* for a CLI
+that declares no login step, *sign-in unknown* for one that keeps its token
+where MindFlock never looks), a **Sign in** button that runs the CLI's login in
+an in-app terminal, the copy-paste install command when the CLI is missing,
+and a **Binary path** field for EVERY provider — built-ins included — that
+writes this device's `coding_cli.binary_paths[name]` (cleared when emptied;
+`PUT /api/providers/{name}/binary-path`). That field is device-local and never
+synced (`settings_sync.LOCAL`): a path is about this machine, and it is how a
+claude or codex off PATH gets fixed without an env var or a hand edit of
+settings.json (`MINDFLOCK_PROVIDER_BIN_<NAME>` still wins; the row says so).
+A custom TOML that failed to parse or validate is a red row naming the file
+and the error (`errors` on the status API, also logged at load time) instead
+of a provider that silently isn't there. MindFlock never stores credentials.
+It does read Claude Code's *existing* OAuth token read-only, solely to display
+live plan usage (see **Live usage & limit state** below). Install detection is
+the same `shutil.which` / explicit-path check the backend uses to gate the
+default provider (below). Settings → **Agent CLI**'s default picker lists
+every provider too, with the absent ones disabled and saying why, and its
+**Test agent CLI** takes a provider picker (`POST /api/settings/test/agent`
+with `{provider}`).
 
 `BaseProvider.install_hint()` backs the install command the doctor RUNS (in the
 one-shot install script and `doctor --fix`), best-effort and wrapped so one
@@ -582,16 +602,26 @@ TOML opts in with `[connect] version_args = ["--version"]`.
 bare program) and `auth_evidence()` (a human string when the CLI *looks* logged
 in, else `""`, reported as "login status unknown" rather than "logged out" so a
 version-fragile credential probe never false-negatives) feed the doctor's
-`agent-auth` row. When that row says no login was found and the provider
-declares a login flow, Setup's *Sign in to your agent* step and the doctor row offer **Sign in to <agent>**,
-which opens `WS /api/providers/{name}/login-terminal` (`web/core/provider_login.py`
-— tmux, or a plain PTY when tmux is missing) in a window; closing it calls
-`POST …/login-close` and re-runs the agent test and the doctor. This reverses
-an earlier decision to leave sign-in to each CLI's first session: sign-in was
-the last onboarding step that still needed a terminal. `doctor --fix` runs the
-same command, and for a bare program (`claude`) first says how to get back
-(`/exit`). The `[connect]` table's `auth_files`, `auth_env`, and
-`login_command` keys configure these for a custom provider.
+`agent-auth` row and the Providers screen's sign-in chip. When no login was
+found and the provider declares a login flow, Setup's *Sign in to your agent*
+step, the doctor row, and the provider's row in Settings → Agent providers
+offer **Sign in**, which opens `WS /api/providers/{name}/login-terminal`
+(`web/core/provider_login.py` — tmux, or a plain PTY when tmux is missing) in
+a window; closing it calls `POST …/login-close` and re-runs whatever reported
+the missing login. Settings → Accounts has the same button per `account`
+profile, with `?profile=<id>` so the login lands in that account's own config
+dir (see [accounts.md](accounts.md)). This reverses an earlier decision to
+leave sign-in to each CLI's first session: sign-in was the last onboarding
+step that still needed a terminal. The doctor probes the default provider AND
+every provider some setting points at — the Assistant's, the ticket pipeline's
+default and each ticket source's agent, PR review's and issue handling's, and
+the per-repo overrides — one `agent-auth-<name>` row each
+(`doctor.referenced_agents()`), so a codex-reviewed repo on a claude-default
+machine learns codex is logged out before its first dead review session.
+`doctor --fix` runs each row's login in turn, and for a bare program
+(`claude`) first says how to get back (`/exit`). The `[connect]` table's
+`auth_files`, `auth_env`, and `login_command` keys configure these for a
+custom provider.
 
 Custom providers configure the install hint (and the other connect fields) with
 an optional `[connect]` table in their TOML (all keys optional):

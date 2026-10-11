@@ -1,10 +1,12 @@
 """Entry point for `python -m backend.ticket_ingestion`."""
 
 import asyncio
+import datetime as _dt
 import fcntl
 import json
 import logging
 import os
+import re
 import sys
 
 from backend.ticket_ingestion.config import ConfigError, load_config
@@ -45,6 +47,44 @@ def _lock_meta() -> dict:
     return meta
 
 
+#: Written next to the lock when this process exits over a configuration
+#: error or an unhandled crash: ``{pid, at, kind, message, fields}``. The web
+#: server reads it to say WHY its child is gone (``/api/mindflock/status`` →
+#: ``last_error`` / ``exit_reason``) instead of "starting, or exited".
+EXIT_RECORD = ".mindflock-pipeline-exit.json"
+
+_FIELD_LINE_RE = re.compile(r"^\s*-\s*(\S+)")
+
+
+def _write_exit_record(kind: str, message: str) -> None:
+    """Best-effort: record why this process is exiting (see
+    :data:`EXIT_RECORD`). ``fields`` are the config paths a ConfigError
+    lists (one per ``  - path (hint)`` line)."""
+    fields = []
+    if kind == "config":
+        for line in message.splitlines():
+            m = _FIELD_LINE_RE.match(line)
+            if m:
+                fields.append(m.group(1))
+    try:
+        path = os.path.join(os.getcwd(), EXIT_RECORD)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(
+                {
+                    "pid": os.getpid(),
+                    "at": _dt.datetime.now().astimezone().isoformat(),
+                    "kind": kind,
+                    "message": message,
+                    "fields": fields,
+                },
+                fh,
+            )
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _acquire_singleton_lock() -> bool:
     """Take an exclusive advisory lock on a per-repo lockfile.
 
@@ -81,6 +121,7 @@ def main() -> None:
         config = load_config()
     except ConfigError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
+        _write_exit_record("config", str(e))
         sys.exit(1)
 
     setup_logging(config)
@@ -102,6 +143,9 @@ def main() -> None:
         asyncio.run(orchestrator.run())
     except KeyboardInterrupt:
         print("\nShutting down gracefully...")
+    except Exception as e:  # noqa: BLE001 — say why before the traceback
+        _write_exit_record("crash", "%s: %s" % (type(e).__name__, e))
+        raise
 
 
 if __name__ == "__main__":

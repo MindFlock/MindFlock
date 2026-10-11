@@ -121,9 +121,14 @@ def test_updater_downloads_in_background_but_never_installs_on_quit():
 def test_one_click_order_engine_then_stop_server_then_app():
     run = _fn(_MAIN_JS, "async function updateEverything")
     engine = run.index("startInstall(plan.ref)")
-    stop = run.index("spawnEngineShell(KILL_SERVER)")
+    # The stop waits for the port to be released (stopEngineServer wraps the
+    # KILL_SERVER shell) before the app swaps itself.
+    stop = run.index("await stopEngineServer()")
     swap = run.index("autoUpdater.quitAndInstall(true, true)")
     assert engine < stop < swap
+    assert "spawnEngineShell(KILL_SERVER)" in _fn(
+        _MAIN_JS, "async function stopEngineServer"
+    )
     # A failed engine update stops before touching the app.
     failed = run.index("The engine update failed")
     assert failed < swap
@@ -135,7 +140,9 @@ def test_engine_step_leaves_developer_engines_alone():
     plan = _fn(_MAIN_JS, "async function enginePlan")
     assert "if (WSL_REPO)" in plan
     assert "/api/update/check" in plan
-    assert "kind !== 'uv-tool'" in plan
+    assert (
+        "kind !== 'uv-tool' && kind !== 'pipx'" in plan
+    )  # pipx is a release install too
     # Unknown kind is NOT treated as a release install.
     assert re.search(r"if \(!kind\) return \{ needed: false", plan)
 

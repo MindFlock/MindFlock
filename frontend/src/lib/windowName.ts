@@ -99,9 +99,7 @@ export function slotNumber(title: string): string {
       }
       return idx >= 0 && idx < 9 ? String(idx + 1) : "";
     }
-    const listed = (snapshot() as Instance[]).filter(
-      (i) => i && !isVerifySession(String(i.title || ""))
-    );
+    const listed = (snapshot() as Instance[]).filter((i) => i && !isVerifySession(i));
     const { rows } = orderedInstances(listed, ui.order);
     const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
     const local = filtered.filter((i) => !(i as { device?: string }).device);

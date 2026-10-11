@@ -149,6 +149,10 @@ DEFAULT_COMPANIONS = (
     "Gemfile.lock",
     "__snapshots__/",
     "*.snap",
+    # The committed shared zones file: MindFlock itself writes it into a
+    # worktree ("Add to repo"), so it must never read as out-of-scope work.
+    # Agents still can't edit it — it is in the guard's protect set.
+    "/.mindflock/zones.toml",
 )
 
 
@@ -521,7 +525,13 @@ def normalize_pattern(p: str) -> Tuple[str, bool]:
 
 
 def _translate_glob(body: str) -> str:
-    """Translate one glob body to a regex fragment valid in Python and JS."""
+    """Translate one glob body to a regex fragment valid in Python and JS.
+
+    Runs of three or more ``*`` collapse to ``**`` first: a committed
+    ``.mindflock/zones.toml`` is untrusted input, and ``****…`` would compile
+    to a chain of ``.*`` that backtracks the guard, the push gate and the Code
+    Map into a hang."""
+    body = re.sub(r"\*{3,}", "**", body)
     out: List[str] = []
     i, n = 0, len(body)
     while i < n:
@@ -1082,7 +1092,10 @@ def effective_zones(wt: str, repo_id: Optional[str]) -> List[dict]:
     """Every zone reaching ``wt``: repo zones (scope ``repo``, ``waived`` flagged
     from the worktree's waiver list), the worktree's own red zones (scope
     ``worktree``, never waivable) and its green zones (scope ``worktree``,
-    ``kind: "green"``). Each carries the compiled ``re`` and its ``kind``.
+    ``kind: "green"``) — then the repo's committed zones from
+    ``<wt>/.mindflock/zones.toml`` (scope ``shared``, ``author``, ``locked``;
+    :mod:`backend.config.repo_zones`). Each carries the compiled ``re`` and
+    its ``kind``.
 
     Consumers that only mean red must filter on ``kind`` — or, better, go
     through :func:`zones_doc` + :func:`classify`, the one predicate.
@@ -1100,7 +1113,12 @@ def effective_zones(wt: str, repo_id: Optional[str]) -> List[dict]:
             out.append(_zone_view(z, "worktree", False))
         for z in wt_entry.get("green") or []:
             out.append(_zone_view(z, "worktree", False, "green"))
-    return out
+    # The repo's committed zones (``.mindflock/zones.toml`` in THIS worktree,
+    # so they follow the branch) — scope ``shared``. See repo_zones.merge for
+    # how an identical local zone stands in for one.
+    from backend.config import repo_zones as _shared
+
+    return _shared.merge(out, _shared.load(wt))
 
 
 def _pat_key(pattern: str) -> Optional[str]:
@@ -1825,6 +1843,9 @@ def _control_protect_set(root: str) -> List[str]:
         os.path.join(root, ".claude", "settings.json"),
         os.path.join(root, ".claude", "settings.local.json"),
         os.path.join(root, ".codex", "hooks.json"),
+        # The repo's committed zones: an agent that could edit it could lift
+        # a zone the team agreed on.
+        os.path.join(root, ".mindflock", "zones.toml"),
         os.path.join(home, ".claude", "settings.json"),
         os.path.join(home, ".claude", "settings.local.json"),
     ]

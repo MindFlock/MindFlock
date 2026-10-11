@@ -227,9 +227,10 @@ class DbClientAddon(Addon):
                 profile = self._profile(cid)
             except _NotFound as err:
                 return _error(404, str(err))
-            return JSONResponse(
-                await asyncio.to_thread(self.service.test_connection, profile)
-            )
+            result = await asyncio.to_thread(self.service.test_connection, profile)
+            # Connections shows each profile's last verdict.
+            store.note_test(cid, result)
+            return JSONResponse(result)
 
         # --- introspection ------------------------------------------------ #
         @router.get("/connections/{cid}/tree")

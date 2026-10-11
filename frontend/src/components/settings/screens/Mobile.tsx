@@ -1,72 +1,35 @@
-/** Settings → Mobile (partial 103 + loadMobile, section 21): /m URLs + QR,
- * the tailscale-mode toggle, the restart-to-apply flow, and the shared phone
- * link (one Tailscale Service URL that whichever device is up answers) with
- * its setup checklist. */
+/** Settings → Your phone (screen key "mobile"): getting this MindFlock onto
+ * your phone, as three steps in order — Tailscale on this computer, Tailscale
+ * on the phone, then ONE QR (or the /m link) to open it. Nothing here is a
+ * knob: the Tailscale-mode switch ("Make reachable"), the shared phone link
+ * and the access token all live on Settings → Your devices / Security, and
+ * this screen points there when one of them stands in the way.
+ *
+ * The screen never hides: without Tailscale the first step shows what to
+ * install (the same problem list as the doctor's tailscale row), with the
+ * QR step waiting below it. */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
-import { copyText } from "../../../lib/clipboard";
-import { toast } from "../../../lib/toast";
 import { useConfig } from "../../../state/queries";
-import { useServerRestart } from "../useServerRestart";
-import { keepSignedIn, reachableFields } from "../useMakeReachable";
 import type { ScreenProps } from "../SettingsDialog";
 import { TailscaleCard } from "./TailscaleCard";
 
-export type StepState = "ok" | "fail" | "unknown";
-
-export interface SetupStep {
-  id: "operator" | "tag" | "define" | "policy" | "approval" | "phone" | string;
-  title: string;
-  state: StepState;
-  reason: string;
-}
-
-export interface SharedLinkState {
-  enabled?: boolean;
-  name?: string;
-  service?: string;
-  url?: string;
-  advertised?: boolean;
-  /** Tri-state: null = this device can't tell (rendered "unknown", never ✓). */
-  approved?: boolean | null;
-  routed?: boolean | null;
-  defined?: boolean | null;
-  tagged?: boolean | null;
-  tags?: string[];
-  tag?: string;
-  machine?: { hostname: string; dns: string; ip: string; duplicate_of: string };
-  error?: string;
-  error_kind?: string;
-  operator_fix?: string;
-  /** The whole policy-file block (tagOwners, autoApprovers, grants, tests). */
-  policy?: string;
-  admin?: { machines: string; services: string; policy: string };
-  steps?: SetupStep[];
-  devices?: Array<{ device: string; host: string; reachable: boolean }>;
-}
-
 interface MobilePayload {
-  shared?: SharedLinkState;
   serve_mode?: string;
   local_only?: boolean;
   qr_svg?: string;
   qr_target?: string;
   note?: string;
   urls?: Array<{ label: string; url: string }>;
-  token?: string;
-  /** Step 1 on the phone: the Tailscale app, signed in as `login`. */
+  /** Step 2 on the phone: the Tailscale app, signed in as `login`. */
   phone_app?: { url: string; qr_svg?: string; login?: string };
 }
 
-export const TOKEN_MASK = "••••••••••••••••";
-
-export function Mobile(_: ScreenProps) {
+export function Mobile(p: ScreenProps) {
   const { data: config } = useConfig();
   const [data, setData] = useState<MobilePayload | null>(null);
   const [error, setError] = useState("");
-  const { restarting, restart } = useServerRestart();
-  const [modeBusy, setModeBusy] = useState(false);
   const tailscale = config?.caps?.tailscale !== false;
 
   const load = useCallback(async () => {
@@ -75,107 +38,78 @@ export function Mobile(_: ScreenProps) {
       setData(await api<MobilePayload>("/api/mobile"));
       setError("");
     } catch {
-      setError("Could not load mobile info.");
+      setError("Could not load the phone URLs.");
     }
   }, [tailscale]);
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  const setMode = async (on: boolean) => {
-    setModeBusy(true);
-    let restarting = false;
-    try {
-      // On = the same save as Devices' Make reachable: Tailscale mode AND the
-      // access gate together — never a non-local bind with the gate off.
-      if (on) await keepSignedIn();
-      const res = await api<{ restarting?: boolean }>("/api/settings", {
-        json: { general: on ? reachableFields({ reach: true }) : { serve_mode: "local" } },
-      });
-      restarting = !!res?.restarting;
-    } catch {
-      /* revert via reload */
-    }
-    setModeBusy(false);
-    // Turning tailscale mode on restarts the server by itself (which interface
-    // uvicorn binds is fixed at boot). It's already going down — wait it out
-    // and refresh the URLs/QR, rather than letting the reload below fail
-    // against a port that is mid-re-exec.
-    if (restarting) restart({ alreadyRequested: true, onBack: load });
-    else load();
-  };
-
-  // Refresh the QR/URLs in place once the server is back — the new serve mode
-  // changes them. No page reload here: that would close Settings, and this
-  // flow is "apply one toggle", not "restart everything".
-  const onRestart = () => restart({ onBack: load });
-
-  // Saved choice not live yet (an explicit choice only — "" never nags).
-  const pending = !!(data?.serve_mode && (data.serve_mode === "tailscale") === !!data.local_only);
-
-  const shared = data?.shared || {};
-  // The QR encodes the shared link once this device advertises it — then it
-  // is also the one to test with (the checklist's last step shows it again).
-  const sharedQr =
-    data?.qr_svg && shared.url && data.qr_target?.startsWith(shared.url) ? data.qr_svg : undefined;
+    if (p.active) void load();
+  }, [p.active, load]);
 
   return (
     <>
-      <h3 className="set-section-title">Mobile</h3>
-      <div className="caps-gate" data-caps-gate="tailscale">
-        <p>
-          Install <strong>Tailscale</strong> to get access to these features — it puts your
-          phone and this machine on a private network, so you can drive your sessions from
-          anywhere.
-        </p>
-        {/* What "install" means here depends on the OS (the Mac app, or
-            Tailscale inside WSL when it's only on Windows): the card knows. */}
-        {!tailscale && <TailscaleCard />}
-        <p>Then reopen this screen — the QR code and phone URLs appear here.</p>
-      </div>
-      {tailscale && <PhoneSteps app={data?.phone_app} />}
+      <h3 className="set-section-title">Your phone</h3>
+      <p className="set-hint set-block-hint">
+        Your phone reaches this computer over Tailscale, a private network between your own
+        devices. Three steps, in order:
+      </p>
+      <ol className="mobile-phone-steps set-hint" id="mobile-computer-steps">
+        <li data-phone-step="computer" data-state={tailscale ? "ok" : "fail"}>
+          {tailscale ? (
+            <>Tailscale is installed on this computer.</>
+          ) : (
+            <>
+              <strong>Install Tailscale on this computer</strong> and sign in. What that means
+              here depends on the OS (the Mac app, or Tailscale inside WSL when it's only on
+              Windows) — the card below knows, and says what's wrong if anything is.
+              {/* The card reads GET /api/tailscale/health: the same checks as
+                  the doctor's tailscale row, so the two never disagree. */}
+              <TailscaleCard active={p.active} />
+              <p>Then reopen this screen — the QR code and phone URLs appear below.</p>
+            </>
+          )}
+        </li>
+      </ol>
+      <PhoneSteps app={data?.phone_app} />
       <div id="mobile-body" className="mobile-body">
-        {!tailscale ? null : error ? (
+        {!tailscale ? (
+          <p className="set-hint" id="mobile-waiting">
+            The QR code and the <code>/m</code> link show here once Tailscale is set up on this
+            computer.
+          </p>
+        ) : error ? (
           <p className="error">{error}</p>
         ) : !data ? (
           <p className="set-hint">Loading…</p>
         ) : (
           <>
-            <div
-              className="set-row set-switch-row"
-              title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
-            >
-              <span className="set-label">Reachable from your other devices and phone (over Tailscale)</span>
-              {/* label wraps only the switch, so clicking the row text no longer flips it */}
-              <label className="ca-switch">
-                <input
-                  type="checkbox"
-                  checked={data.serve_mode === "tailscale"}
-                  disabled={modeBusy}
-                  onChange={(e) => setMode(e.target.checked)}
-                />
-                <span className="ca-slider" />
-              </label>
-            </div>
-            {pending && (
-              <button
-                type="button"
-                className="test-btn mobile-restart"
-                disabled={restarting}
-                onClick={onRestart}
-              >
-                {restarting ? "Restarting…" : "Restart server to apply"}
-              </button>
+            {data.local_only && (
+              // Bound to 127.0.0.1: nothing the phone can open. The one fix is
+              // the Tailscale-mode switch, which lives on Your devices.
+              <div className="devices-warn" id="mobile-local-only" role="alert">
+                <p>
+                  This computer only listens on itself — your phone can't reach it yet. Turn on{" "}
+                  <strong>Make reachable</strong> in Your devices (Tailscale mode with the access
+                  gate on; MindFlock restarts once).
+                </p>
+                <button type="button" className="test-btn" id="mobile-open-devices" onClick={() => p.gotoScreen("devices")}>
+                  Open Your devices
+                </button>
+              </div>
             )}
             {data.qr_svg && (
-              // Server-generated segno SVG (trusted).
+              // Server-generated segno SVG (trusted). The ONE MindFlock QR: it
+              // encodes the shared phone link once this device advertises it,
+              // else this device's own URL.
               <div id="mobile-qr" dangerouslySetInnerHTML={{ __html: data.qr_svg }} />
             )}
             {data.note && <p className="set-hint">{data.note}</p>}
             <UrlList urls={data.urls || []} />
-            {data.token && <TokenField token={data.token} />}
-            <SharedLink shared={shared} qrSvg={sharedQr} onChanged={load} onData={setData} />
+            <p className="set-hint" id="mobile-sign-in-hint">
+              Scanning signs the phone in. To open the link by hand it asks for the access token
+              (Settings → Security). One URL for all your computers: Your devices → One link for
+              all devices.
+            </p>
           </>
         )}
       </div>
@@ -189,7 +123,7 @@ export function Mobile(_: ScreenProps) {
 export function PhoneSteps({ app }: { app?: MobilePayload["phone_app"] }) {
   const url = app?.url || "https://tailscale.com/download";
   return (
-    <ol className="mobile-phone-steps set-hint" id="mobile-phone-steps">
+    <ol className="mobile-phone-steps set-hint" id="mobile-phone-steps" start={2}>
       <li data-phone-step="tailscale">
         Install Tailscale on your phone and sign in
         {app?.login ? (
@@ -206,7 +140,7 @@ export function PhoneSteps({ app }: { app?: MobilePayload["phone_app"] }) {
         </a>{" "}
         on the phone.
         {app?.qr_svg && (
-          // Server-generated segno SVG (trusted).
+          // Server-generated segno SVG (trusted): the app-store link, not MindFlock.
           <div className="qr-card ts-app-qr" dangerouslySetInnerHTML={{ __html: app.qr_svg }} />
         )}
       </li>
@@ -235,340 +169,4 @@ export function UrlList({ urls }: { urls: Array<{ label: string; url: string }> 
       ))}
     </dl>
   );
-}
-
-/** The access token, masked until asked for: it is a bearer credential and
- * this screen gets screenshotted. Same Show/Copy pair as Settings → Security. */
-export function TokenField({ token }: { token: string }) {
-  const [shown, setShown] = useState(false);
-  return (
-    <div className="set-row">
-      <span className="set-label">Access token</span>
-      <div className="token-reveal">
-        <code>{shown ? token : TOKEN_MASK}</code>
-        <button type="button" className="test-btn" onClick={() => setShown(!shown)}>
-          {shown ? "Hide" : "Show"}
-        </button>
-        <CopyButton text={token} what="Access token" />
-      </div>
-      <span className="set-hint">Signs a browser in to this device — treat it like a password.</span>
-    </div>
-  );
-}
-
-function CopyButton({ text, what }: { text: string; what: string }) {
-  return (
-    <button
-      type="button"
-      className="test-btn"
-      onClick={() => copyText(text).then((ok) => toast(ok ? what + " copied" : "Copy failed"))}
-    >
-      Copy
-    </button>
-  );
-}
-
-/** A command or snippet to paste somewhere, with its Copy button. */
-function Snippet({ text, what }: { text: string; what: string }) {
-  return (
-    <div className="sl-snippet">
-      <pre>{text}</pre>
-      <CopyButton text={text} what={what} />
-    </div>
-  );
-}
-
-function AdminLink({ href, children }: { href?: string; children: ReactNode }) {
-  if (!href) return null;
-  return (
-    <a className="sl-admin-link" href={href} target="_blank" rel="noopener noreferrer">
-      {children} ↗
-    </a>
-  );
-}
-
-const DEFAULT_SHARED_NAME = "mindflock";
-
-/** One phone URL for every device: each device that turns this on (with the
- * same name) advertises the same Tailscale Service, and Tailscale routes the
- * phone to whichever is up. Takes effect on save — no restart. */
-function SharedLink({
-  shared,
-  qrSvg,
-  onChanged,
-  onData,
-}: {
-  shared: SharedLinkState;
-  qrSvg?: string;
-  onChanged: () => void;
-  onData: (d: MobilePayload) => void;
-}) {
-  const [name, setName] = useState(shared.name || DEFAULT_SHARED_NAME);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (shared.name) setName(shared.name);
-  }, [shared.name]);
-
-  const save = async (value: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/settings", { json: { general: { shared_link: value } } });
-    } catch (e) {
-      setError((e as Error).message || "Could not save.");
-    }
-    setBusy(false);
-    onChanged();
-  };
-
-  const recheck = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      onData(await api<MobilePayload>("/api/mobile/shared/recheck", { method: "POST" }));
-    } catch (e) {
-      setError((e as Error).message || "Could not re-check.");
-    }
-    setBusy(false);
-  };
-
-  const on = !!shared.enabled;
-  // While it's on, the server re-checks every minute; refresh what we show
-  // at the same pace so a pending approval turns green without a click.
-  useEffect(() => {
-    if (!on) return;
-    const t = window.setInterval(onChanged, 60_000);
-    return () => window.clearInterval(t);
-  }, [on, onChanged]);
-
-  const others = shared.devices || [];
-  return (
-    <>
-      <h3 className="set-section-title">One link for all devices</h3>
-      <p className="set-hint">
-        Turn this on with the same name on each of your machines. The phone then keeps one URL,
-        and it opens on whichever machine is running, so it still works when this one is off.
-      </p>
-      <div
-        className="set-row set-switch-row"
-        title="Advertise this device as a host of the shared Tailscale Service"
-      >
-        <span className="set-label">Shared link</span>
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            checked={on}
-            disabled={busy}
-            onChange={(e) => save(e.target.checked ? name || DEFAULT_SHARED_NAME : "")}
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
-      <label className="set-row">
-        <span className="set-label">Name</span>
-        <input
-          type="text"
-          value={name}
-          disabled={busy}
-          placeholder={DEFAULT_SHARED_NAME}
-          onChange={(e) => setName(e.target.value.trim().toLowerCase())}
-          onBlur={() => on && name && name !== shared.name && save(name)}
-          onKeyDown={(e) => e.key === "Enter" && on && name && name !== shared.name && save(name)}
-        />
-        <span className="set-hint">Use the same name on every device.</span>
-      </label>
-      {error && <p className="error">{error}</p>}
-      {on && (
-        <>
-          {shared.url && <UrlList urls={[{ label: "Shared URL", url: shared.url }]} />}
-          <SetupChecklist shared={shared} qrSvg={qrSvg} busy={busy} onRecheck={recheck} />
-          <p className="set-hint">
-            {others.length
-              ? "Also on this link: " +
-                others.map((d) => d.host + (d.reachable ? "" : " (offline)")).join(", ") +
-                "."
-              : "No other device on this link yet. Turn it on, with the same name, on each machine."}{" "}
-            Signing in once covers Your devices (Settings → Devices) and devices paired under
-            Remote control: the QR carries their keys too.
-          </p>
-        </>
-      )}
-    </>
-  );
-}
-
-const MARK: Record<StepState, string> = { ok: "✓", fail: "✗", unknown: "?" };
-const MARK_LABEL: Record<StepState, string> = {
-  ok: "done",
-  fail: "needs fixing",
-  unknown: "unknown",
-};
-
-/** The shared link's setup, one step per thing a host needs, each with its
- * live state from the server, a one-line reason, and the exact fix. A step
- * that passes keeps its fix folded away; one that doesn't shows it. */
-export function SetupChecklist({
-  shared,
-  qrSvg,
-  busy,
-  onRecheck,
-}: {
-  shared: SharedLinkState;
-  qrSvg?: string;
-  busy?: boolean;
-  onRecheck: () => void;
-}) {
-  const steps = shared.steps || [];
-  return (
-    <div className="sl-setup">
-      <div className="sl-setup-head">
-        <span className="set-label">Setup</span>
-        <button type="button" className="test-btn" disabled={busy} onClick={onRecheck}>
-          {busy ? "Checking…" : "Re-check"}
-        </button>
-      </div>
-      <ol className="sl-steps">
-        {steps.map((s, i) => {
-          const fix = <StepFix step={s} shared={shared} qrSvg={qrSvg} />;
-          return (
-            <li key={s.id} className={"sl-step sl-" + s.state} data-step={s.id}>
-              <span className="sl-mark" title={MARK_LABEL[s.state]} aria-label={MARK_LABEL[s.state]}>
-                {MARK[s.state] || "?"}
-              </span>
-              <div className="sl-body">
-                <div className="sl-title">
-                  {i + 1}. {s.title}
-                </div>
-                <div className="set-hint sl-reason">{s.reason}</div>
-                {s.state === "ok" && s.id !== "phone" ? (
-                  <details className="sl-fix">
-                    <summary>Show how</summary>
-                    {fix}
-                  </details>
-                ) : (
-                  <div className="sl-fix">{fix}</div>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
-  );
-}
-
-function StepFix({ step, shared, qrSvg }: { step: SetupStep; shared: SharedLinkState; qrSvg?: string }) {
-  const svc = shared.service || "svc:" + (shared.name || DEFAULT_SHARED_NAME);
-  const name = shared.name || DEFAULT_SHARED_NAME;
-  const tag = shared.tag || "tag:mindflock";
-  const m = shared.machine;
-  const admin = shared.admin;
-  switch (step.id) {
-    case "operator":
-      if (shared.error_kind === "missing")
-        return (
-          <p className="set-hint">
-            Install it from{" "}
-            <a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">
-              tailscale.com/download
-            </a>
-            , sign in, then press Re-check.
-          </p>
-        );
-      return (
-        <>
-          <p className="set-hint">
-            Lets MindFlock run <code>tailscale serve</code> as you. Run once in a terminal, then
-            press Re-check:
-          </p>
-          <Snippet text={shared.operator_fix || "sudo tailscale set --operator=$USER"} what="Command" />
-        </>
-      );
-    case "tag":
-      return (
-        <>
-          <p className="set-hint">
-            In the admin console's Machines page, open{" "}
-            <strong>{m?.dns || m?.hostname || "this device"}</strong>
-            {m?.ip ? (
-              <>
-                {" "}
-                (<code>{m.ip}</code>)
-              </>
-            ) : null}{" "}
-            → ⋯ → Edit ACL tags → add <code>{tag}</code>. Then ⋯ → <strong>Disable key expiry</strong>:
-            tagging a device after it signed in keeps its key expiry, and when the key expires the
-            device silently drops off the link.
-          </p>
-          {m?.duplicate_of && (
-            <p className="set-hint sl-note">
-              Tailscale named this device <code>{m.dns.split(".")[0]}</code> because another
-              device is already <code>{m.duplicate_of}</code> — match it by its IP.
-            </p>
-          )}
-          <AdminLink href={admin?.machines}>Open Machines</AdminLink>
-        </>
-      );
-    case "define":
-      return (
-        <>
-          <p className="set-hint">
-            On the Services page, add a service named <code>{name}</code> (<code>{svc}</code>)
-            with port <code>tcp:443</code>.
-          </p>
-          <AdminLink href={admin?.services}>Open Services</AdminLink>
-        </>
-      );
-    case "policy":
-      return (
-        <>
-          <p className="set-hint">
-            One block for your access policy: every <code>{tag}</code> device is approved as a host
-            of <code>{svc}</code> without a click, and your own devices and phone may reach each
-            other's MindFlock (needed under any custom policy, such as <code>autogroup:self</code>)
-            — you only, not everyone else on the tailnet. If it says REPLACE, put your Tailscale
-            login where it shows the placeholder.
-            No <code>tagOwners</code>, <code>autoApprovers</code>, <code>grants</code> or{" "}
-            <code>tests</code> in your policy yet? Paste it whole. Already have one? Move the lines
-            inside it into yours: a key can't appear twice.
-          </p>
-          {shared.policy && <Snippet text={shared.policy} what="Policy" />}
-          <AdminLink href={admin?.policy}>Open Access controls</AdminLink>
-        </>
-      );
-    case "approval":
-      if (step.state === "ok") return null;
-      return (
-        <>
-          <p className="set-hint">
-            Approve this device under Services → <code>{svc}</code>, or rely on the policy above.
-            Re-check re-advertises this device, which is what the auto-approver reacts to.
-          </p>
-          <AdminLink href={admin?.services}>Open Services</AdminLink>
-        </>
-      );
-    case "phone":
-      return (
-        <>
-          {qrSvg && (
-            // Server-generated segno SVG (trusted) — the same QR as above.
-            <div className="qr-card sl-qr" dangerouslySetInnerHTML={{ __html: qrSvg }} />
-          )}
-          <p className="set-hint">
-            With Tailscale on, open{" "}
-            {shared.url ? (
-              <a href={shared.url} target="_blank" rel="noopener noreferrer">
-                {shared.url}
-              </a>
-            ) : (
-              "the shared URL"
-            )}{" "}
-            on your phone. If it times out, Re-check here first.
-          </p>
-        </>
-      );
-    default:
-      return null;
-  }
 }

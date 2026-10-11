@@ -832,3 +832,85 @@
 .ik-pickbar .linklike {
   margin-left: auto;
 }
+
+/* --- Ticket source cards: tested state ------------------------------------
+   A source is "connected" only once its stored configuration has been seen to
+   work (Test, run by hand or automatically after a save). The pill says which
+   of the three states the card is in; the message beside it says why. */
+.ik-source-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.ik-source-pill.connected {
+  color: var(--ok, #3fb950);
+  border-color: var(--ok, #3fb950);
+}
+.ik-source-pill.needs_attention {
+  color: var(--warn, #d29922);
+  border-color: var(--warn, #d29922);
+}
+.ik-source-pill.off {
+  opacity: 0.7;
+}
+.tk-head .ik-source-pill {
+  margin-left: auto;
+  flex: none;
+}
+.tk-source .test-row .ik-source-message {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* A required marker next to the label, and the inline error the server sent
+   back for the field. The error replaces the hint's slot so the row never
+   grows a second line of small print. */
+.ik-field-marker {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ik-field-marker.required {
+  color: var(--danger, #e5534b);
+}
+.ik-field-error {
+  color: var(--danger, #e5534b);
+  font-size: 12px;
+}
+
+/* A secret with a stored value gets a Clear control beside its input. */
+.ik-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ik-secret-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ik-secret-clear {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ik-secret-clear:hover {
+  color: var(--text);
+}

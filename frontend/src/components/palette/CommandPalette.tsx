@@ -21,13 +21,17 @@ import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
   copySession,
+  deleteSession,
   hasPrSupport,
   hideSession,
   ideSession,
   instances,
+  killSession,
   makePrSession,
   mergeSession,
+  pauseSession,
   pushSession,
+  resumeSession,
   selectSession,
 } from "../../lib/sessionActions";
 import { orderedInstances } from "../sidebar/ordering";
@@ -116,7 +120,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    acts.push({ label: "Recently closed…", hint: "reopen or clean up closed sessions", run: () => ui.openDialogFor("recent") });
+    acts.push({ label: "Templates…", hint: "manage saved New-session setups", run: () => ui.openDialogFor("templates") });
+    acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
     acts.push({ label: "Assistant agent file…", run: () => ui.openDialogFor("assistant-agent") });
     if (caps.git)
       acts.push({
@@ -132,13 +137,18 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.openDialogFor("settings", "devices"),
     });
     acts.push({
-      label: "Work with someone…",
-      hint: "peer links: invite someone, or join with their code",
+      label: "Your phone",
+      hint: "the QR code and /m link",
+      run: () => ui.openDialogFor("settings", "mobile"),
+    });
+    acts.push({
+      label: "People…",
+      hint: "peer links: invite someone, or join a peer with their code",
       run: () => ui.openDialogFor("settings", "peer"),
     });
-    // ONE place for every code (lib/deviceActions.ts): Settings → Devices'
-    // paste box, which sends one of your devices' codes to Devices and
-    // someone's mfp1:/mfp2: invite to Work with someone. (A code typed
+    // ONE place for every code (lib/deviceActions.ts): Your devices'
+    // paste box, which sends one of your devices' codes to Your devices and
+    // someone's mfp1:/mfp2: invite to People. (A code typed
     // straight into this box gets its own entry at the top, below.)
     acts.push({
       label: "Paste a code…",
@@ -146,6 +156,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => openDevicesFor({ focusPaste: true }),
     });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
+    acts.push({ label: "Tour", hint: "what MindFlock is, in five slides", run: () => ui.openTour() });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
 
@@ -198,13 +209,34 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       if (caps.git && !shared) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
-        acts.push({ label: `Make PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
+        acts.push({ label: `Open PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
       }
       if (!shared) {
         acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
         acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
       }
       acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
+      // Pause / Resume: whichever applies to this session right now.
+      if (inst && !inst.pending) {
+        if (inst.status === "paused")
+          acts.push({ label: `Resume session — ${t}`, hint: "starts the agent again", run: () => resumeSession(t) });
+        else if (!shared)
+          acts.push({
+            label: `Pause session — ${t}`,
+            hint: "stops the agent, keeps the worktree",
+            run: () => pauseSession(t),
+          });
+      }
+      // The two end verbs, same as the row menu. Close keeps the worktree;
+      // Delete… asks first on a card (the palette has closed by then) and
+      // removes the worktree and branch.
+      acts.push({ label: `Close session — ${t}`, hint: "Ctrl+W · keeps the worktree", run: () => killSession(t) });
+      if (caps.git && !shared)
+        acts.push({
+          label: `Delete session… — ${t}`,
+          hint: "removes the worktree and branch",
+          run: () => void deleteSession(t),
+        });
       if (caps.git)
         acts.push({
           label: `Code map — ${t}`,
@@ -260,7 +292,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     if (code.kind)
       out.unshift({
         label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
-        hint: code.kind === "peer" ? "another person · Work with someone" : "your devices",
+        hint: code.kind === "peer" ? "another person · People" : "your devices",
         run: () => void routePastedCode(query),
       });
     return out;

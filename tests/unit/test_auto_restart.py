@@ -1,6 +1,6 @@
 """Restarting the server to make tailscale mode real — and knowing when to stop.
 
-Which interface uvicorn binds is decided once, at boot, so the Settings → Mobile
+Which interface uvicorn binds is decided once, at boot, so the Settings → Your phone
 toggle is inert until the process restarts. :mod:`backend.web.core.restart` does
 that restart itself rather than leaving a button to press, which makes two things
 load-bearing:
@@ -180,7 +180,7 @@ client = TestClient(server.app, base_url="http://127.0.0.1")
 
 
 def test_the_toggle_restarts_and_says_so(armed, execs):
-    """Settings → Mobile flips the switch; the server takes the restart itself
+    """Settings → Your phone flips the switch; the server takes the restart itself
     and tells the client to wait for it rather than report the dropped
     connection as a failure."""
     S.update_settings(general={"serve_mode": "local"})

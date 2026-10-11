@@ -293,7 +293,9 @@ class TestTheSplitEndToEnd:
         assert "overlaps a on auth/session.py" in err.value.message
         with pytest.raises(drv.RunError) as err:
             drv.propose_plan(run["id"], {"pieces": PLAN, "from": "someone-else"})
-        assert err.value.status == 409 and "only the group's lead" in err.value.message
+        assert (
+            err.value.status == 409 and "only the team run's lead" in err.value.message
+        )
         out = drv.propose_plan(run["id"], {"pieces": PLAN, "why": "two", "from": lead})
         assert out["problems"] == [] and len(out["plan"]["pieces"]) == 2
         stored = tr.load(run["id"])
@@ -525,7 +527,7 @@ class TestTheSplitEndToEnd:
         assert "You are on trunkish, the trunk: commit nothing here" in item["text"]
         # Never one already leading, or an unknown one.
         for title, status, words in (
-            ("mine", 409, "already in group"),
+            ("mine", 409, "already in team run"),
             ("nope", 404, "instance not found"),
         ):
             with pytest.raises(drv.RunError) as err:
@@ -683,7 +685,9 @@ class TestAutoSplit:
         run = _split(env, split_optional=True)
         with pytest.raises(drv.RunError) as err:
             drv.propose_plan(run["id"], {"pieces": [], "from": "someone-else"})
-        assert err.value.status == 409 and "only the group's lead" in err.value.message
+        assert (
+            err.value.status == 409 and "only the team run's lead" in err.value.message
+        )
         assert tr.load(run["id"])["state"] == "planning"
         assert armed == [] and self._dissolved(env, run["id"]) == []
 
@@ -787,7 +791,7 @@ class TestOneForAll:
         lead_head = gm.rev_parse(_wt(env, "q4-lead"), "HEAD")
         for p in env.created[1:]:
             assert p["parent"] == "q4-lead" and p["base_ref"] == lead_head
-            assert "one branch for a single PR" in p["prompt"]
+            assert "one branch for one PR" in p["prompt"]
         dto = tr.run_dto(tr.load(run["id"]))
         assert all(tr.task_lane(r, t) == "commit" for t in r["tasks"])
         assert dto["lead"]["title"] == "q4-lead"

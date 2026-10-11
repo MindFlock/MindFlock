@@ -114,6 +114,8 @@ def test_event_names_vocabulary_is_complete():
         "session.test_plan_due",
         "session.profile_changed",
         "session.message",
+        "session.presence_changed",
+        "session.driver_changed",
         "session.red_zone_blocked",
         "session.red_zone_breached",
         "session.red_zone_tampered",

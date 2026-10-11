@@ -43,7 +43,7 @@ export function Workspace({ gotoScreen }: ScreenProps) {
         <span className="set-label">Default PR base branch</span>
         <SettingField group="repository" field="pr_base_branch" placeholder="use the session's own base" />
         <span className="set-hint">
-          Branch the <strong>Make PR</strong> button targets. Set it to e.g. <code>staging</code>{" "}
+          Branch the <strong>Open PR</strong> button targets. Set it to e.g. <code>staging</code>{" "}
           to always PR there. Blank = PR into whatever branch the session was created from.
         </span>
       </label>
@@ -66,7 +66,7 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             { value: "", label: "Off (default)" },
             { value: "commit", label: "Commit" },
             { value: "push", label: "Push" },
-            { value: "pr", label: "Open a PR" },
+            { value: "pr", label: "Open PR" },
             { value: "merge", label: "Merge when green" },
           ]}
         />

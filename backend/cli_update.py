@@ -8,15 +8,21 @@ Thin clients over a running server, like the other session commands
 adds is the waiting: it follows the install, then polls the public hello until
 the server answers with the new build — the only proof the update took.
 
-``update`` with no server running installs in place (the same detached
-installer) and says to start the server afterwards. Headless machines (a rig
-nobody sits at) are the point: before these commands, re-running install.sh
-replaced the venv under a live server that kept running the old code.
+``update`` is the exception: it runs the install HERE, in the foreground,
+with the method ``install.json`` records (uv tool, pipx — or, for a
+development checkout, it only prints the git commands), then restarts a
+running server onto the result. Headless machines (a rig nobody sits at) are
+the point: before these commands, re-running install.sh replaced the venv
+under a live server that kept running the old code.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import re
+import shlex
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -60,6 +66,9 @@ def _build(hello: dict) -> str:
     )
 
 
+_SEMVER = re.compile(r"^\d+\.\d+")
+
+
 def wait_for_build(
     base: str, version: str = "", commit: str = "", timeout: float = RESTART_WAIT_S
 ) -> Optional[dict]:
@@ -71,9 +80,16 @@ def wait_for_build(
         if hello:
             theirs = str(hello.get("commit") or "")
             if commit and theirs:
-                if theirs == commit:
+                # `--ref <short sha>`: either side may be the abbreviation.
+                if theirs.startswith(commit) or commit.startswith(theirs):
                     return hello
-            elif not version or hello.get("version") == version:
+            elif (
+                not version
+                or not _SEMVER.match(version)
+                or hello.get("version") == version
+            ):
+                # A branch or sha ref has no version to match: any build that
+                # answers after the restart is the new one.
                 return hello
         time.sleep(POLL_S)
     return None
@@ -103,146 +119,203 @@ def cmd_restart(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # update (this machine)
 # --------------------------------------------------------------------------- #
-def _follow(base: str, ref: str, commit: str) -> int:
-    """Follow an install the server started until the server answers on it."""
-    seen = "started"
-    deadline = time.monotonic() + 35 * 60
-    while time.monotonic() < deadline:
-        time.sleep(POLL_S)
-        try:
-            st = client.get(base, "/api/update/state", timeout=10.0) or {}
-        except client.ClientError:
-            continue  # the server is mid-restart: keep waiting
-        state = str(st.get("state") or "")
-        if state in ("failed", "rolled_back"):
-            for line in (st.get("log") or [])[-12:]:
-                print("  " + str(line), file=sys.stderr)
-            _err(
-                str(st.get("error") or "")
-                or "the install failed (exit %s) — see the lines above" % st.get("code")
-            )
-            return 1
-        if state == "done" and seen != "done":
-            seen = "done"
-            print("installed — the server restarts onto it…")
-            break
-    if seen != "done":
-        _err("timed out waiting for the install")
+#: How install.json's / install_kind's answer reads on a terminal.
+_METHOD_WORDS = {
+    "uv-tool": "uv tool",
+    "pipx": "pipx",
+    "editable": "a development checkout (editable)",
+    "other": "an installer MindFlock doesn't recognise",
+}
+
+_SHA = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def _run_installer(argv: list) -> int:
+    """Run the install command in the foreground, its output on this
+    terminal. Returns the exit code (1 when it couldn't start)."""
+    print("$ " + " ".join(shlex.quote(a) for a in argv))
+    try:
+        return int(subprocess.run(argv, check=False).returncode)  # noqa: S603
+    except (OSError, subprocess.SubprocessError) as err:
+        _err("couldn't run %s: %s" % (argv[0], err))
         return 1
+
+
+def _rollback(previous: Optional[dict]) -> str:
+    """The boot-failure safety net the server-driven updater had: put the
+    engine ``install.json`` described BEFORE this update back and restart onto
+    it. Returns a sentence for the user ("" when there was nothing to go back
+    to or the rollback itself failed)."""
+    if not previous:
+        return ""
+    from backend.web.core import self_update
+
+    method = str(previous.get("method") or "")
+    target = str(previous.get("sha") or previous.get("ref") or "")
+    if method not in ("uv-tool", "pipx") or not target:
+        return ""
+    argv = self_update.install_command(method, target)
+    if not argv:
+        return ""
+    print("rolling back to %s…" % (previous.get("ref") or target))
+    if _run_installer(argv) != 0:
+        return ""
+    self_update.write_install_json(
+        method=method,
+        ref=previous.get("ref"),
+        sha=previous.get("sha") or None,
+        at=int(time.time()),
+    )
+    return "rolled the engine back to %s (run `mindflock restart` to boot it)" % (
+        previous.get("ref") or target
+    )
+
+
+def _restart_running_server(
+    args: argparse.Namespace, ref: str, commit: str, previous: Optional[dict] = None
+) -> int:
+    """After a successful install: if a server is running, restart it onto
+    the new engine (``POST /api/server/restart``, same mode) and print the
+    version it reports once back. With none, say how to start it."""
+    try:
+        base = client.discover(args.host, args.port)
+    except client.ServerNotFound:
+        print("installed %s — start it with: mindflock serve" % ref)
+        return 0
+    try:
+        client.post(base, "/api/server/restart", {"keep_mode": True}, timeout=10.0)
+    except client.ClientError as err:
+        _err(
+            "installed %s, but the running server couldn't be asked to restart "
+            "(%s) — run `mindflock restart`" % (ref, err)
+        )
+        return 1
+    print("restarting the server onto it…")
+    time.sleep(1.5)  # it answers once more before the re-exec lands
     hello = wait_for_build(base, version=ref.lstrip("vV"), commit=commit)
     if not hello:
+        rolled = _rollback(previous)
         _err(
-            "installed, but the server didn't come back on %s within %ds — "
-            "run `mindflock restart`, or check its log" % (ref, int(RESTART_WAIT_S))
+            "installed %s, but the server did not come back within %ds — "
+            "%s"
+            % (
+                ref,
+                int(RESTART_WAIT_S),
+                rolled or "run `mindflock restart`, or check its log",
+            )
         )
         return 1
     print("updated — MindFlock %s is running" % _build(hello))
     return 0
 
 
-def _update_offline(args: argparse.Namespace) -> int:
-    """No server running: install in place with the same detached installer."""
-    import asyncio
+def cmd_update(args: argparse.Namespace) -> int:
+    """``mindflock update [--check] [--ref <tag|sha>] [--yes] [--all-devices]``.
 
+    One update path for every install method. ``install.json`` (what
+    ``install.sh`` wrote: ``~/.mindflock/install.json``) says how this
+    engine was installed, with the running package's own location as the
+    fallback (:func:`backend.web.core.self_update.install_kind`):
+
+    * ``uv-tool`` — the pinned ``uv tool install --force`` the server's own
+      updater runs (the tag resolved to its commit first);
+    * ``pipx`` — ``pipx install --force "mindflock[web] @ git+<repo>@<tag>"``;
+    * ``editable`` — prints the git commands and changes nothing (exit 0).
+
+    ``--check`` prints the installed and newest versions and exits 0 when
+    current, 1 when behind (2 when GitHub couldn't be reached). After a good
+    install a running server is restarted onto the new engine and the
+    version it then reports is printed.
+    """
+    if getattr(args, "all_devices", False):
+        args.tag = args.ref
+        return cmd_devices_update(args)
     from backend.web.core import self_update
 
     current = self_update.installed_version()
-    ref = str(args.ref or "").strip()
-    if not ref:
-        release = asyncio.run(self_update.latest_release(force=True))
-        if not release:
-            _err("couldn't reach GitHub to find the newest release")
-            return 1
-        print("This MindFlock: v%s · newest release: %s" % (current, release["tag"]))
-        if args.check:
-            return 0
-        if not self_update.is_newer(release["version"], current):
-            print("Already on the newest release.")
-            return 0
-        ref = release["tag"]
-    elif args.check:
-        print("This MindFlock: v%s" % current)
+    commit_now = self_update.installed_commit()
+    kind = self_update.install_kind()
+    recorded = self_update.read_install_json()
+    source = (
+        "install.json"
+        if kind != "editable" and recorded.get("method") == kind
+        else "detected"
+    )
+    latest_tag = asyncio.run(self_update.latest_release_tag(force=True))
+    latest = latest_tag.lstrip("vV")
+    print(
+        "This MindFlock: v%s%s · installed with %s (%s)%s"
+        % (
+            current or "?",
+            " (%s)" % commit_now[:7] if commit_now else "",
+            _METHOD_WORDS.get(kind, kind),
+            source,
+            " · newest release: v%s" % latest if latest else "",
+        )
+    )
+    behind = bool(latest) and self_update.is_newer(latest, current)
+    if not latest_tag:
+        print("Couldn't reach GitHub to check for a newer release.")
+    if args.check:
+        if not latest_tag:
+            return 2
+        print(
+            "Already on the newest release."
+            if not behind
+            else "An update is available."
+        )
+        return 0 if not behind else 1
+    ref = str(args.ref or "").strip() or latest_tag
+    if kind == "editable":
+        print(
+            "This is a development checkout, so the update comes from git. "
+            "Run these yourself:"
+        )
+        for line in self_update.editable_update_commands(ref):
+            print("  " + line)
         return 0
     blocked = self_update.blocked_reason()
     if blocked:
         _err(blocked)
         return 1
-    if not args.yes and not _confirm("Install %s?" % ref):
-        print("not updated")
-        return 1
-    res = self_update.start_update(ref)
-    if not res.get("ok"):
-        _err(str(res.get("error") or "couldn't start the installer"))
-        return 1
-    print("installing %s (commit %s)…" % (ref, str(res.get("commit") or "")[:12]))
-    deadline = time.monotonic() + self_update.INSTALL_TIMEOUT_S + 60
-    while time.monotonic() < deadline:
-        time.sleep(POLL_S)
-        st = self_update.read_state()
-        if st.get("state") == "done":
-            print("installed %s — start it with: mindflock serve" % ref)
+    if not args.ref:
+        if not latest_tag:
+            return 1
+        if not behind:
+            print("Already on the newest release.")
             return 0
-        if st.get("state") in ("failed", "rolled_back"):
-            for line in self_update.log_tail(12):
-                print("  " + line, file=sys.stderr)
-            _err(
-                str(st.get("error") or "the install failed (exit %s)" % st.get("code"))
-            )
-            return 1
-    _err("timed out waiting for the install")
-    return 1
-
-
-def cmd_update(args: argparse.Namespace) -> int:
-    """``mindflock update [--ref vX] [--check] [--all-devices] [--yes]``."""
-    if getattr(args, "all_devices", False):
-        args.tag = args.ref
-        return cmd_devices_update(args)
-    try:
-        base = client.discover(args.host, args.port)
-    except client.ServerNotFound:
-        return _update_offline(args)
-    chk = client.get(base, "/api/update/check?refresh=1", timeout=20.0) or {}
-    current, latest = str(chk.get("current") or "?"), str(chk.get("latest") or "")
-    commit = str(chk.get("commit") or "")
-    print(
-        "This MindFlock: v%s%s" % (current, " (%s)" % commit[:7] if commit else "")
-        + (" · newest release: v%s" % latest if latest else "")
-    )
-    if not chk.get("checked"):
-        print("Couldn't reach GitHub to check for a newer release.")
-    if chk.get("restart_pending"):
-        print("An update is installed; the server restarts onto it shortly.")
-    if args.check:
-        return 0
-    if chk.get("blocked"):
-        _err(str(chk["blocked"]))
-        return 1
-    ref = str(args.ref or "").strip()
-    if not ref:
-        if not chk.get("available"):
-            if chk.get("checked"):
-                print("Already on the newest release.")
-                return 0
-            return 1
-        ref = "v" + latest
     if not args.yes and not _confirm(
-        "Update to %s and restart the server? (sessions keep running)" % ref
+        "Install %s with %s%s?"
+        % (
+            ref,
+            _METHOD_WORDS.get(kind, kind),
+            " and restart the server (sessions keep running)",
+        )
     ):
         print("not updated")
         return 1
-    res = (
-        client.post(
-            base,
-            "/api/update/start",
-            {"ref": args.ref} if args.ref else {},
-            timeout=120.0,
-        )
-        or {}
+    # uv pins the COMMIT (a tag can move under an install); pipx takes the tag
+    # (its spec records what was asked for, which is what `pipx list` shows).
+    commit = self_update._resolve_commit(ref) if kind == "uv-tool" else ""
+    if kind == "uv-tool" and not commit:
+        if _SHA.match(ref):
+            commit = ref
+        else:
+            _err("could not resolve %s on %s" % (ref, self_update.INSTALL_REPO))
+            return 1
+    argv = self_update.install_command(kind, commit or ref)
+    if not argv:
+        _err(self_update.blocked_reason() or "no installer for %s" % kind)
+        return 1
+    print("installing %s…" % ref)
+    code = _run_installer(argv)
+    if code != 0:
+        _err("the install failed (exit %d) — see the lines above" % code)
+        return 1
+    self_update.write_install_json(
+        method=kind, ref=ref, sha=commit or None, at=int(time.time())
     )
-    ref = str(res.get("ref") or ref)
-    print("installing %s (commit %s)…" % (ref, str(res.get("commit") or "")[:12]))
-    return _follow(base, ref, str(res.get("commit") or ""))
+    return _restart_running_server(args, ref, commit, previous=recorded)
 
 
 # --------------------------------------------------------------------------- #
@@ -314,7 +387,7 @@ def cmd_devices_update(args: argparse.Namespace) -> int:
             elif now - down_since > RESTART_WAIT_S:
                 _err(
                     "the server here stopped answering for %ds — see how the "
-                    "update went in Settings → Devices once it's back, or check "
+                    "update went in Settings → Your devices once it's back, or check "
                     "its log" % int(RESTART_WAIT_S)
                 )
                 return 1

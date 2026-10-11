@@ -1,6 +1,6 @@
 """Structural contract tests for the addon frontend modules.
 
-These lock the wiring of the Connections + Templates addon ES modules and the
+These lock the wiring of the Connections addon ES module and the
 shared modal-a11y helper (served as static files), so a refactor that silently
 drops the a11y hookup, the API calls, or the self-registration is caught by the
 suite instead of only by a manual browser check.
@@ -34,47 +34,16 @@ def test_addon_modal_helper_contract():
     assert "opener.focus()" in js  # focus returned to opener on release
 
 
-def test_templates_module_wiring():
-    js = _js("/addons/templates.js")
-    assert 'import { activateModalA11y } from "/core/addon-modal.js"' in js
-    assert "window.mindflockAddons.templates" in js
-    # opened from the + New dialog; focus returns to whatever opened it
-    assert "window.mindflockAddons.templates.open = show" in js
-    assert "activateModalA11y(modal, opener" in js
-    # dynamic run/import messages announced to screen readers
-    assert 'aria-live", "polite"' in js
-    # cold-open loading placeholder (not a blank box)
-    assert "Loading templates" in js
-    # launching reuses the existing create endpoint
-    assert '"/api/instances"' in js
-    assert 'const API = "/api/templates"' in js
-    # edit loads a template back into the form; starters seed the empty state
-    assert "formApi = {" in js and "fill(t)" in js
-    assert "STARTERS" in js
-    # a template only STARTS a session: the old "or send prompt to" row (and
-    # its broadcast) is gone — pasting into running sessions is Customize →
-    # Prompts' job, and the intro points there
-    for gone in (
-        "populateSend",
-        "sendPromptTo",
-        "mft-send-row",
-        '"/send"',
-        "All running sessions",
-    ):
-        assert gone not in js, gone
-    assert "use Customize → Prompts" in js
-    # ...and the paste-into-all now lives in the bundle's Prompts panel
+def test_templates_has_no_vanilla_module():
+    """The templates manager is the SPA's own TemplatesDialog now (React, inline
+    confirm rows, no window.confirm — Electron has none). The vanilla ES module
+    it replaced must stay gone, and the addon must not point slots.js at it."""
+    r = client.get("/addons/templates.js")
+    assert r.status_code == 404
+    data = client.get("/api/addons").json()
+    tpl = next(a for a in data["addons"] if a["id"] == "templates")
+    fe = tpl["frontend"][0]
+    assert fe["module"] is None
+    assert fe["builtin_ui"] is True
+    # the paste-into-all lives in the bundle's Prompts panel, as before
     assert "All running sessions" in _js("/app.js")
-    # duplicate = fork a recipe into a new, distinctly-named one
-    assert '"-copy"' in js
-    # progressive filter box, shown only past a threshold (like the session filter)
-    assert "FILTER_MIN" in js
-    assert "mft-filter-input" in js
-    # narrow-viewport: action buttons stack below the name so it isn't crushed
-    assert "@media (max-width: 600px)" in js
-    # Run suggests a non-colliding session name for repeat runs
-    assert "async function uniqueTitle(" in js
-    # import / export sharing
-    assert "Import / export" in js
-    assert '"mindflock-templates.json"' in js
-    assert "URL.createObjectURL" in js

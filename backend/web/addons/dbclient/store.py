@@ -253,6 +253,7 @@ def upsert_profile(clean: dict) -> List[dict]:
     if not replaced:
         profiles.append(clean)
     save_profiles(profiles)
+    _forget_test(clean["id"])  # a changed profile is untested again
     return profiles
 
 
@@ -263,6 +264,7 @@ def delete_profile(profile_id: str) -> bool:
     if len(kept) == len(profiles):
         return False
     save_profiles(kept)
+    _forget_test(profile_id)
     return True
 
 
@@ -282,4 +284,88 @@ def _complete(item: dict) -> Dict[str, object]:
         else:
             v = item.get(key, "")
             out[key] = "" if v is None else str(v)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Read-only listing for Settings → Connections
+# --------------------------------------------------------------------------- #
+#: The last Test verdict per profile id, ``{ok, error, server, at}``. Kept in
+#: ``dbclient_tests.json`` beside the store (no credential in it), so a
+#: restart does not turn every saved connection back into "not tested".
+_LAST_TESTS: Dict[str, dict] = {}
+#: Which file ``_LAST_TESTS`` was read from (the store path can change under
+#: tests, which point ``$MINDFLOCK_DBCLIENT_FILE`` somewhere new each time).
+_TESTS_LOADED = {"path": ""}
+
+
+def _tests_path() -> Path:
+    return store_path().with_name("dbclient_tests.json")
+
+
+def _load_tests() -> None:
+    path = _tests_path()
+    if _TESTS_LOADED["path"] == str(path):
+        return
+    _TESTS_LOADED["path"] = str(path)
+    _LAST_TESTS.clear()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(k, str) and isinstance(v, dict):
+                _LAST_TESTS[k] = v
+
+
+def _save_tests() -> None:
+    try:
+        path = _tests_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(_LAST_TESTS, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass  # best-effort: the verdict still lives in memory
+
+
+def note_test(profile_id: str, result: dict) -> None:
+    """Remember ``POST /api/dbclient/connections/<id>/test``'s answer."""
+    import time
+
+    _load_tests()
+    _LAST_TESTS[profile_id] = {
+        "ok": bool(result.get("ok")),
+        "error": str(result.get("error") or ""),
+        "server": str(result.get("server") or ""),
+        "at": time.time(),
+    }
+    _save_tests()
+
+
+def _forget_test(profile_id: str) -> None:
+    _load_tests()
+    if _LAST_TESTS.pop(profile_id, None) is not None:
+        _save_tests()
+
+
+def profile_summaries() -> List[dict]:
+    """One ``{id, name, engine, host, database, last_test}`` per saved profile
+    — never a credential. ``last_test`` is ``{}`` until a Test ran (and after
+    the profile was edited)."""
+    _load_tests()
+    out: List[dict] = []
+    for p in load_profiles():
+        pid = str(p.get("id") or "")
+        out.append(
+            {
+                "id": pid,
+                "name": str(p.get("name") or pid),
+                "engine": str(p.get("engine") or ""),
+                "host": str(p.get("host") or ""),
+                "database": str(p.get("database") or ""),
+                "last_test": dict(_LAST_TESTS.get(pid) or {}),
+            }
+        )
     return out

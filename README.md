@@ -66,13 +66,16 @@ source of sessions, not a requirement for them** — and unlike the ingestion pa
 a hand-started session runs whichever agent CLI you point it at.
 
 **What is not automatic** — because a pipeline you can't trust is worse than
-none. MindFlock never commits, pushes, opens or merges a PR by itself: every one
-of those is your click, you write the commit message, and the PR text is filled
-in from your commits. It doesn't write to your tracker unless you opt in per
-source: **Move to state on start**, optionally announced with a one-line
-"taking this on" comment — both off by default. It polls (every 20 s) rather
-than listening for webhooks, works one ticket at a time, and only picks up review comments on *your
-own* PRs.
+none. By default MindFlock never commits, pushes, opens or merges a PR by
+itself: every one of those is your click, you write the commit message, and the
+PR text is filled in from your commits. It goes further only when you say so —
+**fast-track** sets a depth (commit → push → PR → merge) per session or per
+[team run](docs/team-runs.md), and the agents' own `ship_session` /
+`set_autopilot` tools reach the same depths — never by default. It doesn't
+write to your tracker unless you opt in per source: **Move to state on
+start**, optionally announced with a one-line "taking this on" comment — both
+off by default. It polls (every 20 s) rather than listening for webhooks, and
+only picks up review comments on *your own* PRs.
 
 ## Where your code goes
 
@@ -94,7 +97,7 @@ Everything MindFlock itself talks to over the network, in full:
 |---|---|---|
 | Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing on its own — **no automatic writes by default**. The only automatic writes are two opt-in per-source ones: *Move to state on start* (off unless you pick a state) and *Comment when moved* — a `MindFlock (<first name>) is taking this on.` note that only posts alongside that move and is off unless enabled. Filing a ticket (New → Ticket) and merging duplicates are writes you press a button for |
 | your local model server, if you configure one | every turn of a session on a local model | your prompt and code — to `127.0.0.1` (or whatever host you pointed it at). Never leaves your machine unless you aim it off-box |
-| `api.github.com` | polling *your own* PRs for review comments; the **Make PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
+| `api.github.com` | polling *your own* PRs for review comments; the **Open PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
 | `aipricing.guru` | at most once a day, for the model price table behind the cost display | nothing. Falls back to a built-in table offline |
 | your git remote | only when *you* click push | your commits, over the remote your repo already has |
 | `ntfy.sh`, or your own instance | only if you switch phone push on | the notification text |
@@ -276,7 +279,7 @@ a feature race; those two change what your day looks like:
   drive the change home without leaving the app. The push is plain `git push`
   over the remote your repo already has — SSH or HTTPS, your choice. When you
   want to keep working on a branch the ladder considers finished, **↺** puts the
-  window back to idle so it stops asking — nothing is undone, and it clears
+  session back to idle so it stops asking — nothing is undone, and it clears
   itself the moment you commit again.
 - **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
   file — binary, launch args, prompt seeding, activity-detection hooks, model
@@ -336,7 +339,7 @@ a feature race; those two change what your day looks like:
   (provisioning → agent → pre-commit → committed → pushed → PR open). The
   commit runs in the session's own terminal, so you watch the hooks. Pushing is
   plain `git push` over whatever remote you already have — SSH or HTTPS, never
-  rewritten by MindFlock. **Make PR** / **Merge** use the `gh` CLI when it's
+  rewritten by MindFlock. **Open PR** / **Merge** use the `gh` CLI when it's
   installed and authenticated, a GitHub token (Intake → Pull requests) when it
   isn't, and a prefilled compare URL in your browser when you have neither.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
@@ -362,7 +365,7 @@ a feature race; those two change what your day looks like:
   Auth-token protected — never open to the LAN unauthenticated.
 - 🔔 **Notifications where you actually are** — desktop popups while a tab is
   open, and optional **[ntfy](https://ntfy.sh) push to your phone** sent by the
-  server, so "session needs your input" or "pre-commit blocked the commit"
+  server, so "session needs you: Question" or "pre-commit blocked the commit"
   reaches you with MindFlock closed. Off by default; one rule list picks which
   events notify you, and you can point it at your own ntfy instance. Each push
   carries your tailnet phone URL, deep-linked to the session it's about.
@@ -376,10 +379,34 @@ a feature race; those two change what your day looks like:
   the MindFlock MCP. An agent can read another session's reply or diff and
   message it, and an orchestrator can split a task across worker sessions
   forked from its own commit, wait for their reports, merge their branches
-  and clean up. Messages are typed in only when the recipient is idle, never
+  and delete the workers. Messages are typed in only when the recipient is idle, never
   into a permission prompt, and always marked as coming from another agent.
   Use it from your own Claude Code too: `mindflock mcp --print-config`. See
   [docs/mcp.md](docs/mcp.md).
+- 🗺️ **Code Map with zones** — each session's **Map** tab draws the repo as a
+  tree (folders are branches, files are leaves, tests are roots) with every
+  agent nesting where it works and every changed file lit in its colour.
+  Mark a folder **Keep out** (red) or **Only here** (green) and Claude Code
+  is stopped before it edits outside the zone; pushes, PRs and merges refuse
+  a red-zone change unless you override.
+- ✅ **Verify** — "it merged" is not "it works". At push time MindFlock turns
+  the branch's diff into a checklist of observable checks, holds it, and hands
+  it back (top-bar **Verify**, Alt+V) once the work is really live — agent
+  steps run themselves, human steps wait for you.
+- 💻 **Your devices + remote control** — Settings → Your devices joins the
+  computers you own (a 6-digit code, no tokens to paste); their sessions
+  appear as device groups in one sidebar, **New** gets a *Runs on* picker, a
+  phone signed in once reaches all of them, and PR review / issue handling
+  run on exactly one of them.
+- 🔁 **Settings sync** — ticket sources, GitHub repos, notifications, budgets,
+  keymap, prompt presets, theme, templates, red zones and your own agent CLIs
+  stay the same on every device; change one anywhere and the others follow
+  within seconds (Settings → Your devices → **Settings sync**).
+- 👥 **Peer links** — pair-code with another MindFlock user on any network
+  (a Cloudflare quick tunnel when `cloudflared` is installed, direct
+  otherwise). Their agent and yours talk through peer-only MCP tools inside
+  a sandboxed shared folder; your own repo is never touched. See
+  [docs/peer-link.md](docs/peer-link.md).
 - ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
   the app (`new`, `ls`, `attach`, `rm`, `open`, `events`, `msg`, `inbox`), so
   terminal and UI stay one system.
@@ -420,12 +447,15 @@ standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
 
 ### Or start them yourself — no tracker required
 
-From zero to a supervised agent session (this CLI flow is verified in CI on
-every push by
+The **desktop app** is the default client: its first launch installs the
+engine and walks you through Setup, and it auto-starts the server after that.
+From a terminal instead, `mindflock init` is the same guided first run
+(dependencies, agent sign-in, GitHub, your first repo). From zero to a
+supervised agent session (this CLI flow is verified in CI on every push by
 [`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
 
 ```bash
-mindflock doctor                       # 1. everything installed + authenticated?
+mindflock doctor                       # 1. everything installed + authenticated? (`mindflock init` sets it up)
 cd ~/code/your-repo                    # 2. the repo you want the agents to work on
 mindflock serve                        # 3. start the server (the app can also do this for you)
 mindflock new . -p "fix the failing tests"   # 4. (new terminal) spawn a session
@@ -440,8 +470,8 @@ terminal into the same tmux session.
 `mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
 into phone/tailnet access — an auth token + QR code are printed, and scanning
 the QR opens the phone UI at `/m`. To skip the token on your own devices, tick
-your Tailscale account under Settings → Security → **Trusted Tailscale
-accounts** (untagged devices only; rotating the token does not revoke them).
+your Tailscale account under Settings → Your devices → Advanced → **Trusted
+Tailscale accounts** (untagged devices only; rotating the token does not revoke them).
 
 ## Download
 
@@ -458,7 +488,7 @@ accounts** (untagged devices only; rotating the token does not revoke them).
 | | What you get | Anything else? |
 |---|---|---|
 | **Windows** | `MindFlock-Setup.exe` — the app. Its engine runs inside WSL2 and is installed there on first launch. | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, first launch does the rest. |
-| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing to do beforehand. First launch offers **Set up MindFlock on this computer** — one click, no terminal. Apple's developer tools (git) and Homebrew are installed along the way if missing (your password, once). |
+| **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | **Gatekeeper will block the first open** (the build is self-signed, not notarized): System Settings → Privacy & Security → **Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/MindFlock.app` — [details below](#download). Then first launch offers **Set up MindFlock on this computer** — one click, no terminal. If Apple's Command Line Tools (git) are missing, the app opens Apple's installer and waits for it; Homebrew is installed along the way if missing (your password, once). |
 | **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch sets everything up for you. |
 
 First launch is one flow: the engine installs under your home folder (no admin
@@ -545,8 +575,8 @@ commands.
 
 ### 1. Server + CLI
 
-On Linux, macOS, or inside WSL on Windows (the Windows installer runs this for
-you, inside your default distro):
+On Linux, macOS, or inside WSL on Windows (the desktop app runs this for you
+on first launch — inside your default WSL distro on Windows):
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
@@ -559,7 +589,7 @@ code instead), and finishes with `mindflock doctor` so anything still missing
 (git, tmux, `claude`) is listed with the exact install command for your
 platform.
 
-**A second computer?** On the first one, Settings → Devices → **Add a
+**A second computer?** On the first one, Settings → Your devices → **Add a
 device** → *New computer with nothing installed yet?* (or `mindflock devices
 bootstrap`) gives one line to paste on the new one. It installs the same
 MindFlock version, signs in to Tailscale, and joins your devices, so your
@@ -581,11 +611,12 @@ no token to copy when gh is installed), and your first repo.
 > the install, an audit trail for what actually ran. Threat model and
 > disclosure contact: [SECURITY.md](SECURITY.md).
 
-**Updating** is `mindflock update`, the same command again (`install.sh`
-upgrades in place and restarts a server already running), or the **Update**
-button in Settings → Advanced: the server reinstalls itself and restarts onto
+**Updating** is `mindflock update`, re-running the `install.sh` line above
+(a supported way to update a CLI-only install: it installs the newest release
+in place, same as the desktop app pins, and restarts a server already
+running), or the **Update** button in Settings → Advanced: the server reinstalls itself and restarts onto
 the new version on its own, and if the new version doesn't come back up the
-previous one is put back. **Settings → Devices → Update all my devices** (or
+previous one is put back. **Settings → Your devices → Update all my devices** (or
 `mindflock devices update`) updates every one of your computers, one at a
 time. Your sessions are tmux sessions, so nothing running is lost. A
 contributor's editable install is refused rather than replaced.
@@ -594,11 +625,12 @@ contributor's editable install is refused rather than replaced.
 <summary>Prefer your own tooling? (uv / pipx / from source)</summary>
 
 ```bash
-# uv
-uv tool install "mindflock[web] @ git+https://github.com/MindFlock/MindFlock"
+# uv — pin the newest release tag (what install.sh and the desktop app
+# install); replace v<version> with the tag on the Releases page
+uv tool install "mindflock[web] @ git+https://github.com/MindFlock/MindFlock@v<version>"
 
-# pipx
-pipx install "mindflock[web] @ git+https://github.com/MindFlock/MindFlock"
+# pipx — same tag
+pipx install "mindflock[web] @ git+https://github.com/MindFlock/MindFlock@v<version>"
 
 # from a clone (contributors)
 git clone https://github.com/MindFlock/MindFlock
@@ -625,10 +657,11 @@ It finds — and auto-starts — the server by itself.
 | Requirement | Notes |
 |---|---|
 | **OS** | Linux, macOS (Apple silicon & Intel), Windows **via WSL2** (the app runs natively on Windows; the engine lives in WSL2 — native Windows has no tmux/PTYs) |
-| `git` ≥ 2.17, `tmux` ≥ 2.4 | On `PATH`; checked, with versions, by `mindflock doctor` |
+| `tmux` ≥ 2.4 | On `PATH`; checked, with its version, by `mindflock doctor`. Required — every session runs in a detached tmux session |
+| `git` ≥ 2.17 | Checked by the doctor but reported as **optional** (`info`): sessions can run in plain folders without it, but isolated worktrees, Diff, commit and PR all need it, so the doctor keeps it in the install plan |
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |
-| Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Intake → Pull requests), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
+| Optional — `gh` (GitHub CLI) | Only makes **Open PR** / **Merge** one click. Without it they fall back to a GitHub token (Intake → Pull requests), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
 | Optional — everything else | `cursor` (IDE integration), `tailscale` (multiple devices + phone) |
 
 ## How It Works
@@ -687,7 +720,7 @@ In the app, **+ New** creates a session (worktree + tmux + agent); click a
 session to type into its live terminal. Next to it in the top bar, **Intake**
 (Alt+I) is the surface you visit to see what came in — tickets, pull requests
 and issues — and start any of it by hand. The 🔔 bell is the one place
-anything waits on you: an agent's question, an ask-first approval, a group's
+for everything that needs you: an agent's question, an ask-first approval, a team run's
 stuck line or budget pause. The phone UI lives at `/m` (scan the startup QR).
 
 ### Terminal session control
@@ -701,7 +734,7 @@ mindflock new                    # session on the current repo (title = basename
 mindflock new ~/code/webapp -p "fix the failing tests"
 mindflock ls                     # TITLE REPO STATUS ACTIVITY STAGE DIFF COST (--json for scripts)
 mindflock attach webapp          # tmux attach to the agent's terminal (prefix ok; needs a real TTY)
-mindflock rm webapp --yes        # end a session, keep its worktree (prompts without --yes)
+mindflock rm webapp --yes        # close a session, keep its worktree (prompts without --yes)
 mindflock open webapp            # open the workspace in the configured IDE
 mindflock events --follow        # live event stream (great for hook debugging)
 mindflock msg webapp "also update the changelog"   # message the agent (typed in when idle)
@@ -763,7 +796,7 @@ session titles off the public one.
 
 **Every push carries your phone URL.** When Tailscale is up, MindFlock appends
 its tailnet `/m` address to each notification and makes it the tap target —
-deep-linked to the session the alert is about, so "alpha needs your input"
+deep-linked to the session the alert is about, so "alpha needs you: Question"
 opens the mobile UI already showing alpha. You also get one push with that URL
 whenever it becomes newly reachable: at server start, when you switch the ntfy
 channel on, and when you turn on tailscale mode. The access token is never
@@ -850,14 +883,15 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/architecture.md](docs/architecture.md) | System overview, components, data flow, on-disk state map |
 | [docs/extensions.md](docs/extensions.md) | Extension guide: shell hooks, `/api/events` WebSocket, in-process addons, extensions (Addon API v3: manifest, `ExtensionApi`, surfaces, discovery, the Database Client), `window.mindflock` client API |
 | [docs/configuration.md](docs/configuration.md) | `config.toml` reference, `~/.mindflock/` + `~/.mindflock-assistant/`, environment variables |
-| [docs/session-engine.md](docs/session-engine.md) | Instance lifecycle, git worktrees, tmux/PTY, provisioned mode |
-| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, mcp, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
-| [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; what waits in the bell and what the group header holds; restart semantics |
-| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 25 tools, message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
+| [docs/session-engine.md](docs/session-engine.md) | Session lifecycle, git worktrees, tmux/PTY, provisioned mode |
+| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve (`--setup`), init, doctor, update, uninstall, token, mcp, accounts, devices, peer, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
+| [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; what waits in the bell and what the team run header holds; restart semantics |
+| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 27 tools (plus 7 peer-only tools), message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |
 | [docs/accounts.md](docs/accounts.md) | Auth profiles: multiple Claude accounts / OpenRouter keys, per-session identity, hot-swap, per-account usage |
+| [docs/peer-link.md](docs/peer-link.md) | Peer links: pair-coding with another MindFlock user — invite codes, the pinned-key handshake, the sandboxed shared folder, the peer MCP tools, relays across networks |
 | [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md) | Story + PR ingestion flows, state, testmon refresher |
 | [docs/development.md](docs/development.md) | Dev setup, test suite, project layout, known issues |
 

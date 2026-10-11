@@ -259,8 +259,8 @@ class Policy:
         run = row.get("run") if isinstance(row.get("run"), dict) else None
         if run and run.get("id"):
             raise ToolError(
-                "%s refused: %r is %s group %r — MindFlock ships it with the "
-                "group, and your user steers the group"
+                "%s refused: %r is %s team run %r — MindFlock ships it with the "
+                "team run, and your user steers the team run"
                 % (
                     action,
                     title,

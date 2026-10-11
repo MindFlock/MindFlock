@@ -20,6 +20,9 @@ from typing import Tuple
 from fastapi.responses import JSONResponse
 
 from backend.web.core import git_merge as _git_merge
+from backend.web.core import hidden_sessions as _hidden_sessions
+from backend.web.core import person_sessions as _person_sessions
+from backend.web.core import shared_branch as _shared_branch
 
 __all__ = ["create", "create_result"]
 
@@ -31,7 +34,9 @@ def _server():
     return server
 
 
-async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
+async def create(
+    payload: dict, *, peer_share: str = "", person: str = ""
+) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
     Accepted ``payload`` keys:
@@ -76,6 +81,11 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     * ``spawned`` — boolean (strict): an agent, not a human, created this
       session. Only settable here, never afterwards; it is what lets an agent
       later delete the session.
+    * ``hidden_by`` — the feature that owns this session and keeps it off the
+      rail, the window numbers and the prompt-target pickers (the row's
+      ``hidden_by``; core.hidden_sessions). ``"verify"`` is the only value —
+      what ``run_test_plan`` passes for a checklist run; absent/``""`` is an
+      ordinary session; anything else is 400. The title is never the signal.
     * ``after`` — titles this worker runs after (needs ``parent``): created
       now, its task held in its prompt queue until they are done
       (core.worker_order). ``fence`` — ``{"only", "keep_out", "reason"}``: a
@@ -91,6 +101,16 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     * ``base_branch`` — with ``base_ref``: the branch recorded as the session's
       diff/stage base (default: ``base_ref`` itself when it is a local branch,
       else the repo's current branch).
+    * ``continue_branch`` — with ``base_ref: "<remote>/<x>"``: work ON branch
+      ``x`` itself (shared with whoever pushed it) instead of cutting a new
+      branch. The remote is fetched (bounded) and must have ``x``; the local
+      ``x`` is created tracking it when absent (fast-forwarded when strictly
+      behind). 409 naming the worktree when ``x`` is already checked out in
+      one of this repo's worktrees; 400 for a non-remote ``base_ref``, a
+      provisioned or in-place session. The engine records ``x`` as the
+      session's branch and base exactly as for any existing branch (and never
+      deletes it); the row carries ``shared_branch: true``
+      (core.shared_branch).
     * ``playbook`` — ``"split"`` (the New dialog's "Split across workers"):
       decorate ``prompt`` with the split playbook (the task stays its first
       line; idempotent) so the agent splits it across worker sessions through
@@ -113,6 +133,12 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     background task, so a failure is surfaced via a ``session.create_failed``
     event rather than in the 202 response. ``session.created`` carries
     ``parent`` / ``spawned`` in its data when set.
+
+    ``person`` (a keyword, never a payload key — a caller can't name someone
+    else) is the person the create is for: the route passes the request's
+    (:func:`backend.web.core.auth.request_person`); blank means this
+    device's own. Recorded in core.person_sessions; a peer-link session
+    records none (the peer is not this person).
     """
     srv = _server()
     payload = payload or {}
@@ -212,6 +238,14 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
         return JSONResponse(
             {"error": "unknown parent session: %s" % parent}, status_code=400
         )
+    # ``hidden_by``: the feature that owns this session and keeps it off the
+    # rail (core.hidden_sessions). Validated here, recorded once the title is
+    # claimed below. The TITLE is never the signal — ``verify-anything`` is a
+    # fine name for a person's own session and it stays listed.
+    hidden_by = payload.get("hidden_by") or ""
+    hidden_err = _hidden_sessions.validate(hidden_by)
+    if hidden_err:
+        return JSONResponse({"error": hidden_err}, status_code=400)
     # Worker order + fences (see core.worker_order): checked before anything
     # is claimed, so a bad fence costs nothing.
     order_files = None
@@ -267,6 +301,15 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     # ``base_branch`` as the session's diff base. Plain worktree sessions only.
     base_ref = str(payload.get("base_ref", "") or "").strip()
     base_branch = str(payload.get("base_branch", "") or "").strip()
+    continue_branch = str(payload.get("continue_branch", "") or "").strip()
+    if continue_branch and is_provisioned:
+        return JSONResponse(
+            {
+                "error": "continue_branch is only supported for plain worktree "
+                "sessions (not provisioned)"
+            },
+            status_code=400,
+        )
     if (base_ref or base_branch) and is_provisioned:
         return JSONResponse(
             {
@@ -392,6 +435,28 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
             in_place = True
         if is_provisioned:
             provision_repo = plain_path
+    shared_remote = ""
+    if continue_branch:
+        # Work ON the pushed branch: validated (and the local branch readied)
+        # now, so a bad pick is a 400/409 here rather than a create_failed.
+        if in_place:
+            return JSONResponse(
+                {
+                    "error": "continue_branch is only supported for plain worktree "
+                    "sessions (not in-place)"
+                },
+                status_code=400,
+            )
+        status, shared_remote, err = await asyncio.to_thread(
+            _shared_branch.prepare_continue,
+            plain_path,
+            base_ref or "origin/" + continue_branch,
+            continue_branch,
+        )
+        if status:
+            return JSONResponse({"error": err}, status_code=status)
+        # The engine's existing-branch path takes it from here: no fork point.
+        base_ref = base_branch = ""
     if base_ref or base_branch:
         # An in-place session runs ON the folder's checkout — there is no new
         # branch to cut from anywhere.
@@ -459,6 +524,7 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
             title=title,
             path=plain_path,
             program=program,
+            branch=continue_branch,
             provisioned=is_provisioned,
             workspace_strategy=workspace_strategy,
             provision_repo=provision_repo,
@@ -532,6 +598,15 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
         if limit_err:
             return JSONResponse({"error": limit_err}, status_code=409)
         srv.ENGINE.instances[title] = inst
+    # Under the claimed title (an untitled quick-launch was renumbered above).
+    # A reused title starts unhidden: delete drops the entry, and setting ""
+    # here is a no-op, so an ordinary session never inherits a dead run's flag.
+    _hidden_sessions.set_hidden_by(title, hidden_by)
+    # Who it's for (core.person_sessions) — also resets a reused title.
+    _person_sessions.set_person(title, "" if peer_share else _creator(person))
+    # Working on someone's pushed branch (core.shared_branch) — also resets a
+    # reused title.
+    _shared_branch.set_shared(title, shared_remote, continue_branch)
 
     # An ordered worker (it runs after another, is fenced, or waits for a free
     # slot) is created now but its task is parked until its turn.
@@ -602,7 +677,7 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     # What this session was asked to do, for its spawn record in the parent's
     # Thread — the queue path above clears inst.Prompt.
     srv._thread.note_seed(title, srv._created_epoch(inst), prompt)
-    srv._mark_onboarded()  # first-ever session ends first-run; setup card won't auto-show again
+    srv._mark_onboarded()  # the checklist's "Pick a repo" step: done on the first-ever session
     # Remember the folder this session chose so the NEXT New Session dialog opens
     # on it and the repo suggestions rank it first — the second session in a repo
     # should not be another walk down the folder tree. "." is the server's own
@@ -699,6 +774,18 @@ async def create(payload: dict, *, peer_share: str = "") -> JSONResponse:
     return JSONResponse(body, status_code=202)
 
 
+def _creator(person: str) -> str:
+    """``person``, else this device's own person id. Never raises."""
+    if person:
+        return person
+    try:
+        from backend.web.core import person as _person
+
+        return _person.person_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> str:
     """Why a shared-folder session create is malformed ("" = fine): it runs
     in place on exactly its share's folder, on a CLI with a sandbox profile,
@@ -722,11 +809,13 @@ def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> s
     for key in (
         "parent",
         "spawned",
+        "hidden_by",
         "after",
         "fence",
         "playbook",
         "base_ref",
         "base_branch",
+        "continue_branch",
         "provisioned",
         "init_repo",
         "story_id",
@@ -738,10 +827,12 @@ def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> s
     return ""
 
 
-async def create_result(payload: dict, *, peer_share: str = "") -> Tuple[int, dict]:
+async def create_result(
+    payload: dict, *, peer_share: str = "", person: str = ""
+) -> Tuple[int, dict]:
     """:func:`create` as ``(status_code, body)`` for in-process callers: 202
     with the new row (plus ``prompt_delivery``), or 4xx with ``{"error"}``."""
-    resp = await create(payload, peer_share=peer_share)
+    resp = await create(payload, peer_share=peer_share, person=person)
     try:
         body = json.loads(resp.body)
     except Exception:  # noqa: BLE001 — every branch above answers JSON

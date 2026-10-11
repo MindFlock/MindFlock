@@ -907,9 +907,16 @@ def test_row_carries_the_monitor_summary(sess, repo):
 
 
 def test_delete_forgets_red_zone_state_before_kill():
-    src = inspect.getsource(server.delete_instance)
+    # DELETE ends the session through core.session_end.end_session: pin the
+    # order there, where the Kill now lives.
+    from backend.web.core import session_end
+
+    assert "_end_session_response(title, wipe=True)" in inspect.getsource(
+        server.delete_instance
+    )
+    src = inspect.getsource(session_end.end_session)
     assert "_red_zone_monitor.forget" in src
-    assert src.index("_red_zone_monitor.forget") < src.index("to_thread(inst.Kill)")
+    assert src.index("_red_zone_monitor.forget") < src.index("inst.Kill()")
 
 
 def test_loop_is_off_under_pytest_unless_asked(monkeypatch):

@@ -53,7 +53,7 @@ def reg(monkeypatch):
     monkeypatch.setattr(server, "_kill_shell_session", lambda t: None)
     monkeypatch.setattr(server, "_kill_agent_session", lambda t: None)
     monkeypatch.setattr(server, "_close_cursor_window", lambda wt: None)
-    monkeypatch.setattr(server, "_record_closed", lambda inst: None)
+    monkeypatch.setattr(server, "_record_closed", lambda inst, **kw: None)
     return instances
 
 

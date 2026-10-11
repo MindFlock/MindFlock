@@ -48,6 +48,9 @@ import { isVerifySession } from "../dialogs/verify";
 import { Hint } from "../onboarding/Hint";
 import { sidebarDeviceNote } from "../../lib/fleet";
 import { openDevicesFor } from "../../lib/deviceActions";
+import { SetupChip } from "../setup/SetupChip";
+import { showSetupCard } from "../setup/setupModel";
+import { useSetup } from "../setup/useSetup";
 
 /** No folds (while a search filter is on). */
 const NO_FOLDS: ReadonlySet<string> = new Set();
@@ -68,6 +71,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   const ui = useUi();
   const doctorWarn = useDoctorWarn();
   const { data: config } = useConfig();
+  const { data: setup } = useSetup();
   const qc = useQueryClient();
   // "Recently closed (n)" under the list: the same key and endpoint the Verify
   // dialog reads, so a reopen/forget that invalidates one refreshes both.
@@ -111,8 +115,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // Only the RAIL filters. `computeVisible` below still gets the full list,
   // which is what gives a verify run its pane in the grid; the Verify dialog
   // offers to open or end it, so an unlisted session is never stranded.
+  // The ROW goes in, not the title: the server's `hidden_by` flag decides, so
+  // a session someone named `verify-foo` is listed like any other.
   const listed = useMemo(
-    () => deviceLineage(instances.filter((i) => !isVerifySession(i.title))),
+    () => deviceLineage(instances.filter((i) => !isVerifySession(i))),
     [instances]
   );
   // MindFlock MCP families: each session's live workers, and the saved order
@@ -441,37 +447,17 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
 
   const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
-  // The grid's first-run card ("Get set up") shows exactly when there is no
-  // session at all and the user has not onboarded — TerminalGrid's own test.
-  const firstRunCard = instances.length === 0 && config?.onboarded === false;
+  // The grid's first-run card (the setup checklist) — TerminalGrid's own test,
+  // off the same GET /api/setup the footer's Setup chip reads.
+  const firstRunCard = showSetupCard({
+    sessions: instances.length,
+    status: setup,
+    onboarded: config?.onboarded,
+  });
 
   return (
     <aside id="sidebar">
       <SidebarResizer />
-      {/* Not while the grid's first-run card is up: that card IS the setup
-          checklist, and a second "setup issues" warning beside it is noise. */}
-      {doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && (
-        <div id="doctor-warn">
-          <span className="dw-text">⚠ setup issues —</span>
-          <button
-            type="button"
-            id="doctor-warn-open"
-            className="linklike"
-            onClick={() => ui.openDialogFor("settings", "doctor")}
-          >
-            open Doctor
-          </button>
-          <button
-            type="button"
-            id="doctor-warn-dismiss"
-            title="Dismiss until reload"
-            aria-label="Dismiss setup warning"
-            onClick={doctorWarn.dismiss}
-          >
-            ✕
-          </button>
-        </div>
-      )}
       {orderedSections(ui.barOrder, extKeys).map((key) => {
         if (key === SESSIONS_KEY) {
           return (
@@ -537,7 +523,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                             dev.host +
                             (dev.os ? "  ·  " + dev.os : "") +
                             (dev.ip ? "  ·  " + dev.ip : "") +
-                            (d.member ? "  ·  One of your devices — remove it in Settings → Devices" : "")
+                            (d.member ? "  ·  One of your devices — remove it in Settings → Your devices" : "")
                           }
                           // A member stays connected through the shared device
                           // key, so forgetting its token disconnects nothing.
@@ -596,6 +582,35 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
         );
       })}
       <footer id="sidebar-footer">
+        {/* Setup: the doctor's warning and the "Setup 3/5" chip, side by
+            side; both open the Setup checklist. The warning waits out the
+            grid's first-run card — that card IS the checklist, and a second
+            "setup issues" line beside it is noise. */}
+        <div className="foot-row foot-setup">
+          {doctorWarn.failing && !doctorWarn.dismissed && !firstRunCard && (
+            <div id="doctor-warn">
+              <span className="dw-text">⚠ setup issues —</span>
+              <button
+                type="button"
+                id="doctor-warn-open"
+                className="linklike"
+                onClick={() => ui.openDialogFor("setup")}
+              >
+                open Setup
+              </button>
+              <button
+                type="button"
+                id="doctor-warn-dismiss"
+                title="Dismiss until reload"
+                aria-label="Dismiss setup warning"
+                onClick={doctorWarn.dismiss}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          <SetupChip />
+        </div>
         <div
           id="view-modes"
           title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
@@ -618,6 +633,18 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
         </Hint>
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
+          {/* Bulk session actions: opens the checklist bar above the list
+              (BulkBar). The rows themselves carry no checkboxes. */}
+          <button
+            id="bulk-btn"
+            type="button"
+            className={"foot-link" + (ui.bulkMode ? " active" : "")}
+            title="Select sessions to close, hide or delete together"
+            aria-pressed={ui.bulkMode}
+            onClick={() => ui.setBulkMode(!ui.bulkMode)}
+          >
+            {ui.bulkMode ? "Done" : "Select…"}
+          </button>
           <FooterCustomize />
           <button
             id="shortcuts-btn"
@@ -642,7 +669,7 @@ function DeviceHeader(props: {
   title: string;
   showForget: boolean;
   devKey?: string;
-  /** One of "Your devices" (Settings → Devices). */
+  /** One of "Your devices" (Settings → Your devices). */
   member?: boolean;
   onToggle(): void;
 }) {
@@ -690,13 +717,13 @@ function DeviceSection(props: {
   showForget: boolean;
   member?: boolean;
   note: string;
-  /** "add": Add to my devices… (Settings → Devices on it); "connect": the
-   * token-paste dialog, for a MindFlock too old to join. */
+  /** "add": Add to my devices… (Settings → Your devices on it); "connect":
+   * Your devices → Advanced's pasted-token pairing with this device
+   * preselected, for a MindFlock too old to join. */
   action: "add" | "connect" | null;
   onToggle(): void;
   children: React.ReactNode;
 }) {
-  const openDialogFor = useUi((s) => s.openDialogFor);
   return (
     <>
       <DeviceHeader {...props} />
@@ -720,7 +747,7 @@ function DeviceSection(props: {
               className="dev-connect"
               onClick={(e) => {
                 e.stopPropagation();
-                openDialogFor("device", props.devKey);
+                openDevicesFor({ device: props.devKey });
               }}
             >
               Connect…

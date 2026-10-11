@@ -89,55 +89,96 @@ class TestShortcutTest:
 
 
 class TestGithubTest:
+    """POST /api/settings/test/github is the Connect GitHub dialog's Test: a
+    real GET /user (stubbed here through github_auth._http) plus one repo
+    check against the first configured repo, with gh reported as optional."""
+
     @pytest.fixture()
     def gh(self, monkeypatch):
+        from backend.web.core import github_auth as web_auth
+
+        monkeypatch.setattr(web_auth, "_gh_token", lambda: "")
+        web_auth._USERS.clear()
+
         def set_status(installed=True, authenticated=False, detail="d"):
             monkeypatch.setattr(
                 settings_addon,
                 "_gh_cli_status",
                 lambda: (installed, authenticated, detail),
             )
+            if authenticated:
+                monkeypatch.setattr(web_auth, "_gh_token", lambda: "ghp_from_gh")
 
         set_status()
         return set_status
 
-    def test_settings_token_wins(self, client, gh):
+    @pytest.fixture()
+    def http(self, monkeypatch):
+        from backend.web.core import github_auth as web_auth
+
+        calls = []
+
+        def _http(method, url, *, headers=None, data=None, timeout=10.0):
+            calls.append(url)
+            if url.endswith("/user"):
+                return 200, {"X-OAuth-Scopes": "repo"}, {"login": "octo", "id": 1}
+            return 200, {}, {"full_name": "o/r", "permissions": {"push": True}}
+
+        monkeypatch.setattr(web_auth, "_http", _http)
+        return calls
+
+    def test_settings_token_wins(self, client, gh, http):
         client.post("/api/settings", json={"github": {"token": "ghp_secret"}})
         body = client.post("/api/settings/test/github").json()
         assert body["ok"] is True and body["token_source"] == "settings"
+        assert body["login"] == "octo"
         assert "ghp_secret" not in str(body)
 
-    def test_env_token_source_reported(self, client, gh, monkeypatch):
+    def test_env_token_source_reported(self, client, gh, http, monkeypatch):
         monkeypatch.setenv("GH_TOKEN", "ghp_env")
         body = client.post("/api/settings/test/github").json()
         assert body["token_source"] == "env:GH_TOKEN"
         assert "ghp_env" not in str(body)
 
-    def test_gh_cli_fallback(self, client, gh):
+    def test_gh_cli_fallback(self, client, gh, http):
         gh(installed=True, authenticated=True)
         body = client.post("/api/settings/test/github").json()
         assert body["ok"] is True
         assert body["token_source"] == "gh-cli"
         assert body["gh_authenticated"] is True
 
-    def test_nothing_available(self, client, gh):
+    def test_first_repo_is_checked(self, client, gh, http):
+        client.post(
+            "/api/settings",
+            json={"github": {"token": "ghp_secret", "repos": ["o/r", "o/other"]}},
+        )
+        body = client.post("/api/settings/test/github").json()
+        assert body["repo"] == "o/r" and body["repo_ok"] is True
+        assert [u.rsplit("/", 1)[-1] for u in http] == ["user", "r"]
+
+    def test_nothing_available(self, client, gh, http):
         body = client.post("/api/settings/test/github").json()
         assert body["ok"] is False
         assert body["token_source"] == "none"
         assert body["gh_installed"] is True and body["gh_authenticated"] is False
+        assert http == []  # nothing to ask GitHub about
 
 
 class TestAgentTest:
     def test_ok_when_cli_and_auth_pass(self, client, monkeypatch):
         monkeypatch.setattr(
             doctor,
-            "check_agent_cli",
-            lambda: Check("agent-cli", "agent CLI (claude)", "ok", "/usr/bin/claude"),
+            "check_agent_cli_for",
+            lambda name="": Check(
+                "agent-cli", "agent CLI (claude)", "ok", "/usr/bin/claude"
+            ),
         )
         monkeypatch.setattr(
             doctor,
-            "check_agent_auth",
-            lambda: Check("agent-auth", "agent auth (claude)", "ok", "login found"),
+            "check_agent_auth_for",
+            lambda name="": Check(
+                "agent-auth", "agent auth (claude)", "ok", "login found"
+            ),
         )
         body = client.post("/api/settings/test/agent").json()
         assert body["ok"] is True
@@ -147,13 +188,15 @@ class TestAgentTest:
     def test_auth_warn_means_not_ready(self, client, monkeypatch):
         monkeypatch.setattr(
             doctor,
-            "check_agent_cli",
-            lambda: Check("agent-cli", "agent CLI (claude)", "ok", "/usr/bin/claude"),
+            "check_agent_cli_for",
+            lambda name="": Check(
+                "agent-cli", "agent CLI (claude)", "ok", "/usr/bin/claude"
+            ),
         )
         monkeypatch.setattr(
             doctor,
-            "check_agent_auth",
-            lambda: Check(
+            "check_agent_auth_for",
+            lambda name="": Check(
                 "agent-auth",
                 "agent auth (claude)",
                 "warn",

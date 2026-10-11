@@ -24,9 +24,11 @@ who may use it, and trusting the hop would launder its callers into ours.
   from 127.0.0.1 and ``X-Forwarded-For`` names the tailnet client. Any local
   process could send that header, so it is believed only when the loopback
   socket belongs to root (tailscaled) or to this server's own user (who can
-  already read the token from settings.json), read from ``/proc/net/tcp``.
-  Off Linux there is no cheap way to tell, so serve-proxied requests are never
-  trusted there and fall back to the token.
+  already read the token from settings.json): on Linux from
+  ``/proc/net/tcp``, on macOS from ``netstat -anv`` (which names each socket's
+  process, root's included) plus that pid's uid. Elsewhere there is no cheap
+  way to tell, so serve-proxied requests are never trusted there and fall
+  back to the token.
 
 The transport peer is the one uvicorn saw BEFORE its proxy-headers rewrite —
 :class:`PeerCaptureMiddleware` stashes it in ``scope["mf_peer"]``. Should a
@@ -47,6 +49,7 @@ import json
 import os
 import subprocess
 import sys
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -246,12 +249,82 @@ def _proc_socket_uid(client_port: int, server_port: int) -> Optional[int]:
     return None
 
 
+#: macOS netstat answers reused for a few seconds per connection: tailscale
+#: serve keeps its backend connections alive, so one lookup covers a page load.
+_DARWIN_TTL = 10.0
+_DARWIN_SEEN: dict = {}
+_PID_TOKEN = re.compile(r"^[^:]*:(\d+)$")
+
+
+def _darwin_socket_uid(client_port: int, server_port: int) -> Optional[int]:
+    """The uid owning the loopback socket ``:client_port -> :server_port`` on
+    macOS, or None. ``netstat -anv -p tcp`` names the owning process as
+    ``name:pid`` for every socket (root's included, unlike ``lsof`` run as a
+    user); ``ps`` then gives that pid's uid. Only a live ESTABLISHED row
+    counts, as on Linux."""
+    key = (client_port, server_port)
+    hit = _DARWIN_SEEN.get(key)
+    if hit and time.monotonic() - hit[0] < _DARWIN_TTL:
+        return hit[1]
+    try:
+        out = subprocess.run(
+            ["netstat", "-anv", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    locals_ = {"127.0.0.1.%d" % client_port, "::1.%d" % client_port}
+    remotes = {"127.0.0.1.%d" % server_port, "::1.%d" % server_port}
+    pid = None
+    for line in out.splitlines():
+        cols = line.split()
+        if (
+            len(cols) < 7
+            or not cols[0].startswith("tcp")
+            or cols[3] not in locals_
+            or cols[4] not in remotes
+            or cols[5] != "ESTABLISHED"
+        ):
+            continue
+        for tok in cols[6:]:
+            m = _PID_TOKEN.match(tok)
+            if m:
+                pid = int(m.group(1))
+                break
+        break
+    if not pid:
+        return None
+    try:
+        res = subprocess.run(
+            ["ps", "-o", "uid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        uid = int(res.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    _DARWIN_SEEN[key] = (time.monotonic(), uid)
+    if len(_DARWIN_SEEN) > 512:
+        _DARWIN_SEEN.clear()
+    return uid
+
+
+def shared_link_trust_supported() -> bool:
+    return sys.platform.startswith("linux") or sys.platform == "darwin"
+
+
 def _loopback_peer_vouched(client_port: int, server_port: int) -> bool:
     """True when the loopback connection is tailscaled's (root) or our own
     user's — never another local account forging ``X-Forwarded-For``."""
-    if not sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux"):
+        uid = _proc_socket_uid(client_port, server_port)
+    elif sys.platform == "darwin":
+        uid = _darwin_socket_uid(client_port, server_port)
+    else:
         return False
-    uid = _proc_socket_uid(client_port, server_port)
     return uid is not None and uid in (0, os.getuid())
 
 
@@ -310,7 +383,7 @@ def status() -> dict:
         "self_login": "",
         "self_tagged": False,
         "logins": [],
-        "shared_link_supported": sys.platform.startswith("linux"),
+        "shared_link_supported": shared_link_trust_supported(),
         "trusted": trusted_logins(),
     }
     data = _tailscale_cli.status_json()

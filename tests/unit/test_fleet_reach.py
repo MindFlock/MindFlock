@@ -634,7 +634,7 @@ def test_the_desktop_app_raises_os_notifications():
     root = Path(__file__).resolve().parents[2] / "electron"
     main = (root / "main.js").read_text()
     pre = (root / "preload.js").read_text()
-    assert "Notification } = require('electron')" in main
+    assert "Notification" in main.split("require('electron')", 1)[0][-160:]
     assert "ipcMain.handle('notify:show'" in main
     assert "win.webContents.send('notify:click', target)" in main
     assert "NOTIFY_TARGETS = new Set(['devices', 'peer', 'update'])" in main

@@ -17,7 +17,8 @@ Installed via ``[project.scripts]``::
     mindflock accounts add work   # …add one; `login work` authenticates it
     mindflock accounts use work   # …make it the default for new sessions
     mindflock attach TITLE        # tmux attach to a session's terminal
-    mindflock rm TITLE [--yes]    # end a session (keeps the worktree)
+    mindflock rm TITLE... [--yes] # close sessions (agent stops; worktree + branch kept)
+    mindflock rm --wipe TITLE...  # …and delete the worktree + branch (asks y/N)
     mindflock open TITLE          # open the session workspace in the IDE
     mindflock events [--follow]   # print the /api/events stream
     mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
@@ -71,6 +72,7 @@ flock).
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -125,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--setup",
         action="store_true",
         help="run the guided first-run setup (see `mindflock init`) before binding the port",
+    )
+    serve.add_argument(
+        "--github-client-id",
+        default=None,
+        metavar="ID",
+        help="GitHub OAuth App client id (device flow enabled) for Connect GitHub; same as MINDFLOCK_GITHUB_CLIENT_ID",
     )
 
     init_p = sub.add_parser(
@@ -234,14 +242,26 @@ def _build_parser() -> argparse.ArgumentParser:
     rm = sub.add_parser(
         "rm",
         parents=[server_opts],
-        help="end a session (keeps the worktree); prompts unless --yes",
+        help="close sessions: stop the agent, keep the worktree and branch "
+        "(they land in Recently closed); --wipe deletes them too",
+        description="Close one or more sessions on the running server. By default "
+        "the agent is stopped and the session moves to Recently closed in the "
+        "web UI: its worktree and branch stay on disk and it can be reopened. "
+        "With --wipe the worktree and branch are deleted as well; unpushed "
+        "work in them is lost. TITLE may be any unambiguous prefix.",
     )
-    rm.add_argument("title", metavar="TITLE")
+    rm.add_argument("title", metavar="TITLE", nargs="+")
     rm.add_argument(
         "--yes",
         "-y",
         action="store_true",
         help="skip the confirmation prompt (for scripts)",
+    )
+    rm.add_argument(
+        "--wipe",
+        action="store_true",
+        help="also delete the worktree and its branch (irreversible); asks y/N on a "
+        "terminal, and refuses without --yes when stdin is not one",
     )
 
     open_ = sub.add_parser(
@@ -613,23 +633,26 @@ def _build_parser() -> argparse.ArgumentParser:
         parents=[server_opts],
         help="update this MindFlock to the newest release and restart the server",
         description=(
-            "Install the newest MindFlock release (or --ref) over this one and "
-            "wait until the running server answers on it — it restarts itself "
-            "once the install is done; sessions keep running. With no server "
-            "running it installs in place. A development checkout is refused "
-            "(git pull there instead)."
+            "Install the newest MindFlock release (or --ref) over this one the "
+            "way it was installed — install.json says whether that is uv tool "
+            "or pipx — then restart the running server onto it; sessions keep "
+            "running. With no server running it just installs. A development "
+            "checkout gets the git commands printed instead."
         ),
     )
     upd.add_argument(
         "--ref",
         default=None,
         metavar="REF",
-        help="what to install (default: the newest release)",
+        help="a release tag or commit to install (default: the newest release)",
     )
     upd.add_argument(
         "--check",
         action="store_true",
-        help="only print the installed and newest versions",
+        help=(
+            "only print the installed and newest versions; exit 0 when current, "
+            "1 when behind"
+        ),
     )
     upd.add_argument(
         "--all-devices",
@@ -911,7 +934,9 @@ def _fix_checks(checks: list[Check]) -> list[Check]:
         if answer not in ("", "y", "yes"):
             print("  skipped")
             continue
-        if c.id == "agent-auth" and "login" not in c.cmd:
+        # "agent-auth" is the default's row; "agent-auth-<name>" the other
+        # CLIs a ticket source, PR review or the Assistant would launch.
+        if c.id.startswith("agent-auth") and "login" not in c.cmd:
             # A bare program (`claude`) signs in from inside its own UI, which
             # then just sits there: say how to get back. It runs in THIS
             # directory, which is why it may first ask to trust it.
@@ -923,6 +948,11 @@ def _fix_checks(checks: list[Check]) -> list[Check]:
         # the uv installer need a shell); stdio is inherited for interactivity.
         proc = subprocess.run(c.cmd, shell=True)
         recheck = doctor.CHECKS_BY_ID.get(c.id)
+        if recheck is None and c.id.startswith("agent-auth-"):
+            # A per-provider row has no probe of its own in CHECKS_BY_ID (its
+            # family's returns every such row): re-probe just this CLI.
+            name = c.id[len("agent-auth-") :]
+            recheck = functools.partial(doctor._agent_auth_check, c.id, name, c.label)
         if proc.returncode != 0:
             print(f"  command exited {proc.returncode}")
         if recheck is None:
@@ -1122,26 +1152,101 @@ def _cmd_attach(args: argparse.Namespace) -> int:
     return 0  # pragma: no cover — execvp does not return
 
 
-def _cmd_rm(args: argparse.Namespace) -> int:
-    """End a session on the running server (DELETE /api/instances/{title}).
+def _stdin_is_tty() -> bool:
+    """True when stdin is a real terminal (a ``y/N`` question needs one)."""
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:  # noqa: BLE001 — exotic stdin replacements
+        return False
 
-    The worktree stays on disk (recoverable via the web UI's Recently closed /
-    Disk manager). Prompts for confirmation unless ``--yes``; ``TITLE`` may be
-    any unambiguous prefix, like ``attach``."""
+
+def _rm_sessions_in_use(payload: Optional[dict]) -> List[str]:
+    """The titles in a cleanup 409's ``sessions`` list (strings or ``{"title"}``
+    rows), in order, without duplicates."""
+    out: List[str] = []
+    for row in (payload or {}).get("sessions") or []:
+        title = str(row.get("title", "") if isinstance(row, dict) else row or "")
+        if title and title not in out:
+            out.append(title)
+    return out
+
+
+def _cmd_rm(args: argparse.Namespace) -> int:
+    """End one or more sessions on the running server.
+
+    Default: ``POST /api/instances/{title}/close`` — the agent stops, the
+    worktree and branch stay on disk and the session lands in Recently closed
+    (reopenable from the web UI). ``--wipe``: ``POST /api/instances/{title}/cleanup``
+    — the worktree and branch are deleted too, so it asks ``[y/N]`` on a
+    terminal and refuses without ``--yes`` when stdin isn't one. Every
+    ``TITLE`` may be an unambiguous prefix, like ``attach``; all titles are
+    resolved before anything is ended so a typo ends nothing."""
     base = client.discover(args.host, args.port)
-    inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
-    title = str(inst.get("title", ""))
+    instances = client.get(base, "/api/instances") or []
+    titles: List[str] = []
+    for needle in args.title:
+        title = str(_resolve_title(instances, needle).get("title", ""))
+        if title not in titles:
+            titles.append(title)
+    listed = ", ".join(repr(t) for t in titles)
+    plural = "s" if len(titles) > 1 else ""
+    if args.wipe:
+        if not args.yes:
+            if not _stdin_is_tty():
+                print(
+                    "rm --wipe deletes the worktree and branch of %s and needs a "
+                    "terminal to confirm; pass --yes to delete without asking (or "
+                    "drop --wipe to close the session%s and keep the files)"
+                    % (listed, plural),
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                answer = input(
+                    "Delete session%s %s? This stops the agent and DELETES the "
+                    "worktree and branch — unpushed work is lost. [y/N] "
+                    % (plural, listed)
+                )
+            except (EOFError, KeyboardInterrupt):
+                print("aborted", file=sys.stderr)
+                return 1
+            if answer.strip().lower() not in ("y", "yes"):
+                print("aborted")
+                return 0
+        rc = 0
+        for title in titles:
+            try:
+                client.post(base, "/api/instances/%s/cleanup" % _quote_title(title))
+            except client.ApiError as err:
+                if err.status != 409:
+                    raise
+                others = _rm_sessions_in_use(err.payload)
+                print(
+                    "error: not deleting %r — its folder is still used by: %s"
+                    % (title, ", ".join(others) or err.message or "another session"),
+                    file=sys.stderr,
+                )
+                rc = 1
+                continue
+            print("deleted session %s" % title)
+        return rc
     if not args.yes:
         try:
-            answer = input("End session %r? Its worktree is kept. [y/N] " % title)
+            answer = input(
+                "Close session%s %s? The agent stops; the worktree and branch are "
+                "kept (Recently closed). [y/N] " % (plural, listed)
+            )
         except (EOFError, KeyboardInterrupt):
             print("aborted", file=sys.stderr)
             return 1
         if answer.strip().lower() not in ("y", "yes"):
             print("aborted")
             return 0
-    client.delete(base, "/api/instances/%s" % title)
-    print("removed session %s (worktree kept)" % title)
+    for title in titles:
+        client.post(base, "/api/instances/%s/close" % _quote_title(title))
+        print(
+            "closed session %s (worktree and branch kept; see Recently closed)" % title
+        )
     return 0
 
 
@@ -2055,7 +2160,7 @@ def _print_devices(st: dict) -> None:
     if st.get("self_reachable") is False:
         print(
             "! your other devices can't reach this one (it only listens on "
-            "127.0.0.1) — Settings → Devices → Make reachable, or `mindflock "
+            "127.0.0.1) — Settings → Your devices → Make reachable, or `mindflock "
             "serve tailscale` with the access gate on"
         )
     for a in st.get("admitted") or []:
@@ -2154,12 +2259,12 @@ def _print_automation_hint(members: List[dict]) -> None:
     if not on:
         print(
             "! none of your devices runs PR review & issue handling — choose "
-            "Run here (Settings → Devices) on the one that should"
+            "Run here (Settings → Your devices) on the one that should"
         )
     elif len(on) > 1:
         print(
             "! %s all run PR review & issue handling — each PR gets reviewed more "
-            "than once; choose Run here (Settings → Devices) on the one that "
+            "than once; choose Run here (Settings → Your devices) on the one that "
             "should keep it" % ", ".join(on)
         )
 
@@ -2380,7 +2485,7 @@ def _bootstrap_tailscale(base: str) -> bool:
     return False
 
 
-#: What Settings → Devices → Make reachable saves (useMakeReachable.ts): the
+#: What Settings → Your devices → Make reachable saves (useMakeReachable.ts): the
 #: tailnet bind AND the access gate, together — never one without the other.
 _REACHABLE = {"serve_mode": "tailscale", "auth_mode": "on"}
 
@@ -2406,7 +2511,8 @@ def _bootstrap_reachable(base: str, args: argparse.Namespace) -> str:
         )
     except client.ClientError as err:
         print(
-            "! couldn't (%s) — afterwards: Settings → Devices → Make reachable" % err,
+            "! couldn't (%s) — afterwards: Settings → Your devices → Make reachable"
+            % err,
             file=sys.stderr,
         )
         return base
@@ -2467,7 +2573,7 @@ def _bootstrap_join(base: str, pair: str, args: argparse.Namespace) -> int:
         return _report_join(res)
     host = res.get("host") or device
     print(
-        "Approve on %s (Settings → Devices); check it shows code %s  (Ctrl-C to stop asking)"
+        "Approve on %s (Settings → Your devices); check it shows code %s  (Ctrl-C to stop asking)"
         % (host, res.get("code") or "?")
     )
     return _wait_for_join(base, host)
@@ -2486,7 +2592,7 @@ def _print_bootstrap(b: dict) -> None:
     print(
         "Run that on the new computer (macOS, Linux or WSL): it installs MindFlock "
         "(%s), signs in to Tailscale if needed, makes itself reachable, and joins your devices.\n"
-        "Desktop app instead: install it from %s, then Settings → Devices → "
+        "Desktop app instead: install it from %s, then Settings → Your devices → "
         "Paste a code:  %s\n"
         "Single-use code, expires in %s — if it runs out, the new computer asks "
         "this one to approve instead."
@@ -2610,14 +2716,14 @@ def _cmd_devices(args: argparse.Namespace) -> int:
             print(
                 "! this computer is local-only (bound to 127.0.0.1): the new one "
                 "can't reach it to use this code. Make it reachable first — "
-                "Settings → Devices → Make reachable, or `mindflock serve "
+                "Settings → Your devices → Make reachable, or `mindflock serve "
                 "tailscale` with the access gate on.",
                 file=sys.stderr,
             )
         # The code alone on stdout (scriptable); the instructions on stderr.
         print(code)
         print(
-            "On the other computer run:  %s\n(or there: Settings → Devices → "
+            "On the other computer run:  %s\n(or there: Settings → Your devices → "
             "choose %s → Enter code). Single use, expires in %s."
             % (
                 inv.get("command")
@@ -2904,6 +3010,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Default (no subcommand) = serve with defaults.
     mode = getattr(args, "mode", None)
     port = getattr(args, "port", None)
+    cid = getattr(args, "github_client_id", None)
+    if cid:
+        os.environ["MINDFLOCK_GITHUB_CLIENT_ID"] = str(cid).strip()
     return _cmd_serve(mode, port, setup=bool(getattr(args, "setup", False)))
 
 

@@ -18,27 +18,39 @@ their devices would review the same PRs.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import threading
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from backend import log
 
-#: Seconds a burst of synced ticketing/GitHub changes is collapsed into one
-#: pipeline reconcile — a pass that adopts five fields must not restart the
-#: ticket pipeline five times.
-PIPELINE_DEBOUNCE = 5.0
+#: Seconds a burst of ticketing/GitHub changes — synced in, or a run of
+#: blur-saves from the Intake dialog — is collapsed into one pipeline
+#: reconcile: a pass that adopts five fields, or a form that saves on every
+#: field, must not restart the ticket pipeline five times.
+PIPELINE_DEBOUNCE = 2.0
 
 #: The event the ticket-ingestion addon reconciles its child process on
-#: (start / stop / restart) — what a Settings save's GitHub toggle emits.
+#: (start / stop / restart). Its ``data.changed`` lists the signature keys
+#: (:func:`pipeline_signature`) that moved since the last reconcile — names
+#: only, never values — so the addon can log why it restarted.
 PIPELINE_EVENT = "addon.settings.github_toggled"
 
 _TIMER_LOCK = threading.Lock()
 _pipeline_timer: Optional[threading.Timer] = None
+#: Signature keys changed since the pending reconcile was scheduled.
+_pending_changes: set = set()
 #: The pipeline signature last seen by :func:`after_settings_change` (the
 #: baseline when a caller doesn't pass its own "before").
 _last_sig: Optional[tuple] = None
+
+#: Ticket-source fields that are secrets: they enter the signature as a
+#: digest, so a rotated token still restarts the pipeline without the
+#: signature (which is logged nowhere, but lives in memory) holding plaintext.
+_SOURCE_SECRET_FIELDS = ("api_token",)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,43 +137,86 @@ def automation_device() -> str:
     return host or key
 
 
+def _digest(value: object) -> str:
+    """A stable short hash of any JSON-able value."""
+    raw = json.dumps(value, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _source_fingerprint(src) -> str:
+    """One ticket source reduced to a digest of EVERY field it carries —
+    identity, queue, scope, labels, base URL, email, repo, agent, effort,
+    depth, start state… — with each secret replaced by its own digest first,
+    so the plaintext token never sits in the signature. The whole normalized
+    dict is hashed rather than a hand-picked tuple: a field added to
+    :class:`~backend.config.settings.TicketingSource` later is covered
+    without anyone remembering to list it here."""
+    try:
+        d = dict(src.to_dict())
+    except Exception:  # noqa: BLE001 — a hand-built object: its public fields
+        d = {k: v for k, v in vars(src).items() if not k.startswith("_")}
+    for key in _SOURCE_SECRET_FIELDS:
+        if d.get(key):
+            d[key] = "sha256:" + hashlib.sha256(str(d[key]).encode("utf-8")).hexdigest()
+    return _digest(d)
+
+
 def pipeline_signature() -> Tuple:
-    """What the ticket pipeline reads when it boots, reduced to what would
-    change its behaviour: the PR/issue switches, their repos, whether there's
-    a token, each ticket source's identity/queue/repo/agent, and whether this
-    device runs the GitHub halves. A synced change that leaves this alone
-    (a label, a grace period…) doesn't restart anything. Never raises."""
+    """What the ticket pipeline reads when it boots, as sorted ``(key,
+    digest)`` pairs — one per thing whose change needs a restart:
+
+    * ``ticketing.<id>`` — every field of that ticket source (secrets as a
+      hash; see :func:`_source_fingerprint`), so a new or rotated token, a
+      changed assignee scope, labels, base URL, email, queue or repo all count;
+    * ``github`` — the PR-review and issue-handling switches, their repo
+      lists, and whether/which token is set (as a hash);
+    * ``automation`` — whether this device runs the GitHub halves.
+
+    A change that leaves every digest alone (a GitHub grace period, a skip
+    author — both read per poll, or a UI accent) doesn't restart anything.
+    Compare two signatures with :func:`signature_changes`. Never raises."""
     try:
         from backend.config import settings as _settings
 
         _settings.invalidate()
         s = _settings.load_settings()
         gh = s.github
-        sources = tuple(
-            sorted(
-                (
-                    src.id,
-                    src.provider,
-                    src.project,
-                    src.workflow_state,
-                    str(src.workflow_state_id),
-                    src.repo_url,
-                    src.agent,
-                )
-                for src in s.ticketing.sources
+        pairs: List[Tuple[str, str]] = []
+        for idx, src in enumerate(s.ticketing.sources):
+            key = "ticketing.%s" % (str(getattr(src, "id", "") or "") or idx)
+            pairs.append((key, _source_fingerprint(src)))
+        token = str(gh.token or "")
+        pairs.append(
+            (
+                "github",
+                _digest(
+                    {
+                        "enabled": gh.enabled is not False,
+                        "issues_enabled": gh.issues_enabled is True,
+                        "repos": list(gh.repo_list()),
+                        "issue_repos": list(gh.issue_repo_list()),
+                        "token": (
+                            hashlib.sha256(token.encode("utf-8")).hexdigest()
+                            if token
+                            else ""
+                        ),
+                    }
+                ),
             )
         )
-        return (
-            gh.enabled is not False,
-            gh.issues_enabled is True,
-            tuple(gh.repo_list()),
-            tuple(gh.issue_repo_list()),
-            bool(gh.token),
-            sources,
-            automation_here(),
-        )
+        pairs.append(("automation", _digest(automation_here())))
+        return tuple(sorted(pairs))
     except Exception:  # noqa: BLE001
         return ()
+
+
+def signature_changes(before: Optional[tuple], after: Optional[tuple]) -> List[str]:
+    """The signature keys that differ between two :func:`pipeline_signature`
+    results (added, removed or re-digested), sorted. ``None`` on either side
+    means "unknown": every key of the other side counts as changed."""
+    a = dict(before or ())
+    b = dict(after or ())
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
 
 
 # --------------------------------------------------------------------------- #
@@ -224,14 +279,18 @@ def _fire_pipeline() -> None:
     global _pipeline_timer
     with _TIMER_LOCK:
         _pipeline_timer = None
-    _emit(PIPELINE_EVENT)
+        changed = sorted(_pending_changes)
+        _pending_changes.clear()
+    _emit(PIPELINE_EVENT, {"changed": changed})
 
 
-def _schedule_pipeline() -> None:
+def _schedule_pipeline(changed: Iterable[str] = ()) -> None:
     """One reconcile :data:`PIPELINE_DEBOUNCE` s after the LAST change of a
-    burst (each call pushes the timer back)."""
+    burst (each call pushes the timer back); ``changed`` — the signature keys
+    that moved — accumulates across the burst and rides on the event."""
     global _pipeline_timer
     with _TIMER_LOCK:
+        _pending_changes.update(str(c) for c in changed if c)
         if _pipeline_timer is not None:
             _pipeline_timer.cancel()
         t = threading.Timer(PIPELINE_DEBOUNCE, _fire_pipeline)
@@ -261,12 +320,15 @@ def after_settings_change(
     *,
     pipeline_before: Optional[tuple] = None,
 ) -> None:
-    """Run the side effects of ``paths`` having changed underneath the server
-    (sync unit ids), then announce ``settings.synced`` so open UIs refetch.
-    ``source`` is the device the values came from (``""`` for a local write —
-    ``POST /api/prefs`` announces its own saves this way); ``pipeline_before`` the
-    :func:`pipeline_signature` from before the write (the pipeline is only
-    reconciled when it moved). Never raises."""
+    """Run the side effects of ``paths`` having changed (sync unit ids), then
+    announce ``settings.synced`` so open UIs refetch. Runs for every write of
+    a setting the pipeline reads — synced in from another device, or saved
+    locally by ``POST /api/settings`` / ``PUT /api/settings/ticketing/sources``
+    (``source`` is the device the values came from, ``""`` for a local write).
+    ``pipeline_before`` is the :func:`pipeline_signature` from before the
+    write: the pipeline is reconciled (restarted, if it is wanted) only when
+    the signature moved, :data:`PIPELINE_DEBOUNCE` s after the last change of
+    a burst. Never raises."""
     global _last_sig
     try:
         changed = sorted({str(p) for p in (paths or []) if p})
@@ -287,7 +349,7 @@ def after_settings_change(
             before = pipeline_before if pipeline_before is not None else _last_sig
             _last_sig = sig
             if before is None or sig != before:
-                _schedule_pipeline()
+                _schedule_pipeline(signature_changes(before, sig))
         except Exception as err:  # noqa: BLE001
             _log_error("settings hooks: pipeline nudge failed: %v", err)
     if "ui.scroll_speed" in changed:

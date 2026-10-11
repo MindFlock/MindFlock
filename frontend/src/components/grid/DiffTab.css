@@ -13,8 +13,14 @@
   text-overflow: ellipsis;
 }
 
-.stagechip.s-provisioning {
-  color: var(--gold);
+/* The session-state chips (lib/sessionState.ts) take their colour from the
+   same six tone tokens the rail dot uses (styles/tokens.css): a filled chip for
+   the states that act or wait on you, a tint for the quiet ones. The s-* class
+   is the state, the tone-* class beside it is the colour. */
+.stagechip.s-provisioning,
+.stagechip.tone-muted {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
 }
 
 .stagechip.s-agent {
@@ -22,38 +28,45 @@
   background: rgba(var(--accent-rgb), 0.16);
 }
 
-.stagechip.s-running {
-  color: #fff;
-  background: rgba(var(--accent-rgb), 0.5);
+.stagechip.s-running,
+.stagechip.tone-working {
+  color: var(--tone-working-ink);
+  background: var(--tone-working);
   animation: cs-pulse 1.4s ease-in-out infinite;
 }
 
-.stagechip.s-idle {
-  color: var(--gold);
-  background: rgba(255, 215, 0, 0.14);
+.stagechip.s-idle,
+.stagechip.tone-neutral {
+  color: var(--tone-neutral);
+  background: color-mix(in srgb, var(--tone-neutral) 16%, transparent);
+  animation: none;
 }
 
-.stagechip.s-offline {
-  color: var(--muted);
-  background: var(--panel-2);
-  opacity: 0.75;
-}
-
-.stagechip.s-clarify {
-  color: #fff;
-  background: rgba(14, 165, 233, 0.55);
+.stagechip.s-clarify,
+.stagechip.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
   animation: cs-pulse 1.4s ease-in-out infinite;
 }
 
-.stagechip.s-limit {
-  color: #fff;
-  background: rgba(239, 68, 68, 0.7);
-  animation: cs-pulse 1.4s ease-in-out infinite;
+.stagechip.s-limit,
+.stagechip.tone-waiting {
+  color: var(--tone-waiting-ink);
+  background: var(--tone-waiting);
+  animation: none;
+}
+
+.stagechip.s-offline,
+.stagechip.tone-broken {
+  color: var(--tone-broken-ink);
+  background: var(--tone-broken);
+  animation: none;
 }
 
 .stagechip.s-paused {
-  color: var(--muted);
-  background: var(--panel-2);
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
+  animation: none;
 }
 
 @keyframes cs-pulse {

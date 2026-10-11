@@ -55,7 +55,7 @@ def test_session_actions_ask_on_inline_cards():
         "export async function cleanupMissing(title: string, confirmed = false)" in src
     )
     assert (
-        '{ label: "Clean up", primary: true, run: () => void cleanupMissing(title, true) }'
+        '{ label: "Delete", primary: true, run: () => void cleanupMissing(title, true) }'
         in src
     )
     assert (
@@ -208,9 +208,14 @@ def test_assistant_agent_file_has_one_name_and_two_doors():
 
 
 def test_stage_chip_says_question():
-    stage = _read("lib/stage.ts")
-    assert 'label: "question",\n      cls: "s-clarify",' in stage
-    assert 'label: "clarify"' not in stage
+    # The word is lib/sessionState's (one label per state, the same everywhere);
+    # the class stays the activity word "clarify".
+    state = _read("lib/sessionState.ts")
+    assert 'question: "Question",' in state
+    assert 'label: "clarify"' not in state and 'label: "clarify"' not in _read(
+        "lib/stage.ts"
+    )
+    assert 'needs_you: "s-clarify",' in _read("lib/stage.ts")
 
 
 def test_thread_empty_state_points_at_split():

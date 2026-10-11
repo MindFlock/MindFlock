@@ -199,6 +199,7 @@ export function AutomationSwitch({
 export function SourceCard({
   sourceId,
   summary,
+  badge,
   collapsed,
   onToggle,
   children,
@@ -207,6 +208,8 @@ export function SourceCard({
   /** Stable identifier, exposed for tests / addon CSS. */
   sourceId: string;
   summary: string;
+  /** Right-aligned on the fold header, visible collapsed or not (a status pill). */
+  badge?: React.ReactNode;
   collapsed: boolean;
   onToggle(): void;
   children: React.ReactNode;
@@ -218,6 +221,7 @@ export function SourceCard({
       <button type="button" className="tk-head" aria-expanded={!collapsed} onClick={onToggle}>
         <span className="tk-caret">{collapsed ? "▸" : "▾"}</span>
         <span className="tk-summary">{summary}</span>
+        {badge}
       </button>
       <div className="tk-body">
         {children}
@@ -229,29 +233,47 @@ export function SourceCard({
   );
 }
 
-/** The Test button + its ✓/✗ result, as every card's footer wears it. */
+/** What a Test is doing or last said — owned by the button itself, or by the
+ * card when the test can also run without a click (after a save). */
+export interface TestResult {
+  testing: boolean;
+  ok?: boolean;
+  msg?: string;
+}
+
+/** The Test button + its ✓/✗ result, as every card's footer wears it.
+ *
+ * Uncontrolled by default. A card whose tests also run on their own (the
+ * ticket sources auto-test after a save) passes `result` and the button shows
+ * that instead of a verdict of its own — so a save's test and a click's test
+ * are the same line, not two. */
 export function TestButton({
   label = "Test connection",
   onTest,
+  result,
 }: {
   label?: string;
   /** Resolve with the success message, or throw with the failure. */
   onTest(): Promise<string>;
+  /** Controlled result; when given, the button keeps no state of its own. */
+  result?: TestResult;
 }) {
-  const [state, setState] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
-    testing: false,
-  });
+  const [own, setOwn] = useState<TestResult>({ testing: false });
+  const state = result || own;
   return (
     <>
       <button
         type="button"
         className="test-btn"
+        disabled={state.testing}
         onClick={async () => {
-          setState({ testing: true });
+          if (!result) setOwn({ testing: true });
           try {
-            setState({ testing: false, ok: true, msg: await onTest() });
+            const msg = await onTest();
+            if (!result) setOwn({ testing: false, ok: true, msg });
           } catch (err) {
-            setState({ testing: false, ok: false, msg: (err as Error).message || "failed" });
+            if (!result)
+              setOwn({ testing: false, ok: false, msg: (err as Error).message || "failed" });
           }
         }}
       >
@@ -261,6 +283,26 @@ export function TestButton({
         {state.testing ? "testing…" : state.msg ? (state.ok ? "✓ " : "✗ ") + state.msg : ""}
       </span>
     </>
+  );
+}
+
+/** The three-state pill a ticket source wears: connected (its stored
+ * configuration was seen to work within a day), needs attention (with why),
+ * or off (no credentials). `title` carries the message for the collapsed
+ * header, where there is no room to print it. */
+export function SourcePill({
+  state,
+  label,
+  message,
+}: {
+  state: "connected" | "needs_attention" | "off";
+  label: string;
+  message?: string;
+}) {
+  return (
+    <span className={"ik-source-pill " + state} title={message || label} data-state={state}>
+      {label}
+    </span>
   );
 }
 

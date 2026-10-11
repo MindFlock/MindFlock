@@ -12,9 +12,9 @@ change the answer:
   the banner that prints the same URL to the console),
 * the ntfy channel is switched on (:data:`REASON_NTFY` — before that there was
   nowhere to push it),
-* Settings → Mobile turns on tailscale mode (:data:`REASON_MOBILE` — before
+* Settings → Your phone turns on tailscale mode (:data:`REASON_MOBILE` — before
   that the URL was not going to work),
-* Settings → Mobile turns on the shared link (:data:`REASON_SHARED` — the URL
+* Settings → Your phone turns on the shared link (:data:`REASON_SHARED` — the URL
   itself just changed, to the one that outlives this machine).
 
 The same URL then rides along on *every* push: :func:`click_for` hands the

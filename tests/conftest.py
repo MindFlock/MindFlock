@@ -152,6 +152,12 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_RED_ZONES_FILE", str(tmp_path / "mindflock" / "red_zones.json")
     )
     monkeypatch.setenv("MINDFLOCK_RED_ZONE_DIR", str(tmp_path / "red-zones"))
+    # What this device mirrored onto tickets (tracker_claims): the
+    # session-removed hook reads it on every removal.
+    monkeypatch.setenv(
+        "MINDFLOCK_TRACKER_CLAIMS_FILE",
+        str(tmp_path / "mindflock" / "tracker_claims.json"),
+    )
     monkeypatch.setenv("MINDFLOCK_TOOL_FEED_DIR", str(tmp_path / "tool-feed"))
     # User event hooks (``~/.mindflock/hooks/<event>/*`` + ``hooks/all/*``): the
     # events bus runs them on EVERY emit, so without this a developer's real
@@ -264,7 +270,7 @@ def _no_tailnet_side_effects(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_pending_pipeline_reconcile():
     """A synced ``github.*``/``ticketing.*`` change reconciles the ticket
-    pipeline :data:`~backend.web.core.settings_hooks.PIPELINE_DEBOUNCE` (5 s)
+    pipeline :data:`~backend.web.core.settings_hooks.PIPELINE_DEBOUNCE` (2 s)
     later, on a timer thread — long enough to outlive the test that scheduled
     it and land its event inside a later test's bus. Cancel it on the way out.
     Never imports the module (a test that didn't load it can't have a timer)."""

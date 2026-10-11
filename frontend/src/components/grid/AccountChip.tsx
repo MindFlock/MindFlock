@@ -181,7 +181,7 @@ export function AccountChip({ inst }: { inst: Instance }) {
           <div className="usage-pop-note">
             Swapping restarts the agent under the new identity. Files, diff and
             terminal stay. A thread belongs to the account that started it, so
-            this window keeps one conversation per account: swapping back
+            this session keeps one conversation per account: swapping back
             reopens the one you left, a first swap starts fresh.
           </div>
         </UsagePopover>

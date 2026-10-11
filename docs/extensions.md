@@ -53,26 +53,28 @@ Core vocabulary (emitted by the server):
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
 | `session.message` | Another session (or the CLI / an external client, `from: ""`) left a message for this one | `data: {id, from, kind, text, delivery: delivered·pending·held, status?}` (`status` only on a `kind: "result"` report: `done`·`blocked`·`failed`) |
+| `session.presence_changed` | Someone opened or closed a terminal on the session, started typing, took or released its keyboard, or it changed owner ([people.md](people.md#owner-driver-viewers)) | `data: {owner, driver, driver_name, viewers}` — the `/api/instances` row fields |
+| `session.driver_changed` | The session's keyboard changed hands | `old`/`new`: person ids (`""` = nobody); `data: {reason: take·attach·input·release·left·idle, name, previous_name}` |
 | `session.push_failed` | The Push button's push failed for want of a credential or a git identity (read from the push's own output; once per push) | `data: {reason: https_auth·ssh_auth·identity·forbidden·not_found, message, fix, detail}` |
 | `session.pr_state_changed` | The branch's PR genuinely moved | `"" · OPEN · MERGED · CLOSED`, `data: {url}` |
 | `session.pr_review_changed` | A reviewer decided on the branch's open PR | `"" · approved · changes_requested` |
 | `session.red_zone_blocked` | The red-zone guard denied the agent an edit — or a push/PR while zoned files are committed (`push: true`) — once per session and zone (or push) per work cycle | `data: {count, zone_ids, patterns, paths, tool, push, detail}` |
 | `session.red_zone_breached` | A file inside a red zone actually changed (verified against git / the content baseline) — once per worktree and path, seeded silently on first sight | `data: {paths, patterns, total, blocks_push, detail}` |
 | `session.red_zone_tampered` | The guard file, the hook config or the zone store was interfered with (`session` may be `""` for a store change) | `data: {what: guard·hooks·store, detail}` |
-| `run.changed` | A team run (group) changed: a task moved, paused, lines added — for refetching. `state: "dissolved"` means an auto-split's lead declined to split and the run is gone (a lookup 404s); that event also carries who and why | `data: {run, state, counts}`; dissolved: `{run, state, counts: {}, lead, by, why}` (`why` ≤ 500 chars) |
-| `run.needs_you` | A group escalation, once per (run, task, reason, incarnation): stuck after two nudges, ship halted twice, blocked, restart, budget. Never for a dialog (`needs_input` covers it); `session` is the member, `""` for the budget | `new` = reason; `data: {run, task, title, reason, text, detail}` |
-| `run.task_shipped` | A group member reached its lane | `data: {run, task, title, pr_url, detail}` |
-| `run.finished` | A group's last task finished — once, across restarts | `data: {run, name, shipped, failed, cost_usd, duration_s, detail}` |
+| `run.changed` | A team run changed: a task moved, paused, lines added — for refetching. `state: "dissolved"` means an auto-split's lead declined to split and the run is gone (a lookup 404s); that event also carries who and why | `data: {run, state, counts}`; dissolved: `{run, state, counts: {}, lead, by, why}` (`why` ≤ 500 chars) |
+| `run.needs_you` | A team run escalation, once per (run, task, reason, incarnation): stuck after two nudges, ship halted twice, blocked, restart, budget. Never for a dialog (`needs_input` covers it); `session` is the member, `""` for the budget | `new` = reason; `data: {run, task, title, reason, text, detail}` |
+| `run.task_shipped` | A team run member reached its Fast-track target | `data: {run, task, title, pr_url, detail}` |
+| `run.finished` | A team run's last task finished — once, across restarts | `data: {run, name, shipped, failed, cost_usd, duration_s, detail}` |
 | `device.join_requested` | Another computer asks to join "Your devices" and waits for approval on this one (`session` is `""`) | `data: {device, host, code, id, detail}` — the same 6-digit `code` shows on the asking computer. Every OTHER member holding a copy (so it can be approved there too) fires it with `via` (the asked device's key) and `via_host` added |
 | `device.joined` | A computer became one of your devices — by code, approval or one-click add (fires on both sides: on the joiner `device` is itself and `via` the device it joined through), or a device removed here was let back in on this one (`POST /api/fleet/members/{key}/allow`) | `data: {device, host, detail[, via]}` |
 | `device.removed` | A device left or was removed (`device` is this one's own key when it was this device). `by` is the device that made the removal (the leaver itself for a leave — `by == device` — which isn't a removal; `""` when unknown) — a removal by a device you didn't use is how a forged one shows. A removal's `detail` ends with the advice to also remove a lost or stolen device from the tailnet | `data: {device, host, by, detail}` |
 | `settings.synced` | Shared settings changed here — adopted from another of your devices (`from` is its key), or written locally through `POST /api/prefs` (`from` is `""`). For refetching; don't treat every one as an incoming sync | `data: {paths, from}` |
-| `settings.sync_paused` | Settings sync paused itself here: a background scan would have cleared most of this device's settings at once (a reset or replaced settings.json), so nothing is shared until the person chooses whose settings to keep (Settings → Devices, `POST /api/settings/sync/resume`). Once per pause; `session` is `""` | `data: {cleared, held, detail}` — `cleared` settings out of `held` set here |
+| `settings.sync_paused` | Settings sync paused itself here: a background scan would have cleared most of this device's settings at once (a reset or replaced settings.json), so nothing is shared until the person chooses whose settings to keep (Settings → Your devices, `POST /api/settings/sync/resume`). Once per pause; `session` is `""` | `data: {cleared, held, detail}` — `cleared` settings out of `held` set here |
 | `peer.link_added` | Someone paired with this computer (they joined your invite: `role: "listener"`; you joined theirs: `"dialer"`), or re-paired an existing link (`repaired: true` — same link id, its shared folder kept). `sas` is the safety number both people compare. `session` is `""` | `data: {link_id, peer_name, sas, role, repaired}` |
 | `peer.link_removed` | A peer link is gone — the other person unlinked (`by: "peer"`) or it was unlinked here (`"you"`) | `data: {link_id, peer_name, by}` |
 | `peer.state` | A peer link's connection came up or dropped (UI refetch only) | `data: {link_id, peer_name, connected}` |
 | `peer.progress` | A slow invite or join moved on a stage (`op: "invite"` → `relay`, `fallback`, `ready`; `"join"` → `waiting_relay`, `connecting`, `verifying`, `done`); `op_id` is the id the request carried, `text` the line to show | `data: {op_id, op, stage, text}` |
-| `peer.message` | A message from a peer arrived. `stored: true` when no shared session took it — it waits in the link's messages (Settings → Work with someone) | `data: {link_id, peer_name, text, stored}` — `text` is the first 200 characters, one line |
+| `peer.message` | A message from a peer arrived. `stored: true` when no shared session took it — it waits in the link's messages (Settings → People) | `data: {link_id, peer_name, text, stored}` — `text` is the first 200 characters, one line |
 | `peer.relay_changed` | This computer's relay came back with a new public address while people who joined through the old one exist: they need a fresh invite (pasting it reconnects the same link) | `data: {host, peers}` — never the ingress token |
 | `update.available` | A newer MindFlock release is out and this device, or another live member of "Your devices", runs an older one. Once per release and set of devices behind it (remembered in `<config dir>/update_announced.json`, so a restart doesn't announce it again); `session` is `""` | `data: {latest, tag, current, here, blocked, behind: [{key, host, version}], count, detail}` — `here`: this device is behind; `blocked`: why it can't update itself (a dev checkout) |
 
@@ -146,9 +148,9 @@ Override the root with `MINDFLOCK_HOOKS_DIR` (used by the tests).
 
 ```sh
 #!/bin/sh
-# Notify when a session flips to "clarify" (the agent is waiting on you).
+# Notify when a session flips to "clarify" (the agent needs you).
 [ "$MINDFLOCK_NEW" = "clarify" ] || exit 0
-notify-send "MindFlock: $MINDFLOCK_SESSION" "The agent needs your input"
+notify-send "MindFlock: $MINDFLOCK_SESSION" "The agent needs you"
 ```
 
 ### Example: Slack ping when a PR opens
@@ -1153,7 +1155,10 @@ opens the dialog from the manifest, imports `index.js`, awaits `activate`,
 then runs the `main` renderer into the body — and the palette lists "Hello:
 Open" and "Hello: Toast". Settings → Extensions shows the row with its
 `~/.mindflock/extensions` origin and its switch. If `extension.py` is wrong,
-the server log says `extension hello failed to load: <why>` and nothing else
+the server log says `extension hello failed to load: <why>`, Settings →
+Extensions lists the file and the error (with the restart note), the Connections
+dashboard shows it as *needs attention*, `GET /api/addons` carries it under
+`failed` — and nothing else
 changes; if `index.js` throws in `activate`, the dialog shows the error inline
 and the Settings row records it. To add a grid window, declare a
 `kind="pane"` surface (`multi=True` for several at once) and call
@@ -1183,7 +1188,7 @@ global:
 | `mindflock.events.lastSeq` | `seq` of the last envelope received (used for `?since=` resume) |
 | `mindflock.events.connected` | Whether the `/api/events` socket is currently up |
 | `mindflock.events.onStatus(cb)` | Called on connect/disconnect transitions |
-| `mindflock.sessions()` | The latest instances snapshot array (same shape as `GET /api/instances`) |
+| `mindflock.sessions()` | The latest sessions snapshot array (same shape as `GET /api/instances`) |
 | `mindflock.displayName(title)` | What a session is **called** — its rename, else the label the rail shows (`(tix) add-dark-mode/sc-12345`), else the raw title. Published by the SPA (`lib/windowName.ts`); feature-detect it, because a non-SPA page has no rail to agree with. Use it wherever a user reads a session's name: the event envelope carries the machine slug, and naming a window nobody can find under that name is worse than saying nothing. |
 | `mindflock.slotNumber(title)` | The session's **slot number** in the rail — `"1"`…`"9"`, or `""` when the row shows none (tenth row on, filtered out, verify sessions). The rail's numbers are how people locate a window, so a notification carrying one must show the number the rail shows *right now* — drag order and the live filter applied. Same publish point and the same feature-detect rule as `displayName`; the notify addon renders it as a `[3] ` prefix on the name. |
 | `mindflock.toast(msg, opts?)` | Show a toast. Assigned by `app.js` (F3), so it's present whenever the SPA is loaded — still feature-detect in addon modules for non-SPA pages. `opts` is optional: `{onClick, duration}` makes the toast clickable and/or overrides its lifetime (ms). |

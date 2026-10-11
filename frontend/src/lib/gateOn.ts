@@ -1,4 +1,4 @@
-/** "Turn the gate on" — the button in Settings → Devices' gate warning.
+/** "Turn the gate on" — the button in Settings → Your devices' gate warning.
  *
  * The warning shows while this device's access gate is off and it's reachable
  * beyond this machine (`gate_warning` in GET /api/fleet). Turning the gate on
@@ -19,7 +19,7 @@ type Call = <T = unknown>(path: string, opts?: { json?: unknown }) => Promise<T>
 /** What the success toast says happens to the owner's other clients. */
 export const GATE_ON_NOTE =
   "Access gate on. Your other devices sign in with your devices' key, so they keep working; " +
-  "a phone signs in again by scanning the QR in Settings → Mobile.";
+  "a phone signs in again by scanning the QR in Settings → Your phone.";
 
 /** Sign this browser in, then turn the gate on. Throws (with the server's
  * message) when either step is refused. */

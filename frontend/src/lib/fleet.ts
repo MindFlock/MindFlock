@@ -1,4 +1,4 @@
-/** Pure helpers for Settings → Devices ("Your devices"): the code and
+/** Pure helpers for Settings → Your devices ("Your devices"): the code and
  * countdown formatting, and the one-line status texts the screen shows. No
  * DOM and no fetches, so the wording is tested in node (fleet.test.ts). */
 
@@ -199,7 +199,7 @@ export function updateNote(data: Record<string, unknown> | null | undefined): {
   const text =
     String(d.detail || "") ||
     "MindFlock v" + latest + " is out" + (behind.length ? " — " + count + " of your devices are behind" : "");
-  if (behind.length) return { text, screen: "devices", toast: text + " — Update them in Settings → Devices" };
+  if (behind.length) return { text, screen: "devices", toast: text + " — Update them in Settings → Your devices" };
   return { text, screen: "advanced", toast: text + " — Update in Settings → Advanced" };
 }
 
@@ -288,7 +288,7 @@ function sentence(s: string): string {
 
 /** The bell row and toast for settings.sync_paused. */
 export const SYNC_PAUSED_NOTE =
-  "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Devices.";
+  "Settings sync paused on this device — its settings look reset, so nothing was sent. Choose what to keep in Settings → Your devices.";
 
 /** The device.* events (backend fleet.py) and settings.sync_paused as one line each — the bell's row
  * text and class, and the toast's wording for the two that toast. */
@@ -656,7 +656,7 @@ export function automationLine(
       here,
       text:
         "This device runs PR review and issue handling for all your devices. To move them, choose " +
-        "Run here in Settings → Devices on the device that should run them.",
+        "Run here in Settings → Your devices on the device that should run them.",
       canMove: false,
     };
   if (runner)
@@ -713,7 +713,7 @@ export function unpinReplaces(path: string, sync: SyncStatus | null | undefined)
 /** What a pasted code is — the browser's twin of the server's
  * fleet.classify_code, so ONE "Paste a code" box (Devices, the palette)
  * routes it: a peer-link invite (`mfp1:`/`mfp2:` anywhere in the text) to
- * Work with someone, one of your devices' 8-character codes — bare, as
+ * People, one of your devices' 8-character codes — bare, as
  * "<device> <code>", or the whole `mindflock devices join` command — to
  * Devices. `device` is "" when the text names none. */
 export function routeCode(text: string): { kind: "peer" | "device" | ""; code: string; device: string } {
@@ -780,7 +780,7 @@ export function phoneLinkLine(pl: FleetPhoneLink | null | undefined): { text: st
 }
 
 /** An admit whose joiner this device can't reach: "Joined, but rig isn't
- * reachable from here — <why>. On rig: Settings → Devices → Make reachable."
+ * reachable from here — <why>. On rig: Settings → Your devices → Make reachable."
  * "" for any other state. */
 export function admitLine(a: FleetAdmit): string {
   if (a.state !== "unreachable_joiner") return "";
@@ -792,7 +792,7 @@ export function admitLine(a: FleetAdmit): string {
     (a.reason ? " — " + a.reason : "") +
     ". On " +
     h +
-    ": Settings \u2192 Devices \u2192 Make reachable."
+    ": Settings \u2192 Your devices \u2192 Make reachable."
   );
 }
 
@@ -817,7 +817,7 @@ export function requestNote(r: FleetRequest): string {
 
 /** The sidebar note under another computer's device group, and the one
  * action it offers. A MindFlock that can join is offered as one of your
- * devices ("Add to my devices…", which opens Settings → Devices on it) —
+ * devices ("Add to my devices…", which opens Settings → Your devices on it) —
  * joining turns remote control on and needs no token. Pasting an access
  * token ("Connect…") is only for one that can't join (an older MindFlock). */
 export function sidebarDeviceNote(

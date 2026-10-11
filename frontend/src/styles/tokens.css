@@ -40,6 +40,23 @@
      with `background:` and text over it takes the pair. */
   --gold-fill: #ffd700;
   --gold-ink: #1a1a1a;
+  /* Session-state tones (lib/sessionState.ts) — the SIX colours a session's
+     dot and chip are painted with, defined once: muted (starting, paused),
+     working (green), attention (gold — needs you), neutral (idle), waiting
+     (blue — a usage limit that auto-resumes; it is NOT red) and broken (red —
+     offline). `-ink` is the text that goes over the tone as a fill. */
+  --tone-muted: #8a90a2;
+  --tone-muted-ink: #ffffff;
+  --tone-working: #51bd73;
+  --tone-working-ink: #0b1a10;
+  --tone-attention: #ffd700;
+  --tone-attention-ink: #1a1a1a;
+  --tone-neutral: #a3abbe;
+  --tone-neutral-ink: #0f1117;
+  --tone-waiting: #4ea8de;
+  --tone-waiting-ink: #ffffff;
+  --tone-broken: #de613e;
+  --tone-broken-ink: #ffffff;
   /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
      surface theme (theme.css html[data-surface=…] blocks override these). */
   --term-bg: #0f1117;
@@ -99,6 +116,18 @@
      9:1 here) instead of contrasting with the page. */
   --gold-fill: #f0b429;
   --gold-ink: #1a1a1a;
+  --tone-muted: #8a90a2;
+  --tone-muted-ink: #ffffff;
+  --tone-working: #2e9e54;
+  --tone-working-ink: #ffffff;
+  --tone-attention: #f0b429;
+  --tone-attention-ink: #1a1a1a;
+  --tone-neutral: #6b7385;
+  --tone-neutral-ink: #ffffff;
+  --tone-waiting: #1d6fa5;
+  --tone-waiting-ink: #ffffff;
+  --tone-broken: #d6451f;
+  --tone-broken-ink: #ffffff;
   --term-bg: #ffffff;
   --term-fg: #1b2030;
 }

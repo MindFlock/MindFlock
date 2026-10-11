@@ -31,11 +31,24 @@ def test_templates_registered_on_generic_slot_path():
     data = client.get("/api/addons").json()
     tpl = next(a for a in data["addons"] if a["id"] == "templates")
     fe = tpl["frontend"][0]
-    # No sidebar bar: templates are surfaced from the + New dialog. slots.js
-    # still imports the module (it keys on `module`, not `where`).
+    # No sidebar bar and no module: the manager is the SPA's TemplatesDialog
+    # (New → Manage…, palette "Templates…"), which calls this router directly.
     assert fe["where"] == "dialog"
-    assert fe["module"] == "/addons/templates.js"
-    assert fe["builtin_ui"] is False
+    assert fe["module"] is None
+    assert fe["builtin_ui"] is True
+    assert fe["api_base"] == "/api/templates"
+
+
+def test_templates_are_a_settings_sync_unit():
+    """One Templates list everywhere: the store is registered with settings
+    sync (``store:templates``, keyed by name), so a template saved on one
+    device is what the New dialog on every other device offers."""
+    from backend.web.core import settings_sync
+    import backend.web.core.sync_stores  # noqa: F401  (registers at import)
+
+    assert "store:templates" in settings_sync.bases()
+    st = settings_sync._stores()["templates"]
+    assert st.label == "Session templates"
 
 
 # --------------------------------------------------------------------------- #

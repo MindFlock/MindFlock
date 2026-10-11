@@ -186,10 +186,13 @@ def test_a_prefs_save_tells_every_open_browser(client):
 
 def test_moving_the_automation_reconciles_the_pipeline(client, monkeypatch):
     """github.automation_device gates both GitHub halves, so moving them to
-    this device (Run here in Settings → Devices) must reach the
+    this device (Run here in Settings → Your devices) must reach the
     pipeline the way the on/off switches do."""
-    from backend.web.core import events, fleet, remote
+    import threading
 
+    from backend.web.core import events, fleet, remote, settings_hooks
+
+    monkeypatch.setattr(settings_hooks, "PIPELINE_DEBOUNCE", 0.05)
     monkeypatch.setattr(fleet, "in_fleet", lambda: True)
     monkeypatch.setattr(
         fleet, "live_members", lambda: {"laptop": {"host": "L"}, "mac": {"host": "M"}}
@@ -200,9 +203,11 @@ def test_moving_the_automation_reconciles_the_pipeline(client, monkeypatch):
     try:
         client.post("/api/settings", json={"github": {"automation_device": "mac"}})
         client.post("/api/settings", json={"github": {"automation_device": "mac"}})
+        threading.Event().wait(0.3)  # the debounced reconcile fires once
     finally:
         unsubscribe()
     toggles = [e for e in seen if e["event"].endswith("settings.github_toggled")]
     assert len(toggles) == 1  # moved once; the same choice again is no flip
+    assert toggles[0]["data"]["changed"] == ["automation"]
     store.invalidate()
     assert store.load_settings().github.automation_device == "mac"

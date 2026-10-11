@@ -509,7 +509,7 @@ def _hold(run: dict) -> List[str]:
                 "state": "release_ready",
                 "release": {
                     "state": "ready",
-                    "detail": "paused — release it again once the group is resumed",
+                    "detail": "paused — release it again once the team run is resumed",
                 },
             },
             now,
@@ -742,7 +742,7 @@ async def _start(run_id: str, task_id: str, now: float) -> None:
                         "skipped",
                         "",
                         "started elsewhere meanwhile (Intake or ticket ingestion) — "
-                        "left out of the group; it keeps its own lane",
+                        "left out of the team run; it keeps its own fast-track",
                         finished_at=now,
                     ),
                     now,
@@ -806,7 +806,7 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
     lead = run["lead"] or {}
     inst = srv.ENGINE.instances.get(lead.get("title") or "")
     if inst is None:
-        return ("failed", {"error": "the group's lead session is not there"}), ""
+        return ("failed", {"error": "the team run's lead session is not there"}), ""
     try:
         wt = inst.GetWorktreePath() or ""
     except Exception:  # noqa: BLE001
@@ -822,7 +822,7 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
         return (
             "failed",
             {
-                "error": "the lead is on %s, not the group's branch %s"
+                "error": "the lead is on %s, not the team run's branch %s"
                 % (live or "a detached HEAD", lead["branch"])
             },
         ), ""
@@ -2016,7 +2016,7 @@ def _run_ask(run: dict):
             )
         if stray_commits:
             parts.append(
-                "a commit no piece made is on the group's branch (%s) — it ships "
+                "a commit no piece made is on the team run's branch (%s) — it ships "
                 "with the PR unless you undo it"
                 % ", ".join(c[:9] for c in stray_commits[:3])
             )
@@ -2416,12 +2416,12 @@ async def preview(text: str, repo_path: str = "", program: str = "") -> dict:
         owned = _runs.owner_of_title(r["title"])
         if owned:
             warnings.append(
-                "%s is already in group %s — it will be left out"
+                "%s is already in team run %s — it will be left out"
                 % (it["ref"], owned[0]["name"])
             )
         elif has:
             warnings.append(
-                "%s already has a session (%s) — it will be added to the group, "
+                "%s already has a session (%s) — it will be added to the team run, "
                 "not restarted" % (it["ref"], r["title"])
             )
     return {
@@ -2543,7 +2543,8 @@ async def _build_tasks(
         owned = _runs.owner_of_title(title, exclude_run)
         if owned:
             warnings.append(
-                "%s is already in group %s — left out" % (ref or tid, owned[0]["name"])
+                "%s is already in team run %s — left out"
+                % (ref or tid, owned[0]["name"])
             )
             continue
         if together and title in srv.ENGINE.instances:
@@ -2571,7 +2572,7 @@ async def _build_tasks(
             )
             adopted.append(task)
             warnings.append(
-                "%s already has a session (%s) — it was added to the group, not "
+                "%s already has a session (%s) — it was added to the team run, not "
                 "restarted" % (ref or tid, title)
             )
         elif title in taken:
@@ -2590,7 +2591,7 @@ async def _build_tasks(
                     "%s is already being started (%s) — left out"
                     % (
                         ref or tid,
-                        "by another group" if holder else "by ticket ingestion",
+                        "by another team run" if holder else "by ticket ingestion",
                     )
                 )
                 continue
@@ -2670,7 +2671,7 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
             lane = "commit"
         if lane == "leave":
             raise RunError(
-                "one PR for all commits each line into the group's branch — "
+                "one PR for all commits each line into the team run's branch — "
                 "choose commit (nothing leaves this machine) or further"
             )
         if ask_first:
@@ -2727,7 +2728,7 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
     if together and not split and len(items) > max_kids:
         raise RunError(
             "one-for-all takes at most %d lines (MINDFLOCK_MAX_CHILDREN) — every "
-            "line is a worker of the group's lead" % max_kids
+            "line is a worker of the team run's lead" % max_kids
         )
     if split:
         tasks, adopted, warnings = [], [], []
@@ -2881,7 +2882,7 @@ def _lead_candidate(title: str):
         raise RunError("workspace not ready", 409)
     owned = _runs.owner_of_title(title)
     if owned:
-        raise RunError("%s is already in group %s" % (title, owned[0]["name"]), 409)
+        raise RunError("%s is already in team run %s" % (title, owned[0]["name"]), 409)
     # The repository its pieces fork from is the one holding its worktree —
     # never its ``Path``: a ticket session's is "." (the server's cwd), and
     # its worktree hangs off MindFlock's base clone (or is its own clone).
@@ -2933,7 +2934,7 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
             "trunk": bool(fit.get("trunk")),
         }
         note = (
-            "%s's own lane was turned off — the group ships it once, at the "
+            "%s's own fast-track was turned off — the team run ships it once, at the "
             "release" % title
             if disarmed
             else ""
@@ -2973,7 +2974,7 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
             status, body = 500, {"error": str(err)}
         if status != 202:
             raise RunError(
-                "the group's lead could not be started: %s"
+                "the team run's lead could not be started: %s"
                 % (body.get("error") or status),
                 status if 400 <= status < 500 else 500,
             )
@@ -2996,7 +2997,7 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
                 text=(
                     "%s leads the split"
                     if r.get("split")
-                    else "%s integrates the group"
+                    else "%s integrates the team run"
                 )
                 % lead["title"],
             )
@@ -3036,7 +3037,7 @@ def pause(run_id: str, reason: str = "user") -> dict:
         if run is None:
             raise RunError("no such group: %s" % run_id, 404)
         if run["state"] in _runs.RUN_FINISHED:
-            raise RunError("this group has finished", 409)
+            raise RunError("this team run has finished", 409)
         if not run["paused"]:
             run["paused"] = True
             run["pause_reason"] = (
@@ -3062,7 +3063,7 @@ def resume(run_id: str, budget_usd=None) -> dict:
         if run is None:
             raise RunError("no such group: %s" % run_id, 404)
         if run["state"] in _runs.RUN_FINISHED:
-            raise RunError("this group has finished", 409)
+            raise RunError("this team run has finished", 409)
         if budget_usd is not None:
             run["budget_usd"] = budget_usd
         if run["paused"]:
@@ -3101,7 +3102,7 @@ def cancel(run_id: str) -> Tuple[dict, List[str]]:
                             t,
                             "cancelled",
                             "",
-                            "removed when the group was cancelled",
+                            "removed when the team run was cancelled",
                             finished_at=now,
                         ),
                         now,
@@ -3117,7 +3118,7 @@ def cancel(run_id: str) -> Tuple[dict, List[str]]:
                         t,
                         "cancelled",
                         "",
-                        "group cancelled — its session was kept",
+                        "team run cancelled — its session was kept",
                         finished_at=now,
                     ),
                     now,
@@ -3145,7 +3146,7 @@ async def add_tasks(run_id: str, items) -> dict:
     srv = _server()
     run = _need(run_id)
     if run["state"] == "cancelled":
-        raise RunError("this group was cancelled", 409)
+        raise RunError("this team run was cancelled", 409)
     if not isinstance(items, list) or not items:
         raise RunError("nothing to do")
     together = _runs.is_together(run)
@@ -3153,19 +3154,21 @@ async def add_tasks(run_id: str, items) -> dict:
         # The approval REPLACES the task list with the plan's pieces: a line
         # added now would be dropped without a word.
         raise RunError(
-            "this group's plan is not approved yet — add lines once it is "
+            "this team run's plan is not approved yet — add lines once it is "
             "(or ask the lead to include them in its plan)",
             409,
         )
     if together and run["state"] == "releasing":
-        raise RunError("this group is being released — add lines once it is done", 409)
+        raise RunError(
+            "this team run is being released — add lines once it is done", 409
+        )
     if together:
         live = sum(1 for t in run["tasks"] if t["state"] not in _runs.TERMINAL)
         if live + len(items) > _max_pieces():
             raise RunError(
                 "one-for-all takes at most %d lines at once "
                 "(MINDFLOCK_MAX_CHILDREN) — every line is a worker of the "
-                "group's lead" % _max_pieces(),
+                "team run's lead" % _max_pieces(),
                 409,
             )
     # A one-for-all line forks off the LEAD: same repository, never an
@@ -3260,11 +3263,11 @@ def retry(run_id: str, task_id: str, fresh: bool = False) -> dict:
         if run is None:
             raise RunError("no such group: %s" % run_id, 404)
         if run["state"] == "cancelled":
-            raise RunError("this group was cancelled", 409)
+            raise RunError("this team run was cancelled", 409)
         t = _need_task(run, task_id)
         if t["state"] not in ("failed", "needs_you"):
             raise RunError(
-                "only a failed task, or one waiting on you, can be retried", 409
+                "only a failed task, or one that needs you, can be retried", 409
             )
         if (
             not fresh
@@ -3386,7 +3389,7 @@ def _retry_task(run: dict, t: dict, fresh: bool, now: float) -> None:
         try:
             _arm(run, t)
         except Exception as err:  # noqa: BLE001
-            raise RunError("could not re-arm its lane: %s" % err, 409) from None
+            raise RunError("could not re-arm its fast-track: %s" % err, 409) from None
         _runs.apply(run, _runs._to(t, "working"), now)
     else:
         if t["kind"] == "ticket" and not _reserve(run, t):
@@ -3408,7 +3411,7 @@ def start_now(run_id: str, task_id: str) -> dict:
         if t["state"] != "queued":
             raise RunError("only a queued task can be started now", 409)
         if run["paused"]:
-            raise RunError("this group is paused — resume it first", 409)
+            raise RunError("this team run is paused — resume it first", 409)
         t["start_now"] = True
         t["retry_at"] = 0.0
         task = dict(t)
@@ -3461,12 +3464,12 @@ def adopt(run_id: str, title: str) -> dict:
         _runs.owner_of_branch(key, rows) if key else None
     )
     if owned:
-        raise RunError("branch already in group %s" % owned[0]["name"], 409)
+        raise RunError("branch already in team run %s" % owned[0]["name"], 409)
     with _runs.edit(run_id) as run:
         if run is None:
             raise RunError("no such group: %s" % run_id, 404)
         if run["state"] == "cancelled":
-            raise RunError("this group was cancelled", 409)
+            raise RunError("this team run was cancelled", 409)
         n = len(run["tasks"]) + 1
         while _runs.task_by_id(run, "t%d" % n):
             n += 1
@@ -3518,21 +3521,21 @@ def user_lane(
     run, t = owned
     if t.get("kind") == "lead":
         raise RunError(
-            "%s leads group %s — it ships once, through the group's release, "
+            "%s leads team run %s — it ships once, through the team run's release, "
             "not a lane of its own" % (title, run["name"]),
             409,
         )
     if _runs.is_together(run):
         raise RunError(
-            "%s is part of group %s — its work merges into the group's one PR. "
-            "Move it out of the group to give it a lane of its own"
+            "%s is part of team run %s — its work merges into the team run's one PR. "
+            "Move it out of the team run to give it a fast-track of its own"
             % (title, run["name"]),
             409,
         )
     if ship:
         if run["paused"]:
             raise RunError(
-                "group %s is paused — resume it before shipping its members"
+                "team run %s is paused — resume it before shipping its members"
                 % run["name"],
                 409,
             )
@@ -3554,7 +3557,8 @@ def user_lane(
                 now,
                 "note",
                 tk["id"],
-                "lane set to %s%s by you" % (lane, ", ask first" if ask_first else ""),
+                "fast-track set to %s%s by you"
+                % (lane, ", ask first" if ask_first else ""),
             )
         held = bool(r["paused"])
         if held:
@@ -3566,7 +3570,7 @@ def user_lane(
 
 def _need_split(run: dict) -> None:
     if not run.get("split"):
-        raise RunError("this group is not a split", 409)
+        raise RunError("this team run is not a split", 409)
 
 
 def _check_sender(run: dict, sender, what: str) -> str:
@@ -3576,7 +3580,7 @@ def _check_sender(run: dict, sender, what: str) -> str:
     lead = (run.get("lead") or {}).get("title") or ""
     if sender and sender != lead:
         raise RunError(
-            "only the group's lead (%s) can %s" % (lead or "none", what), 409
+            "only the team run's lead (%s) can %s" % (lead or "none", what), 409
         )
     return sender
 
@@ -3589,7 +3593,7 @@ def propose_plan(run_id: str, payload: dict) -> dict:
     _need_split(run)
     if run["state"] not in ("planning", "plan_ready"):
         raise RunError(
-            "this group's plan was already approved (%s)" % run["state"], 409
+            "this team run's plan was already approved (%s)" % run["state"], 409
         )
     sender = _check_sender(run, payload.get("from"), "propose its plan")
     pieces_in = payload.get("pieces")
@@ -3622,7 +3626,7 @@ def propose_plan(run_id: str, payload: dict) -> dict:
         if r is None:
             raise RunError("no such group: %s" % run_id, 404)
         if r["state"] not in ("planning", "plan_ready"):
-            raise RunError("this group's plan was already approved", 409)
+            raise RunError("this team run's plan was already approved", 409)
         prev = r.get("plan") or {}
         r["plan"] = {
             "state": "proposed",
@@ -3655,7 +3659,7 @@ def _decline_split(run_id: str, why: str, sender: str) -> dict:
         if r is None:
             raise RunError("no such group: %s" % run_id, 404)
         if r["state"] not in ("planning", "plan_ready"):
-            raise RunError("this group's plan was already approved", 409)
+            raise RunError("this team run's plan was already approved", 409)
         lead = dict(r.get("lead") or {})
         pol = dict(r["policy"])
         # Removed under the same lock it was read in (``r`` is unchanged, so
@@ -4091,7 +4095,7 @@ def report_integrated(run_id: str, task_id: str, head_sha: str, sender="") -> di
         # The lead's MCP tool always names itself; a person merging by hand
         # uses Retry, which re-checks ancestry the same way.
         raise RunError(
-            "only the group's lead reports a merge — after merging by hand, "
+            "only the team run's lead reports a merge — after merging by hand, "
             "use Retry",
             409,
         )
@@ -4212,7 +4216,7 @@ def _release_refusal(run: dict, now: float) -> Tuple[str, bool]:
     title = lead.get("title") or ""
     _inst, wt = _lead_wt(run)
     if not wt:
-        return "the group's lead session is not there", False
+        return "the team run's lead session is not there", False
     row = next(
         (
             r
@@ -4263,7 +4267,7 @@ def _release_refusal(run: dict, now: float) -> Tuple[str, bool]:
     live = _git_merge.current_branch(wt)
     if pinned and live != pinned:
         return (
-            "%s is on %s, not the group's branch %s — check it out again, then "
+            "%s is on %s, not the team run's branch %s — check it out again, then "
             "release" % (title, live or "a detached HEAD", pinned),
             False,
         )
@@ -4299,10 +4303,10 @@ def release(run_id: str, merge_when_green: bool = False, auto: bool = False) -> 
         rel = run["release"]
         if run["state"] != "release_ready" or rel["state"] not in ("ready", "failed"):
             raise RunError(
-                "this group is not ready to release (%s)" % run["state"], 409
+                "this team run is not ready to release (%s)" % run["state"], 409
             )
         if run["paused"]:
-            raise RunError("this group is paused — resume it first", 409)
+            raise RunError("this team run is paused — resume it first", 409)
         refusal, moved = _release_refusal(run, now)
         if moved:
             _runs.apply(

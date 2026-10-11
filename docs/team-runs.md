@@ -1,18 +1,17 @@
 # Team runs and fast-track
 
-"Work on these tickets together, 3 at a time, PR each." A **team run** (a
-*group* on screen) takes a few ticket IDs and task lines, starts one session
+"Work on these tickets together, 3 at a time, PR each." A **team run** takes a few ticket IDs and task lines, starts one session
 per item, keeps at most N running with the rest queued, **fast-tracks** each
 one as far as you chose, and surfaces only what needs you. The server
 does the plumbing — spawning, queueing, retries, nudges, restart safety —
 deterministically; an agent only does the work.
 
 - [Fast-track](#fast-track)
-- [Starting a group](#starting-a-group)
+- [Starting a team run](#starting-a-team-run)
 - [What the server does on its own](#what-the-server-does-on-its-own)
 - [What needs you](#what-needs-you)
 - [Restarts](#restarts)
-- [Limits, budgets, duplicate windows](#limits-budgets-duplicate-windows)
+- [Limits, budgets, duplicate sessions](#limits-budgets-duplicate-sessions)
 - [Notifications](#notifications)
 - [One PR for all](#one-pr-for-all)
 - [Splitting one task](#splitting-one-task)
@@ -22,26 +21,26 @@ deterministically; an agent only does the work.
 
 **Fast-track** is your answer to "when it's done, what then?" — the one name
 every screen uses (the ⏩ button, the New and Commit dialogs, Settings,
-Intake). The API calls a fast-track target a **lane** (`POST
+Intake). The API calls a fast-track target a `lane` (`POST
 /api/instances/{t}/lane`, the row's `lane`, the MCP's `lane` parameters);
-this page uses both words, the API's where it names a field.
+this page says Fast-track and keeps `lane` only where it names a field.
 
 | On screen | `lane` | MindFlock, once the agent is done |
 |---|---|---|
 | Off | `leave` | Nothing. The work stays in the tree for you. |
 | Commit | `commit` | Commits it, with a message written from the diff. |
 | Push | `push` | Commits and pushes the branch. |
-| Open a PR | `pr` | Commits, pushes and opens a pull request. |
+| Open PR | `pr` | Commits, pushes and opens a pull request. |
 | Merge when green | `merge` | …and merges it once CI is green. |
 
 Plus **Ask me before it ships**: the session stops one rung short of its first
 outward step (a Commit target before the commit, the others before the push)
-and waits in the bell (🔔 → **Needs attention**); approving it (`POST /ship-now`) ships it at once. A
-commit lane that parks for approval has its message written from the diff
+and waits in the bell (🔔 → **Needs you**); approving it (`POST /ship-now`) ships it at once. A
+Commit target that parks for approval has its message written from the diff
 right then: the card shows the exact message, and approving it unedited
 commits exactly that text. The card's size is what will be committed.
 
-Fast-track is **one engine**: the autopilot — the same record whichever
+Fast-track is **one engine** — the same record whichever
 control set it, with its guards intact: the
 30 s idle dwell, proof the agent worked, the usage-limit freeze, the
 pre-commit retry allow-list, the push gate's check, CI before a merge. One
@@ -51,32 +50,32 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
 `by` is who chose it (`user`, or `agent:<title>` for an agent's
 `set_autopilot`).
 
-**Nothing ships beyond what you chose for that session or group:**
+**Nothing ships beyond what you chose for that session or team run:**
 
 - A session with fast-track on gets its own worktree (the New dialog never
   creates it in place — choosing "Work directly in this folder" there turns
-  fast-track Off), and a lane on an in-place session whose folder another
+  fast-track Off), and a fast-track on an in-place session whose folder another
   session shares is refused (409 `shared_with`): it would commit every
   sharer's work as one.
-- A copy window on the same branch shows the target of the window that
+- A copy session on the same branch shows the target of the session that
   drives it (`owner`) and is never armed: `/lane`, `/fast-track` and
   `/ship-now` answer **409** on it (naming the driver; Off — `leave` — is
   always allowed).
-- `POST /ship-now` (the bell's approval) ships the lane the session's own
+- `POST /ship-now` (the bell's approval) ships the fast-track the session's own
   record holds — never the Settings fast-track default: a session with no
-  lane of its own is refused (409).
-- A group's **lead** ships once, through the group's release, and a
-  **one-for-all member**'s work is the group's one PR: neither takes a
-  fast-track of its own (409; the ⏩ picker says so). A **paused** group's member cannot be
-  shipped now; a lane set on it while paused is recorded and armed on resume.
-- A lane (and "ask first") you set on a member of an each-their-own group is
+  fast-track of its own is refused (409).
+- A team run's **lead** ships once, through the team run's release, and a
+  **one-for-all member**'s work is the team run's one PR: neither takes a
+  fast-track of its own (409; the ⏩ picker says so). A **paused** team run's member cannot be
+  shipped now; a fast-track set on it while paused is recorded and armed on resume.
+- A fast-track (and "ask first") you set on a member of an each-their-own team run is
   recorded on the task (`task.lane`, `task.ask_first`): every re-arm — a fix
   after a failed hook, a resume, a retry — keeps it.
-- An agent (MCP) never raises a lane you set, never lifts your "ask first",
-  never ships a group's member or lead, and never releases or resumes a
-  group you started (see [mcp.md](mcp.md)).
+- An agent (MCP) never raises a fast-track you set, never lifts your "ask first",
+  never ships a team run's member or lead, and never releases or resumes a
+  team run you started (see [mcp.md](mcp.md)).
 
-## Starting a group
+## Starting a team run
 
 From your own Claude (the MindFlock MCP): `start_team_run(items=["PAY-412",
 "PAY-415", "Per-user rate limit on /webhooks"], lane="pr", concurrency=3)`,
@@ -96,12 +95,12 @@ already have a session. A ticket that resolves nowhere is an error on its row
   (`in_flight`, tagged `reserved_by: "run:<id>"`), so the pipeline never also
   picks one up. A reservation is handed back — exactly that one entry, never
   the ticket's history — on every path that drops a queued ticket: cancel,
-  skip, a create that kept failing, a group whose lead could not be created
-  or was removed. A ticket the pipeline (or another group) is already
+  skip, a create that kept failing, a team run whose lead could not be created
+  or was removed. A ticket the pipeline (or another team run) is already
   starting is left out with a warning; one that is started elsewhere while
-  queued is skipped, never armed with the group's lane. The pipeline's
-  startup reaper keeps a live group's reservations and hands back a gone
-  group's.
+  queued is skipped, never armed with the team run's fast-track. The pipeline's
+  startup reaper keeps a live team run's reservations and hands back a gone
+  team run's.
 - **Task lines** start like the New dialog (`session_create.create`): a
   worktree of `repo_path`, titled from the line ("per-user-rate-limit-webhooks")
   — never a title whose branch a closed session left behind (it would start
@@ -109,7 +108,7 @@ already have a session. A ticket that resolves nowhere is an error on its row
 - A ticket or title **that already has a session is adopted**, not restarted.
 - Every prompt ends with a short server-owned brief: do only this task, stop
   when it is done and tested, don't push or open PRs yourself — MindFlock does
-  that per the lane.
+  that per its fast-track.
 
 The sessions are **MindFlock's**, not the calling agent's: no parent, not in
 its managed set, so an orchestrator cannot steer or kill what the run owns.
@@ -133,11 +132,11 @@ one for all: committed ─▶ integrating ─merged (ancestry)─▶ integrated
 The record keeps **facts and intent** — reserved titles, the incarnation
 (the session's `created_at` when the run started it), attempt and nudge
 counts, PR urls, terminal states — never a position in a chain. That is what
-makes first start and resume-after-restart one code path (the autopilot's
+makes first start and resume-after-restart one code path (Fast-track's
 rule).
 
 - **Concurrency.** Active = starting, working, needs you, shipping. A task
-  waiting on you holds its slot on purpose: it keeps parallel prompts down
+  that needs you holds its slot on purpose: it keeps parallel prompts down
   while you are away. *Start now* jumps the cap once.
 - **Nudges** go through the prompt queue (which never types into a dialog):
   *"If you're done, make sure tests pass and stop; if you're stuck, say
@@ -147,52 +146,52 @@ rule).
   each nudge actually delivered.
 - **A failed commit** (a hook, a check) is handed back to the agent once per
   attempt, twice: *"MindFlock's commit failed at `mypy`: …. Fix it, keep the
-  change scoped to this task, then stop."* — then the lane is re-armed. What
+  change scoped to this task, then stop."* — then its fast-track is re-armed. What
   only a person can fix (no origin, on the base branch, a red zone, no GitHub
   credentials, a rejected push) escalates at once. A commit that died on git's own
   `index.lock` (another git process held it for a moment) is not a hook
-  failure: the autopilot retries it, and only a lock that never clears
+  failure: Fast-track retries it, and only a lock that never clears
   escalates. A message you edited on the approval card survives every re-arm
   (a fix, a resume, a retry); the task line is only a placeholder, replaced at
   commit time by a message written from the diff — and never previewed as the
   message (nor is a subject a model wrote for an earlier commit). A pause keeps
   an edited message on the task and the resume commits it as written. Red CI
-  on a merge lane is *shipped, not merged*.
+  on a Merge target is *shipped, not merged*.
 - **The agent never answers a permission prompt for you.** Neither does the
   run.
 
 ## What needs you
 
-Everything that does lands in the bell's **Needs attention** list — one
+Everything that does lands in the bell's **Needs you** list — one
 badge, one list (the `waiting` group of `GET /api/outbox`, merged with the
 per-session attention rows): the sessions on a dialog (any session, grouped
-or not), ask-first lanes waiting for your go (with the commit message and
-diff stat, editable before you approve), and a group's escalations — stuck
+or not), ask-first fast-tracks waiting for your go (with the commit message and
+diff stat, editable before you approve), and a team run's escalations — stuck
 after two nudges, hooks failed twice, a session gone after a restart, a
 create that failed after retries, the budget spent — each with its next
 action (Retry, Retry fresh, Skip, Open, Raise budget).
 
-There is no separate log beside it. A group's own controls live on its rail
+There is no separate log beside it. A team run's own controls live on its rail
 header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
-Cancel, and once it has finished **Copy summary** (the group's summary as
-Markdown). A split or one-for-all group has no header (it is a family under
+Cancel, and once it has finished **Copy summary** (the team run's summary as
+Markdown). A split or one-for-all team run has no header (it is a family under
 its lead): its lead's Thread tab carries Start now / Remove on a queued piece
 and, once it has finished, **Copy summary**. What is shipping shows on each
 row's status line.
 
 Controls (routes, or `control_run` from the MCP): **Pause** (nothing new starts,
 merges or ships — not even a session whose create was already under way, nor
-in the pass the budget is crossed; a releasing lead is disarmed and the group
+in the pass the budget is crossed; a releasing lead is disarmed and the team run
 goes back to "ready to release"; agents keep working; resume re-arms exactly
 what it held, never a member already merging back), **Cancel** (stop starting
 and shipping; sessions and branches stay), **Retry** (only the task's own
 session — a title an unrelated session took is refused, use Retry fresh;
-fresh: a new `-2` title on a new branch, the old one kept and its lane
+fresh: a new `-2` title on a new branch, the old one kept and its fast-track
 disarmed so it ships nothing; a vanished one-for-all member's committed
 branch is merged back rather than forked around), **Start now**, **Skip** (a
-running task is detached: its session keeps running and keeps its lane),
-**Add lines** (to a one-for-all group they fork off the lead; refused while
-its plan is pending or its release running; a checking or ready group goes
+running task is detached: its session keeps running and keeps its fast-track),
+**Add lines** (to a one-for-all team run they fork off the lead; refused while
+its plan is pending or its release running; a checking or ready team run goes
 back to running so the release never ships without them), **Adopt** a live
 session.
 
@@ -204,7 +203,7 @@ after the restart) is said once, after the boot quiet window:
 
 | Stored | Observed | Result |
 |---|---|---|
-| starting / working / shipping | its row, same `created_at` | carries on (the autopilot record carries on by itself) |
+| starting / working / shipping | its row, same `created_at` | carries on (the Fast-track record carries on by itself) |
 | any | the title, a different `created_at` | needs you — "the title is used by another session"; never adopted silently |
 | starting | no row, a provisioning row | waits |
 | starting / working | no row, the branch exists | needs you — Re-create it on the existing branch (no double spawn) |
@@ -217,37 +216,37 @@ back on shutdown), so the boot reconcile always runs; the run store's lock is
 a file lock too, so two servers never both claim a run or lose each other's
 updates.
 
-## Limits, budgets, duplicate windows
+## Limits, budgets, duplicate sessions
 
-- **Usage limits.** While a member is limited, the group starts nothing new on
+- **Usage limits.** While a member is limited, the team run starts nothing new on
   that CLI (`waiting_for_usage`); the stuck clock stops. The existing resume
   watcher brings members back.
-- **Budget.** When the members' summed cost reaches `budget_usd` the group
+- **Budget.** When the members' summed cost reaches `budget_usd` the team run
   pauses and asks once ("Raise to $N" = resume with a new budget).
-  Per-session budgets still hold the autopilot as before.
-- **Duplicate windows** (`foo` + `foo-copy`) share one branch: ownership is
-  keyed on `(repo, branch)`. Adopting a branch another group owns is refused;
-  the copy shows the owner's lane and is never armed; `GET /api/outbox` and
+  Per-session budgets still hold Fast-track as before.
+- **Duplicate sessions** (`foo` + `foo-copy`) share one branch: ownership is
+  keyed on `(repo, branch)`. Adopting a branch another team run owns is refused;
+  the copy shows the owner's fast-track and is never armed; `GET /api/outbox` and
   the bell list the branch once.
 
 ## Notifications
 
 One emitter (the driver) feeds every channel at once. `run.needs_you` fires
 once per (run, task, reason, incarnation) — persisted, so a restart never
-repeats one — and only for escalations the group originated: a dialog is
+repeats one — and only for escalations the team run originated: a dialog is
 already announced by `needs_input`, an approval is something you asked for.
-Each carries its announce `key` (a group's ask is keyed per round: a plan's
+Each carries its announce `key` (a team run's ask is keyed per round: a plan's
 second round, a new release head, a later check failure, a second budget
 pause), which the bell dedupes on.
-`run.finished` fires once per group, after the boot quiet window even if it
-finished while the server was down, and says what the group did — a
-one-for-all group "one PR opened", "its branch was pushed; the PR was not
+`run.finished` fires once per team run, after the boot quiet window even if it
+finished while the server was down, and says what the team run did — a
+one-for-all team run "one PR opened", "its branch was pushed; the PR was not
 opened", or "N merged into one branch, nothing pushed", never "N PRs". Rules: `run_needs_you` and
 `run_finished` (on), `run_task_shipped` (off). In the web UI a `run.needs_you`
-toast opens the lead's Thread when the group has a lead and the bell
-otherwise; a `run.finished` toast reveals the group's header on the rail
-(scrolled into view and pulsed once), and for a group with no header (a split
-or one-for-all group, a group of one) opens its lead's Thread, else a member
+toast opens the lead's Thread when the team run has a lead and the bell
+otherwise; a `run.finished` toast reveals the team run's header on the rail
+(scrolled into view and pulsed once), and for a team run with no header (a split
+or one-for-all team run, a team run of one) opens its lead's Thread, else a member
 row still open.
 
 ## One PR for all
@@ -255,31 +254,31 @@ row still open.
 Pick **PRs: One for all** (`policy.grouping: "together"`) and the lines are
 worked on in parallel but ship as **one** branch and one PR:
 
-1. MindFlock first starts the group's **lead**: a session of its own
+1. MindFlock first starts the team run's **lead**: a session of its own
    (`<group>-lead`, a worktree of the repository) whose branch everything
    merges into and whose agent is there to resolve conflicts. Every line then
    starts as a **worker of the lead** — `parent` = lead, cut from the lead's
    current commit (`base_ref`), its diff measured against the lead's branch —
-   so the rail draws the group as one family, and each worker's
+   so the rail draws the team run as one family, and each worker's
    `report_result` lands in the lead's Thread.
-2. A member's lane is always **commit**, whatever the group's: its brief asks
+2. A member's fast-track is always **Commit**, whatever the team run's: its brief asks
    it to commit on its branch and report "done" with a `Tests:` line — but a
    member that committed and then sat idle for a minute on a clean tree is
    done whether or not it reported (its armed record mutes the turn-end
    event, so the server checks its commits beyond its base itself). So a
-   one-for-all group's lane is never `leave` (refused: it would commit
-   unasked) and its "ask me first" is the group's release, which asks. Done is
+   one-for-all team run's fast-track is never `leave` (refused: it would commit
+   unasked) and its "ask me first" is the team run's release, which asks. Done is
    a done report (or a turn that ended) on a clean tree with commits beyond
-   its base — or the autopilot finishing the commit for it.
+   its base — or Fast-track finishing the commit for it.
 3. Done members join the **merge queue**: one at a time, oldest first, and
    only while the lead is idle (or its CLI exited — a merge is plain git),
-   its tracked tree clean, no merge or rebase half-done, and on the group's
+   its tracked tree clean, no merge or rebase half-done, and on the team run's
    branch. That branch is **pinned** when the lead is created: a lead that
    checks out something else (or detaches) is not followed — merges,
-   ancestry, new members and the release all stay on the group's branch.
+   ancestry, new members and the release all stay on the team run's branch.
    The server runs `git merge --no-ff` in the lead's worktree
    (`core/git_merge.py`) and marks the member **merged back** only once its
-   branch head is in the group branch's history — ancestry, never anyone's
+   branch head is in the team run's branch history — ancestry, never anyone's
    word. A merge the server itself left half-done (it died mid-merge) is
    unwound on the next pass.
 4. A **conflict** is aborted (the lead's tree is left exactly as it was) and
@@ -292,8 +291,8 @@ worked on in parallel but ship as **one** branch and one PR:
    tree, a MERGE_HEAD it left and stopped on, a rebase, the wrong branch, its
    agent offline with a conflict to resolve) → **needs you**; Retry puts it
    back in the queue. A lead that is gone (lost, not removed — removing it
-   cancels the group) for 10 minutes is a group-level ask with *Cancel the
-   group*.
+   cancels the team run) for 10 minutes is a team-run-level ask with *Cancel the
+   team run*.
 5. Everything merged → the **check** runs on the merged branch (the repo's
    `.mindflock.toml` `check_command`; with none the card says so). A pass is
    credited only to the commit the check started on: a commit landing during
@@ -303,14 +302,14 @@ worked on in parallel but ship as **one** branch and one PR:
 6. **Release** — the ONE outward step, and yours: the lead's Thread shows the
    ship card (title, base ← branch with the diff, "one commit per piece, kept
    as written + N conflict fixes by the lead", the body). Its buttons follow
-   the group's lane: **Open the PR** never merges (only the explicit **merge
-   when checks pass** does — the primary on a merge group, next to *Open the
-   PR only*), and a push group's button pushes the branch. The release ships
+   the team run's fast-track: **Open the PR** never merges (only the explicit **merge
+   when checks pass** does — the primary on a merge team run, next to *Open the
+   PR only*), and a push team run's button pushes the branch. The release ships
    exactly what the card and the check showed: it is refused while the lead
    is mid-turn, has uncommitted or half-merged work, sits on another branch,
-   or the group is paused; a HEAD that moved since the check sends the group
-   back to checking. It arms the lead's lane through the autopilot,
-   with a server-built title (the group's name, then what each member did)
+   or the team run is paused; a HEAD that moved since the check sends the team run
+   back to checking. It arms the lead's fast-track,
+   with a server-built title (the team run's name, then what each member did)
    and a body with a section per member — what changed (its report), its
    paths, its commits, the tests it ran — plus the conflict fixes and the
    check. No `gh` and no token: the branch is pushed and the card links
@@ -320,16 +319,16 @@ worked on in parallel but ship as **one** branch and one PR:
    provisioned workspace cloned from a checkout that has no forge remote of
    its own) can only push there: the card says so before the click, offers
    one button (*Push to the local folder*), the release arms `push` whatever
-   the lane, and it ends in a hand-off naming the folder — "pushed
+   the fast-track, and it ends in a hand-off naming the folder — "pushed
    `<branch>` to `<folder>`, a folder on this machine, not GitHub, so no PR
    was opened" — with Copy title / Copy body, never a PR it did not open
    (`release.local_origin`). The PR title is built from whole words — never a cut
-   name or a literal "…". A group whose lane is `leave` or `commit`
+   name or a literal "…". A team run whose fast-track is `leave` or `commit`
    ends right after the check — the merged branch is the result, nothing is
    pushed. `policy.release: "auto"` (API only) releases without the click.
 
-The lead's rail chip reads **`→ PR?`** while the release waits on you, and the
-bell lists it under Needs attention.
+The lead's rail chip reads **`→ PR?`** while the release needs you, and the
+bell lists it under Needs you.
 
 ## Splitting one task
 
@@ -337,19 +336,19 @@ Tick **Auto-split into up to N sessions if it's worth it** on New's form (off by
 default; N defaults to 3 and ranges from 2 to `MINDFLOCK_MAX_CHILDREN`,
 default 8), or pick *Split
 into parallel pieces…* on a session — that session becomes the lead — and the
-group is a one-for-all group whose lines come from the lead's plan. New's
+team run is a one-for-all team run whose lines come from the lead's plan. New's
 Prompt is the whole task however many lines it holds: line breaks never split
 anything, the lead does.
 
 New's split is **optional** (`POST /api/runs` with `split_optional: true,
 max_pieces: N`). Its lead is named for the work, not `-lead`, because it may
 stay the only session: its brief says to decide first, and
-`propose_run_plan(run_id, pieces=[], why)` means *no split*. The group then
+`propose_run_plan(run_id, pieces=[], why)` means *no split*. The team run then
 **dissolves** — the run is removed, the lead is an ordinary session doing the
-task itself, armed with the group's fast-track (asking before a push, PR or
-merge, as the group's release would have), and the UI toasts "*<session>*
-didn't split it — it's doing the task itself". A group with lane `leave`
-arms nothing, a `commit` lane never asks first, an adopted lead (`lead:` over
+task itself, armed with the team run's fast-track (asking before a push, PR or
+merge, as the team run's release would have), and the UI toasts "*<session>*
+didn't split it — it's doing the task itself". A team run with fast-track `leave`
+arms nothing, a `commit` fast-track never asks first, an adopted lead (`lead:` over
 HTTP) keeps whatever fast-track it had, and if arming fails the session is
 simply left unarmed. *Split into parallel pieces…* on a session is not
 optional: there, `pieces=[]` is refused like any plan with
@@ -359,7 +358,7 @@ fewer than two pieces.
    shared groundwork, and **propose** 2–N pieces (N: the user's cap, else
    `MINDFLOCK_MAX_CHILDREN`, 8) with
    `propose_run_plan(run_id, pieces=[{title, prompt, paths}], why)` — never
-   spawn sessions. The group waits in `planning`. A lead on its trunk is
+   spawn sessions. The team run waits in `planning`. A lead on its trunk is
    told to commit nothing there (shared groundwork goes into a piece).
 2. The server **validates** the plan against the lead worktree's
    `git ls-files` and red zones: no two pieces may share a file (nor a new
@@ -389,7 +388,7 @@ fewer than two pieces.
    so nothing it changed before is exempted (those are breaches); a piece
    none of whose paths could be fenced stops shipping and needs you.
    *Split into parallel pieces…* on a session turns that session's own
-   fast-track off: the group ships it once, at the release (a session that
+   fast-track off: the team run ships it once, at the release (a session that
    only plans — in place, or on its trunk — keeps its own until you pick
    "in this folder"; split into separate worktrees, it is never touched).
 5. From there it is the one-for-all path above: committed, merged back one at
@@ -408,14 +407,14 @@ run:
   lead** for them: `<session>-split` (numbered when taken), a plain worktree
   of the same repository on a fresh branch (`<branch prefix><session>-split`)
   cut from the original session's **last commit**, with the integration
-  brief. The group runs on it — the pieces fork from it and merge back into
+  brief. The team run continues on it — the pieces fork from it and merge back into
   it, its branch is the one PR — and it is a normal session in the rail, in
-  the group. The original session keeps running and is **never** merged
+  the team run. The original session keeps running and is **never** merged
   into, switched or pushed: its branch, HEAD, index, worktree and
   uncommitted files stay exactly as they were (`run.origin` records it).
   Its uncommitted tracked changes would not be in the split, so approval
   refuses them first: "commit them first" (409 `origin_dirty`). Its own
-  fast-track is left alone (it was never the group's lead).
+  fast-track is left alone (it was never the team run's lead).
 - **In this folder.** The session itself is the lead and the pieces work in
   its folder. That folder must be on its **own** branch: on `main` (any
   trunk, or detached) the card offers **Start a branch here first** —
@@ -427,7 +426,7 @@ run:
 ### In this folder (no merge)
 
 `mode: "same_folder"` on the approval (`run.mode`). Every piece is an extra
-agent session **in the lead's own folder** (in place, like a copy window,
+agent session **in the lead's own folder** (in place, like a copy session,
 `parent` = the lead) — no worktree, no branch, no merge:
 
 - **Fenced per session.** A worktree's green zones fence *every* session in
@@ -442,7 +441,7 @@ agent session **in the lead's own folder** (in place, like a copy window,
   rebase / cherry-pick / revert / am / push` are refused ("MindFlock commits
   exactly your paths"). The other pieces' paths are *siblings*: the
   git-status backstop never blames a piece for a file another piece is
-  writing at the same moment. The lead (and any window of yours) has no
+  writing at the same moment. The lead (and any session of yours) has no
   entry and is not fenced. A CLI without the guard hook gets the brief only
   — the post-hoc checks below still hold.
 - **MindFlock commits, one piece at a time.** A piece is done on its own
@@ -454,7 +453,7 @@ agent session **in the lead's own folder** (in place, like a copy window,
   did not move meanwhile. The working tree is never touched, the other
   pieces' edits (staged or not) stay where they are, and **no commit hook
   runs** — a hook that stashes "unstaged" changes would pull the other
-  pieces' work out from under them mid-turn; the group's check
+  pieces' work out from under them mid-turn; the team run's check
   (`check_command`) runs on the whole branch before the release. One commit
   per piece: its subject is the piece's report, its body names the paths,
   and its trailer `MindFlock-Piece: <run>/<task>` is how MindFlock knows the
@@ -466,10 +465,10 @@ agent session **in the lead's own folder** (in place, like a copy window,
   (Retry) or undo it"). A "done" with nothing under its paths is said, never
   committed empty.
 - **Changes no piece owns** (a file outside every piece's paths that was not
-  already dirty at approval) are never put in a piece's commit: the group
+  already dirty at approval) are never put in a piece's commit: the team run
   says so once (a `stray` item in the bell). The release waits while the folder holds
   **any** change — tracked or untracked, stray or there since before the
-  split: the lead's lane commits everything in its folder before it pushes,
+  split: the lead's fast-track commits everything in its folder before it pushes,
   and a person's scratch never ships with the pieces. Commit it elsewhere,
   discard it or `.gitignore` it, then release.
 - **Release** = the lead's branch, one PR (one commit per piece), exactly as
@@ -486,7 +485,7 @@ provisioned one. So the pieces' repository is read from the lead's worktree
 clone-strategy one, the picked repo for a plain session. The pieces are plain
 worktrees of that repository, cut at the lead's HEAD, and merge back into the
 lead's own branch — a ticket lead stays on `feature/sc-<id>/…` and keeps its
-ticket-ledger entry. Branch-taken probes, the group's `repo_root`, and a
+ticket-ledger entry. Branch-taken probes, the team run's `repo_root`, and a
 one-for-all ticket line's same-repository check (which also accepts the base
 clone's origin, clone source and `_base_`-less name) all use it; a piece's
 rail row names the repository, not the `_base_` folder.
@@ -498,7 +497,7 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 
 | What | Where |
 |---|---|
-| Lanes | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
+| Fast-track | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
 | Run record + planner (pure) | `backend/web/core/team_runs.py` |
 | Driver, reconcile, operations | `backend/web/core/team_run_driver.py` (loop registered in the lifespan, off under pytest) |
 | Waiting list (`GET /api/outbox`) | `backend/web/core/outbox.py` |

@@ -1,6 +1,6 @@
 """Onboarding addon: the first-run plan, Connect GitHub, a new computer in one line.
 
-API-only (Setup and Settings → Devices draw it). Three groups of routes:
+API-only (Setup and Settings → Your devices draw it). Three groups of routes:
 
 * ``/api/onboarding`` — the ordered first-run plan (:mod:`backend.onboarding`)
   and Setup's "First computer, or join one you already have?" answer.

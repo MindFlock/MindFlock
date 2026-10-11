@@ -1,4 +1,4 @@
-/** The "Join with a code…" action: open Work with someone with its join box
+/** The "Join with a code…" action: open People with its join box
  * focused (and, when given, prefilled). Kept apart from lib/peer.ts, which
  * stays free of the store so its wording tests run without one.
  *

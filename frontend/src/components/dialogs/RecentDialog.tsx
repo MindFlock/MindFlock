@@ -19,7 +19,7 @@
  * nothing. Failures of a single row raise an error card (errorPop). */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Instance } from "../../api/types";
+import type { ClosedReason, Instance } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, refreshRecentlyClosed } from "../../state/queries";
 import { useUi } from "../../state/store";
@@ -79,6 +79,24 @@ interface Ask {
   danger?: boolean;
   run?: () => void | Promise<void>;
   alt?: { label: string; run: () => void | Promise<void> };
+}
+
+/** The line a row carries when its session left without the user closing it
+ * ("" for an ordinary close). Today that is only the engine dropping a session
+ * at startup because its folder and tmux were gone — said plainly, with
+ * whether the branch survives, since that branch is the only way back. */
+export function reasonText(e: ClosedReason & { branch?: string | null }): string {
+  const reason = (e.reason || "").trim();
+  if (!reason) return "";
+  if (reason === "workspace missing") {
+    const head = "Workspace missing — removed at startup.";
+    if (e.branch_exists && e.branch)
+      return `${head} Branch ${e.branch} is still in the repo — check it out to recover the work.`;
+    if (e.branch_exists) return `${head} Its branch is still in the repo.`;
+    if (e.branch_exists === false) return `${head} Its branch is gone too.`;
+    return head;
+  }
+  return reason.charAt(0).toUpperCase() + reason.slice(1) + ".";
 }
 
 /** A row whose directory this app may delete. An in-place session ran in the
@@ -373,7 +391,7 @@ export function RecentDialog() {
     }
     setBusy(false);
     toast(prunedMessage(done));
-    if (done.failed?.length) setError(`Could not remove: ${done.failed.join(", ")}`);
+    if (done.failed?.length) setError(`Could not delete: ${done.failed.join(", ")}`);
     await load(!!done.failed?.length);
     refreshInstances();
     refreshRecentlyClosed();
@@ -416,7 +434,7 @@ export function RecentDialog() {
             disabled={busy}
             onClick={pruneUnused}
           >
-            Remove unused worktrees{staleCount ? ` (${staleCount})` : ""}
+            Delete unused worktrees{staleCount ? ` (${staleCount})` : ""}
           </button>
           <button type="button" id="recent-refresh" onClick={() => load()}>
             Refresh
@@ -623,7 +641,7 @@ export function RecentDialog() {
                       {e.stale && (
                         <span
                           className="ws-badge stale"
-                          title="No session is using this and nothing has touched it for over a week — Remove unused worktrees would take it"
+                          title="No session is using this and nothing has touched it for over a week — Delete unused worktrees would take it"
                         >
                           unused {days}d
                         </span>
@@ -635,6 +653,11 @@ export function RecentDialog() {
                         <span className="recent-size muted">{humanSize(e.size_bytes)}</span>
                       )}
                     </span>
+                    {reasonText(e as RecentRow & ClosedReason) && (
+                      <span className="recent-sub recent-reason muted">
+                        {reasonText(e as RecentRow & ClosedReason)}
+                      </span>
+                    )}
                   </div>
                   <div className="recent-actions">
                     {e.source === "closed" && (

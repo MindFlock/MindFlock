@@ -154,7 +154,7 @@ export function runStages(
       label: "Plan",
       how: "the lead proposes, you approve",
       state: st === "planning" ? "now" : st === "plan_ready" ? "now" : "done",
-      detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — waiting for you" : pieces ? pieces + " pieces" : "",
+      detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — needs you" : pieces ? pieces + " pieces" : "",
     });
   }
   const working = tasks.filter((t) => !TERMINAL.has(t.state) && t.state !== "queued" && t.state !== "integrating").length;
@@ -196,7 +196,7 @@ export function runStages(
     label: "One PR",
     how: "you release it",
     state: rel === "done" || rel === "handoff" ? "done" : rel === "failed" ? "bad" : rel === "releasing" || st === "release_ready" ? "now" : "next",
-    detail: rel === "done" ? (run.release?.pr_url ? "opened" : "released") : st === "release_ready" ? "waiting for you" : "",
+    detail: rel === "done" ? (run.release?.pr_url ? "opened" : "released") : st === "release_ready" ? "needs you" : "",
   });
   return out;
 }

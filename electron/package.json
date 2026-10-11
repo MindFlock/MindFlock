@@ -10,6 +10,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
@@ -26,6 +27,8 @@
       "main.js",
       "preload.js",
       "logger.js",
+      "firstlaunch.js",
+      "update.js",
       "offline.html",
       "icon.ico"
     ],

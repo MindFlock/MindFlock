@@ -696,32 +696,32 @@ class TestGithubRepoAccessTest:
         assert r.status_code == 200  # a test result, not a transport failure
         assert r.json() == {"ok": False, "error": "repo must be owner/name"}
 
-    def test_no_token_names_this_screen_not_config_toml(self, monkeypatch):
-        """GithubAuthError's own message is a five-line config.toml walkthrough;
-        on a repo card, one sentence naming the field above it is more use."""
+    def test_no_token_names_the_one_place(self, monkeypatch):
+        """On a repo card, one sentence naming where the credential lives
+        (the Connect GitHub dialog) is more use than the resolver's own."""
         from backend.ticket_ingestion import github_auth
 
-        async def _no_token(_cfg):
-            raise github_auth.GithubAuthError("No GitHub token available. Either:\n…")
+        async def _no_token(_cfg=None):
+            raise github_auth.GithubAuthError("No GitHub token available.")
 
         monkeypatch.setattr(github_auth, "resolve_token", _no_token)
         r = client.post("/api/settings/test/github-repo", json={"repo": "org/a"})
         assert r.json() == {
             "ok": False,
-            "error": "no GitHub token available — set one under Advanced options, "
-            "or sign in with the gh CLI",
+            "error": "no GitHub token available — connect GitHub under Settings → "
+            "Connections → GitHub → Connect, or sign in with the gh CLI",
         }
 
     def test_it_resolves_the_token_afresh(self, monkeypatch):
-        """github_auth caches the resolved token for the life of the process, so
-        a cached answer would make this button report on the credential the user
-        just replaced."""
+        """github_auth memoizes the resolved token for a minute, so a memoized
+        answer would make this button report on the credential the user just
+        replaced."""
         from backend.ticket_ingestion import github_auth
 
         github_auth._cached_token = "stale-token"
         seen: list = []
 
-        async def _resolve(_cfg):
+        async def _resolve(_cfg=None):
             seen.append(github_auth._cached_token)
             return "fresh-token"
 
@@ -731,9 +731,9 @@ class TestGithubRepoAccessTest:
 
 
 def test_saving_a_github_token_invalidates_the_cached_one():
-    """Every consumer (review, issues, Make PR, the per-repo test) resolves
-    through the same process-lifetime cache, so pasting a new token has to clear
-    it — otherwise the paste reads as not having been saved until a restart."""
+    """Every consumer in this process (Make PR, the per-repo test) resolves
+    through the same one-minute memo, so pasting a new token has to clear it —
+    otherwise the paste reads as not having been saved for up to a minute."""
     from backend.ticket_ingestion import github_auth
     from backend.web.addons import settings as settings_addon
 

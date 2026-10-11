@@ -356,7 +356,7 @@ function Ntfy() {
           value={click}
           autoComplete="off"
           spellCheck={false}
-          placeholder="optional — e.g. your phone URL from Settings → Mobile"
+          placeholder="optional — e.g. your phone URL from Settings → Your phone"
           onChange={(e) => setClick(e.target.value)}
           onBlur={() =>
             click.trim() !== (view.click_url || "") && save({ click_url: click.trim() })
@@ -416,7 +416,7 @@ function Ntfy() {
       </div>
       {view.qr_svg && (
         <>
-          {/* Server-generated segno SVG (trusted), same renderer as Settings → Mobile. */}
+          {/* Server-generated segno SVG (trusted), same renderer as Settings → Your phone. */}
           <div id="ntfy-qr" className="qr-card" dangerouslySetInnerHTML={{ __html: view.qr_svg }} />
           <p className="set-hint">
             Scan this in the ntfy app to subscribe, or open{" "}

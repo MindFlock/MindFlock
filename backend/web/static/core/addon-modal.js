@@ -1,6 +1,6 @@
 // Shared modal accessibility helper for addon-built dialogs.
 //
-// Addon modules (connections.js, templates.js) build their own modal DOM and
+// Addon modules (connections.js) build their own modal DOM and
 // reuse the app's `.modal` overlay. This gives those modals the keyboard +
 // screen-reader behavior users expect from a dialog, without each addon
 // re-implementing it: dialog semantics, focus moved inside on open, Tab/Shift+Tab

@@ -193,6 +193,9 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "idle_after",
         "hints",
     ),
+    # The person all these devices share (docs/people.md). Its ``id`` is not
+    # here: it is agreed, never last-edit-wins (see LOCAL and sync_once).
+    "person": ("name", "git_name", "git_email"),
 }
 
 #: Machine-specific fields — never synced. Listed (not just "everything not
@@ -209,12 +212,15 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "auth_token",
         "auth_mode",
         "onboarded",
+        "setup",
         "last_repo_path",
         "remote_control",
         "serve_mode",
         "shared_link",
         "ingestion_autostart",
         "setup_devices",
+        # What THIS machine relaunches when its own server boots.
+        "revive_on_start",
     ),
     "notifications": ("ntfy_click_url",),
     "peer": (
@@ -228,6 +234,10 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "relay_url",
         "relay_port",
     ),
+    # Not machine-specific, but never stamped or adopted as an edit: the
+    # devices AGREE on one id — the pairing handshake, then
+    # :func:`backend.web.core.person.reconcile` on every pass (sync_once).
+    "person": ("id",),
 }
 
 #: Synced list fields that sync PER ENTRY: base path -> the entry's key field.
@@ -312,6 +322,7 @@ GROUP_LABELS: Dict[str, str] = {
     "notifications": "Notifications",
     "extensions": "Extensions",
     "prefs": "Preferences",
+    "person": "You",
     "store": "Saved items",
 }
 
@@ -383,6 +394,9 @@ LABELS: Dict[str, str] = {
     "prefs.idle_flock": "Idle flock on/off",
     "prefs.idle_after": "Idle flock delay",
     "prefs.hints": "Hints",
+    "person.name": "Your name",
+    "person.git_name": "Git author name",
+    "person.git_email": "Git author email",
 }
 
 _LOCK = threading.RLock()
@@ -1388,7 +1402,7 @@ def _scan_locked(
             "cleared": len(cleared),
             "held": held,
             "detail": PAUSED + " — choose whose settings to keep in Settings "
-            "→ Devices",
+            "→ Your devices",
         }
     if force:
         data["paused"] = None
@@ -1440,7 +1454,36 @@ def export() -> dict:
         "stamps": stamps,
         "values": values,
         "withheld": [],
+        # Not a unit: the id the devices settle on (person.reconcile).
+        "person": {"id": _person_id()},
     }
+
+
+def _person_id() -> str:
+    try:
+        from backend.web.core import person as _person
+
+        return _person.known_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _settle_person(body: dict) -> bool:
+    """Agree on one person id with the device that exported ``body`` (a
+    payload of this fleet): the automation device's, else the smaller —
+    what that device decides from the same facts. Never raises."""
+    try:
+        from backend.config import settings as _settings
+        from backend.web.core import person as _person
+
+        return _person.reconcile(
+            body.get("person"),
+            str(body.get("device") or ""),
+            _self_key(),
+            _settings.load_settings().github.automation_device,
+        )
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _defer(unit: str, value: object) -> bool:
@@ -1463,7 +1506,7 @@ def _defer(unit: str, value: object) -> bool:
 def deferred_providers() -> Set[str]:
     """The agent CLIs synced settings name that aren't installed here (what
     :func:`_defer` held back) — the doctor puts them in its install plan, so
-    Settings → Devices can install them in one click."""
+    Settings → Your devices can install them in one click."""
     return {
         str(v.get("value") or "").strip()
         for v in list(_deferred.values())
@@ -1903,7 +1946,7 @@ async def enable(start_from: str = "", *, seed: bool = False) -> dict:
 
     _remember_loop()
     if not _in_fleet():
-        raise LookupError("join your other devices first (Settings → Devices)")
+        raise LookupError("join your other devices first (Settings → Your devices)")
     me = _self_key()
     if not start_from or start_from == me:
         try:
@@ -2209,7 +2252,7 @@ async def sync_once() -> List[str]:
             if why == PAUSED:
                 entry["error"] = (
                     "%s paused sync — its settings look reset; answer it in "
-                    "Settings → Devices there" % label
+                    "Settings → Your devices there" % label
                 )
             else:
                 entry["error"] = (
@@ -2227,6 +2270,9 @@ async def sync_once() -> List[str]:
             entry["error"] = "%s is in a different group of devices" % label
         else:
             got = await asyncio.to_thread(merge, body)
+            # The person tie-break reads github.automation_device: settle it
+            # AFTER the merge so both devices judge from the same value.
+            await asyncio.to_thread(_settle_person, body)
             if got:
                 entry["adopted"] = got
                 adopted.extend(got)
@@ -2265,7 +2311,7 @@ def _idless_sources() -> int:
 
 
 def status() -> dict:
-    """Settings → Devices' sync section."""
+    """Settings → Your devices' sync section."""
     data = _load()
     in_fleet = _in_fleet()
     ok = readable()
@@ -2288,7 +2334,7 @@ def status() -> dict:
         # grouped) reads as: off until this device joins the others.
         warnings.append(
             "Settings sync was on here, but this device isn't one of your devices "
-            "yet — nothing is shared until you join them (Settings → Devices)."
+            "yet — nothing is shared until you join them (Settings → Your devices)."
         )
     if data["enabled"] and in_fleet and _unresolved:
         warnings.append(

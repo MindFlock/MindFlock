@@ -1,7 +1,7 @@
 """Hermetic tests for the PR pipeline auth + fetch helpers.
 
 Covers:
-  - github_auth.resolve_token precedence (config.token -> env -> `gh auth token`)
+  - github_auth.resolve_token delegation (Settings -> env -> gh -> config.toml, memoized)
     with process-global caching, mocking subprocess + env.
   - pr_comments._headers / _extract_ai_prompt and _fetch_review_comments
     parsing (aiohttp mocked).
@@ -24,6 +24,7 @@ from backend.ticket_ingestion.github_auth import (
     resolve_token,
 )
 from backend.ticket_ingestion.models import PRComment, PullRequest
+from backend.web.core.github_auth import _gh_token as _real_gh_token
 
 # A dummy commit SHA used across the PR-checkout fixtures/assertions. Named so
 # detect-secrets' hex-entropy heuristic sees one allowlisted definition instead
@@ -106,12 +107,20 @@ def patch_session(session):
 
 
 @pytest.fixture(autouse=True)
-def _reset_token_cache():
-    """resolve_token caches in a module global; reset around every test so
-    tests do not leak the cache into one another."""
-    github_auth._cached_token = None
+def _reset_token_cache(tmp_path, monkeypatch):
+    """resolve_token memoizes in a module global; reset around every test so
+    tests do not leak the memo into one another. Settings are a scratch file
+    and gh is stubbed out: the one chain must never reach the real ones."""
+    from backend.config import settings as _S
+    from backend.web.core import github_auth as _web
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(_web, "_gh_token", lambda: "")
+    _S.invalidate()
+    github_auth.invalidate()
     yield
-    github_auth._cached_token = None
+    github_auth.invalidate()
+    _S.invalidate()
 
 
 @pytest.fixture(autouse=True)
@@ -130,124 +139,106 @@ def _clear_gh_env(monkeypatch):
 
 
 class TestResolveTokenPrecedence:
-    async def test_config_token_wins(self, monkeypatch):
+    """The pipeline delegates to the ONE chain (backend.web.core.github_auth):
+    Settings → $GH_TOKEN → $GITHUB_TOKEN → gh → config.toml (deprecated, last).
+    The merged ``config.token`` is no longer consulted at all."""
+
+    async def test_settings_token_wins(self, monkeypatch):
+        from backend.config import settings as _S
+        from backend.web.core import github_auth as _web
+
+        _S.update_settings(github={"token": "settings-token"})
         monkeypatch.setenv("GH_TOKEN", "env-token")
-        cfg = make_config(token="config-token")
-        # gh must never be shelled out to when config.token is set.
-        with patch.object(github_auth, "_gh_auth_token", new_callable=AsyncMock) as gh:
-            token = await resolve_token(cfg)
-        assert token == "config-token"
+        gh = MagicMock(return_value="cli-token")
+        monkeypatch.setattr(_web, "_gh_token", gh)
+        token = await resolve_token(
+            make_config(token="config-token", toml_token="toml")
+        )
+        assert token == "settings-token"
         gh.assert_not_called()
 
-    async def test_env_gh_token_used_when_no_config(self, monkeypatch):
+    async def test_env_gh_token_used_when_no_settings(self, monkeypatch):
+        from backend.web.core import github_auth as _web
+
         monkeypatch.setenv("GH_TOKEN", "env-token")
-        cfg = make_config(token="")
-        with patch.object(github_auth, "_gh_auth_token", new_callable=AsyncMock) as gh:
-            token = await resolve_token(cfg)
+        gh = MagicMock(return_value="cli-token")
+        monkeypatch.setattr(_web, "_gh_token", gh)
+        token = await resolve_token(make_config(toml_token="toml"))
         assert token == "env-token"
         gh.assert_not_called()
 
     async def test_github_token_env_used_when_no_gh_token(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "gh-env")
-        cfg = make_config(token="")
-        token = await resolve_token(cfg)
-        assert token == "gh-env"
+        assert await resolve_token(make_config()) == "gh-env"
 
     async def test_gh_token_preferred_over_github_token(self, monkeypatch):
-        # GH_TOKEN is checked before GITHUB_TOKEN.
         monkeypatch.setenv("GH_TOKEN", "primary")
         monkeypatch.setenv("GITHUB_TOKEN", "secondary")
-        cfg = make_config(token="")
-        token = await resolve_token(cfg)
-        assert token == "primary"
+        assert await resolve_token(make_config()) == "primary"
 
-    async def test_falls_back_to_gh_cli(self):
-        cfg = make_config(token="")
-        with patch.object(
-            github_auth,
-            "_gh_auth_token",
-            new_callable=AsyncMock,
-            return_value="cli-token",
-        ):
-            token = await resolve_token(cfg)
-        assert token == "cli-token"
+    async def test_falls_back_to_gh_cli(self, monkeypatch):
+        from backend.web.core import github_auth as _web
+
+        monkeypatch.setattr(_web, "_gh_token", lambda: "cli-token")
+        assert await resolve_token(make_config(toml_token="toml")) == "cli-token"
+
+    async def test_config_toml_token_is_last(self):
+        assert await resolve_token(make_config(toml_token="toml-token")) == "toml-token"
+
+    async def test_merged_config_token_alone_is_not_a_source(self):
+        # ``token`` is the Settings-merged value; the live chain reads Settings
+        # itself, so a stale merged copy must not resurrect a cleared token.
+        with pytest.raises(GithubAuthError):
+            await resolve_token(make_config(token="stale-merged"))
 
     async def test_raises_when_nothing_available(self):
-        cfg = make_config(token="")
-        with patch.object(
-            github_auth,
-            "_gh_auth_token",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            with pytest.raises(GithubAuthError):
-                await resolve_token(cfg)
+        with pytest.raises(GithubAuthError):
+            await resolve_token(make_config())
 
-    async def test_result_is_cached_across_calls(self):
-        cfg = make_config(token="")
-        with patch.object(
-            github_auth,
-            "_gh_auth_token",
-            new_callable=AsyncMock,
-            return_value="cli-token",
-        ) as gh:
-            first = await resolve_token(cfg)
-            # A second call with a different config still returns the cached
-            # value and does not re-shell.
-            second = await resolve_token(make_config(token="ignored-now"))
+    async def test_result_is_memoized_for_a_minute(self, monkeypatch):
+        from backend.web.core import github_auth as _web
+
+        gh = MagicMock(return_value="cli-token")
+        monkeypatch.setattr(_web, "_gh_token", gh)
+        first = await resolve_token(make_config())
+        # A second call with a different config still returns the memo and
+        # does not re-shell.
+        second = await resolve_token(make_config(toml_token="ignored-now"))
         assert first == "cli-token"
         assert second == "cli-token"
-        gh.assert_awaited_once()
+        gh.assert_called_once()
+        github_auth.invalidate()
+        await resolve_token(make_config())
+        assert gh.call_count == 2
 
 
-class TestGhAuthTokenSubprocess:
-    async def test_returns_stripped_token_on_success(self):
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"  ghp_abc123\n", b""))
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=proc,
-        ) as spawn:
-            token = await github_auth._gh_auth_token()
-        assert token == "ghp_abc123"
-        # Confirm we invoked `gh auth token`, not anything else.
-        args = spawn.await_args.args
-        assert args[:3] == ("gh", "auth", "token")
+class TestGhCliSubprocess:
+    """The gh rung lives in the web resolver now (sync subprocess, 5 s cap)."""
 
-    async def test_returns_none_on_nonzero_exit(self):
-        proc = MagicMock()
-        proc.returncode = 1
-        proc.communicate = AsyncMock(return_value=(b"", b"not logged in"))
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=proc,
-        ):
-            token = await github_auth._gh_auth_token()
-        assert token is None
+    def test_returns_stripped_token_on_success(self, monkeypatch):
+        from backend.web.core import github_auth as _web
 
-    async def test_returns_none_on_empty_output(self):
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.communicate = AsyncMock(return_value=(b"   \n", b""))
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=proc,
-        ):
-            token = await github_auth._gh_auth_token()
-        assert token is None
+        monkeypatch.setattr(_web, "gh_path", lambda: "/usr/bin/gh")
+        cp = MagicMock(returncode=0, stdout="  ghp_abc123\n")
+        with patch.object(_web.subprocess, "run", return_value=cp) as run:
+            assert _real_gh_token() == "ghp_abc123"
+        assert run.call_args.args[0][:3] == ["gh", "auth", "token"]
 
-    async def test_returns_none_when_gh_missing(self):
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            side_effect=FileNotFoundError,
-        ):
-            token = await github_auth._gh_auth_token()
-        assert token is None
+    def test_returns_empty_on_nonzero_exit(self, monkeypatch):
+        from backend.web.core import github_auth as _web
+
+        monkeypatch.setattr(_web, "gh_path", lambda: "/usr/bin/gh")
+        cp = MagicMock(returncode=1, stdout="")
+        with patch.object(_web.subprocess, "run", return_value=cp):
+            assert _real_gh_token() == ""
+
+    def test_returns_empty_when_gh_missing(self, monkeypatch):
+        from backend.web.core import github_auth as _web
+
+        monkeypatch.setattr(_web, "gh_path", lambda: "")
+        with patch.object(_web.subprocess, "run") as run:
+            assert _real_gh_token() == ""
+        run.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -429,7 +420,7 @@ class TestFetchActionableComments:
             created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             repo="org/example-bot",
         )
-        cfg = make_config(token="config-token", skip_authors=["bot"])
+        cfg = make_config(toml_token="config-token", skip_authors=["bot"])
         threads = [
             _thread(
                 [
@@ -461,7 +452,7 @@ class TestFetchActionableComments:
             created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             repo="org/example-bot",
         )
-        cfg = make_config(token="config-token")
+        cfg = make_config(toml_token="config-token")
         with patch(
             "aiohttp.ClientSession",
             side_effect=aiohttp.ClientError("connection reset"),
@@ -541,7 +532,7 @@ def _pr_item(number, login, created_at, draft=False, state="open"):
 
 class TestPRMonitorListPrs:
     async def _list(self, raw):
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         resp = _FakeResponse(status=200, json_data=raw)
         session = _FakeSession(get_responses=[resp])
         with patch_session(session):
@@ -580,7 +571,7 @@ class TestPRMonitorListPrs:
         assert [p.number for p in out] == [5]
 
     async def test_non_200_returns_empty(self):
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         resp = _FakeResponse(status=500, text_data="err")
         session = _FakeSession(get_responses=[resp])
         with patch_session(session):
@@ -622,7 +613,7 @@ class TestPRMonitorListPrs:
 
 class TestPRMonitorAuthenticatedUser:
     async def test_returns_login_and_caches(self):
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         resp = _FakeResponse(status=200, json_data={"login": "octocat"})
         session = _FakeSession(get_responses=[resp])
         with patch_session(session):
@@ -634,7 +625,7 @@ class TestPRMonitorAuthenticatedUser:
         assert login2 == "octocat"
 
     async def test_non_200_raises(self):
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         resp = _FakeResponse(status=401, json_data={})
         session = _FakeSession(get_responses=[resp])
         with patch_session(session):
@@ -642,7 +633,7 @@ class TestPRMonitorAuthenticatedUser:
                 await monitor._authenticated_user_login()
 
     async def test_empty_login_raises(self):
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         resp = _FakeResponse(status=200, json_data={"login": "  "})
         session = _FakeSession(get_responses=[resp])
         with patch_session(session):
@@ -669,7 +660,9 @@ class TestPRMonitorScan:
                 3, "f3", "s3", "staging", "t", "u", "me", now - timedelta(minutes=1)
             ),
         ]
-        monitor = pr_monitor.PRMonitor(make_config(token="tok", min_age_minutes=15))
+        monitor = pr_monitor.PRMonitor(
+            make_config(toml_token="tok", min_age_minutes=15)
+        )
         monitor._list_prs = AsyncMock(return_value=prs)
         monitor._authenticated_user_login = AsyncMock(return_value="me")
 
@@ -696,7 +689,9 @@ class TestPRMonitorScan:
                 2, "f2", "s2", "staging", "t", "u", "me", now - timedelta(minutes=60)
             ),
         ]
-        monitor = pr_monitor.PRMonitor(make_config(token="tok", min_age_minutes=15))
+        monitor = pr_monitor.PRMonitor(
+            make_config(toml_token="tok", min_age_minutes=15)
+        )
         monitor._list_prs = AsyncMock(return_value=prs)
         monitor._authenticated_user_login = AsyncMock(return_value="me")
 
@@ -727,7 +722,7 @@ class TestPRMonitorScan:
             ],
         }
         monitor = pr_monitor.PRMonitor(
-            make_config(token="tok", repos=["org/a", "org/b"], min_age_minutes=15)
+            make_config(toml_token="tok", repos=["org/a", "org/b"], min_age_minutes=15)
         )
 
         async def fake_list(repo):
@@ -751,7 +746,9 @@ class TestPRMonitorScan:
                 1, "f", "s", "staging", "t", "u", "me", now - timedelta(minutes=90)
             ),
         ]
-        monitor = pr_monitor.PRMonitor(make_config(token="tok", min_age_minutes=15))
+        monitor = pr_monitor.PRMonitor(
+            make_config(toml_token="tok", min_age_minutes=15)
+        )
         monitor._list_prs = AsyncMock(return_value=prs)
         monitor._authenticated_user_login = AsyncMock(return_value="me")
         eligible = await monitor.scan()
@@ -759,7 +756,7 @@ class TestPRMonitorScan:
 
     async def test_empty_pr_list_short_circuits(self, tmp_path, monkeypatch):
         monkeypatch.setattr(pr_monitor, "_STATE_DIR", tmp_path)
-        monitor = pr_monitor.PRMonitor(make_config(token="tok"))
+        monitor = pr_monitor.PRMonitor(make_config(toml_token="tok"))
         monitor._list_prs = AsyncMock(return_value=[])
         # Should not need to resolve the authenticated user at all.
         monitor._authenticated_user_login = AsyncMock(

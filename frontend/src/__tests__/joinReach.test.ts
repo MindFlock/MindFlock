@@ -147,7 +147,7 @@ describe("after a join", () => {
       reason: "connection refused on :8765",
     };
     expect(admitLine(a)).toBe(
-      "Joined, but rig isn't reachable from here — connection refused on :8765. On rig: Settings → Devices → Make reachable."
+      "Joined, but rig isn't reachable from here — connection refused on :8765. On rig: Settings → Your devices → Make reachable."
     );
     expect(admitLine({ ...a, state: "reachable" })).toBe("");
   });

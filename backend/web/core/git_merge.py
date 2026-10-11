@@ -58,6 +58,18 @@ _ENV = {
 }
 
 
+def _identity() -> List[str]:
+    """The person's ``-c user.name=… -c user.email=…`` for the commits this
+    module makes on their behalf (a team run's integration merge, a piece
+    commit), or ``[]`` — the repo's git config decides. Never raises."""
+    try:
+        from backend.web.core import person as _person
+
+        return _person.git_identity_args()
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _git(path: str, *args: str, timeout: int = _GIT_TIMEOUT_S):
     """``git -C path args`` → CompletedProcess, or None when git could not run."""
     env = dict(os.environ)
@@ -364,7 +376,7 @@ def merge_into(
                     f.write(branch + "\n")
             except OSError:
                 marker = ""
-        cp = _git(worktree, *args, branch)
+        cp = _git(worktree, *_identity(), *args, branch)
         if cp is not None and cp.returncode == 0:
             res["result"] = "clean"
             res["head"] = rev_parse(worktree, "HEAD")
@@ -554,7 +566,7 @@ def commit_paths(
             return {"result": "nothing", "sha": "", "error": ""}
         cp = _git_env(
             path,
-            ["commit-tree", tree, "-p", head, "-F", "-"],
+            [*_identity(), "commit-tree", tree, "-p", head, "-F", "-"],
             env,
             timeout=60,
             data=(message or "Commit").encode("utf-8"),

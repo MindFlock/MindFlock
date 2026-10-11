@@ -633,6 +633,49 @@ def test_removal_routes_orphan_children(
     assert _quiet_teardown == ["orch"]
 
 
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("delete", "/api/instances/orch"),
+        ("post", "/api/instances/orch/close"),
+        ("post", "/api/instances/orch/cleanup"),
+    ],
+)
+def test_removal_routes_hand_children_to_the_grandparent(
+    reg, _quiet_teardown, monkeypatch, tmp_path, method, path
+):
+    """Ending a mid-chain session moves its children up one step rather than
+    cutting them loose, and the response names them."""
+    monkeypatch.setattr(server.shutil, "rmtree", lambda *a, **k: None)
+    reg.add("grand")
+    reg.add("orch", parent="grand", wt=str(tmp_path))
+    kid = reg.add("kid", parent="orch", spawned=True)
+    r = getattr(client, method)(path)
+    assert r.status_code == 200, r.text
+    assert r.json()["children"] == ["kid"]
+    assert kid.Parent == "grand" and kid.Spawned is True
+    assert _quiet_teardown == ["orch"]
+    # The move is persisted with the removal.
+    assert reg.saves and reg.saves[-1] == {"exclude_titles": {"orch"}}
+
+
+def test_workspace_delete_refuses_a_dir_two_sessions_share(
+    reg, _quiet_teardown, monkeypatch, tmp_path
+):
+    root = tmp_path / "ws-root"
+    ws = root / "shared-ws"
+    ws.mkdir(parents=True)
+    monkeypatch.setattr(server, "_workspace_roots", lambda: [str(root)])
+    monkeypatch.setattr(server, "scan_workspaces", lambda *a, **k: [{"path": str(ws)}])
+    a = reg.add("orch", wt=str(ws))
+    b = reg.add("orch-copy", wt=str(ws))
+    r = client.post("/api/workspaces/delete", json={"path": str(ws)})
+    assert r.status_code == 409, r.text
+    assert r.json() == {"error": "folder in use", "sessions": ["orch", "orch-copy"]}
+    assert a.calls == [] and b.calls == [] and ws.is_dir()
+    assert "orch" in reg.instances and "orch-copy" in reg.instances
+
+
 def test_workspace_delete_orphans_the_killed_sessions_children(
     reg, _quiet_teardown, monkeypatch, tmp_path
 ):
@@ -646,6 +689,7 @@ def test_workspace_delete_orphans_the_killed_sessions_children(
     r = client.post("/api/workspaces/delete", json={"path": str(ws)})
     assert r.status_code == 200, r.text
     assert r.json()["killed_session"] == "orch"
+    assert r.json()["children"] == ["kid"]
     assert "kill" in orch.calls and kid.Parent == ""
     assert _quiet_teardown == ["orch"]
 

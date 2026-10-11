@@ -129,6 +129,59 @@ jobs:
       - name: Run test suite
         run: uv run pytest -q
 
+  e2e:
+    # Journey tests (tests/e2e): the committed bundle, served by a real
+    # server with a stub agent, driven in headless Chrome through the first
+    # ten minutes a user has — setup card, New session, close + reopen,
+    # Settings → Connections, the Ctrl+W guard. They assert on visible text
+    # and DOM state so a UX rough edge cannot come back silently.
+    #
+    # NOT in the required set, and `continue-on-error` so a browser hiccup
+    # cannot block a release while the harness is new: a red run here is a
+    # signal to read, not a gate. Drop continue-on-error once a few releases
+    # have shown it steady. Failures upload tests/e2e/_artifacts (a screenshot
+    # + the server log per failed journey).
+    name: e2e journeys (headless Chrome)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      # ubuntu-latest ships google-chrome; install it only when it doesn't,
+      # so the job keeps working on a leaner image.
+      - name: Install Chrome if the runner lacks it
+        run: |
+          if command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "chrome present: $(google-chrome --version 2>/dev/null || google-chrome-stable --version)"
+            exit 0
+          fi
+          curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/chrome.deb
+
+      - name: Sync dependencies
+        run: uv sync --group web --group dev
+
+      - name: Run the journeys
+        run: uv run pytest tests/e2e -q -rxs
+        env:
+          MINDFLOCK_E2E_SHOTS: "1"
+
+      - name: Upload screenshots + server logs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-artifacts
+          path: tests/e2e/_artifacts
+          if-no-files-found: ignore
+
   cold-install:
     name: cold install + quickstart (bare container)
     runs-on: ubuntu-latest
@@ -151,10 +204,33 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      # MINDFLOCK_INSTALL_LOCAL installs THIS checkout — never the newest
+      # release install.sh defaults to (a PR's merge commit isn't on the
+      # remote, so MINDFLOCK_INSTALL_REF=<sha> could not fetch it anyway). The
+      # safe.directory line lets the installer read the checkout's commit for
+      # install.json under this step's HOME (the checkout is owned by the
+      # runner's uid, the container runs as root).
       - name: Run the installer from the checkout under test
-        run: MINDFLOCK_INSTALL_LOCAL="$PWD" sh install.sh
+        run: |
+          git config --global --add safe.directory "$PWD"
+          MINDFLOCK_INSTALL_LOCAL="$PWD" sh install.sh
         env:
           # The container's HOME; uv installs itself + mindflock under it.
+          HOME: /root
+
+      - name: install.json records a uv-tool install of this checkout
+        run: |
+          git config --global --add safe.directory "$PWD"
+          python3 -I - "$HOME/.mindflock/install.json" "$(git rev-parse HEAD)" <<'EOF'
+          import json, sys
+          rec = json.load(open(sys.argv[1]))
+          print(rec)
+          assert rec["method"] == "uv-tool", rec
+          assert rec["ref"] == "local" and rec["python"] == "3.12", rec
+          assert rec["sha"] == sys.argv[2], (rec["sha"], sys.argv[2])
+          assert rec["at"].endswith("Z") and "T" in rec["at"], rec
+          EOF
+        env:
           HOME: /root
 
       - name: Scripted quickstart against a stub agent (no credentials)

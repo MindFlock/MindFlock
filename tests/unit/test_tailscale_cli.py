@@ -1,5 +1,5 @@
 """One Tailscale truth (backend.tailscale_cli): where the CLI is, the shared
-status snapshot, and the health model the doctor and Settings → Devices'
+status snapshot, and the health model the doctor and Settings → Your devices'
 "Tailscale on this device" card render.
 
 What is pinned:

@@ -1,4 +1,4 @@
-/* Settings → Devices ("Your devices"). Rows are a dot + name/status stack +
+/* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */
 
@@ -421,4 +421,35 @@
    launch"): let them wrap on a phone instead of pushing the row wide. */
 .devices-badge[data-update-chip] {
   white-space: normal;
+}
+
+/* Make reachable (the Tailscale-mode switch) sits in the This-device block;
+   its "Restart server to apply" fallback hugs the left like Mobile's did. */
+.devices-this > .devices-restart,
+.devices-warn > .devices-restart {
+  align-self: flex-start;
+}
+
+/* Advanced — other ways to trust a machine: a fold, each row leading with
+   the one line that says when you would still use it. */
+.devices-advanced {
+  margin-top: 14px;
+}
+
+.devices-advanced > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.devices-advanced .devices-when {
+  display: block;
+  margin: 2px 0 6px;
+}
+
+.devices-advanced #pair-by-token .devices-actions {
+  flex-wrap: wrap;
+}
+
+.devices-advanced #pair-by-token input {
+  min-width: 240px;
 }

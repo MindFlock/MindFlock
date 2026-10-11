@@ -15,7 +15,7 @@
   .spin { margin-top: 18px; color: #7d56f4; }
   .hint { margin-top: 22px; font-size: 12px; color: #5c6272; }
   .detail { margin-top: 12px; font-size: 11.5px; color: #5c6272; word-break: break-word; }
-  section[hidden] { display: none; }
+  section[hidden], button[hidden], p[hidden], pre[hidden] { display: none; }
   button.action {
     margin-top: 18px; padding: 10px 22px; border: 0; border-radius: 8px;
     background: #7d56f4; color: #fff; cursor: pointer;
@@ -24,8 +24,12 @@
   }
   button.action:hover { background: #8f6cf6; }
   button.action:disabled { opacity: .6; cursor: default; }
-  /* Installer transcript. Left-aligned and monospaced: it's command output,
-     and centring it would make a multi-minute install unreadable. */
+  /* Secondary button: the "Skip" / "Copy diagnostics" next to a primary one. */
+  button.action.quiet { background: #232734; color: #d7dae3; margin-left: 8px; }
+  button.action.quiet:hover { background: #2d3242; }
+  /* Installer transcript / server log tail. Left-aligned and monospaced: it's
+     command output, and centring it would make a multi-minute install
+     unreadable. */
   .log {
     margin: 18px 0 0; padding: 10px 12px; max-height: 220px; overflow-y: auto;
     background: #14171f; border: 1px solid #232734; border-radius: 8px;
@@ -34,6 +38,8 @@
     color: #8a90a2;
   }
   .log:empty { display: none; }
+  .log.err { border-color: #5a2a2e; }
+  .logcap { margin: 14px 0 -12px; font-size: 11px; color: #5c6272; text-align: left; }
 </style>
 </head>
 <body>
@@ -46,7 +52,8 @@
       <p class="spin">One moment…</p>
     </section>
 
-    <!-- Environment is fine; the server is booting. Nothing for the user to do. -->
+    <!-- Environment is fine; the server is booting. Nothing for the user to do.
+         After 10 s the server's own log shows, so a slow boot never looks hung. -->
     <section id="s-starting" hidden>
       <h1>Starting the MindFlock server…</h1>
       <p>Everything looks good — the app is starting the server for you.
@@ -55,9 +62,27 @@
       <p class="hint" id="starting-next" hidden>The engine is installed. Next,
         MindFlock installs tmux and your coding agent — you’ll see one Install
         button.</p>
+      <p class="logcap" id="starting-cap" hidden>Server log (<span class="logpath"></span>):</p>
+      <pre class="log" id="starting-log" hidden></pre>
       <p class="hint" id="starting-hint" hidden>Taking longer than usual?
         Press <code>Ctrl+Shift+L</code> for app logs.<br>
-        Server startup log: <code>~/.mindflock/desktop-server.log</code></p>
+        Server startup log: <code class="logpath">~/.mindflock/desktop-server.log</code></p>
+    </section>
+
+    <!-- The server we started exited before it ever answered: a crash on boot.
+         Show its last words, offer to try again, and make a bug report easy. -->
+    <section id="s-failed-to-start" hidden>
+      <h1>The MindFlock server didn’t start</h1>
+      <p>MindFlock launched its server, but it stopped before it was ready.
+         The end of its log is below — the last line is usually the reason.</p>
+      <p class="logcap">Server log (<span class="logpath"></span>):</p>
+      <pre class="log err" id="failed-log"></pre>
+      <p class="detail" id="failed-detail"></p>
+      <button class="action" id="retry-start">Try again</button>
+      <button class="action quiet" id="copy-diag">Copy diagnostics</button>
+      <p class="hint">Copy diagnostics puts the log tail and the app’s details on
+         your clipboard, ready to paste into a bug report.<br>
+         Press <code>Ctrl+Shift+L</code> for the app’s own log folder.</p>
     </section>
 
     <!-- wsl.exe errored or hung: offer the fix, don't make them type anything. -->
@@ -103,8 +128,27 @@
       <p>This installs MindFlock’s engine under your home folder, then the
          tools your agents need (tmux and your coding agent). That last part
          may ask for your password once.</p>
+      <!-- macOS only. The app is self-signed (and stays so), so Gatekeeper may
+           have blocked it on the way here; this is the whole fix, in two lines. -->
+      <p class="hint" id="ni-gatekeeper" hidden>If macOS blocked the app: System
+         Settings → Privacy &amp; Security → <b>Open Anyway</b>.<br>
+         MindFlock is self-signed, so this happens once per install.</p>
       <button class="action" id="do-install">Set up MindFlock on this computer (about 3 min)</button>
       <p class="hint">A one-time setup. MindFlock opens by itself and carries on from there.</p>
+    </section>
+
+    <!-- macOS without Homebrew. tmux comes from Homebrew, so offer to install it
+         first; Skip carries on with the engine alone (tmux can come later). -->
+    <section id="s-needs-homebrew" hidden>
+      <h1>Install Homebrew first?</h1>
+      <p>MindFlock installs <b>tmux</b> (which runs your agents’ terminals) with
+         Homebrew, and Homebrew isn’t on this Mac yet.</p>
+      <p><b>Install Homebrew</b> opens Terminal and runs Homebrew’s official
+         installer there — it asks for your password in that window. MindFlock
+         carries on by itself when it’s done (a few minutes).</p>
+      <button class="action" id="brew-install">Install Homebrew</button>
+      <button class="action quiet" id="brew-skip">Skip for now</button>
+      <p class="hint">Skipping installs the engine only; Setup offers tmux again later.</p>
     </section>
 
     <!-- Install in flight, or finished badly. Same section: the transcript is
@@ -115,66 +159,100 @@
          MindFlock starts on its own when it’s done.</p>
       <pre class="log" id="inst-log"></pre>
       <button class="action" id="do-retry" hidden>Try again</button>
+      <button class="action quiet" id="inst-copy-diag" hidden>Copy diagnostics</button>
       <p class="hint" id="inst-manual" hidden></p>
     </section>
 
   </div>
 <script>
 (function () {
-  var sections = ['checking', 'starting', 'wsl-down', 'wsl-setup', 'wsl-missing', 'not-installed', 'installing']
+  var sections = ['checking', 'starting', 'failed-to-start', 'wsl-down', 'wsl-setup',
+    'wsl-missing', 'not-installed', 'needs-homebrew', 'installing']
   var startingSince = 0
+
+  function setAll(selector, text) {
+    Array.prototype.forEach.call(document.querySelectorAll(selector), function (el) {
+      el.textContent = text
+    })
+  }
+
+  // Render a log into a <pre>, keeping the view pinned to the newest line
+  // unless the user has scrolled up to read something.
+  function renderLogInto(el, lines) {
+    var text = (lines || []).join('\n')
+    if (el.textContent === text) return
+    var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24
+    el.textContent = text
+    if (atBottom) el.scrollTop = el.scrollHeight
+  }
 
   function show(state, diag) {
     sections.forEach(function (s) {
       document.getElementById('s-' + s).hidden = (s !== state)
     })
-    if (diag && diag.distro) {
-      Array.prototype.forEach.call(document.querySelectorAll('.distro'), function (el) {
-        el.textContent = diag.distro
-      })
-    }
+    if (diag && diag.distro) setAll('.distro', diag.distro)
+    var start = (diag && diag.start) || {}
+    if (start.logPath) setAll('.logpath', start.logPath)
     if (state === 'wsl-down') {
       document.getElementById('wsl-detail').textContent = (diag && diag.detail) || ''
     }
-    if (state === 'not-installed' && diag && diag.platform !== 'win32') {
-      document.getElementById('ni-where').textContent =
-        'MindFlock isn’t set up on this computer yet.'
+    if (state === 'not-installed' && diag) {
+      if (diag.platform !== 'win32') {
+        document.getElementById('ni-where').textContent =
+          'MindFlock isn’t set up on this computer yet.'
+      }
+      document.getElementById('ni-gatekeeper').hidden = (diag.platform !== 'darwin')
     }
-    // Booting normally takes seconds; only surface log spelunking once it's
-    // clearly stuck, so the happy path never shows troubleshooting noise.
+    // Booting normally takes seconds. After 10 s the server's own log appears
+    // (main decides: start.showTail), so a slow boot is never a blank wait;
+    // the deeper troubleshooting hint only once it's clearly stuck.
     if (state === 'starting') {
       if (!startingSince) startingSince = Date.now()
+      var tail = start.showTail && start.tail && start.tail.length ? start.tail : null
+      document.getElementById('starting-cap').hidden = !tail
+      var sl = document.getElementById('starting-log')
+      sl.hidden = !tail
+      renderLogInto(sl, tail || [])
       document.getElementById('starting-hint').hidden = (Date.now() - startingSince < 45000)
     } else {
       startingSince = 0
     }
+    if (state === 'failed-to-start') {
+      renderLogInto(document.getElementById('failed-log'),
+        start.tail && start.tail.length ? start.tail : ['(the server wrote nothing to its log)'])
+      var ex = start.exited || {}
+      document.getElementById('failed-detail').textContent = ex.at
+        ? 'The server process exited' + (ex.signal ? ' on ' + ex.signal : ' with code ' + ex.code)
+          + (ex.error ? ' (' + ex.error + ')' : '') + '.'
+        : ''
+      document.getElementById('retry-start').hidden = !start.canRetry
+    }
   }
 
-  // Render the installer transcript, keeping the view pinned to the newest
-  // line unless the user has scrolled up to read something.
   var logEl = document.getElementById('inst-log')
-  function renderLog(lines) {
-    var text = (lines || []).join('\n')
-    if (logEl.textContent === text) return
-    var atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24
-    logEl.textContent = text
-    if (atBottom) logEl.scrollTop = logEl.scrollHeight
-  }
+  function renderLog(lines) { renderLogInto(logEl, lines) }
 
   function showInstall(inst) {
+    // The Homebrew question is its own screen: two choices, no transcript yet.
+    if (inst.state === 'running' && inst.waiting === 'homebrew') return show('needs-homebrew', null)
     show('installing', null)
     var failed = inst.state === 'failed'
-    var xcode = !failed && inst.waiting === 'xcode'
+    var waiting = failed ? '' : (inst.waiting || '')
     document.getElementById('inst-title').textContent = failed
       ? 'The install didn’t finish'
-      : xcode ? 'Apple is installing developer tools (git)…' : 'Installing the MindFlock engine…'
+      : waiting === 'xcode' ? 'Apple is installing developer tools (git)…'
+      : waiting === 'homebrew-run' ? 'Homebrew is installing in Terminal…'
+      : 'Installing the MindFlock engine…'
     document.getElementById('inst-sub').textContent = failed
       ? 'It’s safe to run it again — it picks up where it stopped.'
-      : xcode
+      : waiting === 'xcode'
         ? 'Finish Apple’s window (it takes 5–20 minutes). MindFlock will continue on its own.'
+      : waiting === 'homebrew-run'
+        ? 'Terminal asks for your password. MindFlock continues on its own once Homebrew is in place.'
         : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
     renderLog(inst.lines)
     document.getElementById('do-retry').hidden = !failed
+    document.getElementById('inst-copy-diag').hidden = !failed
     var manual = document.getElementById('inst-manual')
     manual.hidden = !failed
     if (failed) {
@@ -200,6 +278,30 @@
   }
   wire('do-install', function () { return window.mfdiag.install() })
   wire('do-retry', function () { return window.mfdiag.install() })
+  wire('brew-install', function () { return window.mfdiag.action('brew-install') })
+  wire('brew-skip', function () { return window.mfdiag.action('brew-skip') })
+
+  // Buttons that stay on their own screen: flip the label while the action
+  // runs, then let the next poll redraw. Electron has no alert(), so the
+  // confirmation is the button itself.
+  function wireQuiet(id, action, doneLabel) {
+    var b = document.getElementById(id)
+    var label = b.textContent
+    b.addEventListener('click', function () {
+      if (b.disabled || !window.mfdiag) return
+      b.disabled = true
+      Promise.resolve(window.mfdiag.action(action))
+        .then(function (r) { b.textContent = (r && r.ok === false) ? 'Didn’t work' : doneLabel })
+        .catch(function () { b.textContent = 'Didn’t work' })
+        .then(function () {
+          setTimeout(function () { b.textContent = label; b.disabled = false }, 1600)
+          tick()
+        })
+    })
+  }
+  wireQuiet('copy-diag', 'copy-diagnostics', 'Copied')
+  wireQuiet('inst-copy-diag', 'copy-diagnostics', 'Copied')
+  wireQuiet('retry-start', 'retry-start', 'Starting…')
 
   var restarting = false
   var armed = false
@@ -236,6 +338,11 @@
         // Freshly installed but the probe hasn't caught up yet — don't blink
         // back to the install prompt for one poll.
         if (inst.state === 'done' && state === 'not-installed') state = 'starting'
+        // Main resolves 'starting' against the server process it spawned: a
+        // process that died before the port answered reads failed-to-start.
+        if (state === 'starting' && diag.start && diag.start.view === 'failed-to-start') {
+          state = 'failed-to-start'
+        }
         if (!restarting) show(state, diag)
         // Say what comes after the engine, so the app opening on a dependency
         // step reads as the same setup carrying on.

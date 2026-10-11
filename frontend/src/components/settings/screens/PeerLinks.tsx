@@ -1,11 +1,12 @@
-/** Settings → Work with someone (screen key "peer"; docs/peer-link.md): pair
+/** Settings → People (screen key "peer", once "People";
+ * docs/peer-link.md): pair
  * this MindFlock with another person's using a one-time invite, then bind ONE
  * shared folder per link — an agent runs in it inside a sandbox and talks to
  * the other person's agent. A side that can't run the sandbox (a Mac, or a
  * Linux box before it shares) still takes part: messages, an inbox, and a
  * read-only view of their changes.
  *
- * Two actions up front — Invite someone, Join with a code — and nothing to set
+ * Two actions up front — Invite someone, Join a peer — and nothing to set
  * first: inviting or joining turns peer links on. When this computer can only
  * make same-network invites (no cloudflared), the first invite asks where the
  * other person is. Every knob lives under Advanced.
@@ -287,7 +288,7 @@ export function PeerLinks(_: ScreenProps) {
 
   return (
     <>
-      <h3 className="set-section-title">Work with someone</h3>
+      <h3 className="set-section-title">People</h3>
       <p className="set-hint set-block-hint">
         Work together with someone else's MindFlock. Send them an invite, they paste it, and
         you're connected. Then either of you can share <strong>one folder</strong>: an agent
@@ -460,7 +461,7 @@ export function PeerLinks(_: ScreenProps) {
           )}
         </div>
         <div className="peer-action">
-          <h4 className="set-subtitle">Join with a code</h4>
+          <h4 className="set-subtitle">Join a peer</h4>
           <div className="set-row">
             <input
               id="peer-join-code"
@@ -540,7 +541,7 @@ export function PeerLinks(_: ScreenProps) {
       <details className="peer-advanced" id="peer-advanced">
         <summary>Advanced</summary>
         <div className="set-row set-switch-row">
-          <span className="set-label">Work with someone</span>
+          <span className="set-label">Peer links</span>
           <label className="ca-switch">
             <input
               type="checkbox"

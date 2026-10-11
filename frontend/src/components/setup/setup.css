@@ -1,0 +1,148 @@
+/* --------------------------------------------------------------------------- *
+ * The first-run checklist (components/setup): the five steps as drawn on the
+ * empty grid's card and in the Setup modal, and the compact "Setup 3/5" chip.
+ * The shared step/doctor rules (.setup-step, .setup-actions, .doctor-list…)
+ * stay in dialogs/SetupDialog.css; this file adds what is new.
+ * --------------------------------------------------------------------------- */
+.setup-progress {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.setup-step .setup-state {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.setup-step .setup-state.st-done {
+  color: var(--ok, #4caf50);
+}
+
+.setup-step.st-done > h3 .setup-num,
+.setup-step.st-skipped > h3 .setup-num {
+  color: var(--muted);
+}
+
+.setup-step.st-skipped > h3 {
+  opacity: 0.7;
+}
+
+.setup-fold > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.setup-fold > summary:hover {
+  color: var(--text);
+}
+
+.setup-logins {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setup-login {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.setup-login-name {
+  font-weight: 600;
+  min-width: 90px;
+}
+
+.setup-login.st-ok .setup-login-state {
+  color: var(--ok, #4caf50);
+}
+
+.setup-login.st-todo .setup-login-state {
+  color: #e8a13c;
+}
+
+.setup-login.st-unknown .setup-login-state {
+  color: var(--muted);
+}
+
+.setup-actions .setup-skip {
+  align-self: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-actions .setup-skip:hover {
+  color: var(--text);
+}
+
+.setup-qr {
+  width: 180px;
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 8px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.setup-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.setup-phone code {
+  font-size: 12px;
+  user-select: all;
+}
+
+.setup-report {
+  margin-top: 14px;
+  font-size: 12px;
+}
+
+.setup-report > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.setup-report > summary:hover {
+  color: var(--text);
+}
+
+.setup-report pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* The compact chip: the sidebar footer, beside the doctor's warning. */
+.setup-chip {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 11px;
+  color: #e8a13c;
+  background: rgba(232, 161, 60, 0.12);
+  border: 1px solid rgba(232, 161, 60, 0.5);
+  border-radius: 999px;
+}
+
+.setup-chip:hover {
+  background: rgba(232, 161, 60, 0.22);
+}

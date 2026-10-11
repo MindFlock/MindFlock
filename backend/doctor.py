@@ -31,7 +31,7 @@ import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from backend import osenv
 
@@ -41,7 +41,11 @@ __all__ = [
     "run_checks",
     "to_payload",
     "check_agent_cli",
+    "check_agent_cli_for",
     "check_agent_auth",
+    "check_agent_auth_for",
+    "check_referenced_agents_auth",
+    "referenced_agents",
     "check_node",
     "install_plan",
 ]
@@ -413,14 +417,14 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
             label,
             missing,
             f"configured binary {binary} is missing or not executable",
-            "fix the binary path in Settings → Coding CLI",
+            "fix the binary path in Settings → Agent CLI",
             provider=name,
         )
     path = shutil.which(binary)
     if path:
         return Check(cid, label, "ok", _with_version(name, path), provider=name)
     cmd = _agent_install_cmd(name, binary)
-    fix = cmd or f"install `{binary}` or set a binary path in Settings → Coding CLI"
+    fix = cmd or f"install `{binary}` or set a binary path in Settings → Agent CLI"
     return Check(
         cid,
         label,
@@ -436,13 +440,21 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
 
 def check_agent_cli() -> Check:
     """Check the default coding-agent CLI is available — whichever provider is
-    the default (Settings → Coding CLI), with that provider's own installer as
+    the default (Settings → Agent CLI), with that provider's own installer as
     the fix. A missing binary is a ``fail``: sessions launch it."""
-    return _agent_cli_check("agent-cli", _default_provider_name(), "agent CLI", "fail")
+    return check_agent_cli_for(_default_provider_name())
+
+
+def check_agent_cli_for(name: str) -> Check:
+    """The ``agent-cli`` row for provider ``name`` instead of the default —
+    Settings → Agent CLI's **Test agent CLI** with a provider picked."""
+    return _agent_cli_check(
+        "agent-cli", name or _default_provider_name(), "agent CLI", "fail"
+    )
 
 
 def _assistant_provider_name() -> str:
-    """Settings → Coding CLI's Assistant provider, or ``""`` when unset."""
+    """Settings → Agent CLI's Assistant provider, or ``""`` when unset."""
     try:
         from backend.config.settings import load_settings
 
@@ -466,7 +478,7 @@ def check_synced_agents() -> List[Check]:
     agent, PR review's…) that aren't installed here. Settings sync holds
     such a value back until the CLI exists (``settings_sync.DEFER_PATHS``);
     listing them as ``install`` rows puts them in the one-shot install plan,
-    so Settings → Devices can install them with one click and the next sync
+    so Settings → Your devices can install them with one click and the next sync
     applies the setting. Empty outside a server (only it syncs)."""
     try:
         from backend.web.core import settings_sync
@@ -648,6 +660,55 @@ def _login_fix(provider, base: str) -> Tuple[str, str]:
     return f"log `{base}` in from inside the CLI itself", ""
 
 
+def _agent_auth_check(cid: str, name: str, label: str) -> Check:
+    """The login probe for provider ``name`` as row ``cid`` — the body of
+    :func:`check_agent_auth`, parametrised so every provider some setting
+    points at gets the same three-way verdict (see
+    :func:`check_referenced_agents_auth`)."""
+    binary = _resolve_agent_binary(name)
+    base = Path(binary).name
+    provider = _agent_provider(name)
+    if provider is None:
+        return Check(
+            cid,
+            label,
+            "info",
+            f"`{name}` is not a registered provider — no login probe",
+        )
+    evidence = _auth_evidence(provider)
+    if evidence:
+        return Check(cid, label, "ok", evidence, provider=name)
+    if not _declares_auth_sources(provider):
+        return Check(
+            cid,
+            label,
+            "info",
+            f"there is no login probe for `{base}` — check its status inside the CLI itself",
+            provider=name,
+        )
+    if not shutil.which(base) and os.sep not in binary:
+        return Check(
+            cid,
+            label,
+            "warn",
+            "agent CLI not installed — cannot probe auth",
+            provider=name,
+        )
+    fix, cmd = _login_fix(provider, base)
+    # `provider` is what the UI's "Sign in to <agent>" button opens the login
+    # terminal for; `cmd` (a DECLARED login flow) is what makes it offer one.
+    return Check(
+        cid,
+        label,
+        "warn",
+        "CLI is installed but no sign of a login was found",
+        fix,
+        docs=_DOCS["claude"] if base == "claude" else "",
+        cmd=cmd,
+        provider=name,
+    )
+
+
 def check_agent_auth() -> Check:
     """Auth probe for the configured coding-agent CLI, asked of the provider.
 
@@ -665,51 +726,85 @@ def check_agent_auth() -> Check:
     declares no credential sources at all is ``info``:
     there is nothing to probe, so silence is the honest report rather than a
     warning the user can never clear.
+
+    This row is the DEFAULT provider's; the CLIs other settings point at (a
+    ticket source's agent, PR review's…) get their own rows from
+    :func:`check_referenced_agents_auth`.
     """
-    name = _default_provider_name()
-    binary = _resolve_agent_binary(name)
-    base = Path(binary).name
-    label = f"agent auth ({name})"
-    provider = _agent_provider(name)
-    if provider is None:
-        return Check(
-            "agent-auth",
-            label,
-            "info",
-            f"`{name}` is not a registered provider — no login probe",
+    return check_agent_auth_for(_default_provider_name())
+
+
+def check_agent_auth_for(name: str) -> Check:
+    """:func:`check_agent_auth` for provider ``name`` instead of the default —
+    the same ``agent-auth`` id, so the Setup / Settings sign-in button reads
+    it the same way (Settings → Agent CLI's test with a provider picked)."""
+    name = name or _default_provider_name()
+    return _agent_auth_check("agent-auth", name, f"agent auth ({name})")
+
+
+def referenced_agents() -> Dict[str, List[str]]:
+    """Every provider a setting other than the default points at, with the
+    roles naming it: ``{"codex": ["PR review", "ticket source jira"]}``.
+
+    The default provider is left out (its own rows cover it); an empty value
+    inherits and names nothing. Read straight from the settings store, not the
+    pipeline's resolved config: the doctor runs without a pipeline, and the
+    question is "which CLIs would this configuration launch", not "which is
+    running". Sources: the Assistant's provider, the ticket pipeline's default
+    (``engine.agent``), each ticket source's ``agent``, PR review's ``agent``
+    and ``issue_agent``, and each watched repo's per-repo override of either.
+    """
+    out: Dict[str, List[str]] = {}
+
+    def add(name: object, role: str) -> None:
+        n = str(name or "").strip()
+        if not n:
+            return
+        roles = out.setdefault(n, [])
+        if role not in roles:
+            roles.append(role)
+
+    try:
+        from backend.config.settings import load_settings
+
+        s = load_settings()
+    except Exception:  # noqa: BLE001 — settings are optional
+        return out
+    add(getattr(s.coding_cli, "assistant_provider", ""), "Assistant")
+    add(getattr(s.engine, "agent", ""), "ticket default")
+    for src in getattr(s.ticketing, "sources", []) or []:
+        label = (
+            getattr(src, "id", "")
+            or getattr(src, "label", "")
+            or getattr(src, "provider", "")
         )
-    evidence = _auth_evidence(provider)
-    if evidence:
-        return Check("agent-auth", label, "ok", evidence, provider=name)
-    if not _declares_auth_sources(provider):
-        return Check(
-            "agent-auth",
-            label,
-            "info",
-            f"there is no login probe for `{base}` — check its status inside the CLI itself",
-            provider=name,
+        add(getattr(src, "agent", ""), f"ticket source {label}".rstrip())
+    gh = s.github
+    add(getattr(gh, "agent", ""), "PR review")
+    add(getattr(gh, "issue_agent", ""), "issue handling")
+    for repo, over in (getattr(gh, "repo_settings", {}) or {}).items():
+        if isinstance(over, dict):
+            add(over.get("agent"), f"PR review of {repo}")
+    for repo, over in (getattr(gh, "issue_repo_settings", {}) or {}).items():
+        if isinstance(over, dict):
+            add(over.get("agent"), f"issues of {repo}")
+    out.pop(_default_provider_name(), None)
+    return out
+
+
+def check_referenced_agents_auth() -> List[Check]:
+    """One ``agent-auth-<name>`` row per CLI :func:`referenced_agents` names —
+    the login probe the default provider already gets, for every other CLI a
+    ticket source, PR review or the Assistant would launch. Before this, a
+    codex-reviewed repo on a claude-default machine learned codex was logged
+    out from its first dead review session. ``doctor --fix`` offers each row's
+    login one at a time, exactly as it does for the default's."""
+    return [
+        _agent_auth_check(
+            f"agent-auth-{name}", name, f"agent auth ({name} — {', '.join(roles)})"
         )
-    if not shutil.which(base) and os.sep not in binary:
-        return Check(
-            "agent-auth",
-            label,
-            "warn",
-            "agent CLI not installed — cannot probe auth",
-            provider=name,
-        )
-    fix, cmd = _login_fix(provider, base)
-    # `provider` is what the UI's "Sign in to <agent>" button opens the login
-    # terminal for; `cmd` (a DECLARED login flow) is what makes it offer one.
-    return Check(
-        "agent-auth",
-        label,
-        "warn",
-        "CLI is installed but no sign of a login was found",
-        fix,
-        docs=_DOCS["claude"] if base == "claude" else "",
-        cmd=cmd,
-        provider=name,
-    )
+        for name, roles in sorted(referenced_agents().items())
+    ]
 
 
 def _uv_install_cmd() -> str:
@@ -1210,6 +1305,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "assistant-cli": check_assistant_cli,
     "node": check_node,
     "agent-auth": check_agent_auth,
+    "agent-auth-referenced": check_referenced_agents_auth,
     "synced-agents": check_synced_agents,
     "local-model": check_local_model,
     "uv": check_uv,
@@ -1240,7 +1336,21 @@ def run_checks() -> List[Check]:
             out.extend(check)
         elif check is not None:
             out.append(check)
+    _note_setup_progress(out)
     return out
+
+
+def _note_setup_progress(checks: List[Check]) -> None:
+    """Tell the first-run checklist what this run found: ``tools`` is done when
+    no required check fails, ``agent_login`` when the default agent CLI is
+    installed and signed in (:mod:`backend.web.core.setup_steps`). Best-effort:
+    the doctor must never fail over a bookkeeping flag."""
+    try:
+        from backend.web.core import setup_steps
+
+        setup_steps.note_doctor(checks)
+    except Exception:  # noqa: BLE001 — advisory flags only
+        pass
 
 
 def _is_brew_cmd(cmd: str) -> bool:

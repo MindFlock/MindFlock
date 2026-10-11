@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
+import { notifyConnectionsChanged } from "../settings/screens/Connections";
 
 /** The doctor row shape this needs (a subset of DoctorCheckItem). */
 export interface SignInCheck {
@@ -38,16 +39,27 @@ export function agentDisplayName(name: string): string {
   return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
 }
 
-function SignInWindow({ provider, onClose }: { provider: string; onClose(): void }) {
+function SignInWindow({
+  provider,
+  profile,
+  onClose,
+}: {
+  provider: string;
+  /** An auth profile id: the login runs in that account's own config dir
+   * (`?profile=`), so a second account signs in without touching the first. */
+  profile?: string;
+  onClose(): void;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const path = "/api/providers/" + encodeURIComponent(provider) + "/login-terminal";
+  const query = profile ? "?profile=" + encodeURIComponent(profile) : "";
+  const path = "/api/providers/" + encodeURIComponent(provider) + "/login-terminal" + query;
   const state = useWsTerm(hostRef, path, true);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
   const close = async () => {
     try {
-      await api("/api/providers/" + encodeURIComponent(provider) + "/login-close", {
+      await api("/api/providers/" + encodeURIComponent(provider) + "/login-close" + query, {
         method: "POST",
       });
     } catch {
@@ -85,7 +97,10 @@ function SignInWindow({ provider, onClose }: { provider: string; onClose(): void
     >
       <div className="prov-login-panel">
         <div className="ws-head">
-          <h2>Sign in to {agentDisplayName(provider)}</h2>
+          <h2>
+            Sign in to {agentDisplayName(provider)}
+            {profile ? " (" + profile + ")" : ""}
+          </h2>
           <span className="muted" id="signin-status">
             {status}
           </span>
@@ -100,13 +115,20 @@ function SignInWindow({ provider, onClose }: { provider: string; onClose(): void
   );
 }
 
-/** The button + its window. `onDone` runs after the window closes. */
+/** The button + its window. `onDone` runs after the window closes. `profile`
+ * signs an auth profile's own account in (Settings → Accounts); `label`
+ * replaces the "Sign in to <Agent>" text (a row that already names the agent
+ * just says "Sign in"). */
 export function AgentSignIn({
   provider,
+  profile,
+  label,
   onDone,
   className,
 }: {
   provider: string;
+  profile?: string;
+  label?: string;
   onDone(): void;
   className?: string;
 }) {
@@ -121,13 +143,15 @@ export function AgentSignIn({
           setOpen(true);
         }}
       >
-        Sign in to {agentDisplayName(provider)}
+        {label || "Sign in to " + agentDisplayName(provider)}
       </button>
       {open && (
         <SignInWindow
           provider={provider}
+          profile={profile}
           onClose={() => {
             setOpen(false);
+            notifyConnectionsChanged();
             onDone();
           }}
         />

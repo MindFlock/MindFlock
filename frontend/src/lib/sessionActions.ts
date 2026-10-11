@@ -15,7 +15,7 @@ import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
 import { focusTerm, releaseTerms } from "./terminals";
-import { errorPop } from "./errorPop";
+import { confirmPop, errorPop } from "./errorPop";
 
 function caps() {
   return queryClient.getQueryData<Config>(["config"])?.caps ?? {
@@ -127,7 +127,7 @@ export function requireGit(): boolean {
 /** The one remedy sentence. Asserted verbatim in docs and tests — if you
  * change it, change it there too. */
 export const PR_REMEDY =
-  "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
+  "add a GitHub token in Settings → Connections → GitHub → Connect, or install the GitHub CLI";
 
 /** Tooltip for a PR/Merge affordance that will fall back to the browser. */
 export const PR_FALLBACK_HINT =
@@ -177,21 +177,123 @@ export function offerUrl(url: string, msg: string) {
  * exactly what you closed. */
 const closeUndo: string[] = [];
 
-export async function killSession(title: string) {
-  if (!title) return;
-  try {
-    await instApi(title, "/close", { method: "POST" });
-  } catch (err) {
-    errorPop("Close failed", errMsg(err));
-    return;
-  }
+/* --- Ending a session -------------------------------------------------------
+ * Exactly two verbs, everywhere (row menu, ✕, Ctrl+W, palette, bulk bar):
+ *   Close   POST /close    — stops the agent, KEEPS the worktree; the session
+ *                            lands in Recently closed and can be reopened.
+ *   Delete  POST /cleanup  — removes the worktree and its branch. Asked first,
+ *                            inline (the row's confirm strip, or a neutral card).
+ * Both answer `{title, wiped, children}`; `children` are the worker sessions
+ * that stay running without their parent. Delete (and the bare DELETE that
+ * Clean up uses for a gone workspace) answers 409 "folder in use" when another
+ * live session shares the folder — a Duplicate session runs in place — and
+ * that is a thing to say, not a failure to swallow. */
+
+/** What /close, /cleanup and DELETE answer. Older servers answered `{ok}`;
+ * every field is read defensively. */
+export interface EndResult {
+  title?: string;
+  wiped?: boolean;
+  children?: string[];
+}
+
+/** The live sessions a 409 "folder in use" names, or null for any other error. */
+export function folderInUse(err: unknown): string[] | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const body = err.body as { error?: unknown; sessions?: unknown } | null;
+  if (!body || body.error !== "folder in use") return null;
+  return Array.isArray(body.sessions) ? body.sessions.map(String) : [];
+}
+
+/** "Folder in use by a, b. Close those first." — one sentence, shared by the
+ * row's inline card, the corner card and the bulk bar. */
+export function folderInUseText(titles: string[]): string {
+  const names = titles.map((t) => displayName(t));
+  return "Folder in use by " + (names.length ? names.join(", ") : "another session") + ". Close those first.";
+}
+
+/** "3 worker sessions kept running" — the after-note for an end whose
+ * children stayed up; null when there were none. */
+export function keptRunningText(result: EndResult | null | undefined): string | null {
+  const n = result?.children?.length || 0;
+  if (!n) return null;
+  return n === 1 ? "1 worker session kept running" : `${n} worker sessions kept running`;
+}
+
+/** The local bookkeeping every end shares: unhide, unfocus, drop the terminals. */
+function forgetLocally(title: string) {
   const ui = useUi.getState();
   ui.setHidden(title, false);
   if (ui.focused === title) ui.setFocused(null);
   releaseTerms(title);
+}
+
+/** Close: stop the agent, keep the worktree. Reopen from Recently closed. */
+export async function killSession(title: string) {
+  if (!title) return;
+  let r: EndResult | null = null;
+  try {
+    r = await instApi<EndResult>(title, "/close", { method: "POST" });
+  } catch (err) {
+    errorPop("Close failed", errMsg(err));
+    return;
+  }
+  forgetLocally(title);
   closeUndo.push(title);
-  toast("Session ended — reopen it from Recently closed, under the session list (or Ctrl+Z / Ctrl+Shift+T)");
+  const kept = keptRunningText(r);
+  toast(
+    "Session closed — reopen it from Recently closed (Ctrl+Shift+T)" + (kept ? " · " + kept : ""),
+    kept ? { duration: 5000 } : undefined
+  );
   await refreshInstances();
+}
+
+/** Delete: remove the worktree and the branch. Asks first unless `confirmed`
+ * — the row's menu asks on its own inline strip and passes true; the palette
+ * and the pane go through the neutral corner card here.
+ *
+ * Resolves to the sessions holding the folder on a 409 (the caller draws
+ * "Folder in use by …" where its button is), `"done"` after a delete, and
+ * `null` for anything else (already reported on a card, or not confirmed). */
+export async function deleteSession(
+  title: string,
+  confirmed = false
+): Promise<"done" | { inUse: string[] } | null> {
+  if (!title) return null;
+  if (!confirmed) {
+    confirmPop(
+      "Delete " + displayName(title) + "?",
+      "Removes the worktree and branch. Close instead keeps the worktree (reopen it from Recently closed).",
+      [
+        {
+          label: "Delete",
+          primary: true,
+          run: () =>
+            void deleteSession(title, true).then((r) => {
+              if (r && r !== "done") errorPop("Can't delete " + displayName(title), folderInUseText(r.inUse));
+            }),
+        },
+      ]
+    );
+    return null;
+  }
+  let r: EndResult | null = null;
+  try {
+    r = await instApi<EndResult>(title, "/cleanup", { method: "POST" });
+  } catch (err) {
+    const held = folderInUse(err);
+    if (held) return { inUse: held };
+    errorPop("Delete failed", errMsg(err));
+    return null;
+  }
+  forgetLocally(title);
+  const kept = keptRunningText(r);
+  toast(
+    "Deleted " + displayName(title) + " — worktree and branch removed" + (kept ? " · " + kept : ""),
+    kept ? { duration: 5000 } : undefined
+  );
+  await refreshInstances();
+  return "done";
 }
 
 interface ClosedEntry {
@@ -253,23 +355,23 @@ export async function undoLastClose() {
       if (inst?.title) selectSession(inst.title);
       toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
-      toast("Reopen failed: " + errMsg(err), { duration: 5000 });
+      errorPop("Reopen failed", errMsg(err));
     }
   } finally {
     undoBusy = false;
   }
 }
 
-/** L7: remove a session whose workspace directory vanished. Asks first on an
- * inline card (the desktop app has no confirm(): it silently meant "no", so
+/** L7: remove a session whose workspace directory vanished. Asks first on a
+ * neutral card (the desktop app has no confirm(): it silently meant "no", so
  * Clean up did nothing there); the card's button re-enters `confirmed`. */
 export async function cleanupMissing(title: string, confirmed = false) {
   if (!title) return;
   if (!confirmed) {
-    errorPop(
-      "Clean up “" + displayName(title) + "”?",
+    confirmPop(
+      "Delete “" + displayName(title) + "”?",
       "Its workspace folder no longer exists — this removes the dead session.",
-      [{ label: "Clean up", primary: true, run: () => void cleanupMissing(title, true) }]
+      [{ label: "Delete", primary: true, run: () => void cleanupMissing(title, true) }]
     );
     return;
   }
@@ -281,14 +383,18 @@ export async function cleanupMissing(title: string, confirmed = false) {
     (prev || []).filter((i) => i.title !== title)
   );
   releaseTerms(title);
+  let r: EndResult | null = null;
   try {
-    await instApi(title, "", { method: "DELETE" });
+    r = await instApi<EndResult>(title, "", { method: "DELETE" });
   } catch (err) {
-    toast("Clean up failed: " + errMsg(err), { duration: 5000 });
+    const held = folderInUse(err);
+    if (held) errorPop("Can't delete " + displayName(title), folderInUseText(held));
+    else errorPop("Delete failed", errMsg(err));
     await refreshInstances(); // restore the row — the session still exists
     return;
   }
-  toast("Session removed");
+  const kept = keptRunningText(r);
+  toast("Session removed" + (kept ? " · " + kept : ""), kept ? { duration: 5000 } : undefined);
   await refreshInstances();
 }
 
@@ -472,6 +578,49 @@ export function offerRedZoneOverride(
   );
 }
 
+/** The push route's 409 `diverged` answer — the remote branch moved on (a
+ * teammate, or you on another machine, pushed to it) — or null. */
+export interface DivergedPush {
+  error: string;
+  remote: string;
+  branch: string;
+  behind: number;
+  authors: string[];
+}
+
+export function divergedPush(err: unknown): DivergedPush | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const b = err.body as Partial<DivergedPush> & { diverged?: unknown } | null;
+  if (!b || typeof b !== "object" || b.diverged !== true) return null;
+  return {
+    error: String(b.error || err.message),
+    remote: String(b.remote || "origin"),
+    branch: String(b.branch || ""),
+    behind: Number(b.behind) || 0,
+    authors: Array.isArray(b.authors) ? b.authors.map(String) : [],
+  };
+}
+
+/** The diverged card's "Rebase onto <remote>/<branch> and push": POST
+ * /rebase-remote (git pull --rebase; on a conflict the server aborts and the
+ * tree is as it was), then the same push again. Never a force-push. */
+export async function rebaseRemoteAndPush(
+  title: string,
+  remote: string,
+  force = false,
+  overrideRedZones = false
+): Promise<void> {
+  try {
+    const r = await instApi<{ row?: Instance | null }>(title, "/rebase-remote", { json: { remote } });
+    if (r?.row?.title) patchInstance(title, r.row);
+  } catch (err) {
+    errorPop("Rebase stopped — nothing changed", displayName(title) + ": " + errMsg(err));
+    void freshStage(title);
+    return;
+  }
+  await pushSession(title, force, overrideRedZones);
+}
+
 export async function pushSession(title: string, force = false, overrideRedZones = false): Promise<void> {
   if (!title || !requireGit()) return;
   selectSession(title, { noKeyboard: true });
@@ -486,7 +635,27 @@ export async function pushSession(title: string, force = false, overrideRedZones
     await instApi(title, "/push-branch", { json: body });
   } catch (err) {
     const rz = redZoneBreaches(err);
-    if (rz) {
+    const div = divergedPush(err);
+    if (div) {
+      // Someone else pushed to this branch: offer to replay this session's
+      // commits on top of theirs, then push. The card names the session (the
+      // same dedupe reason as the check gate's below).
+      clearStep(title);
+      const where = div.remote + "/" + div.branch;
+      confirmPop(
+        "Push blocked — " + where + " moved on",
+        displayName(title) + ": " + div.error + ". Rebase its commits onto " + where + " and push?",
+        [
+          {
+            label: "Rebase onto " + where + " and push",
+            primary: true,
+            title: "git pull --rebase " + div.remote + " " + div.branch + ", then push (never a force-push)",
+            run: () => void rebaseRemoteAndPush(title, div.remote, force, overrideRedZones),
+          },
+        ],
+        "Cancel"
+      );
+    } else if (rz) {
       clearStep(title);
       offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
       // Falls through to freshStage below: that re-read is what repaints the
@@ -515,7 +684,7 @@ export async function pushSession(title: string, force = false, overrideRedZones
       return;
     } else {
       clearStep(title);
-      toast("Push failed: " + errMsg(err), { duration: 6000 });
+      errorPop("Push failed", errMsg(err));
     }
   }
   // The old `setTimeout(refreshInstances, 1000)` could not observe anything: the
@@ -558,7 +727,7 @@ export async function resetStage(title: string, opts?: { quiet?: boolean }) {
       );
   } catch (err) {
     clearLoopReset(title);
-    toast("Could not reset this window: " + errMsg(err), { duration: 6000 });
+    toast("Could not reset this session: " + errMsg(err), { duration: 6000 });
   }
 }
 
@@ -611,7 +780,7 @@ export async function submitMakePr(title: string, base: string, overrideRedZones
     clearStep(title);
     const rz = redZoneBreaches(err);
     if (rz) offerRedZoneOverride(title, "Open PR", rz, () => void submitMakePr(title, base, true));
-    else toast("Make PR failed: " + errMsg(err), { duration: 6000 });
+    else errorPop("Open PR failed", errMsg(err));
   }
   await freshStage(title);
 }
@@ -620,12 +789,12 @@ export async function submitMakePr(title: string, base: string, overrideRedZones
  * "merge it yourself on GitHub", which is a link, not a failure. */
 export async function mergeSession(title: string, overrideRedZones = false, confirmed = false) {
   if (!title || !requireGit()) return;
-  // Asked on an inline card (confirm() is a silent "no" in the desktop app,
-  // so Merge did nothing there); its button re-enters `confirmed`. The
+  // Asked on a neutral inline card (confirm() is a silent "no" in the desktop
+  // app, so Merge did nothing there); its button re-enters `confirmed`. The
   // red-zone override re-entry skips the question: its click on the card IS
   // the answer.
   if (!overrideRedZones && !confirmed) {
-    errorPop(
+    confirmPop(
       "Merge this PR?",
       displayName(title) + "'s pull request merges on GitHub — this can't be undone from MindFlock.",
       [{ label: "Merge PR", primary: true, run: () => void mergeSession(title, false, true) }]
@@ -648,7 +817,7 @@ export async function mergeSession(title: string, overrideRedZones = false, conf
     clearStep(title);
     const rz = redZoneBreaches(err);
     if (rz) offerRedZoneOverride(title, "Merge", rz, () => void mergeSession(title, true));
-    else toast("Merge failed: " + errMsg(err), { duration: 6000 });
+    else errorPop("Merge failed", errMsg(err));
   }
   await freshStage(title);
 }
@@ -669,12 +838,14 @@ export function hideSession(title: string) {
   });
 }
 
+/** Pause: stops the agent, keeps the worktree (no commit, nothing removed).
+ * Resume starts the agent again in the same worktree. */
 export async function pauseSession(title: string) {
   if (!title) return;
   try {
     await instApi(title, "/pause", { method: "POST" });
   } catch (err) {
-    toast("Pause failed: " + errMsg(err), { duration: 5000 });
+    errorPop("Pause failed", errMsg(err));
   }
   await refreshInstances();
 }
@@ -684,7 +855,7 @@ export async function resumeSession(title: string) {
   try {
     await instApi(title, "/resume", { method: "POST" });
   } catch (err) {
-    toast("Resume failed: " + errMsg(err), { duration: 5000 });
+    errorPop("Resume failed", errMsg(err));
   }
   await refreshInstances();
 }

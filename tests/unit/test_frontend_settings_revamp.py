@@ -275,8 +275,9 @@ def test_app_js_first_run_gate_uses_onboarded():
     """
     js = client.get("/app.js").text
     assert "onboarded" in js
-    assert "shouldAutoShowSetup" in js  # the one gate, exported for its own test
-    for retired in ("mf_setup_done", "mf_ever_created"):
+    assert "/api/setup" in js  # the checklist is the gate now (setupModel.ts)
+    assert "shouldAutoShowSetup" not in js  # the Setup modal never opens itself
+    for retired in ("mf_setup_done", "mf_ever_created", "mf_tour_done"):
         assert retired not in js, "a per-browser first-run flag is back: %s" % retired
 
 
@@ -361,8 +362,10 @@ def test_settings_nav_is_grouped_under_headings():
     expect = {
         "Agents": ("coding", "providers", "accounts", "localmodel"),
         "Code": ("workspace", "ide"),
-        "This device": ("security", "appearance", "mobile"),
-        "Troubleshooting": ("doctor", "logs", "advanced", "extensions", "traffic"),
+        "This device": ("security", "appearance"),
+        "Devices and people": ("devices", "mobile", "peer"),
+        "Extensions": ("extensions",),
+        "Troubleshooting": ("doctor", "logs", "advanced", "traffic"),
     }
     for group, keys in expect.items():
         for k in keys:
@@ -389,22 +392,30 @@ def test_coding_cli_reads_status_and_persists_default_correction():
     assert "installed[0]" in js
 
 
-def test_providers_screen_has_no_login_controls():
-    """Settings → Agent providers shows install status only — no 'Log in' button
-    or login modal; the header is relabelled."""
+def test_providers_screen_signs_in_through_the_shared_window():
+    """Settings → Agent providers: one row per CLI with install status, a
+    sign-in chip and a **Sign in** button that reuses the Setup/doctor window
+    (dialogs/AgentSignIn) — never a login modal of its own — plus a Binary
+    path field per provider (PUT /api/providers/{name}/binary-path)."""
     js = client.get("/app.js").text
     assert "Agent providers" in js
     # Install command + installed status still render.
     assert "install_hint" in js
     assert "not installed" in js
-    # No login affordance survives on this screen (sign-in lives in Setup
-    # and the doctor, not here).
+    # No second login surface: the one window is AgentSignIn's.
     assert "ProviderLoginModal" not in js
     providers = (FRONTEND_SRC / "components/settings/screens/Providers.tsx").read_text(
         encoding="utf-8"
     )
-    assert "login-terminal" not in providers
-    assert "<AgentSignIn" not in providers
+    assert "login-terminal" not in providers  # the route lives in AgentSignIn only
+    assert "<AgentSignIn" in providers
+    assert "/binary-path" in providers
+    # Row shapes (installed / signed-in / not installed / parse error) are the
+    # unit-tested pure module, not inline JSX conditions.
+    assert "providerRows(" in providers
+    rows = (FRONTEND_SRC / "lib/providerRows.ts").read_text(encoding="utf-8")
+    assert "no sign-in needed" in rows
+    assert 'kind: "error"' in rows
 
 
 def test_new_session_ctrl_enter_submits_at_dialog_level():

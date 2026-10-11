@@ -1,0 +1,100 @@
+/* Settings → Connections dashboard (Connections.tsx). The base row/pill
+   styles live in ticketingConnections.css; this adds the groups, the
+   three-state pills, the action column, the fix line and the Test result. */
+
+.conn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conn-group + .conn-group {
+  margin-top: 10px;
+}
+
+.conn-group-title {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.conn-pill.conn-needs_attention {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 15%, transparent);
+}
+
+.conn-pill.conn-off {
+  color: var(--muted);
+  background: transparent;
+}
+
+.conn-badge {
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--muted);
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.conn-fix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.conn-fix code {
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.conn-copy {
+  flex: none;
+}
+
+.conn-test-result {
+  margin-top: 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.conn-test-result.ok {
+  color: var(--green);
+}
+
+.conn-test-result.bad {
+  color: var(--red);
+}
+
+.conn-docs {
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .conn-row {
+    flex-wrap: wrap;
+  }
+  .conn-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

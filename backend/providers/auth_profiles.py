@@ -346,6 +346,45 @@ def overlay_for(
 PROFILE_ID_ENV = "MINDFLOCK_PROFILE_ID"
 
 
+#: How each CLI takes a model when NO auth profile applies — the same routes
+#: the api-key profile uses below, so a model reads the same either way.
+#: A CLI missing here has no known model route: :func:`model_route` says so,
+#: and callers warn instead of silently dropping the model.
+_BARE_MODEL_ROUTE = {
+    "claude": ("env", "ANTHROPIC_MODEL"),
+    "codex": ("flag", "-m"),
+    "aider": ("flag", "--model"),
+    "goose": ("env", "GOOSE_MODEL"),
+    "opencode": ("flag", "--model"),
+}
+
+
+def _cli_name(program: str) -> str:
+    try:
+        from . import resolve
+
+        return resolve(program).name
+    except Exception:  # noqa: BLE001
+        return (program or "").strip().split()[0] if (program or "").strip() else ""
+
+
+def model_route(program: str) -> bool:
+    """Whether a per-session model can reach ``program`` without a profile."""
+    return _cli_name(program) in _BARE_MODEL_ROUTE
+
+
+def _bare_model_overlay(
+    name: str, model: str
+) -> Tuple[Dict[str, str], Tuple[str, ...]]:
+    route = _BARE_MODEL_ROUTE.get(name)
+    if not route or not model:
+        return {}, ()
+    kind, key = route
+    if kind == "env":
+        return {key: model}, ()
+    return {}, (key, model)
+
+
 def launch_overlay(
     program: str, profile_id: str = "", model: str = ""
 ) -> Tuple[Dict[str, str], Tuple[str, ...]]:
@@ -362,7 +401,10 @@ def launch_overlay(
     effective = effective_profile_id(profile_id)
     profile = get_profile(effective)
     if profile is None:
-        return {}, ()
+        # No account: a per-session model (the New dialog's Model, an MCP
+        # spawn_session `model`) still has to reach the CLI. It used to be
+        # dropped here, so every "model" spawn ran on the CLI's default.
+        return _bare_model_overlay(_cli_name(program), (model or "").strip())
     if (model or "").strip():
         profile = replace(profile, model=model.strip())
     try:

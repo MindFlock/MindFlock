@@ -45,7 +45,7 @@ export function desktopNoteFor(
       const name = String(d.peer_name || "Someone");
       return {
         title: name + (d.repaired ? " reconnected" : " joined your invite"),
-        body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "Work with someone",
+        body: d.sas ? "Compare the safety number " + String(d.sas) + " with them" : "People",
         target: "peer",
       };
     }
@@ -57,7 +57,7 @@ export function desktopNoteFor(
       const behind = Array.isArray(d.behind) ? d.behind.length : 0;
       return {
         title: "MindFlock " + (v ? v + " " : "") + "is available",
-        body: String(d.detail || "") || (behind ? "Update your devices in Settings → Devices" : "Open MindFlock to update"),
+        body: String(d.detail || "") || (behind ? "Update your devices in Settings → Your devices" : "Open MindFlock to update"),
         target: behind ? "devices" : "update",
         // The shell shows one notice per release (its own update toast
         // included), keyed by this.

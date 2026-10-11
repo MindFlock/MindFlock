@@ -73,6 +73,7 @@ __all__ = [
     "script_attached",
     "refresh_launcher_config",
     "note_launch",
+    "last_launch",
     "launch_attached",
     "supported_providers",
     "run_dir",
@@ -475,8 +476,27 @@ def note_launch(tmux_name: str, attached: bool) -> None:
     CLI with no attach support, a path that bypasses them)."""
     if not tmux_name:
         return
+    import time
+
     with _LAUNCHED_LOCK:
         _LAUNCHED[tmux_name] = bool(attached)
+        _LAST_LAUNCH.clear()
+        _LAST_LAUNCH.update(
+            {"session": tmux_name, "attached": bool(attached), "at": time.time()}
+        )
+
+
+#: The most recent :func:`note_launch`, whatever session it was for.
+_LAST_LAUNCH: dict = {}
+
+
+def last_launch() -> dict:
+    """``{session, attached, at}`` of the most recent launch this process
+    recorded (``session`` is the tmux name), ``{}`` before the first. Settings
+    → Connections reads it: "auto-attach is on, but the last launch had no
+    tools" is the row that says so."""
+    with _LAUNCHED_LOCK:
+        return dict(_LAST_LAUNCH)
 
 
 def launch_attached(tmux_name: str) -> Optional[bool]:

@@ -31,7 +31,7 @@ export const DEPTH_LABELS: Record<string, string> = {
   agent: "Agent only",
   commit: "Commit",
   push: "Push",
-  pr: "Open a PR",
+  pr: "Open PR",
   merge: "Merge when green",
 };
 

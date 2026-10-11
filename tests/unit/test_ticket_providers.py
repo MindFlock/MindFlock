@@ -1037,11 +1037,16 @@ class TestIngestsAnyAssignee:
             TicketProviderConfig(provider="github_issues", assignee_scope="anyone")
         )
 
-    def test_asana_never_offers_it(self):
-        assert not ingests_any_assignee(
+    def test_asana_stands_on_its_sections(self):
+        # Asana's section listing takes no assignee, so "anyone" has a bound
+        # there exactly when an ingest section is picked — and not otherwise.
+        assert ingests_any_assignee(
             TicketProviderConfig(
                 provider="asana", assignee_scope="anyone", workflow_state="x"
             )
+        )
+        assert not ingests_any_assignee(
+            TicketProviderConfig(provider="asana", assignee_scope="anyone")
         )
 
     def test_unknown_value_reads_as_mine(self):
@@ -1051,11 +1056,9 @@ class TestIngestsAnyAssignee:
             )
         )
 
-    def test_asana_has_no_scope_field_in_the_catalog(self):
+    def test_every_provider_offers_the_scope_field_in_the_catalog(self):
         by_id = {p["id"]: p for p in PROVIDER_META}
-        keys = {f["key"] for f in by_id["asana"]["fields"]}
-        assert "assignee_scope" not in keys
-        for pid in ("shortcut", "jira", "linear", "github_issues"):
+        for pid in ("shortcut", "jira", "linear", "github_issues", "asana"):
             fields = {f["key"]: f for f in by_id[pid]["fields"]}
             assert fields["assignee_scope"]["type"] == "choice"
             assert [o["value"] for o in fields["assignee_scope"]["options"]] == [
@@ -1704,76 +1707,66 @@ class TestBaseDefaults:
 # --------------------------------------------------------------------------- #
 # GitHub Issues: auth CLI fallback, _login, comment fetch, fetch, test_connection
 # --------------------------------------------------------------------------- #
-class TestGithubGhAuthToken:
-    async def test_returns_stripped_token(self):
-        from backend.ticket_ingestion.providers import github_issues as ghm
-        from unittest.mock import AsyncMock as _AM
-
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.communicate = _AM(return_value=(b"  ghp_x\n", b""))
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=_AM, return_value=proc
-        ):
-            assert await ghm._gh_auth_token() == "ghp_x"
-
-    async def test_nonzero_exit_returns_none(self):
-        from backend.ticket_ingestion.providers import github_issues as ghm
-        from unittest.mock import AsyncMock as _AM
-
-        proc = MagicMock()
-        proc.returncode = 1
-        proc.communicate = _AM(return_value=(b"", b"nope"))
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=_AM, return_value=proc
-        ):
-            assert await ghm._gh_auth_token() is None
-
-    async def test_missing_gh_returns_none(self):
-        from backend.ticket_ingestion.providers import github_issues as ghm
-        from unittest.mock import AsyncMock as _AM
-
-        with patch(
-            "asyncio.create_subprocess_exec",
-            new_callable=_AM,
-            side_effect=FileNotFoundError,
-        ):
-            assert await ghm._gh_auth_token() is None
-
-
 class TestGithubResolveToken:
+    """The provider resolves through the ONE chain
+    (backend.ticket_ingestion.github_auth → backend.web.core.github_auth) and
+    keeps no per-provider cache: the chain's own one-minute memo is what makes
+    a token pasted into Connect GitHub reach the next poll."""
+
+    @pytest.fixture(autouse=True)
+    def _no_memo(self):
+        from backend.ticket_ingestion import github_auth as chain
+
+        chain.invalidate()
+        yield
+        chain.invalidate()
+
     async def test_no_token_raises(self, monkeypatch):
+        from backend.ticket_ingestion import github_auth as chain
+
         prov = GithubIssuesProvider(
             TicketProviderConfig(provider="github_issues", project="o/r")
         )
 
-        async def none_secret(**kwargs):
-            return None
+        async def none(_cfg=None):
+            raise chain.GithubAuthError("none")
 
-        monkeypatch.setattr(
-            "backend.ticket_ingestion.providers.github_issues.resolve_secret",
-            none_secret,
-        )
+        monkeypatch.setattr(chain, "resolve_token", none)
         with pytest.raises(ProviderError, match="No GitHub token"):
             await prov._resolve_token()
 
-    async def test_token_cached(self, monkeypatch):
+    async def test_every_call_asks_the_chain(self, monkeypatch):
+        from backend.ticket_ingestion import github_auth as chain
+
         prov = GithubIssuesProvider(
             TicketProviderConfig(provider="github_issues", project="o/r")
         )
         calls = {"n": 0}
 
-        async def one_secret(**kwargs):
+        async def one(_cfg=None):
             calls["n"] += 1
-            return "cached-tok"
+            return "tok-%d" % calls["n"]
 
-        monkeypatch.setattr(
-            "backend.ticket_ingestion.providers.github_issues.resolve_secret",
-            one_secret,
+        monkeypatch.setattr(chain, "resolve_token", one)
+        assert await prov._resolve_token() == "tok-1"
+        assert await prov._resolve_token() == "tok-2"  # no provider-side cache
+
+    async def test_a_stored_per_source_token_is_the_last_fallback(self, monkeypatch):
+        from backend.ticket_ingestion import github_auth as chain
+        from backend.ticket_ingestion.providers import github_issues as ghm
+
+        monkeypatch.setattr(ghm, "_PER_SOURCE_TOKEN_NOTICED", True)
+        prov = GithubIssuesProvider(
+            TicketProviderConfig(
+                provider="github_issues", project="o/r", api_token="per-source"
+            )
         )
-        assert await prov._resolve_token() == "cached-tok"
-        assert await prov._resolve_token() == "cached-tok"
-        assert calls["n"] == 1  # second call served from cache
+
+        async def none(_cfg=None):
+            raise chain.GithubAuthError("none")
+
+        monkeypatch.setattr(chain, "resolve_token", none)
+        assert await prov._resolve_token() == "per-source"
 
 
 class TestGithubLogin:
@@ -2467,7 +2460,7 @@ def test_catalog_offers_start_state_exactly_where_it_works():
         for p in PROVIDER_META
         if any(f["key"] == "start_state" for f in p["fields"])
     }
-    assert offering == {"shortcut", "jira", "linear"}
+    assert offering == {"shortcut", "jira", "linear", "asana"}
     for p in PROVIDER_META:
         for f in p["fields"]:
             if f["key"] == "start_state":
@@ -2527,7 +2520,7 @@ def test_start_comment_text_uses_the_first_name():
 
 
 def test_catalog_start_comment_is_an_optional_plain_field_naming_the_ticket():
-    nouns = {"shortcut": "story", "jira": "issue", "linear": "issue"}
+    nouns = {"shortcut": "story", "jira": "issue", "linear": "issue", "asana": "task"}
     for p in PROVIDER_META:
         fields = {f["key"]: f for f in p["fields"]}
         if "start_comment" not in fields:

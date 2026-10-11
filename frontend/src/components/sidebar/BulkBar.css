@@ -46,3 +46,118 @@
   border-color: var(--red);
   color: var(--red);
 }
+
+/* Opened from the footer's Select…: a checklist of sessions above the rail,
+   then the verbs, then (when asked) an inline confirm strip. */
+#bulk-bar.bulk-open {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+#bulk-bar .bulk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+#bulk-bar .bulk-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#bulk-bar .bulk-list li {
+  margin: 0;
+}
+
+#bulk-bar .bulk-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+#bulk-bar .bulk-list label:hover {
+  background: var(--panel-2);
+}
+
+#bulk-bar .bulk-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bulk-bar .bulk-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+#bulk-bar .bulk-empty {
+  padding: 4px 8px;
+}
+
+#bulk-bar .bulk-verbs {
+  justify-content: flex-start;
+}
+
+#bulk-bar .bulk-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The question is neutral; only Delete's answer is red (via .danger). */
+#bulk-bar .bulk-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#bulk-bar .bulk-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-acts button.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#bulk-bar .bulk-held {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 6px;
+  background: var(--panel);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#bulk-bar .bulk-held-x {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+#bulk-bar .bulk-held-x:hover {
+  color: var(--text);
+}

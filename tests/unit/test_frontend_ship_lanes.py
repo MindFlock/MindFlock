@@ -128,7 +128,7 @@ def test_every_lane_row_leads_with_its_lane():
     # (The ⇡ verb is a single-use const Rolldown folds into the call, so the
     # glyph is pinned on its own.)
     for phrase in (
-        '"? needs your answer"',
+        '"? needs you · question"',
         '"⇡ " + (',
         '" — open the bell"',
         '" · working "',
@@ -217,7 +217,7 @@ def test_a_finished_groups_menu_copies_its_summary():
     assert "disabled: !summary" in menu
     assert "copyText(summary)" in menu
     assert '"Copied the summary as Markdown"' in menu
-    assert '"MindFlock has no summary for this group"' in menu
+    assert '"MindFlock has no summary for this team run"' in menu
     assert "No summary for this group yet" not in js
     # Queued lines keep their Start now / Remove here.
     assert 'taskPath(id, t.id, "start-now")' in menu
@@ -285,7 +285,7 @@ def test_split_and_one_for_all_wait_on_the_servers_caps():
     assert "teamRunCaps(caps).split" in squash(_fn(js, "splitBlockReason"))
     assert "coming next" not in js
     assert "this MindFlock server can't split a line into pieces — update it" in js
-    assert "this MindFlock server can't make one PR for a group — update it" in js
+    assert "this MindFlock server can't make one PR for a team run — update it" in js
 
 
 def test_rows_dedupe_on_repo_branch():
@@ -324,7 +324,7 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
         '"Stop starting new work and stop shipping? Sessions and branches are kept."'
         in menu
     )
-    assert '"Cancel group"' in menu
+    assert '"Cancel team run"' in menu
 
 
 def test_new_source_files_have_no_native_dialog_calls():
@@ -386,7 +386,7 @@ def test_the_leads_thread_shows_plan_ship_card_and_pieces():
     for s in (
         '"Ask for a different split"',
         # The release buttons come from releaseChoices(run.policy.lane): the
-        # group's own lane is the primary, "Open the PR" never merges.
+        # group's own lane is the primary, "Open PR" never merges.
         "releaseChoices(run.policy",
         '"Review the diff"',
         '"Run the check again"',
@@ -402,10 +402,10 @@ def test_the_leads_thread_shows_plan_ship_card_and_pieces():
         assert s in panel, s
     choices = squash(_fn(js, "releaseChoices"))
     for s in (
-        '"Open the PR"',
+        '"Open PR"',
         '"Open it, merge when checks pass"',
-        '"Open the PR, merge when checks pass"',
-        '"Open the PR only"',
+        '"Open PR, merge when checks pass"',
+        '"Open PR only"',
         '"Push the branch"',
     ):
         assert s in choices, s

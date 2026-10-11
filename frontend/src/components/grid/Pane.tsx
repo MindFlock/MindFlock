@@ -34,6 +34,8 @@ import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
+import { DriveButton } from "../presence/Presence";
+import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
@@ -463,6 +465,7 @@ export function Pane({
   useEffect(() => {
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
+  const me = useMe(); // before the early returns: hooks run every render
 
   if (missing) {
     return (
@@ -506,7 +509,7 @@ export function Pane({
                 cleanupMissing(title);
               }}
             >
-              Clean up
+              Delete
             </button>
           </div>
         </div>
@@ -611,6 +614,12 @@ export function Pane({
             {deviceName}
           </span>
         )}
+        {(inst.behind || 0) > 0 && (
+          // Not a .stagechip: those render 0x0 inside a pane head.
+          <span className="pane-behind" title={`${inst.behind} commit(s) on the remote branch that this session doesn't have — Push offers to rebase`}>
+            ↓{inst.behind} behind
+          </span>
+        )}
         {hasDiffStat && <CtxLine inst={inst} />}
         <div className="tabs">
           <button data-tab="agent" className={tab === "agent" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("agent"); }}>
@@ -669,7 +678,7 @@ export function Pane({
               className={"thread-tab" + (tab === "thread" ? " active" : "")}
               title={
                 "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
-                (badge.needs ? `\n${badge.needs} waiting on your answer` : "") +
+                (badge.needs ? `\n${badge.needs} need${badge.needs === 1 ? "s" : ""} you` : "") +
                 (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
               }
               onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
@@ -792,6 +801,9 @@ export function Pane({
         </div>
         <AccountChip inst={inst} />
         <SessionUsageChip inst={inst} />
+        {/* The keyboard is one person's at a time (lib/presence): "Driving"
+            / "Watching — take control", only once someone else is here. */}
+        <DriveButton inst={inst} me={me} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
         {/* Pinned right even when the header scrolls: history and hide stay
             reachable without scrolling to the end of a long header. Copy-all
@@ -937,7 +949,7 @@ export function Pane({
             }}
           />
         )}
-        {reduceMotion && chip.cls === "s-running" && tab === "agent" && (
+        {reduceMotion && chip.cls.split(" ").includes("s-running") && tab === "agent" && (
           <RunningCover paneRef={paneRef} />
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}

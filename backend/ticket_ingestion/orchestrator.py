@@ -287,6 +287,11 @@ class PipelineOrchestrator:
                         "pr_busy": self._busy["pr"],
                         "issue_busy": self._busy["issue"],
                         "held_for_slot": self._held,
+                        # Sources the loader skipped over a missing/invalid
+                        # field — the web status names them (kind "config").
+                        "config_errors": [
+                            e.to_dict() for e in (self.config.source_errors or [])
+                        ],
                         "updated": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -318,6 +323,18 @@ class PipelineOrchestrator:
                 else "off"
             ),
         )
+        # A source the loader skipped (a required field missing or invalid)
+        # is said out loud, once per boot, naming the source and the field:
+        # the other sources and PR review carry on, and the sidebar reads the
+        # same list from the activity beacon.
+        for err in self.config.source_errors or ():
+            _logger.error(
+                "Ticketing source '%s' is skipped — %s: %s. Fix it in Intake → "
+                "Tickets; the other sources keep running.",
+                err.source,
+                "missing %s" % err.field if err.field else "invalid",
+                err.message,
+            )
         # Reset the activity beacon: a previous run's file must not read as
         # "actively handling" before any work has arrived.
         self._write_activity()
@@ -911,6 +928,18 @@ class PipelineOrchestrator:
                 )
                 return
 
+        # A teammate whose MindFlock isn't paired with this one may be on it:
+        # the ticket itself says so (assigned to them + the claim label, or a
+        # started state — tracker_claims). Nothing recorded: it's theirs.
+        claimed = await self._tracker_claim_now(
+            story, fetched=not isinstance(item, Ticket)
+        )
+        if claimed:
+            from backend.ticket_ingestion.tracker_claims import describe
+
+            _logger.info("Not launching %s: %s.", story.slug, describe(claimed))
+            return
+
         # In-flight marker (guard 2): from here on, concurrent scans and
         # duplicate dequeues treat this story as processed.
         marked_at = datetime.now(timezone.utc)
@@ -1020,6 +1049,28 @@ class PipelineOrchestrator:
             )
             return ""
         return ingest_filter_miss(scanner._source, fresh)
+
+    async def _tracker_claim_now(self, story: Ticket, *, fetched: bool = False):
+        """The tracker's claim on ``story`` by someone else, or None
+        (:func:`~backend.ticket_ingestion.tracker_claims.tracker_holder`).
+        A queued ticket is re-read first (it may have waited hours); the read
+        failing falls back to the queued snapshot. Fails open."""
+        from backend.ticket_ingestion.tracker_claims import tracker_holder
+
+        try:
+            scanner = self._scanner_for(story.source_key)
+        except Exception:  # noqa: BLE001 — no scanner: nothing to ask
+            return None
+        fresh = story
+        if not fetched:
+            try:
+                fresh = await scanner._provider.fetch(str(story.id))
+                fresh.source_key = story.source_key
+            except Exception:  # noqa: BLE001 — check the snapshot instead
+                fresh = story
+        return await tracker_holder(
+            fresh, src=scanner._source, provider=scanner._provider
+        )
 
     async def _fetch_story(self, story_id: int | str) -> Ticket:
         """Full ticket detail for a webhook event, via the active provider."""

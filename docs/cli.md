@@ -14,16 +14,17 @@ created from either shows up in both.
 mindflock serve             # start the web UI (localhost only, port 8765)
 mindflock serve tailscale   # also bind this node's Tailscale IPs for phone/tailnet access (URL + QR + token)
 mindflock serve --port 9000 # custom port
-mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
+mindflock serve --setup     # run the guided first-run setup (= `mindflock init`) before binding the port
+mindflock doctor            # dependency preflight; exit 1 if a required dep is missing (git is optional: info only)
 mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
-mindflock init              # guided first run: the same ordered plan as Setup (deps, first computer
-                            # or join?, agent sign-in, Tailscale, GitHub, your repo)
+mindflock init              # guided first run: fixes dependencies, signs your agent in, picks your repo,
+                            # and prints the SAME five-step checklist the app shows, in the same state
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
 mindflock token             # print this machine's access token (for sign-in / pairing)
-mindflock update            # install the newest release and restart the server onto it
-mindflock update --check    # …only print the installed and newest versions
+mindflock update            # install the newest release (the way install.json says) and restart the server onto it
+mindflock update --check    # …only print the installed and newest versions (exit 1 when behind)
 mindflock restart           # restart the running server (onto whatever is installed)
 mindflock --version         # print the installed version
 ```
@@ -40,22 +41,85 @@ unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. `mindflock token` prints the same token later (it reads the
 settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.
 
-### `mindflock update [--ref REF] [--check] [--all-devices] [--yes]`
+### `mindflock init [--yes]`
 
-Updates this MindFlock to the newest release (`--ref` picks another: from this
-machine any tag or branch; the server refuses a branch or an older release
-when the request comes from anywhere else). It prints the installed version
-(and commit) and the newest release, asks once (`--yes` skips the question),
-then asks the running server to install it (`POST /api/update/start`) and
-follows the install. The server restarts itself onto the new version when the
-install is done; the command waits until the server's own hello answers with
-the new commit — the only proof the update took — and exits 0. It exits 1 with
-the installer's last lines when the install failed, was interrupted, or was
-rolled back (the new version didn't come back up, so the previous one was put
-back). A development checkout is refused (`git pull` there instead). With no
-server running it installs in place and tells you to start the server.
-`--check` only prints the two versions. `--all-devices` is `mindflock devices
-update`.
+The guided first run — what a stranger needs between a fresh install and a
+first agent session, in order. It prints the doctor's checks, offers to run the
+fix for each one that carries a command (install tmux, install the agent CLI,
+log it in — the same loop as `mindflock doctor --fix`), asks Setup's "first
+computer, or join one you already have?" question (joining brings the default
+agent, the GitHub token and ticket sources along), picks the folder to work in
+(remembered as `general.last_repo_path`), and ends on the commands that start
+the first session.
+
+Between the fix loop and the folder it prints **the first-run checklist** —
+the same five steps the web UI shows on the empty grid, in the Setup dialog
+and as the "Setup 3/5" chip, read from the same stored state
+(`general.setup`; one definition in `backend/web/core/setup_steps.py`):
+
+```
+Your setup, in order:
+  ✓ 1. Engine and tools              done
+  • 2. Sign in to your agent
+  • 3. Pick a repo
+  • 4. Connect a tracker and GitHub  optional
+  – 5. Your phone                    skipped
+```
+
+Nothing in the wizard ticks a step by hand: the doctor run it performs marks
+1 and 2 when they pass, the first session (`mindflock new`, or **+ New** in
+the app) marks 3, saving the first ticket source marks 4, and a phone
+reaching `/m` (or the owner fetching the QR) marks 5. The two optional steps
+can be skipped from the app (`POST /api/setup/<step>/skip`).
+
+`--yes` takes every default without asking and never runs an installer
+unwatched (the fix lines are printed instead). A piped stdin prints the
+non-interactive report — the same text a first `mindflock serve` prints at
+boot and `GET /api/setup` returns as `report` — and names `mindflock init`
+as the door. Exit code 1 when a required dependency is still missing, like
+`mindflock doctor`. `mindflock serve --setup` runs the same wizard before
+binding the port.
+
+### `mindflock update [--check] [--ref REF] [--yes] [--all-devices]`
+
+One update path for every way MindFlock gets installed. The command reads
+`$MINDFLOCK_HOME/install.json` (default `~/.mindflock/install.json`, written by
+install.sh: `{"method": "uv-tool"|"pipx"|"editable", "ref", "sha", "python",
+"at"}`) to learn how this engine was installed — with no file it detects the
+method from where the running package lives (a `…/uv/tools/…` venv, a
+`…/pipx/venvs/…` venv, or a checkout) — prints the installed version (and
+commit), the method and the newest release, asks once (`--yes` skips the
+question), then:
+
+- **uv-tool** — runs the same pinned `uv tool install --force --python 3.12
+  "mindflock[web] @ git+<repo>@<commit>"` the server's own updater runs (the
+  tag is resolved to its commit first, so what gets installed can't move under
+  it);
+- **pipx** — runs `pipx install --force "mindflock[web] @ git+<repo>@<tag>"`;
+- **editable** (a development checkout) — prints the git commands that update
+  it (`cd <checkout>`, `git fetch --tags origin`, `git checkout <tag>`, `uv sync
+  --group web`, `mindflock restart`) and changes nothing, exit 0. A checkout is
+  recognised from the running package even when a stale install.json says
+  otherwise, so a release install is never written over your working tree.
+
+The install runs in the foreground with its output on your terminal. After a
+good install the command refreshes install.json (`ref`, `sha`, `at`) and, if a
+server is running, restarts it onto the new engine (`POST /api/server/restart`
+with `{"keep_mode": true}` — a server started in tailscale mode stays in it;
+sessions are tmux sessions and keep running), waits until the server's own
+hello answers with the new build, and prints the version it now reports. With
+no server running it just installs and says `start it with: mindflock serve`.
+It exits 1 when the install fails (the installer's output is already on the
+terminal), when the ref resolves to nothing, or when the server doesn't come
+back on the new build in time (run `mindflock restart`).
+
+`--ref` takes a release tag or a commit (a commit `git ls-remote` can't name is
+installed as itself). `--check` only prints the two versions and exits **0 when
+current, 1 when behind** (2 when GitHub couldn't be reached — "couldn't tell"
+is not "current"). `--all-devices` is `mindflock devices update`. Settings →
+Advanced in a browser does the same install through the server
+(`/api/update/*`), and the desktop app's **Update** does it for the engine and
+the app together — see [electron/README.md](../electron/README.md#updating).
 
 ### `mindflock restart`
 
@@ -259,14 +323,31 @@ normal tmux `Ctrl-b d`.
 CI) it exits 1 with ``attach needs a real terminal (running in a script? use
 `mindflock ls --json`)`` instead of letting tmux fail cryptically.
 
-### `mindflock rm TITLE [--yes]`
+### `mindflock rm TITLE... [--yes]` / `mindflock rm --wipe TITLE... [--yes]`
 
-End a session on the running server (`DELETE /api/instances/{title}`). The
-**worktree stays on disk** — recover or wipe it from Recently closed, under the session list in the web
-UI. Prompts `End session '<title>'? Its worktree is kept. [y/N]` unless
-`--yes`/`-y` is passed (for scripts). `TITLE` may be any unambiguous prefix,
-exactly like `attach`; an unknown title prints ``no session named '<title>'
-(run `mindflock ls`)`` and exits 1.
+Close one or more sessions on the running server. By default `rm` **keeps your
+work**: it calls `POST /api/instances/{title}/close`, which stops the agent and
+moves the session to **Recently closed** (under the session list in the web
+UI). The worktree and its branch stay on disk, so the session can be reopened
+later as a fresh agent on the same files. It asks `Close session '<title>'? The
+agent stops; the worktree and branch are kept (Recently closed). [y/N]` once
+for all the titles unless `--yes`/`-y` is passed (for scripts), and prints
+`closed session <title> (worktree and branch kept; see Recently closed)`.
+
+`--wipe` is the destructive form: `POST /api/instances/{title}/cleanup` deletes
+the worktree **and** the branch, so unpushed work in them is gone. On a
+terminal it asks `Delete session '<title>'? This stops the agent and DELETES the
+worktree and branch — unpushed work is lost. [y/N]`; `--yes` skips the
+question. When stdin is **not** a terminal (a pipe, a script, CI) and `--yes`
+is absent it refuses with exit 1 and says so, instead of guessing. If the
+server answers 409 because another session still uses the same folder (a copy
+session, say), the refusal names those sessions on stderr and the command exits
+1; other titles on the same command line are still deleted.
+
+Each `TITLE` may be any unambiguous prefix, exactly like `attach`; every title
+is resolved before anything is closed, so a typo closes nothing. An unknown title
+prints ``no session named '<title>' (run `mindflock ls`)`` and exits 1;
+an ambiguous prefix lists the candidates.
 
 ### `mindflock open TITLE`
 
@@ -348,7 +429,7 @@ else exits 1 saying what the two formats look like.
 
 ### `mindflock devices [list|add|join|cancel|approve|deny|remove|leave|update|bootstrap]`
 
-"Your devices" (Settings → Devices in the app) over `/api/fleet`: group the
+"Your devices" (Settings → Your devices in the app) over `/api/fleet`: group the
 computers **you** own, found over Tailscale, so settings follow you between
 them. The CLI only talks to its own server; that server does the
 device-to-device part. Run these on the computer itself. A request sent from
@@ -360,8 +441,8 @@ MindFlock is refused.
 | `devices` / `devices list [--json]` | your devices (`✓` this device / reachable, `-` offline, `!` reachable but in another group; `runs PR review & issues` marks the one that does — a `!` line warns when none or several do), computers asking to join and their codes, live invite codes, an outgoing request still waiting, and the other computers on your tailnet with the command that adds each. A `!` line also says when this device's key is out of date (re-join), when the access-token gate is off while serving beyond localhost (anyone who can reach this computer could then control your other devices through it), when your other devices can't reach this one (it only listens on 127.0.0.1), and when a device you just let in can't be reached from here. An offline member says why (what discovery found: connection refused, timed out, asleep with when Tailscale last saw it), and every other tailnet device that isn't a MindFlock you can join gets its own line with the reason — after a time-out, the tailnet policy lines that open the port are printed too |
 | `devices add` | prints a one-time code (`XXXX-XXXX`, 10 min, single use) on stdout, and on stderr the command to run on the new computer: `mindflock devices join <this device> <code>`. On a local-only computer a `!` line on stderr says the new one can't reach it to use the code — make it reachable first |
 | `devices add DEVICE [--yes]` | adds a device this one already holds an access token for (pasted under Remote control). No code needed. It first asks you to confirm, because it's the other way round from joining: DEVICE takes **this** computer's shared settings where this one has them (its own stay where this one has none); `--yes` skips the question, and answering no prints `not added` and exits 1. Refused for a device that is already one of yours. A `! settings sync:` line on stderr means the device was added but settings sync didn't start here |
-| `devices bootstrap` | makes a fresh code and prints, on stdout, one line for a brand-new computer that has nothing installed: `curl -LsSf …/<ref>/install.sh \| MINDFLOCK_INSTALL_REF=<ref> sh -s -- --join '<this device> <code>'`, where `<ref>` is `v<this device's version>` (`main` from a source checkout) — so the new computer runs the same version and settings sync works at once. On stderr: the desktop-app twin (download the app, paste `<device> <code>` into Settings → Devices → Paste a code) and how long the code lives |
-| `devices bootstrap --join 'DEVICE CODE'` | the new computer's half (`install.sh --join` runs it): starts the server in the background when none is running (on `--port` / `MINDFLOCK_PORT` when given; its errors in `~/.mindflock/logs/serve.log` — never the startup banner, which carries the access token), signs this computer in to Tailscale when it isn't (prints the sign-in link and waits up to 10 min), makes it reachable when it only listens on 127.0.0.1 (what Settings → Devices → Make reachable saves: Tailscale mode and the access gate on together, then the server's own restart; `mindflock token` shows the access token), sweeps the tailnet, and joins DEVICE with CODE. When the code expired while the computer was being set up, it asks DEVICE instead and waits for the approval there (compare the 6-digit code) |
+| `devices bootstrap` | makes a fresh code and prints, on stdout, one line for a brand-new computer that has nothing installed: `curl -LsSf …/<ref>/install.sh \| MINDFLOCK_INSTALL_REF=<ref> sh -s -- --join '<this device> <code>'`, where `<ref>` is `v<this device's version>` (`main` from a source checkout) — so the new computer runs the same version and settings sync works at once. On stderr: the desktop-app twin (download the app, paste `<device> <code>` into Settings → Your devices → Paste a code) and how long the code lives |
+| `devices bootstrap --join 'DEVICE CODE'` | the new computer's half (`install.sh --join` runs it): starts the server in the background when none is running (on `--port` / `MINDFLOCK_PORT` when given; its errors in `~/.mindflock/logs/serve.log` — never the startup banner, which carries the access token), signs this computer in to Tailscale when it isn't (prints the sign-in link and waits up to 10 min), makes it reachable when it only listens on 127.0.0.1 (what Settings → Your devices → Make reachable saves: Tailscale mode and the access gate on together, then the server's own restart; `mindflock token` shows the access token), sweeps the tailnet, and joins DEVICE with CODE. When the code expired while the computer was being set up, it asks DEVICE instead and waits for the approval there (compare the 6-digit code) |
 | `devices join DEVICE CODE [--yes]` | joins DEVICE's group with a code made there. It first asks you to confirm, because this computer takes DEVICE's shared settings wherever DEVICE has them (your own stay where it has none); `--yes` skips the question |
 | `devices join DEVICE [--yes]` | asks DEVICE (after the same confirmation), prints `Approve on <host>; check it shows code 123 456`, then waits up to 10 min for an answer (it polls every 2 s). Ctrl-C withdraws the request, on DEVICE too. Run it again while the request is still out and it picks the wait back up |
 | `devices cancel` | stops asking to join, and withdraws the request on the other device. Once that device has approved and the join is under way it's too late; the command says so and exits 1 |
@@ -380,7 +461,7 @@ PR review and issue handling run on one of your devices (`runs PR review &
 issues` in the list; the choice is the synced `github.automation_device`).
 Joining keeps an existing choice; when there is none, they run on the joining
 computer if it already runs them, else on the device it joined. To move them,
-choose **Run here** in Settings → Devices on the computer that should run
+choose **Run here** in Settings → Your devices on the computer that should run
 them.
 
 ### `mindflock events [--follow]`

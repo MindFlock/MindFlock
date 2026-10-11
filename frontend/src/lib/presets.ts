@@ -1,16 +1,31 @@
-/** J4 prompt-preset store (port of app.js section 23's store): built-ins +
- * user-saved presets in localStorage "mindflock.prompt_presets". Shared by
- * the New-session preset picker and the Prompts library dialog. The saved
- * list follows the person: each save is mirrored to prefs.prompt_presets
- * (lib/prefs.ts) and arrives on your other devices through settings sync. */
+/** Saved prompts = the templates that are a prompt (lib/templates.ts): one
+ * list, on the server, synced between devices. This module is the
+ * synchronous view the New-session "Saved prompt…" picker, the sidebar
+ * Prompts bar and the Prompts dialog read — every function keeps its old
+ * signature, answering from the templates cache and pushing writes to
+ * `/api/templates` behind the scenes. The per-browser list this used to keep
+ * in localStorage is migrated to the server once (templates.ts). */
 
-import { normalizePresets, notePrefWrite, presetKey } from "./prefs";
+import { normalizePresets, presetKey } from "./prefs";
+import {
+  TEMPLATES_CHANGED,
+  deleteTemplate,
+  ensureTemplates,
+  promptTemplates,
+  isPromptOnly,
+  saveTemplate,
+  setTemplates,
+  templatesLoaded,
+  templatesNow,
+  type Template,
+} from "./templates";
 
 export interface Preset {
   name: string;
   prompt: string;
 }
 
+/** The legacy per-browser key — only the migration reads it now. */
 export const PRESET_STORE_KEY = "mindflock.prompt_presets";
 
 export const BUILTIN_PRESETS: Preset[] = [
@@ -41,36 +56,40 @@ export const BUILTIN_PRESETS: Preset[] = [
   },
 ];
 
+/** Fired on document after every change (same event as TEMPLATES_CHANGED),
+ * so a surface that lists the saved prompts repaints when another edits
+ * them — or when the server's list lands. */
+export const PRESETS_CHANGED = TEMPLATES_CHANGED;
+
+/** The saved prompts as this page knows them. The first call on a page
+ * starts the fetch (the answer arrives as a PRESETS_CHANGED event); until
+ * then the mirror from last time, or nothing. */
 export function loadUserPresets(): Preset[] {
-  try {
-    const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-    return Array.isArray(arr)
-      ? arr.filter(
-          (p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string"
-        )
-      : [];
-  } catch {
-    return [];
-  }
+  if (!templatesLoaded()) void ensureTemplates().catch(() => undefined);
+  return promptTemplates(templatesNow());
 }
 
-/** Fired on document after every save, so a surface that lists the saved
- * prompts (the sidebar Prompts bar) repaints when another one edits them. */
-export const PRESETS_CHANGED = "mf-presets-changed";
-
-/** Write the saved list. Names are trimmed and a name repeated ignoring case
- * keeps only its newest (later) entry — the server's rule is "a preset IS its
- * name", and a list it would shorten silently comes back shortened on the
- * next pull. Returns the names that were dropped, so the caller can say so. */
+/** Write the saved list: whatever is missing from it is deleted on the
+ * server, whatever is new or changed is saved. Names are trimmed and a name
+ * repeated ignoring case keeps only its newest (later) entry — the server's
+ * rule is "a preset IS its name". Returns the names that were dropped, so
+ * the caller can say so. The cache is updated at once; the server calls
+ * follow. */
 export function saveUserPresets(list: Preset[]): string[] {
   const { list: clean, dropped } = normalizePresets(list);
-  try {
-    localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(clean));
-  } catch {
-    /* storage unavailable */
+  const current = promptTemplates(templatesNow());
+  const keep = new Set(clean.map((p) => presetKey(p.name)));
+  for (const p of current)
+    if (!keep.has(presetKey(p.name))) void deleteTemplate(p.name).catch(() => undefined);
+  for (const p of clean) {
+    const old = current.find((q) => presetKey(q.name) === presetKey(p.name));
+    if (!old || old.name !== p.name || old.prompt !== p.prompt)
+      void saveTemplate(templateFor(p)).catch(() => undefined);
   }
-  notePrefWrite(PRESET_STORE_KEY);
-  if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
+  // Optimistic: the picker shows the list it was just handed, not last
+  // fetch's, and the server answers with the same list a moment later.
+  const others = templatesNow().filter((t) => !isPromptOnly(t));
+  setTemplates([...others, ...clean.map(templateFor)]);
   return dropped;
 }
 
@@ -88,26 +107,26 @@ export function upsertUserPreset(
   const hit = old.find((p) => presetKey(p.name) === k);
   const list = old.filter((p) => presetKey(p.name) !== k);
   list.push({ name: n, prompt });
-  saveUserPresets(list);
+  const existing = templatesNow().find((t) => presetKey(t.name) === k);
+  // A full template (program, folder…) that shares the name keeps its other
+  // fields: this is "save this prompt under that name", not "forget the rest".
+  void saveTemplate({ ...(existing || {}), name: n, prompt }).catch(() => undefined);
+  setTemplates([
+    ...templatesNow().filter((t) => presetKey(t.name) !== k),
+    { ...(existing || {}), name: n, prompt },
+  ]);
   return { list, replaced: hit && hit.name.trim() !== n ? hit.name : null };
 }
 
-/** A list saved before names were compared ignoring case may hold "Deploy"
- * and "deploy" both; the server keeps only one. Fold it here first (keeping
- * the newer) and report what went, instead of letting the next pull drop one
- * silently. Returns [] and writes nothing when the list is already clean. */
+/** The server keeps one template per name already, so there is nothing to
+ * fold any more. Kept for the callers that ran it before a pull. */
 export function tidyUserPresets(): string[] {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(raw)) return [];
-  const { list, dropped } = normalizePresets(raw as Preset[]);
-  if (!dropped.length) return [];
-  saveUserPresets(list);
-  return dropped;
+  return [];
+}
+
+function templateFor(p: Preset): Template {
+  const existing = templatesNow().find((t) => presetKey(t.name) === presetKey(p.name));
+  return { ...(existing || {}), name: p.name, prompt: p.prompt };
 }
 
 /** Option values are "b:<name>" / "u:<name>" so the two namespaces can share

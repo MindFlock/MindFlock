@@ -586,6 +586,58 @@ class ShortcutProvider(TicketProvider):
                     f"(HTTP {resp.status}): {text[:200]}"
                 )
 
+    # --- claim mirror (tracker_claims) -------------------------------- #
+
+    can_claim = True
+
+    async def assign_to(self, ticket_id: str, member: str) -> None:
+        """Add ``member`` to the story's owners (``owner_ids`` is the whole
+        list, so read it first and keep everyone already there)."""
+        member = (member or "").strip()
+        if not member:
+            raise ProviderError("no Shortcut member to assign")
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            data = await self._story_json(session, ticket_id)
+            owners = [str(o) for o in data.get("owner_ids") or []]
+            if member in owners:
+                return
+            await self._update_story(
+                session, ticket_id, {"owner_ids": owners + [member]}
+            )
+
+    async def _set_labels(self, ticket_id: str, change) -> None:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            data = await self._story_json(session, ticket_id)
+            names = _label_names(data)
+            wanted = change(names)
+            if wanted is None:
+                return
+            # `labels` replaces the story's set; a name Shortcut doesn't know
+            # yet is created on the way.
+            await self._update_story(
+                session, ticket_id, {"labels": [{"name": n} for n in wanted]}
+            )
+
+    async def add_label(self, ticket_id: str, label: str) -> None:
+        low = label.casefold()
+        await self._set_labels(
+            ticket_id,
+            lambda names: (
+                None if any(n.casefold() == low for n in names) else names + [label]
+            ),
+        )
+
+    async def remove_label(self, ticket_id: str, label: str) -> None:
+        low = label.casefold()
+        await self._set_labels(
+            ticket_id,
+            lambda names: (
+                [n for n in names if n.casefold() != low]
+                if any(n.casefold() == low for n in names)
+                else None
+            ),
+        )
+
     async def append_description(self, ticket_id: str, addition: str) -> None:
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             data = await self._story_json(session, ticket_id)

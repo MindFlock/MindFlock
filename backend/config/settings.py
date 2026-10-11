@@ -55,6 +55,7 @@ __all__ = [
     "NotificationSettings",
     "ExtensionsSettings",
     "PrefsSettings",
+    "PersonSettings",
     "Settings",
     "settings_path",
     "load_settings",
@@ -284,6 +285,18 @@ class TicketingSource:
     # the string the Intake card's select writes, so a bool from a hand-edited
     # file is normalized to it on read.
     start_comment: str = ""
+    # Optional: the claim label's stem. When a session starts on a ticket from
+    # this source MindFlock puts "<claim_label>:working" on it (and assigns it
+    # to you), so a teammate's MindFlock that was never paired with yours sees
+    # who is on it (backend.ticket_ingestion.tracker_claims). Blank = "mindflock".
+    claim_label: str = ""
+    # The last connection test the Intake card (or its auto-test after a save)
+    # ran against THIS configuration: ``{ok, at, message, member_id?, states?,
+    # workspaces?}``. Written only by the test route; the sources PUT carries
+    # the stored one over while the tested fields are unchanged and drops it
+    # otherwise, so a source is "connected" only once what is stored has been
+    # seen to work. Empty = never tested since this configuration was saved.
+    last_test: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -305,6 +318,7 @@ class TicketingSource:
             "ingest_labels",
             "start_state",
             "start_comment",
+            "claim_label",
         ):
             v = getattr(self, k)
             if v:
@@ -313,6 +327,8 @@ class TicketingSource:
             d["workflow_state_id"] = self.workflow_state_id
         if self.poll_interval_seconds is not None:
             d["poll_interval_seconds"] = self.poll_interval_seconds
+        if self.last_test:
+            d["last_test"] = dict(self.last_test)
         return d
 
     @classmethod
@@ -340,6 +356,10 @@ class TicketingSource:
             ingest_labels=str(d.get("ingest_labels", "") or ""),
             start_state=str(d.get("start_state", "") or ""),
             start_comment=_on_or_blank(d.get("start_comment")),
+            claim_label=str(d.get("claim_label", "") or "").strip(),
+            last_test=(
+                dict(d["last_test"]) if isinstance(d.get("last_test"), dict) else {}
+            ),
         )
 
 
@@ -791,9 +811,11 @@ class GithubSettings:
     #: A GitHub OAuth App's client id (public, not a secret), turning Setup's
     #: "Connect GitHub" into GitHub's device flow: a code to type at
     #: github.com/login/device, no token to copy. ``""`` = none registered;
-    #: Setup then drives ``gh auth login --web``, or links to a pre-filled
-    #: token page (:mod:`backend.web.core.github_auth`). ``MINDFLOCK_GITHUB_
-    #: CLIENT_ID`` wins over it. SYNCED, like the token it produces.
+    #: Setup then falls back to the build's ``DEFAULT_GITHUB_OAUTH_CLIENT_ID``
+    #: (:mod:`backend.web.core.github_auth`), and with that empty too drives
+    #: ``gh auth login --web`` or links to a pre-filled token page.
+    #: ``MINDFLOCK_GITHUB_CLIENT_ID`` (``mindflock serve --github-client-id``)
+    #: wins over it. SYNCED, like the token it produces.
     oauth_client_id: str = ""
 
     def repo_list(self) -> List[str]:
@@ -1014,9 +1036,18 @@ class GeneralSettings:
     skip the access token (:mod:`backend.web.core.tailnet_trust`). Empty (the
     default) = off. Stored lower-cased and de-duplicated.
 
-    ``onboarded``: set once the user has ever created a session (or finished the
-    first-run checklist). Gates the first-run setup card so it only auto-shows
-    for a brand-new install, not every time the grid happens to be empty.
+    ``setup``: the first-run checklist (:mod:`backend.web.core.setup_steps`),
+    ``{tools, agent_login, repo, tracker, phone}`` each ``{"done": bool, "at":
+    iso|null}`` (the two optional ones also ``"skipped": bool``). Written only by
+    the backend's own hooks (the doctor, the first session create, the first
+    ticket source, a phone QR fetch, the skip route) and only forwards. Empty
+    until something is done; stored per device.
+
+    ``onboarded``: DERIVED — ``True`` exactly when ``setup.repo.done``. Kept as
+    a field so settings sync and every existing reader keep working; a store
+    that still carries the old standalone ``onboarded: true`` is migrated on
+    load (``repo`` becomes done; the doctor marks ``tools`` / ``agent_login``
+    on its next run). Nothing writes it directly any more.
 
     ``last_repo_path``: the folder the most recent session (or init-wizard run)
     was based on, written by the create-session path. It seeds the New Session
@@ -1037,7 +1068,7 @@ class GeneralSettings:
     ``serve_mode``: the server bind mode used when no explicit mode is given
     (CLI arg / ``CS_WEB_MODE``) — ``"tailscale"`` binds 0.0.0.0 for phone
     access, ``""``/``"local"`` binds 127.0.0.1. This is what makes the
-    Settings → Mobile toggle stick across restarts: the desktop app's
+    Settings → Your phone toggle stick across restarts: the desktop app's
     auto-start runs a bare ``mindflock serve``, which falls back to this.
 
     ``shared_link``: the Tailscale Service name this device answers the shared
@@ -1066,6 +1097,12 @@ class GeneralSettings:
     (never set) reads as ON — the whole point of the limit gate is that running
     out is temporary. ``False`` turns it off.
 
+    ``revive_on_start``: whether the server relaunches, in the background
+    after it boots, every session whose agent was running when it stopped
+    (:mod:`backend.web.core.revive`), instead of leaving them Offline until
+    someone opens them. ``None`` (never set) reads as ON; ``False`` turns it
+    off (``POST /api/server/revive-all`` still runs the sweep on demand).
+
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
     agents can list, message, spawn and steer each other. ``None`` (never set)
@@ -1092,7 +1129,8 @@ class GeneralSettings:
     auth_token: str = ""  # SECRET
     auth_mode: str = ""  # "" / "auto" | "on" | "off"
     tailnet_trusted_logins: List[str] = field(default_factory=list)
-    onboarded: bool = False
+    setup: Dict[str, dict] = field(default_factory=dict)
+    onboarded: bool = False  # derived: setup["repo"]["done"] (see docstring)
     last_repo_path: str = ""
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
@@ -1100,6 +1138,7 @@ class GeneralSettings:
     ingestion_autostart: Optional[bool] = None
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
+    revive_on_start: Optional[bool] = None  # None = on (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
@@ -1118,7 +1157,10 @@ class GeneralSettings:
             d["auth_mode"] = self.auth_mode
         if self.tailnet_trusted_logins:
             d["tailnet_trusted_logins"] = list(self.tailnet_trusted_logins)
-        if self.onboarded:
+        setup = _setup_compact(self.setup)
+        if setup:
+            d["setup"] = setup
+        if self.onboarded or _setup_repo_done(self.setup):
             d["onboarded"] = True
         if self.last_repo_path:
             d["last_repo_path"] = self.last_repo_path
@@ -1134,6 +1176,8 @@ class GeneralSettings:
             d["setup_devices"] = self.setup_devices
         if self.resume_on_usage_reset is not None:
             d["resume_on_usage_reset"] = self.resume_on_usage_reset
+        if self.revive_on_start is not None:
+            d["revive_on_start"] = self.revive_on_start
         if self.agent_mcp is not None:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
@@ -1146,13 +1190,21 @@ class GeneralSettings:
 
     @classmethod
     def from_dict(cls, d: dict) -> "GeneralSettings":
+        # Migration from the standalone flag: a store that says onboarded but
+        # has no checklist yet (or one without the repo step) gets repo.done —
+        # that flag always meant "has created a session". Idempotent: once the
+        # step is written the flag is derived from it and never consulted.
+        setup = _setup_state(d.get("setup"))
+        if bool(d.get("onboarded", False)) and not _setup_repo_done(setup):
+            setup = _setup_mark_repo(setup)
         return cls(
             session_budget_usd=_opt_float(d.get("session_budget_usd")),
             window_budget_usd=_opt_float(d.get("window_budget_usd")),
             auth_token=str(d.get("auth_token", "") or ""),
             auth_mode=str(d.get("auth_mode", "") or "").strip().lower(),
             tailnet_trusted_logins=_login_list(d.get("tailnet_trusted_logins")),
-            onboarded=bool(d.get("onboarded", False)),
+            setup=setup,
+            onboarded=_setup_repo_done(setup),
             last_repo_path=str(d.get("last_repo_path", "") or ""),
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
@@ -1160,6 +1212,7 @@ class GeneralSettings:
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
             setup_devices=_setup_devices(d.get("setup_devices")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
+            revive_on_start=_opt_bool(d.get("revive_on_start")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
@@ -1488,6 +1541,76 @@ class PeerSettings:
         )
 
 
+#: A person id: a UUID (``uuid4`` when this device made it), lower-case.
+_PERSON_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+#: A git identity the way ``git -c user.email=…`` takes it: no whitespace and
+#: no angle brackets (git refuses them), one ``@``.
+_GIT_EMAIL_RE = re.compile(r"^[^\s<>@]{1,128}@[^\s<>@]{1,125}$")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def person_id(v: Any) -> str:
+    """A well-formed person id (lower-cased), or ``""``."""
+    s = str(v or "").strip().lower()
+    return s if _PERSON_ID_RE.match(s) else ""
+
+
+def _person_text(v: Any, limit: int) -> str:
+    """One line of display text: control characters dropped, trimmed."""
+    return _CONTROL_RE.sub("", str(v or "")).strip()[:limit]
+
+
+def _git_name(v: Any) -> str:
+    """A git author name: one line, no ``<>`` (git rejects them)."""
+    return re.sub(r"[<>]", "", _person_text(v, 100)).strip()
+
+
+def _git_email(v: Any) -> str:
+    s = _person_text(v, 254)
+    return s if _GIT_EMAIL_RE.match(s) else ""
+
+
+@dataclass
+class PersonSettings:
+    """The PERSON all of one person's devices share (docs/people.md).
+
+    * ``id`` — a UUID made once on the first device; every device the person
+      pairs adopts it (the pairing handshake), and settings sync settles a
+      disagreement deterministically. An identifier, never a credential:
+      the bearer token and device pairing keep gating everything.
+    * ``name`` — how MindFlock names the person ("" = unnamed).
+    * ``git_name`` / ``git_email`` — the identity MindFlock's OWN commits
+      (fast-track, team-run integration, peer export) are authored as; blank
+      = the repo's git config decides (:mod:`backend.web.core.person`).
+
+    ``id`` is device-held (settings sync treats it specially); the other
+    three sync like any shared field.
+    """
+
+    id: str = ""
+    name: str = ""
+    git_name: str = ""
+    git_email: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            k: getattr(self, k)
+            for k in ("id", "name", "git_name", "git_email")
+            if getattr(self, k)
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PersonSettings":
+        return cls(
+            id=person_id(d.get("id")),
+            name=_person_text(d.get("name"), 80),
+            git_name=_git_name(d.get("git_name")),
+            git_email=_git_email(d.get("git_email")),
+        )
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -1514,6 +1637,7 @@ class Settings:
     extensions: ExtensionsSettings = field(default_factory=ExtensionsSettings)
     peer: PeerSettings = field(default_factory=PeerSettings)
     prefs: PrefsSettings = field(default_factory=PrefsSettings)
+    person: PersonSettings = field(default_factory=PersonSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -1544,6 +1668,7 @@ class Settings:
             "extensions": self.extensions,
             "peer": self.peer,
             "prefs": self.prefs,
+            "person": self.person,
         }
 
     @classmethod
@@ -1571,7 +1696,7 @@ class Settings:
                 migrated = migrate(d)
                 d = migrated if isinstance(migrated, dict) else d
                 version += 1
-        return cls(
+        obj = cls(
             coding_cli=CodingCliSettings.from_dict(_group(d, "coding_cli")),
             ticketing=TicketingSettings.from_dict(_group(d, "ticketing")),
             auth_profiles=AuthProfilesSettings.from_dict(_group(d, "auth_profiles")),
@@ -1586,8 +1711,11 @@ class Settings:
             extensions=ExtensionsSettings.from_dict(_group(d, "extensions")),
             peer=PeerSettings.from_dict(_group(d, "peer")),
             prefs=PrefsSettings.from_dict(_group(d, "prefs")),
+            person=PersonSettings.from_dict(_group(d, "person")),
             schema_version=version,
         )
+        _derive_setup_from_store(obj)
+        return obj
 
 
 # --------------------------------------------------------------------------- #
@@ -1679,6 +1807,63 @@ def _setup_devices(v: Any) -> str:
     """``"first"`` / ``"join"`` (Setup's devices question), else ``""``."""
     s = str(v or "").strip().lower()
     return s if s in ("first", "join") else ""
+
+
+def _setup_state(v: Any) -> Dict[str, dict]:
+    """The first-run checklist in its full shape (every step present), from
+    whatever is stored. The shape is owned by
+    :mod:`backend.web.core.setup_steps`; a non-dict reads as nothing done."""
+    from backend.web.core import setup_steps
+
+    return setup_steps.normalize(v)
+
+
+def _setup_compact(v: Any) -> Dict[str, dict]:
+    """The on-disk form of the checklist: ``{}`` while nothing is done or
+    skipped, so an untouched store serializes unchanged."""
+    from backend.web.core import setup_steps
+
+    return setup_steps.compact(v)
+
+
+def _setup_repo_done(v: Any) -> bool:
+    """``onboarded``'s one source of truth: the repo step is done."""
+    if not isinstance(v, dict):
+        return False
+    repo = v.get("repo")
+    return bool(isinstance(repo, dict) and repo.get("done"))
+
+
+def _derive_setup_from_store(s: "Settings") -> None:
+    """Checklist steps a veteran's store already proves: a configured ticket
+    source means "Connect a tracker" is done. Runs on every load, idempotent,
+    never un-marks."""
+    import datetime as _dt
+
+    try:
+        setup = s.general.setup
+        tracker = setup.get("tracker") or {}
+        if s.ticketing.sources and not (tracker.get("done") or tracker.get("skipped")):
+            setup["tracker"] = {
+                "done": True,
+                "at": _dt.datetime.now(_dt.timezone.utc)
+                .replace(microsecond=0)
+                .isoformat(),
+            }
+    except Exception:  # noqa: BLE001 — derivation never blocks a load
+        pass
+
+
+def _setup_mark_repo(v: Dict[str, dict]) -> Dict[str, dict]:
+    """The checklist with ``repo`` done now (the ``onboarded`` migration)."""
+    import datetime as _dt
+
+    out = _setup_state(v)
+    out["repo"] = {
+        "done": True,
+        "at": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    return out
 
 
 def _login_list(v: Any) -> List[str]:
