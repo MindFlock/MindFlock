@@ -107,7 +107,8 @@ Overrides:
 - `MINDFLOCK_UPDATE_FEED` — point the in-app updater at a plain directory URL
   holding a `latest*.yml` and the build it names (staging, or an end-to-end
   test) instead of the GitHub release. `MINDFLOCK_UPDATE_AUTOINSTALL=1` installs
-  as soon as the download finishes (unattended tests only).
+  as soon as the download finishes, without waiting for you to be away
+  (unattended tests only — see [Automatic updates](#automatic-updates)).
   `MINDFLOCK_DISABLE_AUTOUPDATE=1` turns the in-app updater off.
 
 ## Updating
@@ -152,11 +153,58 @@ than the app keeps today's engine-update toast.
   tagged build without them fails), so you approve "unverified developer" once
   when you first install, and updates after that need nothing. The `.zip` on
   the release is what it swaps in; the `.dmg` stays the download.
-- Wherever the app can't swap itself (a dev run, a copy run from the mounted
-  dmg, a failed signature check) the button still updates the engine and then
-  opens the download page.
+- Wherever the app can't swap itself (a copy run from the mounted dmg, a
+  failed signature check, a build without update metadata) the button still
+  updates the engine and then opens the download page.
+- A **run from source** — the dev shell (`--mindflock-dev` / `MINDFLOCK_DEV=1`)
+  or any unpackaged `electron .` — never offers an update at all: no app
+  toast, no OS notification for a release, no engine toast, no automatic run.
+  It is a git checkout; a release download would replace it rather than
+  update it. Settings → Advanced says *running from source — update the
+  checkout with git* and shows the engine's own update view (git commands for
+  an editable engine). `main.log` records `running from source … update checks
+  off`.
 
-The pure helpers (`cmpVersion`, the skew verdict, the shared run state) live in
+### Automatic updates
+
+On by default; **Settings → Advanced → Install updates automatically** turns
+them off (stored as `autoUpdate` in the shell's `update-state.json`, next to
+the skipped version). Off means updates are only offered, as above.
+
+Once a minute `autoUpdateTick` asks the pure `autoUpdateVerdict`
+(`electron/update.js`, pinned in `electron/test/autoupdate.test.js`) whether
+to run the same `updateEverything()` the button runs, now. It goes only when
+all of these hold:
+
+- **Something is ready.** An app release electron-updater has *fully
+  downloaded* (the engine moves with it, first, in the same run), or — the app
+  current — an engine behind the newest release. An app release still
+  downloading, or one the updater can't apply here (macOS refusing the swap, a
+  missing `latest*.yml`), waits for the person: the manual toast's fallback is
+  theirs to pick, and updating the engine alone would run it ahead of the app.
+- **Not skipped, not already tried.** "Skip this version" holds for automatic
+  updates too, and each version is attempted at most once per run of the app
+  (a failed or no-op attempt never loops).
+- **You're away.** The system has been idle (no input anywhere) for 10
+  minutes, or the screen is locked. For an engine-only update a window
+  minimized/hidden that long also counts — it restarts the server, not the
+  window; an app update relaunches the window, so it waits for real idle.
+- **No agent mid-turn.** No session on this machine reads `working`
+  (`/api/instances`). Turns survive the restart (tmux), but their events, the
+  ticket pipeline and team runs are driven by the server — so it waits for a
+  quiet moment, up to 2 hours of waiting while you're away, then goes anyway
+  so an overnight loop can't hold updates off forever.
+
+Why not "install on quit": `autoInstallOnAppQuit` stays false because the
+engine has to be updated *before* the app is swapped — a shell run inside
+WSL/your home that a quitting app can't reliably wait for — and quitting must
+stay instant. After an update (automatic or not) the next app page shows a
+one-off note: *Updated MindFlock to 0.8.1 while you were away.* The decision
+for each tick is logged to `main.log` when it changes (`auto-update: not now —
+the person is active (app 0.8.1)`).
+
+The pure helpers (`cmpVersion`, the skew verdict, the shared run state, the
+automatic-update verdict) live in
 `electron/update.js` and are pinned by `node --test` in `electron/test/`.
 Outside the app, `mindflock update` is the same path for the engine alone (see
 [docs/cli.md](../docs/cli.md)).

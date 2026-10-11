@@ -92,6 +92,12 @@ contextBridge.exposeInMainWorld('mfupdate', {
   // for progress — { app: {state, version, percent, error}, run: {state, step, message} }.
   install: () => ipcRenderer.invoke('update:install'),
   state: () => ipcRenderer.invoke('update:state'),
+  // Settings → Advanced's "Install updates automatically" switch; resolves to
+  // { autoUpdate } as stored. The current value rides on mfengine.updateInfo().
+  setAuto: (on) => ipcRenderer.invoke('update:set-auto', !!on),
+  // The "Updated to X" note after an update, handed out ONCE (null after).
+  done: () => ipcRenderer.invoke('update:done'),
+  onDone: (cb) => ipcRenderer.on('update:done-ready', () => cb()),
 })
 
 // Engine-drift bridge: the shell pins the engine to its own version at install

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The desktop app updates itself.** Automatic updates are on by default
+  (Settings → Advanced → **Install updates automatically** turns them off):
+  a downloaded app release — engine first, then the app — or an engine-only
+  release installs on its own once you've been away for 10 minutes (system
+  idle, or the screen locked; a minimized window also counts for an
+  engine-only update) and no session on this machine is mid-turn, waiting at
+  most 2 hours for that. "Skip this version" is honoured, each version is
+  tried at most once per run, an update the app can't apply here (e.g. macOS
+  refusing the swap) is left to the toast's button, and nothing installs on
+  quit. Afterwards the app says once what happened ("Updated MindFlock to
+  0.8.1 while you were away"). The decision is a pure function
+  (`autoUpdateVerdict` in `electron/update.js`) with its own tests.
+
+### Fixed
+
+- **A desktop app run from source no longer offers updates it can't do.**
+  The dev shell (and any unpackaged `electron .` run) used to show the
+  "Update available" toast and an OS notification for every release, and its
+  Update button fell through to "This app can't update itself here — install
+  the download that just opened". A source run now skips release checks
+  entirely (logged in `main.log`), refuses the update run, and Settings →
+  Advanced says "running from source — update the checkout with git" instead
+  of a button. A packaged app pointed at a developer checkout
+  (`MINDFLOCK_REPO`, or an editable engine) no longer shows the engine-update
+  toast either.
+
 ## [0.8.0] - 2026-10-11
 
 ### Added

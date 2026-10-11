@@ -66,4 +66,127 @@ function runState (run, install) {
   }
 }
 
-module.exports = { cmpVersion, versionSkew, skewNotice, runState }
+// ---------------------------------------------------------------------------
+// Automatic install: "should the shell run updateEverything() by itself NOW?"
+//
+// main.js polls this once a minute (autoUpdateTick) with what it can see and
+// does what it says. Pure on purpose: every rule below is a promise to the
+// person at the keyboard, and each one is pinned in electron/test.
+//
+// The rules, in order (the first that applies decides):
+//   1. A run from source (dev shell / unpackaged) never updates anything —
+//      it is a git checkout; a release build would replace it.
+//   2. The person turned automatic updates off (Settings → Advanced).
+//   3. An update run is already going (theirs, or ours).
+//   4. What would we install? An app release that electron-updater has FULLY
+//      downloaded ('ready') — the engine moves with it inside the same run.
+//      An app release that is still downloading, or that the updater can't
+//      apply here (state 'error': the self-signed mac refusing the swap, a
+//      build without update metadata), waits for the person: the manual
+//      toast's fallback (the download page) is theirs to choose, and
+//      updating the engine alone would push it AHEAD of the app. With the
+//      app current, an engine behind the newest release (and not past the
+//      app's own version) is the target.
+//   5. Not the version they skipped, and not one we already tried this run of
+//      the app (a failed or no-op attempt must not retry every minute).
+//   6. Never while they're working: the screen is locked, or the system has
+//      been idle (no keyboard/mouse anywhere) for `idleNeedSec`. An
+//      engine-only update also goes when the window has been minimized or
+//      hidden that long — it restarts the server, not the window; an app
+//      update relaunches the window, which would pop up over whatever they
+//      are doing, so it waits for a real idle.
+//   7. Agent turns running ('working' sessions on this machine) hold it off:
+//      they survive a server restart (tmux), but a turn's events, the ticket
+//      pipeline and team runs are driven by the server, so wait for a quiet
+//      moment — up to `workingCapMs` of waiting while away, then go anyway
+//      (an overnight loop would otherwise block every update forever).
+//
+// `s` fields: source, enabled, running (bools); appCurrent, appState
+// ('off'|'idle'|'downloading'|'ready'|'error'), appVersion (the downloaded /
+// downloading one), release (latest release seen), engineCurrent,
+// engineLatest, skipped, tried (versions), idleSec, locked, hiddenSec,
+// working (count, or null = unknown), waitedMs (how long `working` has held
+// an otherwise-ready update), idleNeedSec, workingCapMs.
+// Returns { go, kind: 'app'|'engine'|'', version, wait, why }.
+const AUTO_IDLE_SEC = 10 * 60
+const AUTO_WORKING_CAP_MS = 2 * 60 * 60 * 1000
+
+function autoUpdateVerdict (s) {
+  const st = s || {}
+  const no = (why, extra) => Object.assign({ go: false, kind: '', version: '', wait: false, why }, extra || {})
+  if (st.source) return no('running from source — update it with git')
+  if (!st.enabled) return no('automatic updates are off')
+  if (st.running) return no('an update is already running')
+
+  const current = String(st.appCurrent || '')
+  const appNewer = (!!st.release && cmpVersion(st.release, current) > 0) ||
+    (!!st.appVersion && cmpVersion(st.appVersion, current) > 0)
+  let kind = ''
+  let version = ''
+  if (appNewer) {
+    if (st.appState !== 'ready') {
+      return no(st.appState === 'error'
+        ? "the app can't update itself here — the toast offers the download"
+        : 'the app update is not downloaded yet')
+    }
+    kind = 'app'
+    version = String(st.appVersion || st.release)
+  } else if (st.engineLatest && st.engineCurrent && cmpVersion(st.engineLatest, st.engineCurrent) > 0 &&
+      cmpVersion(st.engineLatest, current) <= 0) {
+    // Only up to the app's own version: an engine release newer than this
+    // app means the app is behind too (its release just not seen yet) —
+    // updating the engine alone would run it ahead of the app.
+    kind = 'engine'
+    version = String(st.engineLatest)
+  } else {
+    return no('nothing to update')
+  }
+  const at = { kind, version }
+  if (st.skipped && String(st.skipped) === version) return no('the person skipped ' + version, at)
+  if ((st.tried || []).map(String).indexOf(version) !== -1) return no('already tried ' + version + ' this run', at)
+
+  const need = st.idleNeedSec == null ? AUTO_IDLE_SEC : st.idleNeedSec
+  const away = !!st.locked || (st.idleSec || 0) >= need ||
+    (kind === 'engine' && (st.hiddenSec || 0) >= need)
+  if (!away) return no('the person is active', at)
+
+  const cap = st.workingCapMs == null ? AUTO_WORKING_CAP_MS : st.workingCapMs
+  const working = st.working == null ? 0 : st.working
+  if (working > 0 && (st.waitedMs || 0) < cap) {
+    return no(working + ' session' + (working === 1 ? ' is' : 's are') + ' working', Object.assign({ wait: true }, at))
+  }
+  return {
+    go: true, kind, version, wait: false,
+    why: working > 0 ? 'away, still working after the cap — updating anyway' : 'away and nothing working',
+  }
+}
+
+// How many of this machine's sessions have an agent turn running, from a
+// GET /api/instances body (null when it couldn't be read). Rows mirrored from
+// other devices (`<device>::<title>`) don't count: this restart doesn't touch
+// them.
+function workingCount (rows) {
+  if (!Array.isArray(rows)) return null
+  return rows.filter((r) => r && r.activity === 'working' &&
+    String(r.title || '').indexOf('::') === -1).length
+}
+
+// The one-line "what happened" notice after an update, or null. `rec` is what
+// main.js persisted before the swap ({ kind, to, from, auto }); `running` is
+// the version now running — an app swap that didn't land says nothing.
+function updatedNotice (rec, running) {
+  if (!rec || !rec.to) return null
+  if (rec.kind === 'app' && cmpVersion(running, rec.to) < 0) return null
+  const what = rec.kind === 'engine' ? 'the MindFlock engine' : 'MindFlock'
+  return {
+    version: String(rec.to),
+    auto: !!rec.auto,
+    message: 'Updated ' + what + ' to ' + rec.to +
+      (rec.auto ? ' while you were away.' : '.'),
+  }
+}
+
+module.exports = {
+  cmpVersion, versionSkew, skewNotice, runState,
+  autoUpdateVerdict, workingCount, updatedNotice, AUTO_IDLE_SEC, AUTO_WORKING_CAP_MS,
+}
