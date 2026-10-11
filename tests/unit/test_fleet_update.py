@@ -197,6 +197,29 @@ async def test_blocked_offline_old_and_current_members_are_skipped_not_fatal(
 
 
 @pytest.mark.asyncio
+async def test_a_member_too_old_to_have_the_route_answers_405_and_is_skipped(
+    monkeypatch,
+):
+    """Pre-0.7.5 has no apply route, and a POST to an unknown path falls
+    through to the static mount, which answers 405 — not 404. That once
+    halted the whole rollout with "answered HTTP 405"."""
+    f = _Fleet(monkeypatch, {"mini": {}, "rig": {}})
+    f.on_apply = {"mini": (405, {"detail": "Method Not Allowed"})}
+    f.boots = {"rig": {"after": 1, "commit": "a" * 40}}
+    doc = await _rollout()
+    assert doc["state"] == "done"
+    assert _steps(doc) == {"mini": "skipped", "rig": "done", "laptop": "current"}
+    assert "too old" in doc["members"][0]["detail"]
+
+
+def test_an_old_peer_refusing_a_post_reads_as_too_old():
+    dev = {"key": "mini", "host": "Mini"}
+    assert fleet._err_text(405, None, dev) == "update MindFlock on Mini first"
+    assert fleet._err_text(404, None, dev) == "update MindFlock on Mini first"
+    assert fleet._err_text(500, None, dev) == "Mini answered HTTP 500"
+
+
+@pytest.mark.asyncio
 async def test_a_member_that_answers_blocked_is_skipped(monkeypatch):
     f = _Fleet(monkeypatch, {"mini": {}})
     f.on_apply = {"mini": (409, {"ok": False, "blocked": True, "install": "other"})}
@@ -415,6 +438,59 @@ def test_a_rollout_cut_off_by_a_restart_reads_as_halted(tmp_path):
     doc = fleet_update.status()
     assert doc["state"] == "halted" and "restarted" in doc["error"]
     assert _steps(doc) == {"mini": "failed", "rig": "not_started"}
+
+
+def _halted_on_mini():
+    """The record the 405 left behind: mini failed, this device not started."""
+    fleet_update._write(
+        {
+            "state": "halted",
+            "tag": "v9.9.9",
+            "version": "9.9.9",
+            "started_at": 1.0,
+            "finished_at": 2.0,
+            "error": "Mini: Mini answered HTTP 405",
+            "members": [
+                {"key": "mini", "host": "Mini", "step": "failed", "detail": "x"},
+                {"key": "gone", "host": "Gone", "step": "skipped", "detail": "offline"},
+                {
+                    "key": "laptop",
+                    "host": "Laptop",
+                    "self": True,
+                    "step": "not_started",
+                },
+            ],
+        }
+    )
+
+
+def _hellos(monkeypatch, devs):
+    monkeypatch.setattr(fleet, "_device", lambda key: devs.get(key))
+
+
+def test_a_halted_rollout_reads_as_done_once_everyone_caught_up(monkeypatch):
+    """Updated by hand on the member: the halt no longer describes anything."""
+    _halted_on_mini()
+    _hellos(monkeypatch, {"mini": {"reachable": True, "version": "9.9.9"}})
+    doc = fleet_update.status()
+    assert doc["state"] == "done" and doc["error"] == ""
+    assert _steps(doc) == {"mini": "current", "gone": "skipped", "laptop": "current"}
+    assert doc["members"][0]["detail"] == "on v9.9.9 now"
+    # Settled on disk, not just in this answer.
+    assert fleet_update._read()["state"] == "done"
+
+
+def test_a_halted_rollout_stays_halted_while_anyone_is_behind(monkeypatch):
+    _halted_on_mini()
+    _hellos(monkeypatch, {"mini": {"reachable": True, "version": "0.7.4"}})
+    assert fleet_update.status()["state"] == "halted"
+    # An unreachable member proves nothing about what it runs.
+    _hellos(monkeypatch, {"mini": {"reachable": False, "version": "9.9.9"}})
+    assert fleet_update.status()["state"] == "halted"
+    # Nor does the member being current while THIS device is not.
+    _hellos(monkeypatch, {"mini": {"reachable": True, "version": "9.9.9"}})
+    monkeypatch.setattr(self_update, "installed_version", lambda: "0.7.4")
+    assert fleet_update.status()["state"] == "halted"
 
 
 # --------------------------------------------------------------------------- #
