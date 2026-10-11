@@ -26179,7 +26179,8 @@ var PREF_DEFAULTS = {
 	break_every: null,
 	idle_flock: null,
 	idle_after: null,
-	hints: null
+	hints: null,
+	map_tour: null
 };
 var PREF_MAP = [
 	{
@@ -26248,6 +26249,11 @@ var PREF_MAP = [
 	{
 		ls: "mf_hints",
 		field: "hints",
+		kind: "json-bool"
+	},
+	{
+		ls: "mf_map_tour",
+		field: "map_tour",
 		kind: "json-bool"
 	}
 ];
@@ -26646,6 +26652,7 @@ var useUi = create((set, get) => ({
 	hintsEnabled: load$1("mf_hints", true),
 	dismissedHints: new Set(load$1("mf_hints_seen", [])),
 	tourOpen: false,
+	mapTourSeen: load$1("mf_map_tour", false) === true,
 	lastTab: load$1("cs_lasttab", {}),
 	openDialog: null,
 	dialogTarget: null,
@@ -26838,6 +26845,11 @@ var useUi = create((set, get) => ({
 		next.add(key);
 		save("mf_hints_seen", [...next]);
 		set({ dismissedHints: next });
+	},
+	markMapTourSeen: () => {
+		if (get().mapTourSeen) return;
+		save("mf_map_tour", true);
+		set({ mapTourSeen: true });
 	},
 	openTour: () => set({ tourOpen: true }),
 	finishTour: () => set({ tourOpen: false }),
@@ -30748,6 +30760,9 @@ function applyLive(fields) {
 				break;
 			case "hints":
 				st.hintsEnabled = v !== false;
+				break;
+			case "map_tour":
+				st.mapTourSeen = v === true;
 				break;
 			case "keymap":
 				reloadKeymap();
@@ -53985,7 +54000,7 @@ function ActivityCard(p) {
 			className: "ct-act-list",
 			children: [!p.rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
 				className: "ct-muted",
-				children: "Nothing yet — the agent hasn't touched a file since the map armed."
+				children: "Nothing yet. Files the agent reads and edits appear here as it works."
 			}), (p.open ? p.rows : p.rows.slice(0, 1)).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: "ct-act-row" + (r.bad ? " bad" : "") + (r.rule ? " rule " + r.rule : ""),
@@ -54754,6 +54769,12 @@ function sharedWhere(z) {
 var clip = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var plural$2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
+var ALL_FOLDERS = "\0folders";
+var FOLDERS_SHOWN = 5;
+function shownFolders(folders, all, ruled, max = FOLDERS_SHOWN) {
+	if (all || folders.length <= max) return folders;
+	return folders.filter((f, i) => i < max || ruled(f));
+}
 function changeSummary(M, agents) {
 	const primary = agents.find((A) => A.ag.primary) || null;
 	const mineA = (A) => A.ag.primary || !!primary && A.ag.parent === primary.ag.key;
@@ -54877,9 +54898,11 @@ function BirdIndex(p) {
 			p,
 			sum,
 			riskOpen,
-			onRisk: () => setRisk(!riskOpen)
+			onRisk: () => setRisk(!riskOpen),
+			allFolders: ex.has(ALL_FOLDERS),
+			onAllFolders: () => toggle(ALL_FOLDERS)
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rules, { p })
+		p.zones.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rules, { p })
 	] });
 	if (p.size === "wide") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ct-left ct-bix",
@@ -55257,7 +55280,7 @@ function Rules({ p }) {
 		}) })]
 	});
 }
-function Changes({ p, sum, riskOpen, onRisk }) {
+function Changes({ p, sum, riskOpen, onRisk, allFolders = false, onAllFolders }) {
 	const M = p.M;
 	if (!sum.total) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ct-bix-changes",
@@ -55292,7 +55315,7 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 					children: "⚠ Could break"
 				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			sum.others > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-bix-sum ct-bix-split",
 				title: "This session = the pane header's file count (its branch, helpers included)",
 				children: [
@@ -55381,7 +55404,7 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 				className: "ct-bix-folders",
 				role: "list",
 				"aria-label": "Changed folders",
-				children: sum.folders.map((cf) => {
+				children: shownFolders(sum.folders, allFolders, (cf) => live.some((t) => isUnder(cf.n, t.node))).map((cf) => {
 					const n = cf.n;
 					const keep = live.find((t) => t.type === "keep" && isUnder(n, t.node)) || null;
 					const only = live.find((t) => t.type === "only" && isUnder(n, t.node)) || null;
@@ -55449,6 +55472,13 @@ function Changes({ p, sum, riskOpen, onRisk }) {
 						})]
 					}, n.id + ":" + cf.label);
 				})
+			}),
+			sum.folders.length > FOLDERS_SHOWN && onAllFolders && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ct-bix-allf",
+				"aria-expanded": allFolders,
+				onClick: onAllFolders,
+				children: allFolders ? "Show fewer folders" : `Show all ${sum.folders.length} folders`
 			})
 		]
 	});
@@ -57773,6 +57803,243 @@ function SessionPanel({ m, a }) {
 	] });
 }
 //#endregion
+//#region src/components/grid/codemap/MapTour.tsx
+var MAP_TOUR = [
+	{
+		target: "",
+		title: "Your code, drawn as a tree",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"The ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "trunk" }),
+			" is the repo, each ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "branch" }),
+			" a folder and each ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "leaf" }),
+			" a file. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Roots" }),
+			" ",
+			"underground are the tests, and the piles on the ground are docs and config. Thicker branches hold more code."
+		] })
+	},
+	{
+		target: "",
+		title: "Bright leaves are what changed",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Grey is untouched. A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "glowing leaf" }),
+			" is a file an agent changed, and the ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "lit branches" }),
+			" lead you to it. Labels like ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "web/core ●4" }),
+			" count the changes in that folder. Click a leaf or folder for its card."
+		] })
+	},
+	{
+		target: "[data-hud=\"left\"]",
+		title: "Each agent is a bird",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"This column lists the agents working on this repo: what each is doing now and what it changed. A bird",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: " nests" }),
+			" where it mostly works. Click a row to follow its bird around the tree."
+		] })
+	},
+	{
+		target: ".ct-bix-risk-tog",
+		title: "What could break",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Hover a bright leaf and the files that ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "import" }),
+			" it light up ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "gold" }),
+			". ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚠ Could break" }),
+			" ",
+			"ranks the changed files by how much depends on them, so you know what to review first."
+		] })
+	},
+	{
+		target: ".ct-rules",
+		title: "Fence agents in or out",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
+			": agents may read a folder but never edit it. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
+			": they may edit only inside it. Pick one, then click a folder on the tree. Every changed folder in the column has the same two buttons."
+		] })
+	},
+	{
+		target: ".cm-search",
+		title: "Getting around",
+		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"Press ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+			" to find a file or function. Scroll to zoom, drag to pan, double-click a folder to zoom into it, and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⌂ Whole tree" }),
+			" brings you back. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
+			" beside Agents is the legend."
+		] })
+	}
+];
+var CARD_W = 320;
+var GAP = 12;
+function placeCard(t, W, H, cardH) {
+	const cw = Math.min(CARD_W, W - 16);
+	const clampX = (x) => Math.max(8, Math.min(x, W - cw - 8));
+	const clampY = (y) => Math.max(8, Math.min(y, H - cardH - 8));
+	if (!t) return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+	if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * .4) return {
+		left: t.x + t.w + GAP,
+		top: clampY(t.y)
+	};
+	if (t.y + t.h + GAP + cardH <= H - 8) return {
+		left: clampX(t.x),
+		top: t.y + t.h + GAP
+	};
+	if (t.y - GAP - cardH >= 8) return {
+		left: clampX(t.x),
+		top: t.y - GAP - cardH
+	};
+	return {
+		left: clampX((W - cw) / 2),
+		top: clampY((H - cardH) / 2)
+	};
+}
+function MapTour({ rootRef, onClose, steps = MAP_TOUR }) {
+	const [i, setI] = (0, import_react.useState)(0);
+	const [rect, setRect] = (0, import_react.useState)(null);
+	const [box, setBox] = (0, import_react.useState)({
+		W: 0,
+		H: 0
+	});
+	const [cardH, setCardH] = (0, import_react.useState)(180);
+	const cardRef = (0, import_react.useRef)(null);
+	const step = steps[Math.min(i, steps.length - 1)];
+	const last = i >= steps.length - 1;
+	const measure = (0, import_react.useCallback)(() => {
+		const root = rootRef.current;
+		if (!root) return;
+		const r0 = root.getBoundingClientRect();
+		setBox({
+			W: r0.width,
+			H: r0.height
+		});
+		const el = step.target ? root.querySelector(step.target) : null;
+		const r = el ? el.getBoundingClientRect() : null;
+		setRect(r && r.width > 0 && r.height > 0 ? {
+			x: r.left - r0.left,
+			y: r.top - r0.top,
+			w: r.width,
+			h: r.height
+		} : null);
+		if (cardRef.current) setCardH(cardRef.current.offsetHeight || 180);
+	}, [rootRef, step.target]);
+	(0, import_react.useLayoutEffect)(measure, [measure, i]);
+	(0, import_react.useEffect)(() => {
+		const root = rootRef.current;
+		if (!root || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => measure());
+		ro.observe(root);
+		return () => ro.disconnect();
+	}, [rootRef, measure]);
+	(0, import_react.useEffect)(() => {
+		cardRef.current?.focus();
+	}, [i]);
+	const onKey = (e) => {
+		e.stopPropagation();
+		if (e.key === "Escape") {
+			e.preventDefault();
+			onClose();
+		} else if (e.key === "ArrowRight" || e.key === "Enter") {
+			e.preventDefault();
+			if (last) onClose();
+			else setI(i + 1);
+		} else if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			if (i > 0) setI(i - 1);
+		}
+	};
+	const pos = placeCard(rect, box.W, box.H, cardH);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "mt-layer",
+		"aria-live": "polite",
+		children: [rect && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "mt-ring",
+			"aria-hidden": "true",
+			style: {
+				left: rect.x - 4,
+				top: rect.y - 4,
+				width: rect.w + 8,
+				height: rect.h + 8
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: cardRef,
+			className: "mt-card",
+			role: "dialog",
+			"aria-modal": "false",
+			"aria-labelledby": "mt-title",
+			tabIndex: -1,
+			style: {
+				left: pos.left,
+				top: pos.top
+			},
+			onKeyDown: onKey,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mt-step",
+						children: [
+							i + 1,
+							" of ",
+							steps.length
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "mt-skip",
+						onClick: onClose,
+						children: "Skip tour"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+					id: "mt-title",
+					children: step.title
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mt-body",
+					children: step.body
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mt-foot",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "mt-dots",
+							"aria-hidden": "true",
+							children: steps.map((_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: k === i ? "on" : "" }, k))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "cm-btn mt-back",
+							disabled: i === 0,
+							onClick: () => setI(i - 1),
+							children: "Back"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "cm-btn on mt-next",
+							onClick: () => last ? onClose() : setI(i + 1),
+							children: last ? "Done" : "Next"
+						})
+					]
+				})
+			]
+		})]
+	});
+}
+//#endregion
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
@@ -57862,6 +58129,38 @@ function useThemeKey() {
 	}, []);
 	return k;
 }
+var PREFETCHING = /* @__PURE__ */ new Set();
+var TOUR_ON = "";
+function prefetchNeeded(hasSnap, hasModel, inflight) {
+	return !inflight && !(hasSnap && hasModel);
+}
+async function prefetchCodeMap(title) {
+	const en = entryFor(title);
+	if (!prefetchNeeded(!!en.snap, MODEL_OF.has(title), PREFETCHING.has(title))) return;
+	PREFETCHING.add(title);
+	try {
+		if (!en.snap) {
+			const d = await fetchSnapshot(title);
+			if (!d || "unchanged" in d && d.unchanged) return;
+			en.snap = d;
+			en.snapAt = Date.now();
+			en.err = "";
+		}
+		if (MODEL_OF.has(title)) return;
+		const snap = en.snap;
+		const label = snap.repo?.label || title;
+		const repoKey = snap.repo?.id || "title:" + title;
+		let r = RAW.get(snap);
+		if (!r) {
+			r = rawFromSnapshot(snap, label);
+			RAW.set(snap, r);
+		}
+		const M = cachedModel(repoKey, r) || await layoutModel(repoKey, r);
+		MODEL_OF.set(title, M);
+	} catch {} finally {
+		PREFETCHING.delete(title);
+	}
+}
 function CodeMapTab({ title, active }) {
 	const [ever, setEver] = (0, import_react.useState)(active);
 	(0, import_react.useEffect)(() => {
@@ -57894,6 +58193,10 @@ function CodeMap({ title, active }) {
 	const [reqBusy, setReqBusy] = (0, import_react.useState)({});
 	const [goExempt, setGoExempt] = (0, import_react.useState)(null);
 	const [toast, setToast] = (0, import_react.useState)(null);
+	const [tour, setTour] = (0, import_react.useState)(false);
+	const tourSeen = useUi((s) => s.mapTourSeen);
+	const markTourSeen = useUi((s) => s.markMapTourSeen);
+	const rootRef = (0, import_react.useRef)(null);
 	const themeKey = useThemeKey();
 	const reducedMotion = useUi((s) => s.reduceMotion) || prefersReducedMotion();
 	const searchRef = (0, import_react.useRef)(null);
@@ -58644,6 +58947,39 @@ function CodeMap({ title, active }) {
 			} else if (ctlRef.current?.key(ev.nativeEvent)) ev.preventDefault();
 		}
 	};
+	(0, import_react.useEffect)(() => {
+		if (!active || !model || tourSeen || tour || TOUR_ON && TOUR_ON !== title) return;
+		TOUR_ON = title;
+		setTour(true);
+	}, [
+		active,
+		model,
+		tourSeen,
+		tour,
+		title
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!active && tour) {
+			setTour(false);
+			if (TOUR_ON === title) TOUR_ON = "";
+		}
+	}, [
+		active,
+		tour,
+		title
+	]);
+	(0, import_react.useEffect)(() => () => {
+		if (TOUR_ON === title) TOUR_ON = "";
+	}, [title]);
+	const openTour = () => {
+		TOUR_ON = title;
+		setTour(true);
+	};
+	const closeTour = () => {
+		setTour(false);
+		if (TOUR_ON === title) TOUR_ON = "";
+		markTourSeen();
+	};
 	const failed = !!err && !snap && !live && !model;
 	const ctl = ctlRef.current;
 	const tool = ctl?.v?.tool || "explore";
@@ -58730,6 +59066,7 @@ function CodeMap({ title, active }) {
 	}) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "cm-root ct-root",
+		ref: rootRef,
 		onKeyDown: onRootKey,
 		children: [
 			!failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -58758,38 +59095,57 @@ function CodeMap({ title, active }) {
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "cm-seg ct-tools",
+						className: "ct-rules",
 						role: "group",
-						"aria-label": "Paint a rule",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							type: "button",
-							className: "red" + (tool === "keep" ? " on" : ""),
-							"aria-pressed": tool === "keep",
-							disabled: !model,
-							title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
-							onClick: () => {
-								ctl?.setTool("keep");
-								setTick((x) => x + 1);
-							},
-							children: ["⛔", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "lbl",
-								children: " Keep out"
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							type: "button",
-							className: "green" + (tool === "only" ? " on" : ""),
-							"aria-pressed": tool === "only",
-							disabled: !model,
-							title: "Only here: the one folder agents may edit in; everything else dims",
-							onClick: () => {
-								ctl?.setTool("only");
-								setTick((x) => x + 1);
-							},
-							children: ["✓", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "lbl",
-								children: " Only here"
-							})]
-						})]
+						"aria-label": "Rules for agents",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ct-rules-k",
+								"aria-hidden": "true",
+								children: "Rules"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "cm-seg ct-tools",
+								role: "group",
+								"aria-label": "Paint a rule",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "red" + (tool === "keep" ? " on" : ""),
+									"aria-pressed": tool === "keep",
+									disabled: !model,
+									title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
+									onClick: () => {
+										ctl?.setTool("keep");
+										setTick((x) => x + 1);
+									},
+									children: ["⛔", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "lbl",
+										children: " Keep out"
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "green" + (tool === "only" ? " on" : ""),
+									"aria-pressed": tool === "only",
+									disabled: !model,
+									title: "Only here: the one folder agents may edit in; everything else dims",
+									onClick: () => {
+										ctl?.setTool("only");
+										setTick((x) => x + 1);
+									},
+									children: ["✓", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "lbl",
+										children: " Only here"
+									})]
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-btn",
+								title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
+								onClick: () => add ? setAdd(null) : openAdd("red", ""),
+								children: add ? "Close" : "+ Zone"
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "cm-grow" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SearchBox, {
@@ -58797,7 +59153,7 @@ function CodeMap({ title, active }) {
 						title,
 						onPick
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					zones.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "cm-guard " + guard.cls,
 						title: guard.title,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -58807,13 +59163,6 @@ function CodeMap({ title, active }) {
 							className: "lbl",
 							children: guard.label
 						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "cm-btn",
-						title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
-						onClick: () => add ? setAdd(null) : openAdd("red", ""),
-						children: add ? "Close" : "+ Zone"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
@@ -58829,6 +59178,18 @@ function CodeMap({ title, active }) {
 							className: "cm-count",
 							children: "plan"
 						}) : null]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-btn ct-guide" + (tour ? " on" : ""),
+						"aria-pressed": tour,
+						title: "A short tour of the Map: how to read the tree, what could break, rules",
+						disabled: !model,
+						onClick: () => tour ? closeTour() : openTour(),
+						children: ["?", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lbl",
+							children: " Guide"
+						})]
 					})
 				]
 			}),
@@ -58980,6 +59341,10 @@ function CodeMap({ title, active }) {
 				"aria-live": "polite",
 				role: "status",
 				children: announce
+			}),
+			tour && model && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MapTour, {
+				rootRef,
+				onClose: closeTour
 			})
 		]
 	});
@@ -59404,6 +59769,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 //#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
+var MAP_PREFETCH_MS = 1500;
 var BODY_TABS = /* @__PURE__ */ new Set([
 	"agent",
 	"shell",
@@ -59622,6 +59988,18 @@ function Pane({ inst, drag, dragging }) {
 		loading,
 		histPane,
 		paneFind,
+		tab,
+		title
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!focused || !caps.git || missing || loading || tab === "map") return;
+		const t = setTimeout(() => void prefetchCodeMap(title), MAP_PREFETCH_MS);
+		return () => clearTimeout(t);
+	}, [
+		focused,
+		caps.git,
+		missing,
+		loading,
 		tab,
 		title
 	]);

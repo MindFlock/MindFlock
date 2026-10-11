@@ -73,7 +73,13 @@ def _isolate(tmp_path, monkeypatch):
     """Fresh caches for every test (module-level memos would otherwise carry
     one test's repo state into the next)."""
     monkeypatch.setenv("MINDFLOCK_TOOL_FEED_DIR", str(tmp_path / "feed"))
-    for name in ("_LIST_CACHE", "_CHANGED_CACHE", "_GRAPH_CACHE", "_SCAN_MEMO"):
+    for name in (
+        "_LIST_CACHE",
+        "_CHANGED_CACHE",
+        "_GRAPH_CACHE",
+        "_SCAN_MEMO",
+        "_MEMO_LOADED",
+    ):
         getattr(cm, name).clear()
     for name in ("_INDEX", "_INFO_MEMO", "_FULL_MEMO"):
         getattr(co, name).clear()

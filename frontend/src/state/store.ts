@@ -215,6 +215,10 @@ interface UiState {
    * It never opens by itself: the palette's "Tour", the ? sheet and
    * Settings → General's Replay open it. */
   tourOpen: boolean;
+  /** The Map tab's tour has been seen (synced pref `map_tour`): it opens itself on a first Map only until then. */
+  mapTourSeen: boolean;
+  /** Remember the Map tour as seen (Done / Skip / Esc). */
+  markMapTourSeen(): void;
   /** Per-session last active tab (agent | terminal | diff | queue). */
   lastTab: Record<string, string>;
   /** The open modal, if any (one at a time, like the vanilla app). */
@@ -369,6 +373,7 @@ export const useUi = create<UiState>((set, get) => ({
   hintsEnabled: load<boolean>("mf_hints", true),
   dismissedHints: new Set(load<string[]>("mf_hints_seen", [])),
   tourOpen: false,
+  mapTourSeen: load<boolean>("mf_map_tour", false) === true,
   lastTab: load<Record<string, string>>("cs_lasttab", {}),
   openDialog: null,
   dialogTarget: null,
@@ -565,6 +570,11 @@ export const useUi = create<UiState>((set, get) => ({
     next.add(key);
     save("mf_hints_seen", [...next]);
     set({ dismissedHints: next });
+  },
+  markMapTourSeen: () => {
+    if (get().mapTourSeen) return;
+    save("mf_map_tour", true);
+    set({ mapTourSeen: true });
   },
   openTour: () => set({ tourOpen: true }),
   finishTour: () => set({ tourOpen: false }),

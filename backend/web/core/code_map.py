@@ -35,6 +35,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import marshal
 import os
 import posixpath
 import re
@@ -498,6 +499,165 @@ _SCAN_MEMO_MAX = 200_000
 _GRAPH_CACHE: Dict[tuple, dict] = {}
 _GRAPH_CACHE_MAX = 8
 _JSON_MEMO: Dict[str, tuple] = {}  # abs -> (mtime_ns, size, parsed|None)
+
+# --------------------------------------------------------------------------- #
+# The scan memo on disk. ``_SCAN_MEMO`` is what makes a rebuild cheap (a file
+# that hasn't changed is one stat, not a read), but it lived only in the
+# process: every server restart re-read every source file of every open
+# session's worktree — 3 s for a 3k-file repo, the whole of the Map's "slow
+# first open". So each worktree's slice of the memo is written to a small
+# marshal file after a build that read anything, and loaded once per
+# worktree per process before its first build. marshal (not pickle): it can
+# carry the records' tuples/dicts/lists verbatim and deserializing it never
+# runs code; the file is tagged with the format AND the interpreter version
+# (marshal's wire format is per-Python). Best-effort throughout: a missing,
+# stale, truncated or oddly-shaped file is simply no memo.
+# --------------------------------------------------------------------------- #
+_MEMO_DISK_VERSION = 1
+_MEMO_DISK_MAX_BYTES = 96 * 1024 * 1024
+# Memo files kept (one per worktree, newest first): worktrees come and go, and
+# a file is ~1 KB per source file, so the directory is pruned on every save.
+_MEMO_DISK_KEEP = 40
+_MEMO_LOADED: Set[str] = set()
+
+
+def _memo_dir() -> str:
+    """Beside the tool-feed dir (so the same ``MINDFLOCK_TOOL_FEED_DIR``
+    redirect tests use isolates it too)."""
+    return os.path.join(os.path.dirname(_feed_dir()), ".code-map-cache")
+
+
+def _memo_file(wt: str) -> str:
+    key = hashlib.sha1(os.path.realpath(wt).encode("utf-8", "replace")).hexdigest()[:20]
+    return os.path.join(
+        _memo_dir(),
+        "%s.v%d.py%d%d.scan"
+        % (key, _MEMO_DISK_VERSION, sys.version_info[0], sys.version_info[1]),
+    )
+
+
+def _memo_load(wt: str) -> int:
+    """Merge the worktree's on-disk scan records into ``_SCAN_MEMO`` (entries
+    already in memory win). Once per worktree per process. Returns how many
+    records were taken (0 = none / no file / unreadable). Never raises."""
+    try:
+        root = os.path.realpath(wt)
+        with _LOCK:
+            if root in _MEMO_LOADED:
+                return 0
+            _MEMO_LOADED.add(root)
+        path = _memo_file(root)
+        try:
+            if os.path.getsize(path) > _MEMO_DISK_MAX_BYTES:
+                return 0
+            with open(path, "rb") as fh:
+                doc = marshal.load(fh)
+        except (OSError, EOFError, ValueError, TypeError):
+            return 0
+        if (
+            not isinstance(doc, dict)
+            or doc.get("v") != _MEMO_DISK_VERSION
+            or doc.get("wt") != root
+        ):
+            return 0
+        recs = doc.get("recs")
+        if not isinstance(recs, dict):
+            return 0
+        prefix = root + os.sep
+        took = 0
+        with _LOCK:
+            for abs_path, ent in recs.items():
+                if (
+                    not isinstance(abs_path, str)
+                    or not abs_path.startswith(prefix)
+                    or not isinstance(ent, tuple)
+                    or len(ent) != 3
+                    or not isinstance(ent[0], int)
+                    or not isinstance(ent[1], int)
+                    or not isinstance(ent[2], dict)
+                    or abs_path in _SCAN_MEMO
+                ):
+                    continue
+                if len(_SCAN_MEMO) >= _SCAN_MEMO_MAX:
+                    break
+                _SCAN_MEMO[abs_path] = ent
+                took += 1
+        return took
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _memo_save(wt: str) -> bool:
+    """Write the worktree's slice of ``_SCAN_MEMO`` atomically (tmp + replace).
+    Never raises; False = nothing written."""
+    try:
+        root = os.path.realpath(wt)
+        prefix = root + os.sep
+        with _LOCK:
+            recs = {k: v for k, v in _SCAN_MEMO.items() if k.startswith(prefix)}
+        if not recs:
+            return False
+        try:
+            blob = marshal.dumps({"v": _MEMO_DISK_VERSION, "wt": root, "recs": recs})
+        except ValueError:
+            return False
+        if len(blob) > _MEMO_DISK_MAX_BYTES:
+            return False
+        d = _memo_dir()
+        os.makedirs(d, exist_ok=True)
+        path = _memo_file(root)
+        fd, tmp = tempfile.mkstemp(prefix=".scan-", dir=d)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(blob)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return False
+        _memo_prune(d)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _memo_prune(d: str, keep: Optional[int] = None) -> int:
+    """Delete all but the ``keep`` most recently written memo files (and any
+    stray temp file older than an hour). Returns how many went. Never raises."""
+    keep = _MEMO_DISK_KEEP if keep is None else keep
+    gone = 0
+    try:
+        rows = []
+        now = time.time()
+        for name in os.listdir(d):
+            p = os.path.join(d, name)
+            try:
+                mt = os.stat(p).st_mtime
+            except OSError:
+                continue
+            if name.startswith(".scan-"):
+                if now - mt > 3600:
+                    try:
+                        os.unlink(p)
+                        gone += 1
+                    except OSError:
+                        pass
+                continue
+            if name.endswith(".scan"):
+                rows.append((mt, p))
+        rows.sort(reverse=True)
+        for _mt, p in rows[keep:]:
+            try:
+                os.unlink(p)
+                gone += 1
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return gone
+
 
 _JS_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte")
 _JS_PROBE_EXTS = _JS_EXTS + (".json", ".css")
@@ -1985,8 +2145,11 @@ def graph_detail(
             if hit is not None:
                 _note_partial(wt, False)
                 return dict(hit, edges=[list(e) for e in hit["edges"]])
+        _memo_load(wt)
         res = _build_graph(wt, rels, budget)
         _note_partial(wt, bool(res["partial"]))
+        if res.get("reads"):
+            _memo_save(wt)
         if fp is not None and not res["partial"]:
             with _LOCK:
                 _GRAPH_CACHE[key] = res
@@ -2128,6 +2291,7 @@ def _build_graph(wt: str, rels: List[str], budget: Optional[float] = None) -> di
         "names": {e: tuple(sorted(s)) for e, s in edges.items() if s},
         "entry": entry,
         "api_edges": api,
+        "reads": reads[0],
     }
 
 

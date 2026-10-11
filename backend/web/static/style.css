@@ -11632,6 +11632,200 @@ button.ct-chip:hover {
   color: var(--muted);
   margin-left: 2px;
 }
+
+/* --- Calmer default surface (the toolbar's Rules group, the folder list cap) --- */
+
+/* The rule tools read as one group: "Rules [⛔ Keep out][✓ Only here][+ Zone]". */
+.ct-rules {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding-left: 10px;
+  margin-left: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.ct-rules-k {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Each changed folder's ⛔ / ✓ stay visible (the caption explains them) but
+   quiet until the row is pointed at or focused, or a rule is on. */
+.ct-bix-folder .ct-bix-zb:not(.on) {
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+.ct-bix-folder:hover .ct-bix-zb,
+.ct-bix-folder:focus-within .ct-bix-zb {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .ct-bix-folder .ct-bix-zb:not(.on) {
+    opacity: 1;
+  }
+}
+
+.ct-bix-allf {
+  display: block;
+  margin: 4px 10px 2px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-bix-allf:hover {
+  text-decoration: underline;
+}
+
+@container (max-width: 760px) {
+  .ct-rules-k {
+    display: none;
+  }
+
+  .ct-rules {
+    padding-left: 6px;
+  }
+}
+
+/* --- The Map tour (codemap/MapTour.tsx): a coach mark over the live map --- */
+
+.mt-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.mt-ring {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 0 9999px rgba(0, 0, 0, 0.28);
+  transition:
+    left 200ms ease,
+    top 200ms ease,
+    width 200ms ease,
+    height 200ms ease;
+}
+
+.mt-card {
+  position: absolute;
+  width: min(320px, calc(100% - 16px));
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  outline: none;
+  animation: mt-in 160ms ease-out;
+}
+
+@keyframes mt-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.mt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.mt-step {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mt-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.mt-skip:hover {
+  color: var(--text);
+}
+
+.mt-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mt-body {
+  margin: 0 0 10px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.mt-body kbd {
+  font: 600 10.5px/1 var(--cm-mono);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+.mt-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mt-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.mt-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.mt-dots i.on {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mt-card {
+    animation: none;
+  }
+
+  .mt-ring {
+    transition: none;
+  }
+}
 }
 
 /* 155 — after

@@ -635,6 +635,10 @@ async def lifespan(app: FastAPI):
     # developer's real state there, and this LAUNCHES agents.
     if _revive_on_start_loop_enabled():
         _register_task(_revive.run_on_start())
+    # The Map's snapshot warmer reads every open session's worktree — never
+    # under pytest (ENGINE is the developer's real state there).
+    if _code_map_warm_on_start_enabled():
+        _register_task(_code_map_warm_on_start())
     # Addon startup hooks (e.g. the Assistant seeds its working dir here).
     for _addon in ADDONS:
         try:
@@ -8460,43 +8464,112 @@ async def instance_code_map(title: str, fp: str = "") -> JSONResponse:
     inst, wt, err = _wt_or_409(title)
     if err is not None:
         return err
-
-    def _build() -> dict:
-        repo_id, repo = _rz_repo(wt)
-        zones = _red_zones.effective_zones(wt, repo_id)
-        raw = _code_map.fingerprint(inst, wt)
-        cur = _code_map_fp(inst, wt, zones, raw)
-        if (
-            fp
-            and cur is not None
-            and fp == cur
-            and not _code_map.last_graph_partial(wt)
-        ):
-            return {"unchanged": True, "fingerprint": cur}
-        extra: list = []
-        red = [z for z in zones if z.get("kind", "red") == "red"]
-        if red:
-            # Git-ignored files are shown for RED zones only ("my config
-            # file"); a green scope never makes an ignored file interesting.
-            _files, _dirs, extra, _trunc = _red_zones.zone_files(wt, red)
-        files, truncated = _code_map.list_files(wt, extra, fp=raw)
-        graph = _code_map.build_graph(wt, files, fp=raw)
-        partial = bool(graph.get("partial"))
-        return {
-            "root": wt,
-            "repo": repo,
-            "fingerprint": (cur + _PARTIAL_FP_SUFFIX) if (cur and partial) else cur,
-            "files": files,
-            "truncated": truncated,
-            "edges": graph.get("edges") or [],
-            "graph_partial": partial,
-            "langs": graph.get("langs") or {},
-        }
-
     try:
-        return JSONResponse(await asyncio.to_thread(_build))
+        return JSONResponse(await asyncio.to_thread(_code_map_snapshot, inst, wt, fp))
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": str(err)}, status_code=500)
+
+
+def _code_map_snapshot(inst, wt: str, fp: str = "") -> dict:
+    """The snapshot ``GET /code-map`` answers (see the route), built off the
+    event loop. Every piece is cached on the worktree fingerprint, so calling
+    it for a worktree whose snapshot is current costs one fingerprint."""
+    repo_id, repo = _rz_repo(wt)
+    zones = _red_zones.effective_zones(wt, repo_id)
+    raw = _code_map.fingerprint(inst, wt)
+    cur = _code_map_fp(inst, wt, zones, raw)
+    if fp and cur is not None and fp == cur and not _code_map.last_graph_partial(wt):
+        return {"unchanged": True, "fingerprint": cur}
+    extra: list = []
+    red = [z for z in zones if z.get("kind", "red") == "red"]
+    if red:
+        # Git-ignored files are shown for RED zones only ("my config
+        # file"); a green scope never makes an ignored file interesting.
+        _files, _dirs, extra, _trunc = _red_zones.zone_files(wt, red)
+    files, truncated = _code_map.list_files(wt, extra, fp=raw)
+    graph = _code_map.build_graph(wt, files, fp=raw)
+    partial = bool(graph.get("partial"))
+    return {
+        "root": wt,
+        "repo": repo,
+        "fingerprint": (cur + _PARTIAL_FP_SUFFIX) if (cur and partial) else cur,
+        "files": files,
+        "truncated": truncated,
+        "edges": graph.get("edges") or [],
+        "graph_partial": partial,
+        "langs": graph.get("langs") or {},
+    }
+
+
+# The Map's first open used to pay for everything at once: the file list and
+# the import graph (3 s on a 3k-file repo after a restart), then the layout.
+# Now the snapshot is warmed in the background — once at boot for every open
+# session (serialized, one worktree at a time, starting after the boot quiet
+# window AND the background revive's start, so it never competes with the
+# terminals and agents coming up), and the page prefetches it for the session
+# you are looking at — so opening the tab is a cache hit.
+_CODE_MAP_WARM_DELAY_S = _BOOT_QUIET_SECONDS + 15.0
+_CODE_MAP_WARM_GAP_S = 0.5
+_CODE_MAP_WARM_BUDGET_S = 90.0
+
+
+def _code_map_warm_all(budget_s: float = _CODE_MAP_WARM_BUDGET_S) -> dict:
+    """Build (or confirm) the snapshot of every session that has a worktree.
+    One at a time with a breather between, within ``budget_s`` in all; a
+    worktree whose build fails is skipped. Returns ``{"warmed": n,
+    "skipped": n, "partial": [titles]}`` — the log line. Never raises."""
+    out = {"warmed": 0, "skipped": 0, "partial": []}
+    if not git_available():
+        return out
+    deadline = time.monotonic() + max(0.0, budget_s)
+    for title in list(ENGINE.instances):
+        if time.monotonic() > deadline:
+            out["skipped"] += 1
+            continue
+        inst = ENGINE.instances.get(title)
+        try:
+            wt = inst.GetWorktreePath() if inst is not None else ""
+            if not wt or not os.path.isdir(wt):
+                out["skipped"] += 1
+                continue
+            snap = _code_map_snapshot(inst, wt, "")
+            if snap.get("graph_partial"):
+                out["partial"].append(title)
+            out["warmed"] += 1
+        except Exception:  # noqa: BLE001
+            out["skipped"] += 1
+        time.sleep(_CODE_MAP_WARM_GAP_S)
+    return out
+
+
+def _code_map_warm_on_start_enabled() -> bool:
+    """``MINDFLOCK_CODE_MAP_WARM=0`` switches the boot warm-up off (a scratch
+    ``serve`` on a slow disk); it is always off under pytest."""
+    if os.environ.get("MINDFLOCK_CODE_MAP_WARM", "1") == "0":
+        return False
+    return not _restart._under_pytest()
+
+
+async def _code_map_warm_on_start() -> None:
+    """Boot: wait out the quiet window (and the revive sweep's start), then
+    warm every session's snapshot."""
+    try:
+        await asyncio.sleep(_CODE_MAP_WARM_DELAY_S)
+        res = await asyncio.to_thread(_code_map_warm_all)
+        if log.ErrorLog is not None and (res["warmed"] or res["partial"]):
+            log.ErrorLog.Printf(
+                "code map warmed for %d session(s)%s",
+                res["warmed"],
+                (
+                    (" (partial: %s)" % ", ".join(res["partial"]))
+                    if res["partial"]
+                    else ""
+                ),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _child_fences(title: str) -> list:
