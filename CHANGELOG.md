@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Phone (`/m`): a Sessions sheet replaces the native picker, with the rail's state words and tones; a session actions sheet (row ⋯, long press, or header ⋯) offers Restart (offline only), Pause / Resume session, Close and Delete… (inline confirm, "Folder in use by …" on a 409), plus Recently closed with Reopen. Push/Merge questions and gates are inline sheets (no `confirm()`); the stage resets after a PR opens; "Terminal" replaces "Shell"; the New sheet uses the desktop's button words.
+## [0.8.0] - 2026-10-11
 
 ### Added
 
@@ -134,6 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a block.
 
 ### Changed
+
+- Phone (`/m`): a Sessions sheet replaces the native picker, with the rail's state words and tones; a session actions sheet (row ⋯, long press, or header ⋯) offers Restart (offline only), Pause / Resume session, Close and Delete… (inline confirm, "Folder in use by …" on a 409), plus Recently closed with Reopen. Push/Merge questions and gates are inline sheets (no `confirm()`); the stage resets after a PR opens; "Terminal" replaces "Shell"; the New sheet uses the desktop's button words.
 
 - **Rail: rename, select and filter.** A rename is the session's name
   everywhere (rail, phone page via the new `name` field on
@@ -3394,7 +3396,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.0
 [0.7.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.5
 [0.7.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.4
 [0.7.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.3
