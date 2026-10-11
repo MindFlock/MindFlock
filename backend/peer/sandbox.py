@@ -1,4 +1,5 @@
-"""Bubblewrap sandbox for a peer-link shared session.
+"""Bubblewrap sandbox for a peer-link shared session (Linux; on macOS the
+same contract is kept by a Seatbelt profile — :mod:`backend.peer.seatbelt`).
 
 The shared-folder agent is the one process a remote peer can talk to, so it
 is assumed hostile once prompt-injected. It runs under ``bwrap`` with its own
@@ -43,6 +44,8 @@ __all__ = [
     "find_bwrap",
     "build_argv",
     "build_options",
+    "build_seatbelt",
+    "install_links",
     "prepare_home",
     "egress_allow",
     "safe_write",
@@ -53,7 +56,7 @@ __all__ = [
 
 DEFAULT_BRIDGE_PORT = 3128
 FALLBACK_BWRAP = "~/.local/opt/bwrap/root/usr/bin/bwrap"
-UNAVAILABLE_OS = "peer sandbox needs Linux + bubblewrap"
+UNAVAILABLE_OS = "peer sandbox needs Linux (bubblewrap) or macOS (sandbox-exec)"
 
 ETC_ALLOW = (
     "ssl",
@@ -104,7 +107,11 @@ def profile_for(provider: str):
         raise SandboxError(f"provider {provider} has no sandbox profile")
     if not _BIN_RE.match(str(prof.bin or "")):
         raise SandboxError(f"provider {provider}: bad sandbox binary {prof.bin!r}")
-    names = list(prof.passthrough_env) + [k for k, _v in prof.env]
+    names = (
+        list(prof.passthrough_env)
+        + [k for k, _v in prof.env]
+        + list(getattr(prof, "tmpdir_env", ()) or ())
+    )
     if prof.config_env:
         names.append(prof.config_env)
     for key in names:
@@ -220,7 +227,12 @@ def find_bwrap() -> str | None:
 
 
 def available() -> tuple[bool, str]:
-    """``(True, path)`` when bubblewrap works here, else ``(False, reason)``."""
+    """``(True, path)`` when the sandbox works here — bubblewrap on Linux,
+    ``sandbox-exec`` on macOS — else ``(False, reason)``."""
+    if sys.platform == "darwin":
+        from backend.peer import seatbelt
+
+        return seatbelt.available()
     if not sys.platform.startswith("linux"):
         return False, UNAVAILABLE_OS
     bwrap = find_bwrap()
@@ -493,6 +505,36 @@ def _interpreter(script: str, host_path: str) -> str | None:
     )
 
 
+_NEVER_EXPOSE = (
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/etc",
+    "/var/run",
+    "/boot",
+    # macOS
+    "/private/etc",
+    "/private/var/run",
+    "/private/var/db",
+    "/private/var/root",
+    "/private/tmp",
+    "/Library/Keychains",
+)
+
+
+def _system_covered(p: str) -> bool:
+    """Already readable inside without a runtime grant: all of ``/usr`` on
+    Linux (bound whole), the system dirs the Seatbelt profile allows on
+    macOS (``/usr/local`` is NOT among them — Homebrew lives there)."""
+    if sys.platform == "darwin":
+        from backend.peer import seatbelt
+
+        system = ("/System", "/usr/lib", "/usr/share", *seatbelt.SYSTEM_READ_SUBPATHS)
+        return any(_under(p, q) for q in system)
+    return _under(p, "/usr")
+
+
 def _check_runtime_path(p: str, share_root: str) -> None:
     """Refuse binding anything that would expose more than the runtime."""
     from backend.peer import paths
@@ -501,7 +543,7 @@ def _check_runtime_path(p: str, share_root: str) -> None:
         raise SandboxError(f"runtime path missing: {p}")
     if p == "/" or os.path.dirname(p) == "/" and p != "/usr":
         raise SandboxError(f"refusing to expose top-level dir {p}")
-    for bad in ("/proc", "/sys", "/dev", "/run", "/etc", "/var/run", "/boot"):
+    for bad in _NEVER_EXPOSE:
         if p == bad or p.startswith(bad + "/"):
             raise SandboxError(f"refusing to expose {p}")
     protect = [
@@ -555,10 +597,15 @@ def _runtime(provider: str, share_root: str) -> tuple[list[str], dict[str, str]]
     # (a dev checkout holds config.toml, state.json, logs/ ...).
     binds.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
+    if sys.platform == "darwin":
+        from backend.peer import seatbelt
+
+        binds += seatbelt.homebrew_paths([os.path.realpath(b) for b in binds])
+
     out: list[str] = []
     for p in binds:
         p = os.path.realpath(p)
-        if _under(p, "/usr"):
+        if _system_covered(p):
             continue
         _check_runtime_path(p, share_root)
         if p not in out:
@@ -579,6 +626,63 @@ def _env_ok(key: str) -> bool:
     if up in _ENV_DENY_EXACT or key in _ENV_RESERVED:
         return False
     return not any(up.startswith(p) for p in _ENV_DENY_PREFIX)
+
+
+def _sandbox_env(
+    d: dict, prof, env: dict | None, bridge_port: int, path: str, tmpdir: str
+) -> dict[str, str]:
+    """The agent's whole environment, built from scratch: the fixed
+    variables, a whitelist of the host's locale/terminal ones, the provider
+    profile's, then the caller's explicit ``env`` (checked against the deny
+    lists; it may not override anything set before it)."""
+    proxy = f"http://127.0.0.1:{bridge_port}"
+    try:
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        user = "peer"
+    final: dict[str, str] = {
+        "HOME": d["home"],
+        "PATH": path,
+        "TMPDIR": tmpdir,
+        "USER": user,
+        "LOGNAME": user,
+        "HTTPS_PROXY": proxy,
+        "HTTP_PROXY": proxy,
+        "https_proxy": proxy,
+        "http_proxy": proxy,
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1",
+    }
+    for key, val in os.environ.items():
+        if key in ("TERM", "COLORTERM", "LANG", "TZ") or _LC_RE.match(key):
+            final[key] = val
+    if prof.config_env and prof.config_dir:
+        final[prof.config_env] = os.path.join(d["home"], prof.config_dir)
+    for key, val in prof.env:
+        final[key] = val
+    for key in prof.passthrough_env:
+        if os.environ.get(key):
+            final[key] = os.environ[key]
+    tmp_keys = tuple(getattr(prof, "tmpdir_env", ()) or ())
+    for key in tmp_keys:
+        final[key] = tmpdir
+    # The profile's own variables (its config dir, its fixed env, its temp
+    # dir pointers) are set above and may not be overridden by the caller.
+    profile_keys = {prof.config_env, *(k for k, _v in prof.env), *tmp_keys} - {""}
+    for key, val in (env or {}).items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(val, str)
+            or "\0" in val
+            or not _env_ok(key)
+            or key in profile_keys
+        ):
+            raise SandboxError(f"env var {key!r} may not enter the sandbox")
+        final[key] = val
+    for key, val in final.items():
+        if "\0" in val:
+            raise SandboxError(f"env var {key} contains NUL")
+    return final
 
 
 def build_argv(
@@ -677,11 +781,6 @@ def build_options(
     a += ["--ro-bind", d["run"], d["run"]]
 
     # Environment: cleared, then whitelisted.
-    proxy = f"http://127.0.0.1:{bridge_port}"
-    try:
-        user = pwd.getpwuid(os.getuid()).pw_name
-    except KeyError:
-        user = "peer"
     path = ":".join(
         [
             SANDBOX_BIN,
@@ -691,42 +790,7 @@ def build_options(
             "/bin",
         ]
     )
-    final: dict[str, str] = {
-        "HOME": d["home"],
-        "PATH": path,
-        "TMPDIR": "/tmp",
-        "USER": user,
-        "LOGNAME": user,
-        "HTTPS_PROXY": proxy,
-        "HTTP_PROXY": proxy,
-        "https_proxy": proxy,
-        "http_proxy": proxy,
-        "NO_PROXY": "localhost,127.0.0.1",
-        "no_proxy": "localhost,127.0.0.1",
-    }
-    for key, val in os.environ.items():
-        if key in ("TERM", "COLORTERM", "LANG", "TZ") or _LC_RE.match(key):
-            final[key] = val
-    if prof.config_env and prof.config_dir:
-        final[prof.config_env] = os.path.join(d["home"], prof.config_dir)
-    for key, val in prof.env:
-        final[key] = val
-    for key in prof.passthrough_env:
-        if os.environ.get(key):
-            final[key] = os.environ[key]
-    # The profile's own variables (its config dir, its fixed env) are set
-    # above and may not be overridden by the caller either.
-    profile_keys = {prof.config_env, *(k for k, _v in prof.env)} - {""}
-    for key, val in (env or {}).items():
-        if (
-            not isinstance(key, str)
-            or not isinstance(val, str)
-            or "\0" in val
-            or not _env_ok(key)
-            or key in profile_keys
-        ):
-            raise SandboxError(f"env var {key!r} may not enter the sandbox")
-        final[key] = val
+    final = _sandbox_env(d, prof, env, bridge_port, path, "/tmp")
     a.append("--clearenv")
     for key, val in final.items():
         if "\0" in val:
@@ -735,6 +799,96 @@ def build_options(
 
     a += ["--chdir", d["work"]]
     return bwrap, a
+
+
+#: The in-sandbox PATH dir on macOS: ``run/bin`` (read-only inside), holding
+#: the same name → runtime symlinks bwrap creates at :data:`SANDBOX_BIN`.
+SEATBELT_BIN = "bin"
+#: The sandbox's TMPDIR on macOS, under its writable home (``/tmp`` is the
+#: host's own there, and stays unwritable).
+SEATBELT_TMP = ".tmp"
+
+
+def build_seatbelt(
+    share,
+    inner_argv: list[str],
+    provider: str,
+    env: dict | None = None,
+    *,
+    bridge_port: int = DEFAULT_BRIDGE_PORT,
+    tty: str | None = None,
+) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    """macOS: ``(sandbox-exec argv, its environment, PATH links)`` for a
+    shared session. The caller installs the links (:func:`install_links`),
+    creates ``home/.tmp``, chdirs into ``work`` and execs the argv with
+    exactly that environment. Same validation, runtime discovery and
+    environment as :func:`build_options`; the profile is
+    :func:`backend.peer.seatbelt.build_profile`."""
+    from backend.peer import seatbelt
+
+    prof = profile_for(provider)
+    if not inner_argv or not all(
+        isinstance(a, str) and "\0" not in a for a in inner_argv
+    ):
+        raise SandboxError("bad inner argv")
+    if inner_argv[0].startswith("-"):
+        raise SandboxError("bad inner argv")
+    if not isinstance(bridge_port, int) or not 1024 <= bridge_port <= 65535:
+        raise SandboxError("bad bridge port")
+    d = share_dirs(share)
+    runtime, links = _runtime(provider, d["root"])
+    try:
+        profile = seatbelt.build_profile(
+            dirs=d, runtime=runtime, bridge_port=bridge_port, tty=tty
+        )
+    except seatbelt.SeatbeltError as err:
+        raise SandboxError(str(err)) from None
+    path = ":".join(
+        [
+            os.path.join(d["run"], SEATBELT_BIN),
+            os.path.dirname(sys.executable),
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    )
+    tmpdir = os.path.join(d["home"], SEATBELT_TMP)
+    final = _sandbox_env(d, prof, env, bridge_port, path, tmpdir)
+    return [seatbelt.SANDBOX_EXEC, "-p", profile, *inner_argv], final, links
+
+
+def install_links(run: str, links: dict[str, str]) -> str:
+    """(Re)create ``run/bin`` holding one symlink per ``{name: target}``,
+    without following a symlink at ``run/bin``. Returns the dir."""
+    fd = os.open(run, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        try:
+            os.mkdir(SEATBELT_BIN, 0o700, dir_fd=fd)
+        except FileExistsError:
+            pass
+        try:
+            bfd = os.open(
+                SEATBELT_BIN,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fd,
+            )
+        except OSError:
+            raise SandboxError("run/bin is not a plain directory") from None
+        try:
+            if os.fstat(bfd).st_uid != os.getuid():
+                raise SandboxError("run/bin is not ours")
+            for name in os.listdir(bfd):
+                os.unlink(name, dir_fd=bfd)
+            for name, target in sorted(links.items()):
+                if not _BIN_RE.match(name) or not os.path.isabs(target):
+                    raise SandboxError(f"bad PATH link {name!r}")
+                os.symlink(target, name, dir_fd=bfd)
+        finally:
+            os.close(bfd)
+    finally:
+        os.close(fd)
+    return os.path.join(run, SEATBELT_BIN)
 
 
 # --------------------------------------------------------------------------

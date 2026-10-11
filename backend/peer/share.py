@@ -539,7 +539,23 @@ def _rmtree(path: str) -> None:
 
 def _chmod_dir_nofollow(path: str) -> None:
     """chmod 0700 the directory at ``path`` only if it is not a symlink: an
-    O_PATH|O_NOFOLLOW fd pins the inode, the chmod goes through /proc."""
+    O_PATH|O_NOFOLLOW fd pins the inode, the chmod goes through /proc. Without
+    O_PATH (macOS) the O_NOFOLLOW fd is opened for reading — which needs r on
+    the dir — and fchmod'ed."""
+    if not _O_PATH:
+        try:
+            fd = os.open(
+                path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            )
+        except OSError:
+            return
+        try:
+            os.fchmod(fd, 0o700)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+        return
     try:
         fd = os.open(path, _O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:

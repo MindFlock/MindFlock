@@ -971,12 +971,25 @@ def check_bwrap() -> Check:
     reinstalling would not fix it, so there is no install command for it."""
     label = "peer sandbox (bubblewrap)"
     wanted = bool(_peer_settings().get("enabled"))
+    if osenv.os_kind() == "macos":
+        # macOS ships its sandbox (sandbox-exec / Seatbelt): nothing to
+        # install, only whether it works here.
+        label = "peer sandbox (sandbox-exec)"
+        try:
+            from backend.peer import sandbox
+
+            ok, why = sandbox.available()
+        except Exception as err:  # noqa: BLE001
+            ok, why = False, f"sandbox module failed to load: {err}"
+        if ok:
+            return Check("bwrap", label, "ok", why)
+        return Check("bwrap", label, "warn" if wanted else "info", why)
     if osenv.os_kind() not in ("linux", "wsl"):
         return Check(
             "bwrap",
             label,
             "info",
-            "peer shared sessions need Linux (bubblewrap is Linux-only)",
+            "peer shared sessions need Linux or macOS",
         )
     try:
         from backend.peer import sandbox

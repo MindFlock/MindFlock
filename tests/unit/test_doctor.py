@@ -1073,8 +1073,23 @@ class TestBwrap:
         assert c.status == "warn" and "self-test" in c.detail
         assert c.cmd == "" and c.install is False
 
-    def test_macos_is_info_with_nothing_to_install(self, monkeypatch):
+    def test_macos_uses_the_built_in_sandbox(self, monkeypatch, sandbox):
         monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        sandbox["available"] = (True, "/usr/bin/sandbox-exec")
+        c = doctor.check_bwrap()
+        assert c.status == "ok" and "sandbox-exec" in c.label
+        assert not c.cmd and not c.install
+
+    def test_macos_broken_sandbox_has_nothing_to_install(self, monkeypatch, sandbox):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "macos")
+        monkeypatch.setattr(doctor, "_peer_settings", lambda: {"enabled": True})
+        sandbox["available"] = (False, "sandbox-exec self-test failed: x")
+        c = doctor.check_bwrap()
+        assert c.status == "warn" and "self-test" in c.detail
+        assert not c.cmd and not c.install
+
+    def test_other_os_is_info_with_nothing_to_install(self, monkeypatch):
+        monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "windows")
         c = doctor.check_bwrap()
         assert c.status == "info" and not c.cmd and not c.install
 

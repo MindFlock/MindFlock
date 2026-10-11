@@ -467,6 +467,7 @@ config_dir = ".mycli"                    # its config dir under ~
 config_env = "MYCLI_HOME"                # …and the env var that moves it
 seed_files = ["auth.json"]               # login files under that dir
 env = { MYCLI_NO_UPDATE = "1" }          # fixed env inside
+tmpdir_env = ["MYCLI_TMPDIR"]            # vars pointed at the sandbox's temp dir
 # How the MCP attaches — any of these; templates take {command},
 # {command_json}, {args_json}, {argv_json}, {env_json}, {argv_shell},
 # {env_shell}, {argv_env_shell}, {server}, {tools_csv}, {config_file}:

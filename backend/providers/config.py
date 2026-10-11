@@ -225,6 +225,8 @@ class ProviderConfig:
     sandbox_seed_files: Tuple[str, ...] = ()
     #: Fixed env inside the sandbox, ``((name, value), …)``.
     sandbox_env: Tuple[Tuple[str, str], ...] = ()
+    #: Env vars pointed at the sandbox's temp dir (``SandboxProfile.tmpdir_env``).
+    sandbox_tmpdir_env: Tuple[str, ...] = ()
     #: How the peer-mode MCP attaches, as templates. ``peer_mcp_args`` are argv
     #: tokens, ``peer_mcp_env`` env vars, and ``peer_mcp_file`` an optional
     #: ``(name, content)`` written read-only into the share's run dir.
@@ -930,6 +932,7 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         sandbox_env=tuple(
             (str(k), str(v)) for k, v in (peer.get("env", {}) or {}).items()
         ),
+        sandbox_tmpdir_env=tuple(str(x) for x in (peer.get("tmpdir_env", ()) or ())),
         peer_mcp_args=tuple(str(x) for x in (peer.get("mcp_args", ()) or ())),
         peer_mcp_env=tuple(
             (str(k), str(v)) for k, v in (peer.get("mcp_env", {}) or {}).items()

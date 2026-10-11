@@ -71362,7 +71362,7 @@ function PeerLinks(_) {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
-					"On this computer you can pair, message and view their work; running an agent in a shared folder needs Linux",
+					"On this computer you can pair, message and view their work; running an agent in a shared folder needs Linux or macOS",
 					st.sandbox.reason ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						" (",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -71875,7 +71875,7 @@ function PeerLinkCard(props) {
 				children: [
 					"Here you can message ",
 					link.peer_name,
-					" and look at their changes; sharing a folder needs Linux."
+					" and look at their changes; sharing a folder needs Linux or macOS."
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
