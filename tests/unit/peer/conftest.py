@@ -15,10 +15,10 @@ import pytest
 
 from backend.peer import identity, invite, store, transport, wire
 
-# The shared-folder runtime (bubblewrap sandbox, egress proxy + in-sandbox
-# bridge, the agent API and the share's file access) only ever runs on Linux:
-# elsewhere sharing a folder is refused before any of it starts. Its tests
-# lean on Linux facilities (/proc/self/fd, O_PATH, memfd, SO_PEERCRED).
+# The shared-folder runtime runs on Linux (bubblewrap) and macOS (Seatbelt —
+# its own tests, test_seatbelt.py, run there). These modules test the Linux
+# side with Linux facilities (/proc/self/fd, O_PATH, memfd, SO_PEERCRED,
+# bwrap itself), so they are skipped elsewhere.
 _LINUX_ONLY = {
     "test_sandbox.py",
     "test_egress.py",

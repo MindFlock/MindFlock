@@ -9,6 +9,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -25,8 +26,8 @@ SECRETS = {
     "XDG_RUNTIME_DIR": "/run/user/SECRET-1000",
     "GH_TOKEN": "SECRET-gh-token",
     "GITHUB_TOKEN": "SECRET-github-token",
-    "AWS_SECRET_ACCESS_KEY": "SECRET-aws-key",
-    "OPENAI_API_KEY": "SECRET-openai-for-claude",
+    "AWS_SECRET_ACCESS_KEY": "SECRET-aws-key",  # pragma: allowlist secret
+    "OPENAI_API_KEY": "SECRET-openai-for-claude",  # pragma: allowlist secret
 }
 
 _GIT_ENV = {
@@ -102,7 +103,7 @@ def env(tmp_path, monkeypatch):
                 "projects": {
                     "/secret/project": {"history": ["CANARY-project-history"]}
                 },
-                "primaryApiKey": "CANARY-primary-api-key",
+                "primaryApiKey": "CANARY-primary-api-key",  # pragma: allowlist secret
                 "mcpServers": {"x": {"env": {"TOKEN": "CANARY-mcp-token"}}},
             }
         )
@@ -179,9 +180,20 @@ def _binds(argv):
 # availability
 
 
-def test_available_reports_reason_off_linux(monkeypatch):
+def test_available_reports_reason_off_linux_and_macos(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert sandbox.available() == (
+        False,
+        "peer sandbox needs Linux (bubblewrap) or macOS (sandbox-exec)",
+    )
+
+
+def test_available_on_macos_asks_seatbelt(monkeypatch):
+    from backend.peer import seatbelt
+
     monkeypatch.setattr(sys, "platform", "darwin")
-    assert sandbox.available() == (False, "peer sandbox needs Linux + bubblewrap")
+    monkeypatch.setattr(seatbelt, "available", lambda: (True, "/usr/bin/sandbox-exec"))
+    assert sandbox.available() == (True, "/usr/bin/sandbox-exec")
 
 
 def test_available_missing_bwrap(monkeypatch, tmp_path):
@@ -300,7 +312,7 @@ def test_env_whitelist_drops_secrets(share, monkeypatch):
         == f"http://127.0.0.1:{sandbox.DEFAULT_BRIDGE_PORT}"
     )
     assert envs["NO_PROXY"] == "localhost,127.0.0.1"
-    assert envs["ANTHROPIC_API_KEY"] == "sk-test-passthrough"
+    assert envs["ANTHROPIC_API_KEY"] == os.environ["ANTHROPIC_API_KEY"]
     assert envs["MINDFLOCK_MCP_MODE"] == "peer"
     assert envs["TERM"] == "xterm-256color" and envs["LC_CTYPE"] == "C.UTF-8"
     allowed = {
@@ -321,9 +333,11 @@ def test_env_whitelist_drops_secrets(share, monkeypatch):
         "no_proxy",
         "CLAUDE_CONFIG_DIR",
         "DISABLE_AUTOUPDATER",
+        "CLAUDE_CODE_TMPDIR",
         "ANTHROPIC_API_KEY",
         "MINDFLOCK_MCP_MODE",
     }
+    assert envs["CLAUDE_CODE_TMPDIR"] == envs["TMPDIR"] == "/tmp"
     assert {k for k in envs if not k.startswith("LC_")} <= allowed
     for d in envs["PATH"].split(":"):
         assert d.startswith(
@@ -338,7 +352,7 @@ def test_codex_env(share, env, monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     envs = _setenvs(sandbox.build_argv(share, ["codex"], "codex", {}))
     assert envs["CODEX_HOME"] == os.path.join(share["home"], ".codex")
-    assert envs["OPENAI_API_KEY"] == "sk-openai"
+    assert envs["OPENAI_API_KEY"] == "sk-openai"  # pragma: allowlist secret
     assert "CLAUDE_CONFIG_DIR" not in envs and "ANTHROPIC_API_KEY" not in envs
 
 
@@ -599,27 +613,78 @@ def test_prepare_home_claude_json_override_and_garbage(
 def test_prepare_home_claude_config_dir(share, env, monkeypatch, tmp_path):
     cfg = tmp_path / "profile"
     cfg.mkdir()
-    (cfg / ".credentials.json").write_text("PROFILE-CRED")
+    (cfg / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "PROFILE-CRED"}})
+    )
     (cfg / ".claude.json").write_text(json.dumps({"userID": "profile-id"}))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     sandbox.prepare_home(share, "claude")
-    assert (
-        open(os.path.join(share["home"], ".claude", ".credentials.json")).read()
-        == "PROFILE-CRED"
+    seeded = json.load(
+        open(os.path.join(share["home"], ".claude", ".credentials.json"))
     )
+    assert seeded == {"claudeAiOauth": {"accessToken": "PROFILE-CRED"}}
     assert (
         json.load(open(os.path.join(share["home"], ".claude.json")))["userID"]
         == "profile-id"
     )
 
 
-def test_prepare_home_without_credentials(share, env):
+def test_prepare_home_without_credentials_fails_closed(share, env):
+    """No login on the host: the launch is refused with a fix to try, not an
+    agent that starts and can't log in."""
     os.unlink(env["home"] / ".claude" / ".credentials.json")
+    with pytest.raises(ValueError, match="isn't logged in"):
+        sandbox.prepare_home(share, "claude")
+
+
+def test_prepare_home_api_key_needs_no_login(share, env, monkeypatch):
+    os.unlink(env["home"] / ".claude" / ".credentials.json")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     written = sandbox.prepare_home(share, "claude")
     assert not os.path.exists(
         os.path.join(share["home"], ".claude", ".credentials.json")
     )
     assert os.path.join(share["home"], ".claude.json") in written
+
+
+def test_prepare_home_never_copies_the_refresh_token(share, env):
+    """Refreshing rotates the refresh token: a sandbox holding one could log
+    out every other claude on the host. Only the access token goes in."""
+    (env["home"] / ".claude" / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "AT",
+                    "refreshToken": "CANARY-refresh",
+                    "refreshTokenExpiresAt": 1,
+                    "expiresAt": int((time.time() + 3600) * 1000),
+                    "scopes": ["user:inference"],
+                    "subscriptionType": "max",
+                },
+                "otherSecret": "CANARY-other",  # pragma: allowlist secret
+            }
+        )
+    )
+    sandbox.prepare_home(share, "claude")
+    raw = open(os.path.join(share["home"], ".claude", ".credentials.json")).read()
+    assert "CANARY" not in raw
+    oauth = json.loads(raw)["claudeAiOauth"]
+    assert set(oauth) == {"accessToken", "expiresAt", "scopes", "subscriptionType"}
+
+
+def test_prepare_home_expiring_login_fails_closed(share, env):
+    (env["home"] / ".claude" / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "AT",
+                    "expiresAt": int((time.time() + 60) * 1000),
+                }
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="needs refreshing"):
+        sandbox.prepare_home(share, "claude")
 
 
 def test_prepare_home_codex(share, env):

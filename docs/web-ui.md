@@ -3449,8 +3449,9 @@ A few screens got quieter:
   (`peer.*` in [configuration.md](configuration.md#peer-links-peer-settings-store-only):
   relay `auto` / `off` / `cloudflare` / `url`, listen and advertise
   addresses, display name, egress allow-list) and the off switch. The
-  doctor checks bubblewrap and can install `cloudflared`. Linux + bubblewrap
-  only. Design and protocol in [peer-link.md](peer-link.md).
+  doctor checks the sandbox (bubblewrap on Linux, the built-in
+  `sandbox-exec` on macOS) and can install `cloudflared`. Shared folders run
+  on Linux and macOS. Design and protocol in [peer-link.md](peer-link.md).
 - **Your phone** (screen key `mobile`; was Mobile) — getting this MindFlock
   onto your phone, as three steps in order: Tailscale on this computer,
   **Install Tailscale on your phone and sign in** (*as <login>* when known,

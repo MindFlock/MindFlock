@@ -285,6 +285,7 @@ class GenericProvider(BaseProvider):
             config_dir=cfg.sandbox_config_dir,
             seed_files=tuple(cfg.sandbox_seed_files),
             env=tuple(cfg.sandbox_env),
+            tmpdir_env=tuple(cfg.sandbox_tmpdir_env),
         )
 
     def _peer_render(self, template: str, spec, config_file: str = "") -> str:
