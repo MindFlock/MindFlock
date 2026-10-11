@@ -211,12 +211,16 @@ class TestAgentTest:
     def test_info_auth_probe_counts_as_ok(self, client, monkeypatch):
         monkeypatch.setattr(
             doctor,
-            "check_agent_cli",
-            lambda: Check("agent-cli", "agent CLI (aider)", "ok", "/usr/bin/aider"),
+            "check_agent_cli_for",
+            lambda name="": Check(
+                "agent-cli", "agent CLI (aider)", "ok", "/usr/bin/aider"
+            ),
         )
         monkeypatch.setattr(
             doctor,
-            "check_agent_auth",
-            lambda: Check("agent-auth", "agent auth (aider)", "info", "no probe"),
+            "check_agent_auth_for",
+            lambda name="": Check(
+                "agent-auth", "agent auth (aider)", "info", "no probe"
+            ),
         )
         assert client.post("/api/settings/test/agent").json()["ok"] is True

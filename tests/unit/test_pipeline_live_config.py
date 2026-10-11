@@ -65,6 +65,44 @@ def pipeline_events():
     unsubscribe()
 
 
+class _FakeTimer:
+    """Stands in for ``threading.Timer`` in :mod:`settings_hooks`: records
+    each timer instead of starting a thread, so a test fires the one the
+    debounce left armed itself — a slow CI runner can't stretch the gap
+    between two saves past a real debounce, or the timer past a wait."""
+
+    def __init__(self, made, interval, fn):
+        self.interval, self.fn, self.cancelled = interval, fn, False
+        made.append(self)
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        self.cancelled = True
+
+
+@pytest.fixture
+def fake_timers(monkeypatch):
+    """Every pipeline timer the debounce arms during the test (see
+    :class:`_FakeTimer`); ``armed(made)`` lists the ones not cancelled."""
+    made = []
+    monkeypatch.setattr(
+        settings_hooks,
+        "threading",
+        type(
+            "_T",
+            (),
+            {"Timer": staticmethod(lambda i, fn: _FakeTimer(made, i, fn))},
+        ),
+    )
+    return made
+
+
+def _armed(made):
+    return [t for t in made if not t.cancelled]
+
+
 def _wait_for(seen, n=1, timeout=2.0):
     deadline = _dt.datetime.now() + _dt.timedelta(seconds=timeout)
     while len(seen) < n and _dt.datetime.now() < deadline:
@@ -173,35 +211,36 @@ def test_signature_changes_treats_unknown_as_everything():
 # 2. a local write restarts the pipeline once (debounced)
 # --------------------------------------------------------------------------- #
 def test_a_local_github_token_save_restarts_the_pipeline_once(
-    client, pipeline_events, monkeypatch
+    client, pipeline_events, fake_timers
 ):
     """A pasted token used to take effect only after a manual off/on: the
     settings route never ran ``after_settings_change`` for its own writes."""
-    monkeypatch.setattr(settings_hooks, "PIPELINE_DEBOUNCE", 0.05)
     r = client.post("/api/settings", json={"github": {"token": "ghp_one"}})
     assert r.status_code == 200
     # A burst of blur-saves: the repos field, then the token again.
     client.post("/api/settings", json={"github": {"repos": ["o/r"]}})
     client.post("/api/settings", json={"github": {"token": "ghp_two"}})
     assert pipeline_events == []  # not immediate
-    _wait_for(pipeline_events)
-    threading.Event().wait(0.15)  # would a second follow?
+    armed = _armed(fake_timers)
+    assert len(armed) == 1  # each save pushed the one timer back
+    assert armed[0].interval == settings_hooks.PIPELINE_DEBOUNCE
+    armed[0].fn()
     assert len(pipeline_events) == 1
     assert pipeline_events[0]["data"] == {"changed": ["github"]}
 
 
 def test_a_local_ticket_source_save_restarts_the_pipeline_once(
-    client, pipeline_events, monkeypatch
+    client, pipeline_events, fake_timers
 ):
-    monkeypatch.setattr(settings_hooks, "PIPELINE_DEBOUNCE", 0.05)
     r = client.put("/api/settings/ticketing/sources", json={"sources": [SC]})
     assert r.status_code == 200, r.text
     client.put(
         "/api/settings/ticketing/sources",
         json={"sources": [{**SC, "assignee_scope": "anyone", "workflow_state": "5"}]},
     )
-    _wait_for(pipeline_events)
-    threading.Event().wait(0.15)
+    armed = _armed(fake_timers)
+    assert len(armed) == 1
+    armed[0].fn()
     assert len(pipeline_events) == 1
     assert pipeline_events[0]["data"] == {"changed": ["ticketing.sc"]}
 
