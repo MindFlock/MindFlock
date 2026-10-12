@@ -151,26 +151,22 @@ async def api_token() -> str:
 def has_token_sync() -> bool:
     """Whether a token is reachable WITHOUT shelling out — for capability probes.
 
-    Deliberately skips the ``gh auth token`` rung: capability probes run on
-    every page load, and a subprocess per probe is not worth the extra
-    coverage. The gh rung is already represented by ``gh_available()`` on the
-    caller's side, so nothing real is lost.
+    The same chain :func:`api_token` resolves (Settings → env → config.toml,
+    via :func:`backend.web.core.github_auth.resolve_token`), minus the
+    ``gh auth token`` rung: capability probes run on every page load, and a
+    subprocess per probe is not worth the extra coverage. The gh rung is
+    already represented by ``gh_available()`` on the caller's side, so nothing
+    real is lost.
     """
     try:
-        from backend.config.secrets import resolve_secret_sync
+        from backend.web.core import github_auth
 
-        explicit = ""
+        toml_token = ""
         try:
-            explicit = (_github_config().token or "").strip()
+            toml_token = (_github_config().toml_token or "").strip()
         except Exception:  # noqa: BLE001
-            explicit = ""
-        return bool(
-            resolve_secret_sync(
-                explicit=explicit,
-                settings_getter=lambda s: s.github.token,
-                env_vars=("GH_TOKEN", "GITHUB_TOKEN"),
-            )
-        )
+            toml_token = ""
+        return bool(github_auth.resolve_token(toml_token, gh=False)[1])
     except Exception:  # noqa: BLE001 — capability probes must never 500
         return False
 

@@ -207,6 +207,66 @@ class TestPipelineDelegation:
         assert cfg.github.token == "from-toml"
 
 
+class TestProbesAgreeWithTheTokenUsed:
+    """The cheap "is there a token / which one" probes (``has_token_sync`` for
+    the capability flags, ``_github_token_source`` for the Connections row)
+    walk the same chain as the token the PR buttons call GitHub with. The old
+    ``has_token_sync`` went through ``resolve_secret_sync`` with config.toml
+    FIRST, so it could vouch for a token the real chain never uses."""
+
+    @pytest.fixture
+    def toml_cfg(self, monkeypatch):
+        from backend.web.core import github_pr
+
+        holder = {"cfg": _cfg()}
+        monkeypatch.setattr(github_pr, "_github_config", lambda: holder["cfg"])
+        return holder
+
+    async def test_config_toml_and_gh_token_agree_on_gh_token(
+        self, monkeypatch, toml_cfg
+    ):
+        from backend.web.addons import settings as settings_addon
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="from-toml", toml_token="from-toml")
+        monkeypatch.setenv("GH_TOKEN", "from-env")
+        assert github_pr.has_token_sync() is True
+        assert settings_addon._github_token_source() == "env:GH_TOKEN"
+        assert await github_pr.api_token() == "from-env"
+        assert pipe_auth.cached_source() == "env:GH_TOKEN"
+
+    async def test_config_toml_alone_is_found_by_both(self, toml_cfg):
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="from-toml", toml_token="from-toml")
+        assert github_pr.has_token_sync() is True
+        assert await github_pr.api_token() == "from-toml"
+
+    async def test_a_merged_token_without_its_toml_rung_counts_for_neither(
+        self, toml_cfg
+    ):
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="stale-merged")
+        assert github_pr.has_token_sync() is False
+        assert await github_pr.api_token() == ""
+
+    def test_the_probes_never_run_gh(self, monkeypatch, toml_cfg):
+        from backend.web.addons import settings as settings_addon
+        from backend.web.core import github_pr
+
+        def boom():
+            raise AssertionError("a capability probe ran gh auth token")
+
+        monkeypatch.setattr(web_auth, "_gh_token", boom)
+        assert github_pr.has_token_sync() is False
+        assert settings_addon._github_token_source() == ""
+        assert web_auth.resolve_token("from-toml", gh=False) == (
+            web_auth.SOURCE_CONFIG_TOML,
+            "from-toml",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 3. The device-flow client id ships as a constant (empty until registered)
 # --------------------------------------------------------------------------- #

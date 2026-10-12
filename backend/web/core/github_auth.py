@@ -176,14 +176,18 @@ def _gh_token() -> str:
     return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
-def resolve_token(toml_token: str = "") -> Tuple[str, str]:
+def resolve_token(toml_token: str = "", *, gh: bool = True) -> Tuple[str, str]:
     """``(source, token)`` — THE GitHub credential chain, in the one order
     every consumer uses: Settings (``github.token``, what Connect GitHub
     writes) → ``$GH_TOKEN`` → ``$GITHUB_TOKEN`` → ``gh auth token`` →
     ``toml_token`` (an operator's ``[github].token`` from ``config.toml``,
     deprecated: last, and warned about once). ``("none", "")`` when there is
     none. Sources: ``settings``, ``env:GH_TOKEN``, ``env:GITHUB_TOKEN``,
-    ``gh-cli``, ``config.toml``, ``none``."""
+    ``gh-cli``, ``config.toml``, ``none``.
+
+    ``gh=False`` skips the ``gh auth token`` rung (a subprocess) for probes
+    that run on every page load; the other rungs keep their order, so a
+    Settings or env answer is exactly the token the full chain uses."""
     toml_token = (toml_token or "").strip()
     if toml_token:
         _warn_toml_token_once()
@@ -196,7 +200,7 @@ def resolve_token(toml_token: str = "") -> Tuple[str, str]:
     for var in ("GH_TOKEN", "GITHUB_TOKEN"):
         if (os.environ.get(var) or "").strip():
             return "env:" + var, os.environ[var].strip()
-    tok = _gh_token()
+    tok = _gh_token() if gh else ""
     if tok:
         return "gh-cli", tok
     if toml_token:

@@ -1,27 +1,27 @@
-"""Shared secret / credential resolver.
+"""Shared secret / credential resolver for secrets with no chain of their own.
 
-Generalizes the resolution chain that :mod:`backend.ticket_ingestion.github_auth`
-pioneered for the GitHub token so every credential (GitHub PAT, Shortcut API
-token, …) is resolved the same way and a new user can supply it wherever is most
-convenient.
+Every credential WITHOUT a dedicated resolver (the Shortcut API token, …) is
+resolved the same way, so a new user can supply it wherever is most
+convenient. The GitHub token is NOT resolved here: it has its own chain,
+:func:`backend.web.core.github_auth.resolve_token` (Settings → env →
+``gh auth token`` → config.toml, LAST), and every GitHub consumer — including
+the cheap "is there a token" probes — goes through that one.
 
 Resolution order for a secret::
 
     explicit (config.toml value the caller already parsed)
       →  settings.json  (the web Settings UI writes here)
       →  environment variable(s)
-      →  CLI fallback     (async only, e.g. ``gh auth token``)
+      →  CLI fallback     (async only)
 
 Note the order differs from the *general* config resolver
 (:func:`backend.config.settings.resolve`, which is ``env → settings → toml``):
-for a secret an **explicit** value the operator deliberately pasted into
-``config.toml`` wins first, preserving the long-standing GitHub-token contract
-(``[github].token`` beats ``$GH_TOKEN``). Everything below that is the
-user-friendly fallback chain.
+for these secrets an **explicit** value the operator deliberately pasted into
+``config.toml`` wins first. Everything below that is the user-friendly
+fallback chain.
 
 This module is intentionally cache-free: callers that want to memoize a resolved
-secret keep their own process cache (see ``github_auth._cached_token``), which
-keeps existing test hooks and reset semantics intact.
+secret keep their own process cache.
 """
 
 from __future__ import annotations
