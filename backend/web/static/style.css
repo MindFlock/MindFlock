@@ -20193,9 +20193,14 @@ button.linklike {
    inside an `aria-modal` dialog, whose entire vocabulary was OK and Cancel.
    These are drawn by the app, so they can use the app's words and more than two
    of them, and they cannot be suppressed by a browser that has decided this
-   page shows too many dialogs. */
-.vf-rewrite,
-.vf-confirm {
+   page shows too many dialogs. The two one-way doors (and the bulk delete) are
+   the app's shared InlineConfirm — `.set-confirm` in screens.css — given the
+   breathing room the rewrite box has. */
+#verify-body .set-confirm {
+  margin: 8px 0;
+}
+
+.vf-rewrite {
   margin: 8px 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
@@ -20206,8 +20211,7 @@ button.linklike {
   gap: 6px;
 }
 
-.vf-rewrite-title,
-.vf-confirm-title {
+.vf-rewrite-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
@@ -20239,32 +20243,17 @@ button.linklike {
   color: var(--gold);
 }
 
-.vf-rewrite-actions,
-.vf-confirm-actions {
+.vf-rewrite-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.vf-rewrite-note,
-.vf-confirm-body {
+.vf-rewrite-note {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.45;
-}
-
-.vf-confirm {
-  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
-}
-
-.vf-confirm-go {
-  border-color: var(--red);
-  color: var(--red);
-}
-
-.vf-confirm-go:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 
 /* The run, watched inside the checklist that asked for it -------------------

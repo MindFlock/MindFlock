@@ -22,6 +22,8 @@ export function InlineConfirm(props: {
   body: React.ReactNode;
   /** The verb on the go-ahead button ("Turn it off", "Regenerate", …). */
   confirmLabel: string;
+  /** The safe answer's label. Default "Cancel"; Verify says "Keep it". */
+  cancelLabel?: string;
   busy?: boolean;
   onConfirm(): void;
   onCancel(): void;
@@ -48,7 +50,7 @@ export function InlineConfirm(props: {
           disabled={props.busy}
           onClick={props.onCancel}
         >
-          Cancel
+          {props.cancelLabel ?? "Cancel"}
         </button>
       </div>
     </div>

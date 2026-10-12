@@ -10,7 +10,7 @@
  * naming function, so this is testable without a DOM.
  */
 
-import { isVerifySession } from "../components/dialogs/verify";
+import { isVerifySession } from "../components/dialogs/verifySession";
 
 /** The select value that means "every running session". */
 export const ALL_RUNNING = "*";

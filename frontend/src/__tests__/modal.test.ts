@@ -168,7 +168,7 @@ describe("dialogs use the shell instead of hand-rolling one", () => {
     eager: true,
   }) as Record<string, string>;
   // Owned by other work; still hand-rolled on purpose.
-  const EXEMPT = ["NewSessionDialog.tsx", "VerifyDialog.tsx", "Modal.tsx"];
+  const EXEMPT = ["NewSessionDialog.tsx", "Modal.tsx"];
 
   it('no component renders its own className="modal" backdrop', () => {
     const offenders = Object.entries(SOURCES)
@@ -176,6 +176,13 @@ describe("dialogs use the shell instead of hand-rolling one", () => {
       .filter(([, src]) => /className="modal"/.test(src))
       .map(([path]) => path);
     expect(offenders).toEqual([]);
+  });
+
+  it("VerifyDialog is on the shell too (its own Escape listener is gone)", () => {
+    const src = SOURCES["../components/dialogs/VerifyDialog.tsx"];
+    expect(src).toMatch(/<Modal\s+id="verify-dialog"/);
+    expect(src).not.toMatch(/e\.target === e\.currentTarget/);
+    expect(src).not.toMatch(/addEventListener\("keydown"/);
   });
 
   it("RenameDialog no longer dismisses on a backdrop click", () => {

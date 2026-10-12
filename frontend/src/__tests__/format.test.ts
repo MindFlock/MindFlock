@@ -159,10 +159,10 @@ describe("one relative-time formatter", () => {
     import: "default",
     eager: true,
   }) as Record<string, string>;
-  it("no module rolls its own seconds → m/h/d ladder (VerifyDialog/verify.ts exempt: owned elsewhere)", () => {
+  it("no module rolls its own seconds → m/h/d ladder (verify.ts exempt: its agoText rounds, by design)", () => {
     const ladder = /Math\.(floor|round)\(secs \/ 3600\)/;
     const offenders = Object.entries(SOURCES)
-      .filter(([p]) => !/(VerifyDialog\.tsx|verify\.ts)$/.test(p))
+      .filter(([p]) => !/verify\.ts$/.test(p))
       .filter(([, src]) => ladder.test(src))
       .map(([p]) => p);
     // sessionState's spanWord is a rounded idle-for DURATION ("25m", min 1m),
