@@ -50,8 +50,9 @@ _CACHE_TTL_S = 300.0
 async def _token() -> str:
     """A GitHub token if one is reachable, else ``""`` — never raises.
 
-    The same chain the PR buttons use (config.toml → Settings → ``$GH_TOKEN``
-    → ``gh auth token``), because the ``gh auth token`` rung is where the token
+    The same chain the PR buttons use (:func:`~backend.web.core.github_pr.
+    api_token`: Settings → ``$GH_TOKEN``/``$GITHUB_TOKEN`` → ``gh auth token``
+    → config.toml), because the ``gh auth token`` rung is where the token
     usually IS: `gh auth login` is a normal thing to have done and pasting a
     PAT into Settings is not. Resolving only the static layers left this screen
     calling GitHub anonymously on a machine that was perfectly well

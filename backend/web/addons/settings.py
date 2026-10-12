@@ -576,16 +576,16 @@ def _stored_shortcut_token() -> str:
 
 
 def _github_token_source() -> str:
-    """Where a GitHub token would come from — the first two rungs of the one
-    chain (:mod:`backend.web.core.github_auth`: settings → env → gh CLI →
-    config.toml) without shelling out to gh (the doctor reports gh on its
-    own) and without ever returning the token itself."""
-    if settings_store.load_settings().github.token:
-        return "settings"
-    for var in ("GH_TOKEN", "GITHUB_TOKEN"):
-        if os.environ.get(var):
-            return f"env:{var}"
-    return ""
+    """Where the GitHub token in use comes from, when that is knowable
+    without shelling out: the Settings / env rungs of the one chain
+    (:func:`backend.web.core.github_auth.resolve_token`, asked with
+    ``gh=False``). ``""`` means "the gh CLI, config.toml, or nothing" — the
+    gh rung outranks config.toml, so neither can be named without running
+    gh (the doctor reports gh on its own). Never the token itself."""
+    from backend.web.core import github_auth as web_auth
+
+    source, _tok = web_auth.resolve_token(gh=False)
+    return "" if source == "none" else source
 
 
 def _gh_cli_status() -> Tuple[bool, bool, str]:
