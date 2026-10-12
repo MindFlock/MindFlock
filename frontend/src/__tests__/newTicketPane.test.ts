@@ -33,30 +33,40 @@ describe("the New dialog's two tabs", () => {
   });
 });
 
-describe("the card is centred and one height for every pane", () => {
-  // The fixed-top shape left the card hanging high on the screen ("Recenter
-  // it"). A centred card moves by half of any height change, so the form,
-  // page 1 and the Ticket pane share one height (scrolling inside), and 86vh
-  // keeps it inside a short window.
-  it("overrides nothing of the .modal centring", () => {
-    const block = cssRule(CSS, "#new-dialog");
-    expect(block).not.toContain("align-items: flex-start");
-    expect(block).not.toContain("padding-top");
-    expect(ALL_CSS).not.toContain("--nf-top");
-    expect(ALL_CSS).not.toContain("--nf-anchor-h");
-    expect(block).toContain("--nf-card-h: min(86vh, 620px);");
+describe("the card: landing panes share a top edge, the form is centred", () => {
+  // v0.7's geometry for the two landing panes (Session page 1 and the Ticket
+  // tab): each its own natural height, all starting at the same y, so a tab
+  // click never moves the card. The top is centred on a LANDING pane's height,
+  // so both read as centred. The full form (page 2) is centred at one fixed
+  // height, so a fold never moves it.
+  it("anchors the landing panes' top edge", () => {
+    expect(squash(ALL_CODE)).toContain('className={"modal" + (shownTab === "ticket" || page === 1 ? " nf-landing" : "")}');
+    const block = cssRule(CSS, "#new-dialog.nf-landing");
+    expect(block).toContain("align-items: flex-start;");
+    expect(block).toContain("padding-top: var(--nf-top);");
+    expect(block).toContain("--nf-top: max(16px, calc((100vh - var(--nf-anchor-h)) / 2));");
+    expect(block).toContain("--nf-anchor-h: min(86vh, 400px);");
+    expect(block).toContain("--nf-max-h: calc(100vh - var(--nf-top) - 16px);");
+    expect(squash(CSS)).toContain(
+      "#new-dialog.nf-landing #new-form, #new-dialog.nf-landing #new-ticket-form { max-height: var(--nf-max-h); }"
+    );
   });
 
-  it("gives both cards the one height, and no pane its natural height back", () => {
+  it("gives the landing panes their natural height, and only the form the fixed one", () => {
+    expect(cssRule(CSS, "#new-form.nf-ask")).toBe("height: auto;");
+    expect(squash(ALL_CODE)).toContain('className={"ta-drop" + (page === 1 ? " nf-ask" : "")}');
     expect(squash(CSS)).toContain(
       "#new-ticket-form { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; " +
-        "padding: 20px 22px; width: min(660px, 94vw); height: var(--nf-card-h);"
+        "padding: 20px 22px; width: min(660px, 94vw); height: auto;"
     );
-    expect(ALL_CSS).not.toContain("#new-form.nf-ask");
-    // The Ticket pane fills the card and keeps its actions on the bottom edge.
-    expect(cssRule(CSS, ".nt-pane > .modal-actions")).toBe("margin-top: auto;");
-    // The literal is written once, so the two cards cannot drift apart.
-    expect(ALL_CSS.split("min(86vh, 620px)").length - 1).toBe(1);
+    // The form is centred: the base rule overrides nothing of .modal's.
+    const base = cssRule(CSS, "#new-dialog");
+    expect(base).not.toContain("align-items");
+    expect(base).not.toContain("padding-top");
+    expect(base).toContain("--nf-card-h: min(86vh, 620px);");
+    // Each literal is written once, so the anchor and the cap cannot drift.
+    for (const lit of ["min(86vh, 620px)", "min(86vh, 400px)"])
+      expect(ALL_CSS.split(lit).length - 1).toBe(1);
   });
 });
 

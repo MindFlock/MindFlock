@@ -1,5 +1,6 @@
-/** The New dialog's action row: page 1's three starts (an Intake batch), or
- * the form's Back / Create, with the error line beside them. */
+/** The New dialog's action row: page 1's three ways out (one session, or an
+ * Intake batch's run), or the form's Back / Create, with the error line
+ * beside them. */
 
 import type { Dispatch, SetStateAction } from "react";
 import { startLabel } from "../../../lib/runStart";
@@ -9,7 +10,6 @@ export function FooterActions({
   error,
   page,
   setPage,
-  batch,
   runMode,
   describing,
   describeSlow,
@@ -21,7 +21,6 @@ export function FooterActions({
   error: string;
   page: number;
   setPage: Dispatch<SetStateAction<number>>;
-  batch: boolean;
   runMode: boolean;
   describing: boolean;
   describeSlow: boolean;
@@ -127,18 +126,16 @@ export function FooterActions({
         </>
       ) : (
         <>
-          {/* Back only for a batch, whose list page 1 still holds. One
-              session has nowhere to go back to: the form IS the door. */}
-          {batch && (
-            <button
-              type="button"
-              id="new-back"
-              className="linklike"
-              onClick={() => setPage(1)}
-            >
-              ← Back
-            </button>
-          )}
+          {/* Back, not Cancel: page 1 still holds the sentence, and a
+              create that has not happened yet is not something to undo. */}
+          <button
+            type="button"
+            id="new-back"
+            className="linklike"
+            onClick={() => setPage(1)}
+          >
+            ← Back
+          </button>
           <button
             type="submit"
             disabled={draft.starting || describing}

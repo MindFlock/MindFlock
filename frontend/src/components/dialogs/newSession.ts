@@ -688,10 +688,12 @@ export function rememberedProfileVerdict(
   return profiles.some((p) => p.id === id) ? "apply" : "drop";
 }
 
-/** What the form's Name → Enter does, and what the describe box's Enter does:
- * the two never share a key. Pure, so the fast path is pinned by a test:
- * Enter in Name submits the form (one POST /api/instances, no model turn);
- * Enter in the describe box runs the model turn and never creates. */
+/** What the form's Name → Enter does, and what page 1's sentence box's Enter
+ * does: the two never share a key. Pure, so both are pinned by a test: Enter
+ * in Name submits the form (one POST /api/instances, no model turn); Enter in
+ * the sentence box is "Review details first" — the model turn that fills the
+ * form in — and never creates; Shift+Enter (and any Enter in a batch's list)
+ * is a new line. */
 export function enterAction(where: {
   field: "name" | "describe" | "other";
   shift: boolean;

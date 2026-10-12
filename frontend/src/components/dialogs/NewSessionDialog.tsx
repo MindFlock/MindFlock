@@ -1,14 +1,21 @@
 /** New-session dialog (ports section 16 + the new-form submit from section
- * 17 + the J4 preset row). The describe box comes first, open, with the caret
- * in it: type what you want and Enter buys the model turn that fills the form
- * in. The by-hand path still costs nothing — the form below is pre-filled
- * with the template, agent and account the last session in that folder used
- * (lib/store's last-used memory), so Name → Enter creates with no model turn.
- * Folder browser, Templates strip (one server-side list, managed in
- * TemplatesDialog), prompt presets, the Git & workspace fold with its Base
- * branch picker, and per-session launch flags live behind progressive
- * disclosure. Page 1 (the box alone) survives only for Intake's "Start
- * together…" batch, whose box is a list. */
+ * 17 + the J4 preset row). Two pages, as in v0.7.
+ *
+ * Every opening lands on page 1, a compact card with one question — "What do
+ * you want to work on?" — and three buttons in increasing order of
+ * commitment: "Set it up myself instead" (the full form, empty, no model
+ * turn), "Review details first ↵" (the model reads the sentence and fills the
+ * form in for review; Enter in the box does this) and "Create session" (reads
+ * it and creates straight away). Intake's "Start together…" opens the same
+ * page as a list, one session per line or ticket.
+ *
+ * Page 2 is the full form, with ← Back to the sentence: the Templates strip
+ * (one server-side list, managed in TemplatesDialog), Name pre-filled with the
+ * template, agent and account the last session in that folder used (lib/store's
+ * last-used memory) so Name → Enter creates with no model turn, then the folder
+ * browser, Runs on, Fast-track, prompt presets, the Git & workspace fold with
+ * its Base branch picker, and per-session launch flags behind progressive
+ * disclosure. */
 
 import {
   useCallback,
@@ -168,11 +175,6 @@ export function NewSessionDialog() {
   const [promptOpen, setPromptOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
-  /** The form's describe box is expanded: open on every opening (the owner:
-   * "have the auto generate session as the first option instead of forcing
-   * me to click into it"); **Hide** folds it to the "Describe it instead…"
-   * row for the rest of that opening. */
-  const [describeOpen, setDescribeOpen] = useState(true);
   /** Base branch for a NEW WORKTREE: "" = whatever the server would pick (the
    * folder's checked-out branch — shown in the picker's first row). Sent as
    * base_ref + base_branch only when chosen, and only for a plain worktree
@@ -189,22 +191,22 @@ export function NewSessionDialog() {
   // that the ring alone stops reading as progress. Deliberately NOT wired to
   // anything the form submits — the sentence's only output is the fields
   // applyPlan writes, and it is kept only so the box still shows it afterwards.
-  /** Which of the two pages is on screen: 1 the sentence alone, 2 the form.
+  /** Which of the two pages is on screen: 1 the sentence, 2 the form.
    *
-   * An opening lands on the FORM, with the caret in its describe box at the
-   * top; Name → Enter below it still creates with no model turn. Page 1 is
-   * only for Intake's "Start together…" batch, whose box is a list of
-   * sessions and whose options (RunOptions) have no place on the one-session
-   * form. */
-  const [page, setPage] = useState(2);
+   * An opening lands on 1, the compact card with the sentence box (as v0.7
+   * did — the owner: "I like how it used to look in v0.7"). Page 1 carries an
+   * explicit way through to the form that costs one click and no model turn
+   * ("Set it up myself instead"), and a failed create reopens on page 2, where
+   * the fields to fix it are. */
+  const [page, setPage] = useState(1);
   /** The page this opening meant to land on — read by the focus effect, which
    * runs before the setPage above has rendered. */
-  const openedPage = useRef(2);
+  const openedPage = useRef(1);
   /** Where this opening puts the caret: the describe box, or Name for a failed
    * create's reopen (the form is what needs fixing then). */
   const openedFocus = useRef<"describe" | "title">("describe");
-  /** The opening's target was not on screen yet (page 1 still mounted after a
-   * batch, or the box hidden last time): focus it once it is. */
+  /** The opening's target was not on screen yet (page 2 still mounted from
+   * the last opening): focus it once it is. */
   const focusOpeningNext = useRef(false);
   const [describe, setDescribe] = useState("");
   const [describing, setDescribing] = useState(false);
@@ -464,6 +466,8 @@ export function NewSessionDialog() {
     }
     if (failedReopen.current) {
       failedReopen.current = false;
+      // failCreate has already put the form (page 2) back on screen.
+      openedPage.current = 2;
       openedFocus.current = "title";
       return;
     }
@@ -489,7 +493,6 @@ export function NewSessionDialog() {
     const prefill = useUi.getState().takeNewPrefill();
     setDescribe(prefill);
     setBatch(!!prefill);
-    setDescribeOpen(true);
     setBaseBranch("");
     setBranches(null);
     setDescribing(false);
@@ -506,13 +509,13 @@ export function NewSessionDialog() {
     // planFolderReducer's "reopen" for the asymmetry and why keeping it is
     // safe: the gate is derived from the live field, so a retained plan
     // self-clears the moment that field moves off it.
-    // Every opening starts at the FORM (a batch at its list). The form keeps
-    // whatever the last opening left in it only as far as the resets below
-    // allow — page is not one of the things worth remembering, because a
-    // dialog that reopens halfway through a flow nobody is in the middle of
-    // reads as a bug.
-    openedPage.current = prefill ? 1 : 2;
-    setPage(openedPage.current);
+    // Every opening starts at the sentence (a batch at its list). The form is
+    // one click away and keeps whatever the last opening left in it only as
+    // far as the resets below allow — page is not one of the things worth
+    // remembering, because a dialog that reopens halfway through a flow nobody
+    // is in the middle of reads as a bug.
+    openedPage.current = 1;
+    setPage(1);
     setNewFolderOk(false);
     planFolderDo({ t: "reopen" });
     // An answer for last opening's sentence has nothing to say about this one,
@@ -591,17 +594,17 @@ export function NewSessionDialog() {
   // beats this effect's commit — and whatever did keeps the caret.
   useEffect(() => {
     if (!open) return;
-    // The describe box (page 1's list, or the form's box at the top) — or
-    // Name after a failed create. Only once this render is showing the page
-    // and box the opening asked for: an opening that focused nothing would
-    // leave the caret wherever the app last had it, outside the modal.
+    // Page 1's sentence box — or Name after a failed create. Only once this
+    // render is showing the page the opening asked for: an opening that
+    // focused nothing would leave the caret wherever the app last had it,
+    // outside the modal.
     const toTitle = openedFocus.current === "title";
-    const shown = page === openedPage.current && (toTitle || page === 1 || describeOpen);
+    const shown = page === openedPage.current;
     const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;
     const active = document.activeElement;
     if (!el) {
-      // Not on screen yet (the previous opening was a batch, so page 1 is what
-      // this render still shows, or the box was hidden): focus it once it is.
+      // Not on screen yet (the previous opening ended on page 2, which is what
+      // this render still shows): focus it once it is.
       focusOpeningNext.current = true;
       return;
     }
@@ -823,7 +826,6 @@ export function NewSessionDialog() {
   useDescribeFocus({
     open,
     page,
-    describeOpen,
     focusFolderNext,
     focusOpeningNext,
     openedFocus,
@@ -1036,16 +1038,13 @@ export function NewSessionDialog() {
     postCreate,
   });
 
-  /** The sentence box's props, the same on both pages. */
+  /** Page 1's sentence box. */
   const describeProps = {
     batch,
     describe,
     setDescribe,
     describing,
-    describeSlow,
     describeRef,
-    describeOpen,
-    setDescribeOpen,
     runMode,
     runDescribe,
     cancelDescribe,
@@ -1067,7 +1066,10 @@ export function NewSessionDialog() {
   return (
     <div
       id="new-dialog"
-      className="modal"
+      // The two landing panes — page 1 and the Ticket tab — share one fixed
+      // top edge and are each their own natural height (NewSessionDialog.css),
+      // so a tab click never moves the card; the full form is centred.
+      className={"modal" + (shownTab === "ticket" || page === 1 ? " nf-landing" : "")}
       ref={rootRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeDialog();
@@ -1103,9 +1105,12 @@ export function NewSessionDialog() {
       <form
         id="new-form"
         ref={dropZoneRef}
-        // Every page is the same fixed height (NewSessionDialog.css), so
-        // nothing here changes the centred card's size.
-        className="ta-drop"
+        // Page 1 is one question and three buttons. The fixed height of page 2
+        // exists so that opening a fold scrolls inside .nf-body instead of
+        // growing the card and re-centering it under the pointer — there are
+        // no folds here, and holding 620px up over a single input left most of
+        // the card empty.
+        className={"ta-drop" + (page === 1 ? " nf-ask" : "")}
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -1139,13 +1144,9 @@ export function NewSessionDialog() {
             </div>
           )}
           {page === 1 ? (
-            <>
-              <DescribeSection page={1} {...describeProps} />
-            </>
+            <DescribeSection {...describeProps} />
           ) : (
             <>
-              <DescribeSection page={2} {...describeProps} />
-
               <TemplatesStrip
                 templates={templates}
                 activeTemplate={activeTemplate}
@@ -1339,7 +1340,6 @@ export function NewSessionDialog() {
           error={error}
           page={page}
           setPage={setPage}
-          batch={batch}
           runMode={runMode}
           describing={describing}
           describeSlow={describeSlow}

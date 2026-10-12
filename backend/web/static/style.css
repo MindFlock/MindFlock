@@ -13704,12 +13704,44 @@ button.ct-chip:hover {
   display: none;
 }
 
-/* The New dialog is centred like every other modal. What keeps it still is
-   height, not position: the form and the Ticket pane share ONE fixed card
-   height (--nf-card-h, scrolling inside), so neither a fold nor a tab switch
-   moves the card, and 86vh keeps both inside a short window. */
+/* The full form (Session page 2) is centred like every other modal, at ONE
+   fixed height (--nf-card-h, scrolling inside), so opening a fold never moves
+   it; 86vh keeps it inside a short window. */
 #new-dialog {
   --nf-card-h: min(86vh, 620px);
+}
+
+/* The two LANDING panes — Session page 1 and the Ticket tab — have ONE fixed
+   top edge and grow downward from it (.nf-landing, set by NewSessionDialog).
+
+   A centred card shifts its top by half of any height change, so clicking a
+   tab slid the whole dialog under the pointer. The two ways out are equal
+   heights or a fixed top, and equal heights loses here — it holds a tall card
+   open over a short pane and leaves a dead band above the buttons. A fixed top
+   gives the same stillness and lets each landing pane be exactly as tall as it
+   needs to be.
+
+   The top sits where a landing pane is centred (--nf-anchor-h, the rough
+   height of page 1 and the Ticket tab), so both read as centred. Not a cap,
+   not a height any card is given — it only positions the top.
+
+   --nf-top   that top edge, floored so a short window keeps a margin.
+   --nf-max-h how far a landing card may sag: to the bottom of the window, less
+              the same margin. */
+#new-dialog.nf-landing {
+  --nf-anchor-h: min(86vh, 400px);
+  /* vh, not %: percentage padding resolves against the containing block's
+     WIDTH even on a full-viewport fixed element. */
+  --nf-top: max(16px, calc((100vh - var(--nf-anchor-h)) / 2));
+  --nf-max-h: calc(100vh - var(--nf-top) - 16px);
+  align-items: flex-start;
+  padding-top: var(--nf-top);
+}
+
+/* Both landing cards sag to the bottom of the window at most, never past it. */
+#new-dialog.nf-landing #new-form,
+#new-dialog.nf-landing #new-ticket-form {
+  max-height: var(--nf-max-h);
 }
 
 /* New header: title, then the tab strip, then Close pinned top-right.
@@ -13794,16 +13826,17 @@ button.ct-chip:hover {
   gap: 13px;
 }
 
-/* The Ticket pane's card. Same chrome and the same fixed height as #new-form,
-   so switching tabs leaves the centred card exactly where it was; the pane
-   scrolls inside it. */
+/* The Ticket pane's card. Same chrome as #new-form, and its own natural height
+   rather than the full form's — holding 620px up over one text box is what
+   .nf-ask was written to avoid, and the landing panes' fixed top edge means a
+   shorter card costs no movement. */
 #new-ticket-form {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px 22px;
   width: min(660px, 94vw);
-  height: var(--nf-card-h);
+  height: auto;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -13814,15 +13847,8 @@ button.ct-chip:hover {
   display: flex;
   flex-direction: column;
   gap: 9px;
-  flex: 1;
   min-height: 0;
   overflow-y: auto;
-}
-
-/* The card is a fixed height, so the actions sit on its bottom edge, where
-   the form's do, rather than wherever the pane's content happens to end. */
-.nt-pane > .modal-actions {
-  margin-top: auto;
 }
 
 .nt-label {
@@ -14846,6 +14872,14 @@ button.ct-chip:hover {
   cursor: not-allowed;
 }
 
+/* Page 1 is one question and three buttons: its own height and no more. It can
+   do that only because the landing panes' top edge is fixed — while the card
+   was centred, an honest height here meant the dialog jumped every time you
+   switched to it. */
+#new-form.nf-ask {
+  height: auto;
+}
+
 /* Page 1's plain-language explanation, under the box and above everything the
    answer adds. Full width and normal line length — this is the paragraph that
    makes the button row legible to a first-time user, so it is the one piece of
@@ -15567,41 +15601,7 @@ button.ct-chip:hover {
   color: #fff;
 }
 
-/* --- New dialog: the describe row on the form, and the Base branch picker -- */
-/* "Describe it instead…" — the secondary door to the model-filled form. A
-   quiet row until opened; the box it opens is the same strip page 1 used to
-   be, in the card the Templates strip wears. */
-.nf-describe-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-#new-describe-open {
-  border-radius: 7px;
-  padding: 5px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  border: 1px dashed var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-#new-describe-open:hover {
-  border-color: var(--accent);
-}
-
-.nf-describe-busy {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
+/* --- New dialog: the Base branch picker ---------------------------------- */
 .nf-base-branch {
   margin-top: 8px;
 }

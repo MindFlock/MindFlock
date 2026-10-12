@@ -63969,6 +63969,11 @@ function rememberedProfileVerdict(id, profiles) {
 	if (!profiles) return "wait";
 	return profiles.some((p) => p.id === id) ? "apply" : "drop";
 }
+function enterAction(where) {
+	if (where.field === "describe") return where.shift || where.runMode ? "newline" : "describe";
+	if (where.shift) return "none";
+	return "create";
+}
 function focusRowIndex(paths, leaving) {
 	if (!paths.length) return -1;
 	const i = paths.indexOf(leaving);
@@ -64380,7 +64385,7 @@ function describeFlow(ctx) {
 		} catch (err) {
 			if (planRun.current.seq !== seq) return;
 			if (err?.name === "AbortError") return;
-			setPlanError(errMsg(err) + " — fill the form in by hand instead.");
+			setPlanError(errMsg(err) + " — use Set it up myself instead.");
 		} finally {
 			window.clearTimeout(slow);
 			if (planRun.current.seq === seq) {
@@ -64398,7 +64403,7 @@ function describeFlow(ctx) {
 		runDescribe
 	};
 }
-function useDescribeFocus({ open, page, describeOpen, focusFolderNext, focusOpeningNext, openedFocus, openedPage, repoRef, titleRef, describeRef }) {
+function useDescribeFocus({ open, page, focusFolderNext, focusOpeningNext, openedFocus, openedPage, repoRef, titleRef, describeRef }) {
 	(0, import_react.useEffect)(() => {
 		if (page !== 2 || !focusFolderNext.current) return;
 		focusFolderNext.current = false;
@@ -64415,21 +64420,7 @@ function useDescribeFocus({ open, page, describeOpen, focusFolderNext, focusOpen
 		if (!el) return;
 		focusOpeningNext.current = false;
 		el.focus();
-	}, [
-		open,
-		page,
-		describeOpen
-	]);
-	const wasOpen = (0, import_react.useRef)(describeOpen);
-	(0, import_react.useEffect)(() => {
-		const reopened = describeOpen && !wasOpen.current;
-		wasOpen.current = describeOpen;
-		if (open && reopened && page === 2 && !focusOpeningNext.current) describeRef.current?.focus();
-	}, [
-		open,
-		describeOpen,
-		page
-	]);
+	}, [open, page]);
 }
 function NewFolderRow({ ask: newFolderAsk, ok: newFolderOk, onOk: setNewFolderOk }) {
 	if (!newFolderAsk) return null;
@@ -64466,8 +64457,8 @@ function NewFolderRow({ ask: newFolderAsk, ok: newFolderOk, onOk: setNewFolderOk
 		})]
 	});
 }
-function DescribeSection({ page, batch, describe, setDescribe, describing, describeSlow, describeRef, describeOpen, setDescribeOpen, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath }) {
-	if (page === 1) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+function DescribeSection({ batch, describe, setDescribe, describing, describeRef, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "new-describe",
 		className: "new-templates nf-describe",
 		children: [
@@ -64493,7 +64484,11 @@ function DescribeSection({ page, batch, describe, setDescribe, describing, descr
 					},
 					onKeyDown: (e) => {
 						if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-						if (e.shiftKey || runMode) {
+						if (enterAction({
+							field: "describe",
+							shift: e.shiftKey,
+							runMode
+						}) === "newline") {
 							e.stopPropagation();
 							return;
 						}
@@ -64613,102 +64608,6 @@ function DescribeSection({ page, batch, describe, setDescribe, describing, descr
 				children: planError
 			}),
 			newFolderRow
-		]
-	});
-	return !describeOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "nf-describe-toggle",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			id: "new-describe-open",
-			title: "Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create.",
-			onClick: () => setDescribeOpen(true),
-			children: "✨ Describe it instead…"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "muted",
-			children: "or fill the form in and press Enter"
-		})]
-	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "new-describe",
-		className: "new-templates nf-describe",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "nt-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "What do you want to work on?" }), describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "nf-describe-busy",
-					"aria-live": "polite",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "btn-spin",
-							"aria-hidden": "true"
-						}),
-						describeSlow ? "Still thinking…" : "Thinking…",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "new-describe-cancel",
-							className: "linklike",
-							onClick: cancelDescribe,
-							children: "Cancel"
-						})
-					]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: "new-describe-close",
-					className: "linklike",
-					onClick: () => {
-						setDescribeOpen(false);
-						setPlanError("");
-					},
-					children: "Hide"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "nf-describe-row",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-					id: "new-describe-text",
-					ref: describeRef,
-					rows: Math.min(6, Math.max(2, describe.split("\n").length)),
-					value: describe,
-					maxLength: DESCRIBE_MAX_CHARS,
-					autoComplete: "off",
-					spellCheck: false,
-					readOnly: describing,
-					placeholder: "e.g. fix the login bug in acme-api — Enter fills the form in",
-					onChange: (e) => {
-						setDescribe(e.target.value);
-						setPlanError("");
-					},
-					onKeyDown: (e) => {
-						if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-						if (e.shiftKey) {
-							e.stopPropagation();
-							return;
-						}
-						e.preventDefault();
-						e.stopPropagation();
-						runDescribe("fill");
-					}
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "nf-describe-help",
-				children: [
-					"Your coding CLI reads this and fills in the folder, name and first instruction below. ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you press Create." }),
-					" ",
-					"Or skip it: give the session a Name below and press Enter."
-				]
-			}),
-			planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "nf-describe-note",
-				"aria-live": "polite",
-				children: planNoteShown
-			}),
-			planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				id: "new-describe-error",
-				className: "error",
-				"aria-live": "polite",
-				children: planError
-			})
 		]
 	});
 }
@@ -65701,7 +65600,7 @@ function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, prog
 }
 //#endregion
 //#region src/components/dialogs/newSession/FooterActions.tsx
-function FooterActions({ error, page, setPage, batch, runMode, describing, describeSlow, draft, runDescribe, startRun, startNow }) {
+function FooterActions({ error, page, setPage, runMode, describing, describeSlow, draft, runDescribe, startRun, startNow }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "modal-actions nf-actions",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -65750,7 +65649,7 @@ function FooterActions({ error, page, setPage, batch, runMode, describing, descr
 				onClick: runMode ? () => void startRun() : startNow,
 				children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
 			})
-		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			id: "new-back",
 			className: "linklike",
@@ -65795,12 +65694,11 @@ function NewSessionDialog() {
 	const [promptOpen, setPromptOpen] = (0, import_react.useState)(false);
 	const [templates, setTemplates] = (0, import_react.useState)([]);
 	const [activeTemplate, setActiveTemplate] = (0, import_react.useState)("");
-	const [describeOpen, setDescribeOpen] = (0, import_react.useState)(true);
 	const [baseBranch, setBaseBranch] = (0, import_react.useState)("");
 	const [continueOn, setContinueOn] = (0, import_react.useState)("");
 	const [branches, setBranches] = (0, import_react.useState)(null);
-	const [page, setPage] = (0, import_react.useState)(2);
-	const openedPage = (0, import_react.useRef)(2);
+	const [page, setPage] = (0, import_react.useState)(1);
+	const openedPage = (0, import_react.useRef)(1);
 	const openedFocus = (0, import_react.useRef)("describe");
 	const focusOpeningNext = (0, import_react.useRef)(false);
 	const [describe, setDescribe] = (0, import_react.useState)("");
@@ -65914,6 +65812,7 @@ function NewSessionDialog() {
 		}
 		if (failedReopen.current) {
 			failedReopen.current = false;
+			openedPage.current = 2;
 			openedFocus.current = "title";
 			return;
 		}
@@ -65926,15 +65825,14 @@ function NewSessionDialog() {
 		const prefill = useUi.getState().takeNewPrefill();
 		setDescribe(prefill);
 		setBatch(!!prefill);
-		setDescribeOpen(true);
 		setBaseBranch("");
 		setBranches(null);
 		setDescribing(false);
 		setDescribeSlow(false);
 		setPlanNote("");
 		setPlanError("");
-		openedPage.current = prefill ? 1 : 2;
-		setPage(openedPage.current);
+		openedPage.current = 1;
+		setPage(1);
 		setNewFolderOk(false);
 		planFolderDo({ t: "reopen" });
 		cancelPlanRun(planRun.current);
@@ -65982,7 +65880,7 @@ function NewSessionDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const toTitle = openedFocus.current === "title";
-		const el = page === openedPage.current && (toTitle || page === 1 || describeOpen) ? toTitle ? titleRef.current : describeRef.current : null;
+		const el = page === openedPage.current ? toTitle ? titleRef.current : describeRef.current : null;
 		const active = document.activeElement;
 		if (!el) {
 			focusOpeningNext.current = true;
@@ -66137,7 +66035,6 @@ function NewSessionDialog() {
 	useDescribeFocus({
 		open,
 		page,
-		describeOpen,
 		focusFolderNext,
 		focusOpeningNext,
 		openedFocus,
@@ -66280,10 +66177,7 @@ function NewSessionDialog() {
 		describe,
 		setDescribe,
 		describing,
-		describeSlow,
 		describeRef,
-		describeOpen,
-		setDescribeOpen,
 		runMode,
 		runDescribe,
 		cancelDescribe,
@@ -66303,7 +66197,7 @@ function NewSessionDialog() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "new-dialog",
-		className: "modal",
+		className: "modal" + (shownTab === "ticket" || page === 1 ? " nf-landing" : ""),
 		ref: rootRef,
 		onClick: (e) => {
 			if (e.target === e.currentTarget) closeDialog();
@@ -66332,7 +66226,7 @@ function NewSessionDialog() {
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "new-form",
 			ref: dropZoneRef,
-			className: "ta-drop",
+			className: "ta-drop" + (page === 1 ? " nf-ask" : ""),
 			onSubmit: (e) => {
 				e.preventDefault();
 				submit();
@@ -66368,14 +66262,7 @@ function NewSessionDialog() {
 								}, d.device))]
 							})
 						})]
-					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeSection, {
-						page: 1,
-						...describeProps
-					}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeSection, {
-							page: 2,
-							...describeProps
-						}),
+					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeSection, { ...describeProps }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesStrip, {
 							templates,
 							activeTemplate,
@@ -66555,7 +66442,6 @@ function NewSessionDialog() {
 					error,
 					page,
 					setPage,
-					batch,
 					runMode,
 					describing,
 					describeSlow,

@@ -1,10 +1,9 @@
 /** The New dialog's describe/plan flow: the one-sentence box (page 1's whole
- * body for an Intake batch, the form's "Describe it instead…" fold), the
- * handlers that send it to POST /api/session-plan and write the answer into
+ * body — one session, or an Intake batch's list), the handlers that send it to POST /api/session-plan and write the answer into
  * the form, and the confirm row for a folder a plan wants made. State stays
  * in NewSessionDialog; these read and write it through what they are handed. */
 
-import { useEffect, useRef, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
+import { useEffect, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
 import type { PlanAnswer } from "../../../api/types";
 import type { deviceApi } from "../../../lib/devices";
 import { errMsg } from "../../../lib/format";
@@ -16,6 +15,7 @@ import {
   SUBMIT_ARM_MS,
   cancelPlanRun,
   describeBlockReason,
+  enterAction,
   immediateStartBlockReason,
   leafName,
   planInPlace,
@@ -305,7 +305,7 @@ export function describeFlow(ctx: DescribeFlowCtx) {
       // open dialog — which is exactly what #new-error and MakePrDialog's .error
       // line already are. The remedy never changes and is already on screen, so
       // the sentence names it.
-      setPlanError(errMsg(err) + " — fill the form in by hand instead.");
+      setPlanError(errMsg(err) + " — use Set it up myself instead.");
     } finally {
       window.clearTimeout(slow);
       // Guarded like every other landing: a later run owns the button now, and
@@ -326,7 +326,6 @@ export function describeFlow(ctx: DescribeFlowCtx) {
 export function useDescribeFocus({
   open,
   page,
-  describeOpen,
   focusFolderNext,
   focusOpeningNext,
   openedFocus,
@@ -337,7 +336,6 @@ export function useDescribeFocus({
 }: {
   open: boolean;
   page: number;
-  describeOpen: boolean;
   focusFolderNext: MutableRefObject<boolean>;
   focusOpeningNext: MutableRefObject<boolean>;
   openedFocus: MutableRefObject<"describe" | "title">;
@@ -369,24 +367,14 @@ export function useDescribeFocus({
     el.setSelectionRange(el.value.length, el.value.length);
   }, [page]);
 
-  // The opening's target, once the page (and box) it asked for is on screen.
+  // The opening's target, once the page it asked for is on screen.
   useEffect(() => {
     if (!open || !focusOpeningNext.current || page !== openedPage.current) return;
     const el = openedFocus.current === "title" ? titleRef.current : describeRef.current;
     if (!el) return;
     focusOpeningNext.current = false;
     el.focus();
-  }, [open, page, describeOpen]);
-
-  // "Describe it instead…" pressed after a Hide: the caret goes to the box it
-  // revealed. Only on that transition — the box is open from the start of
-  // every opening, and the opening's own focus owns that caret.
-  const wasOpen = useRef(describeOpen);
-  useEffect(() => {
-    const reopened = describeOpen && !wasOpen.current;
-    wasOpen.current = describeOpen;
-    if (open && reopened && page === 2 && !focusOpeningNext.current) describeRef.current?.focus();
-  }, [open, describeOpen, page]);
+  }, [open, page]);
 }
 
 /* The confirm row, built once and drawn on BOTH pages: under the sentence on
@@ -438,16 +426,11 @@ export function NewFolderRow({
 }
 
 export interface DescribeSectionProps {
-  /** 1: the box alone (an Intake batch); 2: the form's fold. */
-  page: number;
   batch: boolean;
   describe: string;
   setDescribe: Set<string>;
   describing: boolean;
-  describeSlow: boolean;
   describeRef: MutableRefObject<HTMLTextAreaElement | null>;
-  describeOpen: boolean;
-  setDescribeOpen: Set<boolean>;
   runMode: boolean;
   runDescribe(mode?: "fill" | "start"): Promise<void>;
   cancelDescribe(): void;
@@ -466,18 +449,14 @@ export interface DescribeSectionProps {
   homePath: string;
 }
 
-/** The sentence box on either page. One component for both so the page swap
- * reconciles the same element tree it did when this was inline. */
+/** Page 1's body: the sentence box, what it is for, and — for an Intake
+ * batch — the list's rows and run options. */
 export function DescribeSection({
-  page,
   batch,
   describe,
   setDescribe,
   describing,
-  describeSlow,
   describeRef,
-  describeOpen,
-  setDescribeOpen,
   runMode,
   runDescribe,
   cancelDescribe,
@@ -495,294 +474,199 @@ export function DescribeSection({
   device,
   homePath,
 }: DescribeSectionProps) {
-  /* The one-sentence door, first in the body and above Templates because it
-     is the widest of the three ways to fill this form in (a sentence, a
-     template chip, or by hand) and reads top-down as the least specific
-     first. It wears .new-templates so it is the same card as the Templates
-     and folder-suggestion strips rather than a second form stacked on the
-     first — nothing here is submitted, and looking like a form would say
-     otherwise. */
-  if (page === 1)
-    return (
-      <div id="new-describe" className="new-templates nf-describe">
-        <div className="nt-head">
-          <span>
-            {batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"}
-          </span>
-        </div>
-        <div className="nf-describe-row">
-          {/* A textarea, so a longer task can be typed or pasted: three
-              lines tall, growing to eight. However many lines, it is ONE
-              prompt (only Intake's "Start together…" opens New as a list).
-              Enter keeps its old meaning ("read this"); Shift+Enter starts
-              another line, and in a batch or an auto-split Enter does too. */}
-          <textarea
-            id="new-describe-text"
-            ref={describeRef}
-            rows={Math.min(8, Math.max(3, describe.split("\n").length))}
-            value={describe}
-            maxLength={DESCRIBE_MAX_CHARS}
-            autoComplete="off"
-            spellCheck={false}
-            // readOnly rather than disabled: a disabled input loses focus to
-            // the body, so the caret would jump out of the box the moment
-            // Enter was pressed and the sentence would stop being
-            // selectable while the user waits to see what it produced.
-            readOnly={describing}
-            placeholder="e.g. fix the login bug in acme-api"
-            onChange={(e) => {
-              setDescribe(e.target.value);
-              // Typing is what clears the refusal: whatever it objected to
-              // has just changed, and a stale red line under a box the user
-              // is actively fixing is noise.
-              setPlanError("");
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-              // A new line: Shift+Enter always, plain Enter in a list.
-              if (e.shiftKey || runMode) {
-                e.stopPropagation();
-                return;
-              }
-              // Enter here means "read this", never "create a session". This
-              // input sits inside <form id="new-form" onSubmit={submit}>, so
-              // without the preventDefault a sentence nobody has resolved
-              // yet becomes a create in whatever folder the suggestion
-              // pre-fill happened to leave behind. stopPropagation keeps the
-              // modal root's Ctrl+Enter handler out of it.
-              e.preventDefault();
+  /* The one-sentence door, the whole of page 1 because it is the widest of
+     the three ways to fill this form in (a sentence, a template chip, or by
+     hand) and comes first as the least specific. It wears .new-templates so
+     it is the same card as the Templates and folder-suggestion strips rather
+     than a second form stacked on the first — nothing here is submitted, and
+     looking like a form would say otherwise. */
+  return (
+    <div id="new-describe" className="new-templates nf-describe">
+      <div className="nt-head">
+        <span>
+          {batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"}
+        </span>
+      </div>
+      <div className="nf-describe-row">
+        {/* A textarea, so a longer task can be typed or pasted: three
+            lines tall, growing to eight. However many lines, it is ONE
+            prompt (only Intake's "Start together…" opens New as a list).
+            Enter keeps its old meaning ("read this"); Shift+Enter starts
+            another line, and in a batch or an auto-split Enter does too. */}
+        <textarea
+          id="new-describe-text"
+          ref={describeRef}
+          rows={Math.min(8, Math.max(3, describe.split("\n").length))}
+          value={describe}
+          maxLength={DESCRIBE_MAX_CHARS}
+          autoComplete="off"
+          spellCheck={false}
+          // readOnly rather than disabled: a disabled input loses focus to
+          // the body, so the caret would jump out of the box the moment
+          // Enter was pressed and the sentence would stop being
+          // selectable while the user waits to see what it produced.
+          readOnly={describing}
+          placeholder="e.g. fix the login bug in acme-api"
+          onChange={(e) => {
+            setDescribe(e.target.value);
+            // Typing is what clears the refusal: whatever it objected to
+            // has just changed, and a stale red line under a box the user
+            // is actively fixing is noise.
+            setPlanError("");
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+            // A new line: Shift+Enter always, plain Enter in a list.
+            if (enterAction({ field: "describe", shift: e.shiftKey, runMode }) === "newline") {
               e.stopPropagation();
-              void runDescribe("fill");
-            }}
-          />
-          {describing && (
-            <button
-              type="button"
-              id="new-describe-cancel"
-              className="linklike"
-              onClick={cancelDescribe}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-        {/* Written for somebody who has never opened this dialog. The
-            line this replaced — "Enter fills in the form — or start the
-            session straight away" — named two things a first-time user
-            has no way to know: WHICH form, and what starting it straight
-            away skips. This says what the sentence is for, and that
-            reading it costs nothing, which is the fact that makes the
-            button row below safe to experiment with. */}
-        {!runMode && (
-        <>
-        <p className="nf-describe-help">
-          Your coding CLI reads this and works out which folder to use, what
-          to call the session, and what to tell the agent first.{" "}
-          <b>Nothing is created until you pick one of the buttons below.</b>
-        </p>
-        {/* Two examples rather than none: the placeholder can only show
-            one shape and the box accepts three — an existing project, a
-            brand-new one, and a request for somewhere separate to work. A
-            user who cannot tell which of those is allowed types the safest
-            thing they can think of and never finds the other two. */}
-        <p className="nf-describe-eg">
-          Also understood:{" "}
-          <code>start a new project called invoice-parser</code>
-          {" · "}
-          <code>add metrics to billing, in a worktree</code>
-        </p>
-        </>
-        )}
-        {draft.listMode && (
-          <RunItems
-            rows={draft.rows}
-            onRemove={(row) => {
-              setDescribe((d) => removeItem(d, row));
-              setPlanError("");
-            }}
-          />
-        )}
-        {draft.listMode && draft.previewError && (
-          <p className="rt-note error" aria-live="polite">
-            Couldn't read the list: {draft.previewError}
-          </p>
-        )}
-        {draft.listMode &&
-          draft.warnings.map((w) => (
-            <p key={w} className="rt-note">
-              {w}
-            </p>
-          ))}
-        {/* Options only for a BATCH (Intake's "Start together…"). One
-            session's page 1 is the prompt and nothing else: the model
-            fills in the form, and Fast-track and Auto-split sit there
-            with the rest of the details. */}
-        {batch && (
-        <RunOptions
-          draft={draft}
-          n={draft.listMode ? draft.count : 1}
-          split={false}
-          repoPicker={
-            runMode && draft.items.some((i) => i.kind === "task") ? (
-              // Typed tasks need a folder; tickets bring their own (the
-              // source's repo).
-              <span className="rt-repo-pick">
-                <select
-                  id="new-run-repo"
-                  className="rt-repo"
-                  value={runBrowse ? BROWSE_VALUE : repoPath}
-                  title={repoPath + " — each gets its own worktree there"}
-                  onChange={(e) => {
-                    // "Browse…" opens the folder browser right here, so
-                    // ANY folder can be the one — not only a suggestion.
-                    if (e.target.value === BROWSE_VALUE) {
-                      setRunBrowse(true);
-                      return;
-                    }
-                    setRunBrowse(false);
-                    folderDo({ t: "user-set", path: e.target.value });
-                  }}
-                >
-                  {runRepoOptions(repoPath, suggestions, leafName).map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            ) : null
-          }
-          // A batch is already one session per line: nothing to split.
-          splitBox={null}
+              return;
+            }
+            // Enter here means "read this", never "create a session". This
+            // input sits inside <form id="new-form" onSubmit={submit}>, so
+            // without the preventDefault a sentence nobody has resolved
+            // yet becomes a create in whatever folder the suggestion
+            // pre-fill happened to leave behind. stopPropagation keeps the
+            // modal root's Ctrl+Enter handler out of it.
+            e.preventDefault();
+            e.stopPropagation();
+            void runDescribe("fill");
+          }}
         />
+        {describing && (
+          <button
+            type="button"
+            id="new-describe-cancel"
+            className="linklike"
+            onClick={cancelDescribe}
+          >
+            Cancel
+          </button>
         )}
-        {runMode && runBrowse && (
-          // The list's "tasks start in" → Browse…: the same inline
-          // folder browser the Folder field uses (inline: Electron has
-          // no browser dialogs). Picking a folder fills the picker.
-          <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
-            <div className="rt-browse-head">
-              <span>Pick the folder the tasks start in</span>
-              <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
-                Done
-              </button>
-            </div>
-            <FolderBrowser
-              device={device}
-              initialPath={repoPath || homePath || ""}
-              selected={repoPath}
-              onSelect={(p) => folderDo({ t: "user-set", path: p })}
-              onPick={(p) => {
-                folderDo({ t: "user-set", path: p });
-                setRunBrowse(false);
-              }}
-            />
-          </div>
-        )}
-        {planNoteShown && (
-          <p className="nf-describe-note" aria-live="polite">
-            {planNoteShown}
-          </p>
-        )}
-        {planError && (
-          <p id="new-describe-error" className="error" aria-live="polite">
-            {planError}
-          </p>
-        )}
-        {newFolderRow}
       </div>
-    );
-  /* The first thing on the form, open on every opening with the caret in it:
-     Enter buys the model turn (runDescribe) that fills the fields below —
-     nothing is created by it. Hide folds it to a quiet row for the rest of
-     the opening. */
-  return !describeOpen ? (
-      <div className="nf-describe-toggle">
-        <button
-          type="button"
-          id="new-describe-open"
-          title="Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create."
-          onClick={() => setDescribeOpen(true)}
-        >
-          ✨ Describe it instead…
-        </button>
-        <span className="muted">or fill the form in and press Enter</span>
-      </div>
-    ) : (
-      <div id="new-describe" className="new-templates nf-describe">
-        <div className="nt-head">
-          <span>What do you want to work on?</span>
-          {describing ? (
-            <span className="nf-describe-busy" aria-live="polite">
-              <span className="btn-spin" aria-hidden="true" />
-              {describeSlow ? "Still thinking…" : "Thinking…"}
-              <button
-                type="button"
-                id="new-describe-cancel"
-                className="linklike"
-                onClick={cancelDescribe}
+      {/* Written for somebody who has never opened this dialog. The
+          line this replaced — "Enter fills in the form — or start the
+          session straight away" — named two things a first-time user
+          has no way to know: WHICH form, and what starting it straight
+          away skips. This says what the sentence is for, and that
+          reading it costs nothing, which is the fact that makes the
+          button row below safe to experiment with. */}
+      {!runMode && (
+      <>
+      <p className="nf-describe-help">
+        Your coding CLI reads this and works out which folder to use, what
+        to call the session, and what to tell the agent first.{" "}
+        <b>Nothing is created until you pick one of the buttons below.</b>
+      </p>
+      {/* Two examples rather than none: the placeholder can only show
+          one shape and the box accepts three — an existing project, a
+          brand-new one, and a request for somewhere separate to work. A
+          user who cannot tell which of those is allowed types the safest
+          thing they can think of and never finds the other two. */}
+      <p className="nf-describe-eg">
+        Also understood:{" "}
+        <code>start a new project called invoice-parser</code>
+        {" · "}
+        <code>add metrics to billing, in a worktree</code>
+      </p>
+      </>
+      )}
+      {draft.listMode && (
+        <RunItems
+          rows={draft.rows}
+          onRemove={(row) => {
+            setDescribe((d) => removeItem(d, row));
+            setPlanError("");
+          }}
+        />
+      )}
+      {draft.listMode && draft.previewError && (
+        <p className="rt-note error" aria-live="polite">
+          Couldn't read the list: {draft.previewError}
+        </p>
+      )}
+      {draft.listMode &&
+        draft.warnings.map((w) => (
+          <p key={w} className="rt-note">
+            {w}
+          </p>
+        ))}
+      {/* Options only for a BATCH (Intake's "Start together…"). One
+          session's page 1 is the prompt and nothing else: the model
+          fills in the form, and Fast-track and Auto-split sit there
+          with the rest of the details. */}
+      {batch && (
+      <RunOptions
+        draft={draft}
+        n={draft.listMode ? draft.count : 1}
+        split={false}
+        repoPicker={
+          runMode && draft.items.some((i) => i.kind === "task") ? (
+            // Typed tasks need a folder; tickets bring their own (the
+            // source's repo).
+            <span className="rt-repo-pick">
+              <select
+                id="new-run-repo"
+                className="rt-repo"
+                value={runBrowse ? BROWSE_VALUE : repoPath}
+                title={repoPath + " — each gets its own worktree there"}
+                onChange={(e) => {
+                  // "Browse…" opens the folder browser right here, so
+                  // ANY folder can be the one — not only a suggestion.
+                  if (e.target.value === BROWSE_VALUE) {
+                    setRunBrowse(true);
+                    return;
+                  }
+                  setRunBrowse(false);
+                  folderDo({ t: "user-set", path: e.target.value });
+                }}
               >
-                Cancel
-              </button>
+                {runRepoOptions(repoPath, suggestions, leafName).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </span>
-          ) : (
-            <button
-              type="button"
-              id="new-describe-close"
-              className="linklike"
-              onClick={() => {
-                setDescribeOpen(false);
-                setPlanError("");
-              }}
-            >
-              Hide
+          ) : null
+        }
+        // A batch is already one session per line: nothing to split.
+        splitBox={null}
+      />
+      )}
+      {runMode && runBrowse && (
+        // The list's "tasks start in" → Browse…: the same inline
+        // folder browser the Folder field uses (inline: Electron has
+        // no browser dialogs). Picking a folder fills the picker.
+        <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
+          <div className="rt-browse-head">
+            <span>Pick the folder the tasks start in</span>
+            <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
+              Done
             </button>
-          )}
-        </div>
-        <div className="nf-describe-row">
-          <textarea
-            id="new-describe-text"
-            ref={describeRef}
-            rows={Math.min(6, Math.max(2, describe.split("\n").length))}
-            value={describe}
-            maxLength={DESCRIBE_MAX_CHARS}
-            autoComplete="off"
-            spellCheck={false}
-            readOnly={describing}
-            placeholder="e.g. fix the login bug in acme-api — Enter fills the form in"
-            onChange={(e) => {
-              setDescribe(e.target.value);
-              setPlanError("");
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-              if (e.shiftKey) {
-                e.stopPropagation();
-                return;
-              }
-              // Enter here means "read this", never "create": the box
-              // sits inside <form onSubmit={submit}>.
-              e.preventDefault();
-              e.stopPropagation();
-              void runDescribe("fill");
+          </div>
+          <FolderBrowser
+            device={device}
+            initialPath={repoPath || homePath || ""}
+            selected={repoPath}
+            onSelect={(p) => folderDo({ t: "user-set", path: p })}
+            onPick={(p) => {
+              folderDo({ t: "user-set", path: p });
+              setRunBrowse(false);
             }}
           />
         </div>
-        <p className="nf-describe-help">
-          Your coding CLI reads this and fills in the folder, name and first
-          instruction below. <b>Nothing is created until you press Create.</b>{" "}
-          Or skip it: give the session a Name below and press Enter.
+      )}
+      {planNoteShown && (
+        <p className="nf-describe-note" aria-live="polite">
+          {planNoteShown}
         </p>
-        {planNoteShown && (
-          <p className="nf-describe-note" aria-live="polite">
-            {planNoteShown}
-          </p>
-        )}
-        {planError && (
-          <p id="new-describe-error" className="error" aria-live="polite">
-            {planError}
-          </p>
-        )}
-      </div>
+      )}
+      {planError && (
+        <p id="new-describe-error" className="error" aria-live="polite">
+          {planError}
+        </p>
+      )}
+      {newFolderRow}
+    </div>
   );
 }

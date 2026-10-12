@@ -1571,20 +1571,25 @@ filing a ticket needs a tracker, so a newcomer sees only the Session content.
 Session is the landing tab on every open (including after a refused create),
 because it is the hot path. Ticket is described further down.
 
-The card is centred like every other modal. It holds still because every pane
-— the form, Intake's batch page and the Ticket tab — is the same fixed height
-(`min(86vh, 620px)`) and scrolls inside it, so neither switching tabs nor
-opening a fold moves the card.
+The Session tab is two pages, as in v0.7: a compact **Describe** card it opens
+on (*What do you want to work on?* — see
+[describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence)),
+and the full form behind it (**Set it up myself instead**, or **Review details
+first** to have the model fill it in). The form has **← Back** to the sentence.
+The caret starts in the sentence box; after a refused create the dialog
+reopens on the form with the caret in **Name**, since the form is what needs
+fixing.
 
-**Describe it first.** The Session tab opens on the form with its describe box
-(*What do you want to work on?*) at the top, open, with the caret in it: type
-a sentence and Enter fills the form in — see
-[describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence).
-**Hide** folds it to a **✨ Describe it instead…** row for the rest of that
-opening; every opening shows it again. After a refused create the caret goes
-to **Name** instead, since the form is what needs fixing.
+The two *landing* panes — Session page 1 and the Ticket tab — share one fixed
+top edge and are each their own natural height, so switching tabs never moves
+the card: a centred card shifts its top by half of any height change. The top
+is anchored where a landing pane sits centred (`--nf-anchor-h`, `min(86vh,
+400px)`), so both read as centred, and a landing card stops growing at the
+bottom of the window and scrolls inside. The full form is centred like every
+other modal, at one fixed height (`min(86vh, 620px)`) that scrolls inside, so
+opening a fold never moves it.
 
-**The by-hand path costs nothing.** Below the box, the form is pre-filled
+**The by-hand path costs nothing.** The form is pre-filled
 (**Name** placeholder *untitled — Enter creates it*, or *<template> — Enter
 creates it* when a template is active) with the template, agent and account
 the last session in that folder was started with — so Name → Enter creates the
@@ -1736,24 +1741,46 @@ anyway, because a ticket you cannot open is one you cannot act on.
 
 ## New-session dialog: describe it in a sentence
 
-The sentence box is the first thing on the form and the first way to fill it
-in (the other is Name → Enter). It is open with the caret in it on every open
-(*What do you want to work on?*, with a **Hide** link that folds it to a **✨
-Describe it instead…** row). **Enter there never creates anything**: it sends the sentence
-to [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which
-walks the filesystem, asks one headless model turn, and fills in the fields
-you are already looking at — Folder, Name (when the plan has one), Prompt,
-and the Git & workspace choice (*work in place*, *Create a git repo*), opening
-those folds — then moves the caret to Folder. It leaves the agent, account,
-launch flags and Plan first alone. Shift+Enter starts another line. While the
-turn runs the row says **Thinking…** (**Still thinking…** after 8 s: a cold
-CLI start plus a real turn runs to ~25 s) beside a **Cancel** link, and the
-box goes read-only rather than disabled so the caret and the selection survive
-the wait. A failure says why and *— fill the form in by hand instead.*
+The dialog opens on a **Describe** page — *What do you want to work on?*, one
+text box — and the full form is page 2. The box is the widest of the three ways
+to fill the form in (a sentence, a template chip, or by hand), and **nothing in
+it is submitted**: it wears the same card as the Templates and folder-suggestion
+strips rather than looking like a second form stacked on the first. Under it,
+*Your coding CLI reads this and works out which folder to use, what to call the
+session, and what to tell the agent first. **Nothing is created until you pick
+one of the buttons below.*** and two examples (*Also understood: start a new
+project called invoice-parser · add metrics to billing, in a worktree*).
 
-The old first page — the box alone, with **Set it up myself instead**,
-**Review details first ↵** and **Create session** — survives only for Intake's
-**Start together…** batch, below, whose box is a list.
+Three actions sit under it, in increasing order of commitment, each named for
+its outcome rather than for the app's own vocabulary:
+
+- **Set it up myself instead** — straight to page 2. Nothing is read and no model
+  runs. It cannot be dropped: every opening lands here, so it is the only route
+  to the form for someone with no coding CLI installed.
+- **Review details first ↵** — what Enter in the box does (hidden for an
+  Intake batch, which has no single form to fill in). Sends the sentence to
+  [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
+  the filesystem, asks one headless model turn, and fills in page 2 for you to
+  change before anything is created — Folder, Name (when the plan has one),
+  Prompt, and the Git & workspace choice (*work in place*, *Create a git repo*),
+  opening those folds — then moves the caret to Folder. It leaves the agent,
+  account, launch flags and Plan first alone. Enter here has always meant "read
+  this", and `preventDefault` keeps it that way — the box lives inside the form,
+  so without it a sentence nobody has resolved yet would become a create in
+  whatever folder the pre-fill left behind. The button is **`type="button"`**
+  for the same reason. Shift+Enter starts another line.
+- **Create session** — start now from what you typed, without reading the
+  details. The one thing it does *not* skip is a folder that does not exist;
+  its refusal says to *press Create session again* or *use Set it up myself
+  instead*.
+
+While a turn is in flight the button shows a ring and reads **Reading…**, then
+**Still reading…** after 8 s: a cold CLI start plus a real turn runs to ~25 s and
+a spinner that never changes reads as a hang long before the route's own timeout
+would say anything. A **Cancel** link appears beside the box, which goes
+read-only rather than disabled so the caret and the selection survive the wait.
+A failure says why and *— use Set it up myself instead.* Create on the form is
+held while a turn is reading.
 
 **One prompt, however many lines; batches come from Intake.** The box is a
 textarea and stays ONE prompt however many lines it holds — **Fast-track to**
