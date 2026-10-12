@@ -124,6 +124,8 @@ class CodexProvider(GenericProvider):
         since_ts: Optional[float],
         until_ts: Optional[float] = None,
         shared_cwd: bool = False,
+        threads=None,
+        other_threads=None,
     ) -> dict:
         """Tokens for Codex sessions in ``workdir`` since ``since_ts`` (parsed
         from the CLI's rollout ``token_count`` events). Falls back to the

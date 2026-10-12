@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Usage figures (day, week, month, year, and each session's cost) are
+  now right.** Every API reply was counted several times, because Claude Code
+  writes one reply as several transcript lines, and copies them again when a
+  conversation is resumed: totals came out about twice too high. At the same
+  time the work done by subagents (the Agent tool) was never counted at all,
+  and that is often most of it. Both are fixed: each reply counts once, and
+  subagent work counts, priced with the model it actually ran on.
+- **The year total no longer shrinks when Claude Code deletes old
+  transcripts.** A day's total is remembered and never drops because its files
+  disappeared. Totals saved by older versions were inflated, so they are
+  recomputed where the transcripts still exist; older days are kept as an
+  estimate, and the Usage popover says "Includes estimates before" that date
+  under the year. The old file is kept as `usage-history.v1.json`.
+- **A session's cost no longer picks up its sibling's conversations.** When a
+  window and its copies share a folder, each window now remembers every
+  conversation it has had, so a conversation started with `/clear` after a copy
+  was made, or windows working at the same time, are counted for the right
+  window.
+
 ## [0.8.3] - 2026-10-12
 
 ### Fixed

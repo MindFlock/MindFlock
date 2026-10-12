@@ -139,8 +139,9 @@ class _FakeProvider:
         self._ret = ret
         self.calls = 0
 
-    def session_tokens(self, wt, start, until, shared_cwd):
+    def session_tokens(self, wt, start, until, shared_cwd, **kw):
         self.calls += 1
+        self.kw = kw
         return dict(self._ret)
 
 

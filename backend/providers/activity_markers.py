@@ -288,6 +288,16 @@ def hook_command(
             "'.mindflock-assistant','.thread-markers')",
             "    os.makedirs(td,exist_ok=True)",
             "    open(os.path.join(td,s+'.thread'),'w').write(sid)",
+            # Every conversation this window has had, one id per line (the
+            # current marker above is overwritten on /clear): per-session cost
+            # attributes exactly these conversations (thread_markers.history).
+            "    hp=os.path.join(td,s+'.threads')",
+            "    try:",
+            "        h=open(hp).read().split()",
+            "    except Exception:",
+            "        h=[]",
+            "    if sid not in h:",
+            "        open(hp,'w').write('\\n'.join((h+[sid])[-500:])+'\\n')",
             # The hook runs INSIDE the session, so it can see which auth
             # profile the session was launched under and file a per-account
             # memory of this conversation beside the current marker. That is

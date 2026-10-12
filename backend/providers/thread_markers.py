@@ -28,6 +28,14 @@ on a swap, so the CURRENT marker always names a thread the identity about to
 run can actually open. Readers stay pointed at ``<session>.thread`` and never
 learn about accounts.
 
+``<session>.threads`` is the window's thread HISTORY: every distinct id ever
+recorded as its current thread, one per line (capped at
+:data:`HISTORY_MAX`). The current marker is overwritten when the window starts
+a new conversation (``/clear``, a fresh relaunch), so on its own it cannot say
+which of the conversation files in a shared cwd were this window's; the usage
+reader attributes per-session cost from this history (:func:`history`). Its
+suffix keeps it out of every ``*.thread`` glob, so :func:`claimed` is unchanged.
+
 ``@`` cannot occur in a sanitized session name (the sanitizer keeps only
 ``[A-Za-z0-9_.-]``), so it is unambiguous as the separator.
 """
@@ -70,6 +78,49 @@ def _path(session_name: str) -> Path:
     return marker_dir() / (_safe(session_name) + ".thread")
 
 
+#: Most thread ids one window's history keeps (oldest dropped first).
+HISTORY_MAX = 500
+
+
+def _history_path(session_name: str) -> Path:
+    """Every thread this window has had, one id per line."""
+    return marker_dir() / (_safe(session_name) + ".threads")
+
+
+def _append_history(session_name: str, tid: str) -> None:
+    """Add ``tid`` to the window's thread history unless already there."""
+    if not _valid(tid):
+        return
+    p = _history_path(session_name)
+    try:
+        ids = p.read_text(encoding="utf-8").split()
+    except OSError:
+        ids = []
+    if tid in ids:
+        return
+    ids.append(tid)
+    p.write_text("\n".join(ids[-HISTORY_MAX:]) + "\n", encoding="utf-8")
+
+
+def history(session_name: str) -> Set[str]:
+    """Every thread id this window has recorded — its history plus the current
+    marker (a window whose hooks predate the history file still names its
+    current thread). Empty set when none. Never raises."""
+    out: Set[str] = set()
+    if not session_name:
+        return out
+    try:
+        for tid in _history_path(session_name).read_text(encoding="utf-8").split():
+            if _valid(tid):
+                out.add(tid)
+    except Exception:  # noqa: BLE001
+        pass
+    cur = read(session_name)
+    if cur:
+        out.add(cur)
+    return out
+
+
 #: Memory-file name for the CLI's own ambient login. Safe as a key because a
 #: profile can never BE named "default" — that string is the reserved sentinel
 #: meaning "no profile" (``auth_profiles.AMBIENT_ID``).
@@ -109,6 +160,7 @@ def record(session_name: str, thread_id: str, profile_id: str = "") -> None:
         # ambient memory at the only moment it can matter — the first swap.
         if profile_id:
             _account_path(session_name, profile_id).write_text(tid, encoding="utf-8")
+        _append_history(session_name, tid)
     except Exception:  # noqa: BLE001 — markers are enrichment only
         pass
 
@@ -151,6 +203,7 @@ def switch_profile(session_name: str, old_profile_id: str, new_profile_id: str) 
         restored = remembered(session_name, new_profile_id)
         if restored:
             _path(session_name).write_text(restored, encoding="utf-8")
+            _append_history(session_name, restored)
         else:
             _path(session_name).unlink(missing_ok=True)
         return restored
@@ -178,15 +231,18 @@ def read(session_name: str) -> str:
 def clear(session_name: str, forget_accounts: bool = False) -> None:
     """Drop the current marker (fresh launches must not resume a stale thread).
 
-    The per-account memories are kept by default: a fresh start under one
-    identity says nothing about the thread another identity still owns.
-    ``forget_accounts=True`` drops those too, for a window that is going away.
+    The per-account memories and the thread history are kept by default: a
+    fresh start under one identity says nothing about the thread another
+    identity still owns, and the window's earlier conversations are still its
+    own (their cost stays attributed to it). ``forget_accounts=True`` drops
+    both too, for a window that is going away.
     """
     try:
         _path(session_name).unlink(missing_ok=True)
         if forget_accounts:
             for f in marker_dir().glob(_safe(session_name) + "@*.thread"):
                 f.unlink(missing_ok=True)
+            _history_path(session_name).unlink(missing_ok=True)
     except Exception:  # noqa: BLE001
         pass
 

@@ -37232,6 +37232,10 @@ var USAGE_WINDOW_NOTE = {
 	year: "Rolling last 365 days across all sessions. Cost estimated from daily feed prices."
 };
 var USAGE_NOTE_PLAN = "You're on a subscription plan — dollar figures are API-equivalent estimates of what this usage would cost pay-per-token, not billed spend. Window % is estimated against your budget in Settings; the provider's real server-side meter may differ.";
+function yearEstimateNote(period, estimatedBefore) {
+	if (period !== "year" || !estimatedBefore) return null;
+	return "Includes estimates before " + estimatedBefore + ".";
+}
 var USAGE_PERIODS = [
 	["session", "Session"],
 	["day", "Day"],
@@ -37459,6 +37463,8 @@ function OverallUsage() {
 		active = provs.find((p) => p.name === nm) || null;
 	}
 	const plan = isPlanMode(usage);
+	const activeYearNote = yearEstimateNote(period, active?.estimated_before);
+	const combinedYearNote = yearEstimateNote(period, usage?.year_estimated_before);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		id: "overall-usage",
 		ref: btnRef,
@@ -37522,6 +37528,7 @@ function OverallUsage() {
 				}),
 				active.mode === "windowed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: planStripRows(active.window) }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: periodRows(aggByProvider[active.name] || ZERO_AGG, active.periods, period, active.mode === "windowed") }),
+				activeYearNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: activeYearNote }),
 				period !== "session" && (active.accounts?.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "usage-pop-head",
@@ -37538,6 +37545,7 @@ function OverallUsage() {
 			] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				provs.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: provs.map(providerSummaryRow) }) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: periodRows(agg, usage, period, plan) }),
+				combinedYearNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: combinedYearNote }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period] }),
 				plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: USAGE_NOTE_PLAN })
 			] })

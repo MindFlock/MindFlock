@@ -11,6 +11,7 @@ import {
   planStripRows,
   periodRows,
   providerSummaryRow,
+  yearEstimateNote,
   type UsageAgg,
   type UsageProviderEntry,
   type PlanWindow,
@@ -243,5 +244,14 @@ describe("providerSummaryRow", () => {
       "Claude",
       "metered (own API key)",
     ]);
+  });
+});
+
+describe("yearEstimateNote", () => {
+  it("notes the estimate only under the Year figure, and only when flagged", () => {
+    expect(yearEstimateNote("year", "2026-07-14")).toBe("Includes estimates before 2026-07-14.");
+    expect(yearEstimateNote("month", "2026-07-14")).toBeNull();
+    expect(yearEstimateNote("year", null)).toBeNull();
+    expect(yearEstimateNote("year", undefined)).toBeNull();
   });
 });
