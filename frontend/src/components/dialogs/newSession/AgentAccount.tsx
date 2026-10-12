@@ -4,7 +4,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
-import { useUi } from "../../../state/store";
+import { openSettings } from "../../../lib/openSettings";
 import type { Provider } from "../newSession";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
@@ -102,7 +102,7 @@ export function AgentFields({
             title="Manage coding CLIs in Settings"
             onClick={() => {
               closeDialog();
-              useUi.getState().openDialogFor("settings", "coding");
+              openSettings("coding");
             }}
           >
             Manage
@@ -137,7 +137,7 @@ export function AgentFields({
               title="Manage accounts in Settings"
               onClick={() => {
                 closeDialog();
-                useUi.getState().openDialogFor("settings", "accounts");
+                openSettings("accounts");
               }}
             >
               Manage

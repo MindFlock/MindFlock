@@ -136,7 +136,7 @@ export const EMERGE_MS = 20_000;
  * EMERGE_MS. Short next to the window on purpose: a bird that took the full
  * twenty seconds to cross the screen would crawl, and would spend all of it
  * outside the flocking rules. */
-const HATCH_FLIGHT_MS = 4000;
+export const HATCH_FLIGHT_MS = 4000;
 
 export interface FlockHandle {
   stop(): void;

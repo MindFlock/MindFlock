@@ -1,0 +1,141 @@
+/** Intake → Pull requests (components/intake/PullRequestsTab.tsx + the shared
+ * RepoSourceList in RepoSources.tsx) and the ticketing source cards
+ * (TicketsTab.tsx): the switch, the watched-repo cards, the open-PR panel and
+ * each source's Repo URL field.
+ *
+ * Moved from tests/unit/test_pr_review_settings.py (the four bundle tests),
+ * tests/unit/test_pr_force_review.py (test_frontend_ships_the_open_pr_panel,
+ * UI half) and tests/unit/test_multi_repo_ingestion.py (the two source-card
+ * tests), which grepped the built app.js / style.css. These pin the owning
+ * source module instead, comments stripped. That the bundle calls
+ * /api/github/prs and /api/github/prs/review stays a Python contract test. */
+
+/// <reference types="vite/client" />
+import { describe, expect, it } from "vitest";
+import { SRC, dropComments, norm } from "./sourceText";
+import DIALOG_RAW from "../components/intake/IntakeDialog.tsx?raw";
+import PRS_RAW from "../components/intake/PullRequestsTab.tsx?raw";
+import REPO_SOURCES_RAW from "../components/intake/RepoSources.tsx?raw";
+import KIT_RAW from "../components/intake/kit.tsx?raw";
+import TICKETS_RAW from "../components/intake/TicketsTab.tsx?raw";
+import SETTINGS_DIALOG_RAW from "../components/settings/SettingsDialog.tsx?raw";
+import WORKSPACE_RAW from "../components/settings/screens/Workspace.tsx?raw";
+import INDEX_HTML from "../../index.html?raw";
+import INTAKE_CSS_RAW from "../components/intake/IntakeDialog.css?raw";
+import SCREENS_CSS_RAW from "../components/settings/screens/screens.css?raw";
+import TICKETING_CSS_RAW from "../components/settings/screens/ticketingConnections.css?raw";
+
+/** Source minus comments, layout-blind (`norm`). */
+const code = (raw: string) => norm(dropComments(raw));
+
+/** Every app module (tests excluded), comments stripped. */
+const ALL = Object.values(SRC).map(code).join("\n");
+const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+const PRS = code(PRS_RAW);
+const REPOS = code(REPO_SOURCES_RAW);
+const TICKETS = code(TICKETS_RAW);
+const css = (raw: string) => raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ");
+
+/** The declarations of the one rule that starts a line with `selector {`. */
+function rule(raw: string, selector: string): string {
+  const flat = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hits = [...flat.matchAll(new RegExp("^" + esc + " \\{([^}]*)\\}", "gm"))];
+  expect(hits.length, selector).toBe(1);
+  return hits[0][1].replace(/\s+/g, " ");
+}
+
+describe("the Pull requests tab", () => {
+  it("has the feature block: switch, status, filters and its legacy id", () => {
+    // The tab label in the Intake dialog's strip; the tab strip IS the heading,
+    // so the switch label and its status line are what name the feature.
+    expect(code(DIALOG_RAW)).toContain('label: "Pull requests"');
+    expect(PRS).toContain('label="Automated review"');
+    // Legacy id, kept on the work panel for addon CSS that targeted the screen.
+    expect(code(DIALOG_RAW)).toContain('legacyId: "pr-review-block"');
+    expect(code(DIALOG_RAW)).toContain("id={t.legacyId}");
+    // Explicit on/off (pause without deleting repos) + a status line.
+    expect(PRS).toContain('inputId="gh-pr-enabled"');
+    expect(PRS).toContain('statusId="gh-pr-status"');
+    expect(PRS).toContain('id="gh-skip-authors"');
+    expect(PRS).toContain('field="min_age_minutes"');
+    expect(PRS).toContain('field="poll_interval_seconds"');
+    // The global default repo is gone; workspace settings live on their own
+    // screen and each ticketing source names its own repo instead.
+    expect(code(SETTINGS_DIALOG_RAW)).toContain('{ key: "workspace", label: "Workspace"');
+    expect(code(WORKSPACE_RAW)).toContain('field="workspace_dir"');
+    // No global repo URL field anywhere (the page shell included).
+    expect(INDEX_HTML).not.toContain('data-field="url"');
+    expect(ALL).not.toContain('data-field="url"');
+  });
+
+  it("has multi-repo add/remove controls — a watched repo is a CARD", () => {
+    expect(PRS).toContain('listId="gh-repos-list"'); // where the repo cards render
+    expect(PRS).toContain('addId="gh-repo-add-btn"');
+    // The slug is a field inside the card, so there is no separate "add a
+    // repo" text input any more; `+ Add repository` appends an empty card.
+    expect(ALL).not.toContain("gh-repo-new");
+    expect(PRS).toContain('addLabel="+ Add repository"');
+    for (const field of ["repo", "agent", "base_branch", "min_age_minutes", "skip_authors"])
+      expect(REPOS, field).toContain(`data-repo-field="${field}"`);
+  });
+
+  it("wires the watched repos and the toggle", () => {
+    expect(PRS).toContain("gh-pr-enabled");
+    expect(PRS).toContain("gh-skip-authors");
+    expect(PRS).toContain("skip_authors");
+    // Multi-repo add/remove lives in the shared RepoSourceList, which PR review
+    // and Git issues both drive. Exactly one copy of each guard IS the point.
+    expect(count(ALL, "Use owner/name")).toBe(1); // owner/name format guard
+    expect(count(ALL, "is already in the list")).toBe(1); // duplicate guard
+    expect(REPOS).toContain('toast("Use owner/name');
+    expect(REPOS).toContain('toast(val + " is already in the list")');
+    // POST { github: { repos: [...], repo_settings: {...} } } — the per-repo
+    // override map is what makes a card's own agent / base branch mean anything.
+    expect(PRS).toContain("saveGithub({ repos: list, repo_settings: next }");
+    // No "● Active / ‖ Paused" status line under the switch any more; the
+    // switch's only subtitle is the one state a switch can't show.
+    expect(ALL).not.toContain("Paused —");
+    expect(PRS).toContain('"Automated review paused"');
+    expect(PRS).toContain('"Add a repository below and this starts reviewing your PRs on it"');
+  });
+
+  it("styles the feature and the repo cards", () => {
+    const screens = css(SCREENS_CSS_RAW);
+    // Chips still carry the ticketing state picker.
+    expect(screens).toContain(".repo-chip {");
+    expect(screens).toContain(".repo-chip-x {");
+    // The card the watched repos render as, and the grouped work list.
+    expect(css(TICKETING_CSS_RAW)).toContain(".tk-source {");
+    const intake = css(INTAKE_CSS_RAW);
+    expect(intake).toContain(".ik-cards {");
+    expect(intake).toContain(".ik-groups {");
+  });
+});
+
+describe("the open-PR panel", () => {
+  it("ships its list, refresh and Begin review", () => {
+    expect(PRS).toContain('refreshId="gh-prs-refresh"');
+    expect(PRS).toContain('listId="gh-prs-list"');
+    expect(PRS).toContain('actionLabel="Begin review"');
+    expect(rule(SCREENS_CSS_RAW, ".pr-open-item")).toContain("grid-template-columns");
+  });
+});
+
+describe("ticketing source cards", () => {
+  it("each card has a Repo URL field", () => {
+    // Repo URL is required per source (there is no global default repo), and
+    // saveAll() persists any [data-tk-field].
+    expect(TICKETS).toContain('data-tk-field="repo_url"');
+    expect(TICKETS).toContain('<span className="set-label">Repo URL</span>');
+  });
+
+  it("each card is collapsible, and saved sources fold by default", () => {
+    expect(TICKETS).toContain("setCollapsed(new Set(savedSources.data.map((s) => s.id)))");
+    const kit = code(KIT_RAW);
+    expect(kit).toContain('className="tk-head"');
+    expect(kit).toContain('className="tk-body"');
+    expect(rule(TICKETING_CSS_RAW, ".tk-source.tk-collapsed .tk-body")).toContain("display: none");
+  });
+});

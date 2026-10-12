@@ -488,7 +488,7 @@ export const KEYMAP: KeymapEntry[] = [
     key: "v",
     alt: true,
     id: "verify",
-    help: ["Navigation", "Alt+V", "Verify — shipped changes nobody has checked"],
+    help: ["Navigation", "Alt+V", "Verify — pushed changes nobody has checked"],
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("verify"),
   },

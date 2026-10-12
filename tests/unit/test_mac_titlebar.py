@@ -10,9 +10,10 @@ is the desktop app, the frontend rides the engine), so each side is pinned:
 - ``electron/preload.js`` — the ``mfshell.nativeTitleBar`` capability flag and
   ``winctl.onFullScreenChanged``, which (unlike ``onMaximizedChanged``) returns
   an unsubscribe the React effect depends on.
-- the built bundle in ``backend/web/static/`` — same structural style as
-  test_frontend_*.py, which is also what proves ``npm run build`` was re-run
-  after the TSX/CSS edit.
+- the frontend source (TopBar.tsx / TopBar.css / lib/shell.ts) — here, plus
+  ``frontend/src/__tests__/macTitlebarUi.test.ts``; the served stylesheet's
+  light gap is compared against its source below, which is what proves
+  ``npm run build`` was re-run after the CSS edit.
 
 The live layout is verified with screenshots; these pin the wiring and the
 literal strings the three sides share so they can't silently drift apart.
@@ -255,18 +256,8 @@ def test_topbar_mac_cluster_sits_after_the_drag_region():
 
 
 # --------------------------------------------------------------------------- #
-# TopBar.css / the shipped stylesheet — and that they are the SAME rules.
+# The shipped stylesheet carries TopBar.css's gap (a freshness contract).
 # --------------------------------------------------------------------------- #
-
-
-def test_style_css_ships_the_mac_topbar_rules():
-    css = client.get("/style.css").text
-    assert "#topbar[data-mac-lights]" in css
-    assert "#topbar[data-mac] .tb-end" in css
-    # The gap is keyed on data-mac-lights, NOT data-mac — otherwise fullscreen
-    # (where macOS hides the lights) leaves a hole no button occupies.
-    assert "padding-left" in _css_block(css, "#topbar[data-mac-lights]")
-    assert "padding-left" not in _css_block(css, "#topbar[data-mac]")
 
 
 def test_shipped_light_gap_matches_the_topbar_css_source():
@@ -279,30 +270,3 @@ def test_shipped_light_gap_matches_the_topbar_css_source():
     assert pad.search(served).group(1) == pad.search(source).group(1)
     # 13px origin + 3 x 12px buttons + 2 x 8px gaps + breathing room.
     assert pad.search(source).group(1) == "78px"
-
-
-# --------------------------------------------------------------------------- #
-# The built bundle carries the change (i.e. it was actually rebuilt).
-# --------------------------------------------------------------------------- #
-
-
-def test_app_js_bundle_was_rebuilt_with_the_mac_title_bar_sources():
-    js = client.get("/app.js").text
-    # From TopBar.tsx…
-    assert '"data-mac-lights"' in js
-    assert '"data-mac"' in js
-    assert '"tb-end"' in js
-    # …and from lib/shell.ts, strict-equality intact through the build.
-    assert "nativeTitleBar" in js
-    assert re.search(r"nativeTitleBar\)? === true", js)
-    assert "onFullScreenChanged" in js
-
-
-def test_app_js_bundle_builds_the_swapping_cluster_once():
-    """Guards against a future edit that duplicates the cluster in the built
-    output instead of reusing the hoisted element."""
-    js = client.get("/app.js").text
-    assert js.count('id: "theme-btn"') == 1
-    assert js.count('id: "brand-logo"') == 1
-    # Still positioned after the drag handle in the emitted tree.
-    assert js.index('"tb-drag"') < js.index('"tb-end"')

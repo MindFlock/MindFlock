@@ -5,57 +5,22 @@ whose history lives on the tmux side — xterm's local scrollback is empty, so a
 touch drag had nothing to scroll and the terminal appeared frozen. The fix
 translates a vertical one-finger drag into the same SGR mouse-wheel ticks the
 desktop wheel path sends down the PTY (natural direction — content follows the
-finger), in BOTH heads: attachWheelScroll in app.js (desktop grid on touch
-screens) and mobile.js (the /m view). The /m view also gains a native compose
-box (type/paste/autocorrect like any phone text field, Send delivers the line
-plus Enter) alongside the raw soft-key bar. Same style as
-test_frontend_wave4.py: the live UI is verified with screenshots/CDP; these
-pin the JS wiring so it can't silently regress.
+finger), in BOTH heads: attachWheelScroll in lib/terminals.ts (desktop grid
+on touch screens — driven in frontend/src/__tests__/touchScroll.test.ts) and
+mobile.js (the /m view, hand-written and served as-is, pinned here). The /m
+view also gains a native compose box (type/paste/autocorrect like any phone
+text field, Send delivers the line plus Enter) alongside the raw soft-key bar.
+The live UI is verified with screenshots/CDP; these pin the JS wiring so it
+can't silently regress.
 """
 
 from __future__ import annotations
 
-import re
-
 from fastapi.testclient import TestClient
 
 from backend.web import server
-from tests._bundle import in_bundle
 
 client = TestClient(server.app)
-
-
-def test_app_js_touch_scroll_wiring():
-    js = client.get("/app.js").text
-    # Shared tick sender used by both the wheel and touch paths.
-    assert "function sendWheel(" in js
-    # All three touch phases are handled on the terminal host.
-    for ev in ('"touchstart"', '"touchmove"', '"touchend"'):
-        assert ev in js, ev
-    # touchmove must be non-passive to be able to preventDefault page panning.
-    assert in_bundle("{ capture: true, passive: false }", js)
-    # The browser's own gesture handling is disabled on PTY terminals so the
-    # drag reaches our handler instead of panning/zooming the page.
-    #
-    # Matched with the identifier left loose: the bundler renames a local when
-    # another module in the same output claims the same name (`host` became
-    # `host2` the day an unrelated component introduced its own), and the
-    # contract under test is "touch-action is turned off on the terminal host",
-    # not what esbuild decided to call the variable that day.
-    assert re.search(r'host\w*\.style\.touchAction = "none"', js)
-
-
-def test_app_js_touch_scroll_semantics():
-    js = client.get("/app.js").text
-    # Natural scrolling: finger moving down reveals earlier output (wheel up).
-    assert "sendWheel(t.clientX, t.clientY, dy > 0" in js
-    # Only single-finger drags scroll — pinch and multi-touch are left alone.
-    assert "ev.touches.length !== 1" in js
-    # A drag only becomes a scroll once clearly vertical, so taps still focus
-    # the terminal and horizontal gestures pass through.
-    assert "Math.abs(dy) <= Math.abs(dx)" in js
-    # Without a live PTY the handler steps aside for xterm's own scrolling.
-    assert "ws.readyState !== WebSocket.OPEN) return false" in js
 
 
 # --------------------------------------------------------------------------- #
@@ -117,18 +82,14 @@ def test_mobile_css_keys_is_bottommost_bar():
 
 
 def test_touch_scroll_speed_multiplier():
-    # 1:1 finger-to-line felt "far too slow" (user report) — both heads emit
-    # 3 ticks per cell dragged, with the per-event cap raised to match.
-    # mobile.js is hand-written and ships as-is, so the name survives there; in
-    # app.js the bundler folds the multiplier into the arithmetic, so the 3 is
-    # asserted where it actually lands — ticks per cell dragged.
+    # 1:1 finger-to-line felt "far too slow" (user report) — 3 ticks per cell
+    # dragged, with the per-event cap raised to match. mobile.js is hand-written
+    # and ships as-is; the desktop grid's twin (lib/terminals attachWheelScroll)
+    # is driven in frontend/src/__tests__/touchScroll.test.ts.
     mobile = client.get("/mobile.js").text
     assert "TOUCH_SCROLL_MULT = 3" in mobile
-    assert in_bundle("Math.abs(dy) * TOUCH_SCROLL_MULT / cellH", mobile)
-    app = client.get("/app.js").text
-    assert in_bundle("Math.abs(dy) * 3 / cellHeight()", app)
-    for js, path in ((app, "/app.js"), (mobile, "/mobile.js")):
-        assert "Math.min(24, lines)" in js, path
+    assert "Math.abs(dy) * TOUCH_SCROLL_MULT / cellH" in mobile
+    assert "Math.min(24, lines)" in mobile
 
 
 def test_mobile_js_composer_wiring():

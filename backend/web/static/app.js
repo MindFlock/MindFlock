@@ -30170,7 +30170,7 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+V",
-			"Verify — shipped changes nobody has checked"
+			"Verify — pushed changes nobody has checked"
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useUi.getState().openDialogFor("verify")
@@ -35424,7 +35424,7 @@ function TopBar() {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Verify — merged changes nobody has checked (Alt+V)",
+							title: "Verify — pushed changes nobody has checked (Alt+V)",
 							onClick: () => ui.openDialogFor("verify"),
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count",
@@ -61547,7 +61547,7 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("intake", "autostart")
 		});
 		acts.push({
-			label: "Verify — check what shipped",
+			label: "Verify — check what was pushed",
 			hint: "Alt+V",
 			run: () => ui.openDialogFor("verify")
 		});
@@ -65101,7 +65101,7 @@ function AgentFields({ program, providers, setAgent, device, authProfiles, profi
 				title: "Manage coding CLIs in Settings",
 				onClick: () => {
 					closeDialog();
-					useUi.getState().openDialogFor("settings", "coding");
+					openSettings("coding");
 				},
 				children: "Manage"
 			})]
@@ -65129,7 +65129,7 @@ function AgentFields({ program, providers, setAgent, device, authProfiles, profi
 				title: "Manage accounts in Settings",
 				onClick: () => {
 					closeDialog();
-					useUi.getState().openDialogFor("settings", "accounts");
+					openSettings("accounts");
 				},
 				children: "Manage"
 			})]

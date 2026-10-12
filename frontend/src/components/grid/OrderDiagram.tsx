@@ -18,7 +18,7 @@ import { displayName } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
-import { cardTone, fenceChips, modeLine, overlapLines, stepCaption, type Stage } from "../../lib/order";
+import { cardTone, fenceChips, modeLine, overlapLines, stepCaption, type RunStage } from "../../lib/order";
 
 export function OrderDiagram({
   title,
@@ -121,7 +121,7 @@ export function OrderDiagram({
   );
 }
 
-export function StagesDiagram({ stages }: { stages: Stage[] }) {
+export function StagesDiagram({ stages }: { stages: RunStage[] }) {
   if (!stages.length) return null;
   return (
     <ol className="od-stages" aria-label="The order this team run runs in">

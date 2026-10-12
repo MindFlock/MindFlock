@@ -194,6 +194,7 @@ def test_browser_notify_channel_asks_the_app_what_the_window_is_called():
 def test_spa_syncs_renames_to_server():
     js = client.get("/app.js").text
     assert "/api/aliases" in js  # setAlias delta + boot-time bulk seed
+    assert "/api/aliases" in server.app.openapi()["paths"]
 
 
 # --------------------------------------------------------------------------- #

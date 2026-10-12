@@ -1116,28 +1116,6 @@ export interface UsageResponse {
   [k: string]: unknown;
 }
 
-export interface QueueItem {
-  id: string;
-  text: string;
-  queued_at?: number;
-  flags?: Record<string, unknown>;
-}
-
-export interface QueueState {
-  items: QueueItem[];
-  paused: boolean;
-  draining?: boolean;
-  [k: string]: unknown;
-}
-
-export interface DoctorCheck {
-  name: string;
-  ok: boolean;
-  required?: boolean;
-  detail?: string;
-  hint?: string;
-}
-
 export type Json = Record<string, unknown>;
 
 /** What POST /api/session-plan answers with: the New Session form's own fields,

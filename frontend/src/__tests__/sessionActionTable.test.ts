@@ -4,7 +4,7 @@
  *  - every chord is a table row, with the words the "?" sheet always showed
  *  - a chord refuses (with a toast) what the menu and palette leave out
  *  - Merge PR is offered only once there is a PR
- *  - openSettings takes only a real screen key */
+ *  - openSettings takes only a real screen key, and nothing else opens Settings */
 
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -122,5 +122,18 @@ describe("openSettings", () => {
     const typo: SettingsScreen = "devcies";
     const ok: SettingsScreen = "peer";
     expect([typo, ok]).toHaveLength(2);
+  });
+
+  it("is the only way the app opens Settings (so every key is type-checked)", () => {
+    const src = import.meta.glob<string>(["../**/*.{ts,tsx}", "!../__tests__/**", "!../lib/openSettings.ts"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    expect(Object.keys(src).length).toBeGreaterThan(50);
+    const raw = Object.entries(src)
+      .filter(([, text]) => /openDialogFor\(\s*["']settings["']/.test(text))
+      .map(([path]) => path);
+    expect(raw).toEqual([]);
   });
 });

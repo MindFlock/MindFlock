@@ -460,17 +460,12 @@ class TestFrontendWiring:
         # workspace has nothing to point at.
         assert "!!workspace && !!onReopen && !hasSession" in kit
 
-    def test_the_bundle_ships_the_button_and_its_endpoint(self):
-        js = client.get("/app.js").text
-        assert "Reopen window" in js
-        assert "/api/intake/reopen" in js
-        # The start button demotes when a workspace exists, so the row has one
-        # primary action rather than two competing ones.
-        assert "ik-start-again" in js
-
-    def test_the_stylesheet_ships_the_demoted_start(self):
-        css = client.get("/style.css").text
-        assert ".ik-start-again" in css
+    def test_the_bundle_calls_the_reopen_route_the_server_serves(self):
+        """The backend↔frontend contract: the shipped bundle calls the route and
+        the server has it. The button and the demoted start are pinned against
+        the source in frontend/src/__tests__/intakeSurfaceUi.test.ts."""
+        assert "/api/intake/reopen" in client.get("/app.js").text
+        assert "/api/intake/reopen" in server.app.openapi()["paths"]
 
 
 # --------------------------------------------------------------------------- #

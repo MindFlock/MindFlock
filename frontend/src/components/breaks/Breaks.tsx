@@ -51,7 +51,7 @@ import { useIdle } from "./useIdle";
  * right to clear the traffic lights. The fallback is the top-left corner the
  * mark sits in everywhere else. */
 /** How often the running app stamps the heartbeat. */
-const SEEN_EVERY_MS = 15_000;
+export const SEEN_EVERY_MS = 15_000;
 
 function logoPoint(): { x: number; y: number } {
   const el = document.getElementById("brand-logo");
@@ -193,7 +193,7 @@ interface ScreenProps {
   onResume(): void;
 }
 
-function BreakScreen({ away, leaving, flockRef, onSnooze, onResume }: ScreenProps) {
+export function BreakScreen({ away, leaving, flockRef, onSnooze, onResume }: ScreenProps) {
   const resumeRef = useRef<HTMLButtonElement | null>(null);
   // Latest handler behind a stable ref: the card re-renders every second to
   // tick its clock, and the Escape listener must not be re-registered for that.

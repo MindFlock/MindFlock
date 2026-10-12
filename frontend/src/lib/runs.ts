@@ -22,7 +22,6 @@
 import type { Instance, RunDTO, RunSummary, RunTask } from "../api/types";
 import { escalationText, LANE_HEAD, shipLine } from "./agentMessages";
 
-export const RUN_TERMINAL_TASK = new Set(["shipped", "integrated", "failed", "cancelled", "skipped"]);
 export const RUN_DONE_STATES = new Set(["done", "done_with_failures", "cancelled"]);
 
 /** How long a FINISHED one-for-all / split group keeps its details on the rail. */

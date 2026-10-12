@@ -315,47 +315,6 @@ def test_git_ops_helpers_degrade_without_git(monkeypatch):
     assert git_ops._git_count("/tmp/x", "a..b") is None
 
 
-# --------------------------------------------------------------------------- #
-# Frontend: data-caps hooks, gate messages, and the body-class switch
-# --------------------------------------------------------------------------- #
-def test_index_has_caps_gates_and_tags():
-    html = client.get("/").text
-    # Settings screens that need an optional integration declare it and carry
-    # a "connect X to get these features" gate.
-    assert '"tailscale"' in client.get("/app.js").text
-    assert '"data-caps-need"' in client.get("/app.js").text
-    assert '"git ticketing"' in client.get("/app.js").text
-    # (Your phone no longer hides behind a Tailscale gate: it shows the install step.)
-    assert '"data-caps-gate": "git"' in client.get("/app.js").text
-    assert '"data-caps-gate": "ticketing"' in client.get("/app.js").text
-    # Feature entry points that vanish entirely without git.
-    assert 'id: "new-advanced"' in client.get("/app.js").text
-    # The disk manager's own menu item was folded into Recently closed, so the
-    # git-only entry point in that family is now the unused-worktree sweep
-    # inside that page — the one action there that cannot exist without git.
-    assert 'id: "recent-prune"' in client.get("/app.js").text
-    # Gate links jump to the screen where the integration is set up.
-    assert '"data-goto-screen"' in client.get("/app.js").text
-
-
-def test_app_js_caps_wiring():
-    js = client.get("/app.js").text
-    assert "no-tailscale" in js
-    for cls in ("no-git", "no-tailscale", "no-ticketing"):
-        assert cls in js, cls
-    # Every git action funnels through the one guard (buttons, palette, chords).
-    assert "function requireGit()" in js
-    # The ingestion bar needs a connected ticketing source, and connecting one
-    # re-probes caps without a reload.
-    assert "caps.ticketing" in js
-    assert "no-ticketing" in js
-    # The Diff tab / git menu block only render with git present.
-    assert ".git && " in js
-
-
-def test_style_css_caps_rules():
-    css = client.get("/style.css").text
-    assert 'body.no-git [data-caps~="git"]' in css
-    assert 'body.no-tailscale [data-caps~="tailscale"]' in css
-    assert 'body.no-ticketing [data-caps~="ticketing"]' in css
-    assert ".caps-gate" in css
+# The frontend half (data-caps hooks, gate messages, the body-class switch and
+# capsGate.css) is pinned against the source in
+# frontend/src/__tests__/capsGating.test.ts.

@@ -16,7 +16,7 @@ import { UrlList } from "./Mobile";
 
 export type StepState = "ok" | "fail" | "unknown";
 
-export interface SetupStep {
+export interface SharedLinkStep {
   id: "operator" | "tag" | "define" | "policy" | "approval" | "phone" | string;
   title: string;
   state: StepState;
@@ -43,7 +43,7 @@ export interface SharedLinkState {
   /** The whole policy-file block (tagOwners, autoApprovers, grants, tests). */
   policy?: string;
   admin?: { machines: string; services: string; policy: string };
-  steps?: SetupStep[];
+  steps?: SharedLinkStep[];
   devices?: Array<{ device: string; host: string; reachable: boolean }>;
 }
 
@@ -284,7 +284,7 @@ export function SetupChecklist({
   );
 }
 
-function StepFix({ step, shared, qrSvg }: { step: SetupStep; shared: SharedLinkState; qrSvg?: string }) {
+function StepFix({ step, shared, qrSvg }: { step: SharedLinkStep; shared: SharedLinkState; qrSvg?: string }) {
   const svc = shared.service || "svc:" + (shared.name || DEFAULT_SHARED_NAME);
   const name = shared.name || DEFAULT_SHARED_NAME;
   const tag = shared.tag || "tag:mindflock";

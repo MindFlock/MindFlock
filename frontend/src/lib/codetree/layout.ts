@@ -372,10 +372,6 @@ export function newCtx(kW: number): BuildCtx {
 export function unionRecs(ctx: BuildCtx): UnionRec[] {
   return ctx.unions.map((U) => U.place.flatMap((p) => [p.Ex, p.Ey, p.rho, p.f]));
 }
-/** Every shape signature of a build (clumps and forks). */
-export function shapeSigs(ctx: BuildCtx): string[] {
-  return ctx.sigs;
-}
 /** Structure key -> final placements + content signature, for a warm start. */
 export function finalRecs(ctx: BuildCtx): Array<[string, UnionRec, string]> {
   return ctx.unions.map((U) => [U.skey, U.place.flatMap((p) => [p.Ex, p.Ey, p.rho, p.f]), U.sig]);

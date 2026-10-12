@@ -30,7 +30,7 @@ import { useEffect, useState } from "react";
  * free. */
 const REARM_THROTTLE_MS = 1000;
 
-const ACTIVITY = ["pointerdown", "keydown", "touchstart", "wheel"];
+export const ACTIVITY = ["pointerdown", "keydown", "touchstart", "wheel"];
 
 export function useIdle(ms: number, enabled: boolean): boolean {
   const [idle, setIdle] = useState(false);
