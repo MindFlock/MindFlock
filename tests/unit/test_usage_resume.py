@@ -21,6 +21,7 @@ import pytest
 from backend.config import settings as S
 from backend.web import server
 from backend.web.core import events, prompt_queue as _pq
+from backend.web.core import queue_driver
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +65,7 @@ def watch(monkeypatch):
         server, "_EVENT_SNAPSHOT", {"alpha": {"activity": "limit"}}, raising=False
     )
     server._QUEUE_STATE.pop("alpha", None)
-    monkeypatch.setattr(server, "_LAST_RESTORE_EMIT", 0.0, raising=False)
+    monkeypatch.setattr(queue_driver, "_LAST_RESTORE_EMIT", 0.0)
     _pq.clear("alpha")
     yield h
     server._QUEUE_STATE.pop("alpha", None)

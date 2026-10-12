@@ -20,8 +20,9 @@ What lives HERE vs in ``backend.web.core``
 --------------------------------------------
 This module owns the app assembly (lifespan, middleware, auth route), the
 HTTP/websocket routes (except the route groups below), and the always-on
-background loops (instances tick, events state tick, prompt-queue drain,
-window-refresh keepalive) plus the short-TTL probe memo they share. Helper logic lives in focused modules under
+background loops (instances tick, events state tick, window-refresh keepalive)
+plus the short-TTL probe memo they share. Helper logic lives in focused
+modules under
 ``backend/web/core/``:
 
     agent_io         another agent's view of a session: /output views (last
@@ -57,10 +58,15 @@ window-refresh keepalive) plus the short-TTL probe memo they share. Helper logic
     pr_review        automated PR-review pipeline glue
     proc             subprocess helpers: run_capped (a hard timeout that
                      never raises; re-exported here as _run_capped)
+    queue_driver     the prompt-queue drain loop: per-session sends, the
+                     usage-limit gate + resume watch, the mailbox lane
     prompt_queue     the per-session prompt queue store
     recently_closed  the undo store behind reopen / Ctrl+Z
     red_zone_monitor red-zone reconcile loop: guard files, hook health,
                      blocked/breached/tampered events, the row summary
+    red_zone_driver  red-zone helpers for the zone routes and push/PR gate:
+                     zones doc, breaches (live/uncommitted/committed),
+                     green preview + exemptions, guard resync
     remote           tailnet multi-device discovery + proxying
     repo_picker      ranked repo suggestions for the New Session folder field
     revive           background revive: relaunch agents after a restart
@@ -70,8 +76,12 @@ window-refresh keepalive) plus the short-TTL probe memo they share. Helper logic
     session_end      ending a session: DELETE / /close / /cleanup / the
                      workspace delete share one path (folder-in-use 409,
                      Recently closed, children re-parented)
+    session_removal  the teardown every removal runs (_on_session_removed +
+                     hooks), failed-Start records, per-title state forgetting
     session_stats    token/cost telemetry + transcript history rendering
     snapshot         per-session JSON descriptors (labels, diff stat)
+    state_events     session.*_changed diffing: settle + boot quiet windows,
+                     session.turn_ended gates, human-input presence
     system_logs      log-tail sources for Settings → System logs
     team_runs        team runs: the record store, goal parser, pure planner
     team_run_driver  team runs: the loop, reconcile, effects, run.* events,
@@ -503,6 +513,113 @@ from backend.web.core.test_plans_driver import (
     _verify_window_gone,
     _write_test_plan_for_closed,
 )
+from backend.web.core.state_events import (
+    _ACTIVITY_SETTLE_SECONDS,
+    _ATTACH_PROBE_GRACE_S,
+    _BOOT_MONO,
+    _BOOT_QUIET_SECONDS,
+    _EVENT_SNAPSHOT,
+    _EVENT_SNAPSHOT_LOCK,
+    _HUMAN_HOLD_S,
+    _HUMAN_INPUT_AT,
+    _QUEUE_SEND_GRACE_S,
+    _SETTLE_ACTIVITIES,
+    _STAGE_SETTLE_SECONDS,
+    _TRANSIENT_STAGES,
+    _TURN_END_DWELLS,
+    _TURN_END_DWELL_MARKER_S,
+    _TURN_END_DWELL_S,
+    _TURN_END_DWELL_STATUS_S,
+    _autopilot_running,
+    _emit_state_changes,
+    _in_boot_quiet,
+    _note_human_input,
+    _note_turn_boundary,
+    _seed_event_snapshot,
+    _tmux_client_input_recent,
+)
+from backend.web.core.session_removal import (
+    _CREATE_FAILURES,
+    _CREATE_FAILURES_LOCK,
+    _CREATE_FAILURES_MAX,
+    _CREATE_FAILURE_TTL_S,
+    _SESSION_REMOVED_HOOKS,
+    _closed_just_now,
+    _disarm_removed_session,
+    _drop_failed_start,
+    _forget_mcp_run_file,
+    _forget_session_state,
+    _note_create_failure,
+    _on_session_removed,
+    _orphan_children,
+    _orphan_dangling_parents,
+    _prune_session_state,
+    _release_tracker_claim,
+    _remember_finished_child,
+)
+from backend.web.core.queue_driver import (
+    _LIMIT_EXHAUSTED_PCT,
+    _LIMIT_FALLBACK,
+    _LIMIT_RESTORE_QUIET,
+    _LIMIT_RESUME_PROMPT,
+    _LIMIT_STATE,
+    _MAIL_ON_PROMPT,
+    _MAIL_PRUNE_AFTER_S,
+    _MAIL_STATE,
+    _QUEUE_BOOT_GRACE,
+    _QUEUE_DRAIN_INTERVAL,
+    _QUEUE_IDLE_SETTLE,
+    _QUEUE_IDLE_SETTLE_MARKER,
+    _QUEUE_REARM_IDLE,
+    _QUEUE_REBOOT_COOLDOWN,
+    _QUEUE_SEND_COOLDOWN,
+    _QUEUE_STATE,
+    _dialog_on_screen,
+    _drain_mailboxes,
+    _drain_one_mailbox,
+    _drain_one_queue,
+    _drain_prompt_queues,
+    _human_at_keys,
+    _idle_settled,
+    _limited_titles,
+    _live_limit_reset,
+    _mail_provider_name,
+    _mail_type,
+    _meter_is_about_this_session,
+    _pane_holds_agent,
+    _prompt_queue_drain_loop,
+    _queue_wants_turn,
+    _refresh_limit_state,
+    _resume_on_usage_reset,
+    _send_consumed,
+    _send_queued_item,
+    _session_limited_until,
+    _typing_held,
+    _watch_limited_sessions,
+    _watch_one_limited,
+)
+from backend.web.core.red_zone_driver import (
+    _RZ_SYNC_CAP,
+    _clean_rel_arg,
+    _green_preview,
+    _live_breaches,
+    _live_repo_roots,
+    _pr_committed_changed,
+    _pr_content_ref,
+    _red_zone_breaches_for,
+    _rz_changed_paths,
+    _rz_doc,
+    _rz_exempt_ids,
+    _rz_green_exempt,
+    _rz_hard,
+    _rz_repo,
+    _rz_resync_after,
+    _sessions_on_worktree,
+    _shared_zone_author,
+    _shared_zones_body,
+    _uncommitted_zone_breaches,
+    _zone_breach_message,
+)
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
 from backend.web.routes import team_runs as _team_runs_routes
@@ -924,475 +1041,6 @@ ENGINE = get_engine()
 # --------------------------------------------------------------------------- #
 # REST API
 # --------------------------------------------------------------------------- #
-# Last status/activity/stage reported per title, so the poll handler and the
-# /api/events state tick can emit session.*_changed events (B1/F6) by diffing.
-# The lock makes diff+update atomic: the HTTP poll (worker thread) and the tick
-# (to_thread) computing the same transition concurrently emit it exactly once —
-# the shared snapshot IS the dedupe.
-_EVENT_SNAPSHOT: Dict[str, dict] = {}
-_EVENT_SNAPSHOT_LOCK = threading.Lock()
-
-# Activity readings flap: one poll can misread a busy pane as "idle" (or
-# "clarify"/"limit") and the next reads "working" again. The UI debounces its
-# own *display* across 2 polls (frontend lib/stage.ts noteActivity), but events
-# used to carry every raw diff — straight into ntfy pushes, desktop
-# notifications, clarify toasts and shell hooks, and past the UI debounce via
-# forceActivity ("authoritative push"). So transitions INTO these states are
-# held until the reading has persisted this long; a flicker that reverts before
-# then emits nothing at all. Transitions OUT (to "working"/"offline") stay
-# instant — they are cheap to show and wrong to delay. The window is chosen
-# > _PROBE_TTL (2.5s) so settling always requires a second INDEPENDENT probe,
-# not the same memoized misread served twice; with the ~4s tick cadence a real
-# stop settles one tick (~4s) later than it used to.
-_SETTLE_ACTIVITIES = frozenset({"idle", "clarify", "limit"})
-_ACTIVITY_SETTLE_SECONDS = 3.0
-#: Stages that are TRANSIENT by nature (the commit's hooks running): a move
-#: INTO one is held this long before it is announced, so a commit whose hooks
-#: re-run (agent→precommit→agent→precommit→committed in a second — four bell
-#: rows in the live run) announces only its net change. Short: only the
-#: "hooks running" chip waits for it; every other stage is instant.
-_TRANSIENT_STAGES = frozenset({"precommit"})
-_STAGE_SETTLE_SECONDS = 2.0
-
-# Boot quiet window: for this long after process start (a restart re-execs, so
-# this is also "after every restart") the *_changed diff events are swallowed —
-# the snapshot still updates, so post-window transitions diff against the truth.
-# Rationale: rediscovered sessions first register as loading/offline and then
-# "transition" to whatever state they were parked in before the restart —
-# clarify, idle, limit — which re-announced the standing state of every session
-# to every channel (ntfy, desktop, toasts, shell hooks) on every launch. Old
-# news is not a transition. The UI never depended on these boot events (it
-# polls /api/instances); a REAL transition inside the window is lost, which is
-# the accepted cost of a quiet launch.
-_BOOT_QUIET_SECONDS = 30.0
-_BOOT_MONO = time.monotonic()
-
-
-def _in_boot_quiet() -> bool:
-    """Whether the process is still inside its post-launch quiet window."""
-    return time.monotonic() - _BOOT_MONO < _BOOT_QUIET_SECONDS
-
-
-def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> None:
-    """Diff a session's freshly computed state against the last snapshot and
-    emit ``session.status/activity/stage_changed`` events on the bus. The first
-    sighting only seeds the snapshot (creation is announced by its endpoint;
-    created sessions are pre-seeded so their first real transition emits, F6).
-
-    Activity transitions into :data:`_SETTLE_ACTIVITIES` are debounced: the
-    candidate value parks in the snapshot's ``pending_activity`` (value,
-    first-seen monotonic ts) while the snapshot keeps announcing the old
-    activity, and only a reading that persists ``_ACTIVITY_SETTLE_SECONDS``
-    emits. A flicker that reverts first is dropped without a trace — the whole
-    point: a one-tick "idle" misread must not push a phone notification."""
-    now = time.monotonic()
-    with _EVENT_SNAPSHOT_LOCK:
-        prev = _EVENT_SNAPSHOT.get(title)
-        snap = {
-            "status": status,
-            "activity": activity,
-            "stage": stage,
-        }
-        if (
-            prev is not None
-            and activity != prev.get("activity")
-            and activity in _SETTLE_ACTIVITIES
-            # An AUTHORITATIVE idle/clarify skips the settle. The 3s parking
-            # exists for pane-derived MISREADS — a scrolling menu matched as a
-            # waiting prompt, a redraw matched as idle — and a hook marker
-            # cannot misread a frame: it changes only when the CLI fires a
-            # hook. Holding it 3s+a tick was pure latency on the chip and on
-            # the default-on "needs your input" push. Deliberately NOT
-            # "limit": both marker-branch limit reclassifications are really
-            # pane facts (a capture matched against the limit patterns — see
-            # _idle_or_limit / _limit_on_pane), and a single frame CAN misread
-            # those (scrollback in copy-mode, agent output quoting a banner),
-            # so the default-on "ran out of usage" push keeps its two-sighting
-            # guard. What a marker CAN legitimately do is flip idle→working at
-            # a chained turn boundary (Stop then an immediate
-            # UserPromptSubmit); the skip lets that pair through where the
-            # settle sometimes swallowed it — an extra chip flick per chained
-            # turn, accepted for the latency. The check binds source to THIS
-            # value atomically (see reading_is_authoritative) so a stale
-            # memoized reading can never borrow a newer reading's authority —
-            # any mismatch takes the settle, the guarded path.
-            and not (
-                activity in ("idle", "clarify")
-                and _agent_state.reading_is_authoritative(title, activity)
-            )
-        ):
-            pending = prev.get("pending_activity")
-            if pending is None or pending[0] != activity:
-                # New candidate (or the candidate changed): start settling.
-                snap["activity"] = prev.get("activity")
-                snap["pending_activity"] = (activity, now)
-            elif now - pending[1] < _ACTIVITY_SETTLE_SECONDS:
-                snap["activity"] = prev.get("activity")
-                snap["pending_activity"] = pending
-            # else: settled — snap keeps the new activity and the diff below
-            # emits the transition.
-        # A move INTO a transient stage parks like a settling activity; a
-        # flicker back out of it (or on through it) within the window announces
-        # only the net change. Suppressed HERE, at the one emitter, so the
-        # bell, toasts, ntfy and hooks all see the same single event.
-        if (
-            prev is not None
-            and stage != prev.get("stage")
-            and stage in _TRANSIENT_STAGES
-        ):
-            pending = prev.get("pending_stage")
-            if pending is None or pending[0] != stage:
-                snap["stage"] = prev.get("stage")
-                snap["pending_stage"] = (stage, now)
-            elif now - pending[1] < _STAGE_SETTLE_SECONDS:
-                snap["stage"] = prev.get("stage")
-                snap["pending_stage"] = pending
-        # When the ANNOUNCED activity was adopted. Deliberately not
-        # agent_state's ``state_since`` (when the raw reading changed): the
-        # dwell below must measure how long we have been telling people this,
-        # and the wedged-session watchdog must measure what the pane is
-        # actually doing. Neither may gate the other.
-        if prev is None or snap["activity"] != prev.get("activity"):
-            snap["activity_at"] = now
-        else:
-            snap["activity_at"] = prev.get("activity_at", now)
-        _EVENT_SNAPSHOT[title] = snap
-    if prev is None:
-        return
-    if not _in_boot_quiet():
-        for field, event, new in (
-            ("status", "session.status_changed", status),
-            ("activity", "session.activity_changed", snap["activity"]),
-            ("stage", "session.stage_changed", snap["stage"]),
-        ):
-            old = prev.get(field)
-            if old != new:
-                _events.BUS.emit(event, session=title, old=old, new=new)
-    # Verify — the SECOND of two triggers that write a test plan for freshly
-    # pushed work. The first is the ``session.pushed`` subscriber below, fed by
-    # the live_stage push watcher, which is the better signal (it knows the sha
-    # actually reached origin) but is not a guarantee: watchers cap at
-    # ``live_stage._MAX_WATCHERS`` (4) and expire after 180s, so a flock pushing
-    # five sessions at once, or a push whose hooks run past the deadline, simply
-    # never announces. The stage ladder has neither limit — it is recomputed for
-    # every session on every tick — so it catches what the watcher drops.
-    # Deliberately redundant, and safe precisely because it is:
-    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch) — and
-    # per (repo, branch) across sessions, so two windows on one branch also
-    # make one plan — so the loser of the race does no work at all. Cheap
-    # enough to be unconditional: this fires on a stage TRANSITION, not on
-    # every tick.
-    if prev.get("stage") != stage and stage == "pushed":
-        _ensure_test_plan(title)
-    # Turn boundaries are decided on every pass, not only on a transition: the
-    # dwell below is a duration, and the tick that satisfies it is by
-    # definition one where nothing changed.
-    _note_turn_boundary(title, snap, now)
-
-
-# ---- "a turn ended" vs "the activity value is idle" ----------------------- #
-# ``session.activity_changed new="idle"`` is a UI fact: paint the chip grey. It
-# fires at the end of EVERY assistant turn (claude.py's _HOOK_EVENT_STATES maps
-# both Stop and SessionEnd to idle), on /clear, on a session that merely booted
-# to a bare prompt, and on any reading that settles to idle out of offline. It
-# is the wrong fact to interrupt a human with — a ten-turn conversation
-# produced ten "finished" alerts, and re-opening a closed window produced one
-# for a session that had run nothing at all.
-#
-# ``session.turn_ended`` is the notification-grade fact, and it asserts three
-# things at once: this agent was OBSERVED working in this tmux incarnation, it
-# has been continuously idle since, and nothing is queued to wake it back up.
-# Every "the agent is done" channel keys on THIS; nothing keys on the raw idle.
-#
-# The dwell is TIERED by how the work evidence was corroborated
-# (``agent_state.work_evidence``), because the dwell only has to buy the
-# confidence the evidence itself lacks. It used to be a flat 45s chosen as a
-# blanket over three hazards — a human typing a follow-up, the queue's send
-# path, autopilot's own settle — each of which is now checked EXACTLY by its
-# own gate below (recent human keystrokes, the drain's sent_at grace, the
-# autopilot record's state), so the time-padding survives only where the
-# evidence is weak:
-#
-#   * "marker" (the CLI's own hook report) — 12s. The Stop hook is
-#     authoritative that the turn ended; the working→idle transition also
-#     forces a FRESH limit-screen probe (see agent_state._idle_or_limit), so
-#     the old 15s probe-cache blind window no longer bounds this tier. 12s is
-#     three 4s ticks: enough that two unsynchronised tickers plus an on-demand
-#     `_republish_session` shift the answer by a tick, not by half the dwell,
-#     and enough to ride out hook-chained auto-continues (a Stop followed
-#     immediately by a UserPromptSubmit reads working again within a tick).
-#   * "status" (the provider's live-turn status line) — 25s. The turn-END
-#     detection here is itself pane-based (`_ACTIVITY_IDLE_AFTER` of static
-#     pane before idle is even reported), so the dwell carries more of the
-#     burden than it does for a hook CLI.
-#   * "cpu" (the sustained-CPU backstop), or no recorded evidence — 45s,
-#     unchanged. The weakest tier stays the slowest; that is the deal the
-#     backstop was admitted on.
-#
-# What the dwell deliberately no longer covers, because the exact gates do:
-#   * the inter-turn gap of an INTERACTIVE conversation — `_HUMAN_HOLD_S`
-#     holds the announcement while keystrokes have recently reached this
-#     session (terminal, /send, send-now, voice, mobile compose);
-#   * the queue's pop→visible-working window — `_QUEUE_SEND_GRACE_S` holds
-#     while a just-sent prompt has not yet been seen working (peek_next reads
-#     None the instant the last prompt is POPPED, which is at tmux-typing
-#     time, not at pickup time);
-#   * fast-track — held exactly while the session's autopilot record says
-#     state == "running", so the order is always "the chain decided the agent
-#     was done, THEN we said so", at any dwell.
-# `_ACTIVITY_SETTLE_SECONDS` (3.0) is a FLICKER filter — it can only suppress
-# a reading that reverts, and a session parked at its prompt never reverts. It
-# is structurally incapable of answering this question at any tier.
-_TURN_END_DWELL_S = 45.0
-_TURN_END_DWELL_MARKER_S = 12.0
-_TURN_END_DWELL_STATUS_S = 25.0
-#: Dwell per work-evidence tier; unknown/absent evidence gets the slow lane.
-_TURN_END_DWELLS = {
-    "marker": _TURN_END_DWELL_MARKER_S,
-    "status": _TURN_END_DWELL_STATUS_S,
-}
-
-# Hold "has finished" while a human has recently typed into this session — a
-# person mid-composition is about to start the next turn, and a person typing
-# in the window does not need a push about the window. Stamped by
-# `_note_human_input` from every human input path (both terminal websockets,
-# /send, queue send-now; voice dictation and the mobile composer ride the
-# terminal socket) and never by automation (queue drain, limit auto-resume and
-# the trust-gate dismissal all go through `tmux send-keys`, which touches none
-# of those paths). Presence only tunes TIMING: the hard gates above it
-# guarantee the announcement's sentence is true, so a missed stamp (a user
-# typing into tmux directly, outside the web UI) merely announces sooner, and
-# an over-eager stamp (scroll wheels ride the same socket) merely announces
-# later.
-_HUMAN_HOLD_S = 45.0
-#: Ignore terminal input for this long after a websocket attaches: tmux probes
-#: a newly attached client and xterm.js auto-answers through the same data
-#: path as keystrokes, so attach/reconnect bursts are not presence.
-_ATTACH_PROBE_GRACE_S = 2.0
-_HUMAN_INPUT_AT: Dict[str, float] = {}
-
-
-def _note_human_input(title: str, person: str = "", device: str = "") -> None:
-    """Record that a human just put input into ``title``'s window — per
-    title for the announcement gate below, and per (title, person, device)
-    for the session's ``viewers`` (core.ownership) when the caller knows
-    who."""
-    _HUMAN_INPUT_AT[title] = time.time()
-    if person:
-        try:
-            _ownership.note_input(title, person, device)
-        except Exception:  # noqa: BLE001 — presence stamping must never fail
-            pass
-    # A person in the pane: a background find index there stops at once.
-    try:
-        _pane_scroll_find.cancel_background(tmux.to_mindflock_tmux_name(title))
-    except Exception:  # noqa: BLE001 — presence stamping must never fail
-        pass
-
-
-def _tmux_client_input_recent(title: str, within: float) -> bool:
-    """Whether any tmux client attached to ``title``'s session saw input in
-    the last ``within`` seconds — the presence signal for people the web
-    surfaces cannot see: a Windows Terminal tab, a raw ``tmux attach``, SSH.
-    Their keystrokes never cross a MindFlock route, so without this the
-    presence gate would buzz a direct-tmux conversation once per turn.
-
-    Asked only at announce time (one ``list-clients`` per announce-eligible
-    tick, after every cheaper gate has passed), never on the poll path.
-    Over-counts in one known way: the web terminal is itself an attached
-    client, and its terminal emulator answers tmux's attach-time device
-    probes as client input — so a reconnect storm (wifi blip, laptop wake)
-    reads as presence and defers announcements up to ``within``. That errs
-    the direction this whole pipeline errs: late, never wrong. Best-effort:
-    any failure reads as "nobody there" and the announcement proceeds.
-    """
-    try:
-        name = tmux.to_mindflock_tmux_name(title)
-        cp = _run_capped(
-            ["tmux", "list-clients", "-t", name, "-F", "#{client_activity}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        if cp.returncode != 0:
-            return False
-        now = time.time()
-        for tok in cp.stdout.decode("utf-8", "replace").split():
-            try:
-                if now - float(tok) < within:
-                    return True
-            except ValueError:
-                continue
-    except Exception:  # noqa: BLE001 — presence is a courtesy, never a gate
-        pass
-    return False
-
-
-# Hold "has finished" while a queued prompt is in flight: `record_sent` POPS
-# the item the moment tmux typing succeeds, so `peek_next` reads None seconds
-# to minutes before the agent visibly starts the turn (or never, for a send
-# that didn't take). The drain's own record carries the exact facts — `armed`
-# flips back True only when the drain OBSERVES working, and `sent_at` stamps
-# the send — so the gate is "sent, not yet seen working, recently": precise
-# where the old flat dwell was a blanket. Past the grace with the agent never
-# seen working, the send is presumed lost (the drain's own recovery for that
-# is `_QUEUE_REARM_IDLE`) and the announcement falls through, exactly as the
-# flat 45s used to behave.
-_QUEUE_SEND_GRACE_S = 60.0
-
-
-def _autopilot_running(title: str) -> bool:
-    """Whether a fast-track chain is genuinely mid-flight on ``title``: its
-    record reads ``running`` AND a driver still holds the lease. Bounded by
-    that lease: the driver early-returns WITHOUT claiming on the paths it
-    cannot step (budget lock, missing worktree), so a chain nobody is actually
-    advancing goes lease-stale — "running" alone must not be able to mute or
-    hold a session forever. A file read; call it after the cheaper gates."""
-    run = _autopilot.get(title)
-    if run is None or (run.get("state") or "") != "running":
-        return False
-    try:
-        owner_at = float(run.get("owner_at") or 0.0)
-    except (TypeError, ValueError):
-        return True  # a running record we cannot read: hold, as before
-    return time.time() - owner_at <= _autopilot.LEASE_STALE_S * 2
-
-
-def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
-    """Emit ``session.turn_ended`` once per observed work cycle. Never raises.
-
-    Called from the tail of :func:`_emit_state_changes` with the settled
-    snapshot, so it sees exactly the activity the rest of the app was told
-    about. Eight gates, in cheapest-first order:
-
-    1. **The settled activity is idle.** ``limit`` is deliberately excluded — a
-       turn the usage cap cut short is not a turn that ended, and the
-       default-on ``usage_limit`` rule already covers it. So is ``offline``.
-    2. **Boot quiet**, for the same reason the diff events observe it: a
-       restart rediscovers every parked session and none of that is news.
-    3. **Provenance.** ``agent_state.worked_at`` is None unless work by this
-       agent was CORROBORATED in its CURRENT tmux incarnation — the CLI's own
-       hook/live report, or (only for a CLI that has none) a sustained run of
-       proven-busy pane polls. Two failures live here. Re-opening a window
-       relaunches its CLI, and the fresh incarnation has no work behind it, so
-       no amount of idling produces a "finished". And a parked session that
-       merely LOOKS busy for a poll — its own auto-updater, a ``/clear``, a GC
-       pause, anything that crosses the CPU threshold — moves the badge and
-       arms nothing: the reading is enough to paint a chip, never to interrupt
-       a human.
-    4. **Dwell**, tiered by the evidence's own strength (`_TURN_END_DWELLS`
-       via ``agent_state.work_evidence``) and asked of both clocks: since the
-       announced activity became idle, AND since the agent was last seen
-       working. They can disagree, and the second is what the sentence
-       actually claims.
-    5. **Nothing queued.** An exact check of the pending list. Exact about
-       prompts still WAITING — the next gate covers the one already sent.
-    6. **No send in flight.** The drain popped a prompt (peek reads None) but
-       has not yet observed the agent working: `_QUEUE_SEND_GRACE_S` against
-       the drain's own ``sent_at``/``armed`` record.
-    7. **No human at the keys.** `_HUMAN_HOLD_S` since the last keystroke
-       reached this session — a person mid-follow-up is not a finished run,
-       and a person typing in the window does not need a push about it.
-    8. **Fast-track is not mid-chain.** Held exactly while the autopilot
-       record reads ``running`` — the chain announces its own outcome, and
-       "finished" before its commit/push/PR lands would be mistimed at best.
-
-    Emitting SPENDS the evidence (``agent_state.claim_work``). That, not a
-    seconds window, is the real dedupe: one announcement per cycle of observed
-    work, however long the session then sits there. The next ``working`` reading
-    re-arms it. The claim is atomic because two 4s tickers and an on-demand
-    republish all run this, and winning the claim is what grants the right to
-    speak.
-    """
-    try:
-        if snap.get("activity") != "idle" or _in_boot_quiet():
-            return
-        # Evidence label BEFORE the timestamp — the mirror of _verdict's write
-        # order, so no interleaving can pair an old stamp with a newer, faster
-        # label (a fresh stamp always fails the dwell; see _verdict).
-        evidence = _agent_state.work_evidence(title)
-        worked = _agent_state.worked_at(title)
-        if worked is None:
-            return
-        # The tier is keyed on how the WORK was corroborated, but the fast
-        # lane also needs the END to be the CLI's own word: marker-armed work
-        # whose idle reading came from the PANE (the marker went stale mid-
-        # turn and a scrolled-back capture read as parked) is a pane-detected
-        # end wearing marker-armed evidence, and 12s of that can announce —
-        # and SPEND — a turn that is still running. Mismatch takes the slow
-        # lane outright.
-        if evidence == "marker" and not _agent_state.reading_is_authoritative(
-            title, "idle"
-        ):
-            evidence = ""
-        dwell = _TURN_END_DWELLS.get(evidence, _TURN_END_DWELL_S)
-        idle_for = now - float(snap.get("activity_at") or now)
-        if idle_for < dwell:
-            return
-        # The same dwell against the EVIDENCE's own clock. The two can disagree:
-        # ``activity_at`` moves only when a settled reading reaches this
-        # function, while ``worked_at`` is stamped by every ``_agent_activity``
-        # call — including the deliberately UNCACHED ones the prompt-queue drain
-        # and the autopilot driver make on their own 5s cadences, which never
-        # feed a snapshot. So a session that has been idle for ten minutes and
-        # then picks up a queued prompt can have fresh work evidence while the
-        # tickers are still serving "idle" out of the 2.5s probe memo, and the
-        # announcement would land at the moment the agent STARTED a turn. Asking
-        # both clocks closes the whole class — memo skew, snapshot lag, and the
-        # two uncached probes — with one comparison. (Epoch here, monotonic
-        # above; each is compared only against its own kind.)
-        if time.time() - float(worked) < dwell:
-            return
-        if _prompt_queue.peek_next(title) is not None:
-            return
-        # A popped-but-not-picked-up prompt: the drain disarms on send and
-        # re-arms only when it OBSERVES working, so "disarmed and recently
-        # sent" is precisely the in-flight window peek_next cannot see.
-        q = _QUEUE_STATE.get(title)
-        if (
-            q
-            and not q.get("armed", True)
-            and time.time() - float(q.get("sent_at") or 0.0) < _QUEUE_SEND_GRACE_S
-        ):
-            return
-        if time.time() - _HUMAN_INPUT_AT.get(title, 0.0) < _HUMAN_HOLD_S:
-            return
-        if _tmux_client_input_recent(title, _HUMAN_HOLD_S):
-            return
-        # Exact, not a bigger number: while the chain runs, its own events are
-        # the narrative, and its completion releases this gate. A file read,
-        # but only reachable once every cheaper gate has passed — at most a
-        # couple of reads per announce, not per tick. Bounded by the driver's
-        # own lease: _autopilot_observe early-returns WITHOUT claiming on the
-        # paths it cannot step (budget lock, missing worktree), so a chain no
-        # driver is actually advancing goes lease-stale and announcements
-        # resume — "running" alone must not be able to mute a session forever.
-        if _autopilot_running(title):
-            return
-        # Claiming the evidence is what grants permission to speak: two
-        # unsynchronised tickers can reach this line in the same instant, and
-        # only one of them can win the clear.
-        if _agent_state.claim_work(title) is None:
-            return
-        _events.BUS.emit(
-            "session.turn_ended",
-            session=title,
-            data={"idle_for": round(idle_for, 1)},
-        )
-    except Exception:  # noqa: BLE001 — a notification never breaks the tick
-        pass
-
-
-def _seed_event_snapshot(title: str) -> None:
-    """Seed the diff snapshot with a freshly created session's initial state
-    (it registers as Loading before Start runs in the background), so the FIRST
-    real transition (loading->running, offline->working, …) emits instead of
-    being swallowed by first-sighting seeding above (F6)."""
-    with _EVENT_SNAPSHOT_LOCK:
-        _EVENT_SNAPSHOT.setdefault(
-            title,
-            {"status": "loading", "activity": "offline", "stage": "provisioning"},
-        )
 
 
 # ---- Short-TTL memo for the expensive per-session probes ------------------- #
@@ -1510,237 +1158,9 @@ def _session_branch_name(title: str) -> str:
         return ""
 
 
-#: Recent background-Start failures: title -> {"error", "ts"}. A create answers
-#: 202 before Start runs, so a caller polling the listing only ever sees the row
-#: vanish; ``GET /api/create_failures`` hands it the reason (the same text the
-#: ``session.create_failed`` event carries). Bounded and short-lived.
-_CREATE_FAILURES: Dict[str, dict] = {}
-_CREATE_FAILURES_LOCK = threading.Lock()
-_CREATE_FAILURE_TTL_S = 600.0
-_CREATE_FAILURES_MAX = 64
-
-
-def _note_create_failure(title: str, error: str) -> None:
-    now = time.time()
-    with _CREATE_FAILURES_LOCK:
-        for t in [
-            t
-            for t, rec in _CREATE_FAILURES.items()
-            if now - rec.get("ts", 0.0) > _CREATE_FAILURE_TTL_S
-        ]:
-            _CREATE_FAILURES.pop(t, None)
-        _CREATE_FAILURES[title] = {"error": str(error), "ts": now}
-        while len(_CREATE_FAILURES) > _CREATE_FAILURES_MAX:
-            oldest = min(_CREATE_FAILURES, key=lambda t: _CREATE_FAILURES[t]["ts"])
-            _CREATE_FAILURES.pop(oldest, None)
-
-
-def _drop_failed_start(title: str, inst) -> bool:
-    """Clear the registry entry a failed background ``Start`` left behind, and
-    say whether this failure is ours to report.
-
-    BY IDENTITY, NEVER BY NAME, and the difference is a running agent. Every
-    creator here registers the instance as ``Loading`` and starts it on a
-    background task, so by the time that task fails the title may belong to a
-    DIFFERENT, live session — a fast delete-and-retry, a second force-start
-    after the row was closed, two creates racing through one title. Popping by
-    name then deleted the live session's record: its tmux session and its
-    worktree carried on with nothing owning them (invisible in the rail, absent
-    from ``ENGINE.save``), which is exactly how the orphan that blocks the next
-    run of the same name is minted. Reporting by name is the same mistake one
-    layer up — a "couldn't start" event, or a checklist stamped with a failure,
-    about a session that is working.
-
-    Returns True when nothing else claims the title (we popped our own entry, or
-    it was already gone) — say so. False means a live session owns it: stay
-    quiet.
-    """
-    with ENGINE.lock:
-        current = ENGINE.instances.get(title)
-        popped = current is inst
-        if popped:
-            ENGINE.instances.pop(title, None)
-    if popped:
-        _on_session_removed(title)
-        return True
-    return current is None
-
-
-# --------------------------------------------------------------------------- #
-# Session removal: the one teardown every exit path runs.
-#
-# An instance leaves ``ENGINE.instances`` through many doors — DELETE, /close,
-# /cleanup, a workspace deleted from Settings, a background Start that failed
-# (_drop_failed_start), and the engine's own tombstone convergence. Each route
-# keeps its own specific teardown (tmux, worktree, ports, …); what every one of
-# them owes the REST of the flock goes through ``_on_session_removed``.
-# --------------------------------------------------------------------------- #
-#: Extra per-title cleanups run after a session is removed, in order, each
-#: called as ``hook(title)`` and isolated (a failing hook is logged and the
-#: rest still run). Features that keep per-title state elsewhere (a mailbox,
-#: a per-session run file) append their forget function here.
-_SESSION_REMOVED_HOOKS: list = []
-# A removed session's inbox goes with it (a reused title must not read the
-# old mail).
-_SESSION_REMOVED_HOOKS.append(_mailbox.drop)
-
-
-def _closed_just_now(title: str, within_s: float = 120.0) -> bool:
-    """Whether ``title`` was just closed (the newest Recently-closed entry,
-    stamped within ``within_s``), as opposed to deleted."""
-    try:
-        newest = (_load_recently_closed() or [None])[0]
-        if not newest or newest.get("title") != title:
-            return False
-        if newest.get("wiped"):
-            # end_session records wiped sessions too; those were deleted.
-            return False
-        closed = _datetime.datetime.fromisoformat(str(newest.get("closed_at")))
-        return (
-            _datetime.datetime.now().astimezone() - closed
-        ).total_seconds() < within_s
-    except Exception:  # noqa: BLE001 — unknown reads as deleted
-        return False
-
-
-def _remember_finished_child(title: str) -> None:
-    """Keep a removed sub-session on its orchestrator's Thread.
-
-    Runs before the next tick replaces the snapshot, so ``title``'s last row
-    (branch, stage, PR, diff size, final report) is still there. A removed
-    PARENT takes its own finished list with it: a reused title must not show
-    its namesake's workers."""
-    rows = {r.get("title"): r for r in _events.sessions_snapshot()}
-    row = rows.get(title)
-    if row and row.get("parent"):
-        parent_row = rows.get(row.get("parent")) or {}
-        _finished_children.record(
-            row,
-            parent_created=parent_row.get("created_at"),
-            how="closed" if _closed_just_now(title) else "deleted",
-            seed=_thread.seed_for(title, row.get("created_at")),
-        )
-    _finished_children.forget_parent(title)
-
-
-_SESSION_REMOVED_HOOKS.append(_remember_finished_child)
-
-
-def _forget_mcp_run_file(title: str) -> None:
-    """Delete the session's auto-attach MCP run file (Claude's per-launch
-    ``--mcp-config``); a relaunch writes it afresh."""
-    from backend.providers import mcp_attach as _mcp_attach
-
-    _mcp_attach.forget(tmux.to_mindflock_tmux_name(title))
-
-
-_SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
-
-
-def _disarm_removed_session(title: str) -> None:
-    """Forget a removed session's autopilot run (its lane).
-
-    The store is keyed by TITLE and titles come straight back, so a record
-    must leave with its session. ``autopilot.prune`` only drops a record once
-    it is older than ``ARM_GRACE_S`` (the intake grace), which meant a session
-    deleted within 30 minutes of being armed handed its target, attempt
-    counters and halt reason to whichever session took the name next — a
-    recreated ``untitled-2`` would commit and open a PR nobody asked it to.
-    Intake still arms BEFORE its session exists; this only runs for a session
-    that existed and is gone."""
-    _autopilot.disarm(title)
-
-
-_SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
-
-
-def _release_tracker_claim(title: str) -> None:
-    """Take the ``mindflock:working`` label off the ticket a closed (or
-    shipped) session had claimed on its tracker — on a background thread, the
-    tracker is a network call. Never un-assigns; a no-op when the session
-    mirrored nothing (backend.ticket_ingestion.tracker_claims)."""
-    from backend.ticket_ingestion import tracker_claims as _tracker
-
-    try:
-        _tracker.release_soon(title)
-    except Exception:  # noqa: BLE001 — bookkeeping, never the removal
-        pass
-
-
-_SESSION_REMOVED_HOOKS.append(_release_tracker_claim)
-
-
-def _orphan_children(title: str) -> list:
-    """Clear ``Parent`` on every instance whose parent is ``title``; persist
-    when any changed. Returns the orphaned titles.
-
-    Titles are reused (``untitled-2`` comes straight back), and a parent link
-    is authority — an orchestrator manages its children — so a dangling link
-    must never be inherited by whichever session takes the name next.
-    """
-    if not title:
-        return []
-    with ENGINE.lock:
-        orphans = [
-            t
-            for t, i in ENGINE.instances.items()
-            if t != title and (getattr(i, "Parent", "") or "") == title
-        ]
-        for t in orphans:
-            ENGINE.instances[t].Parent = ""
-    if orphans:
-        ENGINE.save()
-    return orphans
-
-
-def _orphan_dangling_parents() -> list:
-    """The backstop sweep behind :func:`_orphan_children`: clear any ``Parent``
-    that does not name a live session (a removal that slipped past every hook,
-    or a parent that never came back after a restart). Persists only when
-    something changed; returns the titles it detached."""
-    with ENGINE.lock:
-        live = set(ENGINE.instances)
-        stale = [
-            t
-            for t, i in ENGINE.instances.items()
-            if (getattr(i, "Parent", "") or "")
-            and (i.Parent not in live or i.Parent == t)
-        ]
-        for t in stale:
-            ENGINE.instances[t].Parent = ""
-    if stale:
-        ENGINE.save()
-    return stale
-
-
-def _on_session_removed(title: str) -> None:
-    """Run the flock-wide teardown for a session that just left the registry.
-
-    Call AFTER the instance is popped (and outside ``ENGINE.lock``): orphans its
-    children, then runs every :data:`_SESSION_REMOVED_HOOKS` entry. Never
-    raises — a removal has already happened and must not be reported as failed
-    because some cleanup did.
-    """
-    try:
-        _orphan_children(title)
-    except Exception as err:  # noqa: BLE001
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("orphaning children of %s failed: %v", title, err)
-    for hook in list(_SESSION_REMOVED_HOOKS):
-        try:
-            hook(title)
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf(
-                    "session-removed hook %s failed for %s: %v",
-                    getattr(hook, "__name__", hook),
-                    title,
-                    err,
-                )
-
-
 # The engine drops instances on its own too (another MindFlock deleted them —
-# tombstone convergence); those removals get the same teardown.
+# tombstone convergence); those removals get the same teardown
+# (core.session_removal; registered here, where ENGINE exists).
 ENGINE.add_removal_listener(_on_session_removed)
 
 
@@ -1764,30 +1184,6 @@ def _forget_probes(title: str) -> None:
     _forget_tokens(title)
 
 
-def _forget_session_state(title: str) -> None:
-    """Forget a session ENTIRELY — memoized results and rolling per-title state.
-
-    For the delete path only. Titles are reused (``untitled-2`` comes straight
-    back), so a namesake must not inherit the dead session's pane hash, CPU
-    baseline, limit verdict or work history; and without this the per-title
-    dicts accumulate dead entries for the life of the server under churn.
-    """
-    _forget_probes(title)
-    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT, _HUMAN_INPUT_AT):
-        _d.pop(title, None)
-    # A namesake must not come back hidden from the rail either.
-    _hidden_sessions.drop(title)
-    # …nor credited to the dead session's person.
-    _person_sessions.drop(title)
-    # …nor working on somebody's shared branch.
-    _shared_branch.drop(title)
-    # …nor its owner, driver or presence stamps.
-    _ownership.drop(title)
-    # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
-    # thread), so it needs the translation the others do not.
-    _THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)
-
-
 def _backfill_hidden_verify_sessions() -> int:
     """Flag the verify runs that predate ``hidden_by`` (startup, once).
 
@@ -1804,23 +1200,6 @@ def _backfill_hidden_verify_sessions() -> int:
                 sessions.add(str(run.get("session") or ""))
     sessions.discard("")
     return _hidden_sessions.backfill_verify(list(ENGINE.instances.keys()), sessions)
-
-
-def _prune_session_state(live_titles) -> None:
-    """Drop per-title probe state for sessions that are no longer in the engine.
-
-    The backstop behind :func:`_forget_session_state`, for the removals that
-    never reach a route: a workspace deleted from Settings, and the tombstone
-    convergence that pops instances another MindFlock deleted. Without it those
-    dicts only ever grow, for the life of the process.
-    """
-    live = set(live_titles or ())
-    live_names = {tmux.to_mindflock_tmux_name(t) for t in live}
-    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT, _HUMAN_INPUT_AT):
-        for dead in [t for t in list(_d) if t not in live]:
-            _d.pop(dead, None)
-    for dead in [n for n in list(_THREAD_RECORD_AT) if n not in live_names]:
-        _THREAD_RECORD_AT.pop(dead, None)
 
 
 def _session_stage_cached(inst) -> dict:
@@ -1913,931 +1292,6 @@ def _ensure_state_ticker() -> None:
     global _EVENTS_TICK_TASK
     if _EVENTS_TICK_TASK is None or _EVENTS_TICK_TASK.done():
         _EVENTS_TICK_TASK = asyncio.create_task(_events_state_tick_loop())
-
-
-# ---- Prompt-queue drain loop (M-series) ----------------------------------- #
-# Feeds each session's queued prompts into its agent whenever it is idle, so a
-# run keeps rolling unattended — and picks straight back up the moment usage
-# returns after an outage. Runs always (not gated on browser clients): draining
-# with nobody watching is the entire point.
-#
-# Per-session gating avoids double-sending and reboot storms:
-#   * send only when activity is "idle" (finished a turn / at its prompt) and
-#     the session is "armed" — armed starts True, clears on send, and re-arms
-#     when we next observe "working" (the agent picked the prompt up), or on
-#     other evidence the send was consumed (_send_consumed). This tracks the
-#     real working→idle cycle instead of trusting a fixed cooldown.
-#   * "working"/"clarify" are left alone (busy, or waiting on a human decision).
-#   * "offline" for a started, non-paused session means the agent tmux died
-#     (e.g. the CLI exited when usage ran out) — reboot it (resuming the
-#     conversation), rate-limited by _QUEUE_REBOOT_COOLDOWN, and let a later
-#     idle tick do the actual send.
-_QUEUE_DRAIN_INTERVAL = 5.0
-_QUEUE_SEND_COOLDOWN = 8.0  # min seconds between sends to one session
-_QUEUE_REARM_IDLE = 300.0  # idle this long after a send -> the send never took; re-arm
-_QUEUE_REBOOT_COOLDOWN = 30.0  # min seconds between reboots of a dead session
-# Seconds "idle" must PERSIST before the first send. The activity signal (Claude's
-# `claude agents --json` / Stop hook, Codex's Stop hook) flips to idle the instant a
-# turn ends and is trusted at any age (no dwell in _agent_activity) — so a momentary
-# Stop between turns, or the ~1s lull before the next UserPromptSubmit/PreToolUse
-# re-marks "working", would otherwise let the drain fire a queued prompt prematurely.
-# Requiring idle to hold this long absorbs that flicker while still resuming promptly.
-#
-# TIERED by the reading's source: an idle the CLI reported ITSELF (a Stop-hook
-# marker, an exit marker — agent_state.reading_is_authoritative) is not a
-# flicker candidate, so it takes the fast tier and the next queued prompt goes
-# out one drain pass sooner. Pane-derived idle keeps the full settle: the pane
-# can misread a quiet moment mid-turn, and typing into a live turn is the one
-# failure this dwell exists to prevent. The premature-Stop lull the comment
-# above describes is still absorbed at the fast tier — idle_since resets on any
-# working sighting, and the drain's pass cadence plus this floor spans the
-# ~1s Stop→UserPromptSubmit gap with margin.
-_QUEUE_IDLE_SETTLE = 12.0
-_QUEUE_IDLE_SETTLE_MARKER = 4.0
-# After WE rebooted a dead agent, hold the queue this long regardless of what the
-# activity probe says. A CLI relaunching with a large `--continue` transcript can
-# spend twenty seconds on a quiet, I/O-bound start, and a quiet pane is exactly
-# what the classifier now reports as idle — correctly, since nothing on that
-# screen says work is happening. But typing into a CLI that has not drawn its
-# input box loses the prompt, and `armed` is cleared by the send, so the retry
-# only comes after _QUEUE_REARM_IDLE (five minutes). The old classifier hid this
-# behind a guess ("a pane I have never seen is working"), which bought roughly
-# this much grace by accident; stating it here says what is actually meant.
-_QUEUE_BOOT_GRACE = 20.0
-_QUEUE_STATE: Dict[str, dict] = (
-    {}
-)  # title -> {"armed", "sent_at", "sent_text", "rebooted_at", "idle_since"}
-
-# Usage-limit gate (roadmap D): when the agent pane shows a "usage limit reached"
-# screen, hold the queue until the limit resets instead of sending into a wall.
-# Bounded + self-correcting: a detected limit sets an expiry (the parsed reset
-# time, or a fallback), so it can NEVER stall the queue forever.
-_LIMIT_STATE: Dict[str, float] = {}  # title -> epoch the limit is known to hold until
-_LIMIT_FALLBACK = 600.0  # no reset time parsed -> retry after 10 min
-_LIMIT_EXHAUSTED_PCT = 99.0  # live-meter %-used at/above which a window counts as spent
-
-
-def _meter_is_about_this_session(inst) -> bool:
-    """Whether the provider's usage meter describes the identity THIS session
-    runs as.
-
-    ``usage_live()`` reads whatever credentials the server process itself sees
-    — the CLI's ambient login. A session pinned to an auth profile is metered
-    somewhere else entirely, so the ambient reading is a different
-    subscription's: trusting it would release a genuinely limited session early
-    (burning the queued prompt on the limit screen) or hold a session whose own
-    account still has headroom. Detection from the session's own pane text is
-    unaffected and remains the gate for profiled sessions.
-    """
-    try:
-        from backend.providers import auth_profiles
-
-        return not auth_profiles.effective_profile_id(
-            getattr(inst, "ProfileId", "") or ""
-        )
-    except Exception:  # noqa: BLE001 — never break the drain over settings
-        return True
-
-
-def _live_limit_reset(provider, now: float, inst=None):
-    """Authoritative "limited until" from the provider's own usage meter
-    (``usage_live()`` — for Claude that's Anthropic's OAuth usage endpoint, the
-    same source as the CLI's ``/usage`` screen), independent of whatever text
-    happens to be on the pane.
-
-    Returns ``None`` when no live reading is available (callers fall back to
-    the pane text), ``0.0`` when the meter says every window still has
-    headroom (a lingering banner must be stale), or the epoch when the LAST
-    exhausted window reopens — both the 5-hour and the weekly cap must have
-    reset before a send can land.
-
-    ``inst``, when given, scopes the reading: the meter is the *ambient*
-    login's, so for a session running under an auth profile there is no live
-    reading to be had and ``None`` is the honest answer (see
-    :func:`_meter_is_about_this_session`)."""
-    if inst is not None and not _meter_is_about_this_session(inst):
-        return None
-    try:
-        live = provider.usage_live()
-    except Exception:  # noqa: BLE001 — live usage is enrichment, never a gate
-        live = None
-    if not isinstance(live, dict) or not live:
-        return None
-    windows = [live]
-    if isinstance(live.get("weekly"), dict):
-        windows.append(live["weekly"])
-    have_reading = False
-    exhausted = False
-    ends = []
-    for w in windows:
-        try:
-            pct = float(w["percent_used"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        have_reading = True
-        try:
-            end = float(w.get("end") or 0.0)
-        except (TypeError, ValueError):
-            end = 0.0
-        if pct >= _LIMIT_EXHAUSTED_PCT:
-            exhausted = True
-            if end > now:
-                ends.append(end)
-    if ends:
-        return max(ends)
-    if exhausted:
-        # A window reads spent but the meter gave no usable reset time
-        # (``resets_at`` can be null right at exhaustion, or in a between-windows
-        # payload — the same transient the fetch layer already tolerates). That is
-        # NOT proof the window is open: returning 0.0 here would read as "meter
-        # confirms open" and send the queued prompt straight into the wall. Hold on
-        # a bounded fallback instead; the active-hold meter check releases it the
-        # instant real headroom reappears, so an over-long hold self-corrects while
-        # an early send eats a prompt.
-        return now + _LIMIT_FALLBACK
-    return 0.0 if have_reading else None
-
-
-def _session_limited_until(title: str) -> float:
-    """Epoch until which ``title`` is known usage-limited (0.0 = not). Read-only
-    (no subprocess) so the /api/instances poll can surface a countdown cheaply.
-
-    Non-mutating on purpose: an expired hold reports 0 (UI countdown ends) but
-    the entry is LEFT for the drain's :func:`_refresh_limit_state` to see, so it
-    can tell "hold I set has expired" (window reopened) apart from "brand-new
-    limit" — the difference that lets the queue actually resume when the window
-    reopens even if the CLI's limit banner is still on screen."""
-    until = _LIMIT_STATE.get(title, 0.0)
-    if until and time.time() >= until:
-        return 0.0
-    return until
-
-
-def _refresh_limit_state(inst, title: str, name: str) -> float:
-    """Read the agent pane and update/return the limited-until epoch (0 = clear).
-
-    Only called from the drain loop right before a would-be send, so the pane
-    capture happens solely when we're actually about to act."""
-    now = time.time()
-    try:
-        cp = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-t", name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-        text = cp.stdout.decode("utf-8", "replace") if cp.returncode == 0 else ""
-    except Exception:  # noqa: BLE001
-        text = ""
-    provider = providers.resolve(getattr(inst, "Program", "") or "")
-    try:
-        state = provider.usage_limit_state(text, now)
-    except Exception:  # noqa: BLE001 — detection must never break the drain
-        state = {"limited": False, "reset_at": None}
-    prev = _LIMIT_STATE.get(title, 0.0)
-    if state.get("limited"):
-        # An active hold for THIS limit episode is kept stable — never recompute
-        # it from the pane. A relative "resets in 2h 30m" re-parses to now+2h30m
-        # every 5s pass; recomputing would slide the deadline forward forever and
-        # the queue would never send after the window reopened. The provider's
-        # own meter may still END it early: if it now shows headroom, the window
-        # reopened before our estimate did — release the queue.
-        if prev > now:
-            if _live_limit_reset(provider, now, inst) == 0.0:
-                _LIMIT_STATE.pop(title, None)
-                return 0.0
-            return prev
-        # A hold we set has already EXPIRED, yet the limit banner is still on
-        # the pane (CLIs often leave the message up after the window reopens).
-        # Ask the meter first: still spent -> re-arm to ITS reset instead of
-        # burning a prompt on a send that lands on the limit screen. No meter,
-        # or meter says open: treat the window as open so the queue sends now —
-        # if the limit really persists a fresh detection re-arms on the next
-        # pass (bounded retry), far better than holding forever on stale text.
-        if prev:
-            live = _live_limit_reset(provider, now, inst)
-            if live and live > now:
-                _LIMIT_STATE[title] = live
-                return live
-            _LIMIT_STATE.pop(title, None)
-            return 0.0
-        # Fresh detection (no prior hold): hold until the limit actually lifts.
-        # The meter and the pane text usually agree; with both present take the
-        # LATER one — sending early eats the queued prompt (a dud), while an
-        # over-long hold self-corrects via the meter check above. A meter that
-        # reads "open" is NOT trusted to skip arming: right after a limit hits,
-        # the ~60s-cached reading can lag the banner.
-        reset_at = state.get("reset_at")
-        try:
-            parsed = float(reset_at) if reset_at is not None else None
-        except (TypeError, ValueError):
-            parsed = None
-        live = _live_limit_reset(provider, now, inst)
-        candidates = [c for c in (parsed, live) if c and c > now]
-        if candidates:
-            until = max(candidates)
-        elif parsed is not None:
-            # Reset time already in the past (stale banner) -> window is open.
-            _LIMIT_STATE.pop(title, None)
-            return 0.0
-        else:
-            until = now + _LIMIT_FALLBACK
-        _LIMIT_STATE[title] = until
-        return until
-    # No limit BANNER on screen — but the pane text alone isn't proof the window
-    # is open. A session that runs out mid-turn usually exits and is rebooted
-    # (drain's offline path) back to a FRESH idle prompt with no banner, and many
-    # CLIs only reprint the limit after a submit. So consult the provider's own
-    # meter, which is independent of whatever text is on the pane.
-    if prev and now < prev:
-        # Active hold: release early only if the meter says the window reopened.
-        if _live_limit_reset(provider, now, inst) == 0.0:
-            _LIMIT_STATE.pop(title, None)
-            return 0.0
-        return prev
-    # No prior hold: arm one straight from the meter if a window is genuinely
-    # exhausted (>= _LIMIT_EXHAUSTED_PCT used, reset still ahead), so the queue
-    # holds instead of burning the queued prompt on a send that lands on the wall
-    # while no banner happens to be visible. A meter that reads open — or is
-    # unavailable (None) — leaves the queue free to send, exactly as before.
-    live = _live_limit_reset(provider, now, inst)
-    if live and live > now:
-        _LIMIT_STATE[title] = live
-        return live
-    _LIMIT_STATE.pop(title, None)
-    return 0.0
-
-
-def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -> bool:
-    """Send one queued item to the agent and record it: pop/requeue in the
-    store, disarm + stamp the drain record, and emit ``session.prompt_sent``.
-    Shared by the idle send path and the usage-limit auto-resume path. Returns
-    whether the send landed (False leaves the item in place to retry).
-
-    The screen-evidence guard runs last, on a fresh capture: a dialog on
-    screen holds the item whatever the activity said (its Enter would pick
-    the highlighted option)."""
-    inst = ENGINE.instances.get(title)
-    if inst is not None and _dialog_on_screen(inst, name):
-        rec["idle_since"] = None
-        return False
-    if not _send_to_agent(name, nxt["text"], submit=True):
-        return False
-    entry = _prompt_queue.record_sent(title, nxt["id"])
-    rec["armed"] = False
-    rec["sent_at"] = now
-    rec["sent_text"] = nxt["text"]
-    _events.BUS.emit(
-        "session.prompt_sent",
-        session=title,
-        data={
-            "text": nxt["text"][:200],
-            "remaining": len(entry["items"]),
-            "loop": entry["loop"],
-        },
-    )
-    if log.ErrorLog is not None:
-        try:
-            log.ErrorLog.Printf(
-                "[MONITORING] queue drained a prompt to %s (%d remaining)",
-                title,
-                len(entry["items"]),
-            )
-        except Exception:  # noqa: BLE001
-            pass
-    return True
-
-
-def _dialog_on_screen(inst, name: str) -> bool:
-    """THE SCREEN-EVIDENCE GUARD every automated typer checks right before it
-    types: whether tmux session ``name``'s visible screen shows a live dialog,
-    by the session's provider (``BaseProvider.dialog_on_screen``: a parse, or
-    its waiting/trust phrases in the bottom lines).
-
-    Screen evidence beats the activity reading. The reading is assembled
-    from hook markers a background sub-agent can rewrite while its
-    permission prompt is up, and the live E2E run lost exactly that race:
-    the orchestrator read idle for 15 s with a sub-agent's ``answer_prompt``
-    dialog on screen, the mailbox lane typed a worker's result into it, and
-    the line's Enter approved the dialog (defect F). One ``capture-pane``;
-    a True answer HOLDS the text for a later pass, never drops it.
-
-    A capture that fails is no evidence either way (False): the session is
-    gone or tmux is down, and the typer's own send fails on its own."""
-    try:
-        provider = providers.resolve(getattr(inst, "Program", "") or "")
-    except Exception:  # noqa: BLE001 — an unresolvable CLI: the patterns are gone
-        return False
-    text, err = _agent_io.capture_screen(name)
-    if err is not None or not text:
-        return False
-    probe = getattr(provider, "dialog_on_screen", None)
-    try:
-        return bool(probe(text)) if callable(probe) else False
-    except Exception:  # noqa: BLE001 — evidence we can't read is no evidence
-        return False
-
-
-def _typing_held(inst, title: str) -> bool:
-    """The session-level gates every automatic typer obeys (the prompt-queue
-    drain and the mailbox delivery lane): not started / paused, over budget,
-    or the worktree's setup pass still running or failed. An instance whose
-    state cannot be read counts as held."""
-    try:
-        if not inst.Started() or inst.Status == session.Paused:
-            return True
-    except Exception:  # noqa: BLE001
-        return True
-    if _budget_locked(title):
-        return True  # over budget — hold until the user raises it
-    # O2: hold while the worktree's setup pass is running or failed — the deps
-    # the prompt needs aren't there yet (the held initial prompt from create
-    # lands in the queue too, so it can't get lost: #2847).
-    try:
-        _wt = inst.GetWorktreePath()
-    except Exception:  # noqa: BLE001
-        _wt = ""
-    if _wt:
-        _setup_st = _wt_setup.setup_status(_wt)
-        if _setup_st and _setup_st.get("state") in ("running", "failed"):
-            return True
-    return False
-
-
-def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool:
-    """Whether ``title``'s idle reading has PERSISTED long enough to type into.
-
-    ``rec["idle_since"]`` is the caller's dwell timer (the caller clears it on
-    any non-idle reading). The first idle sighting only starts it; after that
-    the settle is tiered by the reading's source — see _QUEUE_IDLE_SETTLE.
-    ``since`` restarts a dwell that began at or before it: something else
-    typed into the session then, so "idle ever since" is no longer known."""
-    if rec.get("idle_since") is None or rec["idle_since"] <= since:
-        rec["idle_since"] = now
-        return False
-    settle = (
-        _QUEUE_IDLE_SETTLE_MARKER
-        if _agent_state.reading_is_authoritative(title, "idle")
-        else _QUEUE_IDLE_SETTLE
-    )
-    return now - rec["idle_since"] >= settle
-
-
-def _send_consumed(inst, title: str, rec: dict) -> bool:
-    """Evidence that the drain's last send into ``title`` (``rec["sent_at"]``,
-    ``rec["sent_text"]``) was taken by the agent although the drain never read
-    ``working`` after it. Asked only with the session idle and SETTLED, so a
-    turn that is merely slow to start has had its chance to show. Either:
-
-    * the agent was corroborated working after the send
-      (``agent_state.last_worked_at`` — the unspent twin of ``worked_at``: a
-      turn short enough to start and end between two drain polls is still
-      seen by the 4s tickers, which may announce it and spend ``worked_at``
-      before the drain looks); or
-    * the input box no longer holds the sent text — the CLI submitted it and
-      handled it locally (``/clear``, ``/model``: no hook fires, no turn
-      starts). One screen capture, only for a provider that can read its box
-      (``BaseProvider.input_holds``); only an EMPTY box counts, since a box
-      holding other text (a human's draft, a placeholder) proves nothing.
-
-    False when neither holds; the caller's _QUEUE_REARM_IDLE fallback still
-    applies. Never raises."""
-    sent_at = float(rec.get("sent_at") or 0.0)
-    worked = _agent_state.last_worked_at(title)
-    if worked is not None and worked > sent_at:
-        return True
-    text = rec.get("sent_text")
-    if not text:
-        return False
-    try:
-        from backend.providers.base import BaseProvider
-
-        provider = providers.resolve(getattr(inst, "Program", "") or "")
-        if type(provider).input_holds is BaseProvider.input_holds:
-            return False  # can't read its box: don't pay for a capture
-        screen, err = _agent_io.capture_screen(tmux.to_mindflock_tmux_name(title))
-        if err is not None or not screen:
-            return False
-        return provider.input_holds(screen, text) is False
-    except Exception:  # noqa: BLE001 — no evidence: the fallback re-arms
-        return False
-
-
-def _drain_one_queue(title: str) -> None:
-    """One drain decision for a single session. Never raises."""
-    st = _prompt_queue.get_state(title)
-    # "held": parked by its worker order — only the order loop releases it
-    # (after its fence lands), even when someone switched the queue on.
-    if not st["enabled"] or not st["items"] or st.get("held"):
-        return
-    inst = ENGINE.instances.get(title)
-    if inst is None:
-        return
-    if _typing_held(inst, title):
-        return
-    rec = _QUEUE_STATE.setdefault(
-        title,
-        {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
-    )
-    now = time.time()
-    # Deliberately UNCACHED: a memoized "idle" from before the last send could
-    # double-feed a prompt inside the memo window. The probes are per queued
-    # session only, on the 5s drain cadence.
-    activity = _agent_activity(inst, title)
-    if activity == "working":
-        rec["armed"] = True  # agent picked the last prompt up; ok to send again
-        rec["idle_since"] = None  # not parked — reset the idle-dwell timer
-        return
-    if activity == "clarify":
-        rec["idle_since"] = None
-        return  # waiting on a human — never override a confirmation prompt
-    if activity == "limit":
-        # A usage-limit banner/menu is on screen. Unlike 'clarify' (a human gate
-        # we never override) the queue should ride the window out and resume on
-        # its own: hold while the limit is closed, and the moment it reopens send
-        # a single Esc to drop the lingering limit menu — the CLI leaves it up
-        # until a key is pressed — then submit the next prompt so it lands on a
-        # clean input instead of selecting a menu entry.
-        rec["idle_since"] = None
-        if not st.get("wait_for_limit", True):
-            # Not waiting it out: stop the queue so it sits until the user
-            # resumes by hand (mirrors the idle-path limit gate).
-            if st["enabled"]:
-                _prompt_queue.set_flags(title, enabled=False)
-                _emit_queue_changed(title)
-            return
-        name, err = _ensure_agent_session(inst, title)
-        if err is not None:
-            return
-        if _refresh_limit_state(inst, title, name) > now:
-            return  # still limited — hold; the UI shows the reset countdown
-        # Window reopened (parsed reset passed / live meter shows headroom) but
-        # activity=='limit' means the menu is still on the pane this very tick.
-        # Gate the escape+send on ``armed`` exactly like the idle path: send at
-        # most once, then wait for the agent to actually pick the prompt up (it
-        # transitions to 'working', which re-arms) before sending again. Without
-        # this a menu that doesn't clear on the first Esc — or a live meter that
-        # lags the real reset — would let every 5s pass pop and burn another
-        # queued prompt into the limit screen. A send that never took re-arms
-        # after _QUEUE_REARM_IDLE so a stuck menu still gets a bounded retry.
-        if (
-            not rec.get("armed", True)
-            and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
-        ):
-            rec["armed"] = True
-        if (
-            not rec.get("armed", True)
-            or now - rec.get("sent_at", 0.0) < _QUEUE_SEND_COOLDOWN
-        ):
-            return
-        nxt = _prompt_queue.peek_next(title)
-        if not nxt:
-            return
-        _send_escape_to_agent(name)  # single Esc to leave the limit menu
-        time.sleep(0.15)  # let the CLI redraw its prompt before we type
-        _send_queued_item(title, name, nxt, rec, now)
-        return
-    if activity == "offline":
-        # Agent tmux is gone though the session is live — reboot (resume) it,
-        # rate-limited, and send on a later idle tick.
-        rec["idle_since"] = None
-        if now - rec.get("rebooted_at", 0.0) < _QUEUE_REBOOT_COOLDOWN:
-            return
-        name, err = _ensure_agent_session(inst, title)
-        if err is None:
-            rec["rebooted_at"] = now
-            rec["armed"] = True
-        return
-    # activity == "idle": the CLI's idle signal (Claude `agents --json` / Stop hook,
-    # Codex Stop hook) flips the instant a turn ends and _agent_activity trusts it at
-    # any age — so require idle to PERSIST for _QUEUE_IDLE_SETTLE before the first send.
-    # This absorbs a transient Stop between turns / the brief lull before the next
-    # working marker, which otherwise let the drain fire a prompt prematurely.
-    if now - rec.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
-        return  # we only just relaunched it; let the CLI draw its prompt
-    # A mailbox delivery typed into this session restarts the dwell too.
-    mail_sent = (_MAIL_STATE.get(title) or {}).get("sent_at", 0.0)
-    if not _idle_settled(rec, title, now, since=mail_sent):
-        return
-    # A send the drain never SAW picked up leaves ``armed`` False with no
-    # "working" reading coming. Two ways that happens while the send was in
-    # fact consumed — a turn that started and ended between two 5s polls, and
-    # a slash command the CLI handled locally (no hook, no turn) — re-arm as
-    # soon as the evidence says so (_send_consumed). The third — the send
-    # landed on a usage-limit screen and was never taken — has no evidence to
-    # offer: an agent still idle _QUEUE_REARM_IDLE after it clearly isn't
-    # going to pick it up, so re-arm then and let the next pass (behind the
-    # usage-limit gate below) retry.
-    if not rec.get("armed", True) and (
-        now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
-        or _send_consumed(inst, title, rec)
-    ):
-        rec["armed"] = True
-    # send the next prompt if armed + past the send cooldown (which counts a
-    # mailbox delivery as a send: two typers, one keyboard).
-    if (
-        not rec.get("armed", True)
-        or now - rec.get("sent_at", 0.0) < _QUEUE_SEND_COOLDOWN
-        or now - mail_sent < _QUEUE_SEND_COOLDOWN
-    ):
-        return
-    # Loop timer: with loop on and an interval set, only send every N minutes
-    # (a timed self-improving cycle). The first send is immediate (last_sent 0).
-    interval = int(st.get("loop_interval") or 0)
-    if st["loop"] and interval > 0:
-        last = st.get("last_sent") or 0.0
-        if last and now - last < interval * 60:
-            return
-    nxt = _prompt_queue.peek_next(title)
-    if not nxt:
-        return
-    name, err = _ensure_agent_session(inst, title)
-    if err is not None:
-        return
-    # Never type into a bare shell: a provisioned launcher that dropped to
-    # ``bash -i`` (or a shell/wrapper program) reads idle under the bare-shell
-    # rule, and the prompt — plus Enter — would run as commands. The looser
-    # test (no ``program``): a queued prompt is the user's own text, and a
-    # positive name match that missed some CLI would stall the queue for good.
-    if not _pane_holds_agent(name):
-        rec["idle_since"] = None
-        return
-    # Usage-limit gate: if the pane shows a limit that hasn't reset yet, either
-    # hold (wait_for_limit on — the UI shows the countdown and a later pass sends
-    # once the window reopens) or stop the queue (wait_for_limit off — flip
-    # auto-run off so it sits until the user resumes it by hand).
-    if _refresh_limit_state(inst, title, name) > now:
-        if not st.get("wait_for_limit", True) and st["enabled"]:
-            _prompt_queue.set_flags(title, enabled=False)
-            _emit_queue_changed(title)
-        return
-    _send_queued_item(title, name, nxt, rec, now)
-
-
-# --- Usage-limit watch: sessions parked on the limit screen with no queue --- #
-# The drain above resumes a limited session that has something QUEUED. A session
-# that simply ran out mid-task has an empty queue, so nothing was watching it —
-# it sat on the limit screen until a human came back hours later, long after the
-# window reopened. This watcher covers exactly that gap, and pays for itself:
-# the candidate list comes from the snapshot the /api/events tick already keeps
-# (a dict read), so a flock with nothing limited does no work at all.
-_LIMIT_RESUME_PROMPT = "continue"
-
-#: "Usage is back" is one fact about the account, not one per session — several
-#: sessions typically unblock in the same pass. Announce it once per window.
-_LIMIT_RESTORE_QUIET = 300.0
-_LAST_RESTORE_EMIT = 0.0
-
-
-def _resume_on_usage_reset() -> bool:
-    """Whether to nudge a limited session once its window reopens
-    (``general.resume_on_usage_reset``; unset = on). Never raises."""
-    try:
-        from backend.config import settings as _settings
-
-        return _settings.load_settings().general.resume_on_usage_reset is not False
-    except Exception:  # noqa: BLE001 — an unreadable store keeps the default
-        return True
-
-
-def _limited_titles() -> list:
-    """Sessions whose last observed activity was ``limit``, from the event
-    snapshot — free (no probes), and refreshed every ~4s by the state tick."""
-    with _EVENT_SNAPSHOT_LOCK:
-        return [
-            t for t, snap in _EVENT_SNAPSHOT.items() if snap.get("activity") == "limit"
-        ]
-
-
-def _watch_one_limited(title: str) -> None:
-    """One usage-limit decision for a session sitting on the limit screen.
-
-    Runs only while the session's *observed* activity is ``limit``, so the pane
-    capture in :func:`_refresh_limit_state` happens for genuinely stuck sessions
-    only. Never raises."""
-    global _LAST_RESTORE_EMIT
-    st = _prompt_queue.get_state(title)
-    if st["enabled"] and st["items"]:
-        return  # the drain owns this one — it has a prompt to send on reopening
-    inst = ENGINE.instances.get(title)
-    if inst is None:
-        return
-    try:
-        if not inst.Started() or inst.Status == session.Paused:
-            return
-    except Exception:  # noqa: BLE001
-        return
-    name, err = _ensure_agent_session(inst, title)
-    if err is not None:
-        return
-    now = time.time()
-    if _refresh_limit_state(inst, title, name) > now:
-        return  # still limited — the UI shows the countdown
-    # The window reopened. Reuse the drain's per-session send bookkeeping so the
-    # nudge obeys the same "once, then wait to see it picked up" rule: an Esc +
-    # prompt that doesn't take (a menu that needs a second key, a meter that
-    # lags the real reset) retries after _QUEUE_REARM_IDLE instead of every 5s.
-    rec = _QUEUE_STATE.setdefault(
-        title,
-        {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
-    )
-    if (
-        not rec.get("armed", True)
-        and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
-    ):
-        rec["armed"] = True
-    if (
-        not rec.get("armed", True)
-        or now - rec.get("sent_at", 0.0) < _QUEUE_SEND_COOLDOWN
-    ):
-        return
-    resume = _resume_on_usage_reset()
-    if resume:
-        _send_escape_to_agent(name)  # drop the lingering limit menu
-        time.sleep(0.15)  # let the CLI redraw its prompt before we type
-        if _dialog_on_screen(inst, name):
-            return  # the menu (or another prompt) is still up: next pass
-        if _send_to_agent(name, _LIMIT_RESUME_PROMPT, submit=True):
-            rec["armed"] = False
-            rec["sent_at"] = now
-            rec["sent_text"] = _LIMIT_RESUME_PROMPT
-            if log.ErrorLog is not None:
-                try:
-                    log.ErrorLog.Printf(
-                        "[MONITORING] usage window reopened — resumed %s", title
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-        else:
-            return  # tmux gone: no resume, and no "usage is back" to announce
-    # Announce the reopening whether or not we acted on it — "your usage is
-    # back" is worth knowing even with auto-resume off, and it can only fire for
-    # a session that had actually run out (that is what put it on this list).
-    if now - _LAST_RESTORE_EMIT >= _LIMIT_RESTORE_QUIET:
-        _LAST_RESTORE_EMIT = now
-        _events.BUS.emit(
-            "session.usage_restored", session=title, data={"resumed": resume}
-        )
-
-
-def _watch_limited_sessions() -> None:
-    """One pass over every session parked on a usage-limit screen."""
-    for title in _limited_titles():
-        try:
-            _watch_one_limited(title)
-        except Exception:  # noqa: BLE001 — one bad session can't stop the pass
-            pass
-
-
-# --- Mailbox delivery lane --------------------------------------------------- #
-# Types inter-agent messages (core.mailbox) into idle recipients. A lane of its
-# own, NOT the prompt queue: routing messages through the queue would re-enable
-# a queue the user paused, re-type them forever under ``loop``, put them in the
-# user's Queue tab, and — through the drain's offline path — reboot agents the
-# user stopped. Here a message stays ``pending`` in the mailbox until every
-# gate below passes, and is typed at most once (claimed under the mailbox lock
-# before typing, so an inbox fetch that got there first wins outright):
-#   * the session-level gates the queue obeys (_typing_held): started, not
-#     paused, not over budget, setup not running/failed;
-#   * no long-poll on the recipient's inbox (that poll is about to hand the
-#     message over itself), no fast-track chain mid-flight;
-#   * not inside the queue's post-reboot grace, and the CLI's tmux session
-#     alive — the lane NEVER boots an agent; offline / paused / loading wait;
-#   * activity ``idle``, settled exactly as the queue settles it, and past the
-#     queue's send cooldown counted across BOTH typers; clarify / limit wait;
-#   * human intent first: a queued user prompt that is ready goes before any
-#     message (the message waits for the next settled idle).
-# Typing goes straight through _send_to_agent: never _note_human_input (an
-# agent wrote this, not the person at the keys) and never the user's queue.
-_MAIL_STATE: Dict[str, dict] = {}  # title -> {"idle_since", "sent_at"}
-#: ``_mail_type``'s answer when the recipient's screen showed a dialog.
-_MAIL_ON_PROMPT = "on_prompt"
-#: Boxes whose recipient is no longer live are pruned only once their newest
-#: message is this old — a title another server just created may not have
-#: reached this process's engine yet, and its first message must survive that.
-_MAIL_PRUNE_AFTER_S = 600.0
-
-
-def _mail_provider_name(inst) -> str:
-    """The recipient's provider name, which picks the reply-hint wording."""
-    try:
-        return providers.resolve(getattr(inst, "Program", "") or "").name
-    except Exception:  # noqa: BLE001 — the hint degrades to the generic wording
-        return ""
-
-
-def _mail_type(inst, title: str, name: str, msg: dict, now: float):
-    """Claim ``msg`` and type its one-line rendering into tmux session ``name``
-    → the message's new state (``"delivered"``, or ``"held"`` when only a
-    long-body notice was typed), :data:`_MAIL_ON_PROMPT` when the screen
-    showed a dialog (nothing claimed, nothing typed — the screen-evidence
-    guard, which outranks the activity reading the caller gated on), or None
-    when nothing was typed (an inbox fetch consumed it first, or tmux refused
-    — the claim is then released so a later pass retries). Shared by the
-    lane and ``delivery: "now"``."""
-    if _dialog_on_screen(inst, name):
-        rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
-        rec["idle_since"] = None
-        return _MAIL_ON_PROMPT
-    line, full = _mailbox.render_delivery(msg, _mail_provider_name(inst))
-    state = "delivered" if full else "held"
-    claimed = _mailbox.claim(
-        title,
-        msg["id"],
-        state=state,
-        detail="" if full else _mailbox.long_notice_detail(),
-        now=now,
-    )
-    if claimed is None:
-        return None
-    if not _send_to_agent(name, line, submit=True):
-        _mailbox.release(title, msg["id"])
-        return None
-    rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
-    rec["sent_at"] = now
-    rec["idle_since"] = None
-    if log.ErrorLog is not None:
-        try:
-            log.ErrorLog.Printf(
-                "[MONITORING] mailbox typed %s from %r into %s (%s)",
-                msg["id"],
-                msg.get("from") or "",
-                title,
-                state,
-            )
-        except Exception:  # noqa: BLE001
-            pass
-    return state
-
-
-def _queue_wants_turn(title: str, now: float) -> bool:
-    """Whether the user's prompt queue would send into ``title`` at its next
-    settled idle — in which case a pending message waits behind it. Mirrors
-    the queue's own send conditions (enabled, an item, armed, outside its loop
-    interval and any usage-limit hold) so a queue that is NOT going to send (a
-    timed loop between rounds, a paused queue) cannot starve the mailbox."""
-    st = _prompt_queue.get_state(title)
-    if not st["enabled"] or not st["items"]:
-        return False
-    if not (_QUEUE_STATE.get(title) or {}).get("armed", True):
-        return False
-    interval = int(st.get("loop_interval") or 0)
-    if st["loop"] and interval > 0:
-        last = st.get("last_sent") or 0.0
-        if last and now - last < interval * 60:
-            return False
-    return _session_limited_until(title) <= now
-
-
-def _pane_holds_agent(name: str, program: Optional[str] = None) -> bool:
-    """Whether an agent CLI (not a bare shell) holds tmux session ``name``'s
-    pane — the precondition for typing a mailbox line or a queued prompt.
-
-    A provisioned launcher drops to ``exec bash -i`` when the user quits the
-    agent on purpose, and that pane still reads ``idle`` (a SessionEnd/Stop
-    marker, or the bare-shell rule): typing there hands agent-written text to
-    the shell, which runs it.
-
-    With ``program`` (the session's ``Program``) the answer needs POSITIVE
-    evidence: an agent CLI's executable somewhere in the pane's process tree
-    (:func:`agent_state._pane_runs_agent`). Any non-shell foreground used to
-    count — so after a quit, ``vim``/``ssh prod``/``psql`` started in that
-    shell read as the agent and a sibling's message was typed into them, with
-    Enter (over ssh, a backticked command in it ran on the remote host).
-    Without ``program`` the older, looser test applies: a non-shell
-    foreground, or a bare-shell foreground with a live non-shell descendant.
-    When tmux cannot say, the exit marker for this incarnation decides."""
-    try:
-        fg, created, pane_pid, _size = _pane_meta(name)
-        if fg:
-            if program is not None:
-                names = _agent_state.agent_process_names(program)
-                if names:
-                    return bool(_agent_state._pane_runs_agent(pane_pid, names))
-            if fg.lower() not in _BARE_SHELLS:
-                return True
-            return bool(_pane_has_agent_process(pane_pid))
-        return not _agent_exited(name, created)
-    except Exception:  # noqa: BLE001 — can't tell: don't type blind
-        return False
-
-
-def _human_at_keys(title: str, probe_tmux: bool = True) -> bool:
-    """A person typed into ``title``'s window within ``_HUMAN_HOLD_S`` — a
-    half-written prompt fires no hook, so activity still reads idle, and the
-    lane's Enter would submit it merged with an agent's message. The web
-    stamp is a dict read; the tmux client probe (raw ``tmux attach`` / SSH)
-    shells out, so callers ask for it last."""
-    if time.time() - _HUMAN_INPUT_AT.get(title, 0.0) < _HUMAN_HOLD_S:
-        return True
-    return bool(probe_tmux and _tmux_client_input_recent(title, _HUMAN_HOLD_S))
-
-
-def _drain_one_mailbox(title: str) -> None:
-    """One delivery decision for one recipient: type at most its oldest pending
-    message. Never reboots, never types into clarify/limit/offline."""
-    inst = ENGINE.instances.get(title)
-    if inst is None:
-        return
-    msg = _mailbox.next_pending(title)
-    if msg is None:
-        return
-    rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
-    now = time.time()
-    if _typing_held(inst, title) or _mailbox.waiter_active(title, now):
-        rec["idle_since"] = None
-        return
-    q = _QUEUE_STATE.get(title) or {}
-    if now - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
-        return  # the queue just relaunched it; let the CLI draw its prompt
-    # Deliberately UNCACHED, for the queue's reason: a memoized idle from
-    # before the last send could type a second message into a live turn.
-    activity = _agent_activity(inst, title)
-    if activity != "idle":
-        rec["idle_since"] = None  # working / clarify / limit / offline: wait
-        return
-    if _human_at_keys(title, probe_tmux=False):
-        rec["idle_since"] = None  # someone is mid-composition in this pane
-        return
-    last_typed = max(q.get("sent_at", 0.0), rec.get("sent_at", 0.0))
-    if not _idle_settled(rec, title, now, since=last_typed):
-        return
-    if now - last_typed < _QUEUE_SEND_COOLDOWN:
-        return
-    if _queue_wants_turn(title, now) or _autopilot_running(title):
-        return
-    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
-    if name is None:
-        return  # never boot it: delivery resumes once someone starts it
-    if not _pane_holds_agent(name, getattr(inst, "Program", "") or ""):
-        rec["idle_since"] = None  # the agent quit: a bare shell would RUN it
-        return
-    if _refresh_limit_state(inst, title, name) > now:
-        return  # an idle prompt sitting under a usage-limit banner
-    if _tmux_client_input_recent(title, _HUMAN_HOLD_S):
-        rec["idle_since"] = None  # typing through a raw tmux client / SSH
-        return
-    _mail_type(inst, title, name, msg, now)
-
-
-def _drain_mailboxes() -> None:
-    """One pass of the mailbox delivery lane — run after the prompt queue's,
-    so a user prompt sent this pass holds the lane through the shared
-    cooldown. Never raises."""
-    try:
-        _mailbox.prune(
-            list(ENGINE.instances.keys()),
-            older_than=time.time() - _MAIL_PRUNE_AFTER_S,
-        )
-        titles = _mailbox.pending_titles()
-    except Exception:  # noqa: BLE001 — an unreadable store skips this pass
-        return
-    for title in titles:
-        try:
-            _drain_one_mailbox(title)
-        except Exception:  # noqa: BLE001 — one bad session can't stop the lane
-            pass
-    for gone in [t for t in _MAIL_STATE if t not in ENGINE.instances]:
-        _MAIL_STATE.pop(gone, None)
-
-
-def _drain_prompt_queues() -> None:
-    """One pass over every session with a queue, plus every session parked on a
-    usage-limit screen, then the mailbox delivery lane. Runs in a worker thread
-    (it shells out to tmux) so it never blocks the event loop."""
-    titles = _prompt_queue.all_titles()
-    if not titles:
-        _watch_limited_sessions()
-        _drain_mailboxes()
-        return
-    _prompt_queue.prune(list(ENGINE.instances.keys()))
-    _ports.prune(list(ENGINE.instances.keys()))
-    for title in titles:
-        try:
-            _drain_one_queue(title)
-        except Exception:  # noqa: BLE001 — one bad session can't stop the drain
-            pass
-    _watch_limited_sessions()
-    _drain_mailboxes()
-    # Forget in-memory drain state for sessions that vanished.
-    for gone in [t for t in _QUEUE_STATE if t not in ENGINE.instances]:
-        _QUEUE_STATE.pop(gone, None)
-    for gone in [t for t in _LIMIT_STATE if t not in ENGINE.instances]:
-        _LIMIT_STATE.pop(gone, None)
-    # Drop budget overrides for sessions that no longer exist (so a reused title
-    # doesn't inherit an old raise).
-    for gone in [t for t in _budget_overrides() if t not in ENGINE.instances]:
-        _forget_budget(gone)
-
-
-async def _prompt_queue_drain_loop() -> None:
-    """Drive the prompt-queue drain forever (started by the lifespan)."""
-    while True:
-        try:
-            await asyncio.to_thread(_drain_prompt_queues)
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(_QUEUE_DRAIN_INTERVAL)
 
 
 # --- Window-refresh keepalive (roadmap E) ------------------------------------
@@ -5517,103 +3971,6 @@ async def instance_check_run(title: str) -> JSONResponse:
 # core.red_zone_monitor; these routes are the thin HTTP skin over them. Every
 # git/store touch runs off the event loop — the Map polls /live every 2 s.
 # --------------------------------------------------------------------------- #
-_RZ_SYNC_CAP = 50
-
-
-def _rz_repo(wt: str):
-    """``(repo_id, {"id", "label"})`` for a worktree, ``(None, None)`` when git
-    can't say (the UI then shows worktree-scope zones only)."""
-    ident = _red_zones.repo_identity(wt)
-    if not ident:
-        return None, None
-    return ident[0], {"id": ident[0], "label": ident[1]}
-
-
-def _rz_doc(wt: str, repo_id: Optional[str], zones=None, ci=None) -> dict:
-    """``red_zones.zones_doc`` — what every zone check here classifies
-    against (red, green, companions, exemptions)."""
-    return _red_zones.zones_doc(wt, repo_id, zones=zones, ci=ci)
-
-
-def _rz_hard(inst) -> bool:
-    """Whether ``inst``'s CLI is hard-guarded (the hook blocks before an
-    edit) — the agent messages say "blocked" vs "flagged and block pushes"."""
-    try:
-        prov = providers.resolve(getattr(inst, "Program", "") or "")
-        return bool(prov.red_zone_guard())
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _rz_changed_paths(inst, wt: str) -> tuple:
-    """``(changed, committed)`` path lists of the session (working + committed
-    vs its fork point; committed ``fork..HEAD``)."""
-    changed = [c.get("path") or "" for c in _code_map.changed_files(inst, wt)]
-    committed = _code_map.committed_changed(inst, wt, "HEAD")
-    return [p for p in changed if p], list(committed)
-
-
-def _rz_exempt_ids(root: str, paths: list) -> dict:
-    """``{rel: "sha [sha …]"}`` — every identity a path had when it was
-    exempted: its working-tree blob AND its blob at ``HEAD`` and at
-    ``origin/<branch>`` (when pushed). The monitor compares the working
-    tree, the push gate the blob at ``HEAD`` and the PR gate the one at
-    ``origin/<branch>``: recording only the working tree blocked the push of
-    work committed before the scope and then edited further."""
-    if not paths:
-        return {}
-    wt_b = _red_zones.worktree_blobs(root, paths)
-    revs = [_red_zones.rev_blobs(root, "HEAD", paths)]
-    branch = _current_branch(root) or ""
-    if branch:
-        ref = _pr_content_ref(root, branch)
-        if ref != "HEAD":
-            revs.append(_red_zones.rev_blobs(root, ref, paths))
-    out = {}
-    for p in paths:
-        if p not in wt_b:
-            continue
-        ids = [wt_b[p]]
-        for rb in revs:
-            v = rb.get(p)
-            if v and v not in ids:
-                ids.append(v)
-        out[p] = " ".join(ids)
-    return out
-
-
-def _rz_green_exempt(inst, wt: str, old_doc: dict, new_doc: dict) -> tuple:
-    """Exempt the work a green scope change would suddenly call a breach.
-
-    Every path already changed (working tree or committed) that is OUTSIDE
-    under ``new_doc`` but was NOT a breach under ``old_doc`` is recorded with
-    its current blob (``green_exempt``): the monitor and the push/PR gate
-    skip it while its content stays the same. Scoping a session mid-flight —
-    or narrowing its scope — must not block its push on work that was
-    legitimate when it was done; editing such a file AFTER the scope exists
-    is a breach again. ``(exempt paths, committed_outside count)``."""
-    ci = bool(new_doc.get("ci"))
-    changed, committed = _rz_changed_paths(inst, wt)
-    root = os.path.realpath(wt)
-    cand = sorted(set(changed) | set(committed))
-    now_out = [
-        p
-        for p in cand
-        if (_red_zones.verdict(new_doc, p, ci) or {}).get("kind") == "green"
-    ]
-    was = (
-        _red_zones.breach_verdicts(old_doc, now_out, ci, root=root)
-        if (old_doc.get("red") or old_doc.get("green"))
-        else {}
-    )
-    fresh = [p for p in now_out if p not in was]
-    if not fresh:
-        return [], 0
-    mapping = _rz_exempt_ids(root, fresh)
-    if mapping:
-        _red_zones.set_green_exempt(wt, mapping)
-    csets = set(committed)
-    return sorted(mapping), sum(1 for p in mapping if p in csets)
 
 
 def _code_map_fp(inst, wt: str, zones, fp: Optional[str] = None) -> Optional[str]:
@@ -5631,64 +3988,6 @@ def _code_map_fp(inst, wt: str, zones, fp: Optional[str] = None) -> Optional[str
         sorted("%s %s %s" % (z.get("id"), z.get("kind"), z.get("re")) for z in zones)
     )
     return fp + "." + hashlib.sha1(sig.encode("utf-8", "replace")).hexdigest()[:10]
-
-
-def _live_repo_roots(repo_id: Optional[str], extra_from: str = "") -> list:
-    """``[(root, lroot)]`` of every worktree a repo-scope zone change must
-    reach NOW: each live session's worktree with that repo id, plus (with
-    ``extra_from``) that repo's own ``git worktree list`` — a checkout MindFlock
-    isn't running can still carry an armed hook from an earlier session."""
-    out, seen = [], set()
-
-    def _add(p: str) -> None:
-        if not p or not os.path.isdir(p) or len(out) >= _RZ_SYNC_CAP:
-            return
-        real = os.path.realpath(p)
-        if real not in seen:
-            seen.add(real)
-            out.append((real, p))
-
-    if not repo_id:
-        return out
-    for _t, other in list(ENGINE.instances.items()):
-        try:
-            if not other.Started():
-                continue
-            owt = other.GetWorktreePath()
-        except Exception:  # noqa: BLE001
-            continue
-        if not owt or not os.path.isdir(owt):
-            continue
-        ident = _red_zones.repo_identity(owt)
-        if ident and ident[0] == repo_id:
-            _add(owt)
-    if extra_from:
-        cp = _run_capped(
-            ["git", "-C", extra_from, "worktree", "list", "--porcelain"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-        )
-        if cp.returncode == 0:
-            for line in cp.stdout.decode("utf-8", "replace").splitlines():
-                if line.startswith("worktree "):
-                    _add(line[len("worktree ") :].strip())
-    return out
-
-
-def _rz_resync_after(res: Optional[dict], wt: str = "") -> None:
-    """Re-sync the guard files a removed/added zone reaches (``res`` is
-    ``remove_zone``'s ``{"zone", "scope", "owner"}``)."""
-    if not res:
-        return
-    if res.get("scope") == "repo":
-        _red_zone_monitor.resync(
-            _live_repo_roots(res.get("owner"), wt), res.get("owner")
-        )
-    else:
-        owner = res.get("owner") or ""
-        lroot = wt if wt and os.path.realpath(wt) == owner else owner
-        _red_zone_monitor.resync([(owner, lroot)])
 
 
 def _snapshot_activity(title: str) -> str:
@@ -5738,46 +4037,6 @@ def _feed_out(rec: dict, wt: str, doc: Optional[dict] = None) -> dict:
         if arts:
             out["artifact"] = arts[:50]
     return out
-
-
-def _live_breaches(inst, wt: str, changed, doc, ci: bool = False) -> list:
-    """``[{"path", "pattern", "zone_id", "committed", "kind"}]``: the
-    session's changed files that are breaches under ``doc`` — inside an
-    enforced red zone, or outside the green scope and not exempt
-    (``pattern`` = "outside green") — ``committed`` = already in a commit,
-    i.e. what blocks a push; plus red-zone-matched git-ignored files the
-    monitor saw change. Computed per request, never from the throttled row
-    summary. ``ci``: the worktree's filesystem is case-insensitive, so match
-    the way the hook does (IGNORECASE). ``doc`` may also be a bare list of
-    enforced red zones (older callers)."""
-    if isinstance(doc, list):
-        doc = {"red": doc, "green": [], "companions": [], "exempt": {}}
-    hits: Dict[str, dict] = {}
-    rels = [c.get("path") or "" for c in changed or []]
-    for rel, v in _red_zones.breach_verdicts(
-        doc, rels, ci, root=os.path.realpath(wt)
-    ).items():
-        hits[rel] = {
-            "path": rel,
-            "pattern": v.get("pattern"),
-            "zone_id": v.get("zone_id"),
-            "committed": False,
-            "kind": v.get("kind") or "red",
-        }
-    if hits:
-        for rel in _code_map.committed_changed(inst, wt, "HEAD"):
-            if rel in hits:
-                hits[rel]["committed"] = True
-    for rel, m in _red_zone_monitor.ignored_breaches(wt).items():
-        if rel not in hits:
-            hits[rel] = {
-                "path": rel,
-                "pattern": m.get("pattern"),
-                "zone_id": m.get("zone_id"),
-                "committed": False,
-                "kind": "red",
-            }
-    return [hits[k] for k in sorted(hits)]
 
 
 #: Appended to a snapshot fingerprint whose import graph is still partial,
@@ -6248,28 +4507,6 @@ async def instance_red_zones(title: str) -> JSONResponse:
     return JSONResponse(await asyncio.to_thread(_read))
 
 
-def _shared_zones_body(wt: str) -> dict:
-    """``{"shared", "shared_error", "shared_path", "shared_exists"}`` — the
-    committed zones of ``wt`` (backend.config.repo_zones)."""
-    zones, error = _repo_zones.load_doc(wt)
-    return {
-        "shared": zones,
-        "shared_error": error,
-        "shared_path": _repo_zones.REL_PATH,
-        "shared_exists": os.path.isfile(_repo_zones.file_path(wt)),
-    }
-
-
-def _shared_zone_author() -> str:
-    """Who a shared zone says added it: the person's name, else their git
-    name (docs/people.md). ``""`` when neither is set."""
-    try:
-        me = _person.current()
-    except Exception:  # noqa: BLE001
-        return ""
-    return str(me.get("name") or me.get("git_name") or "").strip()
-
-
 @app.get("/api/instances/{title}/shared-zones")
 async def instance_shared_zones(title: str) -> JSONResponse:
     """The repo's committed zones as this session's worktree has them
@@ -6351,21 +4588,6 @@ async def instance_shared_zones_remove(
     if body is None:
         return JSONResponse({"error": "unknown shared zone: %s" % zid}, status_code=404)
     return JSONResponse(body)
-
-
-def _sessions_on_worktree(wt: str) -> int:
-    """How many registered sessions share ``wt`` — a green zone is worktree
-    scope, so it applies to all of them (the add row says so)."""
-    real = os.path.realpath(wt)
-    n = 0
-    for _t, other in list(ENGINE.instances.items()):
-        try:
-            owt = other.GetWorktreePath()
-        except Exception:  # noqa: BLE001
-            continue
-        if owt and os.path.realpath(owt) == real:
-            n += 1
-    return n
 
 
 @app.post("/api/instances/{title}/red-zones")
@@ -6486,20 +4708,6 @@ async def instance_red_zones_add(
     if reason:
         body["reason"] = reason
     return JSONResponse(body)
-
-
-def _clean_rel_arg(raw) -> Optional[str]:
-    """A worktree-relative path from a request, or None when it is empty,
-    absolute or climbs out (``..``)."""
-    rel = str(raw or "").strip().replace("\\", "/")
-    while rel.startswith("./"):
-        rel = rel[2:]
-    rel = rel.strip("/")
-    if not rel or "\x00" in rel or os.path.isabs(str(raw or "").strip()):
-        return None
-    if any(seg == ".." for seg in rel.split("/")):
-        return None
-    return rel
 
 
 @app.post("/api/instances/{title}/red-zones/allow")
@@ -6634,69 +4842,6 @@ async def instance_red_zones_preview(
         except Exception as err:  # noqa: BLE001 — the base preview still stands
             res.setdefault("warnings", []).append("green check failed: %s" % err)
     return JSONResponse(res)
-
-
-def _green_preview(inst, wt: str, pattern: str, base: dict) -> dict:
-    """The green-only preview fields (see the route)."""
-    norm, anchored = _red_zones.normalize_pattern(pattern)
-    re_src = base.get("re") or _red_zones.compile_pattern(pattern)
-    ci = _red_zone_monitor.root_ci(wt)
-    files, _d, _ign, _t = _red_zones.zone_files(
-        wt, [{"re": re_src, "pattern": pattern}], cap=_code_map.MAX_FILES, ci=ci
-    )
-    roots: list = []
-    for rel in files:
-        parts = rel.split("/")
-        for i in range(1, len(parts) + 1):
-            pre = "/".join(parts[:i])
-            if _red_zones.matches(re_src, pre, ci):
-                if pre not in roots:
-                    roots.append(pre)
-                break
-        if len(roots) >= 20:
-            break
-    repo_id, _repo = _rz_repo(wt)
-    doc = _rz_doc(wt, repo_id, ci=ci)
-    doc = dict(doc, green=list(doc["green"]) + [{"pattern": pattern, "re": re_src}])
-    if len(doc["green"]) == 1:
-        doc["companions"] = _red_zones.zones_doc(
-            wt,
-            repo_id,
-            zones=[{"pattern": pattern, "re": re_src, "kind": "green"}],
-            ci=ci,
-        )["companions"]
-    changed, committed = _rz_changed_paths(inst, wt)
-    outside = sorted(
-        p
-        for p in set(changed) | set(committed)
-        if _red_zones.classify(p, None, doc, ci) == "outside"
-    )
-    cset = set(committed)
-    body = norm.rstrip("/")
-    unanchored = not anchored and "/" not in body
-    warnings: list = []
-    if not files:
-        warnings.append(
-            "nothing exists here yet; the agent may only create new files under it"
-        )
-    anchored_twin = None
-    if unanchored:
-        if len(roots) == 1:
-            anchored_twin = "/" + roots[0]
-        warnings.append(
-            "`%s` is unanchored: it matches at any depth (%s) — anchor it with a "
-            "leading / to scope exactly one folder"
-            % (pattern, ", ".join(roots[:5]) or "nowhere yet")
-        )
-    return {
-        "writable_files": len(files),
-        "changed_outside": outside[:200],
-        "committed_outside": sum(1 for p in outside if p in cset),
-        "roots": roots,
-        "unanchored": unanchored,
-        "anchored": anchored_twin,
-        "warnings": warnings,
-    }
 
 
 @app.delete("/api/instances/{title}/red-zones/{zone_id}")
@@ -8701,47 +6846,6 @@ def _is_human_session(inst) -> bool:
     )
 
 
-def _uncommitted_zone_breaches(wt: str) -> list:
-    """Zone breaches in what a commit of ``wt`` would take — its uncommitted
-    changes, untracked files included — classified by the one predicate
-    (``red_zones.breach_verdicts``): ``[{"path", "pattern", "zone_id",
-    "kind"}]``, the push gate's shape. ``[]`` with no zones or on git
-    failure."""
-    ident = _red_zones.repo_identity(wt)
-    ci = _red_zone_monitor.root_ci(wt)
-    doc = _rz_doc(wt, ident[0] if ident else None, ci=ci)
-    if not doc["red"] and not doc["green"]:
-        return []
-    rels = []
-    for entry in _red_zones._git_z(
-        wt, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"
-    ):
-        rel = entry[3:] if len(entry) > 3 else ""
-        if rel and rel not in rels:
-            rels.append(rel)
-    hits = _red_zones.breach_verdicts(doc, rels, ci, root=os.path.realpath(wt))
-    return [
-        {
-            "path": rel,
-            "pattern": hits[rel].get("pattern"),
-            "zone_id": hits[rel].get("zone_id"),
-            "kind": hits[rel].get("kind") or "red",
-        }
-        for rel in rels
-        if rel in hits
-    ]
-
-
-def _zone_breach_message(hits: list) -> str:
-    if hits[0].get("kind") == "green":
-        msg = "outside green zone: %s" % hits[0]["path"]
-    else:
-        msg = "red zone changed: %s (%s)" % (hits[0]["path"], hits[0]["pattern"])
-    if len(hits) > 1:
-        msg += " and %d more" % (len(hits) - 1)
-    return msg
-
-
 @app.post("/api/instances/{title}/commit")
 async def instance_commit(title: str, payload: dict) -> JSONResponse:
     """Stage everything and commit (running the pre-commit hooks) inside the
@@ -9003,106 +7107,6 @@ async def instance_reset_stage(title: str) -> JSONResponse:
     # client gets it through the publish.
     row = await asyncio.to_thread(_republish_session, title)
     return JSONResponse({"ok": True, "row": row, **res})
-
-
-def _red_zone_breaches_for(inst, wt: str, target: str = "HEAD") -> list:
-    """Zone breaches COMMITTED on the way to ``target`` — computed now, from
-    git, never from the monitor's throttled summary (a gate that reads a
-    10-second-old answer lets exactly the commit it exists for through).
-
-    The committed range (``fork..HEAD`` for a push, see
-    :func:`_pr_committed_changed` for a PR/merge target), classified by the
-    ONE predicate (``red_zones.classify``): a path in an enforced red zone
-    (repo + worktree scope; a repo zone waived here is excluded), or —
-    while a green scope exists — outside it and not a companion, minus the
-    exemptions whose blob AT ``target`` still equals the recorded one (work
-    committed before the scope existed; editing it again re-arms the gate)
-    → ``[{"path", "pattern", "zone_id", "kind"}]``, matched
-    case-insensitively where the filesystem is (as the hook does). A git
-    failure is ``[]``: the gate fails open like every other probe in the push
-    path."""
-    ident = _red_zones.repo_identity(wt)
-    ci = _red_zone_monitor.root_ci(wt)
-    doc = _rz_doc(wt, ident[0] if ident else None, ci=ci)
-    if not doc["red"] and not doc["green"]:
-        return []
-    if target == "HEAD":
-        rels = _code_map.committed_changed(inst, wt, "HEAD")
-    else:
-        rels = _pr_committed_changed(inst, wt, target)
-    rev = _code_map._rev(target) or target
-    hits = _red_zones.breach_verdicts(doc, rels, ci, root=os.path.realpath(wt), rev=rev)
-    return [
-        {
-            "path": rel,
-            "pattern": hits[rel].get("pattern"),
-            "zone_id": hits[rel].get("zone_id"),
-            "kind": hits[rel].get("kind") or "red",
-        }
-        for rel in rels
-        if rel in hits
-    ]
-
-
-def _pr_committed_changed(inst, wt: str, target: str) -> list:
-    """What a PR/merge of ``target`` (``origin/<branch>``) would carry, as the
-    FORGE sees it: ``<base>...<target>`` — the diff from the merge-base of the
-    base branch and the target to the target (``refs/remotes/origin/<base>``
-    first, then the local ``refs/heads/<base>``; full refs, so a tag or branch
-    named like one can't stand in for it).
-
-    WHY NOT ``fork..target``. The session's fork point is the merge-base of
-    the LOCAL ``HEAD`` with the base. Merge (or rebase onto) a newer main
-    locally without pushing and the fork jumps to the new main tip, while the
-    pushed branch still sits on the old one — so a teammate's legitimate
-    change to a zoned file on main shows up, reversed, as this branch's
-    breach, and Make PR / Merge / the autopilot halt on a change the PR
-    doesn't contain. The same happens the other way round after GitHub's
-    "Update branch" merged main into the remote branch. Falls back to
-    ``committed_changed`` when no base ref resolves. ``[]`` on git failure."""
-    try:
-        tgt = _code_map._rev(target)
-        base = str(_session_base_branch(inst) or "").strip()
-        if tgt and base and not base.startswith("-"):
-            for ref in ("refs/remotes/origin/" + base, "refs/heads/" + base):
-                if not _git_ref_exists(wt, ref):
-                    continue
-                out = _code_map._git(
-                    wt,
-                    "diff",
-                    "--name-only",
-                    "-z",
-                    "--no-renames",
-                    ref + "..." + tgt,
-                    "--",
-                )
-                return sorted(set(_code_map._z_fields(out))) if out is not None else []
-        return _code_map.committed_changed(inst, wt, target)
-    except Exception:  # noqa: BLE001 — the gate fails open on its own bugs
-        return []
-
-
-def _pr_content_ref(wt: str, branch: str) -> str:
-    """What a PR/merge would actually carry: ``origin/<branch>`` when that ref
-    exists (the pushed branch IS the PR), else the local ``HEAD``."""
-    if branch:
-        cp = _run_capped(
-            [
-                "git",
-                "-C",
-                wt,
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "refs/remotes/origin/" + branch,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-        if cp.returncode == 0:
-            return "origin/" + branch
-    return "HEAD"
 
 
 async def _red_zone_gate(
