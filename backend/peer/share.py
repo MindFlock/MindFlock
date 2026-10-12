@@ -43,6 +43,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
+from backend import gitutil
 from backend.peer import paths
 
 __all__ = [
@@ -1121,9 +1122,9 @@ def export(share: Share, target_repo: str, branch_name: str) -> dict:
     wt = _target_git(target, "worktree", "list", "--porcelain", timeout=30)
     if wt.returncode != 0:
         raise ShareError("could not list the target's worktrees")
-    for line in wt.stdout.decode("utf-8", "replace").splitlines():
-        if line.strip() == "branch " + ref:
-            raise ShareError("branch %s is checked out in the target" % branch_name)
+    worktrees = gitutil.parse_worktree_list(wt.stdout.decode("utf-8", "replace"))
+    if any(w.get("branch") == ref for w in worktrees):
+        raise ShareError("branch %s is checked out in the target" % branch_name)
 
     with _lock(share):  # HEAD can't move between the commit and the fetch
         sha = _checkpoint_locked(

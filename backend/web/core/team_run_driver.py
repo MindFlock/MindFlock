@@ -30,11 +30,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import subprocess
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend import gitutil
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import git_merge as _git_merge
@@ -151,23 +151,7 @@ def _progress_of(row: dict) -> str:
 def _branch_exists(repo: str, branch: str) -> bool:
     if not repo or not branch or not os.path.isdir(repo):
         return False
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo,
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "refs/heads/" + branch,
-            ],
-            capture_output=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return cp.returncode == 0
+    return gitutil.ref_exists(repo, "refs/heads/" + branch, timeout=20)
 
 
 def _provider(program: str) -> str:
@@ -572,25 +556,13 @@ def _branch_titles(repo: str) -> set:
         prefix = _config.LoadConfig().branch_prefix or ""
     except Exception:  # noqa: BLE001
         prefix = ""
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo,
-                "for-each-ref",
-                "--format=%(refname:short)",
-                "refs/heads",
-            ],
-            capture_output=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    cp = gitutil.git(
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads"], repo, timeout=20
+    )
     if cp.returncode != 0:
         return set()
     out = set()
-    for line in (cp.stdout or b"").decode("utf-8", "replace").splitlines():
+    for line in cp.stdout.splitlines():
         b = line.strip()
         if b and b.startswith(prefix):
             out.add(b[len(prefix) :])
@@ -4012,23 +3984,10 @@ def lead_branch(run_id: str) -> dict:
             raise RunError(
                 "%s's folder is in the middle of a git operation" % title, 409
             )
-        existing = set()
-        try:
-            cp = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    wt,
-                    "for-each-ref",
-                    "--format=%(refname:short)",
-                    "refs/heads",
-                ],
-                capture_output=True,
-                timeout=20,
-            )
-            existing = set((cp.stdout or b"").decode("utf-8", "replace").split())
-        except (OSError, subprocess.SubprocessError):
-            pass
+        cp = gitutil.git(
+            ["for-each-ref", "--format=%(refname:short)", "refs/heads"], wt, timeout=20
+        )
+        existing = set(cp.stdout.split()) if cp.returncode == 0 else set()
         stem = srv._session_branch_name(title + "-split") or (title + "-split")
         branch, n = stem, 2
         while branch in existing:

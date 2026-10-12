@@ -16,10 +16,11 @@ nothing here has to be right about what the branch points at.
 from __future__ import annotations
 
 import os
-import subprocess
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
+
+from backend import gitutil
 
 #: Most branches one answer carries (local first, so remotes are what get cut).
 MAX_BRANCHES = 200
@@ -35,15 +36,8 @@ def _empty(path: str) -> dict:
 
 
 def _git(path: str, *args: str) -> Tuple[int, str]:
-    try:
-        cp = subprocess.run(
-            ["git", "-C", path, *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        )
-    except (OSError, subprocess.SubprocessError):
+    cp = gitutil.git(args, path, timeout=10, env={"GIT_TERMINAL_PROMPT": "0"})
+    if cp.timed_out or cp.not_run:
         return 1, ""
     return cp.returncode, cp.stdout
 

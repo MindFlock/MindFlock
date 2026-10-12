@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 
-from backend import log
+from backend import gitutil, log
 from backend.session.git.util import _exit_error, _trim_prefix
 
 __all__ = [
@@ -452,33 +452,19 @@ def cleanup_worktrees(repo_path: str | None = None) -> None:
         raise RuntimeError("failed to read worktree directory: {}".format(err)) from err
 
     # Get a list of all branches associated with worktrees.
-    try:
-        cmd = subprocess.run(
-            ["git", "-C", repo, "worktree", "list", "--porcelain"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired as err:
-        raise RuntimeError("failed to list worktrees: timed out after 60s") from err
+    cmd = gitutil.git(["worktree", "list", "--porcelain"], repo, timeout=60)
+    if cmd.timed_out:
+        raise RuntimeError("failed to list worktrees: timed out after 60s")
     if cmd.returncode != 0:
         raise RuntimeError(
             "failed to list worktrees: {}".format(_exit_error(cmd.returncode))
         )
-    output = cmd.stdout.decode("utf-8", "replace")
 
-    # Parse the output to extract branch names.
+    # Extract branch names (refs/heads/branch-name -> branch-name).
     worktree_branches = {}
-    current_worktree = ""
-    for line in output.split("\n"):
-        if line.startswith("worktree "):
-            current_worktree = _trim_prefix(line, "worktree ")
-        elif line.startswith("branch "):
-            branch_path = _trim_prefix(line, "branch ")
-            # Extract branch name from refs/heads/branch-name.
-            branch_name = _trim_prefix(branch_path, "refs/heads/")
-            if current_worktree != "":
-                worktree_branches[current_worktree] = branch_name
+    for wt in gitutil.parse_worktree_list(cmd.stdout):
+        if wt["path"] != "" and "branch" in wt:
+            worktree_branches[wt["path"]] = _trim_prefix(wt["branch"], "refs/heads/")
 
     for entry in entries:
         if entry.is_dir():

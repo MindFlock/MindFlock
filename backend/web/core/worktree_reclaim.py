@@ -31,7 +31,7 @@ import os
 import subprocess
 from typing import Callable
 
-from backend import log
+from backend import gitutil, log
 
 #: Per-git-call ceiling. These run on a force-start request, so a hung git must
 #: not hold the launch open indefinitely — a timeout is treated as "don't touch".
@@ -40,16 +40,10 @@ _GIT_TIMEOUT = 30
 
 def _git(repo: str, *args: str) -> tuple[int, str]:
     """``git -C repo <args>`` -> (returncode, stdout). Never raises."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", repo, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except (subprocess.TimeoutExpired, OSError):
+    cp = gitutil.git(args, repo, timeout=_GIT_TIMEOUT, stderr=subprocess.DEVNULL)
+    if cp.timed_out or cp.not_run:
         return 1, ""
-    return cp.returncode, cp.stdout.decode("utf-8", "replace")
+    return cp.returncode, cp.stdout
 
 
 def worktree_is_pristine(path: str) -> bool:

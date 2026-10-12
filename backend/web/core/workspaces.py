@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-from backend import config
+from backend import config, gitutil
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.session import provisioned as provisioning
 from backend.web.core import proc as _proc
@@ -164,19 +164,10 @@ def _base_clone_references(base_dir: str):
         ):
             titles.append(title)
     worktrees = []
-    cp = _proc.run_capped(
-        ["git", "-C", real, "worktree", "list", "--porcelain"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=60,
-    )
-    if cp.returncode == 0:
-        for line in cp.stdout.decode("utf-8", "replace").splitlines():
-            if not line.startswith("worktree "):
-                continue
-            p = os.path.realpath(line[len("worktree ") :].strip())
-            if p and p != real and os.path.isdir(p):
-                worktrees.append(p)
+    for wt in gitutil.worktree_list(real, timeout=60) or ():
+        p = os.path.realpath(str(wt["path"]))
+        if p and p != real and os.path.isdir(p):
+            worktrees.append(p)
     return titles, worktrees
 
 

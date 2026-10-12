@@ -45,9 +45,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+from backend import gitutil
 
 __all__ = ["Plan", "Report", "build_plan", "execute", "home_dirs", "leave_devices"]
 
@@ -363,16 +364,10 @@ def _has_mindflock_hooks(path: str) -> bool:
 
 def _git(repo: str, *args: str) -> tuple[int, str]:
     """Run a git command in ``repo``; return ``(returncode, combined output)``."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", repo, *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError) as err:
-        return 1, str(err)
-    return cp.returncode, ((cp.stdout or "") + (cp.stderr or "")).strip()
+    cp = gitutil.git(args, repo, timeout=_GIT_TIMEOUT_S)
+    if cp.timed_out or cp.not_run:
+        return 1, cp.stderr
+    return cp.returncode, (cp.stdout + cp.stderr).strip()
 
 
 def remove_session_worktree(

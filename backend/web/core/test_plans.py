@@ -110,6 +110,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
+from backend import gitutil
 from backend.fsutil import atomic_write_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -2723,57 +2724,41 @@ def probe_live(repo_root: str, sha: str, live_branch: str) -> str:
     if not repo_root or not sha or not live_branch:
         return "unreachable"
     unreachable = False
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_root,
-                "fetch",
-                "origin",
-                # THE EXPLICIT DESTINATION. `fetch origin <branch>` alone is what
-                # broke this: with a narrow refspec it updates FETCH_HEAD and
-                # nothing else, so the ref the ancestry test needs is never
-                # written and the plan waits for ever.
-                "+refs/heads/%s:refs/remotes/origin/%s" % (live_branch, live_branch),
-                "--quiet",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            timeout=TIMEOUT_FETCH,
-        )
-        if cp.returncode != 0:
-            err = (cp.stderr or b"").decode("utf-8", "replace")
-            if _NO_SUCH_REF_RE.search(err):
-                # The remote answered, and it does not have that branch. This is
-                # a configuration answer, not a network one.
-                return "missing"
-            unreachable = True
-    except Exception:  # noqa: BLE001 — offline, no remote, slow: all tolerable.
+    # Offline, no remote, slow: all tolerable (a failed run, never a raise).
+    cp = gitutil.git(
+        [
+            "fetch",
+            "origin",
+            # THE EXPLICIT DESTINATION. `fetch origin <branch>` alone is what
+            # broke this: with a narrow refspec it updates FETCH_HEAD and
+            # nothing else, so the ref the ancestry test needs is never
+            # written and the plan waits for ever.
+            "+refs/heads/%s:refs/remotes/origin/%s" % (live_branch, live_branch),
+            "--quiet",
+        ],
+        repo_root,
+        stdin=subprocess.DEVNULL,
+        timeout=TIMEOUT_FETCH,
+    )
+    if cp.returncode != 0:
+        if not (cp.timed_out or cp.not_run) and _NO_SUCH_REF_RE.search(cp.stderr):
+            # The remote answered, and it does not have that branch. This is
+            # a configuration answer, not a network one.
+            return "missing"
         unreachable = True
     if not _rev_ok(repo_root, "origin/%s" % live_branch):
         # Nothing local to compare against. If the remote could not be consulted
         # this is simply "we don't know yet"; if it could, the branch is not
         # there and the plan is waiting for something that will never arrive.
         return "unreachable" if unreachable else "missing"
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_root,
-                "merge-base",
-                "--is-ancestor",
-                sha,
-                "origin/%s" % live_branch,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            timeout=TIMEOUT_MERGE_BASE,
-        )
-    except Exception:  # noqa: BLE001
+    cp = gitutil.git(
+        ["merge-base", "--is-ancestor", sha, "origin/%s" % live_branch],
+        repo_root,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=TIMEOUT_MERGE_BASE,
+    )
+    if cp.timed_out or cp.not_run:
         return "unreachable"
     return "live" if cp.returncode == 0 else "waiting"
 
@@ -2836,19 +2821,15 @@ def _git_out(repo_root: str, args: List[str], timeout: float) -> Optional[str]:
     landing of *nowhere* and would quietly retract a branch name the user had
     already been shown.
     """
-    try:
-        cp = subprocess.run(
-            ["git", "-C", repo_root, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
-        )
-    except Exception:  # noqa: BLE001 — a missing repo is an unanswered question
-        return None
-    if cp.returncode != 0:
-        return None
-    return cp.stdout.decode("utf-8", "replace")
+    cp = gitutil.git(
+        args,
+        repo_root,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=timeout,
+    )
+    # A missing repo, a timeout or a non-zero exit is an unanswered question.
+    return cp.stdout if cp.returncode == 0 else None
 
 
 def fetch_all_heads(repo_root: str, ttl: float = HEADS_FETCH_TTL) -> bool:
@@ -2885,25 +2866,20 @@ def fetch_all_heads(repo_root: str, ttl: float = HEADS_FETCH_TTL) -> bool:
         if now - _HEADS_FETCHED.get(root, 0.0) < max(0.0, ttl):
             return True
         _HEADS_FETCHED[root] = now
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                root,
-                "fetch",
-                "origin",
-                "+refs/heads/*:refs/remotes/origin/*",
-                "--prune",
-                "--quiet",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            timeout=TIMEOUT_FETCH,
-        )
-    except Exception:  # noqa: BLE001 — offline, no remote, slow: all tolerable
-        return False
+    # Offline, no remote, slow: all tolerable (a failed run, never a raise).
+    cp = gitutil.git(
+        [
+            "fetch",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+            "--prune",
+            "--quiet",
+        ],
+        root,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=TIMEOUT_FETCH,
+    )
     return cp.returncode == 0
 
 
