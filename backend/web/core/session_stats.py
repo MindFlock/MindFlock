@@ -54,6 +54,25 @@ def _created_epoch(inst) -> Optional[float]:
         return None
 
 
+def _thread_sets(inst, siblings) -> tuple:
+    """(this window's recorded conversation ids, its cwd siblings' ids) from
+    the thread history markers. Empty sets when unavailable; never raises."""
+    own: set = set()
+    others: set = set()
+    try:
+        from backend.providers import thread_markers
+        from backend.session import tmux
+
+        own = thread_markers.history(tmux.to_mindflock_tmux_name(inst.Title))
+        for other in siblings:
+            others |= thread_markers.history(
+                tmux.to_mindflock_tmux_name(getattr(other, "Title", "") or "")
+            )
+    except Exception:  # noqa: BLE001 — markers are enrichment only
+        pass
+    return own, others - own
+
+
 def _session_tokens(inst) -> dict:
     """Best-effort tokens used by claude in this session, SINCE it started.
 
@@ -111,6 +130,7 @@ def _session_tokens(inst) -> dict:
         # instead of summing every run in the shared cwd (the copy-cost bug).
         until = None
         shared_cwd = False
+        siblings = []
         for other in list(srv.ENGINE.instances.values()):
             if other is inst:
                 continue
@@ -120,13 +140,24 @@ def _session_tokens(inst) -> dict:
             except Exception:  # noqa: BLE001
                 continue
             shared_cwd = True  # a copy (or its original) shares this worktree
+            siblings.append(other)
             o_start = _created_epoch(other)
             if start is not None and o_start is not None and o_start > start:
                 until = o_start if until is None else min(until, o_start)
+        # The time windows above are only a heuristic (wrong when windows run
+        # concurrently, or one starts a new conversation after a copy was
+        # made). Every window records the conversation ids it has had, so hand
+        # the provider this window's ids and its siblings' to attribute exactly.
+        threads, other_threads = _thread_sets(inst, siblings)
         # The session's coding provider knows how to read its own telemetry
         # (Claude scans its transcript jsonl; other providers may have none).
         result = providers.resolve(getattr(inst, "Program", "") or "").session_tokens(
-            wt, start, until, shared_cwd
+            wt,
+            start,
+            until,
+            shared_cwd,
+            threads=threads,
+            other_threads=other_threads,
         )
         # Enrich raw counts with an estimated $ cost and the context-window limit,
         # priced from the live AI Pricing Guru feed (best-effort; offline-safe).
@@ -134,7 +165,11 @@ def _session_tokens(inst) -> dict:
             from backend.providers import pricing
 
             model = result.get("model") or ""
-            result["cost"] = pricing.estimate_cost(result, model)
+            # A provider that priced each turn by its own model (Claude: the
+            # subagents often run another model) knows better than one price
+            # on the summed totals with the newest model.
+            if not isinstance(result.get("cost"), (int, float)):
+                result["cost"] = pricing.estimate_cost(result, model)
             # Prefer a window the provider reported first-hand (Codex records its
             # own model_context_window per turn); only fall back to the priced
             # lookup when the provider gave us none (Claude's path).

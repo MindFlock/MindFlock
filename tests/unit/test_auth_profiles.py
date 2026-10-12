@@ -720,7 +720,7 @@ def test_backfill_uses_each_accounts_own_earliest_day(tmp_path, monkeypatch):
     }
     (tmp_path / "assistant").mkdir(exist_ok=True)
     (tmp_path / "assistant" / "usage-history.json").write_text(_json.dumps(ledger))
-    acc, _recent, accounts = uh._compute()
+    acc, _recent, accounts, _est = uh._compute()
     assert accounts["work"]["month"]["in"] == 7  # kept, not gated away
 
 
@@ -1368,17 +1368,24 @@ def markers(tmp_path, monkeypatch):
     return tm
 
 
-def test_an_unprofiled_record_writes_exactly_one_file(markers, tmp_path):
-    """The pre-profiles layout, byte for byte."""
+def test_an_unprofiled_record_writes_the_marker_and_its_history(markers, tmp_path):
+    """The pre-profiles current marker, byte for byte, plus the thread history
+    (per-session cost attribution reads it) — no per-account memory."""
     markers.record("win", "tid-1")
-    assert sorted(p.name for p in (tmp_path / "threads").iterdir()) == ["win.thread"]
+    assert sorted(p.name for p in (tmp_path / "threads").iterdir()) == [
+        "win.thread",
+        "win.threads",
+    ]
+    assert (tmp_path / "threads" / "win.thread").read_text() == "tid-1"
     assert markers.read("win") == "tid-1"
+    assert markers.history("win") == {"tid-1"}
 
 
 def test_a_profiled_record_also_files_a_per_account_memory(markers, tmp_path):
     markers.record("win", "tid-work", "work")
     assert sorted(p.name for p in (tmp_path / "threads").iterdir()) == [
         "win.thread",
+        "win.threads",
         "win@work.thread",
     ]
     assert markers.read("win") == "tid-work"
@@ -1498,7 +1505,8 @@ def test_the_activity_hook_writes_only_the_plain_marker_without_a_profile(
         env=env,
         check=True,
     )
-    assert [p.name for p in td.iterdir()] == ["win1.thread"]
+    assert sorted(p.name for p in td.iterdir()) == ["win1.thread", "win1.threads"]
+    assert (td / "win1.threads").read_text() == "tid-plain\n"
 
 
 def test_the_swap_route_reports_whether_the_conversation_came_back(

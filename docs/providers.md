@@ -653,17 +653,38 @@ API: `price_per_token(model)`, `context_window(model)`, `estimate_cost(tok, mode
 Rolling day/week/month/year token+cost totals across **all** Claude Code sessions
 (powers `GET /api/usage` and the sidebar readout). One pass over every transcript
 under `~/.claude*/projects/` (plus `$CLAUDE_CONFIG_DIR` — wrappers/alternate
-installs may use separate config roots) sums each turn's incremental usage, priced per-turn by
-its own model. Results are memoized for 60 s and folded into a durable daily
-ledger (`~/.mindflock-assistant/usage-history.json`, atomic writes) so totals
-survive Claude pruning old transcripts. The ledger self-prunes days older than
-the longest rolling window (plus 5 days' slack), so long-lived installs don't
-accumulate one entry per calendar day forever. Degrades to zeros on any error.
+installs may use separate config roots), **recursively**: Agent-tool subagents
+write their own transcripts under `<project>/<conversation>/subagents/`, and on
+busy machines they are most of the spend. Claude Code writes one API response as
+several lines (one per content block, each repeating `message.usage`), and a
+resumed/forked conversation copies earlier lines into a new file, so turns are
+**deduplicated by `(message.id, requestId)`** across every file (the copy with
+the most output tokens wins) before they are summed and priced per-turn by their
+own model. Parsed files are memoized on (mtime, size), so the 60 s refresh only
+re-reads files that changed.
+
+Per-day totals are folded into a durable ledger
+(`~/.mindflock-assistant/usage-history.json`, `"version": 2`, atomic writes) so
+totals survive Claude pruning old transcripts. A ledger day never shrinks:
+it keeps whichever of (scanned, ledgered) costs more, and every window is
+back-filled with `ledger − scanned` for each day it covers (per account too).
+A version-1 ledger (summed duplicate lines, missed subagents) is migrated once:
+days the scan still covers are recomputed, older ones are kept as estimates and
+listed in `approx_days`; the original is backed up as `usage-history.v1.json`.
+`GET /api/usage` then reports `year_estimated_before` (and
+`providers[].estimated_before`) and the Usage popover notes it under the year.
+The ledger self-prunes days older than the longest rolling window (plus 5 days'
+slack). Degrades to zeros on any error.
 
 Per-session figures (the pane popup and `tokens_*` fields on
-`GET /api/instances`) come from the provider's `session_tokens(workdir, since)`:
-for Claude, the transcripts of the workspace's project directory — cumulative
-in/out/cache tokens plus the newest turn's context-window fill and model.
+`GET /api/instances`) come from the provider's `session_tokens(workdir, since,
+until, shared_cwd, threads=, other_threads=)`: for Claude, the conversations in
+the workspace's project directory, each together with its subagent
+transcripts, deduplicated the same way and priced per turn (`cost`). Which
+conversations are the session's: the ones its window recorded in its thread
+history (`<session>.threads`, written by the activity hook and
+`thread_markers.record`), never one a sibling window on the same cwd recorded,
+and — for unrecorded conversations only — the old birth-time heuristic.
 
 ## Live usage & limit state
 

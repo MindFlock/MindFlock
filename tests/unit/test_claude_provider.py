@@ -144,6 +144,7 @@ def test_tokens_empty_workdir_returns_zero():
         "cache_write": 0,
         "ctx": 0,
         "model": "",
+        "cost": 0.0,
     }
 
 
@@ -157,6 +158,7 @@ def test_tokens_no_transcript_dir_returns_zero(fake_home):
         "cache_write": 0,
         "ctx": 0,
         "model": "",
+        "cost": 0.0,
     }
 
 
@@ -1755,3 +1757,167 @@ def test_empty_queue_content_is_not_a_prompt(fake_home):
 
     assert _entry_text(_enqueued("   ")) is None
     assert _entry_text({"type": "queue-operation", "operation": "enqueue"}) is None
+
+
+# --------------------------------------------------------------------------- #
+# per-session: duplicate lines, subagents, per-turn pricing, thread history
+# --------------------------------------------------------------------------- #
+def _api(ts, mid, *, rid=None, model="claude-sonnet-4", in_=0, out=0, cw=0, cr=0):
+    e = _usage_entry(ts=ts, model=model, in_=in_, out=out, cw=cw, cr=cr)
+    e["message"]["id"] = mid
+    e["requestId"] = rid or "req-" + mid
+    return e
+
+
+@pytest.fixture
+def flat_prices(monkeypatch):
+    """Per-model rates: opus out = $10/token, haiku out = $1/token."""
+    from backend.providers import pricing
+
+    rates = {"claude-opus-4": 10.0, "claude-haiku-4": 1.0}
+    monkeypatch.setattr(
+        pricing,
+        "price_per_token",
+        lambda model: {
+            "in": 0.0,
+            "out": rates.get(model, 0.0),
+            "cache_read": 0.0,
+            "cache_write": 0.0,
+        },
+    )
+
+
+def test_tokens_dedupe_content_block_lines_and_copies(fake_home, flat_prices):
+    workdir = "/work/proj"
+    one = _api("2024-01-01T00:00:01Z", "m1", model="claude-opus-4", in_=10, out=1)
+    final = _api("2024-01-01T00:00:02Z", "m1", model="claude-opus-4", in_=10, out=4)
+    _write_transcript(fake_home, workdir, [one, one, final], fname="c1.jsonl")
+    # A forked conversation copying the same turn into its own file.
+    _write_transcript(
+        fake_home,
+        workdir,
+        [final, _api("2024-01-01T00:00:09Z", "m2", model="claude-opus-4", out=2)],
+        fname="c2.jsonl",
+    )
+    out = _claude_transcript_tokens(workdir, None)
+    assert out["in"] == 10
+    assert out["out"] == 6
+    assert out["cost"] == pytest.approx(60.0)
+
+
+def test_tokens_count_subagents_and_price_each_turn_by_its_model(
+    fake_home, flat_prices
+):
+    """Subagent transcripts belong to their conversation; they often run a
+    cheaper model, so pricing the summed totals with the main model was wrong."""
+    workdir = "/work/proj"
+    proj = _write_transcript(
+        fake_home,
+        workdir,
+        [_api("2024-01-01T00:00:05Z", "m1", model="claude-opus-4", in_=50, out=3)],
+        fname="conv1.jsonl",
+    )
+    sub = proj / "conv1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-x.jsonl").write_text(
+        json.dumps(
+            _api("2024-01-01T00:00:06Z", "m2", model="claude-haiku-4", in_=7, out=20)
+        )
+        + "\n"
+    )
+    out = _claude_transcript_tokens(workdir, None)
+    assert out["out"] == 23 and out["in"] == 57
+    assert out["cost"] == pytest.approx(3 * 10.0 + 20 * 1.0)  # not 23 * 10
+    # The context fill / model are the MAIN conversation's newest turn.
+    assert out["model"] == "claude-opus-4"
+    assert out["ctx"] == 50
+
+
+def test_subagents_of_an_older_conversation_obey_since_ts(fake_home, flat_prices):
+    workdir = "/work/proj"
+    proj = _write_transcript(
+        fake_home,
+        workdir,
+        [_api("2024-01-01T00:00:00Z", "m1", model="claude-opus-4", out=1)],
+        fname="conv1.jsonl",
+    )
+    sub = proj / "conv1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-x.jsonl").write_text(
+        json.dumps(_api("2024-01-01T00:00:01Z", "m2", model="claude-opus-4", out=100))
+        + "\n"
+        + json.dumps(_api("2024-01-01T01:00:00Z", "m3", model="claude-opus-4", out=5))
+        + "\n"
+    )
+    out = _claude_transcript_tokens(workdir, _ts_epoch("2024-01-01T00:30:00Z"))
+    assert out["out"] == 5
+
+
+def _two_windows(fake_home):
+    """Window A starts at 00:00; its copy B at 01:00. A starts a NEW
+    conversation (/clear) at 02:00, while B's runs concurrently."""
+    workdir = "/work/proj"
+    entries = {
+        "a-conv-1": [_api("2024-01-01T00:00:10Z", "a1", out=1)],
+        "a-conv-2": [_api("2024-01-01T02:00:00Z", "a2", out=10)],
+        "b-conv-1": [
+            _api("2024-01-01T01:00:10Z", "b1", out=100),
+            _api("2024-01-01T02:30:00Z", "b2", out=1000),
+        ],
+    }
+    for cid, lines in entries.items():
+        _write_transcript(fake_home, workdir, lines, fname=cid + ".jsonl")
+    return (
+        workdir,
+        _ts_epoch("2024-01-01T00:00:00Z"),
+        _ts_epoch("2024-01-01T01:00:00Z"),
+    )
+
+
+def test_shared_cwd_attribution_follows_each_windows_thread_history(fake_home):
+    workdir, a_start, b_start = _two_windows(fake_home)
+    a_threads = {"a-conv-1", "a-conv-2"}
+    b_threads = {"b-conv-1"}
+    a = _claude_transcript_tokens(
+        workdir, a_start, b_start, True, threads=a_threads, other_threads=b_threads
+    )
+    b = _claude_transcript_tokens(
+        workdir, b_start, None, True, threads=b_threads, other_threads=a_threads
+    )
+    assert a["out"] == 11  # both of A's conversations, incl. the post-copy /clear
+    assert b["out"] == 1100  # only B's own
+
+
+def test_shared_cwd_without_history_falls_back_to_birth_time(fake_home):
+    workdir, a_start, b_start = _two_windows(fake_home)
+    a = _claude_transcript_tokens(workdir, a_start, b_start, True)
+    b = _claude_transcript_tokens(workdir, b_start, None, True)
+    # The documented heuristic: a conversation goes to the window active when
+    # it was born, so A's post-copy /clear lands on B.
+    assert a["out"] == 1
+    assert b["out"] == 1110
+
+
+def test_unrecorded_conversations_still_use_the_heuristic_beside_history(fake_home):
+    """A window whose history only knows its newest conversation (hooks that
+    predate the history file) keeps its older, unrecorded ones by birth time,
+    and never takes a sibling's recorded conversation."""
+    workdir, a_start, b_start = _two_windows(fake_home)
+    a = _claude_transcript_tokens(
+        workdir, a_start, b_start, True, threads={"a-conv-2"}, other_threads=set()
+    )
+    assert a["out"] == 11
+    b = _claude_transcript_tokens(
+        workdir, b_start, None, True, threads=set(), other_threads={"a-conv-2"}
+    )
+    assert b["out"] == 1100
+
+
+def test_lone_session_history_excludes_sibling_threads(fake_home):
+    """Not shared (only session on the cwd) but another id is known to be a
+    sibling's: still excluded; own + unrecorded count from since_ts on."""
+    workdir, a_start, _b = _two_windows(fake_home)
+    out = _claude_transcript_tokens(
+        workdir, a_start, None, False, threads={"a-conv-1"}, other_threads={"b-conv-1"}
+    )
+    assert out["out"] == 11

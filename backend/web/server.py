@@ -2308,6 +2308,9 @@ def usage_windows() -> JSONResponse:
         (plan — lead with percent/reset). ``window`` is ``{anchor, end, cost,
         tokens, budget, percent_used, source, …}`` for the active window, or
         ``null`` when idle/metered. ``default`` names the default provider.
+      * ``year_estimated_before``: ``"YYYY-MM-DD"`` when the year total includes
+        approximate days before that date (also per provider as
+        ``estimated_before``); absent when the year is exact.
     """
     try:
         from backend.providers import usage_history
@@ -2350,6 +2353,13 @@ def usage_windows() -> JSONResponse:
                     for k in keys:
                         combined[k] += pt.get(k, 0) or 0
                 out[period] = combined
+            # The year includes approximate days (an older ledger's figures)
+            # before this date in at least one provider — the UI notes it.
+            ests = sorted(
+                e["estimated_before"] for e in entries if e.get("estimated_before")
+            )
+            if ests:
+                out["year_estimated_before"] = ests[-1]
         except Exception:  # noqa: BLE001 — providers are enrichment only
             pass
         return JSONResponse(out)

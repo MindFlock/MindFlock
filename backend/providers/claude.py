@@ -195,6 +195,11 @@ class ClaudeProvider(BaseProvider):
 
         return usage_history.windows()
 
+    def usage_estimated_before(self) -> Optional[str]:
+        from . import usage_history
+
+        return usage_history.estimated_before()
+
     def usage_panel_visible(self) -> bool:
         # Claude is one of the default CLIs the cost panel always shows.
         return True
@@ -555,8 +560,12 @@ class ClaudeProvider(BaseProvider):
         since_ts: Optional[float],
         until_ts: Optional[float] = None,
         shared_cwd: bool = False,
+        threads=None,
+        other_threads=None,
     ) -> dict:
-        return _claude_transcript_tokens(workdir, since_ts, until_ts, shared_cwd)
+        return _claude_transcript_tokens(
+            workdir, since_ts, until_ts, shared_cwd, threads, other_threads
+        )
 
     def last_turn_snippet(self, session_name: str, workdir: str) -> Optional[str]:
         return _claude_last_turn_snippet(workdir, session_name)
@@ -1087,13 +1096,13 @@ _LAST_PROMPT_TAIL_BYTES = 8 * 1024 * 1024
 _LAST_TURN_CACHE = (
     {}
 )  # workdir -> {"checked": epoch, "sig": (path, mtime, size), "snippet": str|None}
-_LAST_TURN_CACHE_MAX = 512  # bound like _TT_FILE_CACHE — one entry per workdir
+_LAST_TURN_CACHE_MAX = 512  # one entry per workdir
 
 
 def _last_turn_cache_put(workdir: str, entry: dict) -> None:
     """Store a snippet-cache entry, evicting the oldest half when full so a
     long-running server with high session/workdir churn doesn't leak one entry
-    per distinct workdir forever (mirrors _TT_FILE_CACHE's bound)."""
+    per distinct workdir forever."""
     if (
         workdir not in _LAST_TURN_CACHE
         and len(_LAST_TURN_CACHE) >= _LAST_TURN_CACHE_MAX
@@ -1526,200 +1535,164 @@ def _file_in_window(
     return True
 
 
+def _conversation_files(proj: str) -> dict:
+    """A transcript project dir's files grouped by conversation id:
+    ``{conversation_id: {"root": path-or-None, "subs": [paths]}}``.
+
+    ``<proj>/<id>.jsonl`` is the conversation itself; its Agent-tool subagents
+    write ``<proj>/<id>/subagents/**/agent-*.jsonl``, which belong to the same
+    conversation (and session). Never raises."""
+    from . import usage_history
+
+    convs: dict = {}
+    try:
+        entries = list(os.scandir(proj))
+    except OSError:
+        return convs
+    for e in entries:
+        try:
+            if e.is_dir(follow_symlinks=False):
+                subs = list(usage_history.iter_jsonl(e.path))
+                if subs:
+                    convs.setdefault(e.name, {"root": None, "subs": []})["subs"] = subs
+            elif e.name.endswith(".jsonl"):
+                cid = e.name[: -len(".jsonl")]
+                convs.setdefault(cid, {"root": None, "subs": []})["root"] = e.path
+        except OSError:
+            continue
+    return convs
+
+
 def _claude_transcript_tokens(
     workdir: str,
     since_ts: Optional[float],
     until_ts: Optional[float] = None,
     shared_cwd: bool = False,
+    threads=None,
+    other_threads=None,
 ) -> dict:
-    """Sum the four /usage figures from Claude Code's transcripts for ``workdir``.
+    """Sum the four /usage figures (+ their cost) from Claude Code's
+    transcripts for ``workdir``.
 
     Claude Code stores per-session transcripts under
-    ``<config-dir>/projects/<cwd-with-non-alnum->-dashes>/*.jsonl``; each file is
-    ONE conversation and each assistant message carries a ``usage`` block. We
-    scan every ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR``) because
-    wrappers and alternate installs may keep separate config dirs.
+    ``<config-dir>/projects/<cwd-with-non-alnum->-dashes>/<conversation>.jsonl``
+    (Agent-tool subagents under ``<conversation>/subagents/``); each assistant
+    API response carries a ``usage`` block, repeated on every content-block
+    line — turns are deduplicated by ``(message.id, requestId)`` across all the
+    session's files (:func:`usage_history.read_turns`). We scan every
+    ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR``) because wrappers
+    and alternate installs may keep separate config dirs.
 
-    Attribution depends on whether the cwd is shared:
+    Which conversations are this session's (a conversation's subagents always
+    go with it):
 
-    * ``shared_cwd=False`` (the only session on this cwd): sum turns at/after
-      ``since_ts`` across all files — a resumed/``--continue``d conversation
-      whose file predates this session still counts its post-start turns.
-    * ``shared_cwd=True`` (a window and its copies share this cwd): attribute
-      each *whole conversation file* to exactly one session by its first turn's
-      time (see :func:`_file_in_window`) — each copy starts its own file, so this
-      keeps each copy's cost separate instead of every copy summing them all.
+    * ``threads`` — the conversation ids this window recorded
+      (:func:`thread_markers.history`): always its own; turns at/after
+      ``since_ts`` count.
+    * ``other_threads`` — ids recorded by sibling windows on this cwd: never
+      this session's.
+    * any other (unrecorded) conversation falls back to the time heuristic:
+      ``shared_cwd=False`` (the only session on this cwd) sums its turns
+      at/after ``since_ts``; ``shared_cwd=True`` attributes the whole
+      conversation by its first turn's time (:func:`_file_in_window`).
 
+    ``cost`` prices each turn with its OWN model (subagents often run another
+    one); ``ctx``/``model`` come from the newest main-conversation turn.
     Never raises.
     """
-    import os
-
-    zero = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "ctx": 0, "model": ""}
+    zero = {
+        "in": 0,
+        "out": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "ctx": 0,
+        "model": "",
+        "cost": 0.0,
+    }
     if not workdir:
         return dict(zero)
     try:
-        in_total = out_total = cache_read_total = cache_write_total = 0
-        # The most recent turn's full prompt size (real input + both cache legs) is
-        # how full the context window is right now — tracked separately from the
-        # cumulative sums, which re-count that context on every turn.
-        latest_ts = None
-        latest_ctx = 0
-        latest_model = ""
+        from . import pricing, usage_history
+
+        own = set(threads or ())
+        others = set(other_threads or ()) - own
+        counted: dict = {}  # turn key -> (turn, is_main_conversation)
+
+        def _take(path, per_turn_since, is_main):
+            parsed = usage_history.read_turns(path)
+            if parsed is None:
+                return
+            for t in parsed[0]:
+                ts = t[1]
+                if (
+                    per_turn_since is not None
+                    and ts is not None
+                    and ts < per_turn_since
+                ):
+                    continue
+                prev = counted.get(t[0])
+                if usage_history.better_turn(t, prev[0] if prev else None):
+                    counted[t[0]] = (t, is_main)
 
         for proj in _claude_project_dirs(workdir):
-            for fn in os.listdir(proj):
-                if not fn.endswith(".jsonl"):
+            for cid, conv in _conversation_files(proj).items():
+                files = ([conv["root"]] if conv["root"] else []) + conv["subs"]
+                if cid in own:
+                    since = since_ts
+                elif cid in others:
                     continue
-                path = os.path.join(proj, fn)
-                agg = _transcript_file_tokens(path, since_ts, until_ts, shared_cwd)
-                if agg is None:
-                    continue
-                in_total += agg["in"]
-                out_total += agg["out"]
-                cache_write_total += agg["cache_write"]
-                cache_read_total += agg["cache_read"]
-                # Merge each file's newest turn the same way _fold_turn merged
-                # turns within a file: a timestamped turn wins on >=; ts-less
-                # turns only fill in while nothing timestamped has been seen.
-                if agg["latest_ts"] is not None:
-                    if latest_ts is None or agg["latest_ts"] >= latest_ts:
-                        latest_ts, latest_ctx = agg["latest_ts"], agg["latest_ctx"]
-                        latest_model = agg["latest_model"] or latest_model
-                elif latest_ts is None and agg["counted"]:
-                    latest_ctx = agg["latest_ctx"]
-                    latest_model = agg["latest_model"] or latest_model
-        return {
-            "in": in_total,
-            "out": out_total,
-            "cache_read": cache_read_total,
-            "cache_write": cache_write_total,
-            "ctx": latest_ctx,
-            "model": latest_model,
-        }
+                elif shared_cwd:
+                    # Whole conversation -> the one session whose window it
+                    # was born in. All of its turns count (or none).
+                    born = None
+                    for path in [conv["root"]] if conv["root"] else conv["subs"]:
+                        parsed = usage_history.read_turns(path)
+                        if parsed and parsed[1] is not None:
+                            born = parsed[1] if born is None else min(born, parsed[1])
+                    if not _file_in_window(born, since_ts, until_ts):
+                        continue
+                    since = None
+                else:
+                    # Lone session: per-turn since_ts filtering, so a continued
+                    # conversation still counts its post-start turns.
+                    since = since_ts
+                for path in files:
+                    _take(path, since, path == conv["root"])
+
+        out = dict(zero)
+        price_memo: dict = {}
+        latest_ts = None
+        seen_main = any(m for _t, m in counted.values())
+        for t, is_main in counted.values():
+            _key, ts, t_in, t_out, t_cr, t_cw, model = t
+            out["in"] += t_in
+            out["out"] += t_out
+            out["cache_read"] += t_cr
+            out["cache_write"] += t_cw
+            p = price_memo.get(model)
+            if p is None:
+                p = price_memo[model] = pricing.price_per_token(model)
+            out["cost"] += pricing.cost_from_price(
+                {"in": t_in, "out": t_out, "cache_read": t_cr, "cache_write": t_cw}, p
+            )
+            # The newest turn's full prompt (real input + both cache legs) is
+            # how full the context window is right now. Only the main
+            # conversation's turns speak for that (a subagent has its own
+            # context); a timestamped turn wins on >=, ts-less turns only fill
+            # in while nothing timestamped has been seen.
+            if seen_main and not is_main:
+                continue
+            turn_ctx = t_in + t_cr + t_cw
+            if ts is not None:
+                if latest_ts is None or ts >= latest_ts:
+                    latest_ts, out["ctx"] = ts, turn_ctx
+                    out["model"] = model or out["model"]
+            elif latest_ts is None:
+                out["ctx"] = turn_ctx
+                out["model"] = model or out["model"]
+        return out
     except Exception:  # noqa: BLE001
         return dict(zero)
-
-
-# Per-transcript-file aggregate memo: (mtime, size, window) -> folded usage.
-# Transcripts are append-only and multi-MB for long conversations; without
-# this every telemetry refresh re-read and re-JSON-parsed every file in full.
-# Values are a handful of numbers per file, so memory stays flat.
-_TT_FILE_CACHE: dict = {}  # path -> (sig, agg)
-_TT_FILE_CACHE_MAX = 512
-
-
-def _read_transcript_turns(path: str) -> Optional[tuple]:
-    """Parse one transcript ``.jsonl`` into its per-turn usage tuples.
-
-    Returns ``(turns, first_ts)`` where ``turns`` is a list of
-    ``(t_in, t_out, t_cw, t_cr, ts, model)`` for every line carrying a
-    ``usage`` block and ``first_ts`` is the earliest parseable ``timestamp``
-    (the conversation's birth). Returns ``None`` when the file can't be
-    opened; a malformed line is skipped, never raised.
-    """
-    import json
-
-    # One pass over the file, collecting its turns + first-turn time.
-    turns = []  # (t_in, t_out, t_cw, t_cr, ts, model)
-    f_first_ts = None
-    try:
-        with open(path, errors="replace") as f:
-            for line in f:
-                if '"usage"' not in line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                ts = _ts_epoch(obj.get("timestamp"))
-                if ts is not None and (f_first_ts is None or ts < f_first_ts):
-                    f_first_ts = ts
-                msg = obj.get("message") or {}
-                u = msg.get("usage") or obj.get("usage") or {}
-                turns.append(
-                    (
-                        int(u.get("input_tokens", 0) or 0),
-                        int(u.get("output_tokens", 0) or 0),
-                        int(u.get("cache_creation_input_tokens", 0) or 0),
-                        int(u.get("cache_read_input_tokens", 0) or 0),
-                        ts,
-                        msg.get("model") or obj.get("model") or "",
-                    )
-                )
-    except OSError:
-        return None
-    return turns, f_first_ts
-
-
-def _transcript_file_tokens(
-    path: str,
-    since_ts: Optional[float],
-    until_ts: Optional[float],
-    shared_cwd: bool,
-) -> Optional[dict]:
-    """Fold one transcript file's usage into an aggregate dict (or ``None``
-    for an unreadable / out-of-window file), memoized on (mtime, size) so an
-    unchanged file is never re-read. Never raises."""
-    try:
-        st = os.stat(path)
-        sig = (st.st_mtime, st.st_size, since_ts, until_ts, shared_cwd)
-    except OSError:
-        return None
-    hit = _TT_FILE_CACHE.get(path)
-    if hit is not None and hit[0] == sig:
-        return hit[1]
-
-    parsed = _read_transcript_turns(path)
-    if parsed is None:
-        return None
-    turns, f_first_ts = parsed
-
-    agg = {
-        "in": 0,
-        "out": 0,
-        "cache_write": 0,
-        "cache_read": 0,
-        "latest_ts": None,
-        "latest_ctx": 0,
-        "latest_model": "",
-        "counted": False,
-    }
-
-    def _fold(t_in, t_out, t_cw, t_cr, ts, model):
-        agg["in"] += t_in
-        agg["out"] += t_out
-        agg["cache_write"] += t_cw
-        agg["cache_read"] += t_cr
-        agg["counted"] = True
-        turn_ctx = t_in + t_cr + t_cw
-        if ts is not None:
-            if agg["latest_ts"] is None or ts >= agg["latest_ts"]:
-                agg["latest_ts"], agg["latest_ctx"] = ts, turn_ctx
-                agg["latest_model"] = model or agg["latest_model"]
-        elif agg["latest_ts"] is None:
-            agg["latest_ctx"] = turn_ctx
-            agg["latest_model"] = model or agg["latest_model"]
-
-    if shared_cwd:
-        # Whole conversation → the one session whose window it was born in.
-        # All of its turns count (or none).
-        if _file_in_window(f_first_ts, since_ts, until_ts):
-            for t in turns:
-                _fold(*t)
-    else:
-        # Lone session: keep simple since_ts turn filtering so a continued
-        # conversation still counts its post-start turns.
-        for t_in, t_out, t_cw, t_cr, ts, model in turns:
-            if since_ts is not None and ts is not None and ts < since_ts:
-                continue
-            _fold(t_in, t_out, t_cw, t_cr, ts, model)
-
-    if len(_TT_FILE_CACHE) >= _TT_FILE_CACHE_MAX:
-        # Drop the oldest-inserted half — simple, rare, keeps the dict bounded.
-        for k in list(_TT_FILE_CACHE)[: _TT_FILE_CACHE_MAX // 2]:
-            _TT_FILE_CACHE.pop(k, None)
-    _TT_FILE_CACHE[path] = (sig, agg)
-    return agg
 
 
 #: Caps for reading the real ``.claude.json`` (it can be huge: projects map).

@@ -1530,6 +1530,19 @@ def test_usage_windows_has_period_and_provider_keys():
     assert "default" in body
 
 
+def test_usage_windows_flags_an_estimated_year(monkeypatch):
+    """Days kept from a v1 ledger are approximate: the year says so."""
+    from backend.providers import usage_history
+
+    monkeypatch.setattr(usage_history, "estimated_before", lambda: "2026-07-14")
+    body = client.get("/api/usage").json()
+    assert body["year_estimated_before"] == "2026-07-14"
+    claude = [p for p in body["providers"] if p["name"] == "claude"]
+    assert claude and claude[0]["estimated_before"] == "2026-07-14"
+    monkeypatch.setattr(usage_history, "estimated_before", lambda: None)
+    assert "year_estimated_before" not in client.get("/api/usage").json()
+
+
 # --------------------------------------------------------------------------- #
 # pane history                                                                 #
 # --------------------------------------------------------------------------- #

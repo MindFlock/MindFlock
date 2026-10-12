@@ -53,11 +53,16 @@ export interface UsageProviderEntry {
   /** Per-account breakdown (auth profiles): present only when the provider
    * has account profiles configured. `id` "default" = the ambient login. */
   accounts?: Array<{ id: string; label: string; periods?: PeriodTotals | null }>;
+  /** "YYYY-MM-DD": this provider's year includes approximate days before it
+   * (kept from an older ledger whose transcripts are gone). */
+  estimated_before?: string | null;
 }
 
 export interface UsageWindows extends PeriodTotals {
   providers?: UsageProviderEntry[];
   default?: string | null;
+  /** Combined counterpart of UsageProviderEntry.estimated_before. */
+  year_estimated_before?: string | null;
 }
 
 /** Interpret the loosely-typed useUsage() payload as the shape above. */
@@ -91,6 +96,16 @@ export const USAGE_NOTE_PLAN =
   "API-equivalent estimates of what this usage would cost pay-per-token, not " +
   "billed spend. Window % is estimated against your budget in Settings; the " +
   "provider's real server-side meter may differ.";
+
+/** The caveat under the Year figure when part of it is an estimate, or null.
+ * Only the year can reach back to days the older ledger approximated. */
+export function yearEstimateNote(
+  period: string,
+  estimatedBefore: string | null | undefined,
+): string | null {
+  if (period !== "year" || !estimatedBefore) return null;
+  return "Includes estimates before " + estimatedBefore + ".";
+}
 
 // --- Periods --------------------------------------------------------------- //
 

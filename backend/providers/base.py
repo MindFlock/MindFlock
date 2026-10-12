@@ -707,6 +707,12 @@ class BaseProvider:
         on-disk history. Default: no history available (None)."""
         return None
 
+    def usage_estimated_before(self) -> Optional[str]:
+        """``"YYYY-MM-DD"`` when :meth:`usage_periods`' year total includes
+        approximate days before that date (history kept from an older, less
+        exact ledger whose transcripts are gone); ``None`` when it is exact."""
+        return None
+
     def usage_panel_visible(self) -> bool:
         """Whether this provider appears in the sidebar's overall cost/usage
         panel by DEFAULT (tabs + combined totals). Only the bundled default
@@ -748,6 +754,8 @@ class BaseProvider:
         since_ts: Optional[float],
         until_ts: Optional[float] = None,
         shared_cwd: bool = False,
+        threads=None,
+        other_threads=None,
     ) -> dict:
         """Tokens used since ``since_ts``. Default: provider has no telemetry.
 
@@ -759,6 +767,13 @@ class BaseProvider:
         ``shared_cwd`` is False (the only session on the cwd) the provider keeps
         simple ``since_ts`` filtering so a resumed/continued conversation still
         counts. ``None`` = open-ended.
+
+        ``threads`` / ``other_threads`` are the conversation ids this window /
+        its cwd siblings recorded (``thread_markers.history``): a provider that
+        can map ids to its files attributes those exactly and keeps the time
+        heuristic for unrecorded ones. Optional ``cost`` is the provider's own
+        per-turn-priced USD total; without it the web layer prices the sums
+        with ``model``.
 
         ``ctx`` is the newest turn's context-window fill; ``model`` is that turn's
         model id (used to price the raw sums). Providers without telemetry return

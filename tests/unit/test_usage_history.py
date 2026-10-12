@@ -343,7 +343,8 @@ def test_ledger_preexisting_days_are_preserved_on_merge(_isolate, monkeypatch):
 
 
 def test_ledger_scanned_day_overwrites_stale_ledger_value(_isolate):
-    """Days present in the transcripts are authoritative over the ledger."""
+    """A v1 (pre-dedupe) ledger day the transcripts still cover is recomputed
+    from the scan, not kept (see the v2 migration tests below)."""
     home = _isolate
     now = time.time()
     today = time.strftime("%Y-%m-%d", time.localtime(now))
@@ -468,7 +469,8 @@ def test_pruned_day_tail_fill(_isolate, monkeypatch):
 
 
 def test_tail_fill_skips_days_not_older_than_earliest(_isolate):
-    """Ledger days >= earliest scanned day are ignored to avoid double counting."""
+    """v1 ledger days >= the earliest scanned day are dropped by the migration
+    and recomputed — never added on top of the scan."""
     home = _isolate
     now = time.time()
     today = time.strftime("%Y-%m-%d", time.localtime(now))
@@ -693,3 +695,285 @@ def test_current_window_reanchors_after_a_gap(_isolate, monkeypatch):
     assert win["anchor"] == now - 120
     assert win["tokens"] == 50  # 30 + 20 only, the 999 turn is pre-gap
     assert win["cost"] == pytest.approx(5.0)
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate lines: one API response, several transcript lines
+# --------------------------------------------------------------------------- #
+def _api_line(epoch, mid, rid, *, inp=0, out=0, cr=0, cw=0, model="m"):
+    """One transcript line of an API response: Claude Code writes one per
+    content block, each repeating the response's ``message.usage``."""
+    e = _entry(epoch, model=model, inp=inp, out=out, cr=cr, cw=cw)
+    e["message"]["id"] = mid
+    e["requestId"] = rid
+    return e
+
+
+def test_content_block_lines_of_one_response_count_once(_isolate):
+    """thinking/text/tool_use lines share (message.id, requestId): one turn.
+    When the copies differ, the one with the most output (the final block)
+    wins."""
+    home = _isolate
+    now = time.time()
+    _write_transcript(
+        home,
+        "proj",
+        "a.jsonl",
+        [
+            _api_line(now - 30, "msg_1", "req_1", inp=10, out=1, cr=100),
+            _api_line(now - 30, "msg_1", "req_1", inp=10, out=1, cr=100),
+            _api_line(now - 29, "msg_1", "req_1", inp=10, out=7, cr=100),
+            _api_line(now - 20, "msg_2", "req_2", inp=5, out=2),
+        ],
+    )
+    w = uh.windows()
+    assert w["day"]["in"] == 15
+    assert w["day"]["out"] == 9  # 7 (final block of msg_1) + 2
+    assert w["day"]["cache_read"] == 100
+    assert w["day"]["cost"] == pytest.approx(15 + 9 * 10 + 100 * 0.1)
+
+
+def test_turns_copied_into_a_resumed_conversation_count_once(_isolate):
+    """A resumed/forked conversation copies earlier lines into a NEW file;
+    the copies keep their (message.id, requestId) and must not double up."""
+    home = _isolate
+    now = time.time()
+    orig = [_api_line(now - 300, "msg_1", "req_1", inp=10, out=4)]
+    _write_transcript(home, "proj", "orig.jsonl", orig)
+    _write_transcript(
+        home,
+        "proj",
+        "fork.jsonl",
+        orig + [_api_line(now - 10, "msg_2", "req_2", inp=3, out=1)],
+    )
+    w = uh.windows()
+    assert w["day"]["in"] == 13
+    assert w["day"]["out"] == 5
+
+
+def test_identical_lines_without_message_id_fall_back_to_the_raw_line(_isolate):
+    home = _isolate
+    now = time.time()
+    line = _entry(now - 10, inp=4)
+    _write_transcript(home, "proj", "a.jsonl", [line, line, _entry(now - 5, inp=1)])
+    assert uh.windows()["day"]["in"] == 5
+
+
+def test_subagent_transcripts_are_counted(_isolate):
+    """Agent-tool subagents write <proj>/<conversation>/subagents/**.jsonl —
+    the old scan only listed <proj>/*.jsonl and missed them all."""
+    home = _isolate
+    now = time.time()
+    _write_transcript(
+        home, "proj", "conv1.jsonl", [_api_line(now - 50, "m1", "r1", inp=1)]
+    )
+    _write_transcript(
+        home,
+        "proj/conv1/subagents",
+        "agent-a.jsonl",
+        [_api_line(now - 40, "m2", "r2", inp=20)],
+    )
+    _write_transcript(
+        home,
+        "proj/conv1/subagents/workflows/wf_1",
+        "agent-b.jsonl",
+        [_api_line(now - 30, "m3", "r3", inp=300)],
+    )
+    assert uh.windows()["day"]["in"] == 321
+
+
+def test_unchanged_files_are_not_reparsed(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    _write_transcript(home, "proj", "a.jsonl", [_api_line(now - 10, "m1", "r1", inp=2)])
+    calls = []
+    real = uh._parse_turns
+    monkeypatch.setattr(uh, "_parse_turns", lambda p: calls.append(p) or real(p))
+    assert uh.windows()["day"]["in"] == 2
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 2
+    assert len(calls) == 1  # second scan served from the (mtime, size) memo
+
+
+# --------------------------------------------------------------------------- #
+# Ledger v2: a day never shrinks because transcripts were pruned
+# --------------------------------------------------------------------------- #
+def _day(epoch):
+    return time.strftime("%Y-%m-%d", time.localtime(epoch))
+
+
+def _midday(days_ago):
+    """Noon, ``days_ago`` local days back — safely inside one calendar day."""
+    t = time.localtime(time.time() - days_ago * 86400)
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 12, 0, 0, 0, 0, -1))
+
+
+def test_partially_pruned_day_keeps_its_ledger_total(_isolate, monkeypatch):
+    home = _isolate
+    when = _midday(10)
+    a = _write_transcript(home, "proj", "a.jsonl", [_api_line(when, "m1", "r1", inp=5)])
+    b = _write_transcript(
+        home, "proj", "b.jsonl", [_api_line(when + 60, "m2", "r2", inp=7)]
+    )
+    assert uh.windows()["month"]["in"] == 12
+    b.unlink()  # Claude prunes one of the day's conversations
+    _reset_cache(monkeypatch)
+    w = uh.windows()
+    assert w["month"]["in"] == 12  # was 5: the ledger day was overwritten downward
+    assert w["month"]["cost"] == pytest.approx(12.0)
+    with open(uh._ledger_path()) as f:
+        assert json.load(f)["days"][_day(when)]["in"] == 12
+    a.unlink()
+    _reset_cache(monkeypatch)
+    assert uh.windows()["month"]["in"] == 12  # fully pruned: ledger only
+
+
+def test_pruned_day_newer_than_a_surviving_old_file_still_counts(_isolate, monkeypatch):
+    """One surviving OLD transcript used to block back-fill for every newer
+    day (back-fill only looked before the earliest scanned day)."""
+    home = _isolate
+    _write_transcript(
+        home, "proj", "old.jsonl", [_api_line(_midday(60), "m0", "r0", inp=1)]
+    )
+    mid = _write_transcript(
+        home, "proj", "mid.jsonl", [_api_line(_midday(10), "m1", "r1", inp=40)]
+    )
+    assert uh.windows()["year"]["in"] == 41
+    mid.unlink()
+    _reset_cache(monkeypatch)
+    w = uh.windows()
+    assert w["year"]["in"] == 41
+    assert w["month"]["in"] == 40
+    assert w["week"]["in"] == 0
+
+
+def test_ledger_day_grows_with_new_turns(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(now - 100, "m1", "r1", inp=5)]
+    )
+    uh.windows()
+    _write_transcript(
+        home,
+        "proj",
+        "a.jsonl",
+        [
+            _api_line(now - 100, "m1", "r1", inp=5),
+            _api_line(now - 50, "m2", "r2", inp=6),
+        ],
+    )
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 11  # no ledger delta on top of a full scan
+    with open(uh._ledger_path()) as f:
+        assert sum(t["in"] for t in json.load(f)["days"].values()) == 11
+
+
+def test_account_split_still_sums_to_total_after_pruning(_isolate, monkeypatch):
+    home = _isolate
+    when = _midday(3)
+    work = home / "work-root"
+    monkeypatch.setattr(
+        uh, "_roots", lambda: {str(home / ".claude"): "default", str(work): "work"}
+    )
+    _write_transcript(home, "proj", "a.jsonl", [_api_line(when, "m1", "r1", inp=5)])
+    wp = work / "projects" / "proj"
+    wp.mkdir(parents=True)
+    (wp / "b.jsonl").write_text(json.dumps(_api_line(when, "m2", "r2", inp=9)) + "\n")
+    uh.windows()
+    (wp / "b.jsonl").unlink()
+    _reset_cache(monkeypatch)
+    w = uh.windows()
+    per = uh.windows_by_account()
+    assert w["week"]["in"] == 14
+    assert per["work"]["week"]["in"] == 9
+    assert per["default"]["week"]["in"] + per["work"]["week"]["in"] == w["week"]["in"]
+
+
+# --------------------------------------------------------------------------- #
+# Ledger v1 -> v2 migration
+# --------------------------------------------------------------------------- #
+def _seed_ledger(doc):
+    os.makedirs(os.path.dirname(uh._ledger_path()), exist_ok=True)
+    with open(uh._ledger_path(), "w") as f:
+        json.dump(doc, f)
+
+
+def _day_tot(n, cost):
+    return {"in": n, "out": 0, "cache_read": 0, "cache_write": 0, "cost": cost}
+
+
+def test_v1_ledger_migration(_isolate, monkeypatch):
+    """v1 days the scan still covers are dropped and recomputed (they were
+    inflated by duplicates / missing subagents); older v1 days are kept as
+    estimates; the v1 file is backed up once."""
+    home = _isolate
+    scan_day = _midday(5)
+    old_day = _day(_midday(100))
+    covered_old = _day(_midday(40))
+    _write_transcript(
+        home, "proj", "old.jsonl", [_api_line(_midday(40), "m0", "r0", inp=1)]
+    )
+    _write_transcript(home, "proj", "a.jsonl", [_api_line(scan_day, "m1", "r1", inp=3)])
+    v1 = {
+        "days": {
+            old_day: _day_tot(500, 50.0),
+            covered_old: _day_tot(999, 99.0),
+            _day(scan_day): _day_tot(888, 88.0),
+        },
+        "accounts": {
+            "default": {
+                old_day: _day_tot(500, 50.0),
+                _day(scan_day): _day_tot(888, 88.0),
+            }
+        },
+    }
+    _seed_ledger(v1)
+
+    w = uh.windows()
+    assert w["month"]["in"] == 3  # the inflated v1 value is gone, not maxed in
+    assert w["year"]["in"] == 3 + 1 + 500
+    assert uh.windows_by_account()["default"]["year"]["in"] == 504
+
+    with open(uh._ledger_path()) as f:
+        doc = json.load(f)
+    assert doc["version"] == 2
+    assert doc["approx_days"] == [old_day]
+    assert doc["days"][covered_old]["in"] == 1
+    assert doc["days"][_day(scan_day)]["in"] == 3
+    assert doc["accounts"]["default"][old_day]["in"] == 500
+    backup = os.path.join(os.path.dirname(uh._ledger_path()), "usage-history.v1.json")
+    with open(backup) as f:
+        assert json.load(f) == v1
+    expected = time.strftime("%Y-%m-%d", time.localtime(_midday(99)))
+    assert uh.estimated_before() == expected
+
+    # A second refresh neither re-migrates nor touches the backup.
+    with open(backup, "w") as f:
+        f.write("sentinel")
+    _reset_cache(monkeypatch)
+    assert uh.windows()["year"]["in"] == 504
+    with open(backup) as f:
+        assert f.read() == "sentinel"
+
+
+def test_v1_ledger_left_alone_when_the_scan_is_empty(_isolate):
+    """An empty scan can't say which v1 days are recomputable."""
+    (_isolate / ".claude").mkdir()
+    v1 = {"days": {_day(_midday(2)): _day_tot(7, 1.0)}}
+    _seed_ledger(v1)
+    assert uh.windows()["week"]["in"] == 7
+    with open(uh._ledger_path()) as f:
+        assert json.load(f) == v1
+
+
+def test_no_estimate_note_without_v1_days(_isolate):
+    home = _isolate
+    _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(time.time() - 5, "m", "r", inp=1)]
+    )
+    uh.windows()
+    assert uh.estimated_before() is None
+    with open(uh._ledger_path()) as f:
+        doc = json.load(f)
+    assert doc["version"] == 2 and doc["approx_days"] == []

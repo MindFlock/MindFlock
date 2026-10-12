@@ -219,6 +219,12 @@ def _provider_usage_entry(p) -> dict:
     except Exception:  # noqa: BLE001 — history is enrichment only
         entry["periods"] = None
     try:
+        est = p.usage_estimated_before()
+        if est:
+            entry["estimated_before"] = est
+    except Exception:  # noqa: BLE001 — the caveat is enrichment only
+        pass
+    try:
         accounts = _account_usage_entries(p)
         if accounts:
             entry["accounts"] = accounts

@@ -16,6 +16,7 @@ import {
   USAGE_NOTE_PLAN,
   USAGE_PERIODS,
   USAGE_WINDOW_NOTE,
+  yearEstimateNote,
   ZERO_AGG,
   asUsageWindows,
   isPlanMode,
@@ -167,6 +168,9 @@ export function OverallUsage() {
 
   // Whether ANY provider in play is on a subscription plan (combined caveat).
   const plan = isPlanMode(usage);
+  // Part of the year can be an estimate (days an older ledger approximated).
+  const activeYearNote = yearEstimateNote(period, active?.estimated_before);
+  const combinedYearNote = yearEstimateNote(period, usage?.year_estimated_before);
 
   return (
     <>
@@ -257,6 +261,7 @@ export function OverallUsage() {
                   active.mode === "windowed",
                 )}
               />
+              {activeYearNote && <UsagePopNote text={activeYearNote} />}
               {/* Per-account split (auth profiles). Session totals aren't
                   attributable per account, so the table shows only for the
                   rolling periods. */}
@@ -303,6 +308,7 @@ export function OverallUsage() {
                 <UsagePopTable rows={provs.map(providerSummaryRow)} />
               ) : null}
               <UsagePopTable rows={periodRows(agg, usage, period, plan)} />
+              {combinedYearNote && <UsagePopNote text={combinedYearNote} />}
               <UsagePopNote text={period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period]} />
               {/* The combined dollars span every provider's sessions; note the
                   plan caveat whenever any provider is on a subscription plan. */}
