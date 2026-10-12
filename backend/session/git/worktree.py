@@ -108,21 +108,9 @@ class GitWorktree(
         """Return the path to the repository."""
         return self.repoPath
 
-    def GetRepoName(self) -> str:
-        """Return the repository name (last path element of repoPath)."""
-        return os.path.basename(self.repoPath)
-
     def GetBaseCommitSHA(self) -> str:
         """Return the base commit SHA for the worktree."""
         return self.baseCommitSHA
-
-    # snake_case aliases
-    is_existing_branch = IsExistingBranch
-    get_worktree_path = GetWorktreePath
-    get_branch_name = GetBranchName
-    get_repo_path = GetRepoPath
-    get_repo_name = GetRepoName
-    get_base_commit_sha = GetBaseCommitSHA
 
 
 def new_git_worktree_from_storage(

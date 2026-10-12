@@ -34,7 +34,6 @@ from backend.session.git.remote_url import (
     to_ssh,
 )
 from backend.session.git.util import (
-    IsGitRepo,
     check_gh_cli,
     checkGHCLI,
     find_git_repo_root,
@@ -59,10 +58,8 @@ from backend.session.git.worktree import (
 )
 from backend.session.git.worktree_branch import GitWorktreeBranchMixin
 from backend.session.git.worktree_git import (
-    FetchBranches,
     GitWorktreeGitMixin,
     MaxBranchSearchResults,
-    SearchBranches,
     fetch_branches,
     search_branches,
 )
@@ -79,7 +76,6 @@ __all__ = [
     "check_gh_cli",
     "checkGHCLI",
     "gh_available",
-    "IsGitRepo",
     "is_git_repo",
     "find_git_repo_root",
     "findGitRepoRoot",
@@ -112,9 +108,7 @@ __all__ = [
     "resolveWorktreePaths",
     # worktree_git.go
     "MaxBranchSearchResults",
-    "FetchBranches",
     "fetch_branches",
-    "SearchBranches",
     "search_branches",
     "GitWorktreeGitMixin",
     # worktree_ops.go

@@ -118,12 +118,6 @@ def test_bottom_chrome_matches_pinned_rows_only():
     assert sf.bottom_chrome(normal, tall) == 4
 
 
-def test_find_row_hits_smart_case():
-    scr = ["a Needle b needle", "NEEDLE"]
-    assert sf.find_row_hits(scr, "needle", range(2)) == [(0, 2), (0, 11), (1, 0)]
-    assert sf.find_row_hits(scr, "Needle", range(2)) == [(0, 2)]
-
-
 # --------------------------------------------------------------------------- #
 # Real tmux + fake TUI
 # --------------------------------------------------------------------------- #

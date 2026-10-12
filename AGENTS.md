@@ -37,9 +37,10 @@ REST API with a token, then to a browser URL).
 
 ## Conventions
 
-- Engine code mirrors its Go ancestor: PascalCase methods with snake_case
-  aliases, error-return executors, byte-exact JSON. Keep new engine code
-  consistent with the surrounding style.
+- Engine code mirrors its Go ancestor: PascalCase methods, error-return
+  executors, byte-exact JSON. A snake_case (or Go-cased) alias exists only
+  where a caller uses it: don't add one speculatively, and drop it with its
+  last caller. Keep new engine code consistent with the surrounding style.
 - Providers own CLI-specific behavior — never hardcode launch flags or prompt
   patterns in the engine or web server.
 - `tests/unit/test_launch_parity.py` pins launcher scripts byte-for-byte

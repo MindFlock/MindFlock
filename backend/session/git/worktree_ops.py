@@ -414,12 +414,6 @@ class GitWorktreeOpsMixin:
         except Exception as err:  # noqa: BLE001
             raise RuntimeError("failed to prune worktrees: {}".format(err)) from err
 
-    # snake_case aliases
-    setup = Setup
-    cleanup = Cleanup
-    remove = Remove
-    prune = Prune
-
 
 # ---------------------------------------------------------------------------
 # CleanupWorktrees (free function)

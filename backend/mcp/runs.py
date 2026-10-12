@@ -28,7 +28,7 @@ it started itself (or one its user started), never another agent's.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from backend import client
 from backend.mcp.policy import Flock
@@ -606,9 +606,3 @@ class RunTools:
                 "(git merge --no-ff <branch>), commit, and report again"
             )
         return out
-
-
-def run_of(resp: Optional[dict]) -> Optional[dict]:
-    """The ``run`` block of a response, or None."""
-    run = (resp or {}).get("run")
-    return run if isinstance(run, dict) else None

@@ -19,7 +19,7 @@ Python mirror:
 - :func:`to_string` -> ``ToString``.
 - :class:`MockCmdExec` -> the test double from ``testutils.go``.
 - :class:`ExitError` -> Go's ``*exec.ExitError`` (exposes :meth:`exit_code`),
-  so callers such as ``tmux.CleanupSessions`` can branch on exit code 1.
+  so callers such as ``tmux.cleanup_sessions`` can branch on exit code 1.
 
 Error convention (matches Go's ``error`` return value): methods *return* an
 error object (an ``Exception`` instance) rather than raising it. Success is
@@ -73,7 +73,7 @@ class ExitError(Exception):
 
     Carries the process exit code so callers can replicate Go's
     ``if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1``
-    check (used by ``tmux.CleanupSessions``).
+    check (used by ``tmux.cleanup_sessions``).
     """
 
     def __init__(self, code: int, stderr: bytes = b"", cmd_str: str = ""):

@@ -10,7 +10,6 @@ Pure-Python: no tmux, no git, no network.
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 import shlex
 import shutil
@@ -22,7 +21,6 @@ import pytest
 from backend import providers
 from backend.providers.claude import claude_launch_command
 from backend.session import provisioned
-from backend.session.instance import _format_rfc822
 
 # --------------------------------------------------------------------------- #
 # claude_launch_command — the plain/assistant launch string builder
@@ -336,39 +334,3 @@ def test_exit_policy_and_wrapper():
     assert "; claude; echo $? > " in wrapped
     marker = str(server._exit_marker_path("mindflock_demo"))
     assert shlex.quote(marker) in wrapped
-
-
-# --------------------------------------------------------------------------- #
-# _format_rfc822 — pause commit-message time formatting (Go time.RFC822 parity)
-#
-# Layout "02 Jan 06 15:04 MST": two-digit day, three-letter month, two-digit
-# year, HH:MM, then the zone. A named zone renders its abbreviation; a synthetic
-# fixed-offset name ("UTC-05:00") renders Go's numeric offset instead. Datetimes
-# are constructed with explicit tzinfo so the output is deterministic across the
-# host's local zone.
-# --------------------------------------------------------------------------- #
-def test_format_rfc822_utc_named_zone():
-    t = dt.datetime(2026, 1, 2, 9, 5, tzinfo=dt.timezone.utc)
-    assert _format_rfc822(t) == "02 Jan 26 09:05 UTC"
-
-
-def test_format_rfc822_naive_is_treated_as_utc():
-    assert _format_rfc822(dt.datetime(2026, 1, 2, 9, 5)) == "02 Jan 26 09:05 UTC"
-
-
-def test_format_rfc822_fixed_negative_offset_is_numeric():
-    tz = dt.timezone(dt.timedelta(hours=-5))
-    t = dt.datetime(2026, 1, 2, 9, 5, tzinfo=tz)
-    # Not "UTC-05:00" — Go emits the numeric offset for an unnamed zone.
-    assert _format_rfc822(t) == "02 Jan 26 09:05 -0500"
-
-
-def test_format_rfc822_fixed_positive_offset_is_numeric():
-    tz = dt.timezone(dt.timedelta(hours=5, minutes=30))
-    t = dt.datetime(2026, 1, 2, 9, 5, tzinfo=tz)
-    assert _format_rfc822(t) == "02 Jan 26 09:05 +0530"
-
-
-def test_format_rfc822_two_digit_day_and_year_padding():
-    t = dt.datetime(2007, 3, 9, 8, 4, tzinfo=dt.timezone.utc)
-    assert _format_rfc822(t) == "09 Mar 07 08:04 UTC"

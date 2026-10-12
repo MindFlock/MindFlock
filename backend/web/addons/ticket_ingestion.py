@@ -24,6 +24,7 @@ from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import log
+from backend.config import home_guard
 from backend.session import provisioned as provisioning
 
 from backend.web.core import pending as _pending
@@ -475,6 +476,13 @@ class TicketIngestionController:
 
     def start(self) -> bool:
         if self.is_running():
+            return False
+        # Under pytest, never spawn into a real checkout: the child only dies
+        # on this same guard and leaves its EXIT_RECORD in the checkout (a
+        # settings save in any test fires the background reconcile).
+        try:
+            home_guard.guard_ledger_dir(str(self._repo_root))
+        except home_guard.RealHomeStoreError:
             return False
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         # A fresh start owes the status a clean slate: the previous child's

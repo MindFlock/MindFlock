@@ -5,7 +5,7 @@ package, e.g.::
 
     from backend.session import tmux
     s = tmux.NewTmuxSession("my session", "claude")
-    tmux.CleanupSessions(cmd.make_executor())
+    tmux.cleanup_sessions(cmd.make_executor())
 
 Modules:
 - :mod:`.pty`      — ``PtyFactory`` / ``Pty`` / ``MakePtyFactory`` + PTY sizing.
@@ -21,13 +21,10 @@ from .pty import (
     Pty,
     PtyFactory,
     PtyFile,
-    Setsize,
     Winsize,
-    make_pty_factory,
     set_size,
 )
 from .tmux import (
-    CleanupSessions,
     NewTmuxSession,
     NewTmuxSessionWithDeps,
     ProgramAider,
@@ -53,16 +50,13 @@ __all__ = [
     "to_mindflock_tmux_name",
     # Cleanup.
     "cleanup_sessions",
-    "CleanupSessions",
     # PTY factory + sizing.
     "PtyFactory",
     "Pty",
     "PtyFile",
     "MakePtyFactory",
-    "make_pty_factory",
     "Winsize",
     "set_size",
-    "Setsize",
     # Window-size monitor.
     "monitor_window_size",
 ]

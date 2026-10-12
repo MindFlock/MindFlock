@@ -1407,8 +1407,6 @@ class ProvisionedWorktree(GitWorktree):
                 self.worktreePath,
             )
 
-    setup = Setup
-
 
 class ProvisionedCloneWorktree(GitWorktree):
     """Clone-strategy provisioned workspace: a full standalone ``git clone`` per
@@ -1524,12 +1522,6 @@ class ProvisionedCloneWorktree(GitWorktree):
         # Signals Instance.Pause not to rmtree this directory (even in the
         # orphan fast-path): the branch + committed work live in this clone.
         return True
-
-    setup = Setup
-    remove = Remove
-    prune = Prune
-    is_branch_checked_out = IsBranchCheckedOut
-    cleanup = Cleanup
 
 
 def build_provisioned_worktree(

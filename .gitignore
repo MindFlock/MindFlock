@@ -7,6 +7,8 @@ logs/
 .mindflock-pipeline.lock
 # runtime/ephemeral pipeline activity file (ticket/pr/issue busy state) — not config
 .mindflock-pipeline-activity.json
+# why the last pipeline exited (config error / crash), read by the server
+.mindflock-pipeline-exit.json
 # per-repo scratch files written by the guided commit flow
 .mindflock_*
 # local pre-commit hook workdir

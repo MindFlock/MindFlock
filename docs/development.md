@@ -379,9 +379,10 @@ cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
 ## Conventions
 
 - **Go parity is intentional.** PascalCase methods (`Start`, `Pause`,
-  `Kill`) with snake_case aliases, error-return executors, and byte-exact JSON
-  all mirror the original Go engine. Keep new engine code consistent with the
-  surrounding style.
+  `Kill`), error-return executors, and byte-exact JSON all mirror the original
+  Go engine. A snake_case (or Go-cased) alias exists only where a caller uses
+  it: don't add one speculatively, and drop it with its last caller. Keep new
+  engine code consistent with the surrounding style.
 - **Providers own CLI-specific behavior.** Don't hardcode launch flags or prompt
   strings in the engine or web server — extend a provider (or add a TOML config).
 - **Secrets stay out of git**: `config.toml`, `state.json`, `logs/`,
