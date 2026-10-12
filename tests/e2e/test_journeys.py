@@ -110,8 +110,8 @@ def test_new_session(mf_server, page, open_app):
 
     # The dialog opens on its "describe it" page; the form is one click away.
     skip = dialog.locator("#new-describe-skip")
-    if skip.count():
-        skip.click()
+    expect(skip).to_be_visible(timeout=10_000)
+    skip.click()
     name = dialog.locator("#new-title")
     expect(name).to_be_visible(timeout=10_000)
     name.fill(title)

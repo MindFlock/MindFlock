@@ -1,5 +1,5 @@
-/** The New dialog's fast path, its secondary describe door, and the Base
- * branch picker — the pure pieces NewSessionDialog.tsx exports, plus the
+/** The New dialog's two pages (the v0.7 landing card, then the form), the
+ * form's Name → Enter fast path, and the Base branch picker — the pure pieces NewSessionDialog.tsx exports, plus the
  * dialog's own source where a behaviour is only visible there (the vitest
  * environment is node; the dialog is read as text, the way
  * newSession.test.ts pins the rest of it). */
@@ -43,17 +43,23 @@ function memKV(init: Record<string, string> = {}) {
 }
 
 describe("fast path — Name → Enter creates, no model turn", () => {
-  it("opens on the form: page 2 is the initial page and every opening lands there", () => {
-    expect(SRC).toContain("useState(2)");
-    expect(SRC).toContain("openedPage.current = prefill ? 1 : 2;");
-    // The opening's caret goes to the describe box at the top of the form
-    // (the owner: "have the auto generate session as the first option instead
-    // of forcing me to click into it") — Name only after a failed create,
-    // whose reopen is about fixing the form.
+  it("opens on page 1, the sentence card, every time; a failed create reopens on the form at Name", () => {
+    // v0.7's flow, restored on the owner's word ("I like how it used to look
+    // in v0.7"): the landing card first, the form one click behind it.
+    expect(DIALOG).toContain("const [page, setPage] = useState(1);");
+    expect(DIALOG).toContain("const openedPage = useRef(1);");
+    const reset = DIALOG.slice(DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();"), DIALOG.indexOf("setNewFolderOk(false);"));
+    expect(reset).toContain("openedPage.current = 1;");
+    expect(reset).toContain("setPage(1);");
+    expect(DIALOG).not.toContain("useState(2)");
+    // The caret goes to the sentence box; Name only after a failed create,
+    // whose reopen is about fixing the form failCreate put back on screen.
     expect(SRC).toContain("const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;");
     const failed = DIALOG.slice(DIALOG.indexOf("if (failedReopen.current) {"), DIALOG.indexOf("setTab(\"session\");"));
+    expect(failed).toContain("openedPage.current = 2;");
     expect(failed).toContain('openedFocus.current = "title";');
     expect(failed).toContain('openedFocus.current = "describe";');
+    expect(SUBMIT).toContain("setPage(2);");
   });
 
   it("Enter in Name is the form's submit, never a describe call", () => {
@@ -98,38 +104,66 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   });
 });
 
-describe("describe — first on the form, open by default", () => {
-  it("starts open on every opening: no click before typing", () => {
-    // Was useState(false) + a reset to false behind "Describe it instead…";
-    // the owner asked for the describe box to be the first option, open.
-    expect(DIALOG).toContain("const [describeOpen, setDescribeOpen] = useState(true);");
-    const reset = DIALOG.slice(DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();"), DIALOG.indexOf("setBaseBranch(\"\");"));
-    expect(reset).toContain("setDescribeOpen(true);");
-    expect(DIALOG).not.toContain("setDescribeOpen(false);");
-    // It is the first section of the form.
-    expect(DIALOG.indexOf("<DescribeSection page={2}")).toBeLessThan(DIALOG.indexOf("<TemplatesStrip"));
+describe("page 1 — the sentence card, as in v0.7", () => {
+  it("draws the box, its explanation and examples, and nothing of the form", () => {
+    expect(DESCRIBE).toContain('"What do you want to work on?"');
+    expect(DESCRIBE).toContain('placeholder="e.g. fix the login bug in acme-api"');
+    expect(DESCRIBE).toContain("Your coding CLI reads this and works out which folder to use");
+    expect(DESCRIBE).toContain("<b>Nothing is created until you pick one of the buttons below.</b>");
+    expect(DESCRIBE).toContain("Also understood:");
+    // The form's own sections are page 2's alone — the box is not on the form.
+    const p1 = DIALOG.slice(DIALOG.indexOf("{page === 1 ? ("), DIALOG.indexOf("<TemplatesStrip"));
+    expect(p1).toContain("<DescribeSection {...describeProps} />");
+    expect(DIALOG.split("<DescribeSection").length - 1).toBe(1);
+    // The collapsed "Describe it instead…" door is gone with the form's box.
+    expect(SRC).not.toContain("describeOpen");
+    expect(SRC).not.toContain('id="new-describe-open"');
+    expect(SRC).not.toContain("Describe it instead…");
   });
 
-  it("can still be hidden to a row that reopens it; its Enter runs the model turn with a visible thinking state and a Cancel", () => {
-    expect(SRC).toContain('id="new-describe-open"');
-    expect(SRC).toContain("Describe it instead…");
-    // The form's describe fold is the last thing DescribeSection.tsx draws.
-    const row = DESCRIBE.slice(DESCRIBE.indexOf('id="new-describe-open"'));
-    expect(row).toContain('void runDescribe("fill")');
-    expect(row).toContain("Thinking…");
-    expect(row).toContain('id="new-describe-cancel"');
-    expect(row).toContain("onClick={cancelDescribe}");
+  it("has v0.7's three buttons in increasing order of commitment", () => {
+    const skip = FOOTER.indexOf('id="new-describe-skip"');
+    const go = FOOTER.indexOf('id="new-describe-go"');
+    const start = FOOTER.indexOf('id="new-describe-start"');
+    expect(skip).toBeGreaterThan(-1);
+    expect(skip).toBeLessThan(go);
+    expect(go).toBeLessThan(start);
+    // Set it up myself → the form, empty, no model turn.
+    const skipBtn = FOOTER.slice(skip, go);
+    expect(skipBtn).toContain('className="nf-quiet"');
+    expect(skipBtn).toContain("onClick={() => setPage(2)}");
+    expect(skipBtn).toContain("Set it up myself instead");
+    // Review details first ↵ → the model fills the form in; ↵ says Enter does it.
+    const goBtn = FOOTER.slice(go, start);
+    expect(goBtn).toContain('onClick={() => void runDescribe("fill")}');
+    expect(goBtn).toContain("Review details first");
+    expect(goBtn).toContain("↵");
+    // Create session (startLabel(1)) → read and create, without the form.
+    expect(FOOTER.slice(start)).toContain("onClick={runMode ? () => void startRun() : startNow}");
   });
 
-  it("keeps the parsing flow: a landed plan is applied by applyPlan and holds Create for a breath", () => {
+  it("Enter in the box is Review details first; Shift+Enter (and a list's Enter) a new line", () => {
+    const key = DESCRIBE.slice(DESCRIBE.indexOf("onKeyDown={(e) => {"), DESCRIBE.indexOf("{describing && ("));
+    expect(key).toContain('enterAction({ field: "describe", shift: e.shiftKey, runMode }) === "newline"');
+    expect(key).toContain('void runDescribe("fill")');
+    expect(key).toContain("e.preventDefault();");
+  });
+
+  it("the plan lands on page 2 for review, and Create waits for a breath", () => {
     const run = DESCRIBE.slice(DESCRIBE.indexOf("const runDescribe = async"), DESCRIBE.indexOf("return { applyPlan"));
     expect(run).toContain("applyPlan(a)");
+    expect(run).toContain("setPage(2);");
     expect(run).toContain("submitArmAt.current = Date.now() + SUBMIT_ARM_MS");
-    // the old escape hatch is gone with page 1: the form is already there
-    expect(SRC).not.toContain("Set it up myself instead.");
+    // A failed read names the way out page 1 offers.
+    expect(run).toContain('" — use Set it up myself instead."');
   });
 
-  it("Create is held while the model is reading, so a stray Enter cannot create from half-written fields", () => {
+  it("page 2 has ← Back to the sentence, and Create is held while the model is reading", () => {
+    const form = FOOTER.slice(FOOTER.indexOf(") : ("));
+    expect(form).toContain('id="new-back"');
+    expect(form).toContain("onClick={() => setPage(1)}");
+    // Back for every opening, not only a batch.
+    expect(form).not.toContain("{batch && (");
     expect(SRC).toContain("disabled={draft.starting || describing}");
   });
 });

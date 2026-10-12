@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The New dialog looks and works as it did in v0.7 again.** It opens on the
+  compact *What do you want to work on?* card with **Set it up myself
+  instead**, **Review details first ↵** (what Enter does) and **Create
+  session**; the full form is page 2, with **← Back** to the sentence and no
+  describe box of its own. The form keeps Templates, last-used pre-fill
+  (Name → Enter creates), Runs on, Fast-track and the folds. Page 1 and the
+  Ticket tab share one top edge at their natural heights; the form is
+  centred.
+
 ## [0.8.1] - 2026-10-11
 
 ### Added
