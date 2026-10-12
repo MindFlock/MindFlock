@@ -92,7 +92,7 @@ needs_input: read_output(view="screen"), then answer_prompt or ask your user.
 
 TEAM RUN ("3 at a time, PR each"): start_team_run; MindFlock owns and ships them; wait_for_run, get_run, list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
 
-Also: get_session, wait_for_message, set_parent. Read and message any session; steer, ship and kill only your descendants (ship_session also yourself)."""
+Also: get_session, wait_for_message, set_parent. Read and message any session; steer, ship, close/delete only your descendants (ship_session also yourself)."""
 
 _FOOTER = """
 
@@ -245,9 +245,10 @@ _D_ANSWER = (
     "approve, ask your user."
 )
 _D_KILL = (
-    'Stop a session you manage. mode "close" (default): stops its agent and '
-    "keeps the worktree and branch; the user can reopen it from Recently "
-    'closed. mode "delete": stops it and REMOVES its worktree and branch. '
+    'Close or delete a session you manage. mode "close" (default): stops its '
+    "agent and keeps the worktree and branch; the user can reopen it from "
+    'Recently closed. mode "delete": stops it and REMOVES its worktree and '
+    "branch. "
     "delete is only for sessions an agent spawned, never in-place ones, and is "
     "refused while the worktree has uncommitted changes or its branch has "
     "commits that are not in your HEAD (the error lists unmerged_commits) "
@@ -2284,7 +2285,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "kill_session",
-            "Stop a session",
+            "Close or delete a session",
             _D_KILL,
             _S_KILL,
             box.kill_session,

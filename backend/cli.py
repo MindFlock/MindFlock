@@ -17,8 +17,11 @@ Installed via ``[project.scripts]``::
     mindflock accounts add work   # …add one; `login work` authenticates it
     mindflock accounts use work   # …make it the default for new sessions
     mindflock attach TITLE        # tmux attach to a session's terminal
-    mindflock rm TITLE... [--yes] # close sessions (agent stops; worktree + branch kept)
-    mindflock rm --wipe TITLE...  # …and delete the worktree + branch (asks y/N)
+    mindflock close TITLE... [--yes]   # close sessions (agent stops; worktree + branch kept)
+    mindflock delete TITLE... [--yes]  # …and delete the worktree + branch (asks y/N)
+    mindflock rm [--wipe] TITLE...     # alias: rm = close, rm --wipe = delete
+    mindflock pause TITLE...      # stop the agent; the session stays in the sidebar
+    mindflock resume TITLE...     # restart a paused session's agent in place
     mindflock open TITLE          # open the session workspace in the IDE
     mindflock events [--follow]   # print the /api/events stream
     mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
@@ -239,30 +242,77 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     attach.add_argument("title", metavar="TITLE")
 
+    def _close_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("title", metavar="TITLE", nargs="+")
+        p.add_argument(
+            "--yes",
+            "-y",
+            action="store_true",
+            help="skip the confirmation prompt (for scripts)",
+        )
+
+    close = sub.add_parser(
+        "close",
+        parents=[server_opts],
+        help="close sessions: stop the agent, keep the worktree and branch "
+        "(they land in Recently closed)",
+        description="Close one or more sessions on the running server: the "
+        "agent is stopped and the session moves to Recently closed in the web "
+        "UI. Its worktree and branch stay on disk and it can be reopened. "
+        "TITLE may be any unambiguous prefix.",
+    )
+    _close_args(close)
+    close.set_defaults(wipe=False)
+
+    delete = sub.add_parser(
+        "delete",
+        parents=[server_opts],
+        help="delete sessions: stop the agent and delete the worktree and branch",
+        description="Delete one or more sessions on the running server: the "
+        "agent is stopped and the worktree and branch are deleted; unpushed "
+        "work in them is lost. Asks y/N on a terminal, and refuses without "
+        "--yes when stdin is not one. TITLE may be any unambiguous prefix.",
+    )
+    _close_args(delete)
+    delete.set_defaults(wipe=True)
+
     rm = sub.add_parser(
         "rm",
         parents=[server_opts],
-        help="close sessions: stop the agent, keep the worktree and branch "
-        "(they land in Recently closed); --wipe deletes them too",
-        description="Close one or more sessions on the running server. By default "
+        help="alias: `rm` = close (keep the worktree and branch, Recently "
+        "closed); `rm --wipe` = delete",
+        description="Alias of `close`; with --wipe, of `delete`. By default "
         "the agent is stopped and the session moves to Recently closed in the "
         "web UI: its worktree and branch stay on disk and it can be reopened. "
         "With --wipe the worktree and branch are deleted as well; unpushed "
         "work in them is lost. TITLE may be any unambiguous prefix.",
     )
-    rm.add_argument("title", metavar="TITLE", nargs="+")
-    rm.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="skip the confirmation prompt (for scripts)",
-    )
+    _close_args(rm)
     rm.add_argument(
         "--wipe",
         action="store_true",
         help="also delete the worktree and its branch (irreversible); asks y/N on a "
         "terminal, and refuses without --yes when stdin is not one",
     )
+
+    pause = sub.add_parser(
+        "pause",
+        parents=[server_opts],
+        help="pause sessions: stop the agent, keep the session in the sidebar "
+        "(resume restarts it in place)",
+        description="Pause one or more sessions on the running server: the "
+        "agent stops, the worktree and branch stay exactly as they are, and "
+        "the session stays in the sidebar (not Recently closed). `resume` "
+        "restarts its agent in place. TITLE may be any unambiguous prefix.",
+    )
+    pause.add_argument("title", metavar="TITLE", nargs="+")
+
+    resume = sub.add_parser(
+        "resume",
+        parents=[server_opts],
+        help="resume paused sessions: restart the agent in the same worktree",
+    )
+    resume.add_argument("title", metavar="TITLE", nargs="+")
 
     open_ = sub.add_parser(
         "open",
@@ -1172,32 +1222,34 @@ def _rm_sessions_in_use(payload: Optional[dict]) -> List[str]:
 
 
 def _cmd_rm(args: argparse.Namespace) -> int:
-    """End one or more sessions on the running server.
+    """Close or delete one or more sessions on the running server
+    (``close`` / ``delete``, and their alias ``rm`` / ``rm --wipe``).
 
-    Default: ``POST /api/instances/{title}/close`` — the agent stops, the
+    Close: ``POST /api/instances/{title}/close`` — the agent stops, the
     worktree and branch stay on disk and the session lands in Recently closed
-    (reopenable from the web UI). ``--wipe``: ``POST /api/instances/{title}/cleanup``
+    (reopenable from the web UI). Delete: ``POST /api/instances/{title}/cleanup``
     — the worktree and branch are deleted too, so it asks ``[y/N]`` on a
     terminal and refuses without ``--yes`` when stdin isn't one. Every
     ``TITLE`` may be an unambiguous prefix, like ``attach``; all titles are
     resolved before anything is ended so a typo ends nothing."""
     base = client.discover(args.host, args.port)
     instances = client.get(base, "/api/instances") or []
-    titles: List[str] = []
-    for needle in args.title:
-        title = str(_resolve_title(instances, needle).get("title", ""))
-        if title not in titles:
-            titles.append(title)
+    titles = _resolve_titles(instances, args.title)
     listed = ", ".join(repr(t) for t in titles)
     plural = "s" if len(titles) > 1 else ""
     if args.wipe:
         if not args.yes:
             if not _stdin_is_tty():
+                how, keep = (
+                    ("rm --wipe", "drop --wipe")
+                    if args.command == "rm"
+                    else ("delete", "use `close`")
+                )
                 print(
-                    "rm --wipe deletes the worktree and branch of %s and needs a "
+                    "%s deletes the worktree and branch of %s and needs a "
                     "terminal to confirm; pass --yes to delete without asking (or "
-                    "drop --wipe to close the session%s and keep the files)"
-                    % (listed, plural),
+                    "%s to close the session%s and keep the files)"
+                    % (how, listed, keep, plural),
                     file=sys.stderr,
                 )
                 return 1
@@ -1248,6 +1300,41 @@ def _cmd_rm(args: argparse.Namespace) -> int:
             "closed session %s (worktree and branch kept; see Recently closed)" % title
         )
     return 0
+
+
+def _resolve_titles(instances: list, needles: List[str]) -> List[str]:
+    """Every needle resolved (unambiguous prefixes ok), in order, without
+    duplicates — all before anything is acted on, so a typo touches nothing."""
+    titles: List[str] = []
+    for needle in needles:
+        title = str(_resolve_title(instances, needle).get("title", ""))
+        if title not in titles:
+            titles.append(title)
+    return titles
+
+
+def _cmd_pause_resume(args: argparse.Namespace) -> int:
+    """``pause`` / ``resume``: ``POST /api/instances/{title}/pause|resume``.
+
+    Pause stops the agent and keeps the session in the sidebar (unlike
+    close, which moves it to Recently closed); resume restarts the agent in
+    the same worktree. Exit 1 when any title was refused."""
+    base = client.discover(args.host, args.port)
+    titles = _resolve_titles(client.get(base, "/api/instances") or [], args.title)
+    verb = args.command
+    rc = 0
+    for title in titles:
+        try:
+            client.post(base, "/api/instances/%s/%s" % (_quote_title(title), verb))
+        except client.ApiError as err:
+            print(
+                "error: could not %s %r: %s" % (verb, title, err.message),
+                file=sys.stderr,
+            )
+            rc = 1
+            continue
+        print("%sd session %s" % (verb, title))
+    return rc
 
 
 def _cmd_open(args: argparse.Namespace) -> int:
@@ -2931,7 +3018,11 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "new": _cmd_new,
     "ls": _cmd_ls,
     "attach": _cmd_attach,
+    "close": _cmd_rm,
+    "delete": _cmd_rm,
     "rm": _cmd_rm,
+    "pause": _cmd_pause_resume,
+    "resume": _cmd_pause_resume,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,
@@ -2954,7 +3045,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
     ``doctor``, ``mcp`` and the J1 session commands
-    (new/ls/attach/rm/open/events/msg/inbox) run in-process; any other invocation — including no subcommand at all — falls
+    (new/ls/attach/close/delete/rm/pause/resume/open/events/msg/inbox) run in-process; any other invocation — including no subcommand at all — falls
     through to ``serve``. A session command that can't reach a server turns the
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.

@@ -350,8 +350,9 @@ def _render_workers(args: dict, ctx: Mapping, t) -> str:
         "me one line per worker with its status and what it is doing or "
         "reported. If one is waiting on a prompt, look at it with %s view "
         "screen and answer it with %s only when it is clearly safe and "
-        "read-only; flag every other prompt to me. Do not merge, message or "
-        "stop anyone." % (t("list_sessions"), t("read_output"), t("answer_prompt"))
+        "read-only; flag every other prompt to me. Do not merge, message, "
+        "close or delete anyone."
+        % (t("list_sessions"), t("read_output"), t("answer_prompt"))
     )
 
 

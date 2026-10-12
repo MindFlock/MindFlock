@@ -18,7 +18,7 @@ word. Both tools are the lead's alone (checked by identity here and by the
 server).
 
 THE SESSIONS ARE THE SERVER'S, not the caller's. ``start_team_run`` creates
-sessions with no parent: the calling agent cannot answer, steer or kill them
+sessions with no parent: the calling agent cannot answer, steer or close them
 (they never enter ``policy.spawned_by_me``), so a chatty orchestrator cannot
 override what the run decided. It watches with ``get_run`` /
 ``wait_for_run`` and steers the GROUP with ``control_run`` — and only a group
@@ -71,7 +71,7 @@ D_START_RUN = (
     "once CI is green; needs confirm_merge=true); default: your user's "
     "fast-track setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
     "the rest wait in a queue. MindFlock owns these sessions, not you: you "
-    "cannot steer or kill them, and they do not report to you. It commits "
+    "cannot steer, close or delete them, and they do not report to you. It commits "
     "with messages written from each diff, retries failed hooks, nudges a "
     "stalled agent and surfaces only what needs your user (a prompt, a "
     "repeated failure, the budget). repo_path (default: your session's repo) "

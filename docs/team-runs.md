@@ -111,7 +111,7 @@ already have a session. A ticket that resolves nowhere is an error on its row
   that per its fast-track.
 
 The sessions are **MindFlock's**, not the calling agent's: no parent, not in
-its managed set, so an orchestrator cannot steer or kill what the run owns.
+its managed set, so an orchestrator cannot steer, close or delete what the run owns.
 
 ## What the server does on its own
 
