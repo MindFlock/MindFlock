@@ -1,0 +1,774 @@
+/** The New dialog's describe/plan flow: the one-sentence box (page 1's whole
+ * body for an Intake batch, the form's "Describe it instead…" fold), the
+ * handlers that send it to POST /api/session-plan and write the answer into
+ * the form, and the confirm row for a folder a plan wants made. State stays
+ * in NewSessionDialog; these read and write it through what they are handed. */
+
+import { useEffect, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
+import type { PlanAnswer } from "../../../api/types";
+import type { deviceApi } from "../../../lib/devices";
+import { errMsg } from "../../../lib/format";
+import { BROWSE_VALUE, removeItem, runRepoOptions } from "../../../lib/runStart";
+import { RunItems, RunOptions, type RunDraft } from "../NewList";
+import {
+  DESCRIBE_MAX_CHARS,
+  DESCRIBE_SLOW_MS,
+  SUBMIT_ARM_MS,
+  cancelPlanRun,
+  describeBlockReason,
+  immediateStartBlockReason,
+  leafName,
+  planInPlace,
+  startPlanRun,
+  type FolderAction,
+  type PlanFolderAction,
+  type PlanRun,
+  type RepoSuggestion,
+} from "../newSession";
+import { FolderBrowser } from "./FolderBrowser";
+
+type Set<T> = Dispatch<SetStateAction<T>>;
+
+/** The create body's plan-decided fields, as newSessionSubmit's buildBody takes them. */
+type BodyFields = {
+  title: string;
+  repoPath: string;
+  prompt: string;
+  inPlace: boolean;
+  initRepo: boolean;
+  provisioned: boolean;
+};
+
+export interface DescribeFlowCtx {
+  describe: string;
+  describing: boolean;
+  newFolderOk: boolean;
+  dapi: ReturnType<typeof deviceApi>;
+  planRun: MutableRefObject<PlanRun>;
+  lastAnswer: MutableRefObject<{ sentence: string; answer: PlanAnswer } | null>;
+  submitArmAt: MutableRefObject<number>;
+  focusFolderNext: MutableRefObject<boolean>;
+  foldOpenedByPlan: MutableRefObject<boolean>;
+  folderDo: Dispatch<FolderAction>;
+  planFolderDo: Dispatch<PlanFolderAction>;
+  setError: Set<string>;
+  setTitle: Set<string>;
+  setPrompt: Set<string>;
+  setInPlace: Set<boolean>;
+  setInitRepo: Set<boolean>;
+  setNewFolderOk: Set<boolean>;
+  setProvision: Set<boolean>;
+  setAdvancedOpen: Set<boolean>;
+  setPromptOpen: Set<boolean>;
+  setPlanError: Set<string>;
+  setPlanNote: Set<string>;
+  setDescribing: Set<boolean>;
+  setDescribeSlow: Set<boolean>;
+  setPage: Set<number>;
+  buildBody(p: BodyFields): Record<string, unknown>;
+  postCreate(body: Record<string, unknown>): Promise<void>;
+}
+
+/** The describe box's handlers, built per render like the closures they were. */
+export function describeFlow(ctx: DescribeFlowCtx) {
+  const {
+    describe,
+    describing,
+    newFolderOk,
+    dapi,
+    planRun,
+    lastAnswer,
+    submitArmAt,
+    focusFolderNext,
+    foldOpenedByPlan,
+    folderDo,
+    planFolderDo,
+    setError,
+    setTitle,
+    setPrompt,
+    setInPlace,
+    setInitRepo,
+    setNewFolderOk,
+    setProvision,
+    setAdvancedOpen,
+    setPromptOpen,
+    setPlanError,
+    setPlanNote,
+    setDescribing,
+    setDescribeSlow,
+    setPage,
+    buildBody,
+    postCreate,
+  } = ctx;
+
+  /** Write a plan from the Describe box into the form the user is looking at.
+   *
+   * Deliberately NOT fillFromTemplate, whose last third is wrong for this caller
+   * three ways. Its `setAdvancedOpen(!!(t.provisioned || t.init_repo ||
+   * !t.in_place))` evaluates to FALSE for the commonest plan there is — an
+   * existing repo, in place, no init — so reusing it would CLOSE "Git &
+   * workspace" and hide the two checkboxes the model had just decided, which is
+   * the exact opposite of what this box is for. Its `setProvision(!!...)` would
+   * silently untick a Provision box the user armed by hand. And its
+   * `setActiveTemplate(t.name)` would write a session title into the state that
+   * highlights a template chip, lighting up whichever template happens to share
+   * the name.
+   *
+   * Every field is written unconditionally (except the title — see below),
+   * because the button says it replaces the form, and a half-replaced form is
+   * one whose leftover values are indistinguishable from the new ones. */
+  const applyPlan = (a: PlanAnswer) => {
+    setError("");
+    // Through the reducer like every other way of naming a folder, so the rest
+    // follows by itself: the debounced /api/repos/check probe fires on the new
+    // path (it is absolute, so looksLikePath waves it through), the git nudge
+    // appears under a plain folder, the matching suggestion chip lights up, and
+    // the name-search effect clears its matches rather than leaving a stale list
+    // hanging under a path.
+    folderDo({ t: "user-set", path: a.repo_path });
+    // A blank title is the server declining to name the session, not an
+    // instruction to erase the name the user typed before reaching for the box.
+    if (a.title) setTitle(a.title);
+    setPrompt(a.prompt || "");
+    setInPlace(planInPlace(a));
+    setInitRepo(!!a.init_repo);
+    // The whole folder, existing or not: the gate reads the "does it need
+    // making" half of it and the note reads the path. Keeping a path only for a
+    // NEW folder is what left the note with nothing to compare itself against.
+    // Reading a MISSING folder_exists as "not there" lives in the reducer,
+    // beside the comment about why.
+    planFolderDo({ t: "answer", plan: a });
+    // ALWAYS false, including over a plan that proposes the same folder as the
+    // last one: a tick left over from the previous sentence is consent to that
+    // sentence's folder, not to this one's. Every fill asks again.
+    setNewFolderOk(false);
+    // The plan never provisions — `provisioned` is not in the wire contract and
+    // the server never emits it — so this is a clear, not a copy.
+    setProvision(false);
+    // Never CLOSE a fold the plan has just written into. Unconditional on
+    // purpose; see the fillFromTemplate comparison above.
+    setAdvancedOpen(true);
+    if (a.prompt) {
+      foldOpenedByPlan.current = true;
+      setPromptOpen(true);
+    }
+  };
+
+  /** Stop waiting. The seq bump is what actually cancels — it makes the answer
+   * a no-op whenever it lands — and the abort only saves the socket. The
+   * subprocess on the far side is not killed by this and runs to its own
+   * timeout; it is a read-only one-shot with stdin closed, so that is bounded
+   * and harmless rather than something worth building a kill channel for. */
+  /** Page 1's "Start session": plan if we need to, otherwise act on the plan
+   * we already have.
+   *
+   * The second press of this button — the one after ticking a new folder's
+   * confirm — must NOT buy another model turn. Beyond the waste, a fresh turn
+   * could answer with a different folder than the one the user just said yes
+   * to, which would spend a confirmation on a directory nobody was shown. The
+   * cached answer is keyed on the sentence, so editing the box does correctly
+   * force a new plan. */
+  const startNow = () => {
+    const cached = lastAnswer.current;
+    if (cached && cached.sentence === describe.trim()) {
+      void startFromPlan(cached.answer);
+      return;
+    }
+    void runDescribe("start");
+  };
+
+  const cancelDescribe = () => {
+    cancelPlanRun(planRun.current);
+    setDescribing(false);
+    setDescribeSlow(false);
+  };
+
+  /** Ask the server to read the sentence and fill the form in. */
+  /** Start an immediate create from a plan, or refuse and say why.
+   *
+   * Page 1's "Start session" is the "don't make me read the form" path, and it
+   * skips page 2 entirely — but it does NOT skip the one question that is not a
+   * validation: a folder that does not exist yet still has to be agreed to in
+   * as many words, because nothing else in this flow makes something that
+   * outlives the session. So the first press shows the question and stops, and
+   * the second press — with the tick on, and reusing the answer rather than
+   * paying for a second model turn — creates.
+   *
+   * The body comes from the ANSWER, not from the fields applyPlan has just
+   * written: those setStates are queued, so `inPlace` and friends still hold
+   * the previous opening's values at this point. applyPlan still runs, so that
+   * anything which stops the create leaves the user on a form that agrees with
+   * the sentence instead of an empty one. */
+  const startFromPlan = async (a: PlanAnswer) => {
+    // Not an error — the plan is good and the question is the point. The confirm
+    // row is already on screen (it derives from the folder applyPlan just
+    // wrote), so this only has to say which press comes next.
+    const ask = immediateStartBlockReason({
+      // `!== true`, the same direction applyPlan reads it: of the two ways to be
+      // wrong about a missing key, only one of them makes a directory nobody
+      // was shown.
+      folderExists: a.folder_exists === true,
+      folderLabel: a.folder_display || a.repo_path || "that folder",
+      confirmed: newFolderOk,
+    });
+    if (ask) {
+      setPlanError(ask);
+      return;
+    }
+    await postCreate(
+      buildBody({
+        title: a.title || "",
+        repoPath: a.repo_path || "",
+        prompt: a.prompt || "",
+        inPlace: planInPlace(a),
+        initRepo: !!a.init_repo,
+        // A plan never provisions — `provisioned` is not in the wire contract
+        // and the server never emits it — so an immediate start never does
+        // either, whatever the form happened to be holding.
+        provisioned: false,
+      })
+    );
+  };
+
+  const runDescribe = async (mode: "fill" | "start" = "fill") => {
+    // The in-flight guard comes FIRST, before describeBlockReason is consulted,
+    // because that one cannot carry it: it answers "" while a turn is in flight
+    // on purpose (the button is already saying "Reading…"). The button is
+    // disabled, but the box is readOnly rather than disabled — it keeps focus,
+    // so Enter goes on firing, and each press used to buy another
+    // POST /api/session-plan and another headless CLI turn. Claiming the slot
+    // for a sentence the check below then refuses costs nothing: nothing is in
+    // flight to invalidate, and the controller it makes never gets a request.
+    const started = startPlanRun(planRun.current, describing);
+    if (!started) return;
+    const { seq, ctl } = started;
+    const blocked = describeBlockReason({ text: describe, busy: describing });
+    if (blocked) {
+      // Said out loud rather than silently ignored: both the button and Enter
+      // come through here, and neither is disabled, so a refusal that showed
+      // nothing would read as a dead control.
+      setPlanError(blocked);
+      return;
+    }
+    setDescribing(true);
+    setDescribeSlow(false);
+    setPlanError("");
+    // Last run's note described last run's folder. Clearing it up front means
+    // the strip never shows a sentence about a form that is being replaced.
+    setPlanNote("");
+    const slow = window.setTimeout(() => {
+      if (planRun.current.seq === seq) setDescribeSlow(true);
+    }, DESCRIBE_SLOW_MS);
+    try {
+      const a = await dapi<PlanAnswer>("/api/session-plan", {
+        json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
+        signal: ctl.signal,
+      });
+      if (planRun.current.seq !== seq) return;
+      applyPlan(a);
+      setPlanNote(a.note || "");
+      // Kept so "Start session" can be pressed a second time — after ticking a
+      // new folder's confirm — without buying another CLI turn, and without the
+      // risk that the second turn answers with a DIFFERENT folder than the one
+      // just agreed to.
+      lastAnswer.current = { sentence: describe.trim(), answer: a };
+      if (mode === "start") {
+        // Straight to the create. Nothing below applies: there is no form to
+        // hold, no caret to move, and no page 2 to move it on.
+        setDescribing(false);
+        setDescribeSlow(false);
+        void startFromPlan(a);
+        return;
+      }
+      setPage(2);
+      // Create is held for a breath before the caret moves, not after: the
+      // answer arrives ~10-25s after the keystroke that asked for it, by which
+      // time the user's hand may be back on Enter for some other reason.
+      submitArmAt.current = Date.now() + SUBMIT_ARM_MS;
+      // The Folder field, not Create: it holds the value most likely to be
+      // wrong, it is what the note is about, and focusing it scrolls it into
+      // view — .nf-body is the scroll region and a filled-in form is taller than
+      // the empty one that asked for it, so the folder can easily be above the
+      // fold by now. Plain Enter there still submits (that field only swallows
+      // Enter for a NAME, and a plan's path is never one), so the two-Enter path
+      // survives with the caret on the thing you would be confirming.
+      // Deferred to an effect, because the Folder field is on page 2 and page 2
+      // has not rendered yet — repoRef.current is still null on this line.
+      focusFolderNext.current = true;
+    } catch (err) {
+      if (planRun.current.seq !== seq) return;
+      // Our own cancel, not a failure: cancelDescribe has already put the button
+      // back and there is nothing to report.
+      if ((err as Error)?.name === "AbortError") return;
+      // Inline, never a toast: toast is a 1.4s strip at the bottom of the screen
+      // that lands behind this modal, while this is a field-level failure in an
+      // open dialog — which is exactly what #new-error and MakePrDialog's .error
+      // line already are. The remedy never changes and is already on screen, so
+      // the sentence names it.
+      setPlanError(errMsg(err) + " — fill the form in by hand instead.");
+    } finally {
+      window.clearTimeout(slow);
+      // Guarded like every other landing: a later run owns the button now, and
+      // an overtaken run must not turn its spinner off.
+      if (planRun.current.seq === seq) {
+        setDescribing(false);
+        setDescribeSlow(false);
+        planRun.current.abort = null;
+      }
+    }
+  };
+
+  return { applyPlan, startNow, cancelDescribe, startFromPlan, runDescribe };
+}
+
+/** The focus moves that belong to the describe flow itself (not the opening's). */
+export function useDescribeFocus({
+  open,
+  page,
+  describeOpen,
+  focusFolderNext,
+  focusTitleNext,
+  repoRef,
+  titleRef,
+  describeRef,
+}: {
+  open: boolean;
+  page: number;
+  describeOpen: boolean;
+  focusFolderNext: MutableRefObject<boolean>;
+  focusTitleNext: MutableRefObject<boolean>;
+  repoRef: MutableRefObject<HTMLInputElement | null>;
+  titleRef: MutableRefObject<HTMLInputElement | null>;
+  describeRef: MutableRefObject<HTMLTextAreaElement | null>;
+}) {
+  /** Move the caret to the Folder field once page 2 is actually on screen.
+   *
+   * runDescribe cannot do this itself: it sets the page and the field it wants
+   * is rendered by that same update, so repoRef.current is still null on the
+   * line after. Focusing also SCROLLS the field into view, which is half the
+   * point — a filled-in form is taller than the sentence that asked for it. */
+  useEffect(() => {
+    if (page !== 2 || !focusFolderNext.current) return;
+    focusFolderNext.current = false;
+    const el = repoRef.current;
+    if (!el) return;
+    // Top of the form FIRST, then the caret without moving it again.
+    // focus() scrolls its target into view all by itself, which landed page 2
+    // already scrolled — Folder pinned to the top edge and Name cut off above
+    // it, so the page you had just been sent to appeared to start in the
+    // middle. preventScroll keeps the caret where the value most likely to be
+    // wrong is, while the page still reads from its own beginning.
+    const body = el.closest(".nf-body");
+    if (body) body.scrollTop = 0;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== 2 || !focusTitleNext.current) return;
+    focusTitleNext.current = false;
+    titleRef.current?.focus();
+  }, [page]);
+
+  // "Describe it instead…" opened: the caret goes to the box it revealed.
+  useEffect(() => {
+    if (open && describeOpen && page === 2) describeRef.current?.focus();
+  }, [open, describeOpen, page]);
+}
+
+/* The confirm row, built once and drawn on BOTH pages: under the sentence on
+   page 1, and under the Folder field on page 2. It used to live only in the
+   Describe strip, which "Review details first" leaves behind — so a plan that
+   proposed a new folder landed on a page whose Create refused, naming a tick
+   that was on the other page. The one control in this dialog whose "no" is
+   the safe answer, so it is drawn as a question and not as a fourth checkbox:
+   a folder is the only thing a plan proposes that survives the session, and
+   an option row reads as something you may skim past.
+
+   It is announced as well as the note above it. Two polite regions firing
+   together is a little chatty; a gate a screen reader never mentioned, on a
+   form whose Create then refuses, is worse. */
+export function NewFolderRow({
+  ask: newFolderAsk,
+  ok: newFolderOk,
+  onOk: setNewFolderOk,
+}: {
+  ask: string;
+  ok: boolean;
+  onOk(ok: boolean): void;
+}) {
+  if (!newFolderAsk) return null;
+  return (
+  <div className="nf-newfolder" role="group" aria-labelledby="new-describe-newfolder-q">
+    <p id="new-describe-newfolder-q" className="nf-newfolder-q" aria-live="polite">
+      There is no folder at <b>{newFolderAsk}</b> yet. Make it?
+    </p>
+    <label className="check">
+      <input
+        type="checkbox"
+        id="new-describe-newfolder"
+        checked={newFolderOk}
+        onChange={(e) => setNewFolderOk(e.target.checked)}
+      />
+      {/* Word for word what newFolderBlockReason quotes, because the
+          refusal is read several screens below this row and has to
+          name a control the user can go and find. */}
+      Yes, create {newFolderAsk}{" "}
+      <span className="muted">
+        — a new directory, made when you press Create. Not the same as “Create a git repo in
+        this folder” under Git &amp; workspace, which runs git init inside it; a new project
+        usually wants both.
+      </span>
+    </label>
+  </div>
+  );
+}
+
+export interface DescribeSectionProps {
+  /** 1: the box alone (an Intake batch); 2: the form's fold. */
+  page: number;
+  batch: boolean;
+  describe: string;
+  setDescribe: Set<string>;
+  describing: boolean;
+  describeSlow: boolean;
+  describeRef: MutableRefObject<HTMLTextAreaElement | null>;
+  describeOpen: boolean;
+  setDescribeOpen: Set<boolean>;
+  runMode: boolean;
+  runDescribe(mode?: "fill" | "start"): Promise<void>;
+  cancelDescribe(): void;
+  draft: RunDraft;
+  planNoteShown: string;
+  planError: string;
+  setPlanError: Set<string>;
+  newFolderRow: ReactNode;
+  runBrowse: boolean;
+  setRunBrowse: Set<boolean>;
+  runBrowseRef: MutableRefObject<HTMLDivElement | null>;
+  repoPath: string;
+  folderDo: Dispatch<FolderAction>;
+  suggestions: RepoSuggestion[];
+  device: string;
+  homePath: string;
+}
+
+/** The sentence box on either page. One component for both so the page swap
+ * reconciles the same element tree it did when this was inline. */
+export function DescribeSection({
+  page,
+  batch,
+  describe,
+  setDescribe,
+  describing,
+  describeSlow,
+  describeRef,
+  describeOpen,
+  setDescribeOpen,
+  runMode,
+  runDescribe,
+  cancelDescribe,
+  draft,
+  planNoteShown,
+  planError,
+  setPlanError,
+  newFolderRow,
+  runBrowse,
+  setRunBrowse,
+  runBrowseRef,
+  repoPath,
+  folderDo,
+  suggestions,
+  device,
+  homePath,
+}: DescribeSectionProps) {
+  /* The one-sentence door, first in the body and above Templates because it
+     is the widest of the three ways to fill this form in (a sentence, a
+     template chip, or by hand) and reads top-down as the least specific
+     first. It wears .new-templates so it is the same card as the Templates
+     and folder-suggestion strips rather than a second form stacked on the
+     first — nothing here is submitted, and looking like a form would say
+     otherwise. */
+  if (page === 1)
+    return (
+      <div id="new-describe" className="new-templates nf-describe">
+        <div className="nt-head">
+          <span>
+            {batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?"}
+          </span>
+        </div>
+        <div className="nf-describe-row">
+          {/* A textarea, so a longer task can be typed or pasted: three
+              lines tall, growing to eight. However many lines, it is ONE
+              prompt (only Intake's "Start together…" opens New as a list).
+              Enter keeps its old meaning ("read this"); Shift+Enter starts
+              another line, and in a batch or an auto-split Enter does too. */}
+          <textarea
+            id="new-describe-text"
+            ref={describeRef}
+            rows={Math.min(8, Math.max(3, describe.split("\n").length))}
+            value={describe}
+            maxLength={DESCRIBE_MAX_CHARS}
+            autoComplete="off"
+            spellCheck={false}
+            // readOnly rather than disabled: a disabled input loses focus to
+            // the body, so the caret would jump out of the box the moment
+            // Enter was pressed and the sentence would stop being
+            // selectable while the user waits to see what it produced.
+            readOnly={describing}
+            placeholder="e.g. fix the login bug in acme-api"
+            onChange={(e) => {
+              setDescribe(e.target.value);
+              // Typing is what clears the refusal: whatever it objected to
+              // has just changed, and a stale red line under a box the user
+              // is actively fixing is noise.
+              setPlanError("");
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+              // A new line: Shift+Enter always, plain Enter in a list.
+              if (e.shiftKey || runMode) {
+                e.stopPropagation();
+                return;
+              }
+              // Enter here means "read this", never "create a session". This
+              // input sits inside <form id="new-form" onSubmit={submit}>, so
+              // without the preventDefault a sentence nobody has resolved
+              // yet becomes a create in whatever folder the suggestion
+              // pre-fill happened to leave behind. stopPropagation keeps the
+              // modal root's Ctrl+Enter handler out of it.
+              e.preventDefault();
+              e.stopPropagation();
+              void runDescribe("fill");
+            }}
+          />
+          {describing && (
+            <button
+              type="button"
+              id="new-describe-cancel"
+              className="linklike"
+              onClick={cancelDescribe}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+        {/* Written for somebody who has never opened this dialog. The
+            line this replaced — "Enter fills in the form — or start the
+            session straight away" — named two things a first-time user
+            has no way to know: WHICH form, and what starting it straight
+            away skips. This says what the sentence is for, and that
+            reading it costs nothing, which is the fact that makes the
+            button row below safe to experiment with. */}
+        {!runMode && (
+        <>
+        <p className="nf-describe-help">
+          Your coding CLI reads this and works out which folder to use, what
+          to call the session, and what to tell the agent first.{" "}
+          <b>Nothing is created until you pick one of the buttons below.</b>
+        </p>
+        {/* Two examples rather than none: the placeholder can only show
+            one shape and the box accepts three — an existing project, a
+            brand-new one, and a request for somewhere separate to work. A
+            user who cannot tell which of those is allowed types the safest
+            thing they can think of and never finds the other two. */}
+        <p className="nf-describe-eg">
+          Also understood:{" "}
+          <code>start a new project called invoice-parser</code>
+          {" · "}
+          <code>add metrics to billing, in a worktree</code>
+        </p>
+        </>
+        )}
+        {draft.listMode && (
+          <RunItems
+            rows={draft.rows}
+            onRemove={(row) => {
+              setDescribe((d) => removeItem(d, row));
+              setPlanError("");
+            }}
+          />
+        )}
+        {draft.listMode && draft.previewError && (
+          <p className="rt-note error" aria-live="polite">
+            Couldn't read the list: {draft.previewError}
+          </p>
+        )}
+        {draft.listMode &&
+          draft.warnings.map((w) => (
+            <p key={w} className="rt-note">
+              {w}
+            </p>
+          ))}
+        {/* Options only for a BATCH (Intake's "Start together…"). One
+            session's page 1 is the prompt and nothing else: the model
+            fills in the form, and Fast-track and Auto-split sit there
+            with the rest of the details. */}
+        {batch && (
+        <RunOptions
+          draft={draft}
+          n={draft.listMode ? draft.count : 1}
+          split={false}
+          repoPicker={
+            runMode && draft.items.some((i) => i.kind === "task") ? (
+              // Typed tasks need a folder; tickets bring their own (the
+              // source's repo).
+              <span className="rt-repo-pick">
+                <select
+                  id="new-run-repo"
+                  className="rt-repo"
+                  value={runBrowse ? BROWSE_VALUE : repoPath}
+                  title={repoPath + " — each gets its own worktree there"}
+                  onChange={(e) => {
+                    // "Browse…" opens the folder browser right here, so
+                    // ANY folder can be the one — not only a suggestion.
+                    if (e.target.value === BROWSE_VALUE) {
+                      setRunBrowse(true);
+                      return;
+                    }
+                    setRunBrowse(false);
+                    folderDo({ t: "user-set", path: e.target.value });
+                  }}
+                >
+                  {runRepoOptions(repoPath, suggestions, leafName).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            ) : null
+          }
+          // A batch is already one session per line: nothing to split.
+          splitBox={null}
+        />
+        )}
+        {runMode && runBrowse && (
+          // The list's "tasks start in" → Browse…: the same inline
+          // folder browser the Folder field uses (inline: Electron has
+          // no browser dialogs). Picking a folder fills the picker.
+          <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
+            <div className="rt-browse-head">
+              <span>Pick the folder the tasks start in</span>
+              <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
+                Done
+              </button>
+            </div>
+            <FolderBrowser
+              device={device}
+              initialPath={repoPath || homePath || ""}
+              selected={repoPath}
+              onSelect={(p) => folderDo({ t: "user-set", path: p })}
+              onPick={(p) => {
+                folderDo({ t: "user-set", path: p });
+                setRunBrowse(false);
+              }}
+            />
+          </div>
+        )}
+        {planNoteShown && (
+          <p className="nf-describe-note" aria-live="polite">
+            {planNoteShown}
+          </p>
+        )}
+        {planError && (
+          <p id="new-describe-error" className="error" aria-live="polite">
+            {planError}
+          </p>
+        )}
+        {newFolderRow}
+      </div>
+    );
+  /* The secondary door. A quiet row until opened; opened, it is the sentence
+     box page 1 used to be, in the Templates strip's card. Enter there buys the
+     model turn (runDescribe) that fills the fields below — nothing is created
+     by it. */
+  return !describeOpen ? (
+      <div className="nf-describe-toggle">
+        <button
+          type="button"
+          id="new-describe-open"
+          title="Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create."
+          onClick={() => setDescribeOpen(true)}
+        >
+          ✨ Describe it instead…
+        </button>
+        <span className="muted">or fill the form in and press Enter</span>
+      </div>
+    ) : (
+      <div id="new-describe" className="new-templates nf-describe">
+        <div className="nt-head">
+          <span>Describe what you want to work on</span>
+          {describing ? (
+            <span className="nf-describe-busy" aria-live="polite">
+              <span className="btn-spin" aria-hidden="true" />
+              {describeSlow ? "Still thinking…" : "Thinking…"}
+              <button
+                type="button"
+                id="new-describe-cancel"
+                className="linklike"
+                onClick={cancelDescribe}
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              id="new-describe-close"
+              className="linklike"
+              onClick={() => {
+                setDescribeOpen(false);
+                setPlanError("");
+              }}
+            >
+              Hide
+            </button>
+          )}
+        </div>
+        <div className="nf-describe-row">
+          <textarea
+            id="new-describe-text"
+            ref={describeRef}
+            rows={Math.min(6, Math.max(2, describe.split("\n").length))}
+            value={describe}
+            maxLength={DESCRIBE_MAX_CHARS}
+            autoComplete="off"
+            spellCheck={false}
+            readOnly={describing}
+            placeholder="e.g. fix the login bug in acme-api — Enter fills the form in"
+            onChange={(e) => {
+              setDescribe(e.target.value);
+              setPlanError("");
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+              if (e.shiftKey) {
+                e.stopPropagation();
+                return;
+              }
+              // Enter here means "read this", never "create": the box
+              // sits inside <form onSubmit={submit}>.
+              e.preventDefault();
+              e.stopPropagation();
+              void runDescribe("fill");
+            }}
+          />
+        </div>
+        <p className="nf-describe-help">
+          Your coding CLI reads this and fills in the folder, name and first
+          instruction below. <b>Nothing is created until you press Create.</b>
+        </p>
+        {planNoteShown && (
+          <p className="nf-describe-note" aria-live="polite">
+            {planNoteShown}
+          </p>
+        )}
+        {planError && (
+          <p id="new-describe-error" className="error" aria-live="polite">
+            {planError}
+          </p>
+        )}
+      </div>
+  );
+}

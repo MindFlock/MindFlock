@@ -11,7 +11,9 @@ import { needsRunDetail, runNote, splitRail, TOGETHER_DETAIL_S } from "../lib/ru
 import { waitingActions, waitingChip } from "../components/outbox/outbox";
 import { BROWSE_VALUE, runRepoOptions } from "../lib/runStart";
 import { dissolvedText } from "../state/runs";
-import dialogSrc from "../components/dialogs/NewSessionDialog.tsx?raw";
+// The list mode's run-browse block moved out of NewSessionDialog.tsx with the
+// rest of the describe page.
+import dialogSrc from "../components/dialogs/newSession/DescribeSection.tsx?raw";
 import leadPanelSrc from "../components/grid/RunLeadPanel.tsx?raw";
 import splitRunSrc from "../lib/splitRun.ts?raw";
 
@@ -380,7 +382,7 @@ describe("list mode: tasks start in ANY folder", () => {
     expect(src).toContain("BROWSE_VALUE");
     const at = src.indexOf("{runMode && runBrowse && (");
     expect(at).toBeGreaterThan(0);
-    const block = src.slice(at, src.indexOf("{!runMode && (", at));
+    const block = src.slice(at, src.indexOf("{planNoteShown && (", at));
     expect(block).toContain("<FolderBrowser");
     expect(block).not.toMatch(/window\.prompt|\bprompt\(|confirm\(/);
   });

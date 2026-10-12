@@ -289,8 +289,15 @@ def test_terminal_not_shell():
 
 def test_new_sheet_buttons_are_the_desktops():
     html, js = _html(), _js()
+    # The desktop's action row (NewSessionDialog's FooterActions).
     dialog = (
-        ROOT / "frontend" / "src" / "components" / "dialogs" / "NewSessionDialog.tsx"
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "dialogs"
+        / "newSession"
+        / "FooterActions.tsx"
     ).read_text()
     run_start = (ROOT / "frontend" / "src" / "lib" / "runStart.ts").read_text()
     assert "Review details first" in dialog
