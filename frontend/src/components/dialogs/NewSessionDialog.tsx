@@ -1,9 +1,9 @@
 /** New-session dialog (ports section 16 + the new-form submit from section
- * 17 + the J4 preset row): the fast path is Name → Enter, which costs
- * nothing — the form opens pre-filled with the template, agent and account
- * the last session in that folder used (lib/store's last-used memory), and
- * no model runs. "Describe it instead…" is the secondary door: it expands
- * the sentence box, and Enter there buys the model turn that fills the form.
+ * 17 + the J4 preset row). The describe box comes first, open, with the caret
+ * in it: type what you want and Enter buys the model turn that fills the form
+ * in. The by-hand path still costs nothing — the form below is pre-filled
+ * with the template, agent and account the last session in that folder used
+ * (lib/store's last-used memory), so Name → Enter creates with no model turn.
  * Folder browser, Templates strip (one server-side list, managed in
  * TemplatesDialog), prompt presets, the Git & workspace fold with its Base
  * branch picker, and per-session launch flags live behind progressive
@@ -168,8 +168,11 @@ export function NewSessionDialog() {
   const [promptOpen, setPromptOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
-  /** The form's "Describe it instead…" row is expanded. */
-  const [describeOpen, setDescribeOpen] = useState(false);
+  /** The form's describe box is expanded: open on every opening (the owner:
+   * "have the auto generate session as the first option instead of forcing
+   * me to click into it"); **Hide** folds it to the "Describe it instead…"
+   * row for the rest of that opening. */
+  const [describeOpen, setDescribeOpen] = useState(true);
   /** Base branch for a NEW WORKTREE: "" = whatever the server would pick (the
    * folder's checked-out branch — shown in the picker's first row). Sent as
    * base_ref + base_branch only when chosen, and only for a plain worktree
@@ -188,20 +191,21 @@ export function NewSessionDialog() {
   // applyPlan writes, and it is kept only so the box still shows it afterwards.
   /** Which of the two pages is on screen: 1 the sentence alone, 2 the form.
    *
-   * An opening lands on the FORM, with Name focused: "Ctrl+N, type a name,
-   * Enter" is the fast path again and costs no model turn — the form arrives
-   * pre-filled with what the last session in that folder used. Page 1 is
+   * An opening lands on the FORM, with the caret in its describe box at the
+   * top; Name → Enter below it still creates with no model turn. Page 1 is
    * only for Intake's "Start together…" batch, whose box is a list of
    * sessions and whose options (RunOptions) have no place on the one-session
-   * form. The sentence box itself lives on the form now, behind "Describe it
-   * instead…". */
+   * form. */
   const [page, setPage] = useState(2);
   /** The page this opening meant to land on — read by the focus effect, which
    * runs before the setPage above has rendered. */
   const openedPage = useRef(2);
-  /** Name is on page 2; an opening that found page 1 still mounted (after a
-   * batch) focuses it once the form is actually on screen. */
-  const focusTitleNext = useRef(false);
+  /** Where this opening puts the caret: the describe box, or Name for a failed
+   * create's reopen (the form is what needs fixing then). */
+  const openedFocus = useRef<"describe" | "title">("describe");
+  /** The opening's target was not on screen yet (page 1 still mounted after a
+   * batch, or the box hidden last time): focus it once it is. */
+  const focusOpeningNext = useRef(false);
   const [describe, setDescribe] = useState("");
   const [describing, setDescribing] = useState(false);
   const [describeSlow, setDescribeSlow] = useState(false);
@@ -460,8 +464,10 @@ export function NewSessionDialog() {
     }
     if (failedReopen.current) {
       failedReopen.current = false;
+      openedFocus.current = "title";
       return;
     }
+    openedFocus.current = "describe";
     // Back to Session on every open, for the reason the tab state's own
     // comment gives: Alt+N is a shortcut for starting work, and a shortcut
     // that lands somewhere different depending on what you last looked at is
@@ -483,7 +489,7 @@ export function NewSessionDialog() {
     const prefill = useUi.getState().takeNewPrefill();
     setDescribe(prefill);
     setBatch(!!prefill);
-    setDescribeOpen(false);
+    setDescribeOpen(true);
     setBaseBranch("");
     setBranches(null);
     setDescribing(false);
@@ -585,16 +591,18 @@ export function NewSessionDialog() {
   // beats this effect's commit — and whatever did keeps the caret.
   useEffect(() => {
     if (!open) return;
-    // The sentence box on page 1, the Name field on page 2 — whichever of the
-    // two the opening is actually showing. titleRef is null on page 1 now (that
-    // field is not rendered), and an opening that focused nothing would leave
-    // the caret wherever the app last had it, outside the modal.
-    const el = openedPage.current === 1 ? describeRef.current : titleRef.current;
+    // The describe box (page 1's list, or the form's box at the top) — or
+    // Name after a failed create. Only once this render is showing the page
+    // and box the opening asked for: an opening that focused nothing would
+    // leave the caret wherever the app last had it, outside the modal.
+    const toTitle = openedFocus.current === "title";
+    const shown = page === openedPage.current && (toTitle || page === 1 || describeOpen);
+    const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;
     const active = document.activeElement;
     if (!el) {
-      // The form is not on screen yet (the previous opening was a batch, so
-      // page 1 is what this render still shows): focus Name once it is.
-      if (openedPage.current === 2) focusTitleNext.current = true;
+      // Not on screen yet (the previous opening was a batch, so page 1 is what
+      // this render still shows, or the box was hidden): focus it once it is.
+      focusOpeningNext.current = true;
       return;
     }
     if (
@@ -817,7 +825,9 @@ export function NewSessionDialog() {
     page,
     describeOpen,
     focusFolderNext,
-    focusTitleNext,
+    focusOpeningNext,
+    openedFocus,
+    openedPage,
     repoRef,
     titleRef,
     describeRef,
@@ -1093,12 +1103,9 @@ export function NewSessionDialog() {
       <form
         id="new-form"
         ref={dropZoneRef}
-        // Page 1 is one question and three buttons. The fixed height below
-        // exists so that opening a fold on page 2 scrolls inside .nf-body
-        // instead of growing the card and re-centering it under the pointer —
-        // there are no folds here, and holding 620px up over a single input
-        // left most of the card empty.
-        className={"ta-drop" + (page === 1 ? " nf-ask" : "")}
+        // Every page is the same fixed height (NewSessionDialog.css), so
+        // nothing here changes the centred card's size.
+        className="ta-drop"
         onSubmit={(e) => {
           e.preventDefault();
           submit();

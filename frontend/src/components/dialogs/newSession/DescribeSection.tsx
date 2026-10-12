@@ -4,7 +4,7 @@
  * the form, and the confirm row for a folder a plan wants made. State stays
  * in NewSessionDialog; these read and write it through what they are handed. */
 
-import { useEffect, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from "react";
 import type { PlanAnswer } from "../../../api/types";
 import type { deviceApi } from "../../../lib/devices";
 import { errMsg } from "../../../lib/format";
@@ -321,13 +321,16 @@ export function describeFlow(ctx: DescribeFlowCtx) {
   return { applyPlan, startNow, cancelDescribe, startFromPlan, runDescribe };
 }
 
-/** The focus moves that belong to the describe flow itself (not the opening's). */
+/** The focus moves that belong to the describe flow itself, plus the
+ * opening's deferred one (see NewSessionDialog's opening focus). */
 export function useDescribeFocus({
   open,
   page,
   describeOpen,
   focusFolderNext,
-  focusTitleNext,
+  focusOpeningNext,
+  openedFocus,
+  openedPage,
   repoRef,
   titleRef,
   describeRef,
@@ -336,7 +339,9 @@ export function useDescribeFocus({
   page: number;
   describeOpen: boolean;
   focusFolderNext: MutableRefObject<boolean>;
-  focusTitleNext: MutableRefObject<boolean>;
+  focusOpeningNext: MutableRefObject<boolean>;
+  openedFocus: MutableRefObject<"describe" | "title">;
+  openedPage: MutableRefObject<number>;
   repoRef: MutableRefObject<HTMLInputElement | null>;
   titleRef: MutableRefObject<HTMLInputElement | null>;
   describeRef: MutableRefObject<HTMLTextAreaElement | null>;
@@ -364,15 +369,23 @@ export function useDescribeFocus({
     el.setSelectionRange(el.value.length, el.value.length);
   }, [page]);
 
+  // The opening's target, once the page (and box) it asked for is on screen.
   useEffect(() => {
-    if (page !== 2 || !focusTitleNext.current) return;
-    focusTitleNext.current = false;
-    titleRef.current?.focus();
-  }, [page]);
+    if (!open || !focusOpeningNext.current || page !== openedPage.current) return;
+    const el = openedFocus.current === "title" ? titleRef.current : describeRef.current;
+    if (!el) return;
+    focusOpeningNext.current = false;
+    el.focus();
+  }, [open, page, describeOpen]);
 
-  // "Describe it instead…" opened: the caret goes to the box it revealed.
+  // "Describe it instead…" pressed after a Hide: the caret goes to the box it
+  // revealed. Only on that transition — the box is open from the start of
+  // every opening, and the opening's own focus owns that caret.
+  const wasOpen = useRef(describeOpen);
   useEffect(() => {
-    if (open && describeOpen && page === 2) describeRef.current?.focus();
+    const reopened = describeOpen && !wasOpen.current;
+    wasOpen.current = describeOpen;
+    if (open && reopened && page === 2 && !focusOpeningNext.current) describeRef.current?.focus();
   }, [open, describeOpen, page]);
 }
 
@@ -679,10 +692,10 @@ export function DescribeSection({
         {newFolderRow}
       </div>
     );
-  /* The secondary door. A quiet row until opened; opened, it is the sentence
-     box page 1 used to be, in the Templates strip's card. Enter there buys the
-     model turn (runDescribe) that fills the fields below — nothing is created
-     by it. */
+  /* The first thing on the form, open on every opening with the caret in it:
+     Enter buys the model turn (runDescribe) that fills the fields below —
+     nothing is created by it. Hide folds it to a quiet row for the rest of
+     the opening. */
   return !describeOpen ? (
       <div className="nf-describe-toggle">
         <button
@@ -698,7 +711,7 @@ export function DescribeSection({
     ) : (
       <div id="new-describe" className="new-templates nf-describe">
         <div className="nt-head">
-          <span>Describe what you want to work on</span>
+          <span>What do you want to work on?</span>
           {describing ? (
             <span className="nf-describe-busy" aria-live="polite">
               <span className="btn-spin" aria-hidden="true" />
@@ -757,7 +770,8 @@ export function DescribeSection({
         </div>
         <p className="nf-describe-help">
           Your coding CLI reads this and fills in the folder, name and first
-          instruction below. <b>Nothing is created until you press Create.</b>
+          instruction below. <b>Nothing is created until you press Create.</b>{" "}
+          Or skip it: give the session a Name below and press Enter.
         </p>
         {planNoteShown && (
           <p className="nf-describe-note" aria-live="polite">

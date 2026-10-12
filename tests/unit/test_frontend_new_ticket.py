@@ -36,41 +36,36 @@ def test_the_new_dialog_ships_two_tabs():
     assert ".nf-head .nf-tabs .nf-tab.active" in css
 
 
-def test_the_card_has_one_top_edge_and_grows_downward():
-    """Every pane is its own natural height and they all start at the same y.
+def test_the_card_is_centred_and_one_height_for_every_pane():
+    """The New card is centred like every other modal, and holds still by
+    having ONE fixed height for every pane rather than a fixed top edge.
 
-    The two ways to stop a tab click moving the card are equal heights and a
-    fixed top. Equal heights was tried and is what put a dead band above the
-    buttons on the shorter pane, so the top is fixed instead and each pane is
-    as tall as it needs to be.
-
-    The assertions are about the SHAPE of the rule, not about pixels: that the
-    top is pinned rather than centred, that neither landing pane is given a
-    height, and that a card is capped so sagging stops at the window edge. A
-    pane that quietly regained a fixed height would look right in a screenshot
-    and bring the dead band back.
+    The fixed-top shape (``align-items: flex-start`` + ``--nf-top`` anchored on
+    a landing pane's height) left the card hanging high on the screen, and the
+    owner asked for it back in the middle: "Recenter it". A centred card moves
+    by half of any height change, so the form, page 1 and the Ticket pane now
+    share one height (scrolling inside) — switching tabs or opening a fold
+    moves nothing — and ``86vh`` keeps it inside a short window.
     """
     css = client.get("/style.css").text
-    block = css.split("#new-dialog")[1][:400]
-    assert "align-items: flex-start;" in block
-    assert "padding-top: var(--nf-top);" in block
-    # The top is centred on a LANDING pane's height, not the full form's —
-    # anchoring on 620px is what parked the short panes high on the screen.
+    block = css.split("#new-dialog {")[1].split("}")[0]
+    # Nothing overrides the .modal centring any more.
+    assert "align-items: flex-start" not in block
+    assert "padding-top" not in block
+    assert "--nf-top" not in css and "--nf-anchor-h" not in css
+    assert in_bundle("--nf-card-h: min(86vh, 620px);", block)
+    # One height for both cards; no pane goes back to its natural height.
     assert in_bundle(
-        "--nf-top: max(16px, calc((100vh - var(--nf-anchor-h)) / 2));", css
+        "#new-ticket-form { background: var(--panel); border: 1px solid "
+        "var(--border); border-radius: 12px; padding: 20px 22px; width: "
+        "min(660px, 94vw); height: var(--nf-card-h);",
+        css,
     )
-    assert in_bundle("--nf-anchor-h: min(86vh, 400px);", css)
-    # Neither landing pane is handed a height; both are natural.
-    assert in_bundle("#new-form.nf-ask {\n  height: auto;\n}", css)
-    assert "height: var(--nf-tab-h)" not in css
-    # ...and a card stops sagging at the bottom of the window.
-    assert in_bundle("--nf-max-h: calc(100vh - var(--nf-top) - 16px);", css)
-    assert in_bundle(
-        "#new-form,\n#new-ticket-form {\n  max-height: var(--nf-max-h);\n}", css
-    )
-    # Each literal is written once, so the anchor and the cap cannot drift.
+    assert "#new-form.nf-ask" not in css
+    # The Ticket pane fills the card and keeps its actions on the bottom edge.
+    assert in_bundle(".nt-pane > .modal-actions { margin-top: auto; }", css)
+    # The literal is written once, so the two cards cannot drift apart.
     assert css.count("min(86vh, 620px)") == 1
-    assert css.count("min(86vh, 400px)") == 1
 
 
 def test_the_ticket_pane_ships_its_box_its_picker_and_its_button():

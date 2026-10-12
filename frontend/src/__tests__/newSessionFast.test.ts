@@ -46,8 +46,14 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   it("opens on the form: page 2 is the initial page and every opening lands there", () => {
     expect(SRC).toContain("useState(2)");
     expect(SRC).toContain("openedPage.current = prefill ? 1 : 2;");
-    // and the opening focus goes to Name, not to the sentence box
-    expect(SRC).toContain("openedPage.current === 1 ? describeRef.current : titleRef.current");
+    // The opening's caret goes to the describe box at the top of the form
+    // (the owner: "have the auto generate session as the first option instead
+    // of forcing me to click into it") — Name only after a failed create,
+    // whose reopen is about fixing the form.
+    expect(SRC).toContain("const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;");
+    const failed = DIALOG.slice(DIALOG.indexOf("if (failedReopen.current) {"), DIALOG.indexOf("setTab(\"session\");"));
+    expect(failed).toContain('openedFocus.current = "title";');
+    expect(failed).toContain('openedFocus.current = "describe";');
   });
 
   it("Enter in Name is the form's submit, never a describe call", () => {
@@ -92,8 +98,19 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   });
 });
 
-describe("describe — the secondary door on the form", () => {
-  it("is a button on the form that expands the box; its Enter runs the model turn with a visible thinking state and a Cancel", () => {
+describe("describe — first on the form, open by default", () => {
+  it("starts open on every opening: no click before typing", () => {
+    // Was useState(false) + a reset to false behind "Describe it instead…";
+    // the owner asked for the describe box to be the first option, open.
+    expect(DIALOG).toContain("const [describeOpen, setDescribeOpen] = useState(true);");
+    const reset = DIALOG.slice(DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();"), DIALOG.indexOf("setBaseBranch(\"\");"));
+    expect(reset).toContain("setDescribeOpen(true);");
+    expect(DIALOG).not.toContain("setDescribeOpen(false);");
+    // It is the first section of the form.
+    expect(DIALOG.indexOf("<DescribeSection page={2}")).toBeLessThan(DIALOG.indexOf("<TemplatesStrip"));
+  });
+
+  it("can still be hidden to a row that reopens it; its Enter runs the model turn with a visible thinking state and a Cancel", () => {
     expect(SRC).toContain('id="new-describe-open"');
     expect(SRC).toContain("Describe it instead…");
     // The form's describe fold is the last thing DescribeSection.tsx draws.
