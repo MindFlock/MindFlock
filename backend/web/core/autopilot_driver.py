@@ -51,9 +51,9 @@ def _server():
 
 # --- Autopilot: advance armed sessions toward their target rung -------------- #
 # The impure half of backend.web.core.autopilot (the store and the decision
-# function live there). Structured exactly like server.py's prompt-queue drain:
-# a 5s pass, one decision per armed session, every step wrapped so a single bad
-# session cannot stop the pass.
+# function live there). Structured exactly like the prompt-queue drain
+# (core.queue_driver): a 5s pass, one decision per armed session, every step
+# wrapped so a single bad session cannot stop the pass.
 _AUTOPILOT_INTERVAL = 5.0
 #: Floor between two actions on one session, so a stage that has not yet caught
 #: up cannot cause a double-push.

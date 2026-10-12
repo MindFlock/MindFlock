@@ -1799,7 +1799,7 @@ refuses a `from` starting with `peer:`.
 | Fast-track | `backend/web/core/autopilot.py` (store + decision) and `autopilot_driver.py` (loop + effects); route `/api/instances/{title}/fast-track` |
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
-| Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |
+| Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `backend/web/core/queue_driver.py` |
 | Fences + worker order | `backend/web/core/worker_order.py` (store + planner), `worker_order_driver.py` (fences, releases, the loop); per-session fences in `backend/config/red_zones.py`; routes `POST /api/instances/{t}/fence`, `GET/POST /api/instances/{t}/order` |
 | Lineage | `backend/web/core/lineage.py`; `/output`, `/dialog` and `/answer` helpers in `core/agent_io.py` |
 | Playbooks | `backend/mcp/playbooks.py`; routes `/api/playbooks*` in `server.py` |
