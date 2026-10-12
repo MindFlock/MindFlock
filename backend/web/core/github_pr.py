@@ -161,12 +161,7 @@ def has_token_sync() -> bool:
     try:
         from backend.web.core import github_auth
 
-        toml_token = ""
-        try:
-            toml_token = (_github_config().toml_token or "").strip()
-        except Exception:  # noqa: BLE001
-            toml_token = ""
-        return bool(github_auth.resolve_token(toml_token, gh=False)[1])
+        return bool(github_auth.resolve_full_chain(gh=False)[1])
     except Exception:  # noqa: BLE001 — capability probes must never 500
         return False
 
