@@ -29,12 +29,12 @@ startup, so upgrading does not suddenly list every old run on the rail.
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from typing import Dict, Iterable, Optional
 
-from backend import config, log
+from backend import config
+from backend.web.core import title_store
 
 #: Features that may own a hidden session. The create route 400s any other
 #: value, so a typo cannot quietly hide a session forever.
@@ -56,26 +56,14 @@ def _path() -> str:
 def _load() -> Dict[str, str]:
     global _HIDDEN
     if _HIDDEN is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _HIDDEN = (
-                {str(k): str(v) for k, v in d.items() if v in KINDS}
-                if isinstance(d, dict)
-                else {}
-            )
-        except (OSError, ValueError):
-            _HIDDEN = {}
+        _HIDDEN = title_store.load(
+            _path, lambda d: {str(k): str(v) for k, v in d.items() if v in KINDS}
+        )
     return _HIDDEN
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_HIDDEN or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save hidden sessions: %v", err)
+    title_store.persist(_path, _HIDDEN, "hidden sessions")
 
 
 def validate(value) -> Optional[str]:
