@@ -40,7 +40,7 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
-**Verify** is always on the bar. Its badge counts shipped changes nobody has
+**Verify** is always on the bar. Its badge counts pushed changes nobody has
 checked and says nothing at zero.
 
 Four entries left the bar:
@@ -184,7 +184,7 @@ magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
-have to navigate), **Verify — check what shipped**, **Customize…**, **Prompts…** (*manage saved prompts*),
+have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
 **Templates…** (*manage saved New-session setups*), **Assistant agent file…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
@@ -1529,7 +1529,7 @@ built-in alias.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Alt+V` | Verify — shipped changes nobody has checked |
+| `Alt+V` | Verify — pushed changes nobody has checked |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -2673,7 +2673,7 @@ merged is not verified — nobody has opened the thing and looked at it. So work
 that reaches the branch you actually ship from comes back here as a **checklist**,
 an agent works the steps it can from a shell, and whatever needs a pair of eyes
 is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`, or the
-palette's **Verify — check what shipped**) — the button is always on the bar,
+palette's **Verify — check what was pushed**) — the button is always on the bar,
 with its due badge. Dialog `#verify-dialog` / panel
 `#verify-panel`, from
 `frontend/src/components/dialogs/{VerifyDialog.tsx,verify.ts}`; the sidebar bar

@@ -234,7 +234,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify — check what shipped"',
+        'label: "Verify — check what was pushed"',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label

@@ -172,25 +172,6 @@ export function SettingField(props: {
   );
 }
 
-/** A checkbox settings field (persists booleans). */
-export function SettingCheck(props: { group: string; field: string; label: React.ReactNode }) {
-  const s = useSettings();
-  const stored = s.get(props.group, props.field);
-  const checked = stored === true || stored === "true" || stored === "1";
-  return (
-    <label className="check">
-      <input
-        type="checkbox"
-        data-group={props.group}
-        data-field={props.field}
-        checked={checked}
-        onChange={(e) => s.saveField(props.group, props.field, e.target.checked)}
-      />
-      {props.label}
-    </label>
-  );
-}
-
 // The inline "Are you sure?" row moved to components/InlineConfirm.tsx (it is
 // not Settings-only); re-exported so the screens' imports stay as they are.
 export { InlineConfirm } from "../InlineConfirm";

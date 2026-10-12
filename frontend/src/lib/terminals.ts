@@ -136,7 +136,7 @@ function disableAppMouseReporting(term: Terminal) {
   }
 }
 
-function attachCopyOnSelect(
+export function attachCopyOnSelect(
   host: HTMLElement,
   term: Terminal,
   opts: { session?: string; agent?: boolean }
@@ -258,7 +258,7 @@ export function setWheelDamping(speed: number) {
   wheelDamping = speed / Math.max(1, Math.round(speed));
 }
 
-function attachWheelScroll(host: HTMLElement, term: Terminal, getWs: () => WebSocket | null) {
+export function attachWheelScroll(host: HTMLElement, term: Terminal, getWs: () => WebSocket | null) {
   function cellHeight() {
     return host.getBoundingClientRect().height / (term.rows || 24) || 16;
   }
@@ -713,13 +713,6 @@ export function releaseTerms(title: string) {
   entry.shell?.dispose();
   registry.delete(title);
   notifyTermStates();
-}
-
-/** Drop terminals whose sessions no longer exist. */
-export function pruneTerms(liveTitles: Set<string>) {
-  for (const title of [...registry.keys()]) {
-    if (!liveTitles.has(title)) releaseTerms(title);
-  }
 }
 
 export function fitAll() {

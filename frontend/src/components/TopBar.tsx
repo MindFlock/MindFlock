@@ -198,7 +198,7 @@ export function TopBar() {
             id="verify-btn"
             className="tb-item"
             type="button"
-            title="Verify — merged changes nobody has checked (Alt+V)"
+            title="Verify — pushed changes nobody has checked (Alt+V)"
             /* No aria-label, for the same reason as Intake above: the visible
                "Verify" IS the name, and a second wording would be the one a
                screen reader announced. */

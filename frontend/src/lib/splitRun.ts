@@ -14,11 +14,6 @@
 import type { PlanPiece, RunDTO, RunTask, SplitMode } from "../api/types";
 import { LANE_HEAD } from "./agentMessages";
 
-/** A group whose lines merge back into one branch (a split, or "one for all"). */
-export function isTogether(run: Pick<RunDTO, "policy"> & Partial<Pick<RunDTO, "split">>): boolean {
-  return !!run.split || run.policy?.grouping === "together";
-}
-
 /** The first line of a prompt, trimmed for a one-line row. */
 export function firstLine(text: string | null | undefined, max = 120): string {
   const s = String(text || "")

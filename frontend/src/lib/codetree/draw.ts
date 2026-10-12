@@ -11,7 +11,7 @@
  * app tokens + the tree's --ct-* custom properties); nothing here is themed by
  * hand. */
 
-import { birdSprite, tinted } from "../flock";
+import { tinted } from "../flock";
 import { agentBlast, addBadgeSets, blastOf, collectBadges } from "./blast";
 import { dPS, hashStr, rng, taperHW } from "./layout";
 import { S0, TAU, baseOf, isUnder, shortName, type Branch, type Leaf, type Model, type TNode, type TTerm } from "./model";
@@ -84,15 +84,6 @@ export function tailPath(p: string): string {
 
 function clip(s: string, n = 22): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
-/** Call `cb` once the bird sprite has decoded (birds fall back to nothing
- * until then, so the caller repaints). */
-export function whenSpriteReady(cb: () => void): void {
-  const img = birdSprite();
-  if (!img) return;
-  if (img.complete && img.naturalWidth) return;
-  img.addEventListener("load", () => cb(), { once: true });
 }
 
 function trunkPath(M: Model, T: number): Path2D {
@@ -4497,11 +4488,4 @@ export function drawMini(v: TreeView, canvas: HTMLCanvasElement, screenToWorld: 
       g.arc(p[0] * m.z + m.ox, p[1] * m.z + m.oy, A.ag.parent ? 2 : 3, 0, TAU);
       g.fill();
     }
-}
-
-/** The minimap point (CSS px inside the canvas) → world. */
-export function miniToWorld(canvas: HTMLCanvasElement, mx: number, my: number): [number, number] | null {
-  const m = MINI.get(canvas);
-  if (!m) return null;
-  return [(mx - m.ox) / m.z, (my - m.oy) / m.z];
 }

@@ -24,7 +24,7 @@ vi.mock("../components/settings/useServerRestart", () => ({
 const { PhoneSteps, UrlList } = await import("../components/settings/screens/Mobile");
 const { SetupChecklist } = await import("../components/settings/screens/SharedLink");
 type Shared = import("../components/settings/screens/SharedLink").SharedLinkState;
-type Step = import("../components/settings/screens/SharedLink").SetupStep;
+type Step = import("../components/settings/screens/SharedLink").SharedLinkStep;
 
 const POLICY = `"tagOwners": {\n  "tag:mindflock": ["autogroup:admin"],\n},\n"autoApprovers": {\n  "services": {\n    "svc:mindflock": ["tag:mindflock"],\n  },\n},\n"grants": [\n  {"src": ["tag:mindflock"], "dst": ["tag:mindflock"], "ip": ["tcp:8765", "tcp:443"]},\n  {"src": ["me@example.com"], "dst": ["svc:mindflock"], "ip": ["tcp:443"]},\n],\n"tests": [\n  {"src": "tag:mindflock", "accept": ["tag:mindflock:8765"]},\n],`;
 

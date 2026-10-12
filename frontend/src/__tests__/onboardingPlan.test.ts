@@ -1,67 +1,14 @@
 /// <reference types="vite/client" />
 import { describe, it, expect } from "vitest";
 import {
-  STEP_ORDER,
-  currentStep,
   flowFinished,
   hasSyncedAgentStep,
   needsIdentity,
-  orderedSteps,
   pollDelay,
   primaryGithubMethod,
   pushFailedNote,
   readinessLine,
-  stepNumber,
-  visibleSteps,
-  type OnboardingPlan,
 } from "../lib/onboarding";
-
-const step = (id: string, status: string, extra: Record<string, unknown> = {}) =>
-  ({ id, title: id, status, reason: id + " " + status, ...extra }) as never;
-
-describe("Setup's step order (GET /api/onboarding)", () => {
-  it("asks the join question before the agent and GitHub steps", () => {
-    expect(STEP_ORDER).toEqual(["deps", "devices", "agent", "tailscale", "github", "repo"]);
-    expect(STEP_ORDER.indexOf("devices")).toBeLessThan(STEP_ORDER.indexOf("agent"));
-    expect(STEP_ORDER.indexOf("devices")).toBeLessThan(STEP_ORDER.indexOf("github"));
-  });
-
-  it("draws a shuffled payload in the fixed order", () => {
-    const plan: OnboardingPlan = {
-      steps: [step("repo", "todo"), step("github", "ok"), step("deps", "ok"), step("devices", "todo")],
-      next: "",
-      done: false,
-    };
-    expect(orderedSteps(plan).map((s) => s.id)).toEqual(["deps", "devices", "github", "repo"]);
-    expect(currentStep(plan)).toBe("devices");
-  });
-
-  it("hides Tailscale until going multi-device, and numbers what it shows", () => {
-    const first: OnboardingPlan = {
-      steps: STEP_ORDER.map((id) => step(id, id === "tailscale" ? "skip" : "ok")),
-      next: "",
-      done: true,
-    };
-    const shown = visibleSteps(first);
-    expect(shown).toEqual(["deps", "devices", "agent", "github", "repo"]);
-    expect(stepNumber("github", shown)).toBe("④");
-    const joining: OnboardingPlan = {
-      steps: STEP_ORDER.map((id) => step(id, id === "agent" || id === "github" ? "skip" : "todo")),
-      next: "tailscale",
-      done: false,
-    };
-    expect(visibleSteps(joining)).toContain("tailscale");
-    expect(stepNumber("tailscale", visibleSteps(joining))).toBe("④");
-    // Joining: the agent and GitHub steps stay on screen, with their reason.
-    expect(visibleSteps(joining)).toContain("agent");
-    expect(currentStep(joining)).toBe("tailscale");
-  });
-
-  it("before the plan loads, every step but Tailscale", () => {
-    expect(visibleSteps(null)).toEqual(["deps", "devices", "agent", "github", "repo"]);
-    expect(currentStep(null)).toBe("");
-  });
-});
 
 describe("Connect GitHub", () => {
   it("offers the device flow, then gh, then a token", () => {

@@ -117,7 +117,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
     acts.push({
-      label: "Verify — check what shipped",
+      label: "Verify — check what was pushed",
       hint: "Alt+V",
       run: () => ui.openDialogFor("verify"),
     });

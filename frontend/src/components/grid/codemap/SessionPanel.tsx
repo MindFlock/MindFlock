@@ -16,7 +16,7 @@ import {
   type BlastRow,
   type FeedState,
   type GuardPill,
-  type PlanStatus,
+  type PlanItemStatus,
   type ScopeRequest,
   type ZoneClass,
 } from "../../../lib/codemap";
@@ -41,7 +41,7 @@ export interface PanelModel {
   skew: number;
   plan: CodeMapPlan | null;
   planSupported: boolean;
-  progress: Map<string, PlanStatus>;
+  progress: Map<string, PlanItemStatus>;
   offPlan: string[];
   goZones: RedZone[];
   midFlight: boolean;
