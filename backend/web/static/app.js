@@ -63974,6 +63974,10 @@ function enterAction(where) {
 	if (where.shift) return "none";
 	return "create";
 }
+function ctrlEnterAction(where) {
+	if (where.page === 1 && !where.runMode) return "describe";
+	return "submit";
+}
 function focusRowIndex(paths, leaving) {
 	if (!paths.length) return -1;
 	const i = paths.indexOf(leaving);
@@ -66210,7 +66214,11 @@ function NewSessionDialog() {
 			} else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
 				if (shownTab !== "session") return;
 				e.preventDefault();
-				submit();
+				if (ctrlEnterAction({
+					page,
+					runMode
+				}) === "describe") runDescribe("fill");
+				else submit();
 			}
 		},
 		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

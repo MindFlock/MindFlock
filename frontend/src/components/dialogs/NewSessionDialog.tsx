@@ -73,6 +73,7 @@ import {
   NEW_TABS,
   PLAN_FOLDER_NONE,
   cancelPlanRun,
+  ctrlEnterAction,
   folderReducer,
   foldSummaryFor,
   mayTakeOpeningFocus,
@@ -1088,7 +1089,10 @@ export function NewSessionDialog() {
           // out from under a tab that is not showing one.
           if (shownTab !== "session") return;
           e.preventDefault();
-          submit();
+          // Page 1 has no visible form to submit: read the sentence instead
+          // (see ctrlEnterAction), never create an unseen "untitled" session.
+          if (ctrlEnterAction({ page, runMode }) === "describe") void runDescribe("fill");
+          else submit();
         }
       }}
     >

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ctrl/Cmd+Enter in the New dialog's sentence box no longer creates an
+  empty "untitled" session.** On the first card the full form isn't shown, but
+  the shortcut submitted it anyway: no name, last time's folder, and the
+  sentence thrown away. It now reads the sentence, like Enter and **Review
+  details first**. A list still starts its rows, and the full form still
+  submits as before.
+
 ## [0.8.2] - 2026-10-12
 
 ### Changed

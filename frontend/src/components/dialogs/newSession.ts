@@ -704,6 +704,20 @@ export function enterAction(where: {
   return "create";
 }
 
+/** What Ctrl/Cmd+Enter does anywhere in the New dialog's Session tab.
+ *
+ * On page 1 (the sentence card) the form is not on screen: its Name is empty
+ * and its Folder is only last time's default. Submitting it from here created
+ * an "untitled" session in whatever folder was last used, with the sentence
+ * thrown away. So on page 1 the shortcut reads the sentence, exactly like
+ * Enter and "Review details first", and nothing is created unseen. A list
+ * (run mode) keeps starting its rows, as its own Start button does. Page 2
+ * submits the form the user is looking at. */
+export function ctrlEnterAction(where: { page: number; runMode: boolean }): "describe" | "submit" {
+  if (where.page === 1 && !where.runMode) return "describe";
+  return "submit";
+}
+
 /** Which row a keyboard navigation should land on once the new listing is up:
  * the folder it just stepped out of, if that folder is in the listing — which is
  * the case when stepping UP, so a wrong turn is one ← away from where it started

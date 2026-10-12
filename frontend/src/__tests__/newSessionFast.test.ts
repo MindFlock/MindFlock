@@ -19,6 +19,7 @@ import FOOTER from "../components/dialogs/newSession/FooterActions.tsx?raw";
 import SUBMIT from "../lib/newSessionSubmit.ts?raw";
 import {
   baseBranchFields,
+  ctrlEnterAction,
   enterAction,
   foldSummaryFor,
   rememberedProfileVerdict,
@@ -165,6 +166,24 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     // Back for every opening, not only a batch.
     expect(form).not.toContain("{batch && (");
     expect(SRC).toContain("disabled={draft.starting || describing}");
+  });
+});
+
+describe("Ctrl/Cmd+Enter never creates a session nobody has seen", () => {
+  it("on page 1 reads the sentence (like Enter); a list keeps starting its rows; page 2 submits the form", () => {
+    expect(ctrlEnterAction({ page: 1, runMode: false })).toBe("describe");
+    expect(ctrlEnterAction({ page: 1, runMode: true })).toBe("submit");
+    expect(ctrlEnterAction({ page: 2, runMode: false })).toBe("submit");
+    expect(ctrlEnterAction({ page: 2, runMode: true })).toBe("submit");
+  });
+
+  it("the modal root's Ctrl/Cmd+Enter goes through ctrlEnterAction, not straight to submit", () => {
+    const at = DIALOG.indexOf('e.key === "Enter" && (e.ctrlKey || e.metaKey)');
+    expect(at).toBeGreaterThan(-1);
+    const branch = DIALOG.slice(at, at + 700);
+    expect(branch).toContain("ctrlEnterAction({ page, runMode })");
+    expect(branch).toContain('void runDescribe("fill")');
+    expect(branch.indexOf("ctrlEnterAction")).toBeLessThan(branch.indexOf("submit()"));
   });
 });
 
