@@ -21,7 +21,7 @@ import { SpecialPane } from "./SpecialPane";
 import { SetupChecklist } from "../setup/SetupChecklist";
 import { showSetupCard } from "../setup/setupModel";
 import { useSetup } from "../setup/useSetup";
-import { isVerifySession } from "../dialogs/verify";
+import { isVerifySession } from "../dialogs/verifySession";
 
 export interface SpecialPaneDesc {
   key: string;

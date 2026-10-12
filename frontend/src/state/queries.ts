@@ -9,7 +9,7 @@ import { api } from "../api/client";
 import { nudgeUsage } from "../lib/usageRefresh";
 import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
-import { isVerifySession } from "../components/dialogs/verify";
+import { isVerifySession } from "../components/dialogs/verifySession";
 import type { EffortCap } from "../lib/effort";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {

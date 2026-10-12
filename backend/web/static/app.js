@@ -24272,494 +24272,7 @@ function pop(kind, title, detail, actions) {
 	while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
 }
 //#endregion
-//#region src/lib/rowSearch.ts
-function searchTokens(query) {
-	return query.toLowerCase().split(/\s+/).filter(Boolean);
-}
-function matchesTokens(fields, tokens) {
-	if (!tokens.length) return true;
-	const hay = fields.filter(Boolean).join(" ").toLowerCase();
-	return tokens.every((t) => hay.includes(t));
-}
-//#endregion
-//#region src/components/dialogs/verify.ts
-function isFinal(result) {
-	return result === "pass" || result === "fail";
-}
-function isYourAnswer(result, by = "") {
-	return isFinal(result) || result === "blocked" && by === "human";
-}
-function answeredByYou(entry) {
-	return isYourAnswer(entry?.result, entry?.by);
-}
-function handedBack(entry) {
-	return entry?.result === "blocked" && entry?.by !== "human";
-}
-function stepIsYours(plan, step) {
-	return step.actor === "human" || handedBack(stepResult(plan, step.id));
-}
-function isPhantomRun(run) {
-	if (run.session) return false;
-	const results = run.results || {};
-	return !Object.keys(results).some((id) => !!results[id]?.result);
-}
-function latestRun(plan) {
-	const runs = plan.runs || [];
-	let best = null;
-	for (const run of runs) {
-		if (!run || isPhantomRun(run)) continue;
-		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
-	}
-	return best;
-}
-function stepResult(plan, stepId) {
-	const run = latestRun(plan);
-	if (!run) return null;
-	return run.results?.[stepId] ?? null;
-}
-function verdictOf(plan) {
-	const run = latestRun(plan);
-	if (!run) return "none";
-	const results = run.results || {};
-	const ids = answerableIds(plan, run);
-	if (!ids.length) return "partial";
-	let unsettled = false;
-	for (const id of ids) {
-		const result = results[id]?.result;
-		if (result === "fail") return "fail";
-		if (!isFinal(result)) unsettled = true;
-	}
-	return unsettled ? "partial" : "pass";
-}
-function answerableIds(plan, run) {
-	const steps = plan.steps || [];
-	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
-}
-function openHumanSteps(plan) {
-	const run = latestRun(plan);
-	if (!run) return [];
-	const results = run.results || {};
-	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
-}
-function needsConfirmation(plan) {
-	return openHumanSteps(plan).length > 0;
-}
-function allSettled(plan) {
-	const run = latestRun(plan);
-	const steps = plan.steps || [];
-	if (!run || !steps.length) return false;
-	const results = run.results || {};
-	return steps.every((s) => answeredByYou(results[s.id]));
-}
-function failCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
-}
-function unansweredCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
-}
-function cantCheckCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => {
-		const entry = results[id];
-		return entry?.result === "blocked" && entry.by === "human";
-	}).length;
-}
-function isWaitingOnYou(plan) {
-	return plan.state === "due" || plan.state === "running" || plan.state === "generating" && !!plan.live_at && !allSettled(plan) || needsConfirmation(plan);
-}
-function dueCount(plans) {
-	return (plans || []).filter(isWaitingOnYou).length;
-}
-function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
-	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
-	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
-	return Object.entries(blocks || {}).some(([slug, block]) => {
-		const own = String(block?.live_branch || "").trim();
-		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
-	});
-}
-function planTargets(instances, plans, closed = []) {
-	const havePlans = new Set((plans || []).map((plan) => plan.id));
-	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch, repo) => {
-		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
-		const key = coverageKey(repo, branch);
-		if (key && covered.has(key)) return;
-		seen.add(title);
-		out.push(title);
-	};
-	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
-	for (const entry of closed || []) take(entry.title, entry.branch, "");
-	return out;
-}
-function coverageKey(repo, branch) {
-	const r = (repo || "").trim();
-	const b = (branch || "").trim();
-	return r && b ? r + "\0" + b : "";
-}
-function repoName(repoRoot) {
-	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
-	return parts[parts.length - 1] || "";
-}
-function closedTargets(instances, closed = []) {
-	const live = new Set((instances || []).map((i) => i.title));
-	return new Set((closed || []).map((e) => e.title).filter((t) => t && !live.has(t)));
-}
-function noTargetsReason(instances, plans, closed = []) {
-	if (planTargets(instances, plans, closed).length) return "";
-	const list = [...instances || [], ...closed || []];
-	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
-	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
-	return "Every session with a branch already has a checklist — they're in the list below.";
-}
-var GROUPS = [
-	{
-		key: "due",
-		label: "Not checked yet"
-	},
-	{
-		key: "fail",
-		label: "Steps failed"
-	},
-	{
-		key: "generated",
-		label: "Not shipped yet"
-	},
-	{
-		key: "done",
-		label: "Checked"
-	},
-	{
-		key: "failed",
-		label: "Couldn't be written"
-	}
-];
-function planGroup(plan) {
-	if (isWaitingOnYou(plan)) return "due";
-	if (plan.state === "failed") return "failed";
-	if (verdictOf(plan) === "fail") return "fail";
-	if (plan.state === "done") return "done";
-	if (plan.state === "generating" && plan.live_at) return "done";
-	return "generated";
-}
-function planMatches(plan, tokens) {
-	if (!tokens.length) return true;
-	const fields = [
-		plan.title,
-		plan.id,
-		plan.summary,
-		plan.branch,
-		plan.sha,
-		plan.repo_root,
-		plan.live_branch,
-		GROUPS.find((g) => g.key === planGroup(plan))?.label
-	];
-	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
-	return matchesTokens(fields, tokens);
-}
-function canRunNow(plan) {
-	const action = planStatus(plan).action;
-	return action === "run" || action === "rerun";
-}
-function groupPlans(plans) {
-	const buckets = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) {
-		if (!plan) continue;
-		const key = planGroup(plan);
-		const bucket = buckets.get(key);
-		if (bucket) bucket.push(plan);
-		else buckets.set(key, [plan]);
-	}
-	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
-		const found = buckets.get(g.key) || [];
-		if (g.key === "due" || g.key === "fail") {
-			const sum = found.reduce((acc, p) => {
-				const t = checkTally(p);
-				return {
-					yours: acc.yours + t.yours,
-					failed: acc.failed + t.failed
-				};
-			}, {
-				yours: 0,
-				failed: 0
-			});
-			const bits = [];
-			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
-			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
-			return {
-				key: g.key,
-				label: g.label,
-				detail: bits.length ? bits.join(" · ") : void 0,
-				plans: found
-			};
-		}
-		if (g.key !== "done") return {
-			key: g.key,
-			label: g.label,
-			plans: found
-		};
-		const short = found.filter((p) => unansweredCount(p) > 0);
-		const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
-		const cant = short.length - blank;
-		const bits = [];
-		if (blank) bits.push(blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer");
-		if (cant) bits.push(cant + " you couldn't check");
-		return {
-			key: g.key,
-			label: g.label,
-			detail: bits.length ? bits.join(" · ") : void 0,
-			plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)]
-		};
-	});
-}
-var GENERATION_STALE_S = 300;
-function isGenerationStalled(plan, now = Date.now() / 1e3) {
-	if (!plan || plan.state !== "generating") return false;
-	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
-}
-function runElapsed(run, now = Date.now() / 1e3) {
-	const at = Number(run?.at || 0);
-	if (!at) return "";
-	const mins = Math.round((now - at) / 60);
-	if (mins < 1 || mins > 1440) return "";
-	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
-}
-function agoText(epochSeconds, now = Date.now() / 1e3) {
-	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
-	if (mins < 1) return "just now";
-	if (mins < 60) return mins + "m ago";
-	const h = Math.round(mins / 60);
-	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
-}
-var HEADLINE_MAX = 120;
-function errorHeadline(plan) {
-	const raw = String(plan?.error || "").trim();
-	if (!raw) return "";
-	const stop = raw.search(/[.!?](\s|$)/);
-	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
-	if (first.length > HEADLINE_MAX) {
-		const cut = first.slice(0, HEADLINE_MAX);
-		const space = cut.lastIndexOf(" ");
-		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
-	}
-	const cased = first.charAt(0).toUpperCase() + first.slice(1);
-	return /[.!?…]$/.test(cased) ? cased : cased + ".";
-}
-function planStatus(plan, liveBranch = "") {
-	const status = planStatusOf(plan, liveBranch);
-	const headline = errorHeadline(plan);
-	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
-	return {
-		...status,
-		line: status.line + " " + headline
-	};
-}
-function planStatusOf(plan, liveBranch = "") {
-	const group = planGroup(plan);
-	const steps = plan.steps || [];
-	const run = latestRun(plan);
-	const agentCan = steps.filter((s) => s.actor !== "human").length;
-	const again = (ran = true) => agentCan ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"] : ["answer", "Open the steps"];
-	const at = (tone, line, action, actionLabel = "") => ({
-		group,
-		tone,
-		line,
-		action,
-		actionLabel
-	});
-	if (plan.state === "generating") {
-		if (isGenerationStalled(plan)) return at("broken", "Writing this checklist stopped part-way — nothing has been written for five minutes.", "rewrite", "Rewrite the checklist");
-		return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
-	}
-	if (plan.state === "failed" && !steps.length) return at("broken", "The model couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "failed") return at("warn", "Rewriting this failed — these are the steps from before, and they still work.", "rewrite", "Try rewriting again");
-	if (!steps.length) return at("broken", "No steps — the checklist came back empty.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "running") {
-		const mine = openHumanSteps(plan).length;
-		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again(false));
-		const been = runElapsed(run);
-		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
-	}
-	if (!run) {
-		if (plan.live_at || plan.state === "due") {
-			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
-			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Run with an agent");
-		}
-		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
-		if (plan.live_problem) return at("warn", plan.live_problem, "none");
-		return at("wait", "Waiting for " + (plan.branch || "this branch") + " to reach " + (plan.live_branch || liveBranch || "the live branch") + " — it turns up here to check when it ships.", "none");
-	}
-	const open = openHumanSteps(plan);
-	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
-	const failed = failCount(plan);
-	if (failed) return at("bad", failed === 1 ? "1 step didn't do what was expected." : failed + " steps didn't do what was expected.", "answer", "See what failed");
-	const missing = unansweredCount(plan);
-	const cant = cantCheckCount(plan);
-	if (missing && missing === cant) {
-		const seen = (plan.steps || []).length - cant;
-		return at("warn", seen ? seen + (seen === 1 ? " step passed · " : " steps passed · ") + cant + " you couldn't check." : "Nothing could be checked — " + cant + (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."), "answer", "Check again");
-	}
-	const ranByAgent = !!(run.session || run.by === "agent");
-	if (missing) {
-		const blank = missing - cant;
-		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
-		return at("warn", (plan.state === "done" ? "Checked — " : ranByAgent ? "The run stopped early — " : "Part-answered — ") + gaps + ".", ...again(ranByAgent));
-	}
-	return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
-}
-function checkTally(plan) {
-	const steps = plan?.steps || [];
-	const t = {
-		passed: 0,
-		failed: 0,
-		yours: 0,
-		cant: 0,
-		pending: 0,
-		total: steps.length
-	};
-	const key = {
-		pass: "passed",
-		fail: "failed",
-		yours: "yours",
-		cant: "cant",
-		pending: "pending"
-	};
-	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
-	return t;
-}
-function tallyBits(plan) {
-	const t = checkTally(plan);
-	return [
-		{
-			state: "pass",
-			count: t.passed,
-			label: "passed"
-		},
-		{
-			state: "fail",
-			count: t.failed,
-			label: "failed"
-		},
-		{
-			state: "yours",
-			count: t.yours,
-			label: t.yours === 1 ? "needs you" : "need you"
-		},
-		{
-			state: "cant",
-			count: t.cant,
-			label: "you couldn't check"
-		},
-		{
-			state: "pending",
-			count: t.pending,
-			label: "not checked yet"
-		}
-	].filter((b) => b.count > 0);
-}
-function tallySentence(plan) {
-	const t = checkTally(plan);
-	if (!t.total) return "";
-	const bits = tallyBits(plan);
-	const head = t.total + (t.total === 1 ? " check" : " checks");
-	if (!bits.length) return head;
-	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
-}
-function planShipped(plan) {
-	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
-}
-function asksHumanSteps(plan) {
-	return planShipped(plan) || !!latestRun(plan);
-}
-function stepCheck(plan, stepId) {
-	const entry = stepResult(plan, stepId);
-	if (entry?.result === "pass") return "pass";
-	if (entry?.result === "fail") return "fail";
-	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
-	const step = (plan.steps || []).find((s) => s.id === stepId);
-	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
-	return "pending";
-}
-var CHECK_MARK = {
-	pass: "✓",
-	fail: "✗",
-	cant: "–",
-	yours: "●",
-	pending: "○"
-};
-function stepKeyAction(key) {
-	switch (key) {
-		case "1":
-		case "p":
-		case "P": return "pass";
-		case "2":
-		case "f":
-		case "F": return "fail";
-		case "3":
-		case "b":
-		case "B": return "blocked";
-		case "u":
-		case "U": return "";
-		case "n":
-		case "N": return "note";
-		default: return "";
-	}
-}
-function noteDraftAfter(result, noteOpen, note) {
-	if (result === "") return {
-		open: false,
-		text: ""
-	};
-	if ((result === "fail" || result === "blocked") && !noteOpen) return {
-		open: true,
-		text: ""
-	};
-	if (noteOpen && note.trim()) return {
-		open: false,
-		text: ""
-	};
-	return {
-		open: noteOpen,
-		text: note
-	};
-}
-function stepKeyAllowed(busy, repeat) {
-	return !busy && !repeat;
-}
-function stepKeyIsUndo(key) {
-	return key === "u" || key === "U";
-}
-function runEvidence(run, liveBranch = "") {
-	if (!run) return "";
-	if (run.target) return "Checked against " + run.target;
-	const sha = (run.tested_sha || "").slice(0, 7);
-	if (!sha) return "";
-	return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
-}
-function runTreeMismatch(run) {
-	const tested = (run?.tested_sha || "").trim();
-	const expected = (run?.expected_sha || "").trim();
-	return !!(tested && expected && tested !== expected);
-}
-function rewriteWarning(plan) {
-	if (!latestRun(plan)) return "";
-	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
-}
-function rewriteBlockedReason(plan) {
-	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
-	if (plan.state === "generating") return "It is already being written.";
-	return "";
-}
+//#region src/components/dialogs/verifySession.ts
 var VERIFY_SESSION_PREFIX = "verify-";
 var VERIFY_HIDDEN_BY = "verify";
 function isVerifySession(session) {
@@ -31727,6 +31240,498 @@ function ExtensionDialog() {
 			})]
 		})
 	});
+}
+//#endregion
+//#region src/lib/rowSearch.ts
+function searchTokens(query) {
+	return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+function matchesTokens(fields, tokens) {
+	if (!tokens.length) return true;
+	const hay = fields.filter(Boolean).join(" ").toLowerCase();
+	return tokens.every((t) => hay.includes(t));
+}
+//#endregion
+//#region src/components/dialogs/verify.ts
+function planName(plan) {
+	return plan.title || plan.id;
+}
+function isFinal(result) {
+	return result === "pass" || result === "fail";
+}
+function isYourAnswer(result, by = "") {
+	return isFinal(result) || result === "blocked" && by === "human";
+}
+function answeredByYou(entry) {
+	return isYourAnswer(entry?.result, entry?.by);
+}
+function handedBack(entry) {
+	return entry?.result === "blocked" && entry?.by !== "human";
+}
+function stepIsYours(plan, step) {
+	return step.actor === "human" || handedBack(stepResult(plan, step.id));
+}
+function isPhantomRun(run) {
+	if (run.session) return false;
+	const results = run.results || {};
+	return !Object.keys(results).some((id) => !!results[id]?.result);
+}
+function latestRun(plan) {
+	const runs = plan.runs || [];
+	let best = null;
+	for (const run of runs) {
+		if (!run || isPhantomRun(run)) continue;
+		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+	}
+	return best;
+}
+function stepResult(plan, stepId) {
+	const run = latestRun(plan);
+	if (!run) return null;
+	return run.results?.[stepId] ?? null;
+}
+function verdictOf(plan) {
+	const run = latestRun(plan);
+	if (!run) return "none";
+	const results = run.results || {};
+	const ids = answerableIds(plan, run);
+	if (!ids.length) return "partial";
+	let unsettled = false;
+	for (const id of ids) {
+		const result = results[id]?.result;
+		if (result === "fail") return "fail";
+		if (!isFinal(result)) unsettled = true;
+	}
+	return unsettled ? "partial" : "pass";
+}
+function answerableIds(plan, run) {
+	const steps = plan.steps || [];
+	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
+}
+function openHumanSteps(plan) {
+	const run = latestRun(plan);
+	if (!run) return [];
+	const results = run.results || {};
+	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
+}
+function needsConfirmation(plan) {
+	return openHumanSteps(plan).length > 0;
+}
+function allSettled(plan) {
+	const run = latestRun(plan);
+	const steps = plan.steps || [];
+	if (!run || !steps.length) return false;
+	const results = run.results || {};
+	return steps.every((s) => answeredByYou(results[s.id]));
+}
+function failCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
+}
+function unansweredCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
+}
+function cantCheckCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => {
+		const entry = results[id];
+		return entry?.result === "blocked" && entry.by === "human";
+	}).length;
+}
+function isWaitingOnYou(plan) {
+	return plan.state === "due" || plan.state === "running" || plan.state === "generating" && !!plan.live_at && !allSettled(plan) || needsConfirmation(plan);
+}
+function dueCount(plans) {
+	return (plans || []).filter(isWaitingOnYou).length;
+}
+function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
+	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
+	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
+	return Object.entries(blocks || {}).some(([slug, block]) => {
+		const own = String(block?.live_branch || "").trim();
+		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
+	});
+}
+function planTargets(instances, plans, closed = []) {
+	const havePlans = new Set((plans || []).map((plan) => plan.id));
+	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	const take = (title, branch, repo) => {
+		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+		const key = coverageKey(repo, branch);
+		if (key && covered.has(key)) return;
+		seen.add(title);
+		out.push(title);
+	};
+	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
+	for (const entry of closed || []) take(entry.title, entry.branch, "");
+	return out;
+}
+function coverageKey(repo, branch) {
+	const r = (repo || "").trim();
+	const b = (branch || "").trim();
+	return r && b ? r + "\0" + b : "";
+}
+function repoName(repoRoot) {
+	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
+	return parts[parts.length - 1] || "";
+}
+function closedTargets(instances, closed = []) {
+	const live = new Set((instances || []).map((i) => i.title));
+	return new Set((closed || []).map((e) => e.title).filter((t) => t && !live.has(t)));
+}
+function noTargetsReason(instances, plans, closed = []) {
+	if (planTargets(instances, plans, closed).length) return "";
+	const list = [...instances || [], ...closed || []];
+	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
+	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
+	return "Every session with a branch already has a checklist — they're in the list below.";
+}
+var GROUPS = [
+	{
+		key: "due",
+		label: "Not checked yet"
+	},
+	{
+		key: "fail",
+		label: "Steps failed"
+	},
+	{
+		key: "generated",
+		label: "Not shipped yet"
+	},
+	{
+		key: "done",
+		label: "Checked"
+	},
+	{
+		key: "failed",
+		label: "Couldn't be written"
+	}
+];
+function planGroup(plan) {
+	if (isWaitingOnYou(plan)) return "due";
+	if (plan.state === "failed") return "failed";
+	if (verdictOf(plan) === "fail") return "fail";
+	if (plan.state === "done") return "done";
+	if (plan.state === "generating" && plan.live_at) return "done";
+	return "generated";
+}
+function planMatches(plan, tokens) {
+	if (!tokens.length) return true;
+	const fields = [
+		plan.title,
+		plan.id,
+		plan.summary,
+		plan.branch,
+		plan.sha,
+		plan.repo_root,
+		plan.live_branch,
+		GROUPS.find((g) => g.key === planGroup(plan))?.label
+	];
+	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
+	return matchesTokens(fields, tokens);
+}
+function canRunNow(plan) {
+	const action = planStatus(plan).action;
+	return action === "run" || action === "rerun";
+}
+function groupPlans(plans) {
+	const buckets = /* @__PURE__ */ new Map();
+	for (const plan of plans || []) {
+		if (!plan) continue;
+		const key = planGroup(plan);
+		const bucket = buckets.get(key);
+		if (bucket) bucket.push(plan);
+		else buckets.set(key, [plan]);
+	}
+	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
+		const found = buckets.get(g.key) || [];
+		if (g.key === "due" || g.key === "fail") {
+			const sum = found.reduce((acc, p) => {
+				const t = checkTally(p);
+				return {
+					yours: acc.yours + t.yours,
+					failed: acc.failed + t.failed
+				};
+			}, {
+				yours: 0,
+				failed: 0
+			});
+			const bits = [];
+			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
+			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
+			return {
+				key: g.key,
+				label: g.label,
+				detail: bits.length ? bits.join(" · ") : void 0,
+				plans: found
+			};
+		}
+		if (g.key !== "done") return {
+			key: g.key,
+			label: g.label,
+			plans: found
+		};
+		const short = found.filter((p) => unansweredCount(p) > 0);
+		const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
+		const cant = short.length - blank;
+		const bits = [];
+		if (blank) bits.push(blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer");
+		if (cant) bits.push(cant + " you couldn't check");
+		return {
+			key: g.key,
+			label: g.label,
+			detail: bits.length ? bits.join(" · ") : void 0,
+			plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)]
+		};
+	});
+}
+var GENERATION_STALE_S = 300;
+function isGenerationStalled(plan, now = Date.now() / 1e3) {
+	if (!plan || plan.state !== "generating") return false;
+	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
+}
+function runElapsed(run, now = Date.now() / 1e3) {
+	const at = Number(run?.at || 0);
+	if (!at) return "";
+	const mins = Math.round((now - at) / 60);
+	if (mins < 1 || mins > 1440) return "";
+	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
+}
+function agoText(epochSeconds, now = Date.now() / 1e3) {
+	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
+	if (mins < 1) return "just now";
+	if (mins < 60) return mins + "m ago";
+	const h = Math.round(mins / 60);
+	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+var HEADLINE_MAX = 120;
+function errorHeadline(plan) {
+	const raw = String(plan?.error || "").trim();
+	if (!raw) return "";
+	const stop = raw.search(/[.!?](\s|$)/);
+	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
+	if (first.length > HEADLINE_MAX) {
+		const cut = first.slice(0, HEADLINE_MAX);
+		const space = cut.lastIndexOf(" ");
+		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
+	}
+	const cased = first.charAt(0).toUpperCase() + first.slice(1);
+	return /[.!?…]$/.test(cased) ? cased : cased + ".";
+}
+function planStatus(plan, liveBranch = "") {
+	const status = planStatusOf(plan, liveBranch);
+	const headline = errorHeadline(plan);
+	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
+	return {
+		...status,
+		line: status.line + " " + headline
+	};
+}
+function planStatusOf(plan, liveBranch = "") {
+	const group = planGroup(plan);
+	const steps = plan.steps || [];
+	const run = latestRun(plan);
+	const agentCan = steps.filter((s) => s.actor !== "human").length;
+	const again = (ran = true) => agentCan ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"] : ["answer", "Open the steps"];
+	const at = (tone, line, action, actionLabel = "") => ({
+		group,
+		tone,
+		line,
+		action,
+		actionLabel
+	});
+	if (plan.state === "generating") {
+		if (isGenerationStalled(plan)) return at("broken", "Writing this checklist stopped part-way — nothing has been written for five minutes.", "rewrite", "Rewrite the checklist");
+		return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
+	}
+	if (plan.state === "failed" && !steps.length) return at("broken", "The model couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
+	if (plan.state === "failed") return at("warn", "Rewriting this failed — these are the steps from before, and they still work.", "rewrite", "Try rewriting again");
+	if (!steps.length) return at("broken", "No steps — the checklist came back empty.", "rewrite", "Rewrite the checklist");
+	if (plan.state === "running") {
+		const mine = openHumanSteps(plan).length;
+		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again(false));
+		const been = runElapsed(run);
+		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
+	}
+	if (!run) {
+		if (plan.live_at || plan.state === "due") {
+			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
+			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Run with an agent");
+		}
+		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
+		if (plan.live_problem) return at("warn", plan.live_problem, "none");
+		return at("wait", "Waiting for " + (plan.branch || "this branch") + " to reach " + (plan.live_branch || liveBranch || "the live branch") + " — it turns up here to check when it ships.", "none");
+	}
+	const open = openHumanSteps(plan);
+	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
+	const failed = failCount(plan);
+	if (failed) return at("bad", failed === 1 ? "1 step didn't do what was expected." : failed + " steps didn't do what was expected.", "answer", "See what failed");
+	const missing = unansweredCount(plan);
+	const cant = cantCheckCount(plan);
+	if (missing && missing === cant) {
+		const seen = (plan.steps || []).length - cant;
+		return at("warn", seen ? seen + (seen === 1 ? " step passed · " : " steps passed · ") + cant + " you couldn't check." : "Nothing could be checked — " + cant + (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."), "answer", "Check again");
+	}
+	const ranByAgent = !!(run.session || run.by === "agent");
+	if (missing) {
+		const blank = missing - cant;
+		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
+		return at("warn", (plan.state === "done" ? "Checked — " : ranByAgent ? "The run stopped early — " : "Part-answered — ") + gaps + ".", ...again(ranByAgent));
+	}
+	return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
+}
+function checkTally(plan) {
+	const steps = plan?.steps || [];
+	const t = {
+		passed: 0,
+		failed: 0,
+		yours: 0,
+		cant: 0,
+		pending: 0,
+		total: steps.length
+	};
+	const key = {
+		pass: "passed",
+		fail: "failed",
+		yours: "yours",
+		cant: "cant",
+		pending: "pending"
+	};
+	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
+	return t;
+}
+function tallyBits(plan) {
+	const t = checkTally(plan);
+	return [
+		{
+			state: "pass",
+			count: t.passed,
+			label: "passed"
+		},
+		{
+			state: "fail",
+			count: t.failed,
+			label: "failed"
+		},
+		{
+			state: "yours",
+			count: t.yours,
+			label: t.yours === 1 ? "needs you" : "need you"
+		},
+		{
+			state: "cant",
+			count: t.cant,
+			label: "you couldn't check"
+		},
+		{
+			state: "pending",
+			count: t.pending,
+			label: "not checked yet"
+		}
+	].filter((b) => b.count > 0);
+}
+function tallySentence(plan) {
+	const t = checkTally(plan);
+	if (!t.total) return "";
+	const bits = tallyBits(plan);
+	const head = t.total + (t.total === 1 ? " check" : " checks");
+	if (!bits.length) return head;
+	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
+}
+function planShipped(plan) {
+	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
+}
+function asksHumanSteps(plan) {
+	return planShipped(plan) || !!latestRun(plan);
+}
+function stepCheck(plan, stepId) {
+	const entry = stepResult(plan, stepId);
+	if (entry?.result === "pass") return "pass";
+	if (entry?.result === "fail") return "fail";
+	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
+	const step = (plan.steps || []).find((s) => s.id === stepId);
+	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
+	return "pending";
+}
+var CHECK_MARK = {
+	pass: "✓",
+	fail: "✗",
+	cant: "–",
+	yours: "●",
+	pending: "○"
+};
+function stepKeyAction(key) {
+	switch (key) {
+		case "1":
+		case "p":
+		case "P": return "pass";
+		case "2":
+		case "f":
+		case "F": return "fail";
+		case "3":
+		case "b":
+		case "B": return "blocked";
+		case "u":
+		case "U": return "";
+		case "n":
+		case "N": return "note";
+		default: return "";
+	}
+}
+function noteDraftAfter(result, noteOpen, note) {
+	if (result === "") return {
+		open: false,
+		text: ""
+	};
+	if ((result === "fail" || result === "blocked") && !noteOpen) return {
+		open: true,
+		text: ""
+	};
+	if (noteOpen && note.trim()) return {
+		open: false,
+		text: ""
+	};
+	return {
+		open: noteOpen,
+		text: note
+	};
+}
+function stepKeyAllowed(busy, repeat) {
+	return !busy && !repeat;
+}
+function stepKeyIsUndo(key) {
+	return key === "u" || key === "U";
+}
+function runEvidence(run, liveBranch = "") {
+	if (!run) return "";
+	if (run.target) return "Checked against " + run.target;
+	const sha = (run.tested_sha || "").slice(0, 7);
+	if (!sha) return "";
+	return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
+}
+function runTreeMismatch(run) {
+	const tested = (run?.tested_sha || "").trim();
+	const expected = (run?.expected_sha || "").trim();
+	return !!(tested && expected && tested !== expected);
+}
+function rewriteWarning(plan) {
+	if (!latestRun(plan)) return "";
+	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
+}
+function rewriteBlockedReason(plan) {
+	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
+	if (plan.state === "generating") return "It is already being written.";
+	return "";
 }
 //#endregion
 //#region src/lib/playbooks.ts
@@ -66125,7 +66130,7 @@ function InlineConfirm(props) {
 				autoFocus: true,
 				disabled: props.busy,
 				onClick: props.onCancel,
-				children: "Cancel"
+				children: props.cancelLabel ?? "Cancel"
 			})]
 		})]
 	});
@@ -79268,6 +79273,166 @@ function PromptsDialog() {
 	});
 }
 //#endregion
+//#region src/lib/verifyActions.ts
+function planPath(id) {
+	return "/api/test-plans/" + encodeURIComponent(id);
+}
+function patchPlan(id, apply) {
+	queryClient.cancelQueries({ queryKey: ["test-plans"] });
+	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+		...prev,
+		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
+	} : prev);
+}
+function requestPlanRun(planId, only) {
+	return api(planPath(planId) + "/run", {
+		method: "POST",
+		json: only ? { steps: only } : {}
+	});
+}
+function requestPlanDelete(planId) {
+	return api(planPath(planId), { method: "DELETE" });
+}
+async function startChecklistRun(plan, opts = {}) {
+	try {
+		const r = await requestPlanRun(plan.id, opts.only);
+		await refreshInstances();
+		const started = r?.plan;
+		patchPlan(plan.id, (p) => started || {
+			...p,
+			state: "running",
+			run_session: r?.session || ""
+		});
+		opts.onStarted?.();
+		await refreshTestPlans();
+		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
+	} catch (err) {
+		errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function regeneratePlan(plan, focus = "") {
+	try {
+		await api(planPath(plan.id) + "/regenerate", {
+			method: "POST",
+			json: { focus: focus.trim() }
+		});
+		patchPlan(plan.id, (p) => ({
+			...p,
+			state: "generating",
+			error: "",
+			gen_started: Date.now() / 1e3
+		}));
+		toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
+		return true;
+	} catch (err) {
+		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
+		refreshTestPlans();
+		return false;
+	}
+}
+async function cancelChecklistRun(plan) {
+	try {
+		const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+		await refreshInstances();
+		await refreshTestPlans();
+		toast(r?.session ? "Stopped " + r.session : "Run cancelled");
+	} catch (err) {
+		errorPop("Couldn't cancel the run", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fixPlanFailures(plan, only) {
+	try {
+		const r = await api(planPath(plan.id) + "/fix", {
+			method: "POST",
+			json: only ? { steps: only } : {}
+		});
+		await refreshInstances();
+		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
+	} catch (err) {
+		errorPop("Couldn't open a session to fix it", errMsg(err));
+	}
+}
+async function markPlanDeployed(plan) {
+	try {
+		const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(planName(plan) + " is ready to check");
+	} catch (err) {
+		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function removePlan(plan, opts = {}) {
+	try {
+		await requestPlanDelete(plan.id);
+		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
+		opts.onGone?.();
+		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+			...prev,
+			plans: prev.plans.filter((p) => p.id !== plan.id)
+		} : prev);
+		await refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't delete " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function recordStepAnswer(plan, step, result, note) {
+	const wasAsking = isWaitingOnYou(plan);
+	const next = (await api(planPath(plan.id) + "/result", { json: {
+		step_id: step.id,
+		result,
+		note
+	} }))?.plan;
+	if (next) patchPlan(plan.id, () => next);
+	if (next && wasAsking && !isWaitingOnYou(next)) {
+		const dest = groupPlans([next])[0]?.label || "";
+		toast("All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : ""));
+	}
+	refreshTestPlans();
+}
+async function editPlanStep(plan, step, fields) {
+	try {
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), {
+			method: "PATCH",
+			json: fields
+		});
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't change that step", errMsg(err));
+	}
+}
+async function removePlanStep(plan, step) {
+	try {
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't remove that step", errMsg(err));
+	}
+}
+async function addPlanStep(plan, fields) {
+	return (await api(planPath(plan.id) + "/steps", {
+		method: "POST",
+		json: fields
+	}))?.plan;
+}
+async function writePlanFor(target) {
+	try {
+		const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
+		toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't write a checklist", errMsg(err));
+	}
+}
+//#endregion
 //#region src/lib/rowSelection.ts
 function selectedInOrder(selected, allKeys) {
 	return allKeys.filter((k) => selected.has(k));
@@ -79388,53 +79553,8 @@ function BulkRowBar({ count, hiddenCount, noun, onClear, children }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/VerifyDialog.tsx
-var GROUPS_KEY = "mf_verify_groups";
-var PLANS_KEY = "mf_verify_plans";
-function planPath(id) {
-	return "/api/test-plans/" + encodeURIComponent(id);
-}
-function planName(plan) {
-	return plan.title || plan.id;
-}
-function ageOf(epochSeconds) {
-	if (!epochSeconds) return "";
-	return ageText((/* @__PURE__ */ new Date(epochSeconds * 1e3)).toISOString());
-}
-function agoOf(epochSeconds) {
-	const age = ageOf(epochSeconds);
-	return age ? age.replace(/ old$/, " ago") : "";
-}
-var ANSWER_LABEL = {
-	pass: "Pass",
-	fail: "Fail",
-	blocked: "Can't check"
-};
-var CHECK_LABEL = {
-	pass: "Passed",
-	fail: "Failed",
-	cant: "You couldn't check this",
-	yours: "Needs you",
-	pending: "Not checked yet"
-};
-function answerLabel(result) {
-	return ANSWER_LABEL[result] || result;
-}
-function receiptLabel(entry) {
-	if (entry.result === "blocked" && entry.by !== "human") return "for you to check";
-	return answerLabel(entry.result).toLowerCase();
-}
-function byLabel(by) {
-	return by === "human" ? "you" : by || "agent";
-}
-function patchPlan(id, apply) {
-	queryClient.cancelQueries({ queryKey: ["test-plans"] });
-	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-		...prev,
-		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
-	} : prev);
-}
-function OverflowMenu({ label, items }) {
+//#region src/components/OverflowMenu.tsx
+function OverflowMenu({ label, items, boundaryId }) {
 	const ref = (0, import_react.useRef)(null);
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [up, setUp] = (0, import_react.useState)(false);
@@ -79469,7 +79589,7 @@ function OverflowMenu({ label, items }) {
 				const next = !open;
 				if (next && ref.current) {
 					const here = ref.current.getBoundingClientRect();
-					const body = document.getElementById("verify-body");
+					const body = boundaryId ? document.getElementById(boundaryId) : null;
 					const floor = body ? body.getBoundingClientRect().bottom : window.innerHeight;
 					setUp(floor - here.bottom < 24 * items.length + 40);
 				}
@@ -79491,6 +79611,30 @@ function OverflowMenu({ label, items }) {
 		})]
 	});
 }
+//#endregion
+//#region src/components/dialogs/VerifyStep.tsx
+var ANSWER_LABEL = {
+	pass: "Pass",
+	fail: "Fail",
+	blocked: "Can't check"
+};
+var CHECK_LABEL = {
+	pass: "Passed",
+	fail: "Failed",
+	cant: "You couldn't check this",
+	yours: "Needs you",
+	pending: "Not checked yet"
+};
+function answerLabel(result) {
+	return ANSWER_LABEL[result] || result;
+}
+function receiptLabel(entry) {
+	if (entry.result === "blocked" && entry.by !== "human") return "for you to check";
+	return answerLabel(entry.result).toLowerCase();
+}
+function byLabel(by) {
+	return by === "human" ? "you" : by || "agent";
+}
 var NOTE_DRAFTS = /* @__PURE__ */ new Map();
 function noteKey(planId, stepId) {
 	return planId + "\0" + stepId;
@@ -79508,6 +79652,9 @@ function setRowUi(planId, patch) {
 function forgetNoteDrafts() {
 	NOTE_DRAFTS.clear();
 	ROW_UI.clear();
+}
+function forgetRowUi(planId) {
+	ROW_UI.delete(planId);
 }
 function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, onEdit }) {
 	const [pending, setPending] = (0, import_react.useState)(null);
@@ -79699,7 +79846,7 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 										receiptLabel(entry),
 										" · ",
 										byLabel(entry.by),
-										ageOf(entry.at) ? " · " + ageOf(entry.at) : ""
+										entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""
 									]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
@@ -79720,7 +79867,8 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 							}),
 							stepMenu.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 								label: "More for step " + (index + 1),
-								items: stepMenu
+								items: stepMenu,
+								boundaryId: "verify-body"
 							}) : null
 						]
 					}),
@@ -79763,6 +79911,241 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 			})
 		]
 	});
+}
+function StepEditor({ step, onCancel, onSave }) {
+	const [text, setText] = (0, import_react.useState)(step.text);
+	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		ref.current?.focus();
+	}, []);
+	const save = async () => {
+		if (!text.trim()) return;
+		setBusy(true);
+		try {
+			await onSave({
+				text: text.trim(),
+				expect: expect.trim()
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-step-edit",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref,
+				className: "vf-step-edit-text",
+				rows: 2,
+				"aria-label": "What to do",
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-step-edit-expect",
+				"aria-label": "What should happen",
+				placeholder: "what should happen",
+				autoComplete: "off",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						save();
+					}
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-step-edit-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy || !text.trim(),
+					onClick: () => void save(),
+					children: busy ? "Saving…" : "Save"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: onCancel,
+					children: "Cancel"
+				})]
+			})
+		]
+	});
+}
+function RewriteBox({ plan, busy, onCancel, onRewrite }) {
+	const [focus, setFocusRaw] = (0, import_react.useState)(rowUi(plan.id).focus ?? (plan.focus || ""));
+	const setFocus = (next) => {
+		setFocusRaw(next);
+		setRowUi(plan.id, { focus: next });
+	};
+	const ref = (0, import_react.useRef)(null);
+	const blocked = rewriteBlockedReason(plan);
+	const warning = rewriteWarning(plan);
+	(0, import_react.useEffect)(() => {
+		ref.current?.focus();
+	}, []);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-rewrite",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-title",
+				children: "Rewrite the checklist"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref,
+				className: "vf-rewrite-text",
+				rows: 2,
+				"aria-label": "What should the new checklist check instead?",
+				placeholder: "What should it check instead? (optional) — e.g. “focus on the coupon flow at checkout, ignore the settings refactor”",
+				value: focus,
+				disabled: busy || !!blocked,
+				onChange: (e) => setFocus(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-warn",
+				children: blocked
+			}) : warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-warn",
+				children: warning
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-rewrite-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary",
+						disabled: busy || !!blocked,
+						onClick: () => onRewrite(focus),
+						children: busy ? "Asking…" : "Rewrite"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: onCancel,
+						children: "Cancel"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vf-rewrite-note",
+						children: "It keeps the steps you wrote or edited yourself, and takes up to three minutes."
+					})
+				]
+			})
+		]
+	});
+}
+function AddStep({ plan, onAdded }) {
+	const [text, setText] = (0, import_react.useState)("");
+	const [expect, setExpect] = (0, import_react.useState)("");
+	const [actor, setActor] = (0, import_react.useState)("agent");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const add = async () => {
+		const body = text.trim();
+		if (!body) return;
+		setBusy(true);
+		try {
+			const next = await addPlanStep(plan, {
+				text: body,
+				expect: expect.trim(),
+				actor
+			});
+			if (next) onAdded(next);
+			setText("");
+			setExpect("");
+		} catch (err) {
+			errorPop("Couldn't add that step", errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-addstep",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-addstep-text",
+				placeholder: "what to do",
+				"aria-label": "New step",
+				autoComplete: "off",
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						add();
+					}
+					if (e.key === "Escape") e.stopPropagation();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-addstep-expect",
+				placeholder: "what should happen (optional)",
+				"aria-label": "Expected result",
+				autoComplete: "off",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						add();
+					}
+					if (e.key === "Escape") e.stopPropagation();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				className: "vf-addstep-actor",
+				"aria-label": "Who checks this step",
+				value: actor,
+				disabled: busy,
+				onChange: (e) => setActor(e.target.value),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "agent",
+					children: "the agent"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "human",
+					children: "me"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy || !text.trim(),
+				onClick: () => void add(),
+				children: busy ? "Adding…" : "Add"
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/VerifyPlan.tsx
+function agoOf(epochSeconds) {
+	return epochSeconds ? relTime(epochSeconds) : "";
 }
 function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) {
 	const closeDialog = useUi((s) => s.closeDialog);
@@ -79830,23 +80213,10 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 		if (only) setStepBusy(only[0]);
 		else setBusy("run");
 		try {
-			const r = await api(planPath(plan.id) + "/run", {
-				method: "POST",
-				json: only ? { steps: only } : {}
+			await startChecklistRun(plan, {
+				only,
+				onStarted: () => setWatchingHere(true)
 			});
-			await refreshInstances();
-			const started = r?.plan;
-			patchPlan(plan.id, (p) => started || {
-				...p,
-				state: "running",
-				run_session: r?.session || ""
-			});
-			setWatchingHere(true);
-			await refreshTestPlans();
-			toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
-		} catch (err) {
-			errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
-			refreshTestPlans();
 		} finally {
 			setBusy("");
 			setStepBusy("");
@@ -79871,103 +80241,28 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 	const regenerate = async (focus = "") => {
 		setBusy("regen");
 		try {
-			await api(planPath(plan.id) + "/regenerate", {
-				method: "POST",
-				json: { focus: focus.trim() }
-			});
-			patchPlan(plan.id, (p) => ({
-				...p,
-				state: "generating",
-				error: "",
-				gen_started: Date.now() / 1e3
-			}));
-			setRewriting(false);
-			toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
-		} catch (err) {
-			errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-			refreshTestPlans();
+			if (await regeneratePlan(plan, focus)) setRewriting(false);
 		} finally {
 			setBusy("");
 		}
 	};
 	const runEarly = () => setConfirming("early");
-	const cancelRun = async () => {
-		setBusy("cancel");
+	const withBusy = async (key, fn) => {
+		setBusy(key);
 		try {
-			const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
-			if (r?.plan) patchPlan(plan.id, () => r.plan);
-			if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
-			await refreshInstances();
-			await refreshTestPlans();
-			toast(r?.session ? "Stopped " + r.session : "Run cancelled");
-		} catch (err) {
-			errorPop("Couldn't cancel the run", errMsg(err));
-			refreshTestPlans();
+			await fn();
 		} finally {
 			setBusy("");
 		}
 	};
-	const fixFailures = async (only) => {
-		setBusy("fix");
-		try {
-			const r = await api(planPath(plan.id) + "/fix", {
-				method: "POST",
-				json: only ? { steps: only } : {}
-			});
-			await refreshInstances();
-			toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
-		} catch (err) {
-			errorPop("Couldn't open a session to fix it", errMsg(err));
-		} finally {
-			setBusy("");
-		}
-	};
-	const markDeployed = async () => {
-		setBusy("deployed");
-		try {
-			const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
-			if (r?.plan) patchPlan(plan.id, () => r.plan);
-			await refreshTestPlans();
-			toast(planName(plan) + " is ready to check");
-		} catch (err) {
-			errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
-			refreshTestPlans();
-		} finally {
-			setBusy("");
-		}
-	};
-	const remove = async () => {
-		setBusy("delete");
-		try {
-			await api(planPath(plan.id), { method: "DELETE" });
-			if (watchSession) useUi.getState().closeVerifyPane(watchSession);
-			ROW_UI.delete(plan.id);
-			queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-				...prev,
-				plans: prev.plans.filter((p) => p.id !== plan.id)
-			} : prev);
-			await refreshTestPlans();
-		} catch (err) {
-			errorPop("Couldn't delete " + planName(plan), errMsg(err));
-			refreshTestPlans();
-		} finally {
-			setBusy("");
-		}
-	};
-	const recordStep = async (step, result, note) => {
-		const wasAsking = isWaitingOnYou(plan);
-		const next = (await api(planPath(plan.id) + "/result", { json: {
-			step_id: step.id,
-			result,
-			note
-		} }))?.plan;
-		if (next) patchPlan(plan.id, () => next);
-		if (next && wasAsking && !isWaitingOnYou(next)) {
-			const dest = groupPlans([next])[0]?.label || "";
-			toast("All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : ""));
-		}
-		refreshTestPlans();
-	};
+	const cancelRun = () => withBusy("cancel", () => cancelChecklistRun(plan));
+	const fixFailures = (only) => withBusy("fix", () => fixPlanFailures(plan, only));
+	const markDeployed = () => withBusy("deployed", () => markPlanDeployed(plan));
+	const remove = () => withBusy("delete", () => removePlan(plan, {
+		watchSession,
+		onGone: () => forgetRowUi(plan.id)
+	}));
+	const recordStep = (step, result, note) => recordStepAnswer(plan, step, result, note);
 	const doPrimary = () => {
 		if (status.action === "answer") {
 			onExpand();
@@ -80130,7 +80425,8 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 					label: "More actions for " + planName(plan),
-					items: menu
+					items: menu,
+					boundaryId: "verify-body"
 				})
 			]
 		}), expanded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -80244,10 +80540,11 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 					onCancel: () => setRewriting(false),
 					onRewrite: (focus) => void regenerate(focus)
 				}),
-				confirming === "delete" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+				confirming === "delete" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					title: "Delete the checklist for " + planName(plan) + "?",
 					body: "Every answer recorded against it goes too. " + (running ? "This also stops " + (plan.run_session || "the verify session") + "." : "A later push of the same branch writes a new one."),
 					confirmLabel: busy === "delete" ? "Deleting…" : "Delete it",
+					cancelLabel: "Keep it",
 					busy: busy !== "",
 					onCancel: () => setConfirming(""),
 					onConfirm: () => {
@@ -80255,10 +80552,11 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 						remove();
 					}
 				}),
-				confirming === "early" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+				confirming === "early" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					title: "Check it before it ships?",
 					body: planName(plan) + " hasn't reached " + (plan.live_branch || nowLive || "the live branch") + " yet, so this checks out its own commit (" + (plan.sha ? plan.sha.slice(0, 7) : "its branch") + ") rather than what users have. Once it finishes, this checklist is closed — it will NOT come back to “Not checked yet” when the branch does ship.",
 					confirmLabel: "Check it early",
+					cancelLabel: "Keep it",
 					busy: busy !== "",
 					onCancel: () => setConfirming(""),
 					onConfirm: () => {
@@ -80281,27 +80579,8 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 						onRecord: recordStep,
 						onRunStep: running || busy !== "" || stepBusy !== "" && stepBusy !== step.id ? void 0 : (s) => startRun([s.id]),
 						running: stepBusy === step.id,
-						onEdit: running ? void 0 : async (st, fields) => {
-							try {
-								const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(st.id), {
-									method: "PATCH",
-									json: fields
-								});
-								if (r?.plan) patchPlan(plan.id, () => r.plan);
-								refreshTestPlans();
-							} catch (err) {
-								errorPop("Couldn't change that step", errMsg(err));
-							}
-						},
-						onRemove: async (st) => {
-							try {
-								const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(st.id), { method: "DELETE" });
-								if (r?.plan) patchPlan(plan.id, () => r.plan);
-								refreshTestPlans();
-							} catch (err) {
-								errorPop("Couldn't remove that step", errMsg(err));
-							}
-						}
+						onEdit: running ? void 0 : (st, fields) => editPlanStep(plan, st, fields),
+						onRemove: (st) => removePlanStep(plan, st)
 					}, step.id))
 				}) : null,
 				plan.state !== "generating" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -80316,83 +80595,6 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 				})
 			]
 		})]
-	});
-}
-function StepEditor({ step, onCancel, onSave }) {
-	const [text, setText] = (0, import_react.useState)(step.text);
-	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const ref = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		ref.current?.focus();
-	}, []);
-	const save = async () => {
-		if (!text.trim()) return;
-		setBusy(true);
-		try {
-			await onSave({
-				text: text.trim(),
-				expect: expect.trim()
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-step-edit",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				ref,
-				className: "vf-step-edit-text",
-				rows: 2,
-				"aria-label": "What to do",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-step-edit-expect",
-				"aria-label": "What should happen",
-				placeholder: "what should happen",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						save();
-					}
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-step-edit-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy || !text.trim(),
-					onClick: () => void save(),
-					children: busy ? "Saving…" : "Save"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onCancel,
-					children: "Cancel"
-				})]
-			})
-		]
 	});
 }
 function ChecksHead({ plan }) {
@@ -80442,105 +80644,6 @@ function PlanTally({ plan }) {
 		}, bit.state))
 	});
 }
-function RewriteBox({ plan, busy, onCancel, onRewrite }) {
-	const [focus, setFocusRaw] = (0, import_react.useState)(rowUi(plan.id).focus ?? (plan.focus || ""));
-	const setFocus = (next) => {
-		setFocusRaw(next);
-		setRowUi(plan.id, { focus: next });
-	};
-	const ref = (0, import_react.useRef)(null);
-	const blocked = rewriteBlockedReason(plan);
-	const warning = rewriteWarning(plan);
-	(0, import_react.useEffect)(() => {
-		ref.current?.focus();
-	}, []);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-rewrite",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-title",
-				children: "Rewrite the checklist"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				ref,
-				className: "vf-rewrite-text",
-				rows: 2,
-				"aria-label": "What should the new checklist check instead?",
-				placeholder: "What should it check instead? (optional) — e.g. “focus on the coupon flow at checkout, ignore the settings refactor”",
-				value: focus,
-				disabled: busy || !!blocked,
-				onChange: (e) => setFocus(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-warn",
-				children: blocked
-			}) : warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-warn",
-				children: warning
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-rewrite-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !!blocked,
-						onClick: () => onRewrite(focus),
-						children: busy ? "Asking…" : "Rewrite"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onCancel,
-						children: "Cancel"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "vf-rewrite-note",
-						children: "It keeps the steps you wrote or edited yourself, and takes up to three minutes."
-					})
-				]
-			})
-		]
-	});
-}
-function ConfirmBox({ title, body, confirmLabel, busy, onCancel, onConfirm }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-confirm",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-confirm-title",
-				children: title
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-confirm-body",
-				children: body
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-confirm-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn vf-confirm-go",
-					disabled: busy,
-					onClick: onConfirm,
-					children: confirmLabel
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onCancel,
-					children: "Keep it"
-				})]
-			})
-		]
-	});
-}
 function RunWatch({ session, onPopOut, onHide }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/instances/" + encodeURIComponent(session) + "/terminal", false, true);
@@ -80579,94 +80682,10 @@ function RunWatch({ session, onPopOut, onHide }) {
 		})]
 	});
 }
-function AddStep({ plan, onAdded }) {
-	const [text, setText] = (0, import_react.useState)("");
-	const [expect, setExpect] = (0, import_react.useState)("");
-	const [actor, setActor] = (0, import_react.useState)("agent");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const add = async () => {
-		const body = text.trim();
-		if (!body) return;
-		setBusy(true);
-		try {
-			const r = await api(planPath(plan.id) + "/steps", {
-				method: "POST",
-				json: {
-					text: body,
-					expect: expect.trim(),
-					actor
-				}
-			});
-			if (r?.plan) onAdded(r.plan);
-			setText("");
-			setExpect("");
-		} catch (err) {
-			errorPop("Couldn't add that step", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-addstep",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-addstep-text",
-				placeholder: "what to do",
-				"aria-label": "New step",
-				autoComplete: "off",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						add();
-					}
-					if (e.key === "Escape") e.stopPropagation();
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-addstep-expect",
-				placeholder: "what should happen (optional)",
-				"aria-label": "Expected result",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						add();
-					}
-					if (e.key === "Escape") e.stopPropagation();
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				className: "vf-addstep-actor",
-				"aria-label": "Who checks this step",
-				value: actor,
-				disabled: busy,
-				onChange: (e) => setActor(e.target.value),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "agent",
-					children: "the agent"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "human",
-					children: "me"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy || !text.trim(),
-				onClick: () => void add(),
-				children: busy ? "Adding…" : "Add"
-			})
-		]
-	});
-}
+//#endregion
+//#region src/components/dialogs/VerifyChrome.tsx
+var GROUPS_KEY = "mf_verify_groups";
+var PLANS_KEY = "mf_verify_plans";
 function PlanList({ plans, liveBranch, selection }) {
 	const groups = useToggleSet(GROUPS_KEY, true);
 	const opened = useToggleSet(PLANS_KEY);
@@ -80696,11 +80715,7 @@ function NewPlanBar({ candidates, closed, reason }) {
 	async function write() {
 		setBusy(target);
 		try {
-			const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
-			toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
-			refreshTestPlans();
-		} catch (err) {
-			errorPop("Couldn't write a checklist", errMsg(err));
+			await writePlanFor(target);
 		} finally {
 			setBusy("");
 		}
@@ -80836,6 +80851,8 @@ function VerifyEmpty({ liveBranch }) {
 		})]
 	});
 }
+//#endregion
+//#region src/components/dialogs/VerifyDialog.tsx
 function VerifyDialog() {
 	const open = useUi((s) => s.openDialog === "verify");
 	const closeDialog = useUi((s) => s.closeDialog);
@@ -80865,17 +80882,6 @@ function VerifyDialog() {
 		setConfirmBulk(false);
 		sel.clear();
 	}, [open, sel]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const id = window.setTimeout(() => {
@@ -80972,10 +80978,7 @@ function VerifyDialog() {
 					type: "button",
 					disabled: !runnable.length || bulk !== "",
 					title: runnable.length ? "Start a verify session for each — minutes of a real agent apiece" : "None of the selected checklists is one an agent can run",
-					onClick: () => void fanOut(runnable, "Started", (plan) => api(planPath(plan.id) + "/run", {
-						method: "POST",
-						json: {}
-					})),
+					onClick: () => void fanOut(runnable, "Started", (plan) => requestPlanRun(plan.id)),
 					children: bulk === "Started" ? "Starting…" : "Run " + runnable.length + (runnable.length === picked.length ? "" : " of " + picked.length)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -80986,13 +80989,14 @@ function VerifyDialog() {
 					children: bulk === "Deleted" ? "Deleting…" : "Delete selected"
 				})]
 			}) : null,
-			confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+			confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 				title: "Delete " + picked.length + (picked.length === 1 ? " checklist?" : " checklists?"),
 				body: "Their steps and every answer recorded against them go too. This cannot be undone.\n" + previewList(picked.map(planName)),
 				confirmLabel: "Delete " + picked.length,
+				cancelLabel: "Keep it",
 				busy: bulk !== "",
 				onCancel: () => setConfirmBulk(false),
-				onConfirm: () => void fanOut(picked, "Deleted", (plan) => api(planPath(plan.id), { method: "DELETE" }))
+				onConfirm: () => void fanOut(picked, "Deleted", (plan) => requestPlanDelete(plan.id))
 			}) : null,
 			shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanList, {
 				plans: shown,
@@ -81010,15 +81014,12 @@ function VerifyDialog() {
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "verify-dialog",
-			className: "modal",
 			role: "dialog",
 			"aria-modal": "true",
 			"aria-labelledby": "verify-title",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "verify-panel",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
