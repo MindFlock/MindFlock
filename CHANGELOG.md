@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-12
+
 ### Changed
 
 - **The New dialog looks and works as it did in v0.7 again.** It opens on the
@@ -17,6 +19,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Name → Enter creates), Runs on, Fast-track and the folds. Page 1 and the
   Ticket tab share one top edge at their natural heights; the form is
   centred.
+
+- **One wording across the UI, CLI and MCP.** The CLI gains `close`,
+  `delete`, `pause` and `resume` (`rm` and `rm --wipe` stay as aliases). The
+  MCP `kill_session` tool keeps its name but is titled "Close or delete a
+  session". Pause and Close now say how they differ: Pause keeps the session
+  in the sidebar to resume, Close moves it to Recently closed. Fast-track has
+  one set of levels; both `off` and `leave` are still accepted, so no saved
+  state needs migrating. "shipped" is replaced by the actual step (committed,
+  pushed, PR opened, merged); Verify says "pushed".
+- **The row menu, the command palette and the keyboard chords read one
+  action table.** Where they disagreed, one rule now applies everywhere. Merge
+  PR is offered only once a PR is open. A chord for an action that isn't
+  available says so instead of firing a request the server refuses.
+- Relative ages read "5m ago" everywhere (was "5 min ago" in some places).
+
+### Fixed
+
+- Five small stores (aliases, hidden windows, session owners, people, shared
+  branches) were rewritten in place, so a crash mid-save could truncate them.
+  They now write atomically, and their files are private to you (0600).
+- The "is there a GitHub token" checks disagreed with the token actually
+  used: one checked config.toml first, the real chain checks it last. A token
+  kept only in config.toml showed "none" in Connect GitHub and Test. All of
+  them now use one chain.
+- About a dozen dialogs (Rename among them) closed when a click or a text
+  selection *ended* on the backdrop. Every dialog now shares one shell that
+  closes only on a press that starts on the backdrop.
+
+### Internal
+
+- `backend/web/server.py` shrank from 16,931 to about 11,400 lines. Route
+  groups moved to `backend/web/routes/`. The autopilot, Verify, prompt-queue,
+  state-event, session-removal and red-zone code moved to their own
+  `web/core/*_driver` / `state_events` / `session_removal` modules. One
+  subprocess helper (`core/proc.py`), one atomic-write helper
+  (`backend/fsutil.py`) and one git helper (`backend/gitutil.py`) replace
+  dozens of copies. NewSessionDialog and VerifyDialog are split into modules.
+  About 300 pytest checks that grepped the built bundle are now vitest tests
+  against the source. Five routes with no caller, their code, and unused
+  functions and aliases are gone.
 
 ## [0.8.1] - 2026-10-11
 
@@ -3481,7 +3523,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.2
 [0.8.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.1
 [0.8.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.0
 [0.7.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.5
