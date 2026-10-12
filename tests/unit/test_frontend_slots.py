@@ -1,8 +1,9 @@
 """Frontend addon-slots + provider picker wiring (Stage E).
 
 Structural checks (the live UI is verified manually in a browser): the new
-core/ JS modules serve, the index mounts them, and the addon manifest carries
-the builtin_ui flag the slot renderer keys off.
+core/ JS modules serve, the bundle loads the one the server serves, and the
+addon manifest carries the builtin_ui flag the slot renderer keys off. The
+source-side wiring is pinned by vitest (frontend addonSlots.test.ts).
 """
 
 from __future__ import annotations
@@ -22,13 +23,14 @@ def test_core_js_modules_serve():
         assert len(r.content) > 0
 
 
-def test_index_wires_slots_and_agent_picker():
-    html = client.get("/").text
-    # The New-session agent picker is a <select> populated from /api/providers
-    # (was a datalist-bound free-text "Program" input).
-    assert 'id: "new-program"' in client.get("/app.js").text
-    assert '"addon-bars"' in client.get("/app.js").text  # addon-slot mount point
-    assert "/core/slots.js" in client.get("/app.js").text  # loaded after app.js
+def test_the_bundle_loads_the_served_slots_module():
+    # The bundle injects /core/slots.js after its first paint (frontend
+    # main.tsx; the agent picker and #addon-bars mount it needs are pinned by
+    # vitest, addonSlots.test.ts), so the server must serve that exact path.
+    assert "/core/slots.js" in client.get("/app.js").text
+    r = client.get("/core/slots.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
 
 
 def test_manifest_flags_builtin_addons_and_keeps_modules_honest():

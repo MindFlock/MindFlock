@@ -2,7 +2,7 @@
  *
  * Select mode (store `bulkMode`) starts from the rail itself: Ctrl/⌘-click a
  * row, Shift-click a range, or a row menu's **Select**. The picked rows are
- * highlighted where they sit — no checkboxes (tests/unit/test_frontend_bulk.py
+ * highlighted where they sit — no checkboxes (frontend/src/__tests__/bulkBar.test.ts
  * pins that) and no second copy of the list — and this strip at the top of the
  * list fans the per-session endpoints out over them. Esc leaves select mode.
  * The two end verbs are the row menu's:

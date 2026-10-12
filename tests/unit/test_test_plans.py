@@ -3523,49 +3523,13 @@ def test_sweep_never_touches_ordinary_sessions(sweeper):
 
 
 def test_the_dialog_ships_the_cancel_button(client):
-    """A route nothing presses is a route that does not exist. The button, the
-    endpoint it calls and its hover style all have to reach the built bundle —
-    the frontend is built into backend/web/static, so a stale build is the one
-    failure this feature cannot see from either side."""
+    """A route nothing presses is a route that does not exist: the bundle calls
+    the cancel route and the server serves it. (The button, its hover style and
+    the call itself are pinned against the source in
+    frontend/src/__tests__/verifyDialogUi.test.ts.)"""
     js = client.get("/app.js").text
-    assert "Cancel run" in js
     assert "/cancel" in js
-    assert client.get("/style.css").text.count(".vf-cancel") >= 1
-
-
-def test_the_dialog_ships_the_at_a_glance_tally(client):
-    """The thing the owner asked for: where a checklist has got to, before you
-    open it. Frontend-built-into-backend means a stale bundle is the one failure
-    this feature cannot see from either side, so the row's tally, the group
-    roll-up and the sidebar's failure pill are asserted in the built assets."""
-    js = client.get("/app.js").text
-    css = client.get("/style.css").text
-    # The collapsed row's tally, and the CSS that keeps it from being cut off.
-    assert "vf-plan-tally" in js
-    assert ".vf-plan-tally" in css and ".vf-plan-meta-text" in css
-    # The group heading's roll-up.
-    assert "steps need" in js and "step failed" in js
-    # Something shipped and is broken, said OUTSIDE the dialog.
-    assert "dc-count-bad" in js and ".dc-count.dc-count-bad" in css
-    # And the log can be brought back after the run that produced it ended.
-    assert "Show the run here" in js
-    # Find one among many, and act on several: the list dialogs' own filter box
-    # and checkbox kit, reused rather than re-cut.
-    assert "vf-plans-filter" in js
-    assert "Select every checklist shown" in js
-    assert "Delete selected" in js
-    assert ".vf-plan-check" in css and ".vf-plan.picked" in css
-
-
-def test_the_dialog_ships_the_second_window_rule(client):
-    """The Write-plan bar must stop offering a session whose (repo, branch)
-    another window's plan already covers, and the toast for a press that lands
-    on that rule must name the window the checklist is under — a title that is
-    not the one pressed. Both live in the built bundle, so a stale build is the
-    one failure neither side can see."""
-    js = client.get("/app.js").text
-    assert "coverageKey(repoName(" in js
-    assert "'s branch already has a checklist — it's under " in js
+    assert "/api/test-plans/{plan_id}/cancel" in client.app.openapi()["paths"]
 
 
 def test_routes_address_a_plan_whose_id_is_a_whole_branch_path(client):

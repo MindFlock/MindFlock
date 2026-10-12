@@ -937,10 +937,13 @@ def test_push_metadata_is_not_exposed_to_the_client():
 
 
 def test_frontend_wires_the_ntfy_section():
+    """Contract: the Settings ntfy section (pinned in
+    frontend/src/__tests__/notifyWiring.test.ts) calls routes the server serves."""
     js = client.get("/app.js").text
-    assert "/api/notify/ntfy" in js
-    assert "/api/notify/ntfy/test" in js
-    assert "suggested_topic" in js  # Generate uses the server's random topic
+    paths = server.app.openapi()["paths"]
+    for called in ("/api/notify/ntfy", "/api/notify/ntfy/test"):
+        assert '"%s"' % called in js, called
+        assert called in paths, called
 
 
 # --------------------------------------------------------------------------- #

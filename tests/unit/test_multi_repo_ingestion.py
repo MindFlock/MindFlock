@@ -1,21 +1,18 @@
 """Per-source repo for ticket ingestion: each ticketing source can target its
 own repo, so ingestion spans many repos instead of one global one. Covers the
 settings round-trip, config layering, the engine repo-URL override, the clone
-transport (SSH is as first-class as HTTPS), and the source-card UI wiring.
+transport (SSH is as first-class as HTTPS). The source card's Repo URL field and
+its fold are pinned in frontend/src/__tests__/prReviewTabUi.test.ts.
 """
 
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from starlette.testclient import TestClient
 
 from backend.config import settings as S
 from backend.ticket_ingestion.config import PipelineConfig, load_config
 from backend.session import provisioned
-from backend.web import server
-
-client = TestClient(server.app)
 
 
 @pytest.fixture(autouse=True)
@@ -224,24 +221,3 @@ def test_clone_url_is_empty_when_there_is_nothing_to_go_on():
     from backend.ticket_ingestion.clone_transport import resolve_clone_url
 
     assert resolve_clone_url("") == ""
-
-
-# --------------------------------------------------------------------------- #
-# Frontend: each ticketing source card exposes a Repo URL field
-# --------------------------------------------------------------------------- #
-def test_source_card_js_has_repo_field():
-    js = client.get("/app.js").text
-    assert '"repo_url"' in js
-    # saveAll() persists any [data-tk-field], and cards render for the sources.
-    # Repo URL is now required per source (there is no global default repo).
-    assert "Repo URL" in js
-
-
-def test_source_card_is_collapsible():
-    js = client.get("/app.js").text
-    # Collapsible header + body wired, and saved sources fold by default.
-    assert "setCollapsed" in js
-    assert "tk-head" in js and "tk-body" in js
-    css = client.get("/style.css").text
-    body = css[css.index(".tk-source.tk-collapsed .tk-body") :]
-    assert "display: none" in body[: body.index("}")]

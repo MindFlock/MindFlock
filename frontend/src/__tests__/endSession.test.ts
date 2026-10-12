@@ -343,7 +343,7 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(bar).toContain("Removes their worktrees and branches");
     expect(bar).toContain("Keeps their worktrees");
     expect(strip(bar)).not.toMatch(/\bconfirm\(/);
-    // The rail keeps its rows checkbox-free (tests/unit/test_frontend_bulk.py).
+    // The rail keeps its rows checkbox-free (frontend/src/__tests__/bulkBar.test.ts).
     expect(bar).not.toContain('className="bulk-cb"');
   });
 

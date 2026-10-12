@@ -162,43 +162,12 @@ def test_the_cheap_snapshot_publishes_activity_since_too(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# frontend wiring (house-style markup assertions)
+# frontend wiring: the index page. The bundle's side (no update-from-base
+# wiring, the wedge watchdog) is in frontend/src/__tests__/needsRebaseUi.test.ts.
 # --------------------------------------------------------------------------- #
 client = TestClient(server.app)
-
-
-def test_app_js_has_no_update_from_base_wiring():
-    js = client.get("/app.js").text
-    assert 'data-act="updatebase"' not in js
-    assert "/update-from-base" not in js
-    assert "_withBehind" not in js
-    assert "behind_base" not in js
 
 
 def test_index_has_no_bulk_update_button():
     html = client.get("/").text
     assert 'id="update-all-btn"' not in html
-
-
-def test_app_js_has_wedge_watchdog_rule():
-    js = client.get("/app.js").text
-    # The watchdog now lives in lib/sessionState.ts (one session state for
-    # every channel): the idle-with-uncommitted-work threshold and its reason.
-    assert "STUCK_IDLE_S" in js
-    assert "activity_since" in js
-    assert 'reason: "stuck"' in js
-
-
-def test_a_committed_and_walked_away_session_is_not_called_stuck():
-    """This branch had never once rendered — ``activity_since`` read a key
-    nothing wrote, so it was 0 for every session. Now that it is live, what it
-    calls "unfinished work" has to be true: a COMMITTED branch is finished as
-    far as git is concerned (the header is asking for a push, not reporting a
-    problem), and counting it would put every session anyone committed and
-    walked away from on the bell's attention badge, claiming to be wedged.
-    """
-    js = client.get("/app.js").text
-    at = js.index("function uncommittedWork(")
-    rule = js[at : js.index("\n}", at)]
-    assert "additions" in rule and "deletions" in rule
-    assert '"committed"' not in rule

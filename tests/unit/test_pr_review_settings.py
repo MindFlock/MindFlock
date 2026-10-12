@@ -1,21 +1,18 @@
 """Automated PR review: the opt-in feature surfaced in Settings → Repo & PR
 review. Covers the extended GithubSettings model, the config-layering path that
-feeds the PR monitor, the Connections card, and the frontend wiring (markup,
-JS handlers, CSS).
+feeds the PR monitor, and the Connections card. The frontend (the Intake → Pull
+requests tab's markup, handlers and CSS) is pinned against its source in
+frontend/src/__tests__/prReviewTabUi.test.ts.
 """
 
 import json
 import types
 
 import pytest
-from starlette.testclient import TestClient
 
 from backend.config import settings as S
 from backend.ticket_ingestion.config import load_config
-from backend.web import server
 from backend.web.addons import connections
-
-client = TestClient(server.app)
 
 
 @pytest.fixture(autouse=True)
@@ -179,88 +176,3 @@ def test_github_connection_notes_missing_repo(monkeypatch):
     c = connections._github_connection()
     assert c["pr_review_enabled"] is False
     assert "no repos set" in c["detail"]
-
-
-# --------------------------------------------------------------------------- #
-# Frontend: the Intake → Pull requests tab
-# --------------------------------------------------------------------------- #
-def test_index_has_pr_review_feature_block():
-    html = client.get("/").text
-    # The tab label in the Intake dialog's strip (it left the Settings nav when
-    # the three intake surfaces were unified there). The tab strip IS the
-    # heading now, so there is no in-panel "Automated PR review" title — the
-    # switch label and its status line are what name the feature.
-    js = client.get("/app.js").text
-    assert '"Pull requests"' in js
-    assert '"Automated review"' in js
-    # Legacy id, kept on the work panel for addon CSS that targeted the screen.
-    assert '"pr-review-block"' in client.get("/app.js").text
-    # Explicit on/off (pause without deleting repos) + a status line reflecting it.
-    assert '"gh-pr-enabled"' in client.get("/app.js").text
-    assert '"gh-pr-status"' in client.get("/app.js").text
-    assert '"gh-skip-authors"' in client.get("/app.js").text
-    assert '"min_age_minutes"' in client.get("/app.js").text
-    assert '"poll_interval_seconds"' in client.get("/app.js").text
-    # The global default repo is gone; workspace settings live on their own
-    # screen and each ticketing source names its own repo instead.
-    assert '"workspace"' in client.get("/app.js").text
-    assert (
-        '"workspace_dir"' in client.get("/app.js").text
-    )  # workspace settings on their own screen
-    assert 'data-field="url"' not in html  # no global repo URL field
-
-
-def test_index_has_multi_repo_add_remove_controls():
-    js = client.get("/app.js").text
-    assert '"gh-repos-list"' in js  # where the repo cards render
-    assert '"gh-repo-add-btn"' in js
-    # A watched repo is a CARD now, not a chip plus one screen-wide set of
-    # options: the slug is a field inside the card (alongside that repo's own
-    # agent / base branch / grace period), so there is no separate "add a repo"
-    # text input any more. `+ Add repository` appends an empty card instead.
-    assert '"gh-repo-new"' not in js
-    assert '"+ Add repository"' in js
-    # JSX props survive the bundler as object keys, hence the `":` spelling.
-    for field in ("repo", "agent", "base_branch", "min_age_minutes", "skip_authors"):
-        assert 'data-repo-field": "%s"' % field in js, field
-
-
-def test_app_js_wires_pr_review_repos_and_toggle():
-    js = client.get("/app.js").text
-    assert "gh-pr-enabled" in js
-    assert "gh-skip-authors" in js
-    assert "skip_authors" in js
-    assert "skip_authors" in js
-    # Multi-repo add/remove lives in the shared RepoSourceList (intake/RepoSources
-    # .tsx), which PR review and Git issues both drive. Exactly one copy of each
-    # guard IS the point: both screens had their own before they were unified.
-    assert js.count("Use owner/name") == 1  # owner/name format guard
-    assert js.count("is already in the list") == 1  # duplicate guard
-    assert "repos:" in js  # POST { github: { repos: [...] } }
-    # …and the per-repo override map saved alongside it, which is what makes a
-    # card's own agent / base branch / grace period mean anything.
-    assert "repo_settings:" in js
-    # Explicit pause toggle owns github.enabled, and pausing is what it says in
-    # the toast. There is deliberately no "● Active / ‖ Paused" status line under
-    # the switch any more: with the switch itself right there and the repos it
-    # counts listed below, it only restated what was already on screen (see
-    # AutomationSwitch in intake/kit.tsx). The switch's only subtitle is the one
-    # state a switch can't show — nothing connected yet.
-    assert "Paused —" not in js
-    assert "Automated review paused" in js
-    assert "Add a repository below and this starts reviewing your PRs on it" in js
-
-
-def test_style_has_feature_and_repo_rules():
-    css = client.get("/style.css").text
-    for sel in (
-        # Chips still carry the ticketing state picker.
-        ".repo-chip",
-        ".repo-chip-x",
-        # The card the watched repos render as, and the grouped work list under
-        # them (one group per repo).
-        ".tk-source",
-        ".ik-cards",
-        ".ik-groups",
-    ):
-        assert sel in css, sel

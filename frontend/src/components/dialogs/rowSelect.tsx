@@ -2,7 +2,7 @@
  * of chrome (a row checkbox, a bulk bar) that Recently-closed and Workspaces
  * share. Kept together because the three only make sense as a set.
  *
- * Deliberately NOT named `bulk-cb` — tests/unit/test_frontend_bulk.py pins that
+ * Deliberately NOT named `bulk-cb` — frontend/src/__tests__/bulkBar.test.ts pins that
  * the SIDEBAR has no per-row checkbox, and a dialog class by that name would
  * make the guard lie. */
 

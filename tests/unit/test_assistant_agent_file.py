@@ -99,11 +99,12 @@ def test_restart_endpoint_ok(client, monkeypatch):
     assert called.get("hit") is True
 
 
-def test_ui_exposes_agent_button_and_editor(client):
-    html = client.get("/").text
-    assert '"assistant-agent-btn"' in client.get("/app.js").text
-    assert '"assistant-agent-dialog"' in client.get("/app.js").text
-    assert '"assistant-agent-text"' in client.get("/app.js").text
+def test_ui_calls_the_agent_file_routes(client):
+    """The editor's routes: the bundle calls them and the server serves them.
+    (The button, dialog and text box are pinned against the source in
+    frontend/src/__tests__/assistantAgentUi.test.ts.)"""
     js = client.get("/app.js").text
-    assert "/api/assistant/instructions" in js
-    assert "/api/assistant/restart" in js
+    paths = client.app.openapi()["paths"]
+    for route in ("/api/assistant/instructions", "/api/assistant/restart"):
+        assert route in js, route
+        assert route in paths, route
