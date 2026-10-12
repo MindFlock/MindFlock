@@ -715,7 +715,7 @@ What it looks like in the app:
 
 Permissions: only the read, wait and report tools are pre-approved. An
 orchestrator running **without** skip-permissions asks you before every
-message, spawn, answer or kill, so give it skip-permissions (Settings → Agent
+message, spawn, answer or close/delete, so give it skip-permissions (Settings → Agent
 CLI's default launch flags, or the New-session dialog's **Launch flags**)
 when it should run unattended. You can message any agent yourself from a
 terminal with `mindflock msg TITLE "…"`, and use the same tools from your own

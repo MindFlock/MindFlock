@@ -580,7 +580,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   if (tstate === "failed")
     return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
   if (ap && ap.state === "halted")
-    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 
   // A one-for-all / split line merges back into its lead's branch: that IS
   // its outcome (its own lane is only "commit"), so say so before the lane.
@@ -642,7 +642,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
               : s === 2
                 ? "opening PR"
                 : "merging";
-    return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+    return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is " + verb + ".");
   }
   if ((tstate === "needs_you" && reason === "approve") || (!tstate && awaitingApproval(row)))
     return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");

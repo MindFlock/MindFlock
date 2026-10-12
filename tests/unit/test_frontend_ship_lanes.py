@@ -125,17 +125,20 @@ def test_every_lane_row_leads_with_its_lane():
     flat = squash(js)
     assert 'className: "sl-lead", children: ship.lead' in flat
     body = squash(_fn(js, "shipLine"))
-    # (The ⇡ verb is a single-use const Rolldown folds into the call, so the
-    # glyph is pinned on its own.)
+    # (The ⇡ verb is a const shared by the label and the tooltip, so the glyph
+    # is pinned on its own.)
     for phrase in (
         '"? needs you · question"',
-        '"⇡ " + (',
+        '"⇡ " + verb',
         '" — open the bell"',
         '" · working "',
         '", asks first"',
     ):
         assert phrase in body, phrase
     assert '"opening PR"' in body
+    # The tooltip names the step, never the umbrella "shipping it".
+    assert '"MindFlock is " + verb' in body
+    assert "shipping it" not in body
     assert "Outbox" not in body, "what waits on you is the bell's"
 
 

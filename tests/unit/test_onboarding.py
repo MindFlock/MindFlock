@@ -432,7 +432,9 @@ def test_store_token_lands_in_github_token():
 
 
 def test_credential_helper_answers_github_only(monkeypatch):
-    monkeypatch.setattr(github_auth, "resolve_token", lambda: ("settings", "tok"))
+    monkeypatch.setattr(
+        github_auth, "resolve_token", lambda *a, **k: ("settings", "tok")
+    )
     assert github_auth.credential_answer("protocol=https\nhost=github.com\n") == (
         "username=x-access-token\npassword=tok\n"
     )
@@ -850,7 +852,7 @@ def test_the_git_credential_helper_survives_an_awkward_install_path(
     saved = []
     monkeypatch.setattr(github_auth, "gh_path", lambda: "")
     monkeypatch.setattr(github_auth, "credential_helper", lambda: "")
-    monkeypatch.setattr(github_auth, "resolve_token", lambda: ("settings", "t"))
+    monkeypatch.setattr(github_auth, "resolve_token", lambda *a, **k: ("settings", "t"))
     monkeypatch.setattr(github_auth, "_mindflock_bin", lambda: str(exe))
     monkeypatch.setattr(
         github_auth, "_git", lambda *a, **k: saved.append(a) or (0, "", "")

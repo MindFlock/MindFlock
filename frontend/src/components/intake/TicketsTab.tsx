@@ -70,7 +70,7 @@ import {
   saveShownBuckets,
   visibleBuckets,
 } from "./buckets";
-import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
+import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 import {
   EFFORTS,
   effortOptionLabel,
@@ -1544,10 +1544,10 @@ function TicketSourceCard({
           {/* One ladder, the same words as every other Fast-track control.
               A stored "agent" (stop once the agent stops) IS Off, so it reads
               as Off rather than as a sixth rung. */}
-          <option value="">{DEPTH_LABELS.off}</option>
-          {SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => (
+          <option value="">{LANE_LABEL.leave}</option>
+          {SOURCE_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {DEPTH_LABELS[d]}
+              {LANE_LABEL[d]}
             </option>
           ))}
         </select>

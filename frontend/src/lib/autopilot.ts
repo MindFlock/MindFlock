@@ -1,104 +1,111 @@
-/** The autopilot depth ladder, client side — pure, so it is unit-testable.
+/** THE Fast-track ladder, client side — pure, so it is unit-testable.
  *
- * Mirrors backend/web/core/autopilot.py. The rungs are TARGETS ("carry it as far
- * as Open PR"); the session stages they are compared against are past-tense facts
- * ("committed", "pushed"). Keeping the two vocabularies distinct, and mapping
- * between them in one place, is what stops "am I there yet?" turning into a pile
- * of special cases.
- */
+ * ONE ladder and ONE label table for every Fast-track control: the pane's ⏩,
+ * the row › menu, New's Options, the Commit dialog and Intake's pickers all
+ * read Off / Commit / Push / Open PR / Merge when green from here
+ * (lib/laneActions re-exports it for the controls that act).
+ *
+ * The wire has two spellings of the bottom rung and both stay accepted: the
+ * lane routes and a row's `lane` say "leave", the autopilot / intake routes
+ * (and MCP set_autopilot) say "off"; an older intake config may say "agent"
+ * (stop once the agent stops — which is what Off already does to a session).
+ * normalizeLane folds all three into "leave". Nothing is migrated: each
+ * control keeps EMITTING the spelling its route already stores — the lane
+ * controls "leave", Intake's pickers "off" / "".
+ *
+ * The rungs are TARGETS ("carry it as far as Open PR"); the session stages
+ * they are compared against are past-tense facts ("committed", "pushed").
+ * Mirrors backend/web/core/autopilot.py. */
 
-import type { AutopilotRun, Instance, MergeState } from "../api/types";
+import type { AutopilotRun, MergeState } from "../api/types";
 
-export const DEPTH_ORDER = ["off", "agent", "commit", "push", "pr", "merge"] as const;
+/** A Fast-track target, keyed the way the lane routes name it ("leave" = Off). */
+export type Lane = "leave" | "commit" | "push" | "pr" | "merge";
 
-/** Rungs a caller may arm. "off" is the absence of a run, not a target. */
-export const DEPTHS = ["agent", "commit", "push", "pr", "merge"] as const;
+/** The rungs in ladder order. Every fast-track control offers all five —
+ * Push included: "pushed, no PR" is a real place to stop, and leaving it out
+ * of one control was how the same choice read differently in two places. */
+export const LANE_ORDER: readonly Lane[] = ["leave", "commit", "push", "pr", "merge"];
 
-/** Rungs the per-session fast-track button offers. "agent" is intake-only —
- * arming it on a session that already exists would mean "do nothing". */
-export const SESSION_DEPTHS = ["commit", "push", "pr", "merge"] as const;
+/** What every fast-track control offers, nearest first. */
+export const LANE_CHOICES: readonly Lane[] = LANE_ORDER;
+
+/** Rungs Intake's per-item picker offers beside its Default / Off choices. */
+export const SESSION_DEPTHS: readonly Lane[] = ["commit", "push", "pr", "merge"];
 
 /** Rungs a whole intake SOURCE may default to. Merge is deliberately absent: a
  * source default applies to every future item with no human in the loop, and
  * merging is the one step in the ladder that cannot be undone. Merge is still
  * available on an individual item. */
-export const SOURCE_DEPTHS = ["agent", "commit", "push", "pr"] as const;
+export const SOURCE_DEPTHS: readonly Lane[] = ["commit", "push", "pr"];
 
-/** The rungs in the words every fast-track control uses (lib/laneActions'
- * LANE_LABEL); "agent" is the intake-only "stop once the agent stops". */
-export const DEPTH_LABELS: Record<string, string> = {
-  off: "Off",
-  agent: "Agent only",
+/** THE user-facing word for each rung. */
+export const LANE_LABEL: Record<Lane, string> = {
+  leave: "Off",
   commit: "Commit",
   push: "Push",
   pr: "Open PR",
   merge: "Merge when green",
 };
 
-/** How the ladder reads in a dropdown. No leading "…": inside a CLOSED select a
- * leading ellipsis reads as text that has been clipped. */
-export const DEPTH_STEP_LABELS: Record<string, string> = {
-  off: "Off",
-  agent: "Agent only",
-  commit: "Commit only",
-  push: "Then push",
-  pr: "Then open PR",
-  merge: "Then merge",
+/** The ⏩ button's own text for each rung, where a pane head has no room. */
+export const LANE_SHORT: Record<Lane, string> = {
+  leave: "off",
+  commit: "Commit",
+  push: "Push",
+  pr: "PR",
+  merge: "Merge",
 };
 
-/** Ultra-short target suffix for the pane header, where width is scarce. */
-export const DEPTH_SHORT: Record<string, string> = {
-  agent: "→ agent",
-  commit: "→ commit",
-  push: "→ push",
-  pr: "→ PR",
-  merge: "→ merge",
+/** What each rung means, in one line: the picker's second line and the
+ * segmented control's tooltips. */
+export const LANE_DESC: Record<Lane, string> = {
+  leave: "MindFlock doesn't commit anything — you take it from there",
+  commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+  push: "Commit and push once the agent stops and your hooks pass",
+  pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+  merge: "Commit, push, open a PR and merge it once its checks pass",
 };
 
-/** Which rung a given session stage PROVES is complete. Stages that mean "still
- * working" (provisioning/agent/precommit/interrupt) prove nothing. */
-const STAGE_ACHIEVED: Record<string, string> = {
-  committed: "commit",
-  pushed: "push",
-  pr: "pr",
+/** The picker's letters: Off, Commit, pUsh, PR, Merge (A is "ask first"). */
+export const LANE_KEY: Record<Lane, string> = {
+  leave: "O",
+  commit: "C",
+  push: "U",
+  pr: "P",
+  merge: "M",
 };
 
-export function depthLabel(depth: string): string {
-  return DEPTH_LABELS[depth] || depth || "Off";
-}
-
-export function normalizeDepth(value: string | null | undefined): string {
-  const d = String(value || "")
+/** A target from anything the server or a setting might hand us: "leave",
+ * "off", "agent" and "none" are all Off. Unknown → "". */
+export function normalizeLane(v: string | null | undefined): Lane | "" {
+  const s = String(v || "")
     .trim()
     .toLowerCase();
-  if (d === "off") return "off";
-  return (DEPTHS as readonly string[]).includes(d) ? d : "";
+  if (s === "agent" || s === "off" || s === "none") return "leave";
+  return (LANE_ORDER as readonly string[]).includes(s) ? (s as Lane) : "";
 }
 
-/** Whether `stage` already satisfies the target `depth`.
- *
- * `merge` is never satisfied by a stage: the server has no "merged" stage (a
- * merged PR moves the stage OFF "pr"), so that rung completes when the merge
- * call returns ok, not by observation. */
-export function atOrPastDepth(stage: string, depth: string): boolean {
-  const d = normalizeDepth(depth);
-  if (!d || d === "off" || d === "merge") return false;
-  const got = STAGE_ACHIEVED[String(stage || "")];
-  if (!got) return false;
-  return DEPTH_ORDER.indexOf(got as never) >= DEPTH_ORDER.indexOf(d as never);
+/** THE default for batches and ticket runs: Settings → Workspace
+ * "Fast-track goes as far as" (`/api/config` fasttrack_default). Out of the
+ * box — unset, blank or unknown — it is Off: nothing is fast-tracked unless
+ * someone asked. A single new session never reads it (runStart.defaultLaneFor
+ * starts it Off). */
+export function laneDefault(setting: string | null | undefined): Lane {
+  return normalizeLane(setting) || "leave";
 }
 
-/** The chip text for a live or finished run: short enough for a pane header. */
-export function autopilotChipLabel(run: AutopilotRun): string {
-  const target = depthLabel(run.depth);
-  if (run.state === "halted") return "auto ✗";
-  if (run.state === "done") return "auto ✓";
-  return "auto → " + target;
+/** Any wire spelling of a rung, in the ladder's word. Empty is Off; an
+ * unknown value is shown as-is rather than guessed at. */
+export function laneLabel(value: string | null | undefined): string {
+  if (!String(value || "").trim()) return LANE_LABEL.leave;
+  const lane = normalizeLane(value);
+  return lane ? LANE_LABEL[lane] : String(value);
 }
 
 /** The tooltip: what it is doing, or why it stopped. */
 export function autopilotChipTitle(run: AutopilotRun): string {
-  const target = depthLabel(run.depth);
+  const target = laneLabel(run.depth);
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
   if (run.state === "done")
@@ -138,11 +145,4 @@ export function mergeBlockerLabel(ms: MergeState): string {
     default:
       return ms.mergeable === null ? "checking…" : "can't merge";
   }
-}
-
-/** A running chain on this session, or null. */
-export function liveRun(inst: Partial<Instance>): AutopilotRun | null {
-  const run = inst.autopilot;
-  if (!run || !run.depth) return null;
-  return run.state === "running" ? run : null;
 }

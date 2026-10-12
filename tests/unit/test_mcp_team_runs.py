@@ -129,6 +129,17 @@ class TestStart:
         box.start_team_run({"items": ["PAY-1"]}, FakeCtx(clock))
         assert "lane" not in created[0]["policy"]
 
+    def test_off_is_accepted_and_stored_as_leave(self):
+        # One Fast-track ladder, two spellings: set_autopilot's "off" works
+        # here too, and the run stores what the lane routes already use.
+        from backend.mcp.runs import D_START_RUN, S_START_RUN
+
+        assert "off" in S_START_RUN["properties"]["lane"]["enum"]
+        assert "Fast-track" in D_START_RUN
+        box, api, clock, created = _box()
+        box.start_team_run({"items": ["PAY-1"], "lane": "off"}, FakeCtx(clock))
+        assert created[0]["policy"]["lane"] == "leave"
+
     def test_unresolved_tickets_are_refused_not_turned_into_tasks(self):
         box, api, clock, created = _box()
         api.top_routes[("POST", "/api/runs/preview")] = lambda p, q: {

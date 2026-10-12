@@ -292,9 +292,13 @@ def normalize_depth(value) -> str:
     """Coerce anything to a valid rung name, or ``""`` for "not a depth".
 
     ``""`` and ``"off"`` both mean "no run"; the caller decides which of the two
-    it wants to store.
+    it wants to store. ``"leave"`` (the lane routes' word for Off, see
+    :mod:`backend.web.core.lanes`) is ``"off"`` too, so either spelling works
+    on every input that takes a depth.
     """
     d = str(value or "").strip().lower()
+    if d == "leave":
+        d = "off"
     if d in ("", "off"):
         return "off" if d == "off" else ""
     return d if d in DEPTHS else ""

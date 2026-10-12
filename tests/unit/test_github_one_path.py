@@ -267,6 +267,61 @@ class TestProbesAgreeWithTheTokenUsed:
         )
 
 
+class TestConfigTomlOnlyIsSeenEverywhere:
+    """A user whose ONLY credential is ``[github].token`` in config.toml: the
+    PR buttons (``api_token``) use it, so Connect GitHub's status, its Test,
+    git's credential helper and the per-repo Test must find it too instead of
+    reporting "none"."""
+
+    @pytest.fixture(autouse=True)
+    def toml_only(self, monkeypatch):
+        from backend.web.core import github_pr
+
+        cfg = _cfg(token="from-toml", toml_token="from-toml")
+        monkeypatch.setattr(github_pr, "_github_config", lambda: cfg)
+        monkeypatch.setattr(web_auth, "gh_path", lambda: "")
+        monkeypatch.setattr(web_auth, "credential_helper", lambda: "")
+        web_auth._USERS.clear()
+
+    async def test_pr_buttons_use_it(self):
+        from backend.web.core import github_pr
+
+        assert await github_pr.api_token() == "from-toml"
+
+    def test_status_reports_it(self):
+        st = web_auth.status(check_user=False)
+        assert st["connected"] is True
+        assert st["source"] == web_auth.SOURCE_CONFIG_TOML
+        assert "from-toml" not in str(st)
+
+    def test_connection_test_uses_it(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(web_auth, "_http", _fake_http(calls))
+        out = web_auth.test_connection()
+        assert out["token_source"] == web_auth.SOURCE_CONFIG_TOML
+        assert out["login"] == "octo"
+
+    def test_git_credential_helper_answers_with_it(self):
+        out = web_auth.credential_answer("protocol=https\nhost=github.com\n")
+        assert out == "username=x-access-token\npassword=from-toml\n"
+
+    def test_per_repo_test_gets_past_the_token_check(self, monkeypatch):
+        import aiohttp
+
+        from backend.web import server
+
+        def offline(*_a, **_k):
+            raise OSError("offline")
+
+        monkeypatch.setattr(aiohttp, "ClientSession", offline)
+        with TestClient(server.app) as client:
+            body = client.post(
+                "/api/settings/test/github-repo", json={"repo": "o/r"}
+            ).json()
+        assert body["ok"] is False
+        assert "could not reach api.github.com" in body["error"]
+
+
 # --------------------------------------------------------------------------- #
 # 3. The device-flow client id ships as a constant (empty until registered)
 # --------------------------------------------------------------------------- #

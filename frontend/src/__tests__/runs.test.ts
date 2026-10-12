@@ -82,7 +82,7 @@ describe("splitRail: groups are headers over rows already on the rail", () => {
     expect(grp.queued.map((t) => t.id)).toEqual(["t5", "t6"]);
     expect(grp.lane).toBe("→ PR");
     expect(grp.total).toBe(6);
-    expect(shippedBadge(grp)).toBe("1/6 shipped");
+    expect(shippedBadge(grp)).toBe("1/6 done");
     // needs you: a member on a prompt, deduped against its needs_you task.
     expect(grp.needs).toBe(1);
   });
@@ -118,7 +118,7 @@ describe("splitRail: groups are headers over rows already on the rail", () => {
     ]);
     expect(done.groups[0].done).toBe(true);
     expect(done.groups[0].queued).toEqual([]);
-    expect(shippedBadge(done.groups[0]) + " · " + done.groups[0].failed).toBe("5/6 shipped · 1");
+    expect(shippedBadge(done.groups[0]) + " · " + done.groups[0].failed).toBe("5/6 done · 1");
   });
 
   it("leaves window rows and remote-device rows out of every group", () => {
@@ -232,7 +232,10 @@ describe("runNote: run events, phrased once", () => {
     expect(n.text).toBe("Q4 payments finished — 5 PRs, 1 failed");
     expect(n.rule).toBe("run_finished");
     expect(runNote("run.finished", { run: "r1", shipped: 2, failed: 0 }, { ...info, lane: () => "commit" })!.text).toBe(
-      "Q4 payments finished — 2 shipped"
+      "Q4 payments finished — 2 committed"
+    );
+    expect(runNote("run.finished", { run: "r1", shipped: 2, failed: 0 }, { ...info, lane: () => "leave" })!.text).toBe(
+      "Q4 payments finished — 2 done"
     );
   });
 
@@ -248,7 +251,9 @@ describe("runNote: run events, phrased once", () => {
 
   it("keeps a shipped line bell-only (no rule gate)", () => {
     const n = runNote("run.task_shipped", { run: "r1", task: "t1", title: "jira-PAY-412", pr_url: "https://x/pull/318" }, info)!;
-    expect(n.text).toBe("Q4 payments: jira-PAY-412 shipped — PR #318");
+    expect(n.text).toBe("Q4 payments: jira-PAY-412 opened PR #318");
+    const pushed = runNote("run.task_shipped", { run: "r1", task: "t2", title: "docs" }, { ...info, lane: () => "push" })!;
+    expect(pushed.text).toBe("Q4 payments: docs pushed");
     expect(n.rule).toBe("");
   });
 });
@@ -332,7 +337,7 @@ describe("Sidebar: run groups never renumber the rail", () => {
     const head = r[0].html;
     expect(head).toContain('<span class="dev-name">Q4 payments</span>');
     expect(head).toContain('<span class="rg-lane">→ PR</span>');
-    expect(head).toContain(">1/6 shipped<");
+    expect(head).toContain(">1/6 done<");
     expect(head).toMatch(/class="dev-badge rg-needs"[^>]*>1</);
   });
 

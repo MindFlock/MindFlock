@@ -25766,7 +25766,7 @@ function shipLine(row, opts = {}) {
 	const reason = String(task?.reason || "");
 	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
 	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
-	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
 	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
 	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
@@ -25790,7 +25790,8 @@ function shipLine(row, opts = {}) {
 	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
 		const s = stageRank(stage);
 		const note = String(ap?.note || "");
-		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+		const verb = ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging";
+		return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is " + verb + ".");
 	}
 	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
 	let rest;
@@ -28524,6 +28525,88 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
+//#region src/lib/autopilot.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = LANE_ORDER;
+var SESSION_DEPTHS = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var SOURCE_DEPTHS = [
+	"commit",
+	"push",
+	"pr"
+];
+var LANE_LABEL = {
+	leave: "Off",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge when green"
+};
+var LANE_SHORT = {
+	leave: "off",
+	commit: "Commit",
+	push: "Push",
+	pr: "PR",
+	merge: "Merge"
+};
+var LANE_DESC = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "Commit, push, open a PR and merge it once its checks pass"
+};
+var LANE_KEY = {
+	leave: "O",
+	commit: "C",
+	push: "U",
+	pr: "P",
+	merge: "M"
+};
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(setting) {
+	return normalizeLane(setting) || "leave";
+}
+function laneLabel(value) {
+	if (!String(value || "").trim()) return LANE_LABEL.leave;
+	const lane = normalizeLane(value);
+	return lane ? LANE_LABEL[lane] : String(value);
+}
+function autopilotChipTitle(run) {
+	const target = laneLabel(run.depth);
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
+	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+	return "Fast-tracking to " + target + where + skipped;
+}
+function mergeBlockerLabel(ms) {
+	switch (ms.state) {
+		case "dirty": return "conflicts";
+		case "behind": return "behind base";
+		case "draft": return "draft PR";
+		case "blocked":
+			if (ms.checks === "failed") return "checks ✗";
+			if (ms.checks === "pending") return "checks…";
+			return "review needed";
+		default: return ms.mergeable === null ? "checking…" : "can't merge";
+	}
+}
+//#endregion
 //#region src/lib/runs.ts
 var RUN_DONE_STATES = /* @__PURE__ */ new Set([
 	"done",
@@ -28634,7 +28717,15 @@ function queuedTitle(t) {
 	return ref || text || t.title || "queued line";
 }
 function shippedBadge(g) {
-	return g.shipped + "/" + g.total + " shipped";
+	return g.shipped + "/" + g.total + " done";
+}
+function laneDoneWord(lane) {
+	return {
+		commit: "committed",
+		push: "pushed",
+		pr: "PR opened",
+		merge: "merged"
+	}[lane] || "done";
 }
 function groupTitle(g) {
 	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
@@ -28698,7 +28789,7 @@ function runNote(event, data, info = {}) {
 			const shipped = num$4(d.shipped);
 			const failed = num$4(d.failed);
 			const lane = info.lane?.(run) || "";
-			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
 			const what = str$4(d.outcome) || shipped + word;
 			return {
 				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
@@ -28710,8 +28801,10 @@ function runNote(event, data, info = {}) {
 		}
 		case "run.task_shipped": {
 			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
+			const lane = info.lane?.(run) || "";
+			const did = m ? (lane === "merge" ? "merged" : "opened") + " PR #" + m[1] : laneDoneWord(lane);
 			return {
-				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				text: name + ": " + who + " " + did,
 				cls: "n-done",
 				run,
 				dedupe: [
@@ -28888,52 +28981,8 @@ function suggestedBudget(budget, spent) {
 }
 //#endregion
 //#region src/lib/laneActions.ts
-var LANE_ORDER = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var LANE_CHOICES = LANE_ORDER;
-var LANE_LABEL = {
-	leave: "Off",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge when green"
-};
-var LANE_SHORT = {
-	leave: "off",
-	commit: "Commit",
-	push: "Push",
-	pr: "PR",
-	merge: "Merge"
-};
-var LANE_DESC = {
-	leave: "MindFlock doesn't commit anything — you take it from there",
-	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-	push: "Commit and push once the agent stops and your hooks pass",
-	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-	merge: "Commit, push, open a PR and merge it once its checks pass"
-};
-var LANE_KEY = {
-	leave: "O",
-	commit: "C",
-	push: "U",
-	pr: "P",
-	merge: "M"
-};
 var ASK_FIRST_LABEL = "Ask me before it ships";
 var ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
-function normalizeLane(v) {
-	const s = String(v || "").trim().toLowerCase();
-	if (s === "agent" || s === "off" || s === "none") return "leave";
-	return LANE_ORDER.includes(s) ? s : "";
-}
-function laneDefault(setting) {
-	return normalizeLane(setting) || "leave";
-}
 function laneChoice(inst) {
 	const l = laneOf(inst);
 	const lane = l ? normalizeLane(l.target) : "";
@@ -29116,51 +29165,6 @@ function openFastTrackMenu(title) {
 	}
 	selectSession(title, { noKeyboard: true });
 	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
-}
-//#endregion
-//#region src/lib/autopilot.ts
-var SESSION_DEPTHS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SOURCE_DEPTHS = [
-	"agent",
-	"commit",
-	"push",
-	"pr"
-];
-var DEPTH_LABELS = {
-	off: "Off",
-	agent: "Agent only",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge when green"
-};
-function depthLabel(depth) {
-	return DEPTH_LABELS[depth] || depth || "Off";
-}
-function autopilotChipTitle(run) {
-	const target = depthLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
-	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
-	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-	return "Fast-tracking to " + target + where + skipped;
-}
-function mergeBlockerLabel(ms) {
-	switch (ms.state) {
-		case "dirty": return "conflicts";
-		case "behind": return "behind base";
-		case "draft": return "draft PR";
-		case "blocked":
-			if (ms.checks === "failed") return "checks ✗";
-			if (ms.checks === "pending") return "checks…";
-			return "review needed";
-		default: return ms.mergeable === null ? "checking…" : "can't merge";
-	}
 }
 //#endregion
 //#region src/lib/stage.ts
@@ -32988,7 +32992,10 @@ function doWaitAction(key, w, runId, taskId) {
 		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
 		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
 		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-		case "release": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
+		case "release": {
+			const pushOnly = !!w.preview?.local_origin || w.preview?.lane === "push";
+			return runAction(releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR", runPath(runId, "/release"), { merge_when_green: false }, pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR");
+		}
 		case "release_merge": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
 		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
 		case "cancel_group": return cancelRun(runId, w.run?.name || "");
@@ -35223,7 +35230,7 @@ function TopBar() {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Verify — shipped changes nobody has checked (Alt+V)",
+							title: "Verify — merged changes nobody has checked (Alt+V)",
 							onClick: () => ui.openDialogFor("verify"),
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count",
@@ -66775,10 +66782,6 @@ function workspaceNote(ws) {
 	}
 	return "workspace left on this machine";
 }
-function ladderLabel(depth) {
-	const d = !depth || depth === "agent" ? "off" : depth;
-	return DEPTH_LABELS[d] || d;
-}
 function ageText(iso) {
 	const t = Date.parse(iso || "");
 	return isFinite(t) ? relTime(t / 1e3, { suffix: " old" }) : "";
@@ -66980,12 +66983,12 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 	const [optsOpen, setOptsOpen] = (0, import_react.useState)(false);
 	const picked = !!(agent || depth || effortUsable && effort);
 	const showPicks = optsOpen || picked;
-	const defaultDepth = ladderLabel(configuredDepth);
-	const defaultIsOff = defaultDepth === DEPTH_LABELS.off;
+	const defaultDepth = laneLabel(configuredDepth);
+	const defaultIsOff = defaultDepth === LANE_LABEL.leave;
 	const effortDefault = configuredEffort ? effortOptionLabel(configuredEffort, effortCap) : "";
 	const uses = [
 		agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-		"Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth),
+		"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
 		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : "default effort"
 	].filter(Boolean).join(" · ");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -67127,11 +67130,11 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 									}),
 									!defaultIsOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 										value: "off",
-										children: DEPTH_LABELS.off
+										children: LANE_LABEL.leave
 									}),
 									SESSION_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 										value: d,
-										children: DEPTH_LABELS[d]
+										children: LANE_LABEL[d]
 									}, d))
 								]
 							}),
@@ -68567,10 +68570,10 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 						onChange: (e) => onChange({ depth: e.target.value }),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: "",
-							children: DEPTH_LABELS.off
-						}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							children: LANE_LABEL.leave
+						}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: d,
-							children: DEPTH_LABELS[d]
+							children: LANE_LABEL[d]
 						}, d))]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -69126,10 +69129,10 @@ function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, li
 											onChange: (e) => patch(card.repo, "depth", e.target.value),
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: "",
-												children: DEPTH_LABELS.off
-											}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												children: LANE_LABEL.leave
+											}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: d,
-												children: DEPTH_LABELS[d]
+												children: LANE_LABEL[d]
 											}, d))]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
