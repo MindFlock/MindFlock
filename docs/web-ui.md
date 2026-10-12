@@ -1565,29 +1565,32 @@ Once a ticket tracker is connected (`caps.ticketing`), the dialog has two
 tabs — **Session** and **Ticket**. Before that there is no tab strip at all:
 filing a ticket needs a tracker, so a newcomer sees only the Session content.
 Session is the landing tab on every open (including after a refused create),
-because it is the hot path: name → Enter. Ticket is described further down.
+because it is the hot path. Ticket is described further down.
 
-The card has one fixed top edge and grows downward from it, rather than being
-centred like every other modal — a centred card shifts its top by half of any
-height change, so switching tabs slid the whole dialog under the pointer. The
-top is anchored where a *landing* pane sits centred (Session page 1, the Ticket
-tab), so those read as centred and the full form simply sags past the middle;
-each pane keeps its own natural height, and a card stops growing at the bottom
-of the window and scrolls inside instead.
+The card is centred like every other modal. It holds still because every pane
+— the form, Intake's batch page and the Ticket tab — is the same fixed height
+(`min(86vh, 620px)`) and scrolls inside it, so neither switching tabs nor
+opening a fold moves the card.
 
-**The fast path costs nothing.** The Session tab opens on the form with
-**Name** focused (placeholder *untitled — Enter creates it*, or *<template> —
-Enter creates it* when a template is active), pre-filled with the template,
-agent and account the last session in that folder was started with — so Name
-→ Enter creates the session with no model turn. The memory is per folder and
+**Describe it first.** The Session tab opens on the form with its describe box
+(*What do you want to work on?*) at the top, open, with the caret in it: type
+a sentence and Enter fills the form in — see
+[describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence).
+**Hide** folds it to a **✨ Describe it instead…** row for the rest of that
+opening; every opening shows it again. After a refused create the caret goes
+to **Name** instead, since the form is what needs fixing.
+
+**The by-hand path costs nothing.** Below the box, the form is pre-filled
+(**Name** placeholder *untitled — Enter creates it*, or *<template> — Enter
+creates it* when a template is active) with the template, agent and account
+the last session in that folder was started with — so Name → Enter creates the
+session with no model turn. The memory is per folder and
 per browser (`localStorage` `mf_new_session_last`, the last 32 folders),
 written on a successful create, and applied only while that template still
 exists and that agent is still installed; it never carries a name, a prompt,
 launch flags or a base branch. On the form the defaults do the right thing
 (blank repo → the configured `[repository].url` is provisioned; program
-prefilled). A secondary **✨ Describe it instead…** row (*or fill the form in
-and press Enter*) expands the sentence box — see
-[describe it in a sentence](#new-session-dialog-describe-it-in-a-sentence).
+prefilled).
 
 The **Git & workspace** fold starts **shut** on every open, and its summary
 line says what will happen — *Git & workspace — new worktree from main*, *in
@@ -1729,10 +1732,10 @@ anyway, because a ticket you cannot open is one you cannot act on.
 
 ## New-session dialog: describe it in a sentence
 
-The sentence box is the secondary way to fill the form in — the first is
-Name → Enter. **✨ Describe it instead…** on the form expands it (*Describe
-what you want to work on*, a **Hide** link to fold it again; it starts folded
-on every open). **Enter there never creates anything**: it sends the sentence
+The sentence box is the first thing on the form and the first way to fill it
+in (the other is Name → Enter). It is open with the caret in it on every open
+(*What do you want to work on?*, with a **Hide** link that folds it to a **✨
+Describe it instead…** row). **Enter there never creates anything**: it sends the sentence
 to [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which
 walks the filesystem, asks one headless model turn, and fills in the fields
 you are already looking at — Folder, Name (when the plan has one), Prompt,
