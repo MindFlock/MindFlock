@@ -20,13 +20,12 @@ Persisted at ``<config dir>/finished_children.json`` (or
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 import threading
 import time
 from typing import Dict, List, Mapping, Optional
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -61,30 +60,20 @@ def store_path() -> str:
 
 
 def _load() -> Dict[str, List[dict]]:
-    try:
-        with open(store_path(), encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
+    data = read_json(store_path(), {}, expect=dict)
     return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, list)}
 
 
 def _save(data: Mapping[str, List[dict]]) -> None:
-    path = store_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".finished.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(
+        store_path(),
+        data,
+        indent=None,
+        newline=False,
+        ensure_ascii=True,
+        prefix=".finished.",
+        suffix="",
+    )
 
 
 def _same(a: Optional[float], b: Optional[float]) -> bool:

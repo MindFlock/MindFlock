@@ -29,7 +29,6 @@ Blocking throughout: call via ``asyncio.to_thread``.
 
 from __future__ import annotations
 
-import json
 import os
 import signal
 import subprocess
@@ -38,6 +37,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from backend import config, log
+from backend.web.core import title_store
 
 #: Bound on every fetch this module runs (the push check, create, background).
 FETCH_TIMEOUT = 20.0
@@ -436,29 +436,22 @@ def _path() -> str:
 def _load() -> Dict[str, Dict[str, str]]:
     global _SHARED
     if _SHARED is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _SHARED = {}
-            if isinstance(d, dict):
-                for k, v in d.items():
-                    if isinstance(v, dict) and v.get("branch"):
-                        _SHARED[str(k)] = {
-                            "remote": str(v.get("remote") or "origin"),
-                            "branch": str(v["branch"]),
-                        }
-        except (OSError, ValueError):
-            _SHARED = {}
+        _SHARED = title_store.load(
+            _path,
+            lambda d: {
+                str(k): {
+                    "remote": str(v.get("remote") or "origin"),
+                    "branch": str(v["branch"]),
+                }
+                for k, v in d.items()
+                if isinstance(v, dict) and v.get("branch")
+            },
+        )
     return _SHARED
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_SHARED or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save shared-branch sessions: %v", err)
+    title_store.persist(_path, _SHARED, "shared-branch sessions")
 
 
 def set_shared(title: str, remote: str = "", branch: str = "") -> None:

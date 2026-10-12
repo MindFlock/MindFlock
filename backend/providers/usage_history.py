@@ -18,8 +18,8 @@ import json
 import os
 import threading
 import time
-import uuid
 
+from backend.fsutil import atomic_write_json
 from backend.providers import pricing
 from backend.providers._timeparse import ts_epoch
 
@@ -136,20 +136,17 @@ def _load_ledger() -> dict:
 def _save_ledger(doc: dict) -> None:
     try:
         path = _ledger_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         # Unique tmp name per writer: the engine and the web server can save
         # concurrently, and a shared fixed ".tmp" lets their writes interleave
         # into a corrupt file that then gets renamed into place.
-        tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump(doc, f)
-            os.replace(tmp, path)
-        except OSError:
-            try:
-                os.unlink(tmp)  # don't leave orphaned tmp files behind
-            except OSError:
-                pass
+        atomic_write_json(
+            path,
+            doc,
+            indent=None,
+            newline=False,
+            ensure_ascii=True,
+            prefix=os.path.basename(path) + ".",
+        )
     except OSError:
         pass  # best-effort
 

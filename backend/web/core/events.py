@@ -300,19 +300,22 @@ def _log_error(fmt: str, *args) -> None:
 # language-agnostic (desktop notification on clarify, Slack ping on PR merge…).
 # --------------------------------------------------------------------------- #
 def _hooks_root() -> Path:
-    return Path(
-        os.environ.get(
-            "MINDFLOCK_HOOKS_DIR",
-            os.path.join(os.path.expanduser("~"), ".mindflock", "hooks"),
-        )
-    )
+    env = os.environ.get("MINDFLOCK_HOOKS_DIR")
+    if env is not None:
+        return Path(env)
+    from backend.config.config import GetConfigDir
+
+    return Path(GetConfigDir()) / "hooks"
 
 
 def hook_executables(event: str) -> List[Path]:
     """Executable files registered for ``event`` (its own dir, then ``all/``),
     each dir's entries in name order. Missing dirs are simply no hooks."""
     out: List[Path] = []
-    root = _hooks_root()
+    try:
+        root = _hooks_root()
+    except OSError:  # no resolvable config dir: no hooks
+        return out
     for sub in (event, "all"):
         if not sub:
             continue

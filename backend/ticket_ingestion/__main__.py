@@ -9,6 +9,7 @@ import os
 import re
 import sys
 
+from backend.fsutil import atomic_write_json
 from backend.ticket_ingestion.config import ConfigError, load_config
 from backend.ticket_ingestion.logging_config import setup_logging
 from backend.ticket_ingestion.orchestrator import PipelineOrchestrator
@@ -67,20 +68,19 @@ def _write_exit_record(kind: str, message: str) -> None:
             if m:
                 fields.append(m.group(1))
     try:
-        path = os.path.join(os.getcwd(), EXIT_RECORD)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(
-                {
-                    "pid": os.getpid(),
-                    "at": _dt.datetime.now().astimezone().isoformat(),
-                    "kind": kind,
-                    "message": message,
-                    "fields": fields,
-                },
-                fh,
-            )
-        os.replace(tmp, path)
+        atomic_write_json(
+            os.path.join(os.getcwd(), EXIT_RECORD),
+            {
+                "pid": os.getpid(),
+                "at": _dt.datetime.now().astimezone().isoformat(),
+                "kind": kind,
+                "message": message,
+                "fields": fields,
+            },
+            indent=None,
+            newline=False,
+            ensure_ascii=True,
+        )
     except OSError:
         pass
 

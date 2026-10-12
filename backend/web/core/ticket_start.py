@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from backend.web.core import pipeline_root
 
 _logger = logging.getLogger(__name__)
 
@@ -35,17 +36,9 @@ NO_STATE_BUCKET = "No state"
 
 
 def _resolve_repo_root() -> Path:
-    """Where the pipeline keeps state.json / workspaces/ — same resolution
-    order as the ingestion addon and :mod:`backend.web.core.pr_review`:
-    ``MINDFLOCK_REPO_ROOT`` env → nearest ancestor with ``config.toml`` → cwd.
-    """
-    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "config.toml").is_file():
-            return parent
-    return Path.cwd()
+    """Where the pipeline keeps state.json / workspaces/ — see
+    :func:`backend.web.core.pipeline_root.resolve_repo_root`."""
+    return pipeline_root.resolve_repo_root(__file__)
 
 
 _REPO_ROOT = _resolve_repo_root()
@@ -64,15 +57,9 @@ def _server():
 
 
 def _load_config():
-    """The pipeline's layered config (env → settings.json → config.toml),
-    with the relative ``workspace_dir`` default re-anchored at the repo root
-    (this server's cwd is not guaranteed to match the pipeline's)."""
-    from backend.ticket_ingestion.config import load_config
-
-    cfg = load_config()
-    if not Path(cfg.workspace_dir).is_absolute():
-        cfg.workspace_dir = _REPO_ROOT / cfg.workspace_dir
-    return cfg
+    """The pipeline's config, ``workspace_dir`` anchored at :data:`_REPO_ROOT`
+    (:func:`backend.web.core.pipeline_root.load_config`)."""
+    return pipeline_root.load_config(_REPO_ROOT)
 
 
 def session_title(story) -> str:

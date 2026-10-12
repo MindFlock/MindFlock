@@ -40,12 +40,11 @@ spreads the fix back out.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
-import tempfile
 from typing import Dict
 
+from backend.fsutil import atomic_write_text
 from backend import log
 from backend.web.core import settings_sync
 
@@ -281,20 +280,9 @@ def providers_write(key: str, value: object) -> None:
     if not isinstance(value, str):
         raise ValueError("a provider must be TOML text")
     tomllib.loads(value)  # refuse a file the registry would skip anyway
-    d = _providers_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".prov.", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(value)
-        os.replace(tmp, d / ("%s.toml" % key))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(
+        _providers_dir() / ("%s.toml" % key), value, mode=0o600, prefix=".prov."
+    )
 
 
 def providers_delete(key: str) -> None:

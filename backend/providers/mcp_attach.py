@@ -51,10 +51,11 @@ import os
 import re
 import shlex
 import sys
-import tempfile
 import threading
 from dataclasses import dataclass
 from typing import Optional
+
+from backend.fsutil import atomic_write_json
 
 __all__ = [
     "SERVER_NAME",
@@ -585,19 +586,9 @@ def _write_json_0600(path: str, data: dict) -> None:
         os.chmod(directory, 0o700)
     except OSError:
         pass  # best-effort (a dir we don't own)
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".mcp.", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(
+        path, data, sort_keys=True, ensure_ascii=True, mode=0o600, prefix=".mcp."
+    )
 
 
 def write_claude_config(spec: McpSpec) -> str:

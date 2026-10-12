@@ -25,10 +25,10 @@ import json
 import os
 import re
 import secrets
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from backend.fsutil import atomic_write_json, atomic_write_text
 from backend.config.config import GetConfigDir
 
 from ..base import SECRET_MASK
@@ -124,20 +124,7 @@ def save_profiles(profiles: List[dict]) -> None:
         )
         + "\n"
     )
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".dbclient.", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, data, mode=0o600, prefix=".dbclient.")
 
 
 def get_profile(profile_id: str) -> Optional[dict]:
@@ -321,11 +308,7 @@ def _load_tests() -> None:
 
 def _save_tests() -> None:
     try:
-        path = _tests_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(_LAST_TESTS, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_json(_tests_path(), _LAST_TESTS, ensure_ascii=True)
     except OSError:
         pass  # best-effort: the verdict still lives in memory
 

@@ -29,6 +29,7 @@ import os
 import threading
 from typing import Dict, Optional
 
+from backend.fsutil import atomic_write_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -71,12 +72,9 @@ def _load() -> Dict[str, int]:
 
 
 def _save(data: Dict[str, int]) -> None:
-    path = _path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    atomic_write_json(
+        _path(), data, indent=1, sort_keys=True, newline=False, ensure_ascii=True
+    )
 
 
 def _fnv1a(s: str) -> int:

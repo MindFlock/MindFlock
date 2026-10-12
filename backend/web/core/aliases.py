@@ -20,12 +20,12 @@ pattern): one process writes, so an in-memory dict loaded once is safe.
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from typing import Dict, Optional
 
-from backend import config, log
+from backend import config
+from backend.web.core import title_store
 
 _LOCK = threading.Lock()
 _ALIASES: Optional[Dict[str, str]] = None  # title -> display label
@@ -38,26 +38,14 @@ def _path() -> str:
 def _load() -> Dict[str, str]:
     global _ALIASES
     if _ALIASES is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _ALIASES = (
-                {str(k): str(v) for k, v in d.items() if v}
-                if isinstance(d, dict)
-                else {}
-            )
-        except (OSError, ValueError):
-            _ALIASES = {}
+        _ALIASES = title_store.load(
+            _path, lambda d: {str(k): str(v) for k, v in d.items() if v}
+        )
     return _ALIASES
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_ALIASES or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save session aliases: %v", err)
+    title_store.persist(_path, _ALIASES, "session aliases")
 
 
 def set_alias(title: str, alias: str) -> None:

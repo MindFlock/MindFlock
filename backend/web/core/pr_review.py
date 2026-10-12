@@ -19,27 +19,18 @@ it works even while ingestion is stopped. ``server.py`` owns the engine side
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+from backend.web.core import pipeline_root
 
 _logger = logging.getLogger(__name__)
 
 
 def _resolve_repo_root() -> Path:
-    """Where the pipeline keeps state.json / workspaces/. ``parents[4]`` only
-    lands on the repo root for a src-layout dev checkout; for an installed copy
-    (``uv tool install`` → site-packages) it is the interpreter lib dir, which
-    splits the PR ledger. Same resolution order as the ingestion addon:
-    ``MINDFLOCK_REPO_ROOT`` env → nearest ancestor with ``config.toml`` → cwd.
-    """
-    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "config.toml").is_file():
-            return parent
-    return Path.cwd()
+    """Where the pipeline keeps state.json / workspaces/ — see
+    :func:`backend.web.core.pipeline_root.resolve_repo_root`."""
+    return pipeline_root.resolve_repo_root(__file__)
 
 
 # The pipeline runs with cwd = repo root and keeps state.json / workspaces/
@@ -49,19 +40,9 @@ _REPO_ROOT = _resolve_repo_root()
 
 
 def _load_config():
-    """The pipeline's layered config (env → settings.json → config.toml).
-
-    Raises ``ConfigError`` when ingestion has never been configured — callers
-    surface the message verbatim. The relative ``workspace_dir`` default is
-    re-anchored at the repo root so a differing server cwd can't scatter PR
-    workspaces.
-    """
-    from backend.ticket_ingestion.config import load_config
-
-    cfg = load_config()
-    if not Path(cfg.workspace_dir).is_absolute():
-        cfg.workspace_dir = _REPO_ROOT / cfg.workspace_dir
-    return cfg
+    """The pipeline's config, ``workspace_dir`` anchored at :data:`_REPO_ROOT`
+    (:func:`backend.web.core.pipeline_root.load_config`)."""
+    return pipeline_root.load_config(_REPO_ROOT)
 
 
 def review_agent(repo: str = "") -> str:

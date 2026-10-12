@@ -106,11 +106,11 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import threading
 import time
 from typing import Callable, Dict, List, Optional
 
+from backend.fsutil import atomic_write_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 from backend.web.core import commit_message as _commit_message
@@ -534,22 +534,7 @@ def _quarantine(path: str) -> str:
 
 
 def _save(data: dict) -> None:
-    path = store_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".tp.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(store_path(), data, prefix=".tp.")
 
 
 def _plans_of(data: dict) -> dict:
