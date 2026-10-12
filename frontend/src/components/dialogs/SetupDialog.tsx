@@ -11,8 +11,8 @@
  * (Settings → Doctor, the sidebar). GitHub has no test of its own here: the
  * checklist's Connect GitHub button opens that dialog, whose Test is the one. */
 
-import { useEffect } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { SetupChecklist, progressLine } from "../setup/SetupChecklist";
 import { useSetup } from "../setup/useSetup";
 
@@ -31,28 +31,10 @@ export function SetupDialog() {
   const closeDialog = useUi((s) => s.closeDialog);
   const { data: status } = useSetup(open);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        closeDialog();
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
 
   return (
-    <div
-      id="setup-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="setup-dialog" onClose={closeDialog}>
       <div id="setup-panel-dlg">
         <div className="ws-head">
           <h2>
@@ -66,6 +48,6 @@ export function SetupDialog() {
           <SetupChecklist />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

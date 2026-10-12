@@ -1,13 +1,14 @@
 /** The one modal every extension's dialog surfaces share (store DialogName
  * "extension"; the target string "<ext>:<surface>[:<ref>]" rides in
- * dialogTarget). Standard modal anatomy — .modal backdrop, panel, .ws-head
- * with a close button, its own Escape listener, backdrop-click close — around
+ * dialogTarget). Standard modal anatomy — the shared <Modal> shell (Escape and
+ * backdrop-press close), a panel, a .ws-head with a close button — around
  * a body the extension renders into a host-owned keep-alive container. The
  * body is adopted (appendChild) while THIS target stays open and disposed on
  * close: dialogs are transient, unlike panes. */
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useUi } from "../state/store";
+import { Modal } from "../components/Modal";
 import {
   extDialogView,
   hostVersion,
@@ -39,29 +40,11 @@ export function ExtensionDialog() {
     };
   }, [open, target]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        closeDialog();
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open || !target) return null;
 
   const view = extDialogView(target);
   return (
-    <div
-      id="ext-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="ext-dialog" onClose={closeDialog}>
       <div id="ext-dialog-panel">
         <div className="ws-head">
           <h2>{view.title || view.label}</h2>
@@ -87,6 +70,6 @@ export function ExtensionDialog() {
           <div className="ext-surface-mount" ref={bodyRef} />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

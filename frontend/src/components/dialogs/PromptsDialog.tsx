@@ -13,6 +13,7 @@ import { useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
+import { Modal } from "../Modal";
 import { ALL_RUNNING, promptTargets, resolveTarget, runningTitles } from "../../lib/promptTargets";
 import { pastePrompt as pasteInto } from "../../lib/promptPaste";
 import {
@@ -55,7 +56,7 @@ export function PromptsPanel() {
   }, []);
 
   // First Esc closes the preview, not the dialog: claim it (preventDefault),
-  // which the dialog's own Esc handler (on window, so it runs after this one)
+  // which the Modal shell's Esc handler (on window, so it runs after this one)
   // reads as "handled".
   useEffect(() => {
     if (!pop) return;
@@ -258,28 +259,14 @@ export function PromptsDialog() {
   const open = useUi((s) => s.openDialog === "prompts");
   const closeDialog = useUi((s) => s.closeDialog);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      closeDialog();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
   return (
-    <div
+    <Modal
       id="prompts-dialog"
-      className="modal"
       role="dialog"
       aria-modal="true"
       aria-labelledby="prompts-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
+      onClose={closeDialog}
     >
       <div id="prompts-dialog-panel">
         <div className="ws-head">
@@ -291,6 +278,6 @@ export function PromptsDialog() {
         </div>
         <PromptsPanel />
       </div>
-    </div>
+    </Modal>
   );
 }

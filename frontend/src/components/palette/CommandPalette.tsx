@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useExtensions } from "../../state/queries";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { runCommand } from "../../extensions/host";
 import { focusQueueInput } from "../../lib/playbooks";
 import {
@@ -316,13 +317,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   };
 
   return (
-    <div
-      id="palette"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="palette" onClose={closeDialog}>
       <div id="palette-panel">
         <input
           id="palette-input"
@@ -346,9 +341,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
             } else if (e.key === "Enter") {
               e.preventDefault();
               run(filtered[sel]);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              closeDialog();
             }
           }}
         />
@@ -367,6 +359,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
           {!filtered.length && <li className="palette-empty muted">No matching commands</li>}
         </ul>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -22,6 +22,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.web import server
+from tests._bundle import in_bundle
 
 client = TestClient(server.app)
 
@@ -331,7 +332,12 @@ def test_commit_dialog_closes_on_a_backdrop_click():
     when the backdrop is the event's own target, so a text selection that started
     in the textarea and overshot cannot discard the message."""
     js = client.get("/app.js").text
-    i = js.index('id: "commit-dialog"')
-    frag = js[i : i + 400]
-    assert "onMouseDown" in frag
-    assert "e.target === e.currentTarget" in frag
+    # The dialog renders through the shared Modal shell, which owns the rule.
+    assert in_bundle('jsx)(Modal, { id: "commit-dialog", onClose: closeDialog', js)
+    i = js.index("//#region src/components/Modal.tsx")
+    modal = js[i : js.index("//#endregion", i)]
+    assert in_bundle(
+        "onMouseDown: closeOnBackdrop ? backdropPress(onClose) : void 0", modal
+    )
+    assert "if (e.target === e.currentTarget) onClose();" in modal
+    assert "onClick" not in modal

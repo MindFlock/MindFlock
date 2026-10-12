@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import "./WelcomeTour.css";
@@ -139,16 +140,16 @@ export function WelcomeTour() {
 
   const paused = open && settingsOpen;
 
+  // Arrows page the slides (Escape is the Modal shell's: it finishes the tour).
   useEffect(() => {
     if (!open || paused) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") finishTour();
-      else if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
+      if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
       else if (e.key === "ArrowLeft") setI((n) => Math.max(n - 1, 0));
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, paused, finishTour]);
+  }, [open, paused]);
 
   // Return null (not unmount) while closed or paused: hooks above keep running
   // and `i` is retained for when the tour reappears.
@@ -166,13 +167,7 @@ export function WelcomeTour() {
   };
 
   return (
-    <div
-      id="welcome-tour"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) finishTour();
-      }}
-    >
+    <Modal id="welcome-tour" onClose={finishTour}>
       <div className="wt-card">
         <button type="button" className="wt-skip" onClick={finishTour}>
           Skip
@@ -241,6 +236,6 @@ export function WelcomeTour() {
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

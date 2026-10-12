@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { Modal } from "../Modal";
 import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 
 export function AssistantAgentDialog() {
@@ -63,13 +64,7 @@ export function AssistantAgentDialog() {
   };
 
   return (
-    <div
-      id="assistant-agent-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="assistant-agent-dialog" onClose={closeDialog}>
       <div id="assistant-agent-panel">
         <div className="ws-head">
           <h2>Assistant agent file</h2>
@@ -126,6 +121,6 @@ export function AssistantAgentDialog() {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -31567,6 +31567,75 @@ function extActivationError(extId) {
 	return rec?.status === "error" ? rec.error || "activation failed" : void 0;
 }
 //#endregion
+//#region src/components/Modal.css
+var import_react_dom = require_react_dom();
+//#endregion
+//#region src/components/Modal.tsx
+var stack = [];
+function backdropPress(onClose) {
+	return (e) => {
+		if (e.target === e.currentTarget) onClose();
+	};
+}
+function modalEscape(token, e, p) {
+	if (e.key !== "Escape" || e.defaultPrevented) return false;
+	if (stack[stack.length - 1] !== token) return false;
+	const spent = p.onEscape?.(e) === true;
+	if (!spent && p.closeOnEscape === false) return false;
+	e.preventDefault();
+	if (p.escapeCapture) e.stopPropagation();
+	if (!spent) p.onClose();
+	return true;
+}
+function pushModal(token) {
+	stack.push(token);
+	return () => {
+		const i = stack.lastIndexOf(token);
+		if (i >= 0) stack.splice(i, 1);
+	};
+}
+function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, className, children, ...rest }) {
+	const ref = (0, import_react.useRef)(null);
+	const props = (0, import_react.useRef)({
+		onClose,
+		onEscape,
+		closeOnEscape,
+		escapeCapture
+	});
+	props.current = {
+		onClose,
+		onEscape,
+		closeOnEscape,
+		escapeCapture
+	};
+	(0, import_react.useEffect)(() => {
+		const token = {};
+		const pop = pushModal(token);
+		const onKey = (e) => {
+			modalEscape(token, e, props.current);
+		};
+		window.addEventListener("keydown", onKey, escapeCapture);
+		const node = ref.current;
+		const prev = document.activeElement;
+		if (node && !node.contains(prev)) node.focus({ preventScroll: true });
+		return () => {
+			window.removeEventListener("keydown", onKey, escapeCapture);
+			pop();
+			const now = document.activeElement;
+			if ((!now || now === document.body || (node ? node.contains(now) : false)) && prev && prev !== document.body && prev.isConnected) prev.focus({ preventScroll: true });
+		};
+	}, []);
+	const shell = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		...rest,
+		ref,
+		tabIndex: -1,
+		className: className ? "modal " + className : "modal",
+		onMouseDown: closeOnBackdrop ? backdropPress(onClose) : void 0,
+		children
+	});
+	return portal ? (0, import_react_dom.createPortal)(shell, document.body) : shell;
+}
+//#endregion
 //#region src/extensions/ExtensionDialog.tsx
 function ExtensionDialog() {
 	const open = useUi((s) => s.openDialog === "extension");
@@ -31583,25 +31652,11 @@ function ExtensionDialog() {
 			releaseDialogTarget(target);
 		};
 	}, [open, target]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open || !target) return null;
 	const view = extDialogView(target);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "ext-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "ext-dialog-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -31646,7 +31701,6 @@ function ExtensionDialog() {
 }
 //#endregion
 //#region src/lib/playbooks.ts
-var import_react_dom = require_react_dom();
 var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
 var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
 var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
@@ -38705,25 +38759,14 @@ function SignInWindow({ provider, profile, onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
 	const status = state === "streaming" ? "sign in when it asks (a browser window may open) — then close this window" : state;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "signin-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -38751,7 +38794,7 @@ function SignInWindow({ provider, profile, onClose }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function AgentSignIn({ provider, profile, label, onDone, className }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -38831,24 +38874,13 @@ function InstallWindow({ onClose, onDone }) {
 		} catch {}
 		onClose();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "install-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -38872,7 +38904,7 @@ function InstallWindow({ onClose, onDone }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function InstallMissing({ steps, onDone }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -39566,24 +39598,10 @@ function SetupDialog() {
 	const open = useUi((s) => s.openDialog === "setup");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const { data: status } = useSetup(open);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "setup-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "setup-panel-dlg",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -61584,12 +61602,9 @@ function CommandPalette({ host }) {
 		closeDialog();
 		a.run();
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "palette",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "palette-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -61614,9 +61629,6 @@ function CommandPalette({ host }) {
 					} else if (e.key === "Enter") {
 						e.preventDefault();
 						run(filtered[sel]);
-					} else if (e.key === "Escape") {
-						e.preventDefault();
-						closeDialog();
 					}
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
@@ -62117,18 +62129,13 @@ function TemplatesDialogView(p) {
 			})
 		]
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "templates-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) p.onClose();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				if (ui.editing !== null || ui.confirming) p.dispatch({ t: "cancel" });
-				else p.onClose();
-			}
+		onClose: p.onClose,
+		onEscape: () => {
+			if (ui.editing === null && !ui.confirming) return false;
+			p.dispatch({ t: "cancel" });
+			return true;
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "templates-card",
@@ -70034,28 +70041,14 @@ function IntakeDialog() {
 		prefetchIntakePanels();
 		prefetchIntakeMeta();
 	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const props = { gotoTab: setTab };
 	const noTicketing = !!config?.caps && !config.caps.ticketing;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "intake-dialog",
-			className: "modal",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "intake-panel",
 				children: [
@@ -78877,17 +78870,6 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 		openDialogFor,
 		keys
 	]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const props = {
 		active: true,
@@ -78899,12 +78881,9 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "settings-dialog",
-			className: "modal",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "settings-panel",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -79076,26 +79055,13 @@ function SidebarBarsPicker() {
 function CustomizeDialog() {
 	const open = useUi((s) => s.openDialog === "customize");
 	const closeDialog = useUi((s) => s.closeDialog);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			closeDialog();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "customize-dialog",
-		className: "modal",
 		role: "dialog",
 		"aria-modal": "true",
 		"aria-labelledby": "customize-title",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "customize-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -79337,26 +79303,13 @@ function PromptsPanel() {
 function PromptsDialog() {
 	const open = useUi((s) => s.openDialog === "prompts");
 	const closeDialog = useUi((s) => s.closeDialog);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			closeDialog();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "prompts-dialog",
-		className: "modal",
 		role: "dialog",
 		"aria-modal": "true",
 		"aria-labelledby": "prompts-title",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "prompts-dialog-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -81228,17 +81181,6 @@ function CommitDialog() {
 			cancelled = true;
 		};
 	}, [open, target]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				closeDialog();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const submitLabel = {
 		leave: "Commit",
@@ -81300,12 +81242,9 @@ function CommitDialog() {
 		}
 		freshStage(title);
 	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "commit-dialog",
-		className: "modal",
-		onMouseDown: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "commit-form",
 			onSubmit: (e) => {
@@ -81458,22 +81397,6 @@ function MakePrDialog() {
 		repo,
 		prBaseByRepo
 	]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				if (showList) setShowList(false);
-				else closeDialog();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [
-		open,
-		closeDialog,
-		showList
-	]);
 	const filtered = (0, import_react.useMemo)(() => {
 		const all = info?.branches || [];
 		const q = value.trim().toLowerCase();
@@ -81511,11 +81434,13 @@ function MakePrDialog() {
 			else submit();
 		}
 	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "make-pr-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
+		onClose: closeDialog,
+		onEscape: () => {
+			if (!showList) return false;
+			setShowList(false);
+			return true;
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "make-pr-form",
@@ -81638,15 +81563,9 @@ function RenameDialog() {
 		closeDialog();
 		toast(`Renamed to “${next}”`);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "rename-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "rename-form",
 			onSubmit: (e) => {
@@ -82135,12 +82054,9 @@ function RecentDialog() {
 		refreshInstances();
 		refreshRecentlyClosed();
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "recent-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "recent-panel",
 			children: [
@@ -82460,24 +82376,13 @@ function GhSignInWindow({ onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "gh-signin-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -82500,7 +82405,7 @@ function GhSignInWindow({ onClose }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function ConnectGitHub({ onChange }) {
 	const [st, setSt] = (0, import_react.useState)(null);
@@ -82838,25 +82743,14 @@ function ConnectGitHubDialog() {
 		window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 		return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			setOpen(false);
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open]);
 	if (!open) return null;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "connect-github-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) setOpen(false);
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => setOpen(false),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "connect-github-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -82876,7 +82770,7 @@ function ConnectGitHubDialog() {
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, {})]
 		})
-	}), document.body);
+	});
 }
 //#endregion
 //#region src/components/dialogs/TodoDialog.tsx
@@ -82934,19 +82828,8 @@ function TodoDialog() {
 		const poll = setInterval(() => {
 			if (!document.hidden) load();
 		}, 4e3);
-		const onKey = (e) => {
-			if (e.key === "Escape") closeDialog();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => {
-			clearInterval(poll);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [
-		open,
-		load,
-		closeDialog
-	]);
+		return () => clearInterval(poll);
+	}, [open, load]);
 	if (!open) return null;
 	const add = () => {
 		const text = draft.trim();
@@ -82978,12 +82861,9 @@ function TodoDialog() {
 		editCancelled.current = true;
 		setEditing(null);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "todo-dialog",
-		className: "modal",
-		onMouseDown: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "todo-panel",
 			children: [
@@ -83153,12 +83033,9 @@ function AssistantAgentDialog() {
 			setStatus("Save failed: " + (err.message || ""));
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "assistant-agent-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "assistant-agent-panel",
 			children: [
@@ -83275,14 +83152,6 @@ function RedZonesDialog() {
 	(0, import_react.useEffect)(() => {
 		if (open) load();
 	}, [open, load]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") closeDialog();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	const panelRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -83315,12 +83184,9 @@ function RedZonesDialog() {
 	}, [repos, sessionRepos]);
 	if (!open) return null;
 	const zoneCount = rows.reduce((n, r) => n + r.zones.length, 0);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "red-zones-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "red-zones-panel",
 			ref: panelRef,
@@ -83947,17 +83813,12 @@ function WelcomeTour() {
 	(0, import_react.useEffect)(() => {
 		if (!open || paused) return;
 		const onKey = (e) => {
-			if (e.key === "Escape") finishTour();
-			else if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
+			if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
 			else if (e.key === "ArrowLeft") setI((n) => Math.max(n - 1, 0));
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [
-		open,
-		paused,
-		finishTour
-	]);
+	}, [open, paused]);
 	if (!open || paused) return null;
 	const last = i === SLIDES.length - 1;
 	const slide = last ? lastSlide(failing) : SLIDES[i];
@@ -83965,12 +83826,9 @@ function WelcomeTour() {
 		const tab = LEGACY_SCREEN_TABS[screen];
 		openDialogFor(tab ? "intake" : "settings", tab || screen);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "welcome-tour",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) finishTour();
-		},
+		onClose: finishTour,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "wt-card",
 			children: [

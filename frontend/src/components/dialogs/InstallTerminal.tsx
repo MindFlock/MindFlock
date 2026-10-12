@@ -12,10 +12,10 @@
  * own instead of showing stale ✗s. */
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
+import { Modal } from "../Modal";
 
 export interface InstallStep {
   id: string;
@@ -111,18 +111,6 @@ function InstallWindow({ onClose, onDone }: { onClose(): void; onDone(): void })
     onClose();
   };
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      e.stopPropagation();
-      void close();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const status =
     exit === 0
       ? "✓ everything installed"
@@ -132,15 +120,16 @@ function InstallWindow({ onClose, onDone }: { onClose(): void; onDone(): void })
           ? "installing — type your password if sudo asks"
           : state;
 
-  return createPortal(
-    <div
-      className="modal"
+  // Escape is caught in the capture phase: it must close this window before
+  // the terminal inside it (or Settings under it) sees the key.
+  return (
+    <Modal
       id="install-dialog"
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) void close();
-      }}
+      portal
+      escapeCapture
+      onClose={() => void close()}
     >
       <div className="prov-login-panel">
         <div className="ws-head">
@@ -154,8 +143,7 @@ function InstallWindow({ onClose, onDone }: { onClose(): void; onDone(): void })
         </div>
         <div className="prov-login-term" ref={hostRef} />
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 }
 
