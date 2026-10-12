@@ -20,6 +20,7 @@ from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import log, providers, session
+from backend.fsutil import atomic_write_text
 from backend.session import tmux
 
 from backend.web.core.terminal import (
@@ -108,9 +109,7 @@ def _compose_agent_file(user_text: str) -> str:
 
 def _atomic_write(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` via a temp file + replace (never a partial file)."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, text)
 
 
 def _assistant_program() -> str:

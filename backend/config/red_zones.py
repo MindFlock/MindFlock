@@ -290,22 +290,15 @@ def _save(data: dict) -> None:
     Callers hold ``_LOCK``. Best-effort — a persistence failure must not crash a
     route or a loop, so the OSError is swallowed after being given a chance.
     """
-    import tempfile
+    from backend.fsutil import atomic_write_json
 
     path = store_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_write_json(
+            path, data, sort_keys=True, newline=False, ensure_ascii=True, prefix="tmp"
+        )
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        pass
 
 
 def store_digest() -> str:
@@ -2063,21 +2056,14 @@ def sync_guard(
 
 
 def _write_guard_atomic(path: str, content: dict) -> None:
-    import tempfile
+    from backend.fsutil import atomic_write_json
 
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(content, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_write_json(
+            path, content, indent=None, newline=False, ensure_ascii=True, prefix="tmp"
+        )
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        pass
 
 
 def sync_for_workdir(workdir: str) -> str:

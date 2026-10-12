@@ -94,13 +94,13 @@ import math
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
+from backend.fsutil import atomic_write_json
 from backend import log
 
 #: Seconds between sync passes (rescan local, pull every device).
@@ -733,20 +733,16 @@ def _save(data: dict) -> None:
     data["canon"] = dict(_CANON)
     data["v"] = STATE_VERSION
     data.pop("v1", None)  # in memory only: "v1 sync was on here" (status())
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".sync.", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(
+        _state_path(),
+        data,
+        indent=1,
+        sort_keys=True,
+        newline=False,
+        ensure_ascii=True,
+        mode=0o600,
+        prefix=".sync.",
+    )
 
 
 def _log_error(fmt: str, *args) -> None:

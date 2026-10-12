@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from backend.fsutil import atomic_write_json
 from backend.ticket_ingestion.models import (
     ProcessedIssue,
     ProcessedPR,
@@ -69,14 +70,7 @@ def _write_state(state_dir: Path | str, data: dict) -> None:
     # Atomic replace: a crash mid-write must not truncate the ledger (the
     # singleton flock in __main__ already serializes writers cross-process).
     # fsync before replace so a power loss can't promote a truncated tmp file.
-    path = _state_path(state_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w") as f:
-        f.write(json.dumps(data, indent=2))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    atomic_write_json(_state_path(state_dir), data, newline=False, ensure_ascii=True)
 
 
 def load_last_run_timestamp(state_dir: Path | str, key: str) -> datetime:
@@ -695,11 +689,13 @@ def load_automation_mark(state_dir: Path | str) -> Optional[dict]:
 
 
 def _write_automation_mark(state_dir: Path | str, here: bool, runner: str) -> None:
-    path = _automation_path(state_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"here": here, "runner": "" if here else runner}))
-    os.replace(tmp, path)
+    atomic_write_json(
+        _automation_path(state_dir),
+        {"here": here, "runner": "" if here else runner},
+        indent=None,
+        newline=False,
+        ensure_ascii=True,
+    )
 
 
 def note_automation(state_dir: Path | str, here: bool, runner: str = "") -> None:

@@ -76,12 +76,12 @@ import fcntl
 import json
 import os
 import re
-import tempfile
 import threading
 import time
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend.fsutil import atomic_write_bytes
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -341,19 +341,7 @@ def _save(data: dict) -> None:
     if len(payload) > MAX_FILE_BYTES:
         _evict_file(data, len(payload) - MAX_FILE_BYTES)
         payload = _serialize(data)
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".mbox.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_bytes(path, payload, prefix=".mbox.")
     try:
         st = os.stat(path)
         _CACHE["key"] = (path, st.st_ino, st.st_mtime_ns, st.st_size)

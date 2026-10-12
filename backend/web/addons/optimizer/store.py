@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
 from typing import Dict, List, Optional
 
+from backend.fsutil import atomic_write_text
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -131,20 +131,7 @@ def _compact_locked(p: str) -> None:
     payload = "".join(
         json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n" for r in keep
     )
-    d = os.path.dirname(p) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".uo.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, p)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(p, payload, mode=0o600, prefix=".uo.")
     _cache["rows"] = None
 
 
