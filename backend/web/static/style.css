@@ -13702,47 +13702,12 @@ button.ct-chip:hover {
   display: none;
 }
 
-/* The New dialog's card has ONE fixed top edge and grows downward from it.
-
-   Every other modal is centred, and centring is what made this one move: a
-   centred card shifts its top by half of any height change, so clicking a tab
-   slid the whole dialog under the pointer. The two ways out are equal heights
-   or a fixed top, and equal heights loses — it holds a tall card open over a
-   short pane and leaves a dead band above the buttons. A fixed top gives the
-   same stillness and lets every pane be exactly as tall as it needs to be.
-
-   WHERE the top sits is the part that has to be judged rather than derived.
-   Anchoring it where the FULL FORM would have been centred parks the short
-   panes high on the screen with a lake of space under them. So it is anchored
-   where a LANDING pane is centred instead (--nf-anchor-h, the rough height of
-   Session page 1 and the Ticket tab): those two read as centred, and the full
-   form simply sags past the middle — which is what a form that big should do.
-
-   Four values, each literal written once:
-
-   --nf-card-h   the full form's height (Session page 2).
-   --nf-anchor-h the landing height the top edge is centred on. Not a cap, not
-                 a height any card is given — it only positions the top.
-   --nf-top      that top edge, floored so a short window keeps a margin.
-   --nf-max-h    how far a card may sag: to the bottom of the window, less the
-                 same margin. The full form hits this before 620px on a short
-                 screen and scrolls inside .nf-body, which is what it already
-                 does for its own folds. */
+/* The New dialog is centred like every other modal. What keeps it still is
+   height, not position: the form and the Ticket pane share ONE fixed card
+   height (--nf-card-h, scrolling inside), so neither a fold nor a tab switch
+   moves the card, and 86vh keeps both inside a short window. */
 #new-dialog {
   --nf-card-h: min(86vh, 620px);
-  --nf-anchor-h: min(86vh, 400px);
-  /* vh, not %: percentage padding resolves against the containing block's
-     WIDTH even on a full-viewport fixed element. */
-  --nf-top: max(16px, calc((100vh - var(--nf-anchor-h)) / 2));
-  --nf-max-h: calc(100vh - var(--nf-top) - 16px);
-  align-items: flex-start;
-  padding-top: var(--nf-top);
-}
-
-/* Both cards sag to the bottom of the window at most, never past it. */
-#new-form,
-#new-ticket-form {
-  max-height: var(--nf-max-h);
 }
 
 /* New header: title, then the tab strip, then Close pinned top-right.
@@ -13827,17 +13792,16 @@ button.ct-chip:hover {
   gap: 13px;
 }
 
-/* The Ticket pane's card. Same chrome as #new-form, and its own natural height
-   rather than the full form's — holding 620px up over one text box is what
-   .nf-ask was written to avoid, and the fixed top edge above means a shorter
-   card costs no movement. */
+/* The Ticket pane's card. Same chrome and the same fixed height as #new-form,
+   so switching tabs leaves the centred card exactly where it was; the pane
+   scrolls inside it. */
 #new-ticket-form {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px 22px;
   width: min(660px, 94vw);
-  height: auto;
+  height: var(--nf-card-h);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -13848,8 +13812,15 @@ button.ct-chip:hover {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* The card is a fixed height, so the actions sit on its bottom edge, where
+   the form's do, rather than wherever the pane's content happens to end. */
+.nt-pane > .modal-actions {
+  margin-top: auto;
 }
 
 .nt-label {
@@ -14871,16 +14842,6 @@ button.ct-chip:hover {
 #new-describe-start:disabled {
   opacity: .55;
   cursor: not-allowed;
-}
-
-/* Page 1 sizes to its content; page 2 keeps the fixed height that stops a fold
-   from re-centering the card. max-height, not height, so a long note plus the
-   confirm question still scrolls instead of running off the viewport. */
-/* Page 1 is one question and three buttons: its own height and no more. It can
-   do that now only because the top edge is fixed — while the card was centred,
-   an honest height here meant the dialog jumped every time you switched to it. */
-#new-form.nf-ask {
-  height: auto;
 }
 
 /* Page 1's plain-language explanation, under the box and above everything the
