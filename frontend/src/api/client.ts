@@ -13,10 +13,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = unknown>(
-  path: string,
-  opts?: RequestInit & { json?: unknown }
-): Promise<T> {
+/** The shared request: JSON body encoding, the 401 reload, and a thrown
+ * ApiError (the server's message when it sent one) on non-2xx. Resolves to the
+ * raw response text. */
+async function request(path: string, opts?: RequestInit & { json?: unknown }): Promise<string> {
   const init: RequestInit = { ...opts };
   if (opts && "json" in opts && opts.json !== undefined) {
     init.method = init.method || "POST";
@@ -28,14 +28,9 @@ export async function api<T = unknown>(
     location.reload();
     throw new ApiError(401, "unauthorized", null);
   }
-  let body: unknown = null;
   const text = await r.text();
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
-  }
   if (!r.ok) {
+    const body = parse(text);
     let msg = `${path} -> ${r.status}`;
     if (body && typeof body === "object") {
       const b = body as Json;
@@ -44,7 +39,29 @@ export async function api<T = unknown>(
     }
     throw new ApiError(r.status, msg, body);
   }
-  return body as T;
+  return text;
+}
+
+function parse(text: string): unknown {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return text;
+  }
+}
+
+export async function api<T = unknown>(
+  path: string,
+  opts?: RequestInit & { json?: unknown }
+): Promise<T> {
+  return parse(await request(path, opts)) as T;
+}
+
+/** api() for a plain-text endpoint (a pane's history capture): the same 401
+ * reload and error handling, but the body comes back verbatim — never run
+ * through JSON.parse, which would turn an empty capture into null. */
+export function apiText(path: string, opts?: RequestInit & { json?: unknown }): Promise<string> {
+  return request(path, opts);
 }
 
 /** Instance-scoped fetch: `api('/api/instances/' + encodeURIComponent(title) +

@@ -279,21 +279,20 @@ def _load() -> Dict[str, dict]:
 
 
 def _save(claims: Dict[str, dict]) -> None:
-    import tempfile
+    from backend.fsutil import atomic_write_json
 
     path = store_path()
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"v": 1, "claims": claims}, f, indent=2, sort_keys=True)
-        os.replace(tmp, path)
+        atomic_write_json(
+            path,
+            {"v": 1, "claims": claims},
+            sort_keys=True,
+            newline=False,
+            ensure_ascii=True,
+            prefix="tmp",
+        )
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        pass
 
 
 def mirrored() -> Dict[str, dict]:

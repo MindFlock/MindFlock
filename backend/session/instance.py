@@ -1102,22 +1102,9 @@ class Instance:
             raise RuntimeError(_err_text(err))
 
     # snake_case aliases
-    to_instance_data = ToInstanceData
-    set_status = SetStatus
-    start = Start
-    kill = Kill
-    preview = Preview
     has_updated = HasUpdated
     check_and_handle_trust_prompt = CheckAndHandleTrustPrompt
     tap_enter = TapEnter
-    attach = Attach
-    get_git_worktree = GetGitWorktree
-    get_worktree_path = GetWorktreePath
-    started = Started
-    paused = Paused
-    pause = Pause
-    resume = Resume
-    send_prompt = SendPrompt
     send_keys = SendKeys
 
 
@@ -1350,12 +1337,6 @@ class _InPlaceWorktree(git.GitWorktree):
     def keeps_dir_across_pause(self) -> bool:
         return True
 
-    setup = Setup
-    remove = Remove
-    prune = Prune
-    is_branch_checked_out = IsBranchCheckedOut
-    cleanup = Cleanup
-
 
 def _worktree_from_data(data: InstanceData):
     """Rebuild the git worktree for a persisted instance.
@@ -1500,80 +1481,12 @@ def _is_local_branch(repo_path: str, name: str) -> bool:
         return False
 
 
-def _remove_all(path: str) -> None:
-    """Equivalent of Go's ``os.RemoveAll``: remove a path tree, ignoring absence."""
-    import shutil
-
-    if os.path.islink(path) or os.path.isfile(path):
-        os.remove(path)
-        return
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-
-
 def _clipboard_write(text: str) -> None:
     """Equivalent of Go's ``clipboard.WriteAll``: best-effort, errors ignored."""
     try:
         pyperclip.copy(text)
     except Exception:  # noqa: BLE001
         pass
-
-
-_RFC822_MONTHS = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-]
-
-
-def _format_rfc822(t: _datetime.datetime) -> str:
-    """Format ``t`` as Go's ``time.RFC822`` (layout ``"02 Jan 06 15:04 MST"``).
-
-    Verified against the Go oracle, this is two-digit day, three-letter month,
-    *two-digit* year, ``HH:MM`` (no seconds, no weekday), then the zone. Go uses
-    the zone's abbreviation when the location is named (``EST``, ``UTC``) and a
-    numeric offset (``-0500``) for an unnamed / fixed-offset zone.
-
-    Python's ``datetime.tzname()`` returns a real abbreviation for the system
-    local zone but a synthetic ``"UTC-05:00"`` for a fixed-offset ``timezone``;
-    we treat the synthetic form (and ``None``) as "unnamed" and emit Go's
-    numeric offset so the output matches byte-for-byte.
-    """
-    month = _RFC822_MONTHS[t.month - 1]
-    base = "{dd:02d} {mon} {yy:02d} {hh:02d}:{mm:02d}".format(
-        dd=t.day,
-        mon=month,
-        yy=t.year % 100,
-        hh=t.hour,
-        mm=t.minute,
-    )
-
-    zone = t.tzname()
-    offset = t.utcoffset()
-    # Treat None or a synthetic "UTC±HH:MM"/"UTC" fixed-offset name as unnamed.
-    is_named = bool(zone) and not zone.startswith("UTC")
-    if not is_named:
-        if offset is None:
-            zone = "UTC"
-        elif offset == _datetime.timedelta(0):
-            zone = "UTC"
-        else:
-            total_minutes = int(offset.total_seconds() // 60)
-            sign = "+" if total_minutes >= 0 else "-"
-            total_minutes = abs(total_minutes)
-            zone = "{}{:02d}{:02d}".format(
-                sign, total_minutes // 60, total_minutes % 60
-            )
-    return base + " " + zone
 
 
 # Go-name aliases.

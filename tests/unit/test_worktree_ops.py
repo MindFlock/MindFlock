@@ -27,7 +27,6 @@ from backend.session.git.worktree import (
 )
 from backend.session.git import worktree_ops
 from backend.session.git.worktree_ops import (
-    GitWorktreeOpsMixin,
     cleanup_worktrees,
     CleanupWorktrees,
 )
@@ -449,13 +448,6 @@ def test_exit_error_formats():
     assert worktree_ops._exit_error(1) == "exit status 1"
     assert worktree_ops._exit_error(-9) == "signal: 9"
     assert worktree_ops._exit_error(None) == "exit status 0"
-
-
-def test_ops_mixin_snake_case_aliases():
-    assert GitWorktreeOpsMixin.setup is GitWorktreeOpsMixin.Setup
-    assert GitWorktreeOpsMixin.cleanup is GitWorktreeOpsMixin.Cleanup
-    assert GitWorktreeOpsMixin.remove is GitWorktreeOpsMixin.Remove
-    assert GitWorktreeOpsMixin.prune is GitWorktreeOpsMixin.Prune
 
 
 # ---------------------------------------------------------------------------

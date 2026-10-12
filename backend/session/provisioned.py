@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from backend import workspace_setup
+from backend import gitutil, workspace_setup
 from backend.providers import launch_script
 from backend.providers.base import LauncherSpec
 from backend.session.git import remote_url
@@ -353,7 +353,9 @@ def default_workspace_dir() -> Path:
     s = load_provision_settings()
     if s is not None:
         return s.workspace_dir
-    return Path.home() / ".mindflock" / "workspaces"
+    from backend.config.config import GetConfigDir
+
+    return Path(GetConfigDir()) / "workspaces"
 
 
 def _git_current_branch(repo: str | Path) -> str:
@@ -769,25 +771,7 @@ def worktree_holding_branch(base_repo: str, branch_name: str) -> str:
     :mod:`backend.web.core.worktree_reclaim`, so "who holds this branch" has one
     implementation and the two can't disagree.
     """
-    try:
-        cp = subprocess.run(
-            ["git", "-C", base_repo, "worktree", "list", "--porcelain"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        return ""
-    if cp.returncode != 0:
-        return ""
-    target = "branch refs/heads/" + branch_name
-    current = None
-    for line in cp.stdout.decode("utf-8", "replace").splitlines():
-        if line.startswith("worktree "):
-            current = line[len("worktree ") :]
-        elif line.strip() == target:
-            return current or ""
-    return ""
+    return gitutil.worktree_for_branch(base_repo, branch_name, timeout=60)
 
 
 def provisioned_branch_taken_error(
@@ -1423,8 +1407,6 @@ class ProvisionedWorktree(GitWorktree):
                 self.worktreePath,
             )
 
-    setup = Setup
-
 
 class ProvisionedCloneWorktree(GitWorktree):
     """Clone-strategy provisioned workspace: a full standalone ``git clone`` per
@@ -1540,12 +1522,6 @@ class ProvisionedCloneWorktree(GitWorktree):
         # Signals Instance.Pause not to rmtree this directory (even in the
         # orphan fast-path): the branch + committed work live in this clone.
         return True
-
-    setup = Setup
-    remove = Remove
-    prune = Prune
-    is_branch_checked_out = IsBranchCheckedOut
-    cleanup = Cleanup
 
 
 def build_provisioned_worktree(

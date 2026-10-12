@@ -129,17 +129,29 @@ export function useOutbox() {
 // The bell is the THIRD channel (after ntfy/desktop and the shell hooks) and
 // has no server-side gate, so it checks the same per-rule switches Settings →
 // Notifications flips — and so do the toasts. One cached read of the notify
-// addon's config; a rule it doesn't list (an older server, the addon off)
-// counts as on, which is every run rule's default.
+// addon's config; a rule it doesn't list (an older server, the addon off, a
+// failed read) counts as on, which is every run rule's default. Settings →
+// Notifications lists its rule switches from this same query.
+
+export interface NotifyRule {
+  id: string;
+  label?: string;
+  title?: string;
+  event?: string;
+  body?: string;
+  enabled?: boolean;
+}
 
 interface NotifyConfig {
-  rules?: Array<{ id: string; enabled?: boolean }>;
+  rules?: NotifyRule[];
 }
 
 export function useNotifyConfig() {
   return useQuery({
     queryKey: ["notify-config"],
-    queryFn: () => api<NotifyConfig>("/api/notify/config").catch(() => ({ rules: [] })),
+    // A failed read is an error (Settings says it couldn't load) and keeps the
+    // last good config; with none, ruleOn reads every rule as on.
+    queryFn: () => api<NotifyConfig>("/api/notify/config"),
     staleTime: 60_000,
     refetchInterval: 120_000,
     retry: false,

@@ -151,26 +151,17 @@ async def api_token() -> str:
 def has_token_sync() -> bool:
     """Whether a token is reachable WITHOUT shelling out — for capability probes.
 
-    Deliberately skips the ``gh auth token`` rung: capability probes run on
-    every page load, and a subprocess per probe is not worth the extra
-    coverage. The gh rung is already represented by ``gh_available()`` on the
-    caller's side, so nothing real is lost.
+    The same chain :func:`api_token` resolves (Settings → env → config.toml,
+    via :func:`backend.web.core.github_auth.resolve_token`), minus the
+    ``gh auth token`` rung: capability probes run on every page load, and a
+    subprocess per probe is not worth the extra coverage. The gh rung is
+    already represented by ``gh_available()`` on the caller's side, so nothing
+    real is lost.
     """
     try:
-        from backend.config.secrets import resolve_secret_sync
+        from backend.web.core import github_auth
 
-        explicit = ""
-        try:
-            explicit = (_github_config().token or "").strip()
-        except Exception:  # noqa: BLE001
-            explicit = ""
-        return bool(
-            resolve_secret_sync(
-                explicit=explicit,
-                settings_getter=lambda s: s.github.token,
-                env_vars=("GH_TOKEN", "GITHUB_TOKEN"),
-            )
-        )
+        return bool(github_auth.resolve_full_chain(gh=False)[1])
     except Exception:  # noqa: BLE001 — capability probes must never 500
         return False
 
@@ -684,15 +675,3 @@ def pr_review_state_sync(wt: str, number: Optional[int]) -> str:
         return _run_sync(pr_review_state(wt, number))
     except Exception:  # noqa: BLE001
         return ""
-
-
-def pr_checks_sync(wt: str, branch: str) -> str:
-    """:func:`pr_checks` for synchronous callers (the autopilot snapshot).
-
-    Any failure answers ``"unknown"``, never ``"ok"`` — the caller uses this to
-    decide whether to MERGE, so an error must never be mistaken for a green light.
-    """
-    try:
-        return _run_sync(pr_checks(wt, branch))
-    except Exception:  # noqa: BLE001
-        return "unknown"

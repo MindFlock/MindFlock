@@ -292,21 +292,18 @@ def test_routes_registered():
     assert "/api/github/prs/review" in paths
 
 
-def test_frontend_ships_the_open_pr_panel():
+def test_frontend_calls_the_open_pr_routes_the_server_serves():
+    """The backend<->frontend contract: the shipped bundle calls both routes and
+    the server serves them. The panel itself (list, refresh, Begin review, its
+    stylesheet) is pinned against the source in
+    frontend/src/__tests__/prReviewTabUi.test.ts."""
     from fastapi.testclient import TestClient
 
     from backend.web import server
 
-    client = TestClient(server.app)
-
-    html = client.get("/").text
-    assert '"gh-prs-list"' in client.get("/app.js").text
-    assert '"gh-prs-refresh"' in client.get("/app.js").text
-
-    js = client.get("/app.js").text
+    js = TestClient(server.app).get("/app.js").text
     assert '"/api/github/prs"' in js
     assert '"/api/github/prs/review"' in js
-    assert "Begin review" in js
-
-    css = client.get("/style.css").text
-    assert ".pr-open-item" in css
+    paths = server.app.openapi()["paths"]
+    assert "/api/github/prs" in paths
+    assert "/api/github/prs/review" in paths

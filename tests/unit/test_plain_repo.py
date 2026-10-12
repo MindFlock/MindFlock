@@ -16,6 +16,7 @@ import pytest
 from backend.session import preflight
 from backend.web import server
 from backend.web.core import plain_repo
+from backend.web.core import proc
 
 
 @pytest.fixture()
@@ -80,8 +81,8 @@ def test_init_repo_makes_initial_commit_when_empty(stub_git, monkeypatch, tmp_pa
 
     monkeypatch.setattr(server, "_is_git_repo", lambda p: False)
     monkeypatch.setattr(
-        server,
-        "_run_capped",
+        proc,
+        "run_capped",
         lambda *a, **k: calls.__setitem__("init", calls["init"] + 1) or _R(),
     )
     monkeypatch.setattr(server, "_git_has_commits", lambda p: False)

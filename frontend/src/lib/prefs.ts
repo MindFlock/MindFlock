@@ -347,6 +347,9 @@ let retryMs = 0;
 let suspended = 0;
 let sender: (body: Partial<Prefs>) => Promise<unknown> = (body) =>
   api("/api/prefs", { json: body });
+// A raw fetch on purpose, not api(): this is the page-hide flush, so it needs
+// `keepalive` (the request must outlive the page), and api()'s 401 handling
+// would call location.reload() on a page that is already going away.
 let beacon: (body: Partial<Prefs>) => Promise<unknown> = (body) =>
   fetch("/api/prefs", {
     method: "POST",

@@ -1102,7 +1102,6 @@ rate, advice — all functions of `(samples, now)`, pinned by
 |---|---|
 | `GET /summary?range=24h\|7d\|30d` | `{now, range, period_s, bucket_s, attended_now, overall, providers: [{name, label, mode, window_hours, weekly_hours, score: {score, windows, avg_fill, ceiling, used, basis}, live, weekly, windows, timeline, tokens, split, split_24h, advice}]}`. `basis` is `"estimate"` when any scored window came from the transcript estimate rather than the provider's meter. Never 500s. |
 | `POST /sample` | Record a sample for every watched provider right now (`{ok, written, samples}`). The "Sample now" button and the `optimizer.sample` command. |
-| `GET /samples?provider=&since=` | The raw samples, oldest first. |
 
 ### A minimal third-party extension
 

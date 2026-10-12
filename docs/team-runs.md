@@ -111,7 +111,7 @@ already have a session. A ticket that resolves nowhere is an error on its row
   that per its fast-track.
 
 The sessions are **MindFlock's**, not the calling agent's: no parent, not in
-its managed set, so an orchestrator cannot steer or kill what the run owns.
+its managed set, so an orchestrator cannot steer, close or delete what the run owns.
 
 ## What the server does on its own
 
@@ -172,10 +172,10 @@ create that failed after retries, the budget spent — each with its next
 action (Retry, Retry fresh, Skip, Open, Raise budget).
 
 There is no separate log beside it. A team run's own controls live on its rail
-header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
+header's ⋯ menu: its queued lines (Start now / Take out of run), Pause, Add lines,
 Cancel, and once it has finished **Copy summary** (the team run's summary as
 Markdown). A split or one-for-all team run has no header (it is a family under
-its lead): its lead's Thread tab carries Start now / Remove on a queued piece
+its lead): its lead's Thread tab carries Start now / Take out of run on a queued piece
 and, once it has finished, **Copy summary**. What is shipping shows on each
 row's status line.
 

@@ -3,7 +3,7 @@ the routes perform.
 
 :mod:`backend.web.core.team_runs` holds the record and the pure planner. This
 module is the loop that gives it effect, structured like the autopilot driver
-in ``server.py``: a 5s pass (plus a wake-up when a route changed something),
+(``core.autopilot_driver``): a 5s pass (plus a wake-up when a route changed something),
 one lease per run so two servers never drive the same one, every step wrapped
 so one bad run cannot stop the pass.
 
@@ -30,11 +30,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import subprocess
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend import gitutil
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import git_merge as _git_merge
@@ -151,23 +151,7 @@ def _progress_of(row: dict) -> str:
 def _branch_exists(repo: str, branch: str) -> bool:
     if not repo or not branch or not os.path.isdir(repo):
         return False
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo,
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "refs/heads/" + branch,
-            ],
-            capture_output=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return cp.returncode == 0
+    return gitutil.ref_exists(repo, "refs/heads/" + branch, timeout=20)
 
 
 def _provider(program: str) -> str:
@@ -572,25 +556,13 @@ def _branch_titles(repo: str) -> set:
         prefix = _config.LoadConfig().branch_prefix or ""
     except Exception:  # noqa: BLE001
         prefix = ""
-    try:
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                repo,
-                "for-each-ref",
-                "--format=%(refname:short)",
-                "refs/heads",
-            ],
-            capture_output=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    cp = gitutil.git(
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads"], repo, timeout=20
+    )
     if cp.returncode != 0:
         return set()
     out = set()
-    for line in (cp.stdout or b"").decode("utf-8", "replace").splitlines():
+    for line in cp.stdout.splitlines():
         b = line.strip()
         if b and b.startswith(prefix):
             out.add(b[len(prefix) :])
@@ -4012,23 +3984,10 @@ def lead_branch(run_id: str) -> dict:
             raise RunError(
                 "%s's folder is in the middle of a git operation" % title, 409
             )
-        existing = set()
-        try:
-            cp = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    wt,
-                    "for-each-ref",
-                    "--format=%(refname:short)",
-                    "refs/heads",
-                ],
-                capture_output=True,
-                timeout=20,
-            )
-            existing = set((cp.stdout or b"").decode("utf-8", "replace").split())
-        except (OSError, subprocess.SubprocessError):
-            pass
+        cp = gitutil.git(
+            ["for-each-ref", "--format=%(refname:short)", "refs/heads"], wt, timeout=20
+        )
+        existing = set(cp.stdout.split()) if cp.returncode == 0 else set()
         stem = srv._session_branch_name(title + "-split") or (title + "-split")
         branch, n = stem, 2
         while branch in existing:
@@ -4395,40 +4354,3 @@ async def wait_run(run_id: str, until: str, rev: int, wait_s: float) -> dict:
                 "reason": reason or "timeout",
             }
         await asyncio.sleep(1.0)
-
-
-def outbox(group: str = "all") -> dict:
-    """``GET /api/outbox`` (see :mod:`backend.web.core.outbox`)."""
-    import datetime as _dt
-
-    from backend.web.core import outbox as _outbox
-
-    srv = _server()
-    rows = [r for r in _events.sessions_snapshot() if isinstance(r, dict)]
-    try:
-        rows += srv._pending_rows()
-    except Exception:  # noqa: BLE001
-        pass
-    now = time.time()
-    today = _dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    def _verify(row: dict):
-        try:
-            pid = srv._test_plans.owner_for_branch(
-                str(row.get("title") or ""),
-                str(row.get("path") or ""),
-                str(row.get("branch") or ""),
-            )
-        except Exception:  # noqa: BLE001
-            return None
-        return {"id": pid} if pid else None
-
-    return _outbox.build(
-        rows,
-        _runs.list_runs(),
-        _autopilot.snapshot(),
-        now=now,
-        today_start=today.timestamp(),
-        group=group or "all",
-        verify=_verify,
-    )

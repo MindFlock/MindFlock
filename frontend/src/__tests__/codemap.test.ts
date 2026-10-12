@@ -13,11 +13,9 @@ import {
   feedState,
   findPattern,
   guardPill,
-  heat,
   importersOf,
   isTestPath,
   nodeOf,
-  offPlanSet,
   parseFilterToPattern,
   peeksOf,
   planProgress,
@@ -30,8 +28,6 @@ import {
   exactRe,
   zoneDoc,
   zoneDocFrom,
-  zoneFor,
-  zoneMatchers,
   type ZoneClass,
   type ZoneEntry,
 } from "../lib/codemap";
@@ -369,26 +365,6 @@ describe("rail chip seen-time on the server clock", () => {
   });
 });
 
-describe("heat", () => {
-  it("maps log(added+removed) into 0..1 with a floor", () => {
-    const h = heat([
-      { path: "a", status: "M", added: 1, removed: 0 },
-      { path: "b", status: "M", added: 300, removed: 200 },
-      { path: "c", status: "A", added: 0, removed: 0 },
-    ]);
-    expect(h.get("b")).toBe(1);
-    expect(h.get("a")!).toBeGreaterThan(0.1);
-    expect(h.get("a")!).toBeLessThan(h.get("b")!);
-    expect(h.get("c")!).toBeGreaterThan(0);
-    for (const v of h.values()) expect(v).toBeLessThanOrEqual(1);
-  });
-
-  it("does not paint a lone small change as maximally hot", () => {
-    const h = heat([{ path: "a", status: "M", added: 2, removed: 1 }]);
-    expect(h.get("a")!).toBeLessThan(0.5);
-  });
-});
-
 describe("zone matchers (shared fixture with the Python compiler)", () => {
   it("has cases", () => {
     expect(FIXTURE.cases.length).toBeGreaterThan(5);
@@ -406,25 +382,11 @@ describe("zone matchers (shared fixture with the Python compiler)", () => {
 
   for (const c of FIXTURE.ci) {
     it(`case-insensitive: ${c.pattern}`, () => {
-      const zones: RedZone[] = [{ id: "rz_ci", pattern: c.pattern, name: "", re: c.re }];
-      const ms = zoneMatchers(zones, true);
-      for (const p of c.match) expect(zoneFor(ms, p)?.id).toBe("rz_ci");
-      for (const p of c.miss) expect(zoneFor(ms, p)).toBeNull();
+      const rx = new RegExp(c.re, "i");
+      for (const p of c.match) expect([p, rx.test(p)]).toEqual([p, true]);
+      for (const p of c.miss) expect([p, rx.test(p)]).toEqual([p, false]);
     });
   }
-
-  it("prefers an enforced zone over a waived one and skips bad sources", () => {
-    const zones: RedZone[] = [
-      { id: "w", pattern: "backend", name: "", re: "^backend(?:/.*)?$", waived: true },
-      { id: "bad", pattern: "(", name: "", re: "(" },
-      { id: "e", pattern: "backend/athena", name: "Athena", re: "^backend/athena(?:/.*)?$" },
-    ];
-    const ms = zoneMatchers(zones);
-    expect(ms.length).toBe(2);
-    expect(zoneFor(ms, "backend/athena/q.py")?.id).toBe("e");
-    expect(zoneFor(ms, "backend/other.py")?.id).toBe("w");
-    expect(zoneFor(ms, "frontend/x.ts")).toBeNull();
-  });
 });
 
 describe("plan helpers", () => {
@@ -449,11 +411,6 @@ describe("plan helpers", () => {
     expect(autoMode(plan, 101)).toBe("watch");
     expect(autoMode(null, 0)).toBe("watch");
     expect(autoMode({ ts: 1, items: [] }, 0)).toBe("watch");
-  });
-
-  it("offPlanSet", () => {
-    expect(offPlanSet(["x", "y"]).has("y")).toBe(true);
-    expect(offPlanSet(null).size).toBe(0);
   });
 });
 

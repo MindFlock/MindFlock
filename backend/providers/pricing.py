@@ -22,8 +22,9 @@ import re
 import threading
 import time
 import urllib.request
-import uuid
 from typing import Optional
+
+from backend.fsutil import atomic_write_bytes
 
 _ENDPOINT = "https://www.aipricing.guru/api/pricing.json"
 _TTL = 24 * 60 * 60  # refresh the feed at most once/day
@@ -92,19 +93,9 @@ def _fetch() -> Optional[dict]:
             return None
         try:
             path = _cache_path()
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            # Write-to-unique-tmp + atomic replace: a concurrent reader (or a
-            # second writer in another process) never sees a half-written file.
-            tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-            try:
-                with open(tmp, "wb") as f:
-                    f.write(raw)
-                os.replace(tmp, path)
-            except OSError:
-                try:
-                    os.unlink(tmp)  # don't leave orphaned tmp files behind
-                except OSError:
-                    pass
+            # Unique tmp + atomic replace: a concurrent reader (or a second
+            # writer in another process) never sees a half-written file.
+            atomic_write_bytes(path, raw, prefix=os.path.basename(path) + ".")
         except OSError:
             pass  # cache write is best-effort
         return table

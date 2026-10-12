@@ -33,8 +33,13 @@ def _paste_dirs() -> list:
     """Every directory pasted images may live in: the global
     ``~/.mindflock/pastes`` plus each known session workspace's
     ``.mindflock_pastes``."""
+    from backend.config.config import GetConfigDir
+
     srv = _server()
-    dirs = [os.path.join(os.path.expanduser("~"), ".mindflock", "pastes")]
+    try:
+        dirs = [os.path.join(GetConfigDir(), "pastes")]
+    except OSError:  # no resolvable config dir: only the workspaces' dirs
+        dirs = []
     for inst in list(srv.ENGINE.instances.values()):
         try:
             folder = inst.GetWorktreePath() if inst.Started() else (inst.Path or "")

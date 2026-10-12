@@ -8,8 +8,8 @@
  * close the terminal is torn down (`login-close`) and `onDone` re-runs whatever
  * reported the missing login, so the ✗ clears without a manual re-check. */
 
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useRef, useState } from "react";
+import { Modal } from "../Modal";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
@@ -68,32 +68,21 @@ function SignInWindow({
     closeRef.current();
   };
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      e.stopPropagation();
-      void close();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const status =
     state === "streaming"
       ? "sign in when it asks (a browser window may open) — then close this window"
       : state;
 
-  return createPortal(
-    <div
-      className="modal"
+  // Escape is caught in the capture phase: it must close this window before
+  // the terminal inside it (or the dialog under it) sees the key.
+  return (
+    <Modal
       id="signin-dialog"
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) void close();
-      }}
+      portal
+      escapeCapture
+      onClose={() => void close()}
     >
       <div className="prov-login-panel">
         <div className="ws-head">
@@ -110,8 +99,7 @@ function SignInWindow({
         </div>
         <div className="prov-login-term" ref={hostRef} />
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 }
 

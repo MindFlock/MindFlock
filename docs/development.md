@@ -271,6 +271,7 @@ backend/
 ├── ticket_ingestion/     # the ticket / PR-review / issue ingestion pipeline (Shortcut, Jira, Linear, GitHub Issues, Asana)
 └── web/
     ├── server.py         # FastAPI app assembly: routes, background loops, terminal WS
+    ├── routes/           # route groups split out of server.py (one APIRouter per module)
     ├── core/             # one module per concern: engine, terminal (PTY↔WS),
     │                     # git_ops, agent_state, agent_sessions, snapshot,
     │                     # session_stats, budget, usage_api, mobile_access, …
@@ -378,9 +379,10 @@ cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
 ## Conventions
 
 - **Go parity is intentional.** PascalCase methods (`Start`, `Pause`,
-  `Kill`) with snake_case aliases, error-return executors, and byte-exact JSON
-  all mirror the original Go engine. Keep new engine code consistent with the
-  surrounding style.
+  `Kill`), error-return executors, and byte-exact JSON all mirror the original
+  Go engine. A snake_case (or Go-cased) alias exists only where a caller uses
+  it: don't add one speculatively, and drop it with its last caller. Keep new
+  engine code consistent with the surrounding style.
 - **Providers own CLI-specific behavior.** Don't hardcode launch flags or prompt
   strings in the engine or web server — extend a provider (or add a TOML config).
 - **Secrets stay out of git**: `config.toml`, `state.json`, `logs/`,

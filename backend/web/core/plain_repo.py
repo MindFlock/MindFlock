@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 
 from backend import log
+from backend.web.core import proc as _proc
 
 
 def _server():
@@ -54,7 +55,7 @@ def _prepare_plain_repo(repo_path: str, init_repo: bool) -> tuple[str, bool]:
             except OSError as err:
                 raise ValueError("could not create folder %s: %s" % (abs_path, err))
         if not srv._is_git_repo(abs_path):
-            r = srv._run_capped(
+            r = _proc.run_capped(
                 ["git", "init", abs_path], capture_output=True, text=True, timeout=60
             )
             if r.returncode != 0:

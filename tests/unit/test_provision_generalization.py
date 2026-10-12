@@ -46,6 +46,15 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _tmp_home(tmp_path, monkeypatch):
+    """``default_workspace_dir`` resolves through ``GetConfigDir``, whose home
+    guard refuses the real ``~/.mindflock`` under pytest."""
+    home = tmp_path / "default-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+
 # --------------------------------------------------------------------------- #
 # per-repo base clone dirname
 # --------------------------------------------------------------------------- #

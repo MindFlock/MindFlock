@@ -34,6 +34,7 @@ from backend.session.storage import InstanceData, Status
 from backend.web import server
 from backend.web.core import events as events_mod
 from backend.web.core import github_pr
+from backend.web.core import proc
 from starlette.testclient import TestClient
 
 
@@ -795,9 +796,9 @@ def test_make_pr_rejects_pr_into_base_branch(tmp_path, monkeypatch, with_gh):
     )
     called: list = []
     rest_called: list = []
-    monkeypatch.setattr(
-        server, "_run_capped", lambda *a, **k: called.append(a) or _fake_cp(0, "")
-    )
+    fake_run_capped = lambda *a, **k: called.append(a) or _fake_cp(0, "")
+    monkeypatch.setattr(server, "_run_capped", fake_run_capped)
+    monkeypatch.setattr(proc, "run_capped", fake_run_capped)
     _stub_create(monkeypatch, github_pr.PRResult(ok=True), calls=rest_called)
     try:
         r = _MKPR_CLIENT.post(f"/api/instances/{title}/make-pr", json={})
@@ -820,11 +821,9 @@ def test_make_pr_open_pr_bounce_returns_ok(tmp_path, monkeypatch, with_gh):
         title=f"mkpr-open-{with_gh}",
         with_gh=with_gh,
     )
-    monkeypatch.setattr(
-        server,
-        "_run_capped",
-        lambda *a, **k: _fake_cp(1, "a pull request already exists"),
-    )
+    fake_run_capped = lambda *a, **k: _fake_cp(1, "a pull request already exists")
+    monkeypatch.setattr(server, "_run_capped", fake_run_capped)
+    monkeypatch.setattr(proc, "run_capped", fake_run_capped)
     _stub_create(
         monkeypatch,
         github_pr.PRResult(error="A pull request already exists for o:feat/x."),
@@ -857,11 +856,9 @@ def test_make_pr_no_commits_is_400(tmp_path, monkeypatch, with_gh):
         title=f"mkpr-empty-{with_gh}",
         with_gh=with_gh,
     )
-    monkeypatch.setattr(
-        server,
-        "_run_capped",
-        lambda *a, **k: _fake_cp(1, "no commits between main and feat/x"),
-    )
+    fake_run_capped = lambda *a, **k: _fake_cp(1, "no commits between main and feat/x")
+    monkeypatch.setattr(server, "_run_capped", fake_run_capped)
+    monkeypatch.setattr(proc, "run_capped", fake_run_capped)
     _stub_create(
         monkeypatch,
         github_pr.PRResult(error="No commits between main and feat/x"),

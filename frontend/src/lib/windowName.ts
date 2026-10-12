@@ -22,7 +22,7 @@
  * page where the bridge has not been installed yet, keeps working.
  */
 
-import { isVerifySession } from "../components/dialogs/verify";
+import { isVerifySession } from "../components/dialogs/verifySession";
 import { matchesFilter, orderedInstances } from "../components/sidebar/ordering";
 import type { Instance } from "../api/types";
 import { sessionLabel } from "./sessionLabel";

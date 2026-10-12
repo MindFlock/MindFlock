@@ -16,7 +16,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../../api/client";
 import {
   putTicketingSources,
@@ -71,14 +70,14 @@ import {
   saveShownBuckets,
   visibleBuckets,
 } from "./buckets";
-import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
+import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 import {
   EFFORTS,
   effortOptionLabel,
   effortTitle,
   supportsEffort,
 } from "../../lib/effort";
-import { useProviderEfforts } from "../../state/queries";
+import { useMindflockStatus, useProviderEfforts } from "../../state/queries";
 import type { TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
@@ -107,24 +106,14 @@ interface AgentChoices {
 
 /** Master ticket-ingestion switch — the Intake-tab twin of the sidebar's
  * AutomationBar. Same server contract (GET /api/mindflock/status for the
- * desired state, POST /api/mindflock/{start,stop} to flip it), the same
- * ["mindflock-status"] query key AND the same 4s interval, so the two switches
- * stay in lock-step. Clicking the row text does nothing — only the switch
+ * desired state, POST /api/mindflock/{start,stop} to flip it) and the same
+ * shared status query (useMindflockStatus), so the two switches stay in
+ * lock-step. Clicking the row text does nothing — only the switch
  * itself flips it. */
 function IngestionToggle({ sourceCount }: { sourceCount: number }) {
   const [busy, setBusy] = useState(false);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
-  const { data: status, refetch } = useQuery({
-    queryKey: ["mindflock-status"],
-    queryFn: () =>
-      api<{ available: boolean; running: boolean; desired?: boolean }>("/api/mindflock/status"),
-    // Matches the sidebar bars' interval exactly: a shared query key with two
-    // different intervals makes which component mounted first decide the poll
-    // rate, which is the kind of bug that only shows up as "the light feels
-    // laggy sometimes".
-    refetchInterval: 4_000,
-    retry: false,
-  });
+  const { data: status, refetch } = useMindflockStatus();
 
   // No engine installed / reachable — nothing to toggle (matches the sidebar).
   if (!status || !status.available) return null;
@@ -1555,10 +1544,10 @@ function TicketSourceCard({
           {/* One ladder, the same words as every other Fast-track control.
               A stored "agent" (stop once the agent stops) IS Off, so it reads
               as Off rather than as a sixth rung. */}
-          <option value="">{DEPTH_LABELS.off}</option>
-          {SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => (
+          <option value="">{LANE_LABEL.leave}</option>
+          {SOURCE_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {DEPTH_LABELS[d]}
+              {LANE_LABEL[d]}
             </option>
           ))}
         </select>

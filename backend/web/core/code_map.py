@@ -47,6 +47,9 @@ import threading
 import time
 from typing import IO, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from backend import gitutil
+from backend.fsutil import atomic_write_bytes
+
 
 def _server():
     """The ``backend.web.server`` module, imported lazily (it imports this
@@ -121,18 +124,8 @@ def _feed_path(tmux_name: str) -> str:
 def _git(wt: str, *args: str, timeout: float = 60) -> Optional[bytes]:
     """stdout of ``git -C wt <args>``, or None on any failure (non-zero exit,
     timeout, git missing). Callers treat None as "unknown", never as empty."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", wt, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    if cp.returncode != 0:
-        return None
-    return cp.stdout
+    cp = gitutil.git(args, wt, timeout=timeout, text=False, stderr=subprocess.DEVNULL)
+    return cp.stdout if cp.returncode == 0 else None
 
 
 def _rev(rev: Any) -> Optional[str]:
@@ -604,18 +597,9 @@ def _memo_save(wt: str) -> bool:
         if len(blob) > _MEMO_DISK_MAX_BYTES:
             return False
         d = _memo_dir()
-        os.makedirs(d, exist_ok=True)
-        path = _memo_file(root)
-        fd, tmp = tempfile.mkstemp(prefix=".scan-", dir=d)
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(blob)
-            os.replace(tmp, path)
+            atomic_write_bytes(_memo_file(root), blob, prefix=".scan-", suffix="")
         except OSError:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
             return False
         _memo_prune(d)
         return True

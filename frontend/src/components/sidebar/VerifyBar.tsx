@@ -77,7 +77,7 @@ export function VerifyBar() {
   const on = repo?.verify_enabled !== false;
   const due = dueCount(plans);
   const running = plans.some((p) => p.state === "running");
-  // SOMETHING SHIPPED AND IS BROKEN — the most valuable thing this feature
+  // SOMETHING PUSHED AND IS BROKEN — the most valuable thing this feature
   // produces, and the only state of it that never left the dialog. `dueCount`
   // deliberately excludes a recorded failure (a fail IS an answer, so the plan
   // is not "not checked yet"), and the loud red group lives inside a modal
@@ -106,7 +106,7 @@ export function VerifyBar() {
     <div
       id="verify-bar"
       title={
-        "Verify — writes a checklist when a session branch ships, then hands you " +
+        "Verify — writes a checklist when a session branch is pushed, then hands you " +
         "the steps an agent cannot honestly check. " +
         (repos.length
           ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.`
@@ -132,7 +132,7 @@ export function VerifyBar() {
           running
             ? "Verify: an agent is checking a checklist"
             : broken
-              ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") +
+              ? "Verify: " + broken + " pushed " + (broken === 1 ? "change" : "changes") +
                 " failed its checklist"
               : !on
                 ? "Verify: switched off"
@@ -142,18 +142,18 @@ export function VerifyBar() {
           running
             ? "An agent is working through a checklist right now"
             : broken
-              ? broken + (broken === 1 ? " shipped change" : " shipped changes") +
+              ? broken + (broken === 1 ? " pushed change" : " pushed changes") +
                 " did not do what its checklist expected — open Verify to see" +
                 " which step, and what was observed"
               : !on
                 ? // Deliberately not the word a removed status line used: a blunt
                   // bundle-wide guard in test_pr_review_settings.py watches for it
                   // coming back, and this tooltip is not what it is guarding.
-                  "Switched off — nothing is written when a branch ships, and nothing new turns up to check"
+                  "Switched off — nothing is written when a branch is pushed, and nothing new turns up to check"
                 : due
-                  ? due + (due === 1 ? " shipped change has" : " shipped changes have") +
+                  ? due + (due === 1 ? " pushed change has" : " pushed changes have") +
                     " not been checked"
-                  : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+                  : "On, and nothing is outstanding — a checklist appears here when a branch is pushed"
         }
       />
       {/* The bar's name IS its door (the pattern every automation bar shares):

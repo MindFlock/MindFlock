@@ -135,6 +135,43 @@ describe("relTime", () => {
     expect(relTime(NOW_SEC - 86400)).toBe("1d ago");
     expect(relTime(NOW_SEC - 3 * 86400)).toBe("3d ago");
   });
+  it("takes a suffix: bare for status lines, ' old' for an item's age", () => {
+    at();
+    expect(relTime(NOW_SEC - 360, { suffix: "" })).toBe("6m");
+    // Intake's ageText: was rounded minutes up to 48h ("0m old", "30h old");
+    // now the one formatter's floor and units.
+    expect(relTime(NOW_SEC - 40, { suffix: " old" })).toBe("40s old");
+    expect(relTime(NOW_SEC - 30 * 3600, { suffix: " old" })).toBe("1d old");
+  });
+  it("takes a pinned clock (epoch seconds) instead of Date.now", () => {
+    expect(relTime(1000, { now: 1000 + 7200, suffix: "" })).toBe("2h");
+  });
+  it("replaced the copies: Notifications' 'just now' / ' min ago' and the two since() helpers", () => {
+    at();
+    // What Notifications' last-push line now says for a push 5 minutes ago.
+    expect(relTime(NOW_SEC - 300)).toBe("5m ago");
+  });
+});
+
+describe("one relative-time formatter", () => {
+  const SOURCES = import.meta.glob(["../**/*.ts", "../**/*.tsx", "!../__tests__/**"], {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }) as Record<string, string>;
+  it("no module rolls its own seconds → m/h/d ladder (verify.ts exempt: its agoText rounds, by design)", () => {
+    const ladder = /Math\.(floor|round)\(secs \/ 3600\)/;
+    const offenders = Object.entries(SOURCES)
+      .filter(([p]) => !/verify\.ts$/.test(p))
+      .filter(([, src]) => ladder.test(src))
+      .map(([p]) => p);
+    // sessionState's spanWord is a rounded idle-for DURATION ("25m", min 1m),
+    // not a since-timestamp label.
+    expect(offenders).toEqual(["../lib/format.ts", "../lib/sessionState.ts"]);
+  });
+  it("Intake's ageText is relTime with an age suffix", () => {
+    expect(SOURCES["../components/intake/kit.tsx"]).toContain('relTime(t / 1000, { suffix: " old" })');
+  });
 });
 
 describe("fmtDurationShort", () => {

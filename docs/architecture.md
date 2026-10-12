@@ -262,8 +262,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   obey convention (1) below: their routes (`/reset-stage`, `/api/intake/reopen`)
   live in `server.py`. Two load-bearing conventions keep this decomposition
   black-box-equivalent — hold them when extracting more: **(1) no routes in
-  `core/`** — every `APIRouter`/`@app` handler stays in `server.py`; the modules
-  are pure helpers. **(2) re-import for the monkeypatch seam** — a core module
+  `core/`** — every handler is an `@app` route in `server.py` or lives in a
+  route-group module `backend/web/routes/<name>.py` (a module-level `router`
+  that `server.py` `include_router`s at the position the routes used to hold,
+  since route order decides path matching); the core modules are pure helpers.
+  **(2) re-import for the monkeypatch seam** — a core module
   calls back through the server namespace (`_server()._foo(...)`) for anything
   tests monkeypatch, and `server.py` re-imports the module's names, so
   `monkeypatch.setattr(server, "_foo", …)` works no matter where `_foo` lives.

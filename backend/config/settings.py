@@ -27,11 +27,11 @@ import json
 import logging
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from backend.fsutil import atomic_write_text
 from backend.config.config import GetConfigDir
 
 _logger = logging.getLogger(__name__)
@@ -2195,21 +2195,8 @@ def save_settings(settings: Settings) -> None:
 
     data = json.dumps(settings.to_dict(), indent=2, ensure_ascii=False) + "\n"
 
-    # Atomic write: temp file in the same dir, then rename over the target.
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".settings.", suffix=".tmp")
     try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        atomic_write_text(path, data, mode=0o600, prefix=".settings.")
     finally:
         invalidate()
 

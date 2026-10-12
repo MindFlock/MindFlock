@@ -10,14 +10,7 @@
  * Paths are worktree-relative POSIX paths, exactly as the server's /code-map,
  * /code-map/live routes send them. The tree itself lives in lib/codetree/. */
 
-import type { ChangedFile, CompanionRule, FeedRecord, PlanItem, RedZone } from "../api/types";
-
-/** One file of the snapshot: `[rel, size, flags]`. */
-export type FileEntry = [string, number, number];
-
-/** Server flag bits (backend/web/core/code_map.list_files). */
-export const F_IGNORED = 1;
-export const F_TEST = 2;
+import type { CompanionRule, FeedRecord, PlanItem, RedZone } from "../api/types";
 
 function dirname(p: string): string {
   const i = p.lastIndexOf("/");
@@ -112,11 +105,6 @@ export const RUNNING_AFTER_S = 1.5;
  * gate and the "agent moved on" rule in feedState catch almost all of them
  * long before this. */
 export const RUNNING_STALE_S = 10 * 60;
-
-/** How long an agent touch keeps a card's activity dot: an edit 90 s, a
- * read 60 s (then it is history — the Activity list keeps it). */
-export const EDIT_FADE_S = 90;
-export const READ_FADE_S = 60;
 
 export interface FileLive {
   lastTs: number;
@@ -277,67 +265,14 @@ export function snapStale(o: {
   return !!snap.graph_partial && o.sinceSnapMs > o.partialMs;
 }
 
-// --- Heat, zones, plan -----------------------------------------------------
+// --- Plan ------------------------------------------------------------------
 
-/** 0..1 by log(added+removed), against a floor so one two-line change is not
- * drawn as hot as a rewrite. A delete or an add with no countable lines
- * (binary) still reads as a change. */
-export function heat(changed: ChangedFile[]): Map<string, number> {
-  const out = new Map<string, number>();
-  let max = 0;
-  for (const c of changed) max = Math.max(max, (c.added || 0) + (c.removed || 0));
-  const den = Math.log1p(Math.max(max, 40));
-  for (const c of changed) {
-    const n = (c.added || 0) + (c.removed || 0);
-    const h = n > 0 ? Math.log1p(n) / den : 0.25;
-    out.set(c.path, Math.max(0.12, Math.min(1, h)));
-  }
-  return out;
-}
-
-export interface ZoneMatcher {
-  zone: RedZone;
-  rx: RegExp;
-}
-
-/** Compile the server's regex sources (red_zones.compile_pattern emits a
- * source valid in both Python and JS). A source this engine rejects is
- * skipped rather than thrown — one bad zone must not blank the map. */
-export function zoneMatchers(zones: RedZone[], ci = false): ZoneMatcher[] {
-  const out: ZoneMatcher[] = [];
-  for (const z of zones || []) {
-    if (!z || !z.re) continue;
-    try {
-      out.push({ zone: z, rx: new RegExp(z.re, ci ? "i" : "") });
-    } catch {
-      /* not a JS-compatible source — leave it off the map */
-    }
-  }
-  return out;
-}
-
-/** The zone governing `path`: an enforced one first, else a waived one (drawn
- * faintly), else null. */
-export function zoneFor(ms: ZoneMatcher[], path: string): RedZone | null {
-  let waived: RedZone | null = null;
-  for (const m of ms) {
-    if (!m.rx.test(path)) continue;
-    if (!m.zone.waived) return m.zone;
-    if (!waived) waived = m.zone;
-  }
-  return waived;
-}
-
-export function offPlanSet(offPlan: string[] | null | undefined): Set<string> {
-  return new Set(offPlan || []);
-}
-
-export type PlanStatus = "done" | "untouched" | "new";
+export type PlanItemStatus = "done" | "untouched" | "new";
 
 /** Per plan item: touched yet? Mid-flight a plan item is "done" once the file
  * is changed on the branch or an edit landed on it. */
-export function planProgress(items: PlanItem[], changed: Set<string>, edited: Set<string>): Map<string, PlanStatus> {
-  const out = new Map<string, PlanStatus>();
+export function planProgress(items: PlanItem[], changed: Set<string>, edited: Set<string>): Map<string, PlanItemStatus> {
+  const out = new Map<string, PlanItemStatus>();
   for (const it of items) {
     if (changed.has(it.path) || edited.has(it.path)) out.set(it.path, "done");
     else out.set(it.path, it.new ? "new" : "untouched");

@@ -41,14 +41,13 @@ its creation time so a reused title never inherits a namesake's order.
 from __future__ import annotations
 
 import copy
-import json
 import os
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -101,30 +100,22 @@ def _blank_doc() -> dict:
 
 
 def _load_raw() -> dict:
-    try:
-        with open(store_path(), encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return _blank_doc()
-    if not isinstance(data, dict) or not isinstance(data.get("parents"), dict):
+    data = read_json(store_path(), None, expect=dict)
+    if data is None or not isinstance(data.get("parents"), dict):
         return _blank_doc()
     return data
 
 
 def _save(data: dict) -> None:
-    path = store_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".order.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=1)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(
+        store_path(),
+        data,
+        indent=1,
+        newline=False,
+        ensure_ascii=True,
+        prefix=".order.",
+        suffix="",
+    )
 
 
 #: (path, mtime_ns, size) → the parsed store: every row build reads it.

@@ -45,6 +45,8 @@ import threading
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend import gitutil
+
 __all__ = [
     "store_path",
     "guard_dir",
@@ -290,22 +292,15 @@ def _save(data: dict) -> None:
     Callers hold ``_LOCK``. Best-effort — a persistence failure must not crash a
     route or a loop, so the OSError is swallowed after being given a chance.
     """
-    import tempfile
+    from backend.fsutil import atomic_write_json
 
     path = store_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_write_json(
+            path, data, sort_keys=True, newline=False, ensure_ascii=True, prefix="tmp"
+        )
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        pass
 
 
 def store_digest() -> str:
@@ -323,18 +318,8 @@ def store_digest() -> str:
 def _git(path: str, *args: str) -> Optional[str]:
     """Run ``git -C path <args>`` and return trimmed stdout, or None on any
     non-zero exit / error / timeout. Never raises."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", path, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except Exception:  # noqa: BLE001 — git missing / hung / bad path
-        return None
-    if cp.returncode != 0:
-        return None
-    return cp.stdout.decode("utf-8", "replace").strip()
+    cp = gitutil.git(args, path, timeout=_GIT_TIMEOUT, stderr=subprocess.DEVNULL)
+    return cp.stdout.strip() if cp.returncode == 0 else None
 
 
 def _normalize_origin(url: str) -> Optional[Tuple[str, str]]:
@@ -858,18 +843,15 @@ def worktree_blobs(root: str, rels: Iterable[str]) -> Dict[str, str]:
             todo.append(rel)
     if todo:
         shas: List[str] = []
-        try:
-            cp = subprocess.run(
-                ["git", "-C", root, "hash-object", "--stdin-paths"],
-                input=("\n".join(todo) + "\n").encode("utf-8", "replace"),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=_GIT_TIMEOUT,
-            )
-            if cp.returncode == 0:
-                shas = cp.stdout.decode("ascii", "replace").split()
-        except Exception:  # noqa: BLE001
-            shas = []
+        cp = gitutil.git(
+            ["hash-object", "--stdin-paths"],
+            root,
+            input=("\n".join(todo) + "\n").encode("utf-8", "replace"),
+            stderr=subprocess.DEVNULL,
+            timeout=_GIT_TIMEOUT,
+        )
+        if cp.returncode == 0:
+            shas = cp.stdout.split()
         if len(shas) != len(todo):
             shas = [_py_blob(os.path.join(root, r)) or "" for r in todo]
         if len(_BLOB_MEMO) > _BLOB_MEMO_MAX:
@@ -889,19 +871,16 @@ def rev_blobs(root: str, rev: str, rels: Iterable[str]) -> Dict[str, str]:
     rels = [r for r in (rels or ()) if r]
     if not rels or not rev or rev.startswith("-"):
         return {}
-    try:
-        cp = subprocess.run(
-            ["git", "-C", root, "ls-tree", "-r", "-z", "--full-tree", rev, "--"] + rels,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except Exception:  # noqa: BLE001
-        return {}
+    cp = gitutil.git(
+        ["ls-tree", "-r", "-z", "--full-tree", rev, "--"] + rels,
+        root,
+        stderr=subprocess.DEVNULL,
+        timeout=_GIT_TIMEOUT,
+    )
     if cp.returncode != 0:
         return {}
     found: Dict[str, str] = {}
-    for rec in cp.stdout.decode("utf-8", "replace").split("\0"):
+    for rec in cp.stdout.split("\0"):
         head, _tab, path = rec.partition("\t")
         bits = head.split()
         if len(bits) >= 3 and path:
@@ -1662,18 +1641,10 @@ def all_repos() -> Dict[str, dict]:
 def _git_z(root: str, *args: str, cap: int = 0) -> List[str]:
     """Run a NUL-delimited ``git ls-files`` and return the entries (best-effort;
     empty on failure). ``cap`` limits how many are scanned."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", root, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except Exception:  # noqa: BLE001
-        return []
+    cp = gitutil.git(args, root, stderr=subprocess.DEVNULL, timeout=_GIT_TIMEOUT)
     if cp.returncode != 0:
         return []
-    parts = cp.stdout.decode("utf-8", "replace").split("\0")
+    parts = cp.stdout.split("\0")
     entries = [p for p in parts if p]
     return entries[:cap] if cap else entries
 
@@ -2063,21 +2034,14 @@ def sync_guard(
 
 
 def _write_guard_atomic(path: str, content: dict) -> None:
-    import tempfile
+    from backend.fsutil import atomic_write_json
 
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(content, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_write_json(
+            path, content, indent=None, newline=False, ensure_ascii=True, prefix="tmp"
+        )
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        pass
 
 
 def sync_for_workdir(workdir: str) -> str:

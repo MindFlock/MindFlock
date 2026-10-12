@@ -24,46 +24,20 @@ from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import log
+from backend.config import home_guard
 from backend.session import provisioned as provisioning
 
 from backend.web.core import pending as _pending
+from backend.web.core import pipeline_root
 from backend.web.core.terminal import pump_pty, spawn_tail
 
 from .base import Addon, AppContext, FrontendDescriptor
 
 
 def _resolve_repo_root() -> Path:
-    """Directory the pipeline must run in — where ``config.toml`` + ``state.json``
-    live. State is stored CWD-relative (``_STATE_DIR = Path(".")`` in the pipeline),
-    so getting this wrong splits the processed-story ledger and re-ingests already
-    done tickets (windows re-open, promptless).
-
-    The old ``Path(__file__).resolve().parents[4]`` only landed on the repo root
-    for a src-layout dev checkout (``<repo>/backend/web/addons/…``). For an
-    installed copy (``uv tool install`` → ``…/lib/pythonX/site-packages/backend/…``)
-    ``parents[4]`` is the interpreter lib dir, NOT the repo — so the pipeline ran
-    with a stray, empty ledger there. Resolve robustly instead:
-
-      1. ``MINDFLOCK_REPO_ROOT`` env override (explicit wins).
-      2. walk up from this file for a dir containing ``config.toml`` (dev /
-         editable installs, where the package lives under the repo).
-      3. the process cwd if it holds ``config.toml`` (installed copy launched from
-         the repo root, as ``mindflock serve`` is).
-      4. fall back to the process cwd.
-    """
-    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "config.toml").is_file():
-            return parent
-
-    cwd = Path.cwd()
-    if (cwd / "config.toml").is_file():
-        return cwd
-    return cwd
+    """Where the pipeline keeps state.json / workspaces/ — see
+    :func:`backend.web.core.pipeline_root.resolve_repo_root`."""
+    return pipeline_root.resolve_repo_root(__file__)
 
 
 def _ingestion_repo_available() -> bool:
@@ -502,6 +476,13 @@ class TicketIngestionController:
 
     def start(self) -> bool:
         if self.is_running():
+            return False
+        # Under pytest, never spawn into a real checkout: the child only dies
+        # on this same guard and leaves its EXIT_RECORD in the checkout (a
+        # settings save in any test fires the background reconcile).
+        try:
+            home_guard.guard_ledger_dir(str(self._repo_root))
+        except home_guard.RealHomeStoreError:
             return False
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         # A fresh start owes the status a clean slate: the previous child's

@@ -1,0 +1,250 @@
+"""Peer links (docs/peer-link.md): the ``/api/peer*`` routes.
+
+Pairing with another person's MindFlock, one sandboxed shared folder per link.
+The work lives in ``backend.peer.service``; these routes only translate. Every
+one refuses a request proxied by another MindFlock device (X-MindFlock-Remote):
+tailnet remote control must never manage peer links. No response carries a
+key or secret, except the invite code in POST /api/peer/invites — the one
+value the user must pass on.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Optional
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from backend import log
+from backend.web.core import auth as _auth
+from backend.web.core import remote as _remote
+from backend.web.routes import _server
+
+router = APIRouter()
+
+
+def _peer_service():
+    from backend.peer import service as _svc
+
+    return _svc.get_service()
+
+
+def _service():
+    """:func:`_peer_service`, read off the server namespace (tests patch it)."""
+    return _server()._peer_service()
+
+
+async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
+    """Another MindFlock relaying never manages peer links here; and a change
+    (an invite, a join, sharing a folder with someone, its perms) needs the
+    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
+    gate-off device, who could otherwise share its folders with a peer of
+    their own."""
+    if _remote.from_remote(request):
+        return JSONResponse(
+            {"error": "peer links can only be managed on this device"},
+            status_code=403,
+        )
+    if request.method != "GET" and not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    return None
+
+
+async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
+    refused = await _peer_remote_refusal(request)
+    if refused is not None:
+        return refused
+    from backend.peer.service import PeerServiceError
+
+    try:
+        await _service().reconcile()
+    except Exception as err:  # noqa: BLE001 — report, never 500 the status page
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("peer service reconcile failed: %v", err)
+    try:
+        out = fn(*args, **kwargs)
+        if asyncio.iscoroutine(out):
+            out = await out
+    except PeerServiceError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    return JSONResponse(out if out is not None else {"ok": True}, status_code=status)
+
+
+async def _peer_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty or non-JSON body = {}
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+@router.get("/api/peer")
+async def peer_status(request: Request) -> JSONResponse:
+    """Peer-link status: sandbox availability, this instance's identity
+    fingerprint, the listen address, links (no keys) and active invites (id and
+    expiry only — never the code)."""
+    return await _peer_call(request, lambda: _service().status())
+
+
+@router.post("/api/peer/enable")
+async def peer_enable(request: Request) -> JSONResponse:
+    """Turn peer links on without minting an invite (the "they're somewhere
+    else" step: the doctor then offers cloudflared before the first invite)."""
+    return await _peer_call(request, _service().enable)
+
+
+@router.post("/api/peer/invites")
+async def peer_create_invite(request: Request) -> JSONResponse:
+    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
+    message, expires_in, host, port, direct, relay?, fallback?}``.
+    ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
+    ``advertise_host`` overrides the address a direct code carries (setting
+    ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
+    ``peer.progress`` events. ``fallback: {reason, text}`` marks a direct
+    invite made because the tunnel wouldn't start. The only response that
+    ever contains an invite code; starts the listener."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().create_invite,
+        body.get("ttl_s"),
+        str(body.get("advertise_host") or body.get("host") or ""),
+        str(body.get("reach") or "auto"),
+        str(body.get("op_id") or ""),
+        status=201,
+    )
+
+
+@router.delete("/api/peer/invites/{invite_id}")
+async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
+    return await _peer_call(request, _service().revoke_invite, invite_id)
+
+
+@router.post("/api/peer/join")
+async def peer_join(request: Request) -> JSONResponse:
+    """``{code, op_id?}`` → the link (with its safety number to compare out
+    of band) and ``reconnected`` — true when the code re-paired someone
+    already linked (same link, share kept)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().join,
+        str(body.get("code") or ""),
+        str(body.get("op_id") or ""),
+        status=201,
+    )
+
+
+@router.delete("/api/peer/links/{link_id}")
+async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
+    """Unlink: stop the shared session, forget the pinned key, close the
+    connection. ``?delete_files=1`` also deletes the shared folder."""
+    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
+    return await _peer_call(request, _service().unlink, link_id, delete_files=delete)
+
+
+@router.post("/api/peer/links/{link_id}/address")
+async def peer_set_address(link_id: str, request: Request) -> JSONResponse:
+    """``{address}`` — point a link WE joined at the inviter's new address
+    (``host:port`` or a relay ``wss://host/path``, e.g. after their quick
+    tunnel restarted). The peer's key stays pinned, so this can only change
+    where we dial, never whom we trust."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().set_address,
+        link_id,
+        str(body.get("address") or ""),
+    )
+
+
+@router.post("/api/peer/links/{link_id}/verified")
+async def peer_set_verified(link_id: str, request: Request) -> JSONResponse:
+    """``{verified: bool}`` — "It matches": the safety number was compared."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _service().set_verified, link_id, body.get("verified")
+    )
+
+
+@router.get("/api/peer/links/{link_id}/messages")
+async def peer_messages(link_id: str, request: Request) -> JSONResponse:
+    """The link's message log, both directions → ``{messages: [{id, dir,
+    by, text, ts, delivered_to, read}], unread}``. Read-only."""
+    try:
+        limit = int(request.query_params.get("limit") or 100)
+    except ValueError:
+        limit = 100
+    return await _peer_call(request, _service().messages, link_id, limit)
+
+
+@router.post("/api/peer/links/{link_id}/messages/read")
+async def peer_messages_read(link_id: str, request: Request) -> JSONResponse:
+    return await _peer_call(request, _service().mark_messages_read, link_id)
+
+
+@router.post("/api/peer/links/{link_id}/message")
+async def peer_send_message(link_id: str, request: Request) -> JSONResponse:
+    """``{text}`` — you, messaging the peer directly (no shared session
+    needed on either side) → ``{msg_id, delivered}``."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request, _service().human_message, link_id, body.get("text")
+    )
+
+
+@router.get("/api/peer/links/{link_id}/diff")
+async def peer_their_changes(link_id: str, request: Request) -> JSONResponse:
+    """The peer's shared-folder changes, read-only (their ``diff``; their
+    permissions decide) → ``{stat, diff, truncated}``."""
+    return await _peer_call(request, _service().their_changes, link_id)
+
+
+@router.post("/api/peer/links/{link_id}/perms")
+async def peer_set_perms(link_id: str, request: Request) -> JSONResponse:
+    """``{"messages"?, "diff"?, "read_file"?: bool}`` — what the PEER may do to
+    us (``list_files`` follows ``read_file``)."""
+    body = await _peer_body(request)
+    perms = body.get("perms") if isinstance(body.get("perms"), dict) else body
+    return await _peer_call(request, _service().set_perms, link_id, perms)
+
+
+@router.post("/api/peer/links/{link_id}/share")
+async def peer_share(link_id: str, request: Request) -> JSONResponse:
+    """``{repo_path, branch?, program?, prompt?}`` → clone the repo into a fresh
+    shared folder and start its sandboxed session (any agent CLI with a
+    sandbox profile — see ``backend.peer.launch.allowed_providers``; 409
+    without a working sandbox)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().share,
+        link_id,
+        str(body.get("repo_path") or ""),
+        body.get("branch") or None,
+        str(body.get("program") or ""),
+        str(body.get("prompt") or ""),
+        status=201,
+    )
+
+
+@router.delete("/api/peer/links/{link_id}/share")
+async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
+    """Stop the shared session; ``?delete_files=1`` also deletes the folder."""
+    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
+    return await _peer_call(request, _service().unshare, link_id, delete_files=delete)
+
+
+@router.post("/api/peer/links/{link_id}/export")
+async def peer_export(link_id: str, request: Request) -> JSONResponse:
+    """``{target_repo, branch_name}`` — checkpoint the share, then fetch it into
+    your own repo as ``branch_name`` (must start with ``peer/``)."""
+    body = await _peer_body(request)
+    return await _peer_call(
+        request,
+        _service().export,
+        link_id,
+        str(body.get("target_repo") or ""),
+        str(body.get("branch_name") or ""),
+    )

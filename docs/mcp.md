@@ -396,7 +396,7 @@ skip-permissions**:
   (`openWorldHint` true).
 
 So an orchestrator launched **without** skip-permissions stops on a
-permission dialog for each message, spawn, answer and kill. Run orchestrators
+permission dialog for each message, spawn, answer and close/delete. Run orchestrators
 with skip-permissions (the default launch flags in Settings → Agent CLI, or
 the session's own launch flags) when they should work unattended. A worker
 starts with your default launch flags for its CLI plus any `launch_args` the
@@ -662,8 +662,9 @@ your user.
 
 ### `kill_session`
 
-`title`, `mode` (`close` default, or `delete`), `force` (default false). Only
-for sessions you manage, never your own.
+**Close or delete a session** (the name is historical; it stays so existing
+prompts keep working). `title`, `mode` (`close` default, or `delete`), `force`
+(default false). Only for sessions you manage, never your own.
 
 - `close` stops the agent and **keeps** the worktree and branch. The user can
   reopen it from Recently closed.
@@ -733,7 +734,7 @@ token, the network) is listed in `errors` instead of failing the call.
 | `agent` | the source's | agent CLI for this ticket (a provider name) |
 | `effort` | the source's | thinking-effort rung for this launch |
 | `note` | — | ≤ 4000 chars appended after the ticket text, under "Note from session `<you>`" |
-| `autopilot` | `off` | `off`, `commit`, `push`, `pr` or `merge` (merge needs `confirm_merge: true`) |
+| `autopilot` | `off` | `off` (or `leave`), `commit`, `push`, `pr` or `merge` (merge needs `confirm_merge: true`) |
 | `report_back` | true | append the report-back footer |
 | `wait_ready` | true | wait up to 45 s for the session to finish provisioning |
 
@@ -871,7 +872,7 @@ doesn't count.
 | Argument | Default | Meaning |
 |---|---|---|
 | `title` | you | yourself or a session you manage |
-| `depth` | required | `off` (disarm), `commit`, `push`, `pr` or `merge` |
+| `depth` | required | `off` or `leave` (disarm), `commit`, `push`, `pr` or `merge` |
 | `message` | — | the commit subject to use (else a placeholder replaced at commit time by one written from the final diff) |
 | `base` | — | the PR base branch |
 | `confirm_merge` | false | required for `merge` |
@@ -905,7 +906,7 @@ it surfaces to the user.
 |---|---|---|
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
 | `name` | suggested | the team run's name |
-| `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
+| `lane` | the user's Fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` or `off` (no commit; stored as `leave`), `commit`, `push`, `pr` (a PR per item) or `merge` |
 | `ask_first` | false | stop before each item's first commit / push and wait for the user's go (in MindFlock's bell) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |
@@ -922,7 +923,7 @@ tasks: [{id, ref, title, state}], warnings, note}`. A ticket that already has a
 session is added to the team run, not restarted (a warning says so).
 
 **The sessions are MindFlock's, not yours.** They have no parent, never enter
-your managed set, and don't report to you: you cannot answer, steer or kill
+your managed set, and don't report to you: you cannot answer, steer or close
 them, so an orchestrator cannot override what the run decided. The user sees
 them as an ordinary team run in the rail, with every row's status line leading
 with its Fast-track depth. Whatever the team run needs from them — an ask-first approval, a
@@ -1355,7 +1356,7 @@ What "manages" means under `children`:
   their descendants.
 
 Remote `device::title` rows and pending placeholder rows are never managed.
-Nothing may ever kill, answer or re-parent its own session.
+Nothing may ever close, delete, answer or re-parent its own session.
 
 **Shipping.** A session may ship **itself** (it decides when its own work is
 done) as well as the sessions it manages. A **merge**, the one step that
@@ -1796,10 +1797,10 @@ refuses a `from` starting with `peer:`.
 | MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
-| Fast-track | `backend/web/core/autopilot.py` and the driver in `server.py`; route `/api/instances/{title}/fast-track` |
+| Fast-track | `backend/web/core/autopilot.py` (store + decision) and `autopilot_driver.py` (loop + effects); route `/api/instances/{title}/fast-track` |
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
-| Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |
+| Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `backend/web/core/queue_driver.py` |
 | Fences + worker order | `backend/web/core/worker_order.py` (store + planner), `worker_order_driver.py` (fences, releases, the loop); per-session fences in `backend/config/red_zones.py`; routes `POST /api/instances/{t}/fence`, `GET/POST /api/instances/{t}/order` |
 | Lineage | `backend/web/core/lineage.py`; `/output`, `/dialog` and `/answer` helpers in `core/agent_io.py` |
 | Playbooks | `backend/mcp/playbooks.py`; routes `/api/playbooks*` in `server.py` |

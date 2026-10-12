@@ -158,23 +158,6 @@ class OnboardingAddon(Addon):
                         step["reason"] = "connected"
             return JSONResponse(plan)
 
-        @router.post("/onboarding/choice")
-        async def post_choice(request: Request) -> JSONResponse:
-            if not await _privileged(request.scope):
-                return _forbidden()
-            from backend import onboarding
-
-            body = await _json(request)
-            try:
-                choice = await asyncio.to_thread(
-                    onboarding.set_choice, str(body.get("choice") or "")
-                )
-            except ValueError as err:
-                return JSONResponse({"error": str(err)}, status_code=400)
-            return JSONResponse(
-                {"choice": choice, **(await asyncio.to_thread(self._plan, False))}
-            )
-
         # ---------------------------------------------------------------- #
         # Connect GitHub
         # ---------------------------------------------------------------- #

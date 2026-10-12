@@ -47,6 +47,16 @@ SHIP_DEPTHS = ("commit", "push", "pr", "merge")
 #: set_autopilot's choices ("off" disarms; the server's "agent" rung is for
 #: intake, not a live session).
 AUTOPILOT_DEPTHS = ("off",) + SHIP_DEPTHS
+#: What the depth inputs accept: the choices plus "leave", the lane routes'
+#: (and start_team_run's) word for Off — one Fast-track ladder, two spellings.
+AUTOPILOT_INPUTS = AUTOPILOT_DEPTHS + ("leave",)
+
+
+def _off(depth: str) -> str:
+    """``"leave"`` read as ``"off"``; every other rung unchanged."""
+    return "off" if depth == "leave" else depth
+
+
 SHIP_POLL_S = 2.0
 DEFAULT_SHIP_WAIT_S = 600
 MAX_SHIP_WAIT_S = 1500
@@ -108,7 +118,7 @@ D_SHIP = (
     "calling it again resumes. Refused while the target is mid-turn or on a "
     "dialog (shipping half-finished work): wait_for_session first, or use "
     "set_autopilot to ship when its turn ends; also refused while its "
-    "fast-track is armed. Merge only when the PR is "
+    "Fast-track is armed. Merge only when the PR is "
     "mergeable and CI is not failing or running. wait=true (default) waits up "
     "to timeout_s for the commit hooks and the push. Returns steps "
     "[{step, state, ...}] with the commit sha, the PR url; a failed step "
@@ -117,13 +127,13 @@ D_SHIP = (
     "{state: diverged, behind, authors} with ok=false: rebase first."
 )
 D_AUTOPILOT = (
-    "Arm MindFlock's fast-track on a session (yourself or one you manage): "
+    "Arm MindFlock's Fast-track on a session (yourself or one you manage): "
     "when its agent's turn ends it ships itself up to depth (commit, push, pr "
     "or merge) through the same commit/push/PR/merge buttons, retrying the "
     "pre-commit hooks Settings allow-lists and halting with a reason on anything that needs a "
-    "human. depth off disarms. Use it for a worker that is still working "
+    "human. depth off (or leave) disarms. Use it for a worker that is still working "
     "(ship_session refuses mid-turn). merge needs confirm_merge=true and waits "
-    "for CI. Returns the fast-track state {depth, state, step, reason, url}; "
+    "for CI. Returns the Fast-track state {depth, state, step, reason, url}; "
     "get_session shows it later."
 )
 D_TICKET = (
@@ -134,8 +144,8 @@ D_TICKET = (
     "text. ticket: its slug (sc-23588), id or URL as list_tickets shows it; "
     "add source when the ticket is not in that list. note adds your own "
     "instructions after the ticket text; the report-back footer is appended "
-    "when its CLI gets the MindFlock tools. autopilot (the fast-track depth) "
-    "arms shipping at creation (default off: the worker reports and you decide; merge needs "
+    "when its CLI gets the MindFlock tools. autopilot (the Fast-track depth; "
+    "leave = off) arms it at creation (default off: the worker reports and you decide; merge needs "
     "confirm_merge=true). It forks from the ticket repository's base branch, "
     "not your HEAD. Spawn limits apply. Then wait_for_session."
 )
@@ -198,7 +208,7 @@ S_SHIP = _obj(
 S_AUTOPILOT = _obj(
     {
         "title": _TITLE_OR_SELF,
-        "depth": {"type": "string", "enum": list(AUTOPILOT_DEPTHS)},
+        "depth": {"type": "string", "enum": list(AUTOPILOT_INPUTS)},
         "message": {"type": "string", "maxLength": 5000},
         "base": {"type": "string", "maxLength": 200},
         "confirm_merge": {"type": "boolean", "default": False},
@@ -223,7 +233,7 @@ S_TICKET = _obj(
         "note": {"type": "string", "maxLength": 4000},
         "autopilot": {
             "type": "string",
-            "enum": list(AUTOPILOT_DEPTHS),
+            "enum": list(AUTOPILOT_INPUTS),
             "default": "off",
         },
         "confirm_merge": {"type": "boolean", "default": False},
@@ -438,7 +448,7 @@ class ShipTools:
             # Two drivers on one shell double-commit and double-push: the
             # autopilot's lease is the server's, so it wins.
             raise ToolError(
-                "%r has its fast-track armed (depth %s, %s): it will ship itself. "
+                "%r has its Fast-track armed (depth %s, %s): it will ship itself. "
                 'Disarm it first with set_autopilot(title=%r, depth="off") to '
                 "ship by hand."
                 % (title, auto.get("depth"), auto.get("note") or "waiting", title)
@@ -818,7 +828,7 @@ class ShipTools:
     def set_autopilot(self, args: dict, ctx: ToolContext) -> dict:
         flock = self.flock()
         title = self._target(flock, args, "set_autopilot")
-        depth = args["depth"]
+        depth = _off(args["depth"])
         self.policy.require_ship(
             flock,
             title,
@@ -956,10 +966,10 @@ class ShipTools:
         flock = self.flock()
         me = flock.self_title
         self.policy.require_write(flock, "spawn_ticket_session")
-        autopilot = args.get("autopilot") or "off"
+        autopilot = _off(args.get("autopilot") or "off")
         if autopilot == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "autopilot=merge (fast-track to Merge) merges the worker's PR with no "
+                "autopilot=merge (Fast-track to Merge) merges the worker's PR with no "
                 "one looking: pass confirm_merge=true only when that was clearly asked for"
             )
         source, ticket_id, listed = self._resolve_ticket(

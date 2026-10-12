@@ -1,8 +1,10 @@
-"""The UI surfaces for multi-CLI ingestion + the local-model path.
+"""Multi-CLI ingestion + the local-model path: the backend half and the
+routes the UI calls.
 
-These read the built bundle the server actually serves, so a change to
-``frontend/src`` that was never rebuilt into ``backend/web/static/app.js`` fails
-here — the same contract the other ``test_frontend_*`` suites use.
+The route checks are a backend↔frontend contract, so they read the bundle the
+server actually serves AND the server's own route table. The UI surfaces (the
+per-source Agent picker, the Local model screen) are pinned against the source
+in ``frontend/src/__tests__/multiCliUi.test.ts``.
 """
 
 from starlette.testclient import TestClient
@@ -16,48 +18,28 @@ def _js() -> str:
     return client.get("/app.js").text
 
 
+def _paths() -> dict:
+    # Included routers are opaque in app.routes; the OpenAPI map flattens them.
+    return server.app.openapi()["paths"]
+
+
 # --------------------------------------------------------------------------- #
 # Per-source agent picker (multi-CLI ingestion).
 # --------------------------------------------------------------------------- #
-def test_ticketing_source_has_an_agent_picker():
-    js = _js()
-    assert '"tk-agent"' in js, "the per-source Agent select is missing"
-    assert '"agent"' in js
-    # The unset option must NAME the fallback, so "App default" is never a
-    # mystery value.
-    assert "App default" in js
-
-
 def test_agent_picker_reads_the_provider_list():
     """The choices come from the live provider registry, not a hardcoded list —
     otherwise a user-defined provider TOML could never be selected."""
     js = _js()
     assert "/api/providers" in js
+    assert "/api/providers" in _paths()
 
 
 # --------------------------------------------------------------------------- #
 # Local-model screen.
 # --------------------------------------------------------------------------- #
-def test_local_model_screen_is_registered():
-    js = _js()
-    assert '"localmodel"' in js and "Local model" in js
-
-
-def test_local_model_screen_has_its_controls():
-    js = _js()
-    for el in ("lm-enabled", "lm-runtime", "lm-base-url", "lm-model", "lm-test"):
-        assert f'"{el}"' in js, f"{el} is missing from the Local model screen"
-
-
 def test_local_model_screen_calls_the_probe_endpoint():
     assert "/api/settings/test/local-model" in _js()
-
-
-def test_local_model_screen_is_honest_about_claude():
-    """The one thing the privacy story cannot be quiet about: Claude Code has no
-    local route, so a session on it still uses the hosted API."""
-    js = _js()
-    assert "Anthropic API" in js
+    assert "/api/settings/test/local-model" in _paths()
 
 
 def test_local_model_probe_endpoint_is_served():

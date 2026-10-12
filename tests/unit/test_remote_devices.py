@@ -60,17 +60,10 @@ def test_title_namespace_roundtrip():
     ns = remote.join_title("otherbox", "myrepo")
     assert ns == "otherbox::myrepo"
     assert remote.is_remote_title(ns)
-    assert remote.split_title(ns) == ("otherbox", "myrepo")
 
 
 def test_local_title_is_not_remote():
     assert not remote.is_remote_title("myrepo")
-    assert remote.split_title("myrepo") == ("", "myrepo")
-
-
-def test_title_containing_separator_splits_on_first():
-    dev, bare = remote.split_title("otherbox::weird::title")
-    assert (dev, bare) == ("otherbox", "weird::title")
 
 
 # --------------------------------------------------------------------------- #

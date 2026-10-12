@@ -231,11 +231,13 @@ def test_actions_hit_the_rails_routes():
 
 def test_action_words_are_the_rails():
     js = _js()
-    assert '"Close", "keeps the worktree; reopen from Recently closed"' in js
+    assert '"Close", "stops the agent and moves it to Recently closed"' in js
     assert '"Closed — reopen from Recently closed"' in js
     assert '"Delete…"' in js
     assert '"Removes the worktree and branch"' in js
-    assert '"Pause", "stops the agent, keeps the worktree"' in js
+    # Pause and Close both stop the agent; where the session goes is what
+    # each one says.
+    assert '"Pause", "stops the agent; keeps it in the list to resume"' in js
     assert '"Resume session"' in js
     assert '"Restart"' in js
     # Restart is offered only where the rail offers it (offline, restartable).
@@ -289,8 +291,15 @@ def test_terminal_not_shell():
 
 def test_new_sheet_buttons_are_the_desktops():
     html, js = _html(), _js()
+    # The desktop's action row (NewSessionDialog's FooterActions).
     dialog = (
-        ROOT / "frontend" / "src" / "components" / "dialogs" / "NewSessionDialog.tsx"
+        ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "dialogs"
+        / "newSession"
+        / "FooterActions.tsx"
     ).read_text()
     run_start = (ROOT / "frontend" / "src" / "lib" / "runStart.ts").read_text()
     assert "Review details first" in dialog

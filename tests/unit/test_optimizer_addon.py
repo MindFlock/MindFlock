@@ -592,8 +592,5 @@ def test_sample_route_records_into_the_redirected_store(monkeypatch, tmp_path):
     rows = [json.loads(line) for line in p.read_text().splitlines()]
     claude = next(row for row in rows if row["p"] == "claude")
     assert claude["pct"] == 42.0 and claude["wpct"] == 7.0 and claude["src"] == "live"
-    assert (
-        client.get("/api/optimizer/samples?provider=claude").json()["samples"][0]["pct"]
-        == 42.0
-    )
+    assert store.read(provider="claude")[0]["pct"] == 42.0
     sampler._last_written.clear()

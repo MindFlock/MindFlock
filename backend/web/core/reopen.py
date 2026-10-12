@@ -32,7 +32,8 @@ in ``server.py`` (it needs the engine).
 from __future__ import annotations
 
 import os
-import subprocess
+
+from backend import gitutil
 
 #: Per-git-call ceiling. This runs while a panel request is open, so a hung git
 #: must degrade to "no workspace found" rather than hold the listing.
@@ -110,18 +111,9 @@ def _closed_index(cache: dict) -> tuple[dict, dict]:
 
 def _head_branch(path: str) -> str:
     """The branch ``path`` currently has checked out ("" if it can't be read)."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", path, "symbolic-ref", "--short", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return ""
-    if cp.returncode != 0:
-        return ""
-    return cp.stdout.decode("utf-8", "replace").strip()
+    return gitutil.git_out(
+        ["symbolic-ref", "--short", "HEAD"], path, timeout=_GIT_TIMEOUT
+    )
 
 
 def _still_holds(entry: dict, cache: dict | None = None) -> bool:
@@ -227,24 +219,11 @@ def _list_worktrees(base_repo: str) -> dict:
     path was named last. The base clone's own checkout is included and harmless:
     an intake item's feature branch is never what the base clone has out.
     """
-    try:
-        cp = subprocess.run(
-            ["git", "-C", base_repo, "worktree", "list", "--porcelain"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return {}
-    if cp.returncode != 0:
-        return {}
     out: dict = {}
-    current = ""
-    for line in cp.stdout.decode("utf-8", "replace").splitlines():
-        if line.startswith("worktree "):
-            current = line[len("worktree ") :].strip()
-        elif line.startswith("branch refs/heads/") and current:
-            out[line[len("branch refs/heads/") :].strip()] = current
+    for wt in gitutil.worktree_list(base_repo, timeout=_GIT_TIMEOUT) or ():
+        ref = str(wt.get("branch") or "")
+        if ref.startswith("refs/heads/") and wt["path"]:
+            out[ref[len("refs/heads/") :]] = wt["path"]
     return out
 
 

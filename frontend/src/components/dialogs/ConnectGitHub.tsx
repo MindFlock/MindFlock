@@ -22,7 +22,6 @@
  * neither). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { api } from "../../api/client";
 import { copyText } from "../../lib/clipboard";
 import {
@@ -43,6 +42,7 @@ import {
 import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
 import { notifyConnectionsChanged } from "../settings/screens/Connections";
+import { Modal } from "../Modal";
 
 interface PushCheck {
   ok: boolean | null;
@@ -70,26 +70,16 @@ function GhSignInWindow({ onClose }: { onClose(): void }) {
     }
     closeRef.current();
   };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      e.stopPropagation();
-      void close();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return createPortal(
-    <div
-      className="modal"
+  // Escape in the capture phase: it closes this window before the terminal
+  // inside it sees the key, and (topmost wins) never the dialog under it.
+  return (
+    <Modal
       id="gh-signin-dialog"
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) void close();
-      }}
+      portal
+      escapeCapture
+      onClose={() => void close()}
     >
       <div className="prov-login-panel">
         <div className="ws-head">
@@ -105,8 +95,7 @@ function GhSignInWindow({ onClose }: { onClose(): void }) {
         </div>
         <div className="prov-login-term" ref={hostRef} />
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 }
 
@@ -442,26 +431,15 @@ export function ConnectGitHubDialog() {
     window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
     return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
   }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      setOpen(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
   if (!open) return null;
-  return createPortal(
-    <div
-      className="modal"
+  return (
+    <Modal
       id="connect-github-dialog"
       role="dialog"
       aria-modal="true"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) setOpen(false);
-      }}
+      portal
+      escapeCapture
+      onClose={() => setOpen(false)}
     >
       <div className="connect-github-panel">
         <div className="ws-head">
@@ -473,7 +451,6 @@ export function ConnectGitHubDialog() {
         </div>
         <ConnectGitHub />
       </div>
-    </div>,
-    document.body
+    </Modal>
   );
 }

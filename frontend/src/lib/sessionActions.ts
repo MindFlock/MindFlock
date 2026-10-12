@@ -179,8 +179,8 @@ const closeUndo: string[] = [];
 
 /* --- Ending a session -------------------------------------------------------
  * Exactly two verbs, everywhere (row menu, ✕, Ctrl+W, palette, bulk bar):
- *   Close   POST /close    — stops the agent, KEEPS the worktree; the session
- *                            lands in Recently closed and can be reopened.
+ *   Close   POST /close    — stops the agent and moves the session to
+ *                            Recently closed (worktree kept); reopen it there.
  *   Delete  POST /cleanup  — removes the worktree and its branch. Asked first,
  *                            inline (the row's confirm strip, or a neutral card).
  * Both answer `{title, wiped, children}`; `children` are the worker sessions
@@ -228,8 +228,10 @@ function forgetLocally(title: string) {
   releaseTerms(title);
 }
 
-/** Close: stop the agent, keep the worktree. Reopen from Recently closed. */
-export async function killSession(title: string) {
+/** Close: stop the agent and move the session to Recently closed (its
+ * worktree is kept); reopen it from there. Not Pause, which leaves the
+ * session in the sidebar. */
+export async function closeSession(title: string) {
   if (!title) return;
   let r: EndResult | null = null;
   try {
@@ -510,9 +512,17 @@ export async function copySession(title: string) {
   }
 }
 
+/** Commit… — the table's Commit action (lib/sessionActionTable): opens the
+ * Commit dialog, whose submit calls commitNow. */
 export function commitSession(title: string) {
   if (!requireGit() || !title) return;
   useUi.getState().openDialogFor("commit", title);
+}
+
+/** POST /commit with the typed message. `proceedAnyway` is the second click
+ * past a red-zone warning (zones warn at a commit, they never block it). */
+export async function commitNow(title: string, message: string, proceedAnyway = false): Promise<void> {
+  await instApi(title, "/commit", { json: { message, ...(proceedAnyway ? { proceed_anyway: true } : {}) } });
 }
 
 /* --- Red-zone gate ----------------------------------------------------------
@@ -838,8 +848,10 @@ export function hideSession(title: string) {
   });
 }
 
-/** Pause: stops the agent, keeps the worktree (no commit, nothing removed).
- * Resume starts the agent again in the same worktree. */
+/** Pause: stops the agent and the session STAYS in the sidebar (status
+ * paused; no commit, nothing removed). Resume starts the agent again in the
+ * same worktree. Close is the other stop: it moves the session to Recently
+ * closed. */
 export async function pauseSession(title: string) {
   if (!title) return;
   try {

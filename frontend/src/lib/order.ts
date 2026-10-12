@@ -121,14 +121,14 @@ export function orderWorthShowing(o: WorkerOrder | null | undefined): o is Worke
 
 // --- A split's group: its stages ------------------------------------------------------
 
-export type StageState = "done" | "now" | "next" | "bad";
+export type RunStageState = "done" | "now" | "next" | "bad";
 
-export interface Stage {
+export interface RunStage {
   key: string;
   label: string;
   /** How its items run: "together", "one at a time" … */
   how: string;
-  state: StageState;
+  state: RunStageState;
   detail: string;
 }
 
@@ -140,13 +140,13 @@ const TERMINAL = new Set(["shipped", "integrated", "failed", "cancelled", "skipp
  * time) → Check → One PR. */
 export function runStages(
   run: Pick<RunDTO, "state" | "split" | "mode" | "concurrency" | "tasks" | "plan" | "check" | "release">
-): Stage[] {
+): RunStage[] {
   const tasks = (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
   const n = tasks.length;
   const sf = run.mode === "same_folder";
   const st = run.state;
   const planning = st === "planning" || st === "plan_ready";
-  const out: Stage[] = [];
+  const out: RunStage[] = [];
   if (run.split) {
     const pieces = run.plan?.pieces?.length || 0;
     out.push({

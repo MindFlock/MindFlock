@@ -5,7 +5,18 @@
  * newSession.test.ts pins the rest of it). */
 
 import { describe, expect, it } from "vitest";
-import SRC from "../components/dialogs/NewSessionDialog.tsx?raw";
+import DIALOG from "../components/dialogs/NewSessionDialog.tsx?raw";
+import PURE from "../components/dialogs/newSession.ts?raw";
+import DESCRIBE from "../components/dialogs/newSession/DescribeSection.tsx?raw";
+import TEMPLATES from "../components/dialogs/newSession/TemplatesStrip.tsx?raw";
+import FOLDER from "../components/dialogs/newSession/FolderPicker.tsx?raw";
+import BROWSER from "../components/dialogs/newSession/FolderBrowser.tsx?raw";
+import AGENT from "../components/dialogs/newSession/AgentAccount.tsx?raw";
+import WORKSPACE from "../components/dialogs/newSession/WorkspaceFold.tsx?raw";
+import PROMPT from "../components/dialogs/newSession/PromptFold.tsx?raw";
+import LAUNCH from "../components/dialogs/newSession/LaunchFold.tsx?raw";
+import FOOTER from "../components/dialogs/newSession/FooterActions.tsx?raw";
+import SUBMIT from "../lib/newSessionSubmit.ts?raw";
 import {
   baseBranchFields,
   enterAction,
@@ -14,6 +25,11 @@ import {
 } from "../components/dialogs/NewSessionDialog";
 import { forgetNewSessionProfile, lastNewSessionChoice, rememberNewSessionChoice } from "../state/store";
 
+
+/** The dialog's whole source: NewSessionDialog.tsx and the modules it was
+ * split into. A slice that has to stay within one piece of code reads that
+ * piece's own file. */
+const SRC = [DIALOG, PURE, DESCRIBE, TEMPLATES, FOLDER, BROWSER, AGENT, WORKSPACE, PROMPT, LAUNCH, FOOTER, SUBMIT].join("\n");
 
 function memKV(init: Record<string, string> = {}) {
   const data = { ...init };
@@ -30,8 +46,14 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   it("opens on the form: page 2 is the initial page and every opening lands there", () => {
     expect(SRC).toContain("useState(2)");
     expect(SRC).toContain("openedPage.current = prefill ? 1 : 2;");
-    // and the opening focus goes to Name, not to the sentence box
-    expect(SRC).toContain("openedPage.current === 1 ? describeRef.current : titleRef.current");
+    // The opening's caret goes to the describe box at the top of the form
+    // (the owner: "have the auto generate session as the first option instead
+    // of forcing me to click into it") — Name only after a failed create,
+    // whose reopen is about fixing the form.
+    expect(SRC).toContain("const el = shown ? (toTitle ? titleRef.current : describeRef.current) : null;");
+    const failed = DIALOG.slice(DIALOG.indexOf("if (failedReopen.current) {"), DIALOG.indexOf("setTab(\"session\");"));
+    expect(failed).toContain('openedFocus.current = "title";');
+    expect(failed).toContain('openedFocus.current = "describe";');
   });
 
   it("Enter in Name is the form's submit, never a describe call", () => {
@@ -44,7 +66,8 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   });
 
   it("the create goes through submit → postCreate, which POSTs /api/instances and never /api/session-plan", () => {
-    const submit = SRC.slice(SRC.indexOf("const submit = async () => {"), SRC.indexOf("const savePreset = () => {"));
+    const submit = SUBMIT.slice(SUBMIT.indexOf("const submit = async () => {"), SUBMIT.indexOf("return { failCreate"));
+    expect(submit).toContain("buildBody(");
     expect(submit).toContain("postCreate(");
     expect(submit).not.toContain("runDescribe");
     expect(submit).not.toContain("session-plan");
@@ -75,11 +98,23 @@ describe("fast path — Name → Enter creates, no model turn", () => {
   });
 });
 
-describe("describe — the secondary door on the form", () => {
-  it("is a button on the form that expands the box; its Enter runs the model turn with a visible thinking state and a Cancel", () => {
+describe("describe — first on the form, open by default", () => {
+  it("starts open on every opening: no click before typing", () => {
+    // Was useState(false) + a reset to false behind "Describe it instead…";
+    // the owner asked for the describe box to be the first option, open.
+    expect(DIALOG).toContain("const [describeOpen, setDescribeOpen] = useState(true);");
+    const reset = DIALOG.slice(DIALOG.indexOf("const prefill = useUi.getState().takeNewPrefill();"), DIALOG.indexOf("setBaseBranch(\"\");"));
+    expect(reset).toContain("setDescribeOpen(true);");
+    expect(DIALOG).not.toContain("setDescribeOpen(false);");
+    // It is the first section of the form.
+    expect(DIALOG.indexOf("<DescribeSection page={2}")).toBeLessThan(DIALOG.indexOf("<TemplatesStrip"));
+  });
+
+  it("can still be hidden to a row that reopens it; its Enter runs the model turn with a visible thinking state and a Cancel", () => {
     expect(SRC).toContain('id="new-describe-open"');
     expect(SRC).toContain("Describe it instead…");
-    const row = SRC.slice(SRC.indexOf('id="new-describe-open"'), SRC.indexOf('id="new-templates"'));
+    // The form's describe fold is the last thing DescribeSection.tsx draws.
+    const row = DESCRIBE.slice(DESCRIBE.indexOf('id="new-describe-open"'));
     expect(row).toContain('void runDescribe("fill")');
     expect(row).toContain("Thinking…");
     expect(row).toContain('id="new-describe-cancel"');
@@ -87,7 +122,7 @@ describe("describe — the secondary door on the form", () => {
   });
 
   it("keeps the parsing flow: a landed plan is applied by applyPlan and holds Create for a breath", () => {
-    const run = SRC.slice(SRC.indexOf("const runDescribe = async"), SRC.indexOf("const armInitRepo"));
+    const run = DESCRIBE.slice(DESCRIBE.indexOf("const runDescribe = async"), DESCRIBE.indexOf("return { applyPlan"));
     expect(run).toContain("applyPlan(a)");
     expect(run).toContain("submitArmAt.current = Date.now() + SUBMIT_ARM_MS");
     // the old escape hatch is gone with page 1: the form is already there
@@ -101,7 +136,7 @@ describe("describe — the secondary door on the form", () => {
 
 describe("Base branch — the Git & workspace fold's picker", () => {
   it("sends base_ref and base_branch together, for a new worktree only", () => {
-    const body = SRC.slice(SRC.indexOf("const buildBody = ("), SRC.indexOf("/** POST the create"));
+    const body = SUBMIT.slice(SUBMIT.indexOf("const buildBody = ("), SUBMIT.indexOf("/** POST the create"));
     expect(body).toContain("baseBranchFields(base, !!p.baseBranchRemote, !!p.continueBranch)");
     // a remote-tracking pick cuts from "origin/x" but compares against "x"
     expect(baseBranchFields("origin/x", true, false)).toEqual({ base_ref: "origin/x", base_branch: "x" });
@@ -116,7 +151,7 @@ describe("Base branch — the Git & workspace fold's picker", () => {
 
   it("is populated from GET /api/repos/branches for the folder in the field, and forgets the pick when the folder changes", () => {
     expect(SRC).toContain('"/api/repos/branches?path=" + encodeURIComponent(path)');
-    const eff = SRC.slice(SRC.indexOf("// The Base branch menu for the folder"), SRC.indexOf("const cancelDescribe"));
+    const eff = WORKSPACE.slice(WORKSPACE.indexOf("// The Base branch menu for the folder"), WORKSPACE.indexOf("export interface WorkspaceFoldProps"));
     expect(eff).toContain('setBaseBranch("")');
     expect(eff).toContain("looksLikePath(path)");
   });
@@ -124,7 +159,7 @@ describe("Base branch — the Git & workspace fold's picker", () => {
   it("draws the picker only for a plain worktree, with the server's own choice as the first row", () => {
     expect(SRC).toContain("worktreeMode && branches?.is_git");
     expect(SRC).toContain('id="new-base-branch"');
-    const pick = SRC.slice(SRC.indexOf('id="new-base-branch"'), SRC.indexOf("OUTSIDE the mode group"));
+    const pick = WORKSPACE.slice(WORKSPACE.indexOf('id="new-base-branch"'), WORKSPACE.indexOf("OUTSIDE the mode group"));
     expect(pick).toContain('<option value="">');
   });
 
@@ -136,7 +171,7 @@ describe("Base branch — the Git & workspace fold's picker", () => {
     });
     // a LOCAL pick never continues — "Work on x itself" is only for a pushed branch
     expect(baseBranchFields("feature/x", false, true)).toEqual({ base_ref: "feature/x", base_branch: "feature/x" });
-    const pick = SRC.slice(SRC.indexOf('id="new-base-branch"'), SRC.indexOf("OUTSIDE the mode group"));
+    const pick = WORKSPACE.slice(WORKSPACE.indexOf('id="new-base-branch"'), WORKSPACE.indexOf("OUTSIDE the mode group"));
     expect(pick).toContain("{canContinue && remoteBranchName(baseBranch) && (");
     expect(pick).toContain('id="new-base-mode-new"');
     expect(pick).toContain("Start a new branch from {baseBranch}");
@@ -164,7 +199,7 @@ describe("Base branch — the Git & workspace fold's picker", () => {
 
 describe("Templates strip — one list, always manageable", () => {
   it("shows Manage… whether or not a template exists, and opens the React dialog", () => {
-    const strip = SRC.slice(SRC.indexOf('id="new-templates"'), SRC.indexOf('id="new-title"'));
+    const strip = TEMPLATES.slice(TEMPLATES.indexOf('id="new-templates"'));
     expect(strip).toContain('id="new-templates-manage"');
     expect(strip).toContain('openDialogFor("templates", "new")');
     expect(strip).toContain("No templates yet");
@@ -184,7 +219,7 @@ describe("remembered account — only while it still exists", () => {
   });
 
   it("goes through setAccount, and forgets a removed account from the memory entry", () => {
-    const settle = SRC.slice(SRC.indexOf("settleProfile.current = () => {"), SRC.indexOf("}, [authProfiles]);"));
+    const settle = DIALOG.slice(DIALOG.indexOf("settleProfile.current = () => {"), DIALOG.indexOf("}, [authProfiles]);"));
     expect(settle).toContain('if (verdict === "apply") setAccount(pend.id, pend.program);');
     expect(settle).toContain('else if (verdict === "drop") forgetNewSessionProfile(pend.repo);');
     // the old unconditional restore is gone

@@ -63,7 +63,7 @@ import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
-from backend import git_auth_hints
+from backend import git_auth_hints, gitutil
 
 #: Where to make a token by hand: classic PAT, scopes pre-ticked.
 TOKEN_URL = (
@@ -176,14 +176,18 @@ def _gh_token() -> str:
     return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
-def resolve_token(toml_token: str = "") -> Tuple[str, str]:
+def resolve_token(toml_token: str = "", *, gh: bool = True) -> Tuple[str, str]:
     """``(source, token)`` — THE GitHub credential chain, in the one order
     every consumer uses: Settings (``github.token``, what Connect GitHub
     writes) → ``$GH_TOKEN`` → ``$GITHUB_TOKEN`` → ``gh auth token`` →
     ``toml_token`` (an operator's ``[github].token`` from ``config.toml``,
     deprecated: last, and warned about once). ``("none", "")`` when there is
     none. Sources: ``settings``, ``env:GH_TOKEN``, ``env:GITHUB_TOKEN``,
-    ``gh-cli``, ``config.toml``, ``none``."""
+    ``gh-cli``, ``config.toml``, ``none``.
+
+    ``gh=False`` skips the ``gh auth token`` rung (a subprocess) for probes
+    that run on every page load; the other rungs keep their order, so a
+    Settings or env answer is exactly the token the full chain uses."""
     toml_token = (toml_token or "").strip()
     if toml_token:
         _warn_toml_token_once()
@@ -196,12 +200,31 @@ def resolve_token(toml_token: str = "") -> Tuple[str, str]:
     for var in ("GH_TOKEN", "GITHUB_TOKEN"):
         if (os.environ.get(var) or "").strip():
             return "env:" + var, os.environ[var].strip()
-    tok = _gh_token()
+    tok = _gh_token() if gh else ""
     if tok:
         return "gh-cli", tok
     if toml_token:
         return SOURCE_CONFIG_TOML, toml_token
     return "none", ""
+
+
+def config_toml_token() -> str:
+    """The operator's ``[github].token`` from ``config.toml`` (``""`` when
+    there is none or the ingestion config won't load) — the deprecated last
+    rung of :func:`resolve_token`. Read the same way the PR buttons' token
+    (``github_pr.api_token``) reads it, so the Connect GitHub step, its Test
+    and git's credential helper see the credential the PR buttons use."""
+    try:
+        from backend.web.core.github_pr import _github_config
+
+        return str(getattr(_github_config(), "toml_token", "") or "").strip()
+    except Exception:  # noqa: BLE001 — ingestion is optional
+        return ""
+
+
+def resolve_full_chain(*, gh: bool = True) -> Tuple[str, str]:
+    """:func:`resolve_token` with the ``config.toml`` rung filled in."""
+    return resolve_token(config_toml_token(), gh=gh)
 
 
 def _warn_toml_token_once() -> None:
@@ -355,7 +378,7 @@ def first_configured_repo() -> str:
     return repos[0] if repos else ""
 
 
-def test_connection(toml_token: str = "") -> dict:
+def test_connection(toml_token: Optional[str] = None) -> dict:
     """The Connect GitHub dialog's **Test**: resolve the token the one way,
     ask GitHub who it is (a fresh ``GET /user``, never the cached answer —
     the whole point is "does the credential I have right now work"), then
@@ -363,7 +386,10 @@ def test_connection(toml_token: str = "") -> dict:
 
     ``ok`` is the whole verdict: a token resolved, GitHub accepted it, and
     the repo check passed (or there was no repo to check). ``detail`` is the
-    one-line human reading of it."""
+    one-line human reading of it. ``toml_token`` ``None`` reads it from
+    ``config.toml``."""
+    if toml_token is None:
+        toml_token = config_toml_token()
     source, tok = resolve_token(toml_token)
     repo = first_configured_repo()
     out = {
@@ -477,20 +503,11 @@ def import_gh_token() -> dict:
 def _git(
     *args: str, cwd: Optional[str] = None, timeout: float = 10.0
 ) -> Tuple[int, str, str]:
-    env = dict(os.environ, **git_auth_hints.NO_PROMPT_ENV)
-    try:
-        cp = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
+    cp = gitutil.git(args, cwd, timeout=timeout, env=git_auth_hints.NO_PROMPT_ENV)
+    if cp.timed_out:
         return 124, "", "timed out"
-    except OSError as err:
-        return 127, "", str(err)
+    if cp.not_run:
+        return 127, "", cp.stderr
     return cp.returncode, cp.stdout.strip(), cp.stderr.strip()
 
 
@@ -580,7 +597,7 @@ def setup_git_credential() -> dict:
             "error": "git already has a credential helper for GitHub (%s) — "
             "sign in through it, or remove it first" % existing,
         }
-    if resolve_token()[0] == "none":
+    if resolve_full_chain()[0] == "none":
         return {"ok": False, "helper": "", "error": "connect GitHub first"}
     exe = _mindflock_bin()
     if not exe:
@@ -612,7 +629,7 @@ def credential_answer(stdin_text: str) -> str:
         or req.get("protocol", "https") != "https"
     ):
         return ""
-    _source, tok = resolve_token()
+    _source, tok = resolve_full_chain()
     if not tok:
         return ""
     return "username=x-access-token\npassword=%s\n" % tok
@@ -713,7 +730,7 @@ def remembered_repo() -> str:
 # --------------------------------------------------------------------------- #
 def status(*, check_user: bool = True) -> dict:
     """Everything the "Connect GitHub" step shows. Never the token."""
-    source, tok = resolve_token()
+    source, tok = resolve_full_chain()
     gh = gh_path()
     gh_authed = bool(gh) and (source == "gh-cli" or bool(_gh_token()))
     user = fetch_user(tok) if (tok and check_user) else {}

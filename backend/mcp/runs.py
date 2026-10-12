@@ -18,7 +18,7 @@ word. Both tools are the lead's alone (checked by identity here and by the
 server).
 
 THE SESSIONS ARE THE SERVER'S, not the caller's. ``start_team_run`` creates
-sessions with no parent: the calling agent cannot answer, steer or kill them
+sessions with no parent: the calling agent cannot answer, steer or close them
 (they never enter ``policy.spawned_by_me``), so a chatty orchestrator cannot
 override what the run decided. It watches with ``get_run`` /
 ``wait_for_run`` and steers the GROUP with ``control_run`` — and only a group
@@ -28,7 +28,7 @@ it started itself (or one its user started), never another agent's.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from backend import client
 from backend.mcp.policy import Flock
@@ -45,6 +45,9 @@ __all__ = [
 ]
 
 LANES = ("leave", "commit", "push", "pr", "merge")
+#: What the lane input accepts: the lanes plus "off", set_autopilot's word for
+#: leave — one Fast-track ladder, two spellings. Stored as "leave".
+LANE_INPUTS = LANES + ("off",)
 WAIT_UNTIL = ("needs_you", "done", "change")
 CONTROL_ACTIONS = (
     "pause",
@@ -65,13 +68,13 @@ DEFAULT_RUN_WAIT_S = 600
 D_START_RUN = (
     "Start a TEAM RUN: MindFlock works on several things at once for your "
     "user, one session per item, and carries each one as far as its "
-    "fast-track says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
+    "Fast-track says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
     "IDs is that many tickets) and/or task lines (one thing per line). lane "
-    "(the fast-track): leave (no commit) | commit | push | pr (one PR per item) | merge (merges "
+    "(the Fast-track): leave or off (no commit) | commit | push | pr (one PR per item) | merge (merges "
     "once CI is green; needs confirm_merge=true); default: your user's "
-    "fast-track setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
+    "Fast-track setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
     "the rest wait in a queue. MindFlock owns these sessions, not you: you "
-    "cannot steer or kill them, and they do not report to you. It commits "
+    "cannot steer, close or delete them, and they do not report to you. It commits "
     "with messages written from each diff, retries failed hooks, nudges a "
     "stalled agent and surfaces only what needs your user (a prompt, a "
     "repeated failure, the budget). repo_path (default: your session's repo) "
@@ -154,7 +157,7 @@ S_START_RUN = _obj(
             "description": "ticket IDs / links and task lines",
         },
         "name": {"type": "string", "maxLength": 80},
-        "lane": {"type": "string", "enum": list(LANES)},
+        "lane": {"type": "string", "enum": list(LANE_INPUTS)},
         "ask_first": {
             "type": "boolean",
             "default": False,
@@ -349,9 +352,11 @@ class RunTools:
         flock = self.flock()
         self.policy.require_write(flock, "start_team_run")
         lane = args.get("lane")
+        if lane == "off":
+            lane = "leave"
         if lane == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "lane=merge (fast-track to Merge) merges every item's PR with no one "
+                "lane=merge (Fast-track to Merge) merges every item's PR with no one "
                 "looking: pass confirm_merge=true only when that was clearly asked for"
             )
         items = [str(i).strip() for i in args["items"] if str(i).strip()]
@@ -601,9 +606,3 @@ class RunTools:
                 "(git merge --no-ff <branch>), commit, and report again"
             )
         return out
-
-
-def run_of(resp: Optional[dict]) -> Optional[dict]:
-    """The ``run`` block of a response, or None."""
-    run = (resp or {}).get("run")
-    return run if isinstance(run, dict) else None

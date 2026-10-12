@@ -144,14 +144,6 @@ def join_title(device: str, title: str) -> str:
     return device + NS + title
 
 
-def split_title(ns_title: str) -> Tuple[str, str]:
-    """``"dev::title" -> ("dev", "title")``; a local title comes back as ``("", title)``."""
-    if NS not in (ns_title or ""):
-        return "", ns_title
-    dev, _, bare = ns_title.partition(NS)
-    return dev, bare
-
-
 # --------------------------------------------------------------------------- #
 # Settings / token store
 # --------------------------------------------------------------------------- #
@@ -429,14 +421,6 @@ def _fleet_id() -> str:
         return str(_fleet().fleet_id() or "")
     except Exception:  # noqa: BLE001 — discovery must never break on the fleet store
         return ""
-
-
-def _is_member(key: str) -> bool:
-    """Whether device ``key`` is a live member of this device's fleet."""
-    try:
-        return bool(key) and bool(_fleet().is_member(key))
-    except Exception:  # noqa: BLE001
-        return False
 
 
 def _fleet_key() -> str:

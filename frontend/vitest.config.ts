@@ -9,5 +9,9 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     setupFiles: ["./src/__tests__/setup.ts"],
+    // CSS is skipped by default, which turns `import X from "./foo.css?raw"`
+    // into "". The structural tests read stylesheets as text (`?raw` only — a
+    // component's plain `import "./Foo.css"` stays unprocessed).
+    css: { include: [/\.css\?raw$/] },
   },
 });

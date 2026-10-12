@@ -13,7 +13,7 @@
  *
  * Such a group has no header on the rail (it is a family under its lead), so
  * this panel is also its home for what a header's ⋯ holds: a queued piece's
- * Start now / Remove, and a finished group's "Copy summary". */
+ * Start now / Take out of run, and a finished group's "Copy summary". */
 
 import { useState } from "react";
 import type { Instance, PlanPiece, RunDTO, RunTask } from "../../api/types";
@@ -207,10 +207,10 @@ export function RunLeadPanel({
     setBusy(verb + ":" + t.id);
     const name = pieceLabel(t, run).name;
     void runAction(
-      verb === "skip" ? "Remove" : "Start now",
+      verb === "skip" ? "Take out of run" : "Start now",
       taskPath(id, t.id, verb),
       {},
-      (verb === "skip" ? "Removed " : "Starting ") + name,
+      verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name,
     ).finally(() => setBusy(""));
   };
   const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
@@ -589,7 +589,7 @@ export function RunLeadPanel({
                           title="Take it out of the team run — it never starts"
                           onClick={() => pieceAct(t, "skip")}
                         >
-                          Remove
+                          Take out of run
                         </button>
                       </>
                     )}

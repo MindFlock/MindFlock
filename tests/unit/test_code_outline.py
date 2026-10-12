@@ -1,6 +1,5 @@
-"""Code Atlas (``backend.web.core.code_outline``): levels (tiers, roles,
-interfaces, JVM source-set merge), outlines, the file view, search and entry
-points.
+"""Code Map outlines (``backend.web.core.code_outline``): outlines, the
+index, the file view and search.
 
 Every test builds a small REAL git repo under ``tmp_path`` (the index reads
 ``git ls-files`` and fingerprints the worktree with ``git status``), and the
@@ -86,247 +85,14 @@ def _isolate(tmp_path, monkeypatch):
     yield
 
 
-def _by_name(level: dict) -> dict:
-    return {n["name"]: n for n in level["nodes"]}
-
-
-# --------------------------------------------------------------------------- #
-# Tiering
-# --------------------------------------------------------------------------- #
-
-
-def test_tiering_breaks_a_two_node_cycle_at_its_lighter_edge():
-    # a→b ×3 and b→a ×1 (a lazy import back): FAS drops b→a, not a whole tier.
-    tier, back = co._tiering(
-        ["a", "b", "c", "d"], {("a", "b"): 3, ("b", "a"): 1, ("b", "c"): 1}
-    )
-    assert tier == {"a": 0, "b": 1, "c": 2, "d": -1}
-    assert back == [("b", "a")]
-
-
-def test_level_cycle_back_edge_standalone_and_extras(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "app/main.py": "from core import db, util\nfrom core.db import Db\n"
-            + _body(),
-            "app/views.py": "from core.db import Db\n" + _body(),
-            "app/cli.py": "from core.util import slug\n" + _body(),
-            # the lazy import back up: 1 edge against 3
-            "core/db.py": "class Db:\n    pass\n\ndef _late():\n    from app import views\n",
-            "core/util.py": "def slug(s):\n    return s\n" + _body(),
-            "core/__init__.py": "",
-            "app/__init__.py": "",
-            "tools/gen.py": "def main():\n    pass\n" + _body(),
-            "tests/test_db.py": "from core.db import Db\nfrom app.views import x\n",
-            "README.md": "# hi\n",
-            "tiny.py": "X = 1\n",
-        },
-    )
-    lvl = co.atlas(None, wt, "")
-    by = _by_name(lvl)
-    assert by["app"]["tier"] == 0 and by["core"]["tier"] == 1
-    assert lvl["tiers"] == 2
-    assert lvl["back_edges"] == [["core", "app"]]
-    assert by["app"]["deps_out"] == ["core"] and by["app"]["deps_in"] == ["core"]
-    assert by["tools"]["tier"] == -1 and by["tools"]["role"] == "code"
-    # tests / project files / trivial unimported files: the strip, not cards
-    assert by["tests"]["role"] == "tests" and by["tests"]["tier"] == -2
-    assert by["README.md"]["role"] == "files" and by["tiny.py"]["role"] == "files"
-    assert lvl["extras"]["tests"] == 1
-    assert {f["name"] for f in lvl["extras"]["files"]} == {"README.md", "tiny.py"}
-    # edges FROM tests never shape the layering; they are tested_by
-    assert "tests" not in by["core"]["deps_in"]
-    assert by["core"]["tested_by"] == 1 and by["app"]["tested_by"] == 1
-    assert lvl["crumbs"] == [{"path": "", "name": "r"}]
-
-
-def test_level_with_no_relations_is_a_plain_grid(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "modules/a/x.py": _body(),
-            "modules/b/y.py": _body(),
-            "modules/c/z.go": _body(),
-        },
-    )
-    lvl = co.atlas(None, wt, "modules")
-    assert lvl["tiers"] == 0
-    assert {n["tier"] for n in lvl["nodes"]} == {-1}
-    assert [c["name"] for c in lvl["crumbs"]] == ["r", "modules"]
-
-
-def test_single_child_chains_collapse(tmp_path):
-    wt = _repo(
-        tmp_path / "r", {"backend/web/x.py": _body(), "backend/web/y.py": _body()}
-    )
-    lvl = co.atlas(None, wt, "")
-    assert [(n["path"], n["name"]) for n in lvl["nodes"]] == [
-        ("backend/web", "backend/web")
-    ]
-    assert lvl["nodes"][0]["files"] == 2
-
-
-def test_a_test_named_file_that_code_imports_is_code(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "core/test_plans.py": "def add_step():\n    pass\n" + _body(),
-            "core/runner.py": "from core.test_plans import add_step\n" + _body(),
-            "core/__init__.py": "",
-        },
-    )
-    by = _by_name(co.atlas(None, wt, "core"))
-    assert by["test_plans.py"]["role"] == "code"
-    assert by["runner.py"]["deps_out"] == ["core/test_plans.py"]
-
-
-def test_node_cap_folds_the_rest_into_more(tmp_path, monkeypatch):
-    monkeypatch.setattr(co, "MAX_NODES", 5)
-    wt = _repo(tmp_path / "r", {f"m{i}.py": _body(50 + i) for i in range(8)})
-    lvl = co.atlas(None, wt, "")
-    assert len(lvl["nodes"]) == 5
-    assert lvl["hidden"] == 4
-    more = lvl["nodes"][-1]
-    assert more["kind"] == "more" and more["files"] == 4
-    # the biggest files keep their cards
-    assert [n["name"] for n in lvl["nodes"][:4]] == ["m7.py", "m6.py", "m5.py", "m4.py"]
-
-
 # --------------------------------------------------------------------------- #
 # Interface ranking
 # --------------------------------------------------------------------------- #
 
 
-def test_interface_ranks_external_use_private_last_then_fills(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "lib/core.py": (
-                "class Thing:\n    def run(self):\n        pass\n\n"
-                "def helper():\n    pass\n\n"
-                "def _private_fn():\n    pass\n\n"
-                "class Unused:\n    def a(self):\n        pass\n    def b(self):\n        pass\n"
-            ),
-            "lib/__init__.py": "",
-            "app/a.py": "from lib.core import Thing, _private_fn\n" + _body(),
-            "app/b.py": "from lib.core import Thing, helper\n" + _body(),
-            "tests/test_core.py": "from lib.core import Unused\n",
-        },
-    )
-    lib = _by_name(co.atlas(None, wt, ""))["lib"]
-    itf = [(i["name"], i["used_by"], i["scope"]) for i in lib["interface"]]
-    assert itf[:3] == [
-        ("Thing", 2, "external"),
-        ("helper", 1, "external"),
-        ("_private_fn", 1, "external"),
-    ]
-    # < 4 external: filled with declared-public symbols (the test's import of
-    # Unused never counts as use)
-    assert ("Unused", 0, "declared") in itf
-    assert lib["interface_total"] == 3
-    assert all(i["path"] == "lib/core.py" for i in lib["interface"])
-
-
-def test_interface_merges_a_reexport_by_name(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "pkg/__init__.py": "from pkg.impl import Engine\n",
-            "pkg/impl.py": "class Engine:\n    pass\n" + _body(),
-            "a/x.py": "from pkg import Engine\n" + _body(),
-            "b/y.py": "from pkg import Engine\n" + _body(),
-        },
-    )
-    pkg = _by_name(co.atlas(None, wt, ""))["pkg"]
-    top = pkg["interface"][0]
-    assert (top["name"], top["used_by"], top["path"]) == ("Engine", 2, "pkg/impl.py")
-
-
-def test_interface_routes_from_api_edges(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "backend/api.py": (
-                "from fastapi import APIRouter\n"
-                'router = APIRouter(prefix="/api/items")\n\n'
-                '@router.get("/{item_id}")\ndef get_item(item_id):\n    return 1\n'
-            ),
-            "frontend/a.ts": "export const a = () => fetch(`/api/items/${1}`)\n"
-            + _body(),
-            "frontend/b.ts": "export const b = () => fetch('/api/items/7')\n" + _body(),
-        },
-    )
-    lvl = co.atlas(None, wt, "")
-    by = _by_name(lvl)
-    assert by["frontend"]["tier"] == 0 and by["backend"]["tier"] == 1
-    item = by["backend"]["interface"][0]
-    assert (item["name"], item["kind"], item["used_by"]) == (
-        "GET /api/items/{item_id}",
-        "route",
-        2,
-    )
-    assert by["backend"]["entry"] == 1
-
-
 # --------------------------------------------------------------------------- #
 # JVM source-set merge
 # --------------------------------------------------------------------------- #
-
-
-def _jvm_repo(tmp_path) -> str:
-    b = "svc/src/main/java/com/acme/svc/"
-    t = "svc/src/test/java/com/acme/svc/"
-    return _repo(
-        tmp_path / "r",
-        {
-            "svc/build.gradle": "plugins {}\n",
-            b
-            + "App.java": "package com.acme.svc;\n\npublic class App {}\n"
-            + "//\n" * 45,
-            b
-            + "api/Ctl.java": (
-                "package com.acme.svc.api;\n\nimport com.acme.svc.model.Widget;\n\n"
-                "public class Ctl {\n  public Widget get(\n      long id) {\n"
-                "    return null;\n  }\n}\n"
-            ),
-            b
-            + "model/Widget.java": "package com.acme.svc.model;\n\npublic class Widget {}\n",
-            b
-            + "model/Gadget.java": (
-                "package com.acme.svc.model;\n\npublic class Gadget { Widget w; }\n"
-            ),
-            "svc/src/main/resources/application.yml": "a: 1\n",
-            t
-            + "api/CtlTest.java": "package com.acme.svc.api;\n\nclass CtlTest { Ctl c; }\n",
-        },
-    )
-
-
-def test_jvm_module_shows_its_packages_directly(tmp_path):
-    wt = _jvm_repo(tmp_path)
-    lvl = co.atlas(None, wt, "svc")
-    by = _by_name(lvl)
-    root = "svc/src/main/java/com/acme/svc"
-    assert by["api"]["path"] == root + "/api"
-    assert by["model"]["path"] == root + "/model"
-    assert by["App.java"]["kind"] == "file"
-    assert by["tests (src/test)"]["role"] == "tests"
-    assert by["resources"]["role"] == "files"
-    assert by["api"]["deps_out"] == [root + "/model"]
-    assert by["api"]["tier"] == 0 and by["model"]["tier"] == 1
-    assert by["model"]["tested_by"] == 0 and by["api"]["tested_by"] == 1
-    itf = by["model"]["interface"][0]
-    assert (itf["name"], itf["scope"]) == ("Widget", "external")
-    # The root level keeps the module (whose only dir child is src) as one node.
-    assert [n["name"] for n in co.atlas(None, wt, "")["nodes"]] == ["svc"]
-
-
-def test_jvm_crumbs_skip_the_source_set_chain(tmp_path):
-    wt = _jvm_repo(tmp_path)
-    lvl = co.atlas(None, wt, "svc/src/main/java/com/acme/svc/api")
-    assert [c["name"] for c in lvl["crumbs"]] == ["r", "svc", "api"]
-    assert lvl["crumbs"][1]["path"] == "svc"
 
 
 # --------------------------------------------------------------------------- #
@@ -512,17 +278,8 @@ def test_file_view_rejects_a_symlink_out_of_the_worktree(tmp_path, monkeypatch):
         co.file_view(object(), wt, "link.py")
 
 
-def test_atlas_rejects_escaping_paths_and_tolerates_missing_dirs(tmp_path):
-    wt = _repo(tmp_path / "r", {"a/x.py": _body()})
-    for bad in ("/abs", "../up", "a/../../up"):
-        with pytest.raises(ValueError):
-            co.atlas(None, wt, bad)
-    lvl = co.atlas(None, wt, "no/such/dir")
-    assert lvl["nodes"] == [] and lvl["path"] == "no/such/dir"
-
-
 # --------------------------------------------------------------------------- #
-# Search / entry points / budgets / caching
+# Search / budgets / caching
 # --------------------------------------------------------------------------- #
 
 
@@ -548,26 +305,6 @@ def test_search_ranks_exact_prefix_words_and_skips_nothing_useful(tmp_path):
     assert len(co.search(wt, "a", limit=2)["items"]) == 2
 
 
-def test_entry_points_drop_tests_and_sort_by_kind(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "svc/main.py": '@app.get("/api/x/y")\ndef h():\n    pass\n\nif __name__ == "__main__":\n    pass\n',
-            "tools/cli.py": "@cli.command()\ndef run():\n    pass\n",
-            "tests/test_app.py": '@app.get("/api/t/t")\ndef t():\n    pass\n',
-        },
-    )
-    ep = co.entry_points(wt)
-    assert [(e["kind"], e["path"]) for e in ep["items"]] == [
-        ("http", "svc/main.py"),
-        ("cli", "tools/cli.py"),
-        ("main", "svc/main.py"),
-    ]
-    assert ep["dropped"] == 1 and ep["total"] == 3
-    assert ep["counts"] == {"http": 1, "cli": 1, "main": 1}
-    assert ep["items"][2]["folder"] == "svc"
-
-
 def test_budget_goes_partial_then_completes(tmp_path, monkeypatch):
     wt = _repo(
         tmp_path / "r",
@@ -579,28 +316,25 @@ def test_budget_goes_partial_then_completes(tmp_path, monkeypatch):
     monkeypatch.setattr(co, "INFO_BUDGET_S", -1.0)
     monkeypatch.setattr(co, "_MIN_FRESH_INFO", 0)
     monkeypatch.setattr(co, "GRAPH_SHARE_S", -1.0)
-    lvl = co.atlas(None, wt, "")
-    assert lvl["partial"] is True
-    assert all(not n["deps_out"] for n in lvl["nodes"])
+    assert co.search(wt, "f")["partial"] is True
+    assert ("a/x.py", "b/y.py") not in co._index(wt)["edges"]
     monkeypatch.setattr(co, "INFO_BUDGET_S", 4.0)
     monkeypatch.setattr(co, "GRAPH_SHARE_S", 6.0)
     co.forget(wt)  # a partial index is only cached for a moment
-    lvl = co.atlas(None, wt, "")
-    assert lvl["partial"] is False
-    assert _by_name(lvl)["a"]["deps_out"] == ["b"]
-    assert co.entry_points(wt)["partial"] is False
+    assert co.search(wt, "f")["partial"] is False
+    assert ("a/x.py", "b/y.py") in co._index(wt)["edges"]
 
 
 def test_index_follows_the_worktree_content(tmp_path):
     wt = _repo(
         tmp_path / "r", {"a/x.py": _body(), "b/y.py": "def f():\n    pass\n" + _body()}
     )
-    first = co.atlas(None, wt, "")
-    assert co.atlas(None, wt, "") is first  # cached level
+    first = co._index(wt)
+    assert co._index(wt) is first  # cached index
     _write(Path(wt), "a/x.py", "from b.y import f\n" + _body())
-    second = co.atlas(None, wt, "")
+    second = co._index(wt)
     assert second is not first
-    assert _by_name(second)["a"]["deps_out"] == ["b"]
+    assert ("a/x.py", "b/y.py") in second["edges"]
     co.forget(wt)
     assert wt not in co._INDEX
     assert not any(k.startswith(os.path.join(wt, "")) for k in co._INFO_MEMO)
@@ -608,9 +342,7 @@ def test_index_follows_the_worktree_content(tmp_path):
 
 def test_public_functions_never_raise_on_a_non_repo(tmp_path):
     d = str(tmp_path / "nope")
-    assert co.atlas(None, d, "")["nodes"] == []
     assert co.search(d, "x")["items"] == []
-    assert co.entry_points(d)["items"] == []
     co.forget(d)
 
 
@@ -640,25 +372,6 @@ def test_outlines_stay_fast_on_pathological_files(rel, text):
     assert time.monotonic() - t0 < 3.0
 
 
-def test_drilling_into_a_test_tree_shows_its_files_as_cards(tmp_path):
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "src/app.py": "def run():\n    pass\n" + _body(),
-            "tests/helpers.py": "def make():\n    pass\n" + _body(),
-            "tests/test_app.py": "from helpers import make\nfrom src.app import run\n"
-            + _body(),
-        },
-    )
-    root = _by_name(co.atlas(None, wt, ""))
-    assert root["tests"]["role"] == "tests"
-    by = _by_name(co.atlas(None, wt, "tests"))
-    assert by["test_app.py"]["role"] == "code" and by["helpers.py"]["role"] == "code"
-    assert by["test_app.py"]["deps_out"] == ["tests/helpers.py"]
-    assert by["test_app.py"]["ext_out"] == 1
-    assert by["helpers.py"]["interface"][0]["name"] == "make"
-
-
 def test_quick_py_a_triple_quote_literal_opens_no_string():
     """A scanner that spells ``'\"\"\"'`` as a literal (code_outline itself)
     must not read the rest of its file as one docstring."""
@@ -681,63 +394,14 @@ def test_quick_py_a_triple_quote_literal_opens_no_string():
 
 def test_index_is_rebuilt_once_the_fingerprint_turns_unknown(tmp_path, monkeypatch):
     """An index built under a real fingerprint never expires; reusing it once
-    the fingerprint became unknown (>5000 dirty paths) froze the Atlas,
-    search and entry points on the old snapshot forever."""
+    the fingerprint became unknown (>5000 dirty paths) froze search and
+    the file view on the old snapshot forever."""
     wt = _repo(tmp_path / "r", {"pkg/a.py": "def alpha():\n    pass\n" + _body()})
     assert co.search(wt, "alpha")["items"]
     monkeypatch.setattr(co, "_content_fp", lambda wt: None)
     _write(Path(wt), "pkg/new_mod.py", "def gamma():\n    pass\n" + _body())
     names = [i["name"] for i in co.search(wt, "gamma")["items"]]
     assert "gamma" in names
-
-
-def test_a_non_jvm_src_with_a_test_dir_is_an_ordinary_directory(tmp_path):
-    """Vite: src/test/setup.ts next to src/components. The source-set merge
-    fired on any `src/test`, so the `src` card's count disagreed with its
-    drill-down, src/test showed twice and the `src` crumb vanished."""
-    wt = _repo(
-        tmp_path / "r",
-        {
-            "src/App.tsx": "export function App() {}\n" + "//\n" * 45,
-            "src/components/Button.tsx": "export function Button() {}\n" + "//\n" * 45,
-            "src/lib/util.ts": "export const x = 1;\n" + "//\n" * 45,
-            "src/test/setup.ts": "export {};\n",
-            "src/test/App.test.ts": "import { App } from '../App';\n",
-        },
-    )
-    root = co.atlas(None, wt, "")
-    assert [n["path"] for n in root["nodes"]] == ["src"]
-    assert root["nodes"][0]["files"] == 5
-    lvl = co.atlas(None, wt, "src")
-    assert sum(n["files"] for n in lvl["nodes"]) == 5  # the card's own count
-    assert [n["path"] for n in lvl["nodes"]].count("src/test") == 1
-    crumbs = [c["path"] for c in co.atlas(None, wt, "src/components")["crumbs"]]
-    assert crumbs == ["", "src", "src/components"]
-
-
-def test_a_jvm_source_set_s_other_children_get_their_own_nodes(tmp_path):
-    """Gradle src/integrationTest beside src/main/java: no catch-all `src`
-    card that drills into main/test again; the leftover has its own node
-    and keeps its breadcrumb."""
-    b = "src/main/java/com/acme/"
-    wt = _repo(
-        tmp_path / "r",
-        {
-            b + "Foo.java": "package com.acme;\npublic class Foo {}\n" + "//\n" * 45,
-            b + "Bar.java": "package com.acme;\npublic class Bar { Foo f; }\n",
-            "src/test/java/com/acme/FooTest.java": "package com.acme;\nclass FooTest {}\n",
-            "src/integrationTest/java/com/acme/ItTest.java": "package com.acme;\nclass ItTest {}\n",
-        },
-    )
-    top = co.atlas(None, wt, "")
-    paths = [n["path"] for n in top["nodes"]] + [
-        x["path"] for x in top["extras"]["files"]
-    ]
-    assert "src" not in paths
-    assert any(p.startswith("src/integrationTest") for p in paths), paths
-    it = next(p for p in paths if p.startswith("src/integrationTest"))
-    crumbs = [c["path"] for c in co.atlas(None, wt, it)["crumbs"]]
-    assert it in crumbs
 
 
 def test_js_full_outline_survives_regex_literals_and_templates():
@@ -820,9 +484,7 @@ def test_jvm_same_package_twin_in_a_sibling_module_is_not_a_dependency(tmp_path)
     ) in edges
 
 
-def test_paths_with_edge_whitespace_or_a_backslash_drill_and_open(
-    tmp_path, monkeypatch
-):
+def test_paths_with_edge_whitespace_or_a_backslash_open(tmp_path, monkeypatch):
     wt = _repo(
         tmp_path / "r",
         {
@@ -834,19 +496,11 @@ def test_paths_with_edge_whitespace_or_a_backslash_drill_and_open(
     )
     fork = _git("rev-parse", "HEAD", cwd=wt)
     monkeypatch.setattr(cm, "_server", lambda: _FakeSrv(fork))
-    for d in (" lead", "back\\slash"):
-        lvl = co.atlas(None, wt, d)
-        assert lvl["path"] == d
-        assert [n["path"] for n in lvl["nodes"]] + [
-            x["path"] for x in lvl["extras"]["files"]
-        ], d
     for f in (" lead/l.py", "back\\slash/b.py", " spacefile.py"):
         assert co.file_view(object(), wt, f)["loc"] > 0, f
-    # Windows-style input still resolves when no literal name exists.
-    assert co.atlas(None, wt, "normal\\")["path"] == "normal"
 
 
-def test_outside_symlinks_never_surface_in_the_atlas_search_or_entries(tmp_path):
+def test_outside_symlinks_never_surface_in_search(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret_module.py").write_text(
@@ -862,10 +516,9 @@ def test_outside_symlinks_never_surface_in_the_atlas_search_or_entries(tmp_path)
     (root / "inside.py").write_text("def ok_fn():\n    pass\n" + _body())
     (root / "link_in.py").symlink_to(root / "inside.py")
     wt = _repo(root, {})
-    blob = repr(co.atlas(None, wt, ""))
-    assert "secret_fn" not in blob and "API_TOKEN" not in blob
     assert co.search(wt, "secret")["items"] == []
-    assert not [e for e in co.entry_points(wt)["items"] if "hidden" in repr(e)]
+    assert co.search(wt, "API_TOKEN")["items"] == []
+    assert co.search(wt, "hidden_admin")["items"] == []
     # A link that stays inside the worktree still counts.
     assert {i["path"] for i in co.search(wt, "ok_fn")["items"]} >= {"inside.py"}
 

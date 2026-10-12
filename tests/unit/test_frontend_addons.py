@@ -45,5 +45,5 @@ def test_templates_has_no_vanilla_module():
     fe = tpl["frontend"][0]
     assert fe["module"] is None
     assert fe["builtin_ui"] is True
-    # the paste-into-all lives in the bundle's Prompts panel, as before
-    assert "All running sessions" in _js("/app.js")
+    # The paste-into-all lives in the SPA's Prompts panel, as before — pinned
+    # against the source in frontend/src/__tests__/promptsPanelTargets.test.ts.

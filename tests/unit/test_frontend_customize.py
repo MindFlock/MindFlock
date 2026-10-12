@@ -39,12 +39,15 @@ def test_customize_is_the_sidebar_picker_and_prompts_is_its_own_dialog():
     assert "PromptsPanel" not in src
     code = _code("components/customize/CustomizeDialog.tsx")
     assert "Outbox" not in code and '"outbox"' not in code
-    assert "e.defaultPrevented" in src
+    # Both close through the shared Modal shell, which leaves an Escape some
+    # child already claimed (defaultPrevented) alone.
+    assert "<Modal" in src
+    assert "e.defaultPrevented" in _src("components/Modal.tsx")
     dialog = _src("components/dialogs/PromptsDialog.tsx")
     assert "export function PromptsDialog()" in dialog
     assert 'id="prompts-dialog"' in dialog
     assert 'useUi((s) => s.openDialog === "prompts")' in dialog
-    assert "e.defaultPrevented" in dialog
+    assert "<Modal" in dialog
     app = _code("App.tsx")
     assert "<CustomizeDialog />" in app and "<PromptsDialog />" in app
     assert "OutboxDialog" not in app
@@ -220,7 +223,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "New session…"',
         'label: "Open Intake"',
         'label: "Customize…"',
-        "label: `Rename… — ${t}`",
+        "label: `${actionLabel(id, c)} — ${t}`",
         'label: "Focus: " + name',
     ]
     at = [src.index(x) for x in order]
@@ -229,9 +232,9 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Prompts…", hint: "manage saved prompts"',
         'label: "Assistant agent file…"',
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
-        "label: `Open PR — ${t}`",
-        "label: `Merge PR — ${t}`",
-        'label: "Verify — check what shipped"',
+        '  "pr",\n',
+        '  "merge",\n',
+        'label: "Verify — check what was pushed"',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label
@@ -318,7 +321,8 @@ def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
 
 
 def test_new_page_two_templates_strip_says_what_a_template_is():
-    src = _src("components/dialogs/NewSessionDialog.tsx")
+    # The strip moved out of NewSessionDialog.tsx into its own component.
+    src = _src("components/dialogs/newSession/TemplatesStrip.tsx")
     assert (
         '<span title="Saved New-session setups — one list on every device">Templates</span>'
         in src

@@ -1,7 +1,7 @@
 """``GET /api/instances/{title}/output`` and ``POST /api/instances/{title}/answer``.
 
 The control surface an orchestrator agent reads and steers a worker through.
-tmux and the providers are stubbed at the server seams (``_run_capped``,
+tmux and the providers are stubbed at the seams (``proc.run_capped``,
 ``_live_session_name``, ``providers.resolve``, ``_agent_transcript_text``,
 ``_agent_activity``), so nothing here starts a real session.
 """
@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from backend.web import server
 from backend.web.core import agent_io
 from backend.web.server import app
+from backend.web.core import proc
 
 client = TestClient(app)
 
@@ -32,7 +33,7 @@ class _Inst:
 
 
 class _Tmux:
-    """A recording stand-in for ``server._run_capped`` (tmux only)."""
+    """A recording stand-in for ``proc.run_capped`` (tmux only)."""
 
     def __init__(self):
         self.calls: list = []
@@ -65,6 +66,7 @@ def env(monkeypatch):
     monkeypatch.setattr(server.ENGINE, "instances", instances)
     tm = _Tmux()
     monkeypatch.setattr(server, "_run_capped", tm)
+    monkeypatch.setattr(proc, "run_capped", tm)
     monkeypatch.setattr(server, "_live_session_name", lambda n: n if tm.alive else None)
     monkeypatch.setattr(agent_io.time, "sleep", lambda s: None)
     monkeypatch.setattr(server, "_budget_locked", lambda t: False)
@@ -238,6 +240,7 @@ def test_output_screen_capture_failure_is_500(env, monkeypatch):
         return subprocess.CompletedProcess(args, 1, "", "no pane")
 
     monkeypatch.setattr(server, "_run_capped", _fail)
+    monkeypatch.setattr(proc, "run_capped", _fail)
     r = client.get("/api/instances/w/output?view=screen")
     assert r.status_code == 500 and r.json()["error"] == "no pane"
 

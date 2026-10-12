@@ -3,8 +3,9 @@
  *  - the Ctrl+W / Delete guard: any dialog or overlay (store slot OR a visible
  *    [role=dialog] / .modal / .dialog / .palette / [data-modal] in the DOM),
  *    and any typing target (inputs, contenteditable, a terminal) stands it down
- *  - the row menu's two end verbs: Close (keeps the worktree) and Delete… (an
- *    inline confirm strip), and no "End" / "Delete + wipe" wording anywhere
+ *  - the row menu's two end verbs: Close (moves it to Recently closed) and
+ *    Delete… (an inline confirm strip), Pause saying it stays in the sidebar,
+ *    and no "End" / "Delete + wipe" wording anywhere
  *  - the 409 "folder in use" card, and the "N worker sessions kept running" note
  *  - no native confirm() / prompt() / alert() anywhere under src/ — the desktop
  *    app implements none of them, so each one is a button that silently does
@@ -21,6 +22,8 @@ import { ApiError } from "../api/client";
 import { KEYMAP, OVERLAY_SELECTOR, endShortcutAllowed, modalOpen, overlayOpen, typingTarget } from "../lib/keymap";
 import { useUi, type DialogName } from "../state/store";
 import { folderInUse, folderInUseText, keptRunningText } from "../lib/sessionActions";
+import { SESSION_ACTIONS, actionCtx, actionNote } from "../lib/sessionActionTable";
+import type { Instance } from "../api/types";
 
 /** Every module the app ships (never the tests), source keyed by its path
  * under src/. Vite's glob rather than a directory walk: this project installs
@@ -259,14 +262,21 @@ describe("Ctrl+W / Delete guard: typing targets", () => {
 describe("the row menu ends a session in exactly two ways", () => {
   const row = read("components/sidebar/SidebarRow.tsx");
 
-  it("Close keeps the worktree and says so under the verb", () => {
-    expect(row).toMatch(/✕ Close<span className="kbd">Ctrl\+W<\/span>/);
-    expect(row).toContain("keeps the worktree; reopen from Recently closed");
-    expect(row).toMatch(/className="end-close"[\s\S]{0,400}killSession\(title\)/);
+  it("Close says where the session goes, under the verb", () => {
+    // The words are the action table's (the palette and Ctrl+W read the same row).
+    expect(SESSION_ACTIONS.close.short).toBe("Close");
+    expect(SESSION_ACTIONS.close.keys).toBe("Ctrl+W");
+    expect(SESSION_ACTIONS.close.note).toBe("stops the agent and moves it to Recently closed");
+    expect(row).toContain(
+      '✕ {SESSION_ACTIONS.close.short}<span className="kbd">{SESSION_ACTIONS.close.keys}</span>'
+    );
+    expect(row).toContain('<span className="end-sub">{actionNote("close", ctx)}</span>');
+    expect(row).toMatch(/className="end-close"[\s\S]{0,400}sessionAction\("close"\)\.run\(title\)/);
   });
 
   it("Delete… asks on an inline strip with Delete / Cancel — no confirm()", () => {
-    expect(row).toMatch(/>\s*Delete…\s*<\/button>/);
+    expect(SESSION_ACTIONS.delete.short).toBe("Delete…");
+    expect(row).toMatch(/>\s*\{SESSION_ACTIONS\.delete\.short\}\s*<\/button>/);
     expect(row).toContain("Removes the worktree and branch");
     const armed = row.slice(row.indexOf("deleteArmed ? ("), row.indexOf("end-delete"));
     expect(armed).toMatch(/className="danger"/);
@@ -278,12 +288,24 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(armed).toContain("deleteSession(title, true)");
   });
 
-  it("Pause says what it does", () => {
-    expect(row).toContain('"Pause (stops the agent, keeps the worktree)"');
+  it("Pause and Close both stop the agent, and each says where the session goes", () => {
+    expect(SESSION_ACTIONS.pause.note).toBe("stops the agent; keeps it in the sidebar to resume");
+    expect(SESSION_ACTIONS.pause.note).not.toBe(SESSION_ACTIONS.close.note);
+    // The row draws the note under the verb, as Close does.
+    expect(row).toMatch(/className="end-pause"[\s\S]{0,400}<span className="end-sub">\{actionNote\(pauseId, ctx\)\}<\/span>/);
+    // Resume replaces Pause on a paused session; a shared folder can't pause.
+    const at = (o: Partial<Instance>) =>
+      actionCtx("s", { inst: { title: "s", ...o } as Instance, caps: { git: true, tailscale: true, ticketing: true } });
+    expect(SESSION_ACTIONS.pause.enabled(at({ status: "ready" }))).toBe(true);
+    expect(SESSION_ACTIONS.resume.enabled(at({ status: "ready" }))).toBe(false);
+    expect(SESSION_ACTIONS.pause.enabled(at({ status: "paused" }))).toBe(false);
+    expect(SESSION_ACTIONS.resume.enabled(at({ status: "paused" }))).toBe(true);
+    expect(SESSION_ACTIONS.pause.enabled(at({ status: "ready", peer_share: true }))).toBe(false);
+    expect(actionNote("resume", at({ status: "paused" }))).toBe("starts the agent again in the same worktree");
   });
 
   it("the ✕ button is Close, and no 'End' / 'Delete + wipe' wording survives anywhere in the frontend", () => {
-    expect(row).toMatch(/title=\{[\s\S]{0,200}"Close session — keeps the worktree/);
+    expect(row).toMatch(/title=\{[\s\S]{0,200}"Close session — stops the agent and moves it to Recently closed/);
     const offenders: string[] = [];
     for (const rel of codeFiles()) {
       const s = read(rel);
@@ -295,11 +317,14 @@ describe("the row menu ends a session in exactly two ways", () => {
 
   it("the palette offers Close, Delete…, and Pause or Resume", () => {
     const pal = read("components/palette/CommandPalette.tsx");
-    expect(pal).toContain("`Close session — ${t}`");
-    expect(pal).toContain("`Delete session… — ${t}`");
-    expect(pal).toContain("`Pause session — ${t}`");
-    expect(pal).toContain("`Resume session — ${t}`");
-    expect(pal).toMatch(/inst\.status === "paused"\s*\)?\s*\n?\s*acts\.push\(\{ label: `Resume session/);
+    const list = pal.slice(pal.indexOf("const PALETTE_ACTIONS"), pal.indexOf("];", pal.indexOf("const PALETTE_ACTIONS")));
+    for (const id of ['"close"', '"delete"', '"pause"', '"resume"']) expect(list).toContain(id);
+    expect(pal).toContain("label: `${actionLabel(id, c)} — ${t}`");
+    expect(pal).toContain("if (!sessionAction(id).enabled(c)) continue;");
+    expect(SESSION_ACTIONS.close.label).toBe("Close session");
+    expect(SESSION_ACTIONS.delete.label).toBe("Delete session…");
+    expect(SESSION_ACTIONS.pause.label).toBe("Pause session");
+    expect(SESSION_ACTIONS.resume.label).toBe("Resume session");
   });
 
   it("the bulk bar is reachable from the rail rows and asks inline with the same two verbs", () => {
@@ -318,7 +343,7 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(bar).toContain("Removes their worktrees and branches");
     expect(bar).toContain("Keeps their worktrees");
     expect(strip(bar)).not.toMatch(/\bconfirm\(/);
-    // The rail keeps its rows checkbox-free (tests/unit/test_frontend_bulk.py).
+    // The rail keeps its rows checkbox-free (frontend/src/__tests__/bulkBar.test.ts).
     expect(bar).not.toContain('className="bulk-cb"');
   });
 

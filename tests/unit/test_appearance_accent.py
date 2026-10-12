@@ -2,7 +2,12 @@
 mobile page. Palettes live in theme.css (html[data-accent=…] accent trio,
 html[data-surface=…] surface sets with a light-mode counterpart each); the
 choice persists server-side as ui.accent / ui.surface so all devices match,
-with localStorage (cs_accent / cs_surface) as a pre-paint cache."""
+with localStorage (cs_accent / cs_surface) as a pre-paint cache.
+
+The React screen, the top-bar glyphs and the base stylesheet are pinned in
+vitest (frontend/src/__tests__/appearanceThemes.test.ts); this file keeps what
+is served as-is (theme.css, mobile.css, mobile.js, the page heads) and the
+settings round trip."""
 
 import re
 
@@ -49,41 +54,14 @@ ACCENTS = COLORS
 SURFACES = COLORS + SURFACE_ONLY
 MULTI = tuple(s for s in SURFACES if s not in QUIET)
 
-# The region tokens a multi-color set steers, and the app-palette copies that let
-# a popover floating out of a recolored region opt back out. Both halves are
-# aliased to the globals on :root, so single-hue sets are unaffected.
+# The region tokens a multi-color set steers. They are aliased to the globals on
+# :root (pinned with the base stylesheet in frontend/src/__tests__/
+# appearanceThemes.test.ts), so single-hue sets are unaffected.
 REGION_VARS = tuple(
     "--%s-%s" % (region, part)
     for region in ("topbar", "sidebar")
     for part in ("bg", "hi", "border", "text", "muted")
 )
-APP_ALIAS_VARS = (
-    "--app-panel",
-    "--app-panel-2",
-    "--app-border",
-    "--app-text",
-    "--app-muted",
-)
-
-
-def test_appearance_screen_and_nav_present():
-    html = client.get("/").text
-    assert "Appearance" in client.get("/app.js").text  # nav item
-    assert '"appearance"' in client.get("/app.js").text  # screen
-    assert '"accent-swatches"' in client.get("/app.js").text
-    assert '"surface-swatches"' in client.get("/app.js").text
-
-
-def test_swatch_per_preset_plus_defaults():
-    html = client.get("/").text
-    # Default swatches clear the override (empty choice = built-in look).
-    assert '"data-accent-choice"' in client.get("/app.js").text
-    assert '"data-surface-choice"' in client.get("/app.js").text
-    js = client.get("/app.js").text
-    for name in ACCENTS:
-        assert '"%s"' % name in js, name
-    for name in SURFACES:
-        assert '"%s"' % name in js, name
 
 
 def test_theme_css_defines_accent_trio_per_preset():
@@ -200,73 +178,6 @@ def test_every_set_is_legible_in_every_region():
             )
 
 
-def _button_glyph_markup(js, marker, span):
-    """A button's own markup plus the body of any *Glyph component it renders.
-
-    A glyph used in more than one place gets hoisted into its own component, so
-    the <svg> stops being inline next to the button — resolve that one hop
-    before checking what paints it.
-
-    The call form is bundler-dependent and must not be: Rollup emitted
-    `jsxRuntimeExports.jsx(Foo, ...)`, Rolldown emits `(0, ns.jsx)(Foo, ...)`.
-    The optional `)` matches both, so a toolchain bump cannot silently turn this
-    check into a no-op."""
-    win = js.split(marker, 1)[1][:span]
-    parts = [win]
-    for name in sorted(set(re.findall(r"jsx\)?\((\w+Glyph)\b", win))):
-        decl = "function %s(" % name
-        assert decl in js, "%s renders <%s/> but it is not in the bundle" % (
-            marker,
-            name,
-        )
-        parts.append(js.split(decl, 1)[1][:1200])
-    return "\n".join(parts)
-
-
-def test_top_bar_glyphs_are_monochrome_not_emoji():
-    """An emoji paints its own colors, so 🌙/🔔 vanish on Goldfinch's lemon bar
-    or Toucan's amber one. Both are currentColor SVGs, which follow the top bar's
-    rebound --text."""
-    js = client.get("/app.js").text
-    theme_btn = _button_glyph_markup(js, '"theme-btn"', 1200)
-    assert "🌙" not in theme_btn and "☀" not in theme_btn
-    assert '"currentColor"' in theme_btn
-    bell = _button_glyph_markup(js, '"notif-btn"', 1600)
-    assert "🔔" not in bell
-    assert '"currentColor"' in bell
-
-
-def test_region_tokens_alias_the_globals_and_reach_the_regions():
-    css = client.get("/style.css").text
-    root = css.split(":root {", 1)[1].split("}", 1)[0]
-    for var in REGION_VARS + APP_ALIAS_VARS:
-        assert var + ":" in root, "base :root missing %s" % var
-    # Aliases must NOT be repeated in .light: a custom property resolves its
-    # var()s against the value that won on the same element, so one declaration
-    # on :root already picks up the light palette. A copy there would rot.
-    light = css.split(".light {", 1)[1].split("}", 1)[0]
-    for var in REGION_VARS:
-        assert var + ":" not in light, ".light re-declares %s" % var
-    # Each region rebinds the generic surface tokens on itself (regions.css) —
-    # that's what makes every control inside it follow the region hue with no
-    # per-component CSS.
-    for region in ("topbar", "sidebar"):
-        block = re.search(
-            r"#%s\s*\{([^}]*--panel:\s*var\(--%s-bg\)[^}]*)\}" % (region, region), css
-        )
-        assert block, "regions.css does not rebind --panel on #%s" % region
-        for generic, token in (
-            ("--panel-2", "hi"),
-            ("--border", "border"),
-            ("--text", "text"),
-            ("--muted", "muted"),
-        ):
-            want = "%s: var(--%s-%s)" % (generic, region, token)
-            assert want in block.group(1), "#%s missing `%s`" % (region, want)
-    # Popovers that float out of a recolored region opt back into the app palette.
-    assert "--panel: var(--app-panel)" in css
-
-
 def test_both_pages_link_theme_css_and_preapply_cached_choice():
     for page in ("/", "/m"):
         html = client.get(page).text
@@ -274,18 +185,6 @@ def test_both_pages_link_theme_css_and_preapply_cached_choice():
         # Inline <head> script applies the cached choice — no flash on load.
         assert "localStorage.getItem('cs_accent')" in html, page
         assert "localStorage.getItem('cs_surface')" in html, page
-
-
-def test_desktop_base_palette_is_themable():
-    css = client.get("/style.css").text
-    # :root and .light must carry the accent companions + terminal vars so
-    # rgba() glows, light-mode deep text, and xterm all resolve per theme.
-    for scope in (":root {", ".light {"):
-        block = css.split(scope, 1)[1].split("}", 1)[0]
-        for var in ("--accent-rgb:", "--accent-deep:", "--term-bg:", "--term-fg:"):
-            assert var in block, "%s missing %s" % (scope, var)
-    # No accent-purple glow may remain hard-coded (would ignore the theme).
-    assert "rgba(125, 86, 244" not in css
 
 
 def test_mobile_css_is_themable():
@@ -307,26 +206,6 @@ def test_mobile_css_is_themable():
     assert "#14171f" not in body
 
 
-def test_js_reads_live_vars_and_syncs_server():
-    js = client.get("/app.js").text
-    # Terminal canvas/cursor + favicon follow the live CSS vars.
-    assert "function cssVar(" in js
-    assert '"--term-bg"' in js and '"--term-fg"' in js
-    assert "function cssVar" in js
-    # Swatches persist to the server (all devices) and the local cache.
-    assert "/api/settings" in js and '"cs_surface"' in js
-    mjs = client.get("/mobile.js").text
-    assert "function termTheme()" in mjs and '"--term-bg"' in mjs
-    assert '"/api/settings"' in mjs  # pulls the server-chosen look
-    assert "cs_surface" in mjs  # caches it for pre-paint apply
-
-
-def test_no_legacy_preset_map_remains():
-    """The retired-name migration map is gone from both bundles."""
-    for path in ("/app.js", "/mobile.js"):
-        assert "LEGACY_PRESETS" not in client.get(path).text, path
-
-
 def test_ui_settings_persist_accent_and_surface(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
     settings_mod.invalidate()
@@ -341,3 +220,18 @@ def test_ui_settings_persist_accent_and_surface(tmp_path, monkeypatch):
         assert got.ui.accent == "" and got.ui.surface == ""
     finally:
         settings_mod.invalidate()
+
+
+def test_mobile_js_reads_live_vars_and_syncs_server():
+    mjs = client.get("/mobile.js").text
+    assert "function termTheme()" in mjs and '"--term-bg"' in mjs
+    assert '"/api/settings"' in mjs  # pulls the server-chosen look
+    assert "cs_surface" in mjs  # caches it for pre-paint apply
+    # The retired-name migration map is gone from the hand-written page too.
+    assert "LEGACY_PRESETS" not in mjs
+
+
+def test_bundle_saves_the_look_to_a_route_the_server_serves():
+    """Contract: swatches persist through /api/settings (all devices)."""
+    assert "/api/settings" in client.get("/app.js").text
+    assert "post" in server.app.openapi()["paths"]["/api/settings"]

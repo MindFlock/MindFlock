@@ -9,11 +9,12 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
+import { commitNow, redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { pickFastTrack, type Lane } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
 import { FastTrackChoice } from "./FastTrackChoice";
+import { Modal } from "../Modal";
 
 /** What "Then fast-track to" offers once this commit has landed: Commit itself
  * is what the press does, so the first choice is Off — commit and stop. */
@@ -78,19 +79,6 @@ export function CommitDialog() {
       cancelled = true;
     };
   }, [open, target]);
-
-  // Escape closes (vanilla: global Escape chain in 170-new-session.js).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeDialog();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
 
   if (!open) return null;
 
@@ -163,7 +151,7 @@ export function CommitDialog() {
     // had written in the meantime, under the message typed before all of it. You
     // pressed Commit; the commit has to happen.
     const commit = async (proceed: boolean) => {
-      await instApi(title, "/commit", { json: { message: m, ...(proceed ? { proceed_anyway: true } : {}) } });
+      await commitNow(title, m, proceed);
       // Then fast-track the rest — the ⏩ button flips at once and says so.
       if (chosen.lane !== "leave")
         await pickFastTrack(
@@ -200,19 +188,9 @@ export function CommitDialog() {
   }
 
   return (
-    <div
-      id="commit-dialog"
-      className="modal"
-      // Clicking the backdrop dismisses, like Escape — reaching for Cancel to
-      // put away a dialog you're already looking away from is a wasted trip.
-      // mousedown, not click: a click whose press began inside the form and
-      // whose release landed out here is a text selection that overshot, and
-      // closing on it would throw away the message being selected. Only the
-      // backdrop itself counts, never a bubbled event from the form.
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    // Backdrop press and Escape dismiss (the Modal shell): reaching for Cancel
+    // to put away a dialog you're already looking away from is a wasted trip.
+    <Modal id="commit-dialog" onClose={closeDialog}>
       <form
         id="commit-form"
         onSubmit={(e) => {
@@ -300,7 +278,7 @@ export function CommitDialog() {
           {error}
         </p>
       </form>
-    </div>
+    </Modal>
   );
 }
 

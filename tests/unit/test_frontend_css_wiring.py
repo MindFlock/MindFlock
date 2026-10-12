@@ -1,4 +1,4 @@
-"""Every component stylesheet reaches the shipped bundle.
+"""No source stylesheet is orphaned, and no hook follows an early return.
 
 ``frontend/src/styles/index.css`` is a hand-kept, ordered ``@import`` list (the
 numbers in its comments ARE the cascade), rather than each component importing
@@ -12,40 +12,20 @@ inset: 0; z-index: 4`` never reached the page, so opening it produced an
 invisible zero-size block, and every route into the feature (the drag gesture,
 the header button, Ctrl+Up) looked broken.
 
-Two guards, deliberately at different levels: the built ``/style.css`` really
-carries the overlay's rules, and no source stylesheet is orphaned.
+Two guards, deliberately at different levels: the overlay's rules and their
+``@import`` (frontend/src/__tests__/cssWiring.test.ts, which also pins the
+account chip's rules), and — here — no source stylesheet is orphaned.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
-from backend.web import server
-
-client = TestClient(server.app)
-
 _FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 #: Sheets a component imports for itself (``import "./Hint.css"``), so they
 #: legitimately never appear in the aggregator.
 _SELF_IMPORTED = {"Hint.css", "WelcomeTour.css"}
-
-
-def test_style_css_ships_the_history_overlay_rules():
-    """The overlay must be positioned and painted, or it opens invisible."""
-    css = client.get("/style.css").text
-    assert ".hist-overlay" in css, "HistoryOverlay.css never reached the bundle"
-    # The rules that make it a visible layer over the pane rather than an
-    # unstyled block appended below the terminal.
-    block = css[css.index(".hist-overlay") : css.index(".hist-overlay") + 400]
-    assert "position: absolute" in block or "position:absolute" in block
-    assert "inset:" in block.replace(" ", "") or "inset:0" in block.replace(" ", "")
-    assert "z-index" in block
-    # The scroller and its header ride along with it.
-    assert ".hist-scroll" in css
-    assert ".hist-bar" in css
 
 
 def test_no_orphaned_component_stylesheet():
@@ -115,24 +95,3 @@ def test_no_component_calls_a_hook_after_an_early_return():
                         "%s:%d %s" % (path.name, j + 1, lines[j].strip()[:60])
                     )
     assert not offenders, "hook called after an early return:\n" + "\n".join(offenders)
-
-
-def test_style_css_carries_the_account_chip_rules():
-    """The account chip and its swap menu are hooks in two existing sheets.
-
-    Both `Pane.css` and `usage.css` were already imported, so the orphaned-sheet
-    guard above cannot see a class that is referenced by a component and defined
-    by nobody — which is how `.acct-chip` and `.acct-pop-row` shipped as dead
-    hooks. These are the rules that make the chip a member of the header's
-    right-hand group instead of a stranded one, and the menu's rows answer the
-    pointer.
-    """
-    css = client.get("/style.css").text
-    # Only the FIRST .tok in the header may take the auto margin; a second one
-    # splits the free space and lands the chip mid-header.
-    assert ".pane-head .acct-chip + .tok" in css.replace("\n", " ")
-    # A user-typed label cannot be allowed to grow the no-wrap header.
-    assert ".acct-chip .usage-head" in css
-    # The swap rows are buttons wearing a <tr>.
-    assert ".acct-pop-row" in css
-    assert ".acct-pop-model select" in css

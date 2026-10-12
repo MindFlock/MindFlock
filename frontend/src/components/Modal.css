@@ -1,0 +1,6 @@
+/* The shell takes focus when a dialog opens without focusing anything itself
+   (components/Modal.tsx) — so the keyboard leaves the terminal. It is a
+   backdrop, not a control: no focus ring on it. */
+.modal:focus {
+  outline: none;
+}

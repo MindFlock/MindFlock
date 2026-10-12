@@ -1,8 +1,9 @@
-"""Send / prompt-queue frontend wiring (M-series): structural contract checks.
+"""Send / prompt-queue: the backend<->frontend route contract.
 
-The live UI is verified with screenshots/CDP; these pin the markup hooks, JS
-wiring, and CSS so the Queue tab, its inline console, and the palette actions
-can't silently regress. Same style as test_frontend_wave4.py.
+The Queue tab's markup, wiring and CSS are pinned at the source by vitest
+(frontend/src/__tests__/queueTabWiring.test.ts). What stays here is the half
+only the server can answer: every queue endpoint the shipped bundle calls
+exists on the server, with the method the console uses.
 """
 
 from __future__ import annotations
@@ -13,61 +14,28 @@ from backend.web import server
 
 client = TestClient(server.app)
 
+_INSTANCE = "/api/instances/{title}"
 
-def test_app_js_pane_has_queue_tab():
+# Suffix the console passes to instApi/qApi -> methods it calls it with.
+_QUEUE_ROUTES = {
+    "/send": {"post"},
+    "/queue": {"get", "post", "delete"},
+    "/queue/flags": {"post"},
+    "/queue/reorder": {"post"},
+    "/queue/send_now": {"post"},
+}
+
+
+def test_queue_console_routes_exist_on_the_server():
     js = client.get("/app.js").text
-    # Queue is a first-class pane tab (beside Agent/Terminal/Diff), with a badge.
-    assert '"data-tab": "queue"' in js
-    assert "queue-tab-badge" in js
-    assert '"pane-queue"' in js
-    # Selecting the tab loads the inline console.
-    assert "QueueTab" in js
-    # Badge painted from the /api/instances queue summary each poll.
-    assert "inst.queue" in js and "queue-tab-badge" in js
-
-
-def test_app_js_queue_console_uses_backend_endpoints():
-    js = client.get("/app.js").text
-    assert "Add to queue" in js
-    assert "/queue/reorder" in js
-    # Send-now hits /send; add hits /queue; flags + reorder + delete wired.
-    assert '"/send"' in js
-    assert '"/queue"' in js
-    assert '"/queue/flags"' in js
-    assert '"/queue/reorder"' in js
-    # Per-item ▶ fires one queued entry immediately via the send_now endpoint.
-    assert '"/queue/send_now"' in js
-    assert "qi-send" in js
-    # Loop + auto-run + wait-out-usage-limit toggles present.
-    assert "queue-loop" in js and "queue-enabled" in js and "queue-wait" in js
-    # The wait-out toggle posts the wait_for_limit flag.
+    paths = server.app.openapi()["paths"]
+    for suffix, methods in _QUEUE_ROUTES.items():
+        # The bundle calls it ...
+        assert f'"{suffix}"' in js, suffix
+        # ... and the server answers it.
+        route = _INSTANCE + suffix
+        assert route in paths, route
+        assert methods <= set(paths[route]), (route, sorted(paths[route]))
+    # The flags the toggles post are the ones the console sends.
     assert "wait_for_limit" in js
-    # Timed loop: an interval input that posts loop_interval (minutes).
-    assert "queue-loop-interval" in js
     assert "loop_interval" in js
-
-
-def test_app_js_palette_has_send_and_queue_actions():
-    js = client.get("/app.js").text
-    assert "Send message… — " in js
-    assert "Queue prompt… — " in js
-    # Both used to ask with window.prompt, a no-op in Electron. Send message…
-    # now opens the Thread composer and Queue prompt… the Queue tab's own box
-    # (pinned in test_frontend_playbooks.py); the old helpers must stay gone.
-    assert "function sendMessagePrompt(" not in js
-    assert "function queuePromptPrompt(" not in js
-    assert "function focusQueueInput(" in js
-
-
-def test_style_css_has_queue_rules():
-    css = client.get("/style.css").text
-    for sel in (
-        ".queue-tab",
-        ".queue-tab-badge",
-        ".pane-queue",
-        ".queue-input",
-        ".queue-item",
-        ".queue-flags",
-        ".queue-status.queue-stopped",
-    ):
-        assert sel in css, sel

@@ -12,10 +12,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FinishedChild, Instance, ThreadItem, ThreadMember } from "../api/types";
 
-const killSession = vi.fn();
+const closeSession = vi.fn();
 vi.mock("../lib/sessionActions", async (orig) => ({
   ...((await orig()) as object),
-  killSession: (...a: unknown[]) => killSession(...a),
+  closeSession: (...a: unknown[]) => closeSession(...a),
 }));
 
 const {
@@ -309,7 +309,7 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
   const prevDoc = g.document;
   afterEach(() => {
     useUi.setState({ focused: null } as never);
-    killSession.mockReset();
+    closeSession.mockReset();
     if (hadDoc) g.document = prevDoc;
     else delete g.document;
   });
@@ -366,14 +366,14 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
     expect(threadComposerFocused()).toBe(false);
   });
 
-  it("Ctrl+W and Delete go to the textarea, and killSession is never called", () => {
+  it("Ctrl+W and Delete go to the textarea, and closeSession is never called", () => {
     useUi.setState({ focused: "api" } as never);
     const listeners = fakeDoc(el("TEXTAREA", ".thread-compose"));
     const off = installKeymap(host);
     try {
       const w = press(listeners, "w", true);
       const del = press(listeners, "Delete", false);
-      expect(killSession).not.toHaveBeenCalled();
+      expect(closeSession).not.toHaveBeenCalled();
       // Not swallowed either: the keys reach the text box.
       expect(w.defaultPrevented).toBe(false);
       expect(del.defaultPrevented).toBe(false);
@@ -390,7 +390,7 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
     let off = installKeymap(host);
     try {
       const w = press(listeners, "w", true);
-      expect(killSession).not.toHaveBeenCalled();
+      expect(closeSession).not.toHaveBeenCalled();
       expect(w.defaultPrevented).toBe(false);
     } finally {
       off();
@@ -400,7 +400,7 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
     off = installKeymap(host);
     try {
       press(listeners, "w", true);
-      expect(killSession).toHaveBeenCalledWith("api");
+      expect(closeSession).toHaveBeenCalledWith("api");
     } finally {
       off();
     }
@@ -415,7 +415,7 @@ describe("Delete and Ctrl+W typed in the Thread composer never end the session",
     try {
       press(listeners, "Delete", false);
       press(listeners, "w", true);
-      expect(killSession).not.toHaveBeenCalled();
+      expect(closeSession).not.toHaveBeenCalled();
     } finally {
       off();
     }

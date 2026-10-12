@@ -28,11 +28,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
+from backend.fsutil import atomic_write_json
 from backend import log
 from backend.web.core import restart as _restart
 from backend.web.core import self_update as _self_update
@@ -74,11 +74,9 @@ def _remember(sig: str) -> None:
         return
     _LAST["sig"] = sig
     try:
-        path = _last_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"sig": sig}), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_json(
+            _last_path(), {"sig": sig}, indent=None, newline=False, ensure_ascii=True
+        )
     except OSError as err:
         _log("update announce: could not save the marker (%v)", err)
 

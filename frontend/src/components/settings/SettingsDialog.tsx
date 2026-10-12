@@ -18,6 +18,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { resolveScreenKey } from "./screenKeys";
@@ -57,12 +58,14 @@ export interface ScreenProps {
  * heading — keys and labels are what deep links and the palette resolve, so
  * they never move with it. (Kept AFTER `label` so `{ key, label` stays one
  * contiguous phrase for whoever greps for a screen.) */
-const SCREENS: Array<{
+interface ScreenDef {
   key: string;
   label: string;
   group?: string;
   el: (p: ScreenProps) => React.ReactNode;
-}> = [
+}
+
+const SCREENS = [
   { key: "general", label: "General", el: (p) => <General {...p} /> },
   { key: "connections", label: "Connections", el: (p) => <Connections {...p} /> },
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
@@ -89,7 +92,11 @@ const SCREENS: Array<{
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.
   { key: "traffic", label: "Site traffic", group: "Troubleshooting", el: (p) => <Traffic {...p} /> },
-];
+] as const satisfies readonly ScreenDef[];
+
+/** A Settings screen key, derived from SCREENS: open one with
+ * lib/openSettings, where a typo'd key fails tsc. */
+export type SettingsScreen = (typeof SCREENS)[number]["key"];
 
 export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () => void }) {
   const open = useUi((s) => s.openDialog === "settings");
@@ -100,7 +107,10 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const openDialogFor = useUi((s) => s.openDialogFor);
   // Site traffic is MindFlock's own maintainer dashboard — hidden from nav,
   // deep-link and fallback resolution alike unless this is a dev-shell build.
-  const screens = useMemo(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
+  const screens = useMemo(
+    (): readonly ScreenDef[] => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()),
+    []
+  );
 
   // A retired screen key hands off to Intake rather than selecting nothing (which
   // rendered a blank right-hand pane, since .set-screen.active would match no
@@ -123,18 +133,6 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
     setScreen(resolveScreenKey(target, keys) || "general");
   }, [open, target, openDialogFor, keys]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        closeDialog();
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
 
   const props: ScreenProps = {
@@ -148,13 +146,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
 
   return (
     <SettingsCtx.Provider value={model}>
-      <div
-        id="settings-dialog"
-        className="modal"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) closeDialog();
-        }}
-      >
+      <Modal id="settings-dialog" onClose={closeDialog}>
         <div id="settings-panel">
           <div className="ws-head">
             <h2>Settings</h2>
@@ -198,7 +190,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
             </div>
           </div>
         </div>
-      </div>
+      </Modal>
     </SettingsCtx.Provider>
   );
 }

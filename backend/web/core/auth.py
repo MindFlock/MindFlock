@@ -389,11 +389,6 @@ def _cookies_from(headers: list) -> List[str]:
     return (plain + keyed)[:_MAX_CANDIDATES]
 
 
-def _cookie_from(headers: list) -> Optional[str]:
-    vals = _cookies_from(headers)
-    return vals[0] if vals else None
-
-
 def _bearer_from(headers: list) -> Optional[str]:
     for k, v in headers:
         if k == b"authorization":
@@ -580,11 +575,6 @@ def _query_tokens(query_string: bytes) -> List[str]:
         return []
     vals = parse_qs(query_string.decode("latin-1")).get(QUERY_PARAM) or []
     return vals[:_MAX_CANDIDATES]
-
-
-def _query_token(query_string: bytes) -> Optional[str]:
-    vals = _query_tokens(query_string)
-    return vals[0] if vals else None
 
 
 def set_auth_cookies(response, *, secure: bool = False, extra: Iterable[str] = ()):

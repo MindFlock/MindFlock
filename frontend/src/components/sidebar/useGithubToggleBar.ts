@@ -8,11 +8,11 @@
  * own markup; only this behavior is shared. */
 
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
-import { useConfig } from "../../state/queries";
+import { refreshMindflockStatus, useConfig, useMindflockStatus } from "../../state/queries";
 import { useUi } from "../../state/store";
 
 interface GithubSettings {
@@ -20,13 +20,6 @@ interface GithubSettings {
   issues_enabled?: boolean;
   repos?: string[];
   issue_repos?: string[];
-}
-
-interface MfStatus {
-  available: boolean;
-  running: boolean;
-  pr_active?: boolean;
-  issues_active?: boolean;
 }
 
 export interface GithubToggleBar {
@@ -54,7 +47,6 @@ export function useGithubToggleBar(opts: {
   const { settingKey, reposKey, defaultOn, activeFlag, toggleLabel } = opts;
   const { data: config } = useConfig();
   const openDialog = useUi((s) => s.openDialog);
-  const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
 
@@ -67,14 +59,8 @@ export function useGithubToggleBar(opts: {
     refetchInterval: 30_000,
     retry: false,
   });
-  // Same key AND interval as AutomationBar's poll — TanStack dedupes it into
-  // one request, and a mismatched interval would make which one wins matter.
-  const { data: ingestion } = useQuery({
-    queryKey: ["mindflock-status"],
-    queryFn: () => api<MfStatus>("/api/mindflock/status"),
-    refetchInterval: 4_000,
-    retry: false,
-  });
+  // The one shared status query (AutomationBar's too) — TanStack dedupes it.
+  const { data: ingestion } = useMindflockStatus();
 
   // The Settings dialog edits github.* without touching this query — re-read
   // whenever a dialog closes so the bar reflects it at once.
@@ -110,7 +96,7 @@ export function useGithubToggleBar(opts: {
       refetch();
       // The toggle may start/stop/bounce the shared pipeline process — pull
       // fresh status now instead of waiting out the 10s poll.
-      qc.invalidateQueries({ queryKey: ["mindflock-status"] });
+      void refreshMindflockStatus();
     }
   };
 

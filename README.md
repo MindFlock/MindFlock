@@ -734,7 +734,9 @@ mindflock new                    # session on the current repo (title = basename
 mindflock new ~/code/webapp -p "fix the failing tests"
 mindflock ls                     # TITLE REPO STATUS ACTIVITY STAGE DIFF COST (--json for scripts)
 mindflock attach webapp          # tmux attach to the agent's terminal (prefix ok; needs a real TTY)
-mindflock rm webapp --yes        # close a session, keep its worktree (prompts without --yes)
+mindflock close webapp --yes     # close a session, keep its worktree (prompts without --yes; `rm` is an alias)
+mindflock delete webapp          # …or delete it with its worktree and branch (asks y/N)
+mindflock pause webapp           # stop the agent, keep the session in the sidebar (`resume` restarts it)
 mindflock open webapp            # open the workspace in the configured IDE
 mindflock events --follow        # live event stream (great for hook debugging)
 mindflock msg webapp "also update the changelog"   # message the agent (typed in when idle)

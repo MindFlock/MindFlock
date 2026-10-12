@@ -27,6 +27,7 @@ from backend.config import red_zones
 from backend.providers import _tool_hook_src as th
 from backend.session.storage import Status
 from backend.web import server
+from backend.web.core import autopilot_driver as ap_driver
 from backend.web.core import code_map
 from backend.web.core import red_zone_monitor as mon
 
@@ -125,10 +126,8 @@ def _rid(repo) -> str:
 _SESSION_ROUTES = [
     ("GET", "/api/instances/{t}/code-map"),
     ("GET", "/api/instances/{t}/code-map/live"),
-    ("GET", "/api/instances/{t}/code-map/atlas"),
     ("GET", "/api/instances/{t}/code-map/file?path=app.py"),
     ("GET", "/api/instances/{t}/code-map/search?q=lib"),
-    ("GET", "/api/instances/{t}/code-map/entry-points"),
     ("POST", "/api/instances/{t}/code-map/ask-plan"),
     ("POST", "/api/instances/{t}/code-map/go"),
     ("GET", "/api/instances/{t}/red-zones"),
@@ -728,8 +727,8 @@ def test_autopilot_merge_halts_on_a_red_zone_even_if_a_path_says_pending(
 
     halts, notes = [], []
     monkeypatch.setattr(server, "instance_merge_pr", _merge)
-    monkeypatch.setattr(server, "_autopilot_halt", lambda t, r: halts.append(r))
-    monkeypatch.setattr(server, "_autopilot_note", lambda *a: notes.append(a))
+    monkeypatch.setattr(ap_driver, "_autopilot_halt", lambda t, r: halts.append(r))
+    monkeypatch.setattr(ap_driver, "_autopilot_note", lambda *a: notes.append(a))
     asyncio.run(
         server._autopilot_act(
             "ap", "/wt", {"issues": {}}, {"now": time.time()}, "merge", {}
@@ -1558,9 +1557,9 @@ def test_removing_a_green_zone_exempts_its_work_and_tells_the_agent(
 
 
 # --------------------------------------------------------------------------- #
-# Atlas routes (the drill-down board; analysis in core.code_outline)
+# File view + search routes (analysis in core.code_outline)
 # --------------------------------------------------------------------------- #
-def _atlas_repo(repo) -> None:
+def _svc_repo(repo) -> None:
     _write(
         repo,
         "svc/api.py",
@@ -1580,37 +1579,18 @@ def _atlas_repo(repo) -> None:
     _git(repo, "commit", "-qm", "svc")
 
 
-def test_atlas_root_and_drilled_level(sess, repo):
-    _atlas_repo(repo)
-    d = client.get("/api/instances/rzt/code-map/atlas").json()
-    assert {"path", "crumbs", "nodes", "tiers", "back_edges", "extras"} <= set(d)
-    assert d["path"] == ""
-    by = {n["path"]: n for n in d["nodes"]}
-    assert "svc" in by and by["svc"]["kind"] == "dir"
-    assert by["svc"]["role"] == "code"
-    lvl = client.get("/api/instances/rzt/code-map/atlas", params={"path": "svc"}).json()
-    assert lvl["path"] == "svc"
-    assert [c["path"] for c in lvl["crumbs"]][-1] == "svc"
-    names = {n["path"]: n for n in lvl["nodes"]}
-    # api.py imports core.py: a sibling relation both ways round.
-    assert "svc/core.py" in names["svc/api.py"]["deps_out"]
-    assert "svc/api.py" in names["svc/core.py"]["deps_in"]
-    assert any(i["name"] == "Engine" for i in names["svc/core.py"]["interface"])
-
-
-def test_atlas_and_file_reject_escaping_paths_with_400(sess, repo):
-    for route in ("atlas", "file"):
-        for bad in ("/etc", "../x", "a/../../b"):
-            r = client.get("/api/instances/rzt/code-map/" + route, params={"path": bad})
-            assert r.status_code == 400, (route, bad)
-            assert r.json()["error"]
+def test_file_rejects_escaping_paths_with_400(sess, repo):
+    for bad in ("/etc", "../x", "a/../../b"):
+        r = client.get("/api/instances/rzt/code-map/file", params={"path": bad})
+        assert r.status_code == 400, bad
+        assert r.json()["error"]
     for bad in ("", "missing.py", "config"):
         r = client.get("/api/instances/rzt/code-map/file", params={"path": bad})
         assert r.status_code == 400, bad
 
 
 def test_file_view_route_shape_and_changes(sess, repo):
-    _atlas_repo(repo)
+    _svc_repo(repo)
     _write(
         repo,
         "svc/core.py",
@@ -1630,7 +1610,7 @@ def test_file_view_route_shape_and_changes(sess, repo):
 
 
 def test_file_view_zones_follow_the_shared_classifier(sess, repo):
-    _atlas_repo(repo)
+    _svc_repo(repo)
     r = client.post(
         "/api/instances/rzt/red-zones",
         json={"pattern": "/svc/api.py", "scope": "worktree"},
@@ -1648,18 +1628,14 @@ def test_file_view_zones_follow_the_shared_classifier(sess, repo):
     assert z("lib.py") == {"red": False, "green": False}
 
 
-def test_search_and_entry_points_routes(sess, repo):
-    _atlas_repo(repo)
+def test_search_route(sess, repo):
+    _svc_repo(repo)
     items = client.get(
         "/api/instances/rzt/code-map/search", params={"q": "engine"}
     ).json()["items"]
     top = items[0]
     assert top["name"] == "Engine" and top["path"] == "svc/core.py"
     assert top["line"] == 1 and {"kind", "score"} <= set(top)
-    ep = client.get("/api/instances/rzt/code-map/entry-points").json()
-    http = [i for i in ep["items"] if i["kind"] == "http"]
-    assert http and http[0]["route"] == "/items" and http[0]["method"] == "GET"
-    assert http[0]["path"] == "svc/api.py" and ep["total"] >= 1
 
 
 # --------------------------------------------------------------------------- #

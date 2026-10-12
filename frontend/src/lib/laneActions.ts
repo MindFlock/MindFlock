@@ -25,80 +25,27 @@ import { useUi } from "../state/store";
 import { errMsg } from "./format";
 import { instances, selectSession } from "./sessionActions";
 import { laneOf } from "./agentMessages";
+import { LANE_CHOICES, LANE_DESC, LANE_KEY, LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { taskPath } from "./runsApi";
 import { toast } from "./toast";
 
-/** A fast-track target as the API names it ("leave" = Off). */
-export type Lane = "leave" | "commit" | "push" | "pr" | "merge";
-
-/** The rungs in ladder order. Every fast-track control offers all five —
- * Push included: "pushed, no PR" is a real place to stop, and leaving it out
- * of one control was how the same choice read differently in two places. */
-export const LANE_ORDER: readonly Lane[] = ["leave", "commit", "push", "pr", "merge"];
-
-/** What every fast-track control offers, nearest first. */
-export const LANE_CHOICES: readonly Lane[] = LANE_ORDER;
-
-/** THE user-facing word for each rung. */
-export const LANE_LABEL: Record<Lane, string> = {
-  leave: "Off",
-  commit: "Commit",
-  push: "Push",
-  pr: "Open PR",
-  merge: "Merge when green",
-};
-
-/** The ⏩ button's own text for each rung, where a pane head has no room. */
-export const LANE_SHORT: Record<Lane, string> = {
-  leave: "off",
-  commit: "Commit",
-  push: "Push",
-  pr: "PR",
-  merge: "Merge",
-};
-
-/** What each rung means, in one line: the picker's second line and the
- * segmented control's tooltips. */
-export const LANE_DESC: Record<Lane, string> = {
-  leave: "MindFlock doesn't commit anything — you take it from there",
-  commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-  push: "Commit and push once the agent stops and your hooks pass",
-  pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-  merge: "Commit, push, open a PR and merge it once its checks pass",
-};
-
-/** The picker's letters: Off, Commit, pUsh, PR, Merge (A is "ask first"). */
-export const LANE_KEY: Record<Lane, string> = {
-  leave: "O",
-  commit: "C",
-  push: "U",
-  pr: "P",
-  merge: "M",
-};
+// THE ladder and its label table live in the pure lib/autopilot; the
+// controls import them from here as they always have.
+export {
+  LANE_CHOICES,
+  LANE_DESC,
+  LANE_KEY,
+  LANE_LABEL,
+  LANE_ORDER,
+  LANE_SHORT,
+  laneDefault,
+  normalizeLane,
+  type Lane,
+} from "./autopilot";
 
 /** The toggle every fast-track control carries beside the rungs. */
 export const ASK_FIRST_LABEL = "Ask me before it ships";
 export const ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
-
-/** A target from anything the server or a setting might hand us. The autopilot
- * ladder's own words map across: `agent` (stop when the agent stops) and
- * `off` are both Off. Unknown → "". */
-export function normalizeLane(v: string | null | undefined): Lane | "" {
-  const s = String(v || "")
-    .trim()
-    .toLowerCase();
-  if (s === "agent" || s === "off" || s === "none") return "leave";
-  return (LANE_ORDER as readonly string[]).includes(s) ? (s as Lane) : "";
-}
-
-/** THE default for batches and ticket runs: Settings → Workspace
- * "Fast-track goes as far as" (`/api/config` fasttrack_default). Out of the
- * box — unset, blank or unknown — it is Off: nothing is fast-tracked unless
- * someone asked. A single new session never reads it (runStart.defaultLaneFor
- * starts it Off). */
-export function laneDefault(setting: string | null | undefined): Lane {
-  return normalizeLane(setting) || "leave";
-}
 
 /** A session's target as the controls read it: agentMessages.laneOf (THE rule
  * — `row.lane` is authoritative, else an older server's autopilot depth), in

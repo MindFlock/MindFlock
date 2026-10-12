@@ -9,38 +9,19 @@
 
 import { useEffect, useState } from "react";
 import { create } from "zustand";
-import { api } from "../../api/client";
+import type { DoctorCheckItem, DoctorPayload } from "../../api/types";
+import { reprobeDoctor, useDoctor } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { InstallMissing, type InstallStep } from "../dialogs/InstallTerminal";
+import { InstallMissing } from "../dialogs/InstallTerminal";
 import { AgentSignIn, signInTarget } from "../dialogs/AgentSignIn";
 import { consumeSetupIntent } from "./setupModel";
 
 // --- Doctor model -------------------------------------------------------------
 
-export interface DoctorCheckItem {
-  id?: string;
-  label?: string;
-  status?: "ok" | "info" | "warn" | "fail" | string;
-  detail?: string;
-  fix?: string;
-  /** The runnable fix (an agent-auth row's declared login command). */
-  cmd?: string;
-  /** The agent provider an agent row is about (drives "Sign in to …"). */
-  provider?: string;
-}
-
-export interface DoctorPayload {
-  ok: boolean;
-  checks?: DoctorCheckItem[];
-  /** Everything missing that this machine needs, as one install (see
-   * `backend.doctor.install_plan`). */
-  install?: { steps?: InstallStep[]; packages?: string[] };
-}
+// The payload is GET /api/doctor's, cached once in state/queries (useDoctor).
+export type { DoctorCheckItem, DoctorPayload };
 
 const DOCTOR_ICON: Record<string, string> = { ok: "✓", info: "ℹ", warn: "!", fail: "✗" };
-
-/** Cached GET /api/doctor payload (5-min background probe keeps it warm). */
-let lastDoctor: DoctorPayload | null = null;
 
 interface DoctorWarnState {
   failing: boolean;
@@ -77,54 +58,50 @@ export function useDoctorWarn() {
 export function useDoctorAutoShow() {
   useEffect(() => {
     if (consumeSetupIntent()) useUi.getState().openDialogFor("setup");
-    const check = async () => {
-      try {
-        const d = await api<DoctorPayload>("/api/doctor");
-        lastDoctor = d;
-        useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
-      } catch {
-        /* unreachable backend is the conn-banner's job */
-      }
-    };
-    check();
-    const t = setInterval(() => {
-      if (!document.hidden) check();
-    }, 300000);
-    return () => clearInterval(t);
   }, []);
+  // Any fresh payload — this probe's, or a re-probe from the doctor list —
+  // re-reads the chip. A failed fetch keeps the last answer (an unreachable
+  // backend is the conn-banner's job).
+  const { data } = useDoctor({ refetchInterval: 300_000 });
+  useEffect(() => {
+    if (data !== undefined) useDoctorWarnStore.getState()._setFailing(!(data && data.ok));
+  }, [data]);
 }
 
 /** The doctor check list (setup checklist step 1 + Settings → Doctor).
  * `onChange` fires after an install or a sign-in finished, so the checklist
  * can re-read its steps. */
 export function DoctorList({ reprobeKey, onChange }: { reprobeKey?: number; onChange?(): void }) {
-  const [doctor, setDoctor] = useState<DoctorPayload | null>(lastDoctor);
-  const [error, setError] = useState("");
   // Bumped when the install window finishes, so the list re-probes itself.
   const [installed, setInstalled] = useState(0);
+  const reprobe = (reprobeKey || 0) > 0 || installed > 0;
+  // A plain open reads the shared payload (refetched on mount); a re-probe is
+  // asked for explicitly below and lands in the same cache.
+  const query = useDoctor({ enabled: !reprobe });
+  const [reprobeError, setReprobeError] = useState("");
 
   useEffect(() => {
+    if (!reprobe) return;
     let live = true;
-    (async () => {
-      const reprobe = (reprobeKey || 0) > 0 || installed > 0;
-      try {
-        const d = await api<DoctorPayload>("/api/doctor" + (reprobe ? "?refresh=1" : ""));
+    reprobeDoctor().then(
+      () => {
         if (!live) return;
-        lastDoctor = d;
-        useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
-        setDoctor(d);
-        setError("");
-        if (reprobe) onChange?.();
-      } catch (e) {
-        if (live) setError((e as Error).message);
+        setReprobeError("");
+        onChange?.();
+      },
+      (e) => {
+        if (live) setReprobeError((e as Error).message);
       }
-    })();
+    );
     return () => {
       live = false;
     };
     // onChange is a notification, not an input: re-running the probe because
     // the parent re-rendered with a new closure would re-probe forever.
   }, [reprobeKey, installed]);
+
+  const doctor = query.data ?? null;
+  const error = reprobe ? reprobeError : query.error ? (query.error as Error).message : "";
 
   if (error) return <p className="error">doctor failed: {error}</p>;
   if (!doctor) return <p className="muted">Checking dependencies…</p>;

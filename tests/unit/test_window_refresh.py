@@ -120,12 +120,10 @@ def test_api_anchor_time_roundtrips():
     assert client.get("/api/window-refresh").json()["anchor_time"] == "08:15"
 
 
-def test_settings_ui_present():
-    html = client.get("/").text
-    js = client.get("/app.js").text
-    for el in ("wr-enabled", "wr-interval", "wr-anchor", "wr-providers", "wr-status"):
-        assert '"' + el + '"' in js, el
+def test_settings_ui_calls_the_route():
+    """The settings block reads and writes /api/window-refresh: the bundle calls
+    it and the server serves it. (The block's controls are pinned against the
+    source in frontend/src/__tests__/windowRefreshUi.test.ts.)"""
     js = client.get("/app.js").text
     assert "/api/window-refresh" in js
-    assert "WindowRefresh" in js
-    assert "anchor_time" in js
+    assert "/api/window-refresh" in server.app.openapi()["paths"]

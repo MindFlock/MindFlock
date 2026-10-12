@@ -90,6 +90,9 @@ def test_normalize_depth_rejects_junk():
     assert ap.normalize_depth("PR") == "pr"
     assert ap.normalize_depth("  merge ") == "merge"
     assert ap.normalize_depth("off") == "off"
+    # The lane routes' word for Off is the same rung (one ladder).
+    assert ap.normalize_depth("leave") == "off"
+    assert ap.normalize_depth(" Leave ") == "off"
     assert ap.normalize_depth("") == ""
     assert ap.normalize_depth("nonsense") == ""
     assert ap.normalize_depth(None) == ""

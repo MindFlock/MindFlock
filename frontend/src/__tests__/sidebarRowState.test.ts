@@ -23,7 +23,7 @@ vi.mock("../lib/sessionActions", () => ({
   hasPrSupport: () => true,
   hideSession: vi.fn(),
   ideSession: vi.fn(),
-  killSession: vi.fn(),
+  closeSession: vi.fn(),
   makePrSession: vi.fn(),
   mergeSession: vi.fn(),
   pauseSession: vi.fn(),

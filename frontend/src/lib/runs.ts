@@ -22,7 +22,6 @@
 import type { Instance, RunDTO, RunSummary, RunTask } from "../api/types";
 import { escalationText, LANE_HEAD, shipLine } from "./agentMessages";
 
-export const RUN_TERMINAL_TASK = new Set(["shipped", "integrated", "failed", "cancelled", "skipped"]);
 export const RUN_DONE_STATES = new Set(["done", "done_with_failures", "cancelled"]);
 
 /** How long a FINISHED one-for-all / split group keeps its details on the rail. */
@@ -206,9 +205,16 @@ export function queuedTitle(t: Pick<RunTask, "ticket_id" | "text" | "title">): s
   return ref || text || t.title || "queued line";
 }
 
-/** The header's "N/M shipped" badge text (and "· K failed" once finished). */
+/** The header's "N/M done" badge text (and "· K failed" once finished). A
+ * line is done when it reached its own Fast-track target — committed, pushed,
+ * PR opened or merged — so the badge says "done", not one of those. */
 export function shippedBadge(g: Pick<RunGroup, "shipped" | "total">): string {
-  return g.shipped + "/" + g.total + " shipped";
+  return g.shipped + "/" + g.total + " done";
+}
+
+/** What a line that reached `lane` did, in the step's own word. */
+function laneDoneWord(lane: string): string {
+  return { commit: "committed", push: "pushed", pr: "PR opened", merge: "merged" }[lane] || "done";
 }
 
 /** The header's tooltip: the whole state in one sentence per fact. */
@@ -307,7 +313,7 @@ export function runNote(
       const shipped = num(d.shipped);
       const failed = num(d.failed);
       const lane = info.lane?.(run) || "";
-      const word = lane === "pr" || lane === "merge" ? (shipped === 1 ? " PR" : " PRs") : " shipped";
+      const word = lane === "pr" || lane === "merge" ? (shipped === 1 ? " PR" : " PRs") : " " + laneDoneWord(lane);
       // The server says what the group did (a one-for-all group ships ONE
       // branch: "one PR opened", "its branch was pushed …"); an older server
       // sends no outcome and gets the per-line count.
@@ -322,8 +328,10 @@ export function runNote(
     }
     case "run.task_shipped": {
       const m = str(d.pr_url).match(/\/pull\/(\d+)/);
+      const lane = info.lane?.(run) || "";
+      const did = m ? (lane === "merge" ? "merged" : "opened") + " PR #" + m[1] : laneDoneWord(lane);
       return {
-        text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+        text: name + ": " + who + " " + did,
         cls: "n-done",
         run,
         dedupe: ["shipped", run, str(d.task)].join(":"),

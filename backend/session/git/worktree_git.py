@@ -1,8 +1,8 @@
 """Port of the Go ``session/git`` package's ``worktree_git.go``.
 
 Holds the git-and-gh-driven methods of ``GitWorktree`` (exposed via
-:class:`GitWorktreeGitMixin`), plus the free functions ``FetchBranches`` /
-``SearchBranches`` and the constant ``MaxBranchSearchResults``.
+:class:`GitWorktreeGitMixin`), plus the free functions ``fetch_branches`` /
+``search_branches`` and the constant ``MaxBranchSearchResults``.
 
 Command argv and error strings are byte-for-byte identical to the Go source,
 with one deliberate divergence: Go pushed through ``gh repo sync``, which made
@@ -25,15 +25,13 @@ from backend.session.git.util import _exit_error, _trim_prefix, gh_available
 
 __all__ = [
     "MaxBranchSearchResults",
-    "FetchBranches",
     "fetch_branches",
-    "SearchBranches",
     "search_branches",
     "GitWorktreeGitMixin",
 ]
 
 # MaxBranchSearchResults is the maximum number of branches returned by
-# SearchBranches.
+# search_branches.
 MaxBranchSearchResults: int = 50
 
 # Default subprocess budgets (seconds): local git commands vs. network
@@ -440,14 +438,6 @@ class GitWorktreeGitMixin:
                 "failed to open branch URL: no browser available for {}".format(url)
             )
 
-    # snake_case aliases
-    push_changes = PushChanges
-    commit_changes = CommitChanges
-    is_dirty = IsDirty
-    is_valid_worktree = IsValidWorktree
-    is_branch_checked_out = IsBranchCheckedOut
-    open_branch_url = OpenBranchURL
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -457,8 +447,3 @@ def _decode(b: bytes) -> str:
     if b is None:
         return ""
     return b.decode("utf-8", "replace")
-
-
-# Go-name aliases.
-FetchBranches = fetch_branches
-SearchBranches = search_branches

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 
 interface Todo {
   id: string;
@@ -78,15 +79,8 @@ export function TodoDialog() {
     const poll = setInterval(() => {
       if (!document.hidden) load();
     }, 4000);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDialog();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      clearInterval(poll);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open, load, closeDialog]);
+    return () => clearInterval(poll);
+  }, [open, load]);
 
   if (!open) return null;
 
@@ -118,13 +112,7 @@ export function TodoDialog() {
   };
 
   return (
-    <div
-      id="todo-dialog"
-      className="modal"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="todo-dialog" onClose={closeDialog}>
       <div id="todo-panel">
         <div className="ws-head">
           <h2>Todo</h2>
@@ -235,6 +223,6 @@ export function TodoDialog() {
           )}
         </ul>
       </div>
-    </div>
+    </Modal>
   );
 }

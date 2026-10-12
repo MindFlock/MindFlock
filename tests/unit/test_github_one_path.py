@@ -207,6 +207,121 @@ class TestPipelineDelegation:
         assert cfg.github.token == "from-toml"
 
 
+class TestProbesAgreeWithTheTokenUsed:
+    """The cheap "is there a token / which one" probes (``has_token_sync`` for
+    the capability flags, ``_github_token_source`` for the Connections row)
+    walk the same chain as the token the PR buttons call GitHub with. The old
+    ``has_token_sync`` went through ``resolve_secret_sync`` with config.toml
+    FIRST, so it could vouch for a token the real chain never uses."""
+
+    @pytest.fixture
+    def toml_cfg(self, monkeypatch):
+        from backend.web.core import github_pr
+
+        holder = {"cfg": _cfg()}
+        monkeypatch.setattr(github_pr, "_github_config", lambda: holder["cfg"])
+        return holder
+
+    async def test_config_toml_and_gh_token_agree_on_gh_token(
+        self, monkeypatch, toml_cfg
+    ):
+        from backend.web.addons import settings as settings_addon
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="from-toml", toml_token="from-toml")
+        monkeypatch.setenv("GH_TOKEN", "from-env")
+        assert github_pr.has_token_sync() is True
+        assert settings_addon._github_token_source() == "env:GH_TOKEN"
+        assert await github_pr.api_token() == "from-env"
+        assert pipe_auth.cached_source() == "env:GH_TOKEN"
+
+    async def test_config_toml_alone_is_found_by_both(self, toml_cfg):
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="from-toml", toml_token="from-toml")
+        assert github_pr.has_token_sync() is True
+        assert await github_pr.api_token() == "from-toml"
+
+    async def test_a_merged_token_without_its_toml_rung_counts_for_neither(
+        self, toml_cfg
+    ):
+        from backend.web.core import github_pr
+
+        toml_cfg["cfg"] = _cfg(token="stale-merged")
+        assert github_pr.has_token_sync() is False
+        assert await github_pr.api_token() == ""
+
+    def test_the_probes_never_run_gh(self, monkeypatch, toml_cfg):
+        from backend.web.addons import settings as settings_addon
+        from backend.web.core import github_pr
+
+        def boom():
+            raise AssertionError("a capability probe ran gh auth token")
+
+        monkeypatch.setattr(web_auth, "_gh_token", boom)
+        assert github_pr.has_token_sync() is False
+        assert settings_addon._github_token_source() == ""
+        assert web_auth.resolve_token("from-toml", gh=False) == (
+            web_auth.SOURCE_CONFIG_TOML,
+            "from-toml",
+        )
+
+
+class TestConfigTomlOnlyIsSeenEverywhere:
+    """A user whose ONLY credential is ``[github].token`` in config.toml: the
+    PR buttons (``api_token``) use it, so Connect GitHub's status, its Test,
+    git's credential helper and the per-repo Test must find it too instead of
+    reporting "none"."""
+
+    @pytest.fixture(autouse=True)
+    def toml_only(self, monkeypatch):
+        from backend.web.core import github_pr
+
+        cfg = _cfg(token="from-toml", toml_token="from-toml")
+        monkeypatch.setattr(github_pr, "_github_config", lambda: cfg)
+        monkeypatch.setattr(web_auth, "gh_path", lambda: "")
+        monkeypatch.setattr(web_auth, "credential_helper", lambda: "")
+        web_auth._USERS.clear()
+
+    async def test_pr_buttons_use_it(self):
+        from backend.web.core import github_pr
+
+        assert await github_pr.api_token() == "from-toml"
+
+    def test_status_reports_it(self):
+        st = web_auth.status(check_user=False)
+        assert st["connected"] is True
+        assert st["source"] == web_auth.SOURCE_CONFIG_TOML
+        assert "from-toml" not in str(st)
+
+    def test_connection_test_uses_it(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(web_auth, "_http", _fake_http(calls))
+        out = web_auth.test_connection()
+        assert out["token_source"] == web_auth.SOURCE_CONFIG_TOML
+        assert out["login"] == "octo"
+
+    def test_git_credential_helper_answers_with_it(self):
+        out = web_auth.credential_answer("protocol=https\nhost=github.com\n")
+        assert out == "username=x-access-token\npassword=from-toml\n"
+
+    def test_per_repo_test_gets_past_the_token_check(self, monkeypatch):
+        import aiohttp
+
+        from backend.web import server
+
+        def offline(*_a, **_k):
+            raise OSError("offline")
+
+        monkeypatch.setattr(aiohttp, "ClientSession", offline)
+        with TestClient(server.app) as client:
+            body = client.post(
+                "/api/settings/test/github-repo", json={"repo": "o/r"}
+            ).json()
+        assert body["ok"] is False
+        assert "could not reach api.github.com" in body["error"]
+
+
 # --------------------------------------------------------------------------- #
 # 3. The device-flow client id ships as a constant (empty until registered)
 # --------------------------------------------------------------------------- #
@@ -371,6 +486,8 @@ class TestRemedies:
         "rel",
         [
             "backend/web/server.py",
+            "backend/web/core/autopilot_driver.py",
+            "backend/web/core/test_plans_driver.py",
             "backend/web/addons/connections.py",
             "backend/web/addons/settings.py",
             "backend/ticket_ingestion/providers/github_issues.py",

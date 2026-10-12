@@ -22,12 +22,7 @@ from backend.config.config import (
     LoadConfig,
     Profile,
     SaveConfig,
-    default_config,
-    get_claude_command,
-    get_config_dir,
-    load_config,
     marshal_indent,
-    save_config,
 )
 from backend.config.state import (
     AppState,
@@ -40,9 +35,6 @@ from backend.config.state import (
     State,
     StateFileName,
     StateManager,
-    default_state,
-    load_state,
-    save_state,
     state_file_lock,
 )
 from backend.config.settings import (
@@ -66,15 +58,10 @@ __all__ = [
     "Profile",
     "Config",
     "GetConfigDir",
-    "get_config_dir",
     "GetClaudeCommand",
-    "get_claude_command",
     "DefaultConfig",
-    "default_config",
     "LoadConfig",
-    "load_config",
     "SaveConfig",
-    "save_config",
     "marshal_indent",
     # state.go
     "StateFileName",
@@ -85,11 +72,8 @@ __all__ = [
     "StateManager",
     "State",
     "DefaultState",
-    "default_state",
     "LoadState",
-    "load_state",
     "SaveState",
-    "save_state",
     "state_file_lock",
     # settings.py (user settings store + resolver)
     "Settings",

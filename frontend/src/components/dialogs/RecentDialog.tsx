@@ -31,6 +31,7 @@ import { previewList } from "../../lib/rowSelection";
 import { sortRows } from "../../lib/rowSort";
 import { toast } from "../../lib/toast";
 import { DialogFilter } from "./DialogFilter";
+import { Modal } from "../Modal";
 import { BulkRowBar, RowCheck, SelectAllCheck, useRowSelection } from "./rowSelect";
 import { SortPicker, useSortPref, type SortOption } from "./SortPicker";
 import {
@@ -398,13 +399,7 @@ export function RecentDialog() {
   };
 
   return (
-    <div
-      id="recent-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="recent-dialog" onClose={closeDialog}>
       <div id="recent-panel">
         <div className="ws-head">
           <h2>Recently closed</h2>
@@ -746,6 +741,6 @@ export function RecentDialog() {
         </div>
         <p id="recent-error" className="error">{error}</p>
       </div>
-    </div>
+    </Modal>
   );
 }

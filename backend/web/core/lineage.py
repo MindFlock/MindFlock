@@ -30,6 +30,8 @@ import re
 import subprocess
 from typing import Mapping, Optional
 
+from backend import gitutil
+
 #: Env knobs (read per request) and their defaults.
 MAX_CHILDREN_ENV = "MINDFLOCK_MAX_CHILDREN"
 MAX_SPAWN_DEPTH_ENV = "MINDFLOCK_MAX_SPAWN_DEPTH"
@@ -323,16 +325,9 @@ def _ref_shape_error(kind: str, ref: str) -> Optional[str]:
 def _git(repo: str, *args: str) -> subprocess.CompletedProcess:
     """``git -C repo args…`` with a short timeout; a timeout or a missing git
     reads as a failed probe (returncode != 0), never an exception."""
-    try:
-        return subprocess.run(
-            ["git", "-C", repo, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=_GIT_PROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return subprocess.CompletedProcess(["git", *args], 1, stdout="")
+    return gitutil.git(
+        args, repo, timeout=_GIT_PROBE_TIMEOUT, stderr=subprocess.DEVNULL
+    )
 
 
 def resolve_base_ref(repo: str, ref: str) -> str:

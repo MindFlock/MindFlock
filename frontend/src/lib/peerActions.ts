@@ -5,8 +5,8 @@
  * Reused by the "Paste a code" router (lib/deviceActions.ts): an mfp1:/mfp2:
  * invite whose join failed reopens here, prefilled. */
 
-import { useUi } from "../state/store";
 import { PEER_SCREEN } from "./peer";
+import { openSettings } from "./openSettings";
 
 /** The DOM event PeerLinks listens for (detail: {code?: string}). */
 export const PEER_JOIN_EVENT = "mf-peer-join";
@@ -23,7 +23,7 @@ export function takePendingPeerJoin(): { code: string } | null {
 
 export function openJoinWithCode(code = ""): void {
   pending = { code };
-  useUi.getState().openDialogFor("settings", PEER_SCREEN);
+  openSettings(PEER_SCREEN);
   // Already open on that screen: it hears this instead of mounting again.
   document.dispatchEvent(new CustomEvent(PEER_JOIN_EVENT, { detail: { code } }));
 }

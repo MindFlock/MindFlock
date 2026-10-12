@@ -18,6 +18,7 @@
  */
 
 import type { Instance, LastReport } from "../api/types";
+import { relTime } from "./format";
 
 /** The fields of a `session.message` event's `data` the UI reads. `status` is
  * read when present (a worker's report_result carries it in the message's
@@ -206,13 +207,7 @@ export function workerState(row: FamilyRow, act: string): WorkerState {
 const isReported = (s: WorkerState) => s === "done" || s === "blocked" || s === "failed";
 
 /** "40s", "6m", "2h", "3d" — how long since `ts` (epoch seconds). */
-function since(ts: number, now: number): string {
-  const secs = Math.max(0, Math.floor(now - ts));
-  if (secs < 60) return secs + "s";
-  if (secs < 3600) return Math.floor(secs / 60) + "m";
-  if (secs < 86400) return Math.floor(secs / 3600) + "h";
-  return Math.floor(secs / 86400) + "d";
-}
+const since = (ts: number, now: number) => relTime(ts, { suffix: "", now });
 
 /** The status line under a worker's name on the rail.
  *
@@ -585,7 +580,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   if (tstate === "failed")
     return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
   if (ap && ap.state === "halted")
-    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 
   // A one-for-all / split line merges back into its lead's branch: that IS
   // its outcome (its own lane is only "commit"), so say so before the lane.
@@ -647,7 +642,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
               : s === 2
                 ? "opening PR"
                 : "merging";
-    return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+    return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is " + verb + ".");
   }
   if ((tstate === "needs_you" && reason === "approve") || (!tstate && awaitingApproval(row)))
     return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");

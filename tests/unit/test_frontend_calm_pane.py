@@ -170,9 +170,12 @@ def test_copy_all_lives_in_the_history_bar():
     assert (
         "copyText(forClipboard(all))" in hist
     )  # Claude Code layout cleaned (agentCopy)
-    assert (
-        hist.count("/history?pane=${pane}") == 2
-    )  # the view's load + the copy fallback
+    # One fetch helper (through apiText, so a 401 reloads) serves both the
+    # view's load and the copy fallback.
+    assert hist.count("/history?pane=${pane}") == 1
+    assert "t = await fetchHistory(title, pane);" in hist
+    assert ": fetchHistory(title, pane);" in hist
+    assert "return apiText(" in hist
 
 
 def test_narrow_heads_keep_the_cost():

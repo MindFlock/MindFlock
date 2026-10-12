@@ -30,13 +30,12 @@ re-reads/writes the file under it (the file is tiny; simplicity beats caching).
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 import threading
 import time
 from typing import Dict, List, Optional
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -84,31 +83,11 @@ def queue_path() -> str:
 # ``enabled`` gates the drain loop for that session; ``loop`` re-appends a sent
 # item instead of dropping it. Everything defaults sanely when absent.
 def _load() -> dict:
-    try:
-        with open(queue_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return read_json(queue_path(), {}, expect=dict)
 
 
 def _save(data: dict) -> None:
-    path = queue_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".pq.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(queue_path(), data, prefix=".pq.")
 
 
 def _blank() -> dict:

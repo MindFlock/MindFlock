@@ -5,45 +5,52 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useExtensions } from "../../state/queries";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { runCommand } from "../../extensions/host";
-import { focusQueueInput } from "../../lib/playbooks";
-import {
-  LANE_LABEL,
-  laneChoice,
-  openFastTrackMenu,
-  splitBlockReason,
-  splitSession,
-} from "../../lib/laneActions";
-import { fastTrackStep } from "../../lib/stage";
-import { errMsg } from "../../lib/format";
-import { toast } from "../../lib/toast";
 import type { KeymapHost } from "../../lib/keymap";
+import { instances, selectSession } from "../../lib/sessionActions";
 import {
-  commitSession,
-  copySession,
-  deleteSession,
-  hasPrSupport,
-  hideSession,
-  ideSession,
-  instances,
-  killSession,
-  makePrSession,
-  mergeSession,
-  pauseSession,
-  pushSession,
-  resumeSession,
-  selectSession,
-} from "../../lib/sessionActions";
+  actionCtx,
+  actionHint,
+  actionLabel,
+  sessionAction,
+  type SessionActionId,
+} from "../../lib/sessionActionTable";
 import { orderedInstances } from "../sidebar/ordering";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
 import { routeCode } from "../../lib/fleet";
+import { openSettings } from "../../lib/openSettings";
 
 interface PaletteAction {
   label: string;
   hint?: string;
   run(): void;
 }
+
+/** The focused session's entries, in palette order (the table holds what
+ * each one says and when it applies). Pause and Resume never both apply;
+ * Merge is last — the most consequential, and deliberately unbound. */
+const PALETTE_ACTIONS: SessionActionId[] = [
+  "rename",
+  "message",
+  "queue",
+  "fastTrack",
+  "split",
+  "thread",
+  "commit",
+  "push",
+  "pr",
+  "ide",
+  "duplicate",
+  "hide",
+  "resume",
+  "pause",
+  "close",
+  "delete",
+  "map",
+  "merge",
+];
 
 /** Contiguous substring beats a spread-out subsequence; earlier/tighter
  * matches rank higher. -1 = no match. (Port of fuzzyScore.) */
@@ -87,9 +94,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     if (!open) return [];
     const ui = useUi.getState();
     const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
-    // PR entries are never withheld: without gh/token they still work, they
-    // just end in the browser. The hint column says so instead of the label.
-    const prHint = hasPrSupport(caps) ? "" : " · opens GitHub";
     const ideName = config?.ide_name || "Cursor";
     const acts: PaletteAction[] = [];
     // Order: New, then the places you open, then what acts on the focused
@@ -113,7 +117,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
     acts.push({
-      label: "Verify — check what shipped",
+      label: "Verify — check what was pushed",
       hint: "Alt+V",
       run: () => ui.openDialogFor("verify"),
     });
@@ -134,22 +138,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         hint: "keep-out paths per repo, and derived outputs",
         run: () => ui.openDialogFor("red-zones"),
       });
-    acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
+    acts.push({ label: "Open Settings", run: () => openSettings() });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({
       label: "Your devices",
       hint: "add a computer you own, or join one; settings sync",
-      run: () => ui.openDialogFor("settings", "devices"),
+      run: () => openSettings("devices"),
     });
     acts.push({
       label: "Your phone",
       hint: "the QR code and /m link",
-      run: () => ui.openDialogFor("settings", "mobile"),
+      run: () => openSettings("mobile"),
     });
     acts.push({
       label: "People…",
       hint: "peer links: invite someone, or join a peer with their code",
-      run: () => ui.openDialogFor("settings", "peer"),
+      run: () => openSettings("peer"),
     });
     // ONE place for every code (lib/deviceActions.ts): Your devices'
     // paste box, which sends one of your devices' codes to Your devices and
@@ -166,99 +170,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
 
     // --- The focused session's verbs ---------------------------------------
+    // Labels, shortcuts and enable rules come from the session action table
+    // (lib/sessionActionTable) — the same rows the sidebar › menu and the
+    // Ctrl+K chords read. Only what applies right now is listed: an entry
+    // that only explains why not is noise in a launcher.
     const { rows } = orderedInstances(instances(), ui.order);
     const t = ui.focused;
     if (t) {
-      // A shared-folder (peer) session runs sandboxed: the server refuses
-      // rename, ship, the IDE, copies and the rest, so they aren't offered.
-      const shared = !!rows.find((r) => r.title === t)?.peer_share;
-      if (!shared) acts.push({ label: `Rename… — ${t}`, run: () => ui.openDialogFor("rename", t) });
-      // Both used to ask for the text with window.prompt, which the desktop
-      // app never implements — the entries did nothing there. They now open
-      // the place the text is typed: the Thread composer (as you, Ctrl+Enter
-      // sends) and the Queue tab's own box.
-      acts.push({
-        label: `Send message… — ${t}`,
-        hint: "Ctrl+K S",
-        run: () => ui.threadOpen(t, { composeTo: t }),
-      });
-      acts.push({ label: `Queue prompt… — ${t}`, hint: "runs when idle", run: () => focusQueueInput(t) });
-      // Fast-track: ONE entry, which opens the pane's ⏩ picker (the same
-      // control as the button and Ctrl+K F, never a second copy of its
-      // choices). Split is its own action, acting at once through the
-      // server — nothing is pasted into the agent. Split is for local rows
-      // only (another device's group and split routes aren't forwarded), and
-      // is listed only when it can run: an entry that only explains why not
-      // is noise in a launcher.
-      const inst = rows.find((r) => r.title === t);
-      if (inst && !shared && !inst.pending && fastTrackStep(inst)) {
+      const c = actionCtx(t, { inst: rows.find((r) => r.title === t), caps, ideName });
+      for (const id of PALETTE_ACTIONS) {
+        if (!sessionAction(id).enabled(c)) continue;
         acts.push({
-          label: `Fast-track… — ${t}`,
-          hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
-          run: () => openFastTrackMenu(t),
+          label: `${actionLabel(id, c)} — ${t}`,
+          hint: actionHint(id, c),
+          run: () => sessionAction(id).run(t),
         });
       }
-      if (inst && !shared && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) {
-        acts.push({
-          label: `Split into parallel pieces… — ${t}`,
-          hint: "starts a split",
-          run: () => {
-            const name = ui.aliases[t] || t;
-            splitSession(inst, name)
-              .then((said) => toast(said, { duration: 5000 }))
-              .catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6000 }));
-          },
-        });
-      }
-      acts.push({ label: `Thread — ${t}`, hint: "Ctrl+K T", run: () => ui.threadOpen(t) });
-      if (caps.git && !shared) {
-        acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
-        acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
-        acts.push({ label: `Open PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
-      }
-      if (!shared) {
-        acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
-        acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
-      }
-      acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
-      // Pause / Resume: whichever applies to this session right now.
-      if (inst && !inst.pending) {
-        if (inst.status === "paused")
-          acts.push({ label: `Resume session — ${t}`, hint: "starts the agent again", run: () => resumeSession(t) });
-        else if (!shared)
-          acts.push({
-            label: `Pause session — ${t}`,
-            hint: "stops the agent, keeps the worktree",
-            run: () => pauseSession(t),
-          });
-      }
-      // The two end verbs, same as the row menu. Close keeps the worktree;
-      // Delete… asks first on a card (the palette has closed by then) and
-      // removes the worktree and branch.
-      acts.push({ label: `Close session — ${t}`, hint: "Ctrl+W · keeps the worktree", run: () => killSession(t) });
-      if (caps.git && !shared)
-        acts.push({
-          label: `Delete session… — ${t}`,
-          hint: "removes the worktree and branch",
-          run: () => void deleteSession(t),
-        });
-      if (caps.git)
-        acts.push({
-          label: `Code map — ${t}`,
-          hint: "Ctrl+K M",
-          run: () => {
-            selectSession(t);
-            ui.setLastTab(t, "map");
-          },
-        });
-      // Merge is deliberately unbound (most consequential action) — palette or
-      // sidebar menu only, and mergeSession() itself confirms.
-      if (caps.git && !shared)
-        acts.push({
-          label: `Merge PR — ${t}`,
-          hint: prHint ? prHint.replace(" · ", "") : undefined,
-          run: () => mergeSession(t),
-        });
     }
 
     // --- Focus rows: every session under the name its rail row shows -------
@@ -316,13 +243,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   };
 
   return (
-    <div
-      id="palette"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="palette" onClose={closeDialog}>
       <div id="palette-panel">
         <input
           id="palette-input"
@@ -346,9 +267,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
             } else if (e.key === "Enter") {
               e.preventDefault();
               run(filtered[sel]);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              closeDialog();
             }
           }}
         />
@@ -367,6 +285,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
           {!filtered.length && <li className="palette-empty muted">No matching commands</li>}
         </ul>
       </div>
-    </div>
+    </Modal>
   );
 }

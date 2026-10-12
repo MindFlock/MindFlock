@@ -88,13 +88,13 @@ import math
 import os
 import re
 import secrets
-import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
+from backend.fsutil import atomic_write_json
 from backend import log
 
 #: Seconds between gossip passes (pull every reachable member's roster).
@@ -333,20 +333,16 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".fleet.", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(
+        _path(),
+        data,
+        indent=1,
+        sort_keys=True,
+        newline=False,
+        ensure_ascii=True,
+        mode=0o600,
+        prefix=".fleet.",
+    )
     with _LOCK:
         _CACHE["sig"], _CACHE["doc"] = None, None
 

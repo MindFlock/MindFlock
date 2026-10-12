@@ -20,10 +20,10 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from backend.fsutil import atomic_write_bytes
 from backend import log
 
 __all__ = [
@@ -32,15 +32,10 @@ __all__ = [
     "Profile",
     "Config",
     "GetConfigDir",
-    "get_config_dir",
     "GetClaudeCommand",
-    "get_claude_command",
     "DefaultConfig",
-    "default_config",
     "LoadConfig",
-    "load_config",
     "SaveConfig",
-    "save_config",
     "marshal_indent",
 ]
 
@@ -140,9 +135,6 @@ class Config:
             if p.name == self.default_program:
                 return p.program
         return self.default_program
-
-    # snake_case aliases
-    get_program = GetProgram
 
     # --- JSON ----------------------------------------------------------------
     def to_dict(self) -> dict:
@@ -407,28 +399,6 @@ def _write_file(path: str, data: bytes, mode: int) -> None:
     the fsynced temp file is renamed over them. ``mode`` is applied to the
     new file explicitly (not umask-masked).
     """
-    dir_name = os.path.dirname(path) or "."
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=os.path.basename(path) + ".tmp.", dir=dir_name
+    atomic_write_bytes(
+        path, data, mode=mode, prefix=os.path.basename(path) + ".tmp.", suffix=""
     )
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp_path, mode)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-# snake_case aliases for Pythonic call sites.
-get_config_dir = GetConfigDir
-get_claude_command = GetClaudeCommand
-default_config = DefaultConfig
-load_config = LoadConfig
-save_config = SaveConfig

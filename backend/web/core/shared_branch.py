@@ -29,15 +29,14 @@ Blocking throughout: call via ``asyncio.to_thread``.
 
 from __future__ import annotations
 
-import json
 import os
-import signal
 import subprocess
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
-from backend import config, log
+from backend import config, gitutil, log
+from backend.web.core import title_store
 
 #: Bound on every fetch this module runs (the push check, create, background).
 FETCH_TIMEOUT = 20.0
@@ -65,37 +64,26 @@ def _git(path: str, *args: str, timeout: float = 15.0) -> Tuple[int, str, str]:
     """``git -C path args…`` → ``(rc, stdout, stderr)``; never raises (a
     timeout or a missing git is rc 124 / 127)."""
     env = {
-        **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_EDITOR": "true",
         "GCM_INTERACTIVE": "never",
     }
     # SSH would still ask (host key, passphrase) on a tty: never let it.
-    if "GIT_SSH_COMMAND" not in env:
+    if "GIT_SSH_COMMAND" not in os.environ:
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-    try:
-        proc = subprocess.Popen(
-            ["git", "-C", path, *args],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            start_new_session=True,
-        )
-    except (OSError, subprocess.SubprocessError) as err:
-        return 127, "", str(err)
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Kill git AND its children (pull's rebase, ssh), not just the parent.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            proc.kill()
-        proc.communicate()
+    # A new session: a timeout kills git AND its children (pull's rebase,
+    # ssh), not just the parent.
+    cp = gitutil.git(
+        args,
+        path,
+        timeout=timeout,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        new_session=True,
+    )
+    if cp.timed_out:
         return 124, "", "timed out after %ds" % int(timeout)
-    return proc.returncode, out, err
+    return cp.returncode, cp.stdout, cp.stderr
 
 
 def _ref_ok(name: str) -> bool:
@@ -149,16 +137,7 @@ def split_remote_ref(path: str, ref: str) -> Tuple[str, str]:
 
 def checked_out_in(path: str, branch: str) -> str:
     """The worktree path that has ``branch`` checked out, or ``""``."""
-    rc, out, _ = _git(path, "worktree", "list", "--porcelain")
-    if rc != 0:
-        return ""
-    current = ""
-    for line in out.splitlines():
-        if line.startswith("worktree "):
-            current = line[len("worktree ") :]
-        elif line.strip() == "branch refs/heads/" + branch:
-            return current
-    return ""
+    return gitutil.worktree_for_branch(path, branch, timeout=15.0)
 
 
 def _rev(path: str, ref: str) -> str:
@@ -436,29 +415,22 @@ def _path() -> str:
 def _load() -> Dict[str, Dict[str, str]]:
     global _SHARED
     if _SHARED is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _SHARED = {}
-            if isinstance(d, dict):
-                for k, v in d.items():
-                    if isinstance(v, dict) and v.get("branch"):
-                        _SHARED[str(k)] = {
-                            "remote": str(v.get("remote") or "origin"),
-                            "branch": str(v["branch"]),
-                        }
-        except (OSError, ValueError):
-            _SHARED = {}
+        _SHARED = title_store.load(
+            _path,
+            lambda d: {
+                str(k): {
+                    "remote": str(v.get("remote") or "origin"),
+                    "branch": str(v["branch"]),
+                }
+                for k, v in d.items()
+                if isinstance(v, dict) and v.get("branch")
+            },
+        )
     return _SHARED
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_SHARED or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save shared-branch sessions: %v", err)
+    title_store.persist(_path, _SHARED, "shared-branch sessions")
 
 
 def set_shared(title: str, remote: str = "", branch: str = "") -> None:
@@ -495,12 +467,6 @@ def shared(title: str) -> Optional[Dict[str, str]]:
 def drop(title: str) -> None:
     """Forget a deleted session (missing is fine)."""
     set_shared(title, "", "")
-
-
-def remote_for(title: str) -> str:
-    """The remote a session pushes to and rebases from."""
-    s = shared(title)
-    return (s or {}).get("remote") or "origin"
 
 
 def forget_worktree(wt: str) -> None:

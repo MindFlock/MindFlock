@@ -6,6 +6,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { relTime } from "../../../lib/format";
+import { queryClient } from "../../../state/queries";
+import { useNotifyConfig, type NotifyRule } from "../../../state/runs";
 import { SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -36,40 +39,19 @@ function notifState(): string {
   }
 }
 
-interface Rule {
-  id: string;
-  label?: string;
-  title?: string;
-  event?: string;
-  body?: string;
-  enabled?: boolean;
-}
-
 export function Notifications(_: ScreenProps) {
   const [state, setState] = useState(notifState());
-  const [rules, setRules] = useState<Rule[] | null>(null);
-  const [rulesError, setRulesError] = useState(false);
+  // The rule switches come from the shared notify-config query (state/runs.ts)
+  // the bell and the toasts already read.
+  const config = useNotifyConfig();
+  const rules = config.data ? config.data.rules || [] : null;
+  const rulesError = config.isError && !config.data;
 
   useEffect(() => {
     const paint = () => setState(notifState());
     document.addEventListener("mf-notify-state", paint);
     return () => document.removeEventListener("mf-notify-state", paint);
   }, []);
-
-  const loadRules = useCallback(async () => {
-    try {
-      const r = await fetch("/api/notify/config");
-      const list = (r.ok && (await r.json()).rules) || [];
-      setRules(list);
-      setRulesError(false);
-    } catch {
-      setRulesError(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadRules();
-  }, [loadRules]);
 
   const usable = state === "on" || state === "off";
   const status =
@@ -162,14 +144,6 @@ interface NtfyView {
   suggested_topic?: string;
   last?: { ts?: number; ok?: boolean; error?: string };
   note?: string;
-}
-
-function ago(ts: number): string {
-  const secs = Math.max(0, Math.round(Date.now() / 1000 - ts));
-  if (secs < 60) return "just now";
-  if (secs < 3600) return Math.round(secs / 60) + " min ago";
-  if (secs < 86400) return Math.round(secs / 3600) + "h ago";
-  return Math.round(secs / 86400) + "d ago";
 }
 
 function Ntfy() {
@@ -410,7 +384,7 @@ function Ntfy() {
         )}
         {!verdict && last.ts && (
           <span className={last.ok ? "ntfy-verdict-ok" : "ntfy-verdict-bad"}>
-            {last.ok ? "Last push sent " + ago(last.ts) : "Last push failed: " + last.error}
+            {last.ok ? "Last push sent " + relTime(last.ts) : "Last push failed: " + last.error}
           </span>
         )}
       </div>
@@ -439,7 +413,7 @@ function Ntfy() {
   );
 }
 
-function RuleRow({ rule }: { rule: Rule }) {
+function RuleRow({ rule }: { rule: NotifyRule }) {
   const [on, setOn] = useState(rule.enabled !== false);
   const label = rule.label || rule.title || rule.event || "event";
   return (
@@ -461,6 +435,7 @@ function RuleRow({ rule }: { rule: Rule }) {
                 json: { enabled: want },
               });
               notifApi()?.refreshRules?.();
+              void queryClient.invalidateQueries({ queryKey: ["notify-config"] });
               toast(want ? "Notify: " + label : "Muted: " + label);
             } catch {
               setOn(!want); // revert on failure

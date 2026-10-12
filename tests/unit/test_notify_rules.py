@@ -86,10 +86,10 @@ def _enabled(rules, rid):
 # Frontend wiring
 # --------------------------------------------------------------------------- #
 def test_frontend_renders_per_rule_toggles():
-    js = client.get("/app.js").text
-    assert "/api/notify/rules/" in js
-    assert "/api/notify/rules/" in js  # POST per-rule toggle
-    assert "refreshRules" in js  # applies without reload
+    """The Settings switches (pinned in frontend/src/__tests__/notifyWiring.test.ts)
+    POST a route the server serves, and the served addon honours the result."""
+    assert "/api/notify/rules/" in client.get("/app.js").text  # POST per-rule toggle
+    assert "post" in server.app.openapi()["paths"]["/api/notify/rules/{rule_id}"]
     notify = client.get("/addons/notify.js").text
     assert "rule.enabled === false" in notify  # muted rules are skipped
-    assert "refreshRules" in notify
+    assert "refreshRules" in notify  # applies without reload

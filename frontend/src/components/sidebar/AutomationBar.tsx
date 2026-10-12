@@ -9,22 +9,11 @@
  * live in Settings → System logs. */
 
 import { useState, useSyncExternalStore } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
-import { refreshInstances, useConfig } from "../../state/queries";
+import { refreshInstances, useConfig, useMindflockStatus } from "../../state/queries";
 import { useUi } from "../../state/store";
-
-interface MfStatus {
-  available: boolean;
-  running: boolean;
-  net_error?: boolean;
-  desired?: boolean;
-  tickets_active?: boolean;
-  pr_active?: boolean;
-  pr_enabled?: boolean;
-}
 
 function subscribeOnline(cb: () => void) {
   window.addEventListener("online", cb);
@@ -40,15 +29,10 @@ export function AutomationBar() {
   const openDialogFor = useUi((s) => s.openDialogFor);
   const [busy, setBusy] = useState(false);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
-  const { data: status, refetch } = useQuery({
-    queryKey: ["mindflock-status"],
-    queryFn: () => api<MfStatus>("/api/mindflock/status"),
-    // Matches the sessions poll: the green window can be as short as one
-    // provisioning, and a 10s poll missed those often enough that the light
-    // looked like it never turned green at all.
-    refetchInterval: 4_000,
-    retry: false,
-  });
+  // 4s (useMindflockStatus): the green window can be as short as one
+  // provisioning, and a 10s poll missed those often enough that the light
+  // looked like it never turned green at all.
+  const { data: status, refetch } = useMindflockStatus();
 
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine);
 
@@ -70,7 +54,7 @@ export function AutomationBar() {
     setBusy(true);
     setOptimistic(start);
     try {
-      await api<MfStatus>(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
     } catch (err) {
       // A card, not alert(): the desktop app has no native dialogs, so an
       // alert() failure there said nothing at all.

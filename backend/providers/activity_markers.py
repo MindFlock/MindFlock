@@ -337,7 +337,6 @@ def notification_hook_command(marker_dir=None) -> str:
     for versions without the field. An unreadable/garbled payload falls back to
     clarify so a real "needs input" is never silently dropped.
     """
-    import json
 
     code = (
         "import json,sys,subprocess,os,time,re\n"
@@ -533,27 +532,12 @@ def _atomic_write_json(path, data) -> bool:
     Atomic so a hot-reloading CLI (Claude Code re-reads settings mid-turn) never
     observes a truncated file and drops ALL local hooks. Returns True on success.
     """
-    import json
-    import os
-    import tempfile
-    from pathlib import Path
+    from backend.fsutil import atomic_write_json
 
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = json.dumps(data, indent=2) + "\n"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(body)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
+        atomic_write_json(path, data, ensure_ascii=True, prefix="tmp")
         return True
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
         return False
 
 
