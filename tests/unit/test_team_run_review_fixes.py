@@ -20,6 +20,7 @@ import pytest
 
 from backend.web import server
 from backend.web.core import autopilot as ap
+from backend.web.core import autopilot_driver as ap_driver
 from backend.web.core import team_run_driver as drv
 from backend.web.core import team_runs as tr
 
@@ -259,7 +260,7 @@ def test_an_ask_first_card_carries_the_exact_message_that_lands(pair, monkeypatc
     rec = ap.get("foo")
     assert rec["depth"] == "agent"
     monkeypatch.setattr(
-        server, "_autopilot_written_message", lambda t, wt, r: "notes: add new.txt"
+        ap_driver, "_autopilot_written_message", lambda t, wt, r: "notes: add new.txt"
     )
     server._autopilot_draft_for_approval("foo", str(pair), rec)
     ap.finish("foo")
@@ -278,7 +279,7 @@ def test_a_persons_message_is_never_replaced_by_a_draft(pair, monkeypatch):
     _run(server.instance_set_lane("foo", {"lane": "commit", "ask_first": True}))
     ap.update("foo", message="mine", message_auto=False)
     (pair / "new.txt").write_text("work\n")
-    monkeypatch.setattr(server, "_autopilot_written_message", lambda *a: "draft")
+    monkeypatch.setattr(ap_driver, "_autopilot_written_message", lambda *a: "draft")
     server._autopilot_draft_for_approval("foo", str(pair), ap.get("foo"))
     assert ap.get("foo")["message"] == "mine"
 

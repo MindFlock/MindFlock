@@ -21,6 +21,7 @@ import pytest
 from backend.web import server
 from backend.web.core import agent_state
 from backend.web.core import autopilot as ap
+from backend.web.core import autopilot_driver as ap_driver
 
 _BANNER = (
     "> summarise the diff\n"
@@ -183,8 +184,8 @@ def test_a_working_agent_never_pays_for_the_limit_probe(monkeypatch, snapshot_ha
 @pytest.fixture()
 def wait_harness(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "ap.json"))
-    monkeypatch.setattr(server, "_emit_autopilot", lambda title: None)
-    monkeypatch.setattr(server, "_emit_autopilot_event", lambda title: None)
+    monkeypatch.setattr(ap_driver, "_emit_autopilot", lambda title: None)
+    monkeypatch.setattr(ap_driver, "_emit_autopilot_event", lambda title: None)
     return None
 
 

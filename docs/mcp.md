@@ -1796,7 +1796,7 @@ refuses a `from` starting with `peer:`.
 | MCP server | `backend/mcp/` (`protocol.py`, `tools.py`, `ship.py`, `runs.py`, `identity.py`, `policy.py`, `api.py`, `gitlocal.py`) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
-| Fast-track | `backend/web/core/autopilot.py` and the driver in `server.py`; route `/api/instances/{title}/fast-track` |
+| Fast-track | `backend/web/core/autopilot.py` (store + decision) and `autopilot_driver.py` (loop + effects); route `/api/instances/{title}/fast-track` |
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
 | Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `server.py` |

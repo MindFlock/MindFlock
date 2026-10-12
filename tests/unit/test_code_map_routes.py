@@ -27,6 +27,7 @@ from backend.config import red_zones
 from backend.providers import _tool_hook_src as th
 from backend.session.storage import Status
 from backend.web import server
+from backend.web.core import autopilot_driver as ap_driver
 from backend.web.core import code_map
 from backend.web.core import red_zone_monitor as mon
 
@@ -728,8 +729,8 @@ def test_autopilot_merge_halts_on_a_red_zone_even_if_a_path_says_pending(
 
     halts, notes = [], []
     monkeypatch.setattr(server, "instance_merge_pr", _merge)
-    monkeypatch.setattr(server, "_autopilot_halt", lambda t, r: halts.append(r))
-    monkeypatch.setattr(server, "_autopilot_note", lambda *a: notes.append(a))
+    monkeypatch.setattr(ap_driver, "_autopilot_halt", lambda t, r: halts.append(r))
+    monkeypatch.setattr(ap_driver, "_autopilot_note", lambda *a: notes.append(a))
     asyncio.run(
         server._autopilot_act(
             "ap", "/wt", {"issues": {}}, {"now": time.time()}, "merge", {}

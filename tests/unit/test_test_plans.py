@@ -44,6 +44,7 @@ from fastapi.testclient import TestClient
 
 from backend.web.core import commit_message as cm
 from backend.web.core import test_plans as tp
+from backend.web.core import test_plans_driver as tp_driver
 
 
 @pytest.fixture(autouse=True)
@@ -2741,9 +2742,9 @@ def test_the_landing_pass_stops_asking_once_the_landing_has_settled(
     repo_settings(live_branch="main")
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_test_plan_merged_into",
         lambda plan: asked.append(plan["id"])
         or {"branch": "main", "at": 1.0, "all": []},
@@ -2772,9 +2773,9 @@ def test_the_landing_pass_keeps_climbing_past_the_live_branch(
     repo_settings(live_branch="staging")
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_test_plan_merged_into",
         lambda plan: asked.append(plan["id"])
         or {"branch": "main", "at": 2.0, "all": ["main", "staging"]},
@@ -2804,9 +2805,9 @@ def test_the_landing_pass_closes_the_window_on_an_undated_landing(
     repo_settings(live_branch="main")
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_test_plan_merged_into",
         lambda plan: asked.append(plan["id"]) or {"branch": "", "at": 0.0, "all": []},
     )
@@ -2835,9 +2836,9 @@ def test_the_landing_pass_asks_each_plan_at_most_once_a_window(
     repo_settings(live_branch="main")
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_test_plan_merged_into",
         lambda plan: asked.append(plan["id"]) or {"branch": "", "at": 0.0, "all": []},
     )
@@ -2857,9 +2858,9 @@ def test_the_landing_pass_is_quiet_while_verify_is_paused(
 
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_verify_enabled", lambda: False)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: False)
     monkeypatch.setattr(
-        server, "_test_plan_merged_into", lambda plan: asked.append(plan["id"]) or {}
+        tp_driver, "_test_plan_merged_into", lambda plan: asked.append(plan["id"]) or {}
     )
     server._TEST_PLAN_LANDED_CHECKED.clear()
     tp.upsert(_plan("sc-1"))
@@ -3006,13 +3007,13 @@ def test_the_pass_reads_finished_runs_before_it_talks_to_the_network(
     order = []
     monkeypatch.setattr(tp, "prune", lambda *a, **k: None)
     monkeypatch.setattr(
-        server, "_recover_stalled_test_plans", lambda p: order.append("stalled")
+        tp_driver, "_recover_stalled_test_plans", lambda p: order.append("stalled")
     )
     monkeypatch.setattr(
-        server, "_poll_running_test_plans", lambda p: order.append("runs")
+        tp_driver, "_poll_running_test_plans", lambda p: order.append("runs")
     )
     monkeypatch.setattr(
-        server, "_check_test_plans_for_liveness", lambda p: order.append("live")
+        tp_driver, "_check_test_plans_for_liveness", lambda p: order.append("live")
     )
     server._test_plans_due_pass()
     # Both local phases come before the network one, and picking abandoned
@@ -3029,13 +3030,15 @@ def test_a_stalled_REFRESH_is_recovered_as_a_refresh(store, monkeypatch):
     from backend.web import server
 
     started: list = []
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_start_test_plan_generation",
         lambda pid, program, wt, refresh=False: started.append((pid, refresh)),
     )
-    monkeypatch.setattr(server, "_test_plan_session_ctx", lambda pid: ("claude", "/wt"))
+    monkeypatch.setattr(
+        tp_driver, "_test_plan_session_ctx", lambda pid: ("claude", "/wt")
+    )
     old = time.time() - (tp.GENERATE_STALE_S + 1)
     tp.upsert(_plan("sc-1", state="generating", gen_started=old))  # _plan HAS steps
     server._recover_stalled_test_plans(tp.list_plans())
@@ -3049,16 +3052,16 @@ def test_the_pass_picks_up_a_generation_the_app_was_closed_on(store, monkeypatch
     from backend.web import server
 
     started: list = []
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_start_test_plan_generation",
         lambda pid, program, wt, refresh=False: started.append(
             (pid, program, wt, refresh)
         ),
     )
     monkeypatch.setattr(
-        server, "_test_plan_session_ctx", lambda pid: ("claude", "/wt/%s" % pid)
+        tp_driver, "_test_plan_session_ctx", lambda pid: ("claude", "/wt/%s" % pid)
     )
     old = time.time() - (tp.GENERATE_STALE_S + 1)
     tp.upsert(_plan("sc-1", state="generating", steps=[], gen_started=old))
@@ -3079,9 +3082,9 @@ def test_the_pass_gives_up_on_a_generation_that_stalled_twice(store, monkeypatch
     from backend.web import server
 
     started: list = []
-    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: True)
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_start_test_plan_generation",
         lambda pid, program, wt: started.append(pid),
     )
@@ -3106,9 +3109,9 @@ def test_a_paused_verify_does_not_fire_model_calls_on_a_timer(store, monkeypatch
     from backend.web import server
 
     started: list = []
-    monkeypatch.setattr(server, "_verify_enabled", lambda: False)
+    monkeypatch.setattr(tp_driver, "_verify_enabled", lambda: False)
     monkeypatch.setattr(
-        server, "_start_test_plan_generation", lambda *a: started.append(a)
+        tp_driver, "_start_test_plan_generation", lambda *a: started.append(a)
     )
     old = time.time() - (tp.GENERATE_STALE_S + 1)
     tp.upsert(_plan("sc-1", state="generating", steps=[], gen_started=old))
@@ -3132,9 +3135,9 @@ def test_the_liveness_phase_is_budgeted_and_rotates(store, monkeypatch):
         return False
 
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_test_plan_is_live", slow)
-    monkeypatch.setattr(server, "_TEST_PLAN_LIVE_BUDGET_S", 0.01)
-    monkeypatch.setattr(server, "_TEST_PLAN_LIVE_CHECKED", {})
+    monkeypatch.setattr(tp_driver, "_test_plan_is_live", slow)
+    monkeypatch.setattr(tp_driver, "_TEST_PLAN_LIVE_BUDGET_S", 0.01)
+    monkeypatch.setattr(tp_driver, "_TEST_PLAN_LIVE_CHECKED", {})
     plans = tp.list_plans()
     for _ in range(3):
         server._check_test_plans_for_liveness(plans)
@@ -3651,10 +3654,13 @@ def pushed_session(tmp_path, monkeypatch):
     # Generation is the expensive half and is not what these tests are about;
     # record the call instead so they can assert it did or did not happen.
     calls: list = []
-    monkeypatch.setattr(server, "_generate_test_plan", lambda *a, **k: calls.append(a))
-    monkeypatch.setattr(
-        server, "_start_test_plan_generation", lambda *a, **k: calls.append(a)
-    )
+    # Both modules: the push trigger and the closed-session path call them from
+    # the driver, the write route for an open session through ``server``.
+    for mod in (server, tp_driver):
+        monkeypatch.setattr(mod, "_generate_test_plan", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(
+            mod, "_start_test_plan_generation", lambda *a, **k: calls.append(a)
+        )
     return repo, calls
 
 
@@ -4159,7 +4165,7 @@ def test_the_switch_pauses_the_liveness_loop_too(repo_settings, monkeypatch):
     asked = []
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(
-        server, "_test_plan_is_live", lambda plan: asked.append(plan["id"]) or True
+        tp_driver, "_test_plan_is_live", lambda plan: asked.append(plan["id"]) or True
     )
 
     server._check_test_plans_for_liveness(tp.list_plans())
@@ -4180,7 +4186,7 @@ def test_the_liveness_loop_runs_again_once_the_switch_is_back_on(
     # is a different rule and is pinned on its own below.
     repo_settings(verify_enabled=True, deploy_delay_minutes=0)
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_test_plan_is_live", lambda plan: True)
+    monkeypatch.setattr(tp_driver, "_test_plan_is_live", lambda plan: True)
 
     server._check_test_plans_for_liveness(tp.list_plans())
 
@@ -5281,8 +5287,8 @@ def test_the_loop_waits_out_the_window_then_marks_it_due(
 
     repo_settings(verify_enabled=True, deploy_delay_minutes=10)
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server, "_test_plan_is_live", lambda plan: True)
-    monkeypatch.setattr(server, "_notify_test_plan_due", lambda plan: None)
+    monkeypatch.setattr(tp_driver, "_test_plan_is_live", lambda plan: True)
+    monkeypatch.setattr(tp_driver, "_notify_test_plan_due", lambda plan: None)
     tp.upsert(_plan("sc-1", state="generated"))
 
     server._check_test_plans_for_liveness(tp.list_plans())
@@ -5307,7 +5313,7 @@ def test_a_plan_waiting_on_a_deploy_costs_no_fetch(store, repo_settings, monkeyp
     repo_settings(verify_enabled=True, deploy_delay_minutes=10)
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(
-        server, "_test_plan_is_live", lambda plan: asked.append(plan["id"]) or True
+        tp_driver, "_test_plan_is_live", lambda plan: asked.append(plan["id"]) or True
     )
     tp.upsert(_plan("sc-1", state="generated", merged_at=time.time()))
     server._check_test_plans_for_liveness(tp.list_plans())
@@ -5453,7 +5459,7 @@ def test_the_loop_re_aims_before_it_asks_whether_the_work_shipped(
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(tp, "resolve_live_branch", lambda root="": "main")
     monkeypatch.setattr(
-        server,
+        tp_driver,
         "_test_plan_is_live",
         lambda plan: asked.append(plan["live_branch"]) or False,
     )
@@ -5478,7 +5484,7 @@ def test_the_loop_re_aims_due_plans_the_rotation_never_visits(
     repo_settings(verify_enabled=True, deploy_delay_minutes=0)
     monkeypatch.setattr(server, "git_available", lambda: True)
     monkeypatch.setattr(tp, "resolve_live_branch", lambda root="": "staging")
-    monkeypatch.setattr(server, "_test_plan_is_live", lambda plan: False)
+    monkeypatch.setattr(tp_driver, "_test_plan_is_live", lambda plan: False)
     tp.upsert(
         _plan(
             "sc-1",
@@ -6365,8 +6371,8 @@ def test_a_finished_result_file_is_eaten_so_it_cannot_settle_the_next_run(
         {"verify-sc-1": SimpleNamespace(GetWorktreePath=lambda: str(wt))},
     )
     monkeypatch.setattr(server, "_live_session_name", lambda name: name)
-    monkeypatch.setattr(server, "_verify_run_trees", lambda plan: ("", ""))
-    monkeypatch.setattr(server, "_announce_test_plan_checked", lambda plan: None)
+    monkeypatch.setattr(tp_driver, "_verify_run_trees", lambda plan: ("", ""))
+    monkeypatch.setattr(tp_driver, "_announce_test_plan_checked", lambda plan: None)
     tp.upsert(_plan("sc-1", state="due", live_at=50.0))
     tp.start_run("sc-1", "verify-sc-1")
 
@@ -7488,7 +7494,7 @@ def test_writing_a_checklist_for_a_closed_session(client, closed_session, monkey
 
     started: list = []
     monkeypatch.setattr(
-        server, "_start_test_plan_generation", lambda *a, **k: started.append(a)
+        tp_driver, "_start_test_plan_generation", lambda *a, **k: started.append(a)
     )
     monkeypatch.setattr(server.ENGINE, "instances", {})
 
@@ -7528,7 +7534,7 @@ def test_a_closed_session_that_already_has_a_checklist_points_at_it(
     from backend.web import server
 
     monkeypatch.setattr(server.ENGINE, "instances", {})
-    monkeypatch.setattr(server, "_start_test_plan_generation", lambda *a, **k: None)
+    monkeypatch.setattr(tp_driver, "_start_test_plan_generation", lambda *a, **k: None)
     tp.upsert(_plan("sc-9", branch="feature/sc-9", state="generated"))
 
     r = client.post("/api/instances/sc-9/test-plan")
@@ -7550,7 +7556,7 @@ def test_a_closed_session_whose_branch_another_window_covers_names_that_window(
     monkeypatch.setattr(server.ENGINE, "instances", {})
     started: list = []
     monkeypatch.setattr(
-        server, "_start_test_plan_generation", lambda *a, **k: started.append(a)
+        tp_driver, "_start_test_plan_generation", lambda *a, **k: started.append(a)
     )
     tp.upsert(
         _plan(
@@ -7880,9 +7886,9 @@ def test_with_no_base_it_falls_back_to_the_flock_wide_heuristic(store, monkeypat
         "_pr_info",
         lambda root, branch: {"state": "MERGED", "base": "", "url": "u"},
     )
-    monkeypatch.setattr(server, "_merging_is_shipping", lambda live: True)
+    monkeypatch.setattr(tp_driver, "_merging_is_shipping", lambda live: True)
     assert server._test_plan_is_live(_plan("sc-1", live_branch="main")) is True
-    monkeypatch.setattr(server, "_merging_is_shipping", lambda live: False)
+    monkeypatch.setattr(tp_driver, "_merging_is_shipping", lambda live: False)
     assert server._test_plan_is_live(_plan("sc-1", live_branch="main")) is False
 
 
