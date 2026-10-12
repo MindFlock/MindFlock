@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-12
+
 ### Fixed
 
 - **Ctrl/Cmd+Enter in the New dialog's sentence box no longer creates an
@@ -3532,7 +3534,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.3
 [0.8.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.2
 [0.8.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.1
 [0.8.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.0
