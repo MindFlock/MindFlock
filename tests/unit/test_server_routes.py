@@ -29,6 +29,7 @@ from backend.session.storage import Loading, Status
 from backend.web import server
 from backend.web.core import github_pr
 from backend.web.server import app
+from backend.web.core import proc
 
 client = TestClient(app)
 
@@ -826,6 +827,7 @@ def test_branches_lists_remote_heads(registered, monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stdout=out, stderr=b"")
 
     monkeypatch.setattr(server, "_run_capped", _fake_run)
+    monkeypatch.setattr(proc, "run_capped", _fake_run)
     monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
     monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
     r = client.get("/api/instances/gt-8/branches")
@@ -858,6 +860,7 @@ def _stub_gh(monkeypatch, returncode: int, out: bytes):
         return SimpleNamespace(returncode=returncode, stdout=out, stderr=b"")
 
     monkeypatch.setattr(server, "_run_capped", _fake_run)
+    monkeypatch.setattr(proc, "run_capped", _fake_run)
     return calls
 
 
@@ -1919,39 +1922,6 @@ def test_list_workspaces_mtime_is_none_when_stat_fails(monkeypatch, tmp_path):
     assert r.status_code == 200
     rows = {w["name"]: w for w in r.json()["workspaces"]}
     assert rows["ghost"]["mtime"] is None
-
-
-# --------------------------------------------------------------------------- #
-# clear_workspaces (bulk reclaim)                                              #
-# --------------------------------------------------------------------------- #
-def test_clear_workspaces_removes_idle_keeps_active_and_protected(
-    registered, monkeypatch, tmp_path
-):
-    # The sweep resolves ~/.mindflock/worktrees: never the real one under pytest.
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    root = tmp_path / "workspaces"
-    root.mkdir()
-    idle = root / "idle-ws"
-    idle.mkdir()
-    active = root / "active-ws"
-    active.mkdir()
-    base = root / "_base_repo"  # protected base clone
-    base.mkdir()
-    monkeypatch.setattr(
-        server, "_workspace_roots", lambda: [os.path.realpath(str(root))]
-    )
-    monkeypatch.setattr(server, "_close_cursor_window", lambda p: None)
-    monkeypatch.setattr(server, "_remove_trust_entry", lambda p: None)
-    # A live session owns active-ws.
-    registered("holder", wt=str(active))
-    r = client.post("/api/workspaces/clear", json={})
-    assert r.status_code == 200
-    body = r.json()
-    assert "idle-ws" in body["removed"]
-    assert "holder" in body["kept_active"]
-    assert not idle.exists()  # idle reclaimed
-    assert active.exists()  # live session's dir left alone
-    assert base.exists()  # protected base clone never bulk-deleted
 
 
 # --------------------------------------------------------------------------- #

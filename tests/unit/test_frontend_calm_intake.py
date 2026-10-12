@@ -51,18 +51,25 @@ def test_no_intake_picker_renders_agent_only():
     for name in ("kit.tsx", "TicketsTab.tsx", "RepoSources.tsx"):
         code = _code(_INTAKE / name)
         assert "Agent only" not in code, name
-        # The ladder's own constant still carries "agent"; the pickers must not
-        # render it as an option. Every source/repo picker filters it out, and
-        # the row picker draws from the session ladder, which never had it.
-        assert not re.search(r"\b(?:SOURCE_)?DEPTHS\.map\(", code), name
+        # ONE ladder: every picker draws its words from lib/autopilot's
+        # LANE_LABEL, never a second table of its own.
+        assert "DEPTH_LABELS" not in code, name
+
+
+def test_the_ladder_has_no_agent_rung_to_render():
+    src = _read(_INTAKE.parent.parent / "lib" / "autopilot.ts")
+    assert (
+        'export const SOURCE_DEPTHS: readonly Lane[] = ["commit", "push", "pr"];' in src
+    )
+    assert "Agent only" not in src
 
 
 def test_source_and_repo_pickers_drop_the_agent_rung():
     for name in ("TicketsTab.tsx", "RepoSources.tsx"):
         code = _code(_INTAKE / name)
-        assert 'SOURCE_DEPTHS.filter((d) => d !== "agent")' in code, name
+        assert "SOURCE_DEPTHS.map(" in code, name
         # The empty choice is Off, in the ladder's own word.
-        assert '<option value="">{DEPTH_LABELS.off}</option>' in code, name
+        assert '<option value="">{LANE_LABEL.leave}</option>' in code, name
         assert "Off — stop after the agent works" not in code, name
 
 
@@ -82,8 +89,11 @@ def test_row_picker_offers_an_explicit_off_and_names_its_default():
 
 
 def test_a_stored_agent_rung_reads_as_off():
-    kit = _code(_INTAKE / "kit.tsx")
-    assert 'depth === "agent" ? "off"' in kit
+    # The one ladder folds every wire spelling of Off ("agent" included);
+    # the row picker labels through it.
+    ladder = _read(_INTAKE.parent.parent / "lib" / "autopilot.ts")
+    assert 'if (s === "agent" || s === "off" || s === "none") return "leave";' in ladder
+    assert "laneLabel(configuredDepth)" in _code(_INTAKE / "kit.tsx")
     assert 'source.depth === "agent" ? ""' in _code(_INTAKE / "TicketsTab.tsx")
     assert 'o?.depth === "agent" ? ""' in _code(_INTAKE / "RepoSources.tsx")
 
@@ -112,7 +122,7 @@ def test_row_pickers_fold_behind_options():
     assert '"ik-item-uses"' in code
     # The collapsed line names Fast-track the way New's Options summary does:
     # a bare "Off" beside Start now read as "this item is off".
-    assert '"Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth)' in code
+    assert '"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth)' in code
     # The payload shapes the bundle pins rely on are untouched.
     for tab in ("PullRequestsTab.tsx", "IssuesTab.tsx", "TicketsTab.tsx"):
         assert "agent ? { agent } : {}" in _read(_INTAKE / tab), tab

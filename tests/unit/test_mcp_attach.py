@@ -35,6 +35,7 @@ from backend.providers.claude import ClaudeProvider, claude_launch_command
 from backend.providers.codex import CodexProvider
 from backend.providers.config import BUILTIN_CONFIGS
 from backend.providers.generic import GenericProvider
+from backend.web.core import proc
 
 _TOOLS = (
     "whoami",
@@ -980,7 +981,7 @@ def _wire_relaunch(monkeypatch, prov, *, launcher_exists: bool):
     )
     from backend.web import server
 
-    monkeypatch.setattr(server, "_run_capped", fake_run)
+    monkeypatch.setattr(proc, "run_capped", fake_run)
     return agent_sessions, calls
 
 
@@ -1269,7 +1270,7 @@ def test_relaunch_that_fails_records_nothing(tmp_path, monkeypatch):
     def failing(argv, **kw):
         return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=b"nope")
 
-    monkeypatch.setattr(server, "_run_capped", failing)
+    monkeypatch.setattr(proc, "run_capped", failing)
     inst = SimpleNamespace(
         Program="rec",
         InPlace=False,

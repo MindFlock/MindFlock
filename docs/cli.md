@@ -2,8 +2,8 @@
 
 The console entry point (`backend/cli.py`) has two kinds of commands. **Host
 commands** run things locally: `serve`, `doctor`, `uninstall`, and `mcp`, the
-MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `rm`,
-`open`, `events`, `msg`, `inbox`) are thin clients over a *running* server's
+MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `close`,
+`delete`, `pause`, `resume`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
 HTTP API (`backend/client.py`). Session commands never spawn an engine of
 their own: the terminal and the web UI drive the same server, so a session
 created from either shows up in both.
@@ -323,31 +323,47 @@ normal tmux `Ctrl-b d`.
 CI) it exits 1 with ``attach needs a real terminal (running in a script? use
 `mindflock ls --json`)`` instead of letting tmux fail cryptically.
 
-### `mindflock rm TITLE... [--yes]` / `mindflock rm --wipe TITLE... [--yes]`
+### `mindflock close TITLE... [--yes]` / `mindflock delete TITLE... [--yes]`
 
-Close one or more sessions on the running server. By default `rm` **keeps your
-work**: it calls `POST /api/instances/{title}/close`, which stops the agent and
-moves the session to **Recently closed** (under the session list in the web
-UI). The worktree and its branch stay on disk, so the session can be reopened
-later as a fresh agent on the same files. It asks `Close session '<title>'? The
-agent stops; the worktree and branch are kept (Recently closed). [y/N]` once
-for all the titles unless `--yes`/`-y` is passed (for scripts), and prints
-`closed session <title> (worktree and branch kept; see Recently closed)`.
+**Close** keeps your work: `close` calls `POST /api/instances/{title}/close`,
+which stops the agent and moves the session to **Recently closed** (under the
+session list in the web UI). The worktree and its branch stay on disk, so the
+session can be reopened later as a fresh agent on the same files. It asks
+`Close session '<title>'? The agent stops; the worktree and branch are kept
+(Recently closed). [y/N]` once for all the titles unless `--yes`/`-y` is passed
+(for scripts), and prints `closed session <title> (worktree and branch kept;
+see Recently closed)`.
 
-`--wipe` is the destructive form: `POST /api/instances/{title}/cleanup` deletes
-the worktree **and** the branch, so unpushed work in them is gone. On a
-terminal it asks `Delete session '<title>'? This stops the agent and DELETES the
-worktree and branch — unpushed work is lost. [y/N]`; `--yes` skips the
-question. When stdin is **not** a terminal (a pipe, a script, CI) and `--yes`
-is absent it refuses with exit 1 and says so, instead of guessing. If the
-server answers 409 because another session still uses the same folder (a copy
-session, say), the refusal names those sessions on stderr and the command exits
-1; other titles on the same command line are still deleted.
+**Delete** is the destructive form: `delete` calls `POST
+/api/instances/{title}/cleanup`, which deletes the worktree **and** the branch,
+so unpushed work in them is gone. On a terminal it asks `Delete session
+'<title>'? This stops the agent and DELETES the worktree and branch — unpushed
+work is lost. [y/N]`; `--yes` skips the question. When stdin is **not** a
+terminal (a pipe, a script, CI) and `--yes` is absent it refuses with exit 1
+and says so, instead of guessing. If the server answers 409 because another
+session still uses the same folder (a copy session, say), the refusal names
+those sessions on stderr and the command exits 1; other titles on the same
+command line are still deleted.
+
+`mindflock rm TITLE...` is an alias of `close`, and `mindflock rm --wipe
+TITLE...` an alias of `delete`; both keep working for existing scripts.
 
 Each `TITLE` may be any unambiguous prefix, exactly like `attach`; every title
 is resolved before anything is closed, so a typo closes nothing. An unknown title
 prints ``no session named '<title>' (run `mindflock ls`)`` and exits 1;
 an ambiguous prefix lists the candidates.
+
+### `mindflock pause TITLE...` / `mindflock resume TITLE...`
+
+**Pause** is not Close: `pause` calls `POST /api/instances/{title}/pause`,
+which stops the agent and leaves the worktree and branch exactly as they are,
+and the session **stays in the sidebar** (it does not move to Recently
+closed). `resume` calls `POST /api/instances/{title}/resume`, which restarts
+the agent in place in the same worktree. They print `paused session <title>` /
+`resumed session <title>`; a title the server refuses (a peer shared session
+can't be paused, say) is reported on stderr, the rest still run, and the
+command exits 1. Titles resolve like `close` (unambiguous prefixes, all before
+anything runs).
 
 ### `mindflock open TITLE`
 

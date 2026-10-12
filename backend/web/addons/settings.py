@@ -1911,12 +1911,16 @@ class SettingsAddon(Addon):
             if not re.match(r"^[^\s/]+/[^\s/]+$", repo):
                 return JSONResponse({"ok": False, "error": "repo must be owner/name"})
             from backend.ticket_ingestion import github_auth
+            from backend.web.core import github_pr
 
             # Resolve afresh: a memoized token from before the user pasted a
             # new one would make this button answer about the wrong credential.
+            # The same config (config.toml rung included) the PR buttons use.
             github_auth.invalidate()
             try:
-                token = (await github_auth.resolve_token(None)).strip()
+                token = (
+                    await github_auth.resolve_token(github_pr._github_config())
+                ).strip()
             except github_auth.GithubAuthError:
                 # One sentence naming where the credential lives.
                 return JSONResponse(

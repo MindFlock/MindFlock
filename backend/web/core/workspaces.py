@@ -28,6 +28,7 @@ import time
 from backend import config
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.session import provisioned as provisioning
+from backend.web.core import proc as _proc
 from backend.web.core.cursor_windows import _close_cursor_window
 from backend.web.core.worktree_reclaim import _git as _wt_git
 from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirname
@@ -83,8 +84,7 @@ def _workspace_roots() -> list:
 def _dir_size_bytes(path: str) -> int:
     # GNU du takes -b (bytes); BSD/macOS du doesn't, so fall back to the
     # POSIX -k (KiB) form there. Best-effort either way — 0 on any failure.
-    srv = _server()
-    cp = srv._run_capped(
+    cp = _proc.run_capped(
         ["du", "-sb", path],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -92,7 +92,7 @@ def _dir_size_bytes(path: str) -> int:
     )
     scale = 1
     if cp.returncode != 0:
-        cp = srv._run_capped(
+        cp = _proc.run_capped(
             ["du", "-sk", path],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -164,7 +164,7 @@ def _base_clone_references(base_dir: str):
         ):
             titles.append(title)
     worktrees = []
-    cp = srv._run_capped(
+    cp = _proc.run_capped(
         ["git", "-C", real, "worktree", "list", "--porcelain"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -196,7 +196,7 @@ def _remove_worktree_path(folder: str, repo_path: str = "") -> bool:
     _close_cursor_window(real)
     _remove_trust_entry(real)  # GC ~/.claude.json trust entry (G3)
     if repo_path and os.path.isdir(repo_path):
-        srv._run_capped(
+        _proc.run_capped(
             ["git", "-C", repo_path, "worktree", "prune"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -40,11 +40,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from backend.fsutil import atomic_write_json
 from backend import log
 from backend.config import config as _config
 from backend.web.core import self_update as _self_update
@@ -110,11 +110,7 @@ def _read() -> dict:
 
 def _write(doc: dict) -> None:
     try:
-        path = _path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(doc), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_json(_path(), doc, indent=None, newline=False, ensure_ascii=True)
     except OSError as err:
         _log("fleet update: could not save progress (%v)", err)
 

@@ -30,7 +30,7 @@ import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { SourceCard, TestButton } from "./kit";
-import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
+import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 
 export const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
@@ -335,7 +335,7 @@ export function RepoSourceList({
           cards.map((card) => {
             const o = ov[card.repo];
             const agent = o?.agent || "";
-            // A stored "agent" rung is Off in the one ladder (see kit's ladderLabel).
+            // A stored "agent" rung is Off in the one ladder (see lib/autopilot's normalizeLane).
             const depth = o?.depth === "agent" ? "" : o?.depth || "";
             // What this repo measures "shipped" against, override first. Only
             // read on the verify surface, where it is both the summary line and
@@ -631,10 +631,10 @@ export function RepoSourceList({
                         {/* One ladder: Off / Commit / Push / Open a PR, the
                             words every Fast-track control uses. A stored
                             "agent" is Off and reads as Off. */}
-                        <option value="">{DEPTH_LABELS.off}</option>
-                        {SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => (
+                        <option value="">{LANE_LABEL.leave}</option>
+                        {SOURCE_DEPTHS.map((d) => (
                           <option key={d} value={d}>
-                            {DEPTH_LABELS[d]}
+                            {LANE_LABEL[d]}
                           </option>
                         ))}
                       </select>

@@ -295,7 +295,7 @@ class TestShippableGuard:
         )
         with pytest.raises(ToolError) as err:
             box.ship_session({"title": "w1", "depth": "push"}, _ctx(clock))
-        assert "fast-track armed" in err.value.message
+        assert "Fast-track armed" in err.value.message
         assert 'depth="off"' in err.value.message
         assert sim.posts == []
         # A finished or halted run no longer drives anything.
@@ -746,6 +746,17 @@ class TestSetAutopilot:
         box, api, clock = make_box(_tree())
         api.routes[("DELETE", "fast-track")] = {"ok": True, "stopped": True}
         out = box.set_autopilot({"title": "w1", "depth": "off"}, FakeCtx(clock))
+        assert out == {"title": "w1", "autopilot": None, "stopped": True}
+
+    def test_leave_is_off(self):
+        # The lane routes' word for Off works here too (one ladder).
+        from backend.mcp.ship import S_AUTOPILOT, S_TICKET
+
+        assert "leave" in S_AUTOPILOT["properties"]["depth"]["enum"]
+        assert "leave" in S_TICKET["properties"]["autopilot"]["enum"]
+        box, api, clock = make_box(_tree())
+        api.routes[("DELETE", "fast-track")] = {"ok": True, "stopped": True}
+        out = box.set_autopilot({"title": "w1", "depth": "leave"}, FakeCtx(clock))
         assert out == {"title": "w1", "autopilot": None, "stopped": True}
 
     def test_merge_with_confirm(self):

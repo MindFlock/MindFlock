@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from backend.fsutil import atomic_write_json
 from backend import log
 from backend.config import config as _config
 
@@ -243,12 +244,8 @@ def write_install_json(**fields) -> bool:
     the existing fields are kept, ``fields`` replace them. Best-effort."""
     data = read_install_json()
     data.update({k: v for k, v in fields.items() if v is not None})
-    path = install_json_path()
-    tmp = path.with_suffix(".json.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_json(install_json_path(), data, ensure_ascii=True, mode=0o644)
     except OSError:
         return False
     return True
@@ -545,11 +542,10 @@ def read_state() -> dict:
 def write_state(**fields) -> None:
     """Replace the state file atomically (the installer writes it too)."""
     path = state_path()
-    tmp = path.with_suffix(".json.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(fields), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_json(
+            path, fields, indent=None, newline=False, ensure_ascii=True, mode=0o644
+        )
     except OSError as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("update: could not write %s (%v)", path, err)

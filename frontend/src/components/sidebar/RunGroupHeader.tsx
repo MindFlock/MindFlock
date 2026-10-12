@@ -9,7 +9,7 @@
  * The ⋯ menu acts through the runs API at once — never a `window.prompt` /
  * `confirm` (Electron has neither): "Add lines…" and "Cancel…" open inline
  * rows inside the menu. It is the group's one home: its queued lines (Start
- * now / Remove), Pause, Cancel and, once it has finished, "Copy summary" —
+ * now / Take out of run), Pause, Cancel and, once it has finished, "Copy summary" —
  * what waits on you is the bell's. */
 
 import { useEffect, useRef, useState } from "react";
@@ -244,9 +244,9 @@ function RunGroupMenu({
                 type="button"
                 disabled={busy}
                 title="Take it out of the team run — it never starts"
-                onClick={() => go(() => runAct("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t)))}
+                onClick={() => go(() => runAct("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run"))}
               >
-                Remove
+                Take out of run
               </button>
             </div>
           ))}
@@ -302,7 +302,7 @@ function RunGroupMenu({
   );
 }
 
-/** A line still waiting for a slot: dim, hollow dot, no number, no ✕ (Remove
+/** A line still waiting for a slot: dim, hollow dot, no number, no ✕ (Take out of run
  * lives in the header's ⋯). Not a rail row — see the module comment. */
 export function QueuedRow({ task, pos, groupName }: { task: RunTask; pos: number; groupName: string }) {
   const title = queuedTitle(task);

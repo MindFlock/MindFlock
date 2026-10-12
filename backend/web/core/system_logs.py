@@ -10,28 +10,18 @@ Split out of ``backend.web.server`` (which re-imports these names — the
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from backend import log
+from backend.web.core import pipeline_root
 
 _LOG_TAIL_MAX = 256 * 1024  # only ever read/return the last 256 KB of a log
 
 
 def _resolve_repo_root() -> Path:
-    """The directory the ingestion pipeline runs in — where ``config.toml`` and
-    its ``logs/`` live. Same resolution the ingestion addon uses to launch the
-    subprocess (``MINDFLOCK_REPO_ROOT`` env → nearest ancestor with
-    ``config.toml`` → cwd), because THIS server's cwd is not guaranteed to
-    match the pipeline's — which is exactly why a hard-coded relative
-    ``logs/pipeline.log`` never resolved and the ingestion log went missing."""
-    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "config.toml").is_file():
-            return parent
-    return Path.cwd()
+    """Where the pipeline keeps state.json / workspaces/ — see
+    :func:`backend.web.core.pipeline_root.resolve_repo_root`."""
+    return pipeline_root.resolve_repo_root(__file__)
 
 
 def _log_sources() -> list:

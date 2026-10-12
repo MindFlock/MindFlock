@@ -24272,494 +24272,7 @@ function pop(kind, title, detail, actions) {
 	while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
 }
 //#endregion
-//#region src/lib/rowSearch.ts
-function searchTokens(query) {
-	return query.toLowerCase().split(/\s+/).filter(Boolean);
-}
-function matchesTokens(fields, tokens) {
-	if (!tokens.length) return true;
-	const hay = fields.filter(Boolean).join(" ").toLowerCase();
-	return tokens.every((t) => hay.includes(t));
-}
-//#endregion
-//#region src/components/dialogs/verify.ts
-function isFinal(result) {
-	return result === "pass" || result === "fail";
-}
-function isYourAnswer(result, by = "") {
-	return isFinal(result) || result === "blocked" && by === "human";
-}
-function answeredByYou(entry) {
-	return isYourAnswer(entry?.result, entry?.by);
-}
-function handedBack(entry) {
-	return entry?.result === "blocked" && entry?.by !== "human";
-}
-function stepIsYours(plan, step) {
-	return step.actor === "human" || handedBack(stepResult(plan, step.id));
-}
-function isPhantomRun(run) {
-	if (run.session) return false;
-	const results = run.results || {};
-	return !Object.keys(results).some((id) => !!results[id]?.result);
-}
-function latestRun(plan) {
-	const runs = plan.runs || [];
-	let best = null;
-	for (const run of runs) {
-		if (!run || isPhantomRun(run)) continue;
-		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
-	}
-	return best;
-}
-function stepResult(plan, stepId) {
-	const run = latestRun(plan);
-	if (!run) return null;
-	return run.results?.[stepId] ?? null;
-}
-function verdictOf(plan) {
-	const run = latestRun(plan);
-	if (!run) return "none";
-	const results = run.results || {};
-	const ids = answerableIds(plan, run);
-	if (!ids.length) return "partial";
-	let unsettled = false;
-	for (const id of ids) {
-		const result = results[id]?.result;
-		if (result === "fail") return "fail";
-		if (!isFinal(result)) unsettled = true;
-	}
-	return unsettled ? "partial" : "pass";
-}
-function answerableIds(plan, run) {
-	const steps = plan.steps || [];
-	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
-}
-function openHumanSteps(plan) {
-	const run = latestRun(plan);
-	if (!run) return [];
-	const results = run.results || {};
-	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
-}
-function needsConfirmation(plan) {
-	return openHumanSteps(plan).length > 0;
-}
-function allSettled(plan) {
-	const run = latestRun(plan);
-	const steps = plan.steps || [];
-	if (!run || !steps.length) return false;
-	const results = run.results || {};
-	return steps.every((s) => answeredByYou(results[s.id]));
-}
-function failCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
-}
-function unansweredCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
-}
-function cantCheckCount(plan) {
-	const run = latestRun(plan);
-	if (!run) return 0;
-	const results = run.results || {};
-	return answerableIds(plan, run).filter((id) => {
-		const entry = results[id];
-		return entry?.result === "blocked" && entry.by === "human";
-	}).length;
-}
-function isWaitingOnYou(plan) {
-	return plan.state === "due" || plan.state === "running" || plan.state === "generating" && !!plan.live_at && !allSettled(plan) || needsConfirmation(plan);
-}
-function dueCount(plans) {
-	return (plans || []).filter(isWaitingOnYou).length;
-}
-function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
-	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
-	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
-	return Object.entries(blocks || {}).some(([slug, block]) => {
-		const own = String(block?.live_branch || "").trim();
-		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
-	});
-}
-function planTargets(instances, plans, closed = []) {
-	const havePlans = new Set((plans || []).map((plan) => plan.id));
-	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch, repo) => {
-		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
-		const key = coverageKey(repo, branch);
-		if (key && covered.has(key)) return;
-		seen.add(title);
-		out.push(title);
-	};
-	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
-	for (const entry of closed || []) take(entry.title, entry.branch, "");
-	return out;
-}
-function coverageKey(repo, branch) {
-	const r = (repo || "").trim();
-	const b = (branch || "").trim();
-	return r && b ? r + "\0" + b : "";
-}
-function repoName(repoRoot) {
-	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
-	return parts[parts.length - 1] || "";
-}
-function closedTargets(instances, closed = []) {
-	const live = new Set((instances || []).map((i) => i.title));
-	return new Set((closed || []).map((e) => e.title).filter((t) => t && !live.has(t)));
-}
-function noTargetsReason(instances, plans, closed = []) {
-	if (planTargets(instances, plans, closed).length) return "";
-	const list = [...instances || [], ...closed || []];
-	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
-	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
-	return "Every session with a branch already has a checklist — they're in the list below.";
-}
-var GROUPS = [
-	{
-		key: "due",
-		label: "Not checked yet"
-	},
-	{
-		key: "fail",
-		label: "Steps failed"
-	},
-	{
-		key: "generated",
-		label: "Not shipped yet"
-	},
-	{
-		key: "done",
-		label: "Checked"
-	},
-	{
-		key: "failed",
-		label: "Couldn't be written"
-	}
-];
-function planGroup(plan) {
-	if (isWaitingOnYou(plan)) return "due";
-	if (plan.state === "failed") return "failed";
-	if (verdictOf(plan) === "fail") return "fail";
-	if (plan.state === "done") return "done";
-	if (plan.state === "generating" && plan.live_at) return "done";
-	return "generated";
-}
-function planMatches(plan, tokens) {
-	if (!tokens.length) return true;
-	const fields = [
-		plan.title,
-		plan.id,
-		plan.summary,
-		plan.branch,
-		plan.sha,
-		plan.repo_root,
-		plan.live_branch,
-		GROUPS.find((g) => g.key === planGroup(plan))?.label
-	];
-	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
-	return matchesTokens(fields, tokens);
-}
-function canRunNow(plan) {
-	const action = planStatus(plan).action;
-	return action === "run" || action === "rerun";
-}
-function groupPlans(plans) {
-	const buckets = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) {
-		if (!plan) continue;
-		const key = planGroup(plan);
-		const bucket = buckets.get(key);
-		if (bucket) bucket.push(plan);
-		else buckets.set(key, [plan]);
-	}
-	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
-		const found = buckets.get(g.key) || [];
-		if (g.key === "due" || g.key === "fail") {
-			const sum = found.reduce((acc, p) => {
-				const t = checkTally(p);
-				return {
-					yours: acc.yours + t.yours,
-					failed: acc.failed + t.failed
-				};
-			}, {
-				yours: 0,
-				failed: 0
-			});
-			const bits = [];
-			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
-			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
-			return {
-				key: g.key,
-				label: g.label,
-				detail: bits.length ? bits.join(" · ") : void 0,
-				plans: found
-			};
-		}
-		if (g.key !== "done") return {
-			key: g.key,
-			label: g.label,
-			plans: found
-		};
-		const short = found.filter((p) => unansweredCount(p) > 0);
-		const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
-		const cant = short.length - blank;
-		const bits = [];
-		if (blank) bits.push(blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer");
-		if (cant) bits.push(cant + " you couldn't check");
-		return {
-			key: g.key,
-			label: g.label,
-			detail: bits.length ? bits.join(" · ") : void 0,
-			plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)]
-		};
-	});
-}
-var GENERATION_STALE_S = 300;
-function isGenerationStalled(plan, now = Date.now() / 1e3) {
-	if (!plan || plan.state !== "generating") return false;
-	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
-}
-function runElapsed(run, now = Date.now() / 1e3) {
-	const at = Number(run?.at || 0);
-	if (!at) return "";
-	const mins = Math.round((now - at) / 60);
-	if (mins < 1 || mins > 1440) return "";
-	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
-}
-function agoText(epochSeconds, now = Date.now() / 1e3) {
-	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
-	if (mins < 1) return "just now";
-	if (mins < 60) return mins + "m ago";
-	const h = Math.round(mins / 60);
-	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
-}
-var HEADLINE_MAX = 120;
-function errorHeadline(plan) {
-	const raw = String(plan?.error || "").trim();
-	if (!raw) return "";
-	const stop = raw.search(/[.!?](\s|$)/);
-	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
-	if (first.length > HEADLINE_MAX) {
-		const cut = first.slice(0, HEADLINE_MAX);
-		const space = cut.lastIndexOf(" ");
-		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
-	}
-	const cased = first.charAt(0).toUpperCase() + first.slice(1);
-	return /[.!?…]$/.test(cased) ? cased : cased + ".";
-}
-function planStatus(plan, liveBranch = "") {
-	const status = planStatusOf(plan, liveBranch);
-	const headline = errorHeadline(plan);
-	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
-	return {
-		...status,
-		line: status.line + " " + headline
-	};
-}
-function planStatusOf(plan, liveBranch = "") {
-	const group = planGroup(plan);
-	const steps = plan.steps || [];
-	const run = latestRun(plan);
-	const agentCan = steps.filter((s) => s.actor !== "human").length;
-	const again = (ran = true) => agentCan ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"] : ["answer", "Open the steps"];
-	const at = (tone, line, action, actionLabel = "") => ({
-		group,
-		tone,
-		line,
-		action,
-		actionLabel
-	});
-	if (plan.state === "generating") {
-		if (isGenerationStalled(plan)) return at("broken", "Writing this checklist stopped part-way — nothing has been written for five minutes.", "rewrite", "Rewrite the checklist");
-		return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
-	}
-	if (plan.state === "failed" && !steps.length) return at("broken", "The model couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "failed") return at("warn", "Rewriting this failed — these are the steps from before, and they still work.", "rewrite", "Try rewriting again");
-	if (!steps.length) return at("broken", "No steps — the checklist came back empty.", "rewrite", "Rewrite the checklist");
-	if (plan.state === "running") {
-		const mine = openHumanSteps(plan).length;
-		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again(false));
-		const been = runElapsed(run);
-		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
-	}
-	if (!run) {
-		if (plan.live_at || plan.state === "due") {
-			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
-			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Run with an agent");
-		}
-		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
-		if (plan.live_problem) return at("warn", plan.live_problem, "none");
-		return at("wait", "Waiting for " + (plan.branch || "this branch") + " to reach " + (plan.live_branch || liveBranch || "the live branch") + " — it turns up here to check when it ships.", "none");
-	}
-	const open = openHumanSteps(plan);
-	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
-	const failed = failCount(plan);
-	if (failed) return at("bad", failed === 1 ? "1 step didn't do what was expected." : failed + " steps didn't do what was expected.", "answer", "See what failed");
-	const missing = unansweredCount(plan);
-	const cant = cantCheckCount(plan);
-	if (missing && missing === cant) {
-		const seen = (plan.steps || []).length - cant;
-		return at("warn", seen ? seen + (seen === 1 ? " step passed · " : " steps passed · ") + cant + " you couldn't check." : "Nothing could be checked — " + cant + (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."), "answer", "Check again");
-	}
-	const ranByAgent = !!(run.session || run.by === "agent");
-	if (missing) {
-		const blank = missing - cant;
-		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
-		return at("warn", (plan.state === "done" ? "Checked — " : ranByAgent ? "The run stopped early — " : "Part-answered — ") + gaps + ".", ...again(ranByAgent));
-	}
-	return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
-}
-function checkTally(plan) {
-	const steps = plan?.steps || [];
-	const t = {
-		passed: 0,
-		failed: 0,
-		yours: 0,
-		cant: 0,
-		pending: 0,
-		total: steps.length
-	};
-	const key = {
-		pass: "passed",
-		fail: "failed",
-		yours: "yours",
-		cant: "cant",
-		pending: "pending"
-	};
-	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
-	return t;
-}
-function tallyBits(plan) {
-	const t = checkTally(plan);
-	return [
-		{
-			state: "pass",
-			count: t.passed,
-			label: "passed"
-		},
-		{
-			state: "fail",
-			count: t.failed,
-			label: "failed"
-		},
-		{
-			state: "yours",
-			count: t.yours,
-			label: t.yours === 1 ? "needs you" : "need you"
-		},
-		{
-			state: "cant",
-			count: t.cant,
-			label: "you couldn't check"
-		},
-		{
-			state: "pending",
-			count: t.pending,
-			label: "not checked yet"
-		}
-	].filter((b) => b.count > 0);
-}
-function tallySentence(plan) {
-	const t = checkTally(plan);
-	if (!t.total) return "";
-	const bits = tallyBits(plan);
-	const head = t.total + (t.total === 1 ? " check" : " checks");
-	if (!bits.length) return head;
-	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
-}
-function planShipped(plan) {
-	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
-}
-function asksHumanSteps(plan) {
-	return planShipped(plan) || !!latestRun(plan);
-}
-function stepCheck(plan, stepId) {
-	const entry = stepResult(plan, stepId);
-	if (entry?.result === "pass") return "pass";
-	if (entry?.result === "fail") return "fail";
-	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
-	const step = (plan.steps || []).find((s) => s.id === stepId);
-	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
-	return "pending";
-}
-var CHECK_MARK = {
-	pass: "✓",
-	fail: "✗",
-	cant: "–",
-	yours: "●",
-	pending: "○"
-};
-function stepKeyAction(key) {
-	switch (key) {
-		case "1":
-		case "p":
-		case "P": return "pass";
-		case "2":
-		case "f":
-		case "F": return "fail";
-		case "3":
-		case "b":
-		case "B": return "blocked";
-		case "u":
-		case "U": return "";
-		case "n":
-		case "N": return "note";
-		default: return "";
-	}
-}
-function noteDraftAfter(result, noteOpen, note) {
-	if (result === "") return {
-		open: false,
-		text: ""
-	};
-	if ((result === "fail" || result === "blocked") && !noteOpen) return {
-		open: true,
-		text: ""
-	};
-	if (noteOpen && note.trim()) return {
-		open: false,
-		text: ""
-	};
-	return {
-		open: noteOpen,
-		text: note
-	};
-}
-function stepKeyAllowed(busy, repeat) {
-	return !busy && !repeat;
-}
-function stepKeyIsUndo(key) {
-	return key === "u" || key === "U";
-}
-function runEvidence(run, liveBranch = "") {
-	if (!run) return "";
-	if (run.target) return "Checked against " + run.target;
-	const sha = (run.tested_sha || "").slice(0, 7);
-	if (!sha) return "";
-	return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
-}
-function runTreeMismatch(run) {
-	const tested = (run?.tested_sha || "").trim();
-	const expected = (run?.expected_sha || "").trim();
-	return !!(tested && expected && tested !== expected);
-}
-function rewriteWarning(plan) {
-	if (!latestRun(plan)) return "";
-	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
-}
-function rewriteBlockedReason(plan) {
-	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
-	if (plan.state === "generating") return "It is already being written.";
-	return "";
-}
+//#region src/components/dialogs/verifySession.ts
 var VERIFY_SESSION_PREFIX = "verify-";
 var VERIFY_HIDDEN_BY = "verify";
 function isVerifySession(session) {
@@ -25766,7 +25279,7 @@ function shipLine(row, opts = {}) {
 	const reason = String(task?.reason || "");
 	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
 	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
-	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
 	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
 	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
@@ -25790,7 +25303,8 @@ function shipLine(row, opts = {}) {
 	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
 		const s = stageRank(stage);
 		const note = String(ap?.note || "");
-		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+		const verb = ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging";
+		return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is " + verb + ".");
 	}
 	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
 	let rest;
@@ -28524,6 +28038,88 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
+//#region src/lib/autopilot.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = LANE_ORDER;
+var SESSION_DEPTHS = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var SOURCE_DEPTHS = [
+	"commit",
+	"push",
+	"pr"
+];
+var LANE_LABEL = {
+	leave: "Off",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge when green"
+};
+var LANE_SHORT = {
+	leave: "off",
+	commit: "Commit",
+	push: "Push",
+	pr: "PR",
+	merge: "Merge"
+};
+var LANE_DESC = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "Commit, push, open a PR and merge it once its checks pass"
+};
+var LANE_KEY = {
+	leave: "O",
+	commit: "C",
+	push: "U",
+	pr: "P",
+	merge: "M"
+};
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(setting) {
+	return normalizeLane(setting) || "leave";
+}
+function laneLabel(value) {
+	if (!String(value || "").trim()) return LANE_LABEL.leave;
+	const lane = normalizeLane(value);
+	return lane ? LANE_LABEL[lane] : String(value);
+}
+function autopilotChipTitle(run) {
+	const target = laneLabel(run.depth);
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
+	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+	return "Fast-tracking to " + target + where + skipped;
+}
+function mergeBlockerLabel(ms) {
+	switch (ms.state) {
+		case "dirty": return "conflicts";
+		case "behind": return "behind base";
+		case "draft": return "draft PR";
+		case "blocked":
+			if (ms.checks === "failed") return "checks ✗";
+			if (ms.checks === "pending") return "checks…";
+			return "review needed";
+		default: return ms.mergeable === null ? "checking…" : "can't merge";
+	}
+}
+//#endregion
 //#region src/lib/runs.ts
 var RUN_DONE_STATES = /* @__PURE__ */ new Set([
 	"done",
@@ -28634,7 +28230,15 @@ function queuedTitle(t) {
 	return ref || text || t.title || "queued line";
 }
 function shippedBadge(g) {
-	return g.shipped + "/" + g.total + " shipped";
+	return g.shipped + "/" + g.total + " done";
+}
+function laneDoneWord(lane) {
+	return {
+		commit: "committed",
+		push: "pushed",
+		pr: "PR opened",
+		merge: "merged"
+	}[lane] || "done";
 }
 function groupTitle(g) {
 	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
@@ -28698,7 +28302,7 @@ function runNote(event, data, info = {}) {
 			const shipped = num$4(d.shipped);
 			const failed = num$4(d.failed);
 			const lane = info.lane?.(run) || "";
-			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
 			const what = str$4(d.outcome) || shipped + word;
 			return {
 				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
@@ -28710,8 +28314,10 @@ function runNote(event, data, info = {}) {
 		}
 		case "run.task_shipped": {
 			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
+			const lane = info.lane?.(run) || "";
+			const did = m ? (lane === "merge" ? "merged" : "opened") + " PR #" + m[1] : laneDoneWord(lane);
 			return {
-				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				text: name + ": " + who + " " + did,
 				cls: "n-done",
 				run,
 				dedupe: [
@@ -28888,52 +28494,8 @@ function suggestedBudget(budget, spent) {
 }
 //#endregion
 //#region src/lib/laneActions.ts
-var LANE_ORDER = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var LANE_CHOICES = LANE_ORDER;
-var LANE_LABEL = {
-	leave: "Off",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge when green"
-};
-var LANE_SHORT = {
-	leave: "off",
-	commit: "Commit",
-	push: "Push",
-	pr: "PR",
-	merge: "Merge"
-};
-var LANE_DESC = {
-	leave: "MindFlock doesn't commit anything — you take it from there",
-	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-	push: "Commit and push once the agent stops and your hooks pass",
-	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-	merge: "Commit, push, open a PR and merge it once its checks pass"
-};
-var LANE_KEY = {
-	leave: "O",
-	commit: "C",
-	push: "U",
-	pr: "P",
-	merge: "M"
-};
 var ASK_FIRST_LABEL = "Ask me before it ships";
 var ASK_FIRST_DESC = "Stop one step short and wait for your OK in the bell";
-function normalizeLane(v) {
-	const s = String(v || "").trim().toLowerCase();
-	if (s === "agent" || s === "off" || s === "none") return "leave";
-	return LANE_ORDER.includes(s) ? s : "";
-}
-function laneDefault(setting) {
-	return normalizeLane(setting) || "leave";
-}
 function laneChoice(inst) {
 	const l = laneOf(inst);
 	const lane = l ? normalizeLane(l.target) : "";
@@ -29116,51 +28678,6 @@ function openFastTrackMenu(title) {
 	}
 	selectSession(title, { noKeyboard: true });
 	requestAnimationFrame(() => useUi.getState().setFastTrackMenu({ title }));
-}
-//#endregion
-//#region src/lib/autopilot.ts
-var SESSION_DEPTHS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SOURCE_DEPTHS = [
-	"agent",
-	"commit",
-	"push",
-	"pr"
-];
-var DEPTH_LABELS = {
-	off: "Off",
-	agent: "Agent only",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge when green"
-};
-function depthLabel(depth) {
-	return DEPTH_LABELS[depth] || depth || "Off";
-}
-function autopilotChipTitle(run) {
-	const target = depthLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
-	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
-	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-	return "Fast-tracking to " + target + where + skipped;
-}
-function mergeBlockerLabel(ms) {
-	switch (ms.state) {
-		case "dirty": return "conflicts";
-		case "behind": return "behind base";
-		case "draft": return "draft PR";
-		case "blocked":
-			if (ms.checks === "failed") return "checks ✗";
-			if (ms.checks === "pending") return "checks…";
-			return "review needed";
-		default: return ms.mergeable === null ? "checking…" : "can't merge";
-	}
 }
 //#endregion
 //#region src/lib/stage.ts
@@ -32042,6 +31559,498 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
+//#region src/lib/rowSearch.ts
+function searchTokens(query) {
+	return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+function matchesTokens(fields, tokens) {
+	if (!tokens.length) return true;
+	const hay = fields.filter(Boolean).join(" ").toLowerCase();
+	return tokens.every((t) => hay.includes(t));
+}
+//#endregion
+//#region src/components/dialogs/verify.ts
+function planName(plan) {
+	return plan.title || plan.id;
+}
+function isFinal(result) {
+	return result === "pass" || result === "fail";
+}
+function isYourAnswer(result, by = "") {
+	return isFinal(result) || result === "blocked" && by === "human";
+}
+function answeredByYou(entry) {
+	return isYourAnswer(entry?.result, entry?.by);
+}
+function handedBack(entry) {
+	return entry?.result === "blocked" && entry?.by !== "human";
+}
+function stepIsYours(plan, step) {
+	return step.actor === "human" || handedBack(stepResult(plan, step.id));
+}
+function isPhantomRun(run) {
+	if (run.session) return false;
+	const results = run.results || {};
+	return !Object.keys(results).some((id) => !!results[id]?.result);
+}
+function latestRun(plan) {
+	const runs = plan.runs || [];
+	let best = null;
+	for (const run of runs) {
+		if (!run || isPhantomRun(run)) continue;
+		if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+	}
+	return best;
+}
+function stepResult(plan, stepId) {
+	const run = latestRun(plan);
+	if (!run) return null;
+	return run.results?.[stepId] ?? null;
+}
+function verdictOf(plan) {
+	const run = latestRun(plan);
+	if (!run) return "none";
+	const results = run.results || {};
+	const ids = answerableIds(plan, run);
+	if (!ids.length) return "partial";
+	let unsettled = false;
+	for (const id of ids) {
+		const result = results[id]?.result;
+		if (result === "fail") return "fail";
+		if (!isFinal(result)) unsettled = true;
+	}
+	return unsettled ? "partial" : "pass";
+}
+function answerableIds(plan, run) {
+	const steps = plan.steps || [];
+	return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
+}
+function openHumanSteps(plan) {
+	const run = latestRun(plan);
+	if (!run) return [];
+	const results = run.results || {};
+	return (plan.steps || []).filter((step) => stepIsYours(plan, step) && !answeredByYou(results[step.id]));
+}
+function needsConfirmation(plan) {
+	return openHumanSteps(plan).length > 0;
+}
+function allSettled(plan) {
+	const run = latestRun(plan);
+	const steps = plan.steps || [];
+	if (!run || !steps.length) return false;
+	const results = run.results || {};
+	return steps.every((s) => answeredByYou(results[s.id]));
+}
+function failCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => results[id]?.result === "fail").length;
+}
+function unansweredCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => !isFinal(results[id]?.result)).length;
+}
+function cantCheckCount(plan) {
+	const run = latestRun(plan);
+	if (!run) return 0;
+	const results = run.results || {};
+	return answerableIds(plan, run).filter((id) => {
+		const entry = results[id];
+		return entry?.result === "blocked" && entry.by === "human";
+	}).length;
+}
+function isWaitingOnYou(plan) {
+	return plan.state === "due" || plan.state === "running" || plan.state === "generating" && !!plan.live_at && !allSettled(plan) || needsConfirmation(plan);
+}
+function dueCount(plans) {
+	return (plans || []).filter(isWaitingOnYou).length;
+}
+function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
+	if ((plans || []).some((plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch)) return true;
+	const tracked = new Set((trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()));
+	return Object.entries(blocks || {}).some(([slug, block]) => {
+		const own = String(block?.live_branch || "").trim();
+		return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
+	});
+}
+function planTargets(instances, plans, closed = []) {
+	const havePlans = new Set((plans || []).map((plan) => plan.id));
+	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	const take = (title, branch, repo) => {
+		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+		const key = coverageKey(repo, branch);
+		if (key && covered.has(key)) return;
+		seen.add(title);
+		out.push(title);
+	};
+	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
+	for (const entry of closed || []) take(entry.title, entry.branch, "");
+	return out;
+}
+function coverageKey(repo, branch) {
+	const r = (repo || "").trim();
+	const b = (branch || "").trim();
+	return r && b ? r + "\0" + b : "";
+}
+function repoName(repoRoot) {
+	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
+	return parts[parts.length - 1] || "";
+}
+function closedTargets(instances, closed = []) {
+	const live = new Set((instances || []).map((i) => i.title));
+	return new Set((closed || []).map((e) => e.title).filter((t) => t && !live.has(t)));
+}
+function noTargetsReason(instances, plans, closed = []) {
+	if (planTargets(instances, plans, closed).length) return "";
+	const list = [...instances || [], ...closed || []];
+	if (!list.length) return "Start a session first — a checklist is written from a branch's diff.";
+	if (!list.some((inst) => inst.branch)) return "No session has a branch yet — a checklist is written from a branch's diff.";
+	return "Every session with a branch already has a checklist — they're in the list below.";
+}
+var GROUPS = [
+	{
+		key: "due",
+		label: "Not checked yet"
+	},
+	{
+		key: "fail",
+		label: "Steps failed"
+	},
+	{
+		key: "generated",
+		label: "Not shipped yet"
+	},
+	{
+		key: "done",
+		label: "Checked"
+	},
+	{
+		key: "failed",
+		label: "Couldn't be written"
+	}
+];
+function planGroup(plan) {
+	if (isWaitingOnYou(plan)) return "due";
+	if (plan.state === "failed") return "failed";
+	if (verdictOf(plan) === "fail") return "fail";
+	if (plan.state === "done") return "done";
+	if (plan.state === "generating" && plan.live_at) return "done";
+	return "generated";
+}
+function planMatches(plan, tokens) {
+	if (!tokens.length) return true;
+	const fields = [
+		plan.title,
+		plan.id,
+		plan.summary,
+		plan.branch,
+		plan.sha,
+		plan.repo_root,
+		plan.live_branch,
+		GROUPS.find((g) => g.key === planGroup(plan))?.label
+	];
+	for (const step of plan.steps || []) fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
+	return matchesTokens(fields, tokens);
+}
+function canRunNow(plan) {
+	const action = planStatus(plan).action;
+	return action === "run" || action === "rerun";
+}
+function groupPlans(plans) {
+	const buckets = /* @__PURE__ */ new Map();
+	for (const plan of plans || []) {
+		if (!plan) continue;
+		const key = planGroup(plan);
+		const bucket = buckets.get(key);
+		if (bucket) bucket.push(plan);
+		else buckets.set(key, [plan]);
+	}
+	return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
+		const found = buckets.get(g.key) || [];
+		if (g.key === "due" || g.key === "fail") {
+			const sum = found.reduce((acc, p) => {
+				const t = checkTally(p);
+				return {
+					yours: acc.yours + t.yours,
+					failed: acc.failed + t.failed
+				};
+			}, {
+				yours: 0,
+				failed: 0
+			});
+			const bits = [];
+			if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
+			if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
+			return {
+				key: g.key,
+				label: g.label,
+				detail: bits.length ? bits.join(" · ") : void 0,
+				plans: found
+			};
+		}
+		if (g.key !== "done") return {
+			key: g.key,
+			label: g.label,
+			plans: found
+		};
+		const short = found.filter((p) => unansweredCount(p) > 0);
+		const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
+		const cant = short.length - blank;
+		const bits = [];
+		if (blank) bits.push(blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer");
+		if (cant) bits.push(cant + " you couldn't check");
+		return {
+			key: g.key,
+			label: g.label,
+			detail: bits.length ? bits.join(" · ") : void 0,
+			plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)]
+		};
+	});
+}
+var GENERATION_STALE_S = 300;
+function isGenerationStalled(plan, now = Date.now() / 1e3) {
+	if (!plan || plan.state !== "generating") return false;
+	return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
+}
+function runElapsed(run, now = Date.now() / 1e3) {
+	const at = Number(run?.at || 0);
+	if (!at) return "";
+	const mins = Math.round((now - at) / 60);
+	if (mins < 1 || mins > 1440) return "";
+	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
+}
+function agoText(epochSeconds, now = Date.now() / 1e3) {
+	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
+	if (mins < 1) return "just now";
+	if (mins < 60) return mins + "m ago";
+	const h = Math.round(mins / 60);
+	return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+var HEADLINE_MAX = 120;
+function errorHeadline(plan) {
+	const raw = String(plan?.error || "").trim();
+	if (!raw) return "";
+	const stop = raw.search(/[.!?](\s|$)/);
+	let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
+	if (first.length > HEADLINE_MAX) {
+		const cut = first.slice(0, HEADLINE_MAX);
+		const space = cut.lastIndexOf(" ");
+		first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
+	}
+	const cased = first.charAt(0).toUpperCase() + first.slice(1);
+	return /[.!?…]$/.test(cased) ? cased : cased + ".";
+}
+function planStatus(plan, liveBranch = "") {
+	const status = planStatusOf(plan, liveBranch);
+	const headline = errorHeadline(plan);
+	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
+	return {
+		...status,
+		line: status.line + " " + headline
+	};
+}
+function planStatusOf(plan, liveBranch = "") {
+	const group = planGroup(plan);
+	const steps = plan.steps || [];
+	const run = latestRun(plan);
+	const agentCan = steps.filter((s) => s.actor !== "human").length;
+	const again = (ran = true) => agentCan ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"] : ["answer", "Open the steps"];
+	const at = (tone, line, action, actionLabel = "") => ({
+		group,
+		tone,
+		line,
+		action,
+		actionLabel
+	});
+	if (plan.state === "generating") {
+		if (isGenerationStalled(plan)) return at("broken", "Writing this checklist stopped part-way — nothing has been written for five minutes.", "rewrite", "Rewrite the checklist");
+		return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
+	}
+	if (plan.state === "failed" && !steps.length) return at("broken", "The model couldn't write a checklist for this.", "rewrite", "Rewrite the checklist");
+	if (plan.state === "failed") return at("warn", "Rewriting this failed — these are the steps from before, and they still work.", "rewrite", "Try rewriting again");
+	if (!steps.length) return at("broken", "No steps — the checklist came back empty.", "rewrite", "Rewrite the checklist");
+	if (plan.state === "running") {
+		const mine = openHumanSteps(plan).length;
+		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again(false));
+		const been = runElapsed(run);
+		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
+	}
+	if (!run) {
+		if (plan.live_at || plan.state === "due") {
+			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
+			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Run with an agent");
+		}
+		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
+		if (plan.live_problem) return at("warn", plan.live_problem, "none");
+		return at("wait", "Waiting for " + (plan.branch || "this branch") + " to reach " + (plan.live_branch || liveBranch || "the live branch") + " — it turns up here to check when it ships.", "none");
+	}
+	const open = openHumanSteps(plan);
+	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
+	const failed = failCount(plan);
+	if (failed) return at("bad", failed === 1 ? "1 step didn't do what was expected." : failed + " steps didn't do what was expected.", "answer", "See what failed");
+	const missing = unansweredCount(plan);
+	const cant = cantCheckCount(plan);
+	if (missing && missing === cant) {
+		const seen = (plan.steps || []).length - cant;
+		return at("warn", seen ? seen + (seen === 1 ? " step passed · " : " steps passed · ") + cant + " you couldn't check." : "Nothing could be checked — " + cant + (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."), "answer", "Check again");
+	}
+	const ranByAgent = !!(run.session || run.by === "agent");
+	if (missing) {
+		const blank = missing - cant;
+		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
+		return at("warn", (plan.state === "done" ? "Checked — " : ranByAgent ? "The run stopped early — " : "Part-answered — ") + gaps + ".", ...again(ranByAgent));
+	}
+	return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
+}
+function checkTally(plan) {
+	const steps = plan?.steps || [];
+	const t = {
+		passed: 0,
+		failed: 0,
+		yours: 0,
+		cant: 0,
+		pending: 0,
+		total: steps.length
+	};
+	const key = {
+		pass: "passed",
+		fail: "failed",
+		yours: "yours",
+		cant: "cant",
+		pending: "pending"
+	};
+	for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
+	return t;
+}
+function tallyBits(plan) {
+	const t = checkTally(plan);
+	return [
+		{
+			state: "pass",
+			count: t.passed,
+			label: "passed"
+		},
+		{
+			state: "fail",
+			count: t.failed,
+			label: "failed"
+		},
+		{
+			state: "yours",
+			count: t.yours,
+			label: t.yours === 1 ? "needs you" : "need you"
+		},
+		{
+			state: "cant",
+			count: t.cant,
+			label: "you couldn't check"
+		},
+		{
+			state: "pending",
+			count: t.pending,
+			label: "not checked yet"
+		}
+	].filter((b) => b.count > 0);
+}
+function tallySentence(plan) {
+	const t = checkTally(plan);
+	if (!t.total) return "";
+	const bits = tallyBits(plan);
+	const head = t.total + (t.total === 1 ? " check" : " checks");
+	if (!bits.length) return head;
+	return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
+}
+function planShipped(plan) {
+	return !!plan?.live_at || plan?.state === "due" || plan?.state === "running" || plan?.state === "done";
+}
+function asksHumanSteps(plan) {
+	return planShipped(plan) || !!latestRun(plan);
+}
+function stepCheck(plan, stepId) {
+	const entry = stepResult(plan, stepId);
+	if (entry?.result === "pass") return "pass";
+	if (entry?.result === "fail") return "fail";
+	if (isYourAnswer(entry?.result || "", entry?.by || "")) return "cant";
+	const step = (plan.steps || []).find((s) => s.id === stepId);
+	if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
+	return "pending";
+}
+var CHECK_MARK = {
+	pass: "✓",
+	fail: "✗",
+	cant: "–",
+	yours: "●",
+	pending: "○"
+};
+function stepKeyAction(key) {
+	switch (key) {
+		case "1":
+		case "p":
+		case "P": return "pass";
+		case "2":
+		case "f":
+		case "F": return "fail";
+		case "3":
+		case "b":
+		case "B": return "blocked";
+		case "u":
+		case "U": return "";
+		case "n":
+		case "N": return "note";
+		default: return "";
+	}
+}
+function noteDraftAfter(result, noteOpen, note) {
+	if (result === "") return {
+		open: false,
+		text: ""
+	};
+	if ((result === "fail" || result === "blocked") && !noteOpen) return {
+		open: true,
+		text: ""
+	};
+	if (noteOpen && note.trim()) return {
+		open: false,
+		text: ""
+	};
+	return {
+		open: noteOpen,
+		text: note
+	};
+}
+function stepKeyAllowed(busy, repeat) {
+	return !busy && !repeat;
+}
+function stepKeyIsUndo(key) {
+	return key === "u" || key === "U";
+}
+function runEvidence(run, liveBranch = "") {
+	if (!run) return "";
+	if (run.target) return "Checked against " + run.target;
+	const sha = (run.tested_sha || "").slice(0, 7);
+	if (!sha) return "";
+	return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
+}
+function runTreeMismatch(run) {
+	const tested = (run?.tested_sha || "").trim();
+	const expected = (run?.expected_sha || "").trim();
+	return !!(tested && expected && tested !== expected);
+}
+function rewriteWarning(plan) {
+	if (!latestRun(plan)) return "";
+	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
+}
+function rewriteBlockedReason(plan) {
+	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
+	if (plan.state === "generating") return "It is already being written.";
+	return "";
+}
+//#endregion
 //#region src/lib/flockActions.ts
 var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str$3 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
@@ -33163,7 +33172,10 @@ function doWaitAction(key, w, runId, taskId) {
 		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
 		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
 		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-		case "release": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
+		case "release": {
+			const pushOnly = !!w.preview?.local_origin || w.preview?.lane === "push";
+			return runAction(releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR", runPath(runId, "/release"), { merge_when_green: false }, pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR");
+		}
 		case "release_merge": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
 		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
 		case "cancel_group": return cancelRun(runId, w.run?.name || "");
@@ -35412,7 +35424,7 @@ function TopBar() {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Verify — shipped changes nobody has checked (Alt+V)",
+							title: "Verify — merged changes nobody has checked (Alt+V)",
 							onClick: () => ui.openDialogFor("verify"),
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count",
@@ -35425,7 +35437,7 @@ function TopBar() {
 							type: "button",
 							title: "Settings",
 							"aria-label": "Open settings",
-							onClick: () => ui.openDialogFor("settings"),
+							onClick: () => openSettings(),
 							children: "Settings"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -38101,14 +38113,14 @@ function VerifyBar() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "verify-bar",
-		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
+		title: "Verify — writes a checklist when a session branch is pushed, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "verify-dot",
 				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
 				role: "img",
-				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
-				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " pushed " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
+				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " pushed change" : " pushed changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch is pushed, and nothing new turns up to check" : due ? due + (due === 1 ? " pushed change has" : " pushed changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch is pushed"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				id: "verify-plans-btn",
@@ -38489,8 +38501,8 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 						type: "button",
 						disabled: busy,
 						title: "Take it out of the team run — it never starts",
-						onClick: () => go(() => runAction("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t))),
-						children: "Remove"
+						onClick: () => go(() => runAction("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run")),
+						children: "Take out of run"
 					})
 				]
 			}, t.id))] }),
@@ -43249,7 +43261,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 		if (busy) return;
 		setBusy(verb + ":" + t.id);
 		const name = pieceLabel(t, run).name;
-		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the run" : "Starting " + name).finally(() => setBusy(""));
+		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name).finally(() => setBusy(""));
 	};
 	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -62550,111 +62562,6 @@ function useFileDropTextarea(opts) {
 	}, []);
 }
 //#endregion
-//#region src/components/dialogs/FlagChips.tsx
-var LAUNCH_FLAG_PRESETS = {
-	claude: [
-		{
-			label: "Skip permissions",
-			flag: "--dangerously-skip-permissions"
-		},
-		{
-			label: "Plan mode",
-			flag: "--permission-mode plan"
-		},
-		{
-			label: "Verbose",
-			flag: "--verbose"
-		}
-	],
-	codex: [{
-		label: "Bypass approvals",
-		flag: "--dangerously-bypass-approvals-and-sandbox"
-	}, {
-		label: "Web search",
-		flag: "--search"
-	}],
-	antigravity: [{
-		label: "Skip permissions",
-		flag: "--dangerously-skip-permissions"
-	}, {
-		label: "Sandbox",
-		flag: "--sandbox"
-	}],
-	aider: [{
-		label: "Yes to all",
-		flag: "--yes-always"
-	}, {
-		label: "No auto-commit",
-		flag: "--no-auto-commits"
-	}],
-	opencode: [{
-		label: "Auto-approve",
-		flag: "--auto"
-	}]
-};
-function tokenize(s) {
-	if (!s) return [];
-	const out = [];
-	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-	let m;
-	while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || m[3] || "");
-	return out.filter(Boolean);
-}
-var quote = (t) => /\s/.test(t) ? "\"" + t + "\"" : t;
-function joinTokens(tokens) {
-	return tokens.map(quote).join(" ");
-}
-function seqIndex(tokens, seq) {
-	if (!seq.length) return -1;
-	for (let i = 0; i + seq.length <= tokens.length; i++) {
-		let ok = true;
-		for (let j = 0; j < seq.length; j++) if (tokens[i + j] !== seq[j]) {
-			ok = false;
-			break;
-		}
-		if (ok) return i;
-	}
-	return -1;
-}
-function FlagChips({ provider, value, onChange }) {
-	const presets = LAUNCH_FLAG_PRESETS[(provider || "").trim().toLowerCase()] || [];
-	if (!presets.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "flag-chips" });
-	const tokens = tokenize(value);
-	const toggle = (p) => {
-		let next = tokenize(value);
-		const seq = tokenize(p.flag);
-		const at = seqIndex(next, seq);
-		if (at >= 0) next.splice(at, seq.length);
-		else {
-			if (p.group) for (const other of presets) {
-				if (other === p || other.group !== p.group) continue;
-				const osq = tokenize(other.flag);
-				let oi;
-				while ((oi = seqIndex(next, osq)) >= 0) next.splice(oi, osq.length);
-			}
-			next = next.concat(seq);
-		}
-		onChange(next.map(quote).join(" "));
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "flag-chips",
-		children: presets.map((p) => {
-			const on = seqIndex(tokens, tokenize(p.flag)) >= 0;
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "flag-chip" + (on ? " active" : ""),
-				"data-flag": p.flag,
-				"aria-pressed": on,
-				onClick: (e) => {
-					e.preventDefault();
-					toggle(p);
-				},
-				children: p.label
-			}, p.flag);
-		})
-	});
-}
-//#endregion
 //#region src/components/dialogs/NewTicketPane.tsx
 var MIN_BRIEF = 6;
 var MAX_BRIEF = 2e3;
@@ -63235,7 +63142,7 @@ function Seg({ value, options, onChange, label, id }) {
 	});
 }
 function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
-	const askWhy = askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
 		id,
 		label,
@@ -63718,7 +63625,112 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/NewSessionDialog.tsx
+//#region src/components/dialogs/FlagChips.tsx
+var LAUNCH_FLAG_PRESETS = {
+	claude: [
+		{
+			label: "Skip permissions",
+			flag: "--dangerously-skip-permissions"
+		},
+		{
+			label: "Plan mode",
+			flag: "--permission-mode plan"
+		},
+		{
+			label: "Verbose",
+			flag: "--verbose"
+		}
+	],
+	codex: [{
+		label: "Bypass approvals",
+		flag: "--dangerously-bypass-approvals-and-sandbox"
+	}, {
+		label: "Web search",
+		flag: "--search"
+	}],
+	antigravity: [{
+		label: "Skip permissions",
+		flag: "--dangerously-skip-permissions"
+	}, {
+		label: "Sandbox",
+		flag: "--sandbox"
+	}],
+	aider: [{
+		label: "Yes to all",
+		flag: "--yes-always"
+	}, {
+		label: "No auto-commit",
+		flag: "--no-auto-commits"
+	}],
+	opencode: [{
+		label: "Auto-approve",
+		flag: "--auto"
+	}]
+};
+function tokenize(s) {
+	if (!s) return [];
+	const out = [];
+	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+	let m;
+	while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || m[3] || "");
+	return out.filter(Boolean);
+}
+var quote = (t) => /\s/.test(t) ? "\"" + t + "\"" : t;
+function joinTokens(tokens) {
+	return tokens.map(quote).join(" ");
+}
+function seqIndex(tokens, seq) {
+	if (!seq.length) return -1;
+	for (let i = 0; i + seq.length <= tokens.length; i++) {
+		let ok = true;
+		for (let j = 0; j < seq.length; j++) if (tokens[i + j] !== seq[j]) {
+			ok = false;
+			break;
+		}
+		if (ok) return i;
+	}
+	return -1;
+}
+function FlagChips({ provider, value, onChange }) {
+	const presets = LAUNCH_FLAG_PRESETS[(provider || "").trim().toLowerCase()] || [];
+	if (!presets.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "flag-chips" });
+	const tokens = tokenize(value);
+	const toggle = (p) => {
+		let next = tokenize(value);
+		const seq = tokenize(p.flag);
+		const at = seqIndex(next, seq);
+		if (at >= 0) next.splice(at, seq.length);
+		else {
+			if (p.group) for (const other of presets) {
+				if (other === p || other.group !== p.group) continue;
+				const osq = tokenize(other.flag);
+				let oi;
+				while ((oi = seqIndex(next, osq)) >= 0) next.splice(oi, osq.length);
+			}
+			next = next.concat(seq);
+		}
+		onChange(next.map(quote).join(" "));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "flag-chips",
+		children: presets.map((p) => {
+			const on = seqIndex(tokens, tokenize(p.flag)) >= 0;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "flag-chip" + (on ? " active" : ""),
+				"data-flag": p.flag,
+				"aria-pressed": on,
+				onClick: (e) => {
+					e.preventDefault();
+					toggle(p);
+				},
+				children: p.label
+			}, p.flag);
+		})
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession.ts
 var NEW_TABS = [{
 	key: "session",
 	label: "Session"
@@ -63766,29 +63778,6 @@ function homeRelative(path, home) {
 }
 function fitsWithin(childRight, rowRight) {
 	return childRight <= rowRight + .5;
-}
-function FitRow({ children }) {
-	const ref = (0, import_react.useRef)(null);
-	(0, import_react.useLayoutEffect)(() => {
-		const el = ref.current;
-		if (!el) return;
-		const fit = () => {
-			const kids = Array.from(el.children);
-			for (const k of kids) k.classList.remove("nt-clipped");
-			const right = el.getBoundingClientRect().right;
-			if (!(right > 0)) return;
-			for (const k of kids) if (!fitsWithin(k.getBoundingClientRect().right, right)) k.classList.add("nt-clipped");
-		};
-		fit();
-		const ro = new ResizeObserver(fit);
-		ro.observe(el);
-		return () => ro.disconnect();
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "nt-list",
-		ref,
-		children
-	});
 }
 function leafName(path) {
 	return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
@@ -63980,373 +63969,15 @@ function rememberedProfileVerdict(id, profiles) {
 	if (!profiles) return "wait";
 	return profiles.some((p) => p.id === id) ? "apply" : "drop";
 }
-function NewSessionDialog() {
-	const open = useUi((s) => s.openDialog === "new-session");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const [tab, setTab] = (0, import_react.useState)("session");
-	const [title, setTitle] = (0, import_react.useState)("");
-	const [program, setProgram] = (0, import_react.useState)("");
-	const [providers, setProviders] = (0, import_react.useState)([]);
-	const [prompt, setPrompt] = (0, import_react.useState)("");
-	const dropZoneRef = useFileDropTextarea({ onInsert: (text) => setDescribe((prev) => {
-		const next = (prev && !/\s$/.test(prev) ? prev + " " : prev) + text + " ";
-		return next.length > DESCRIBE_MAX_CHARS ? next.slice(0, DESCRIBE_MAX_CHARS) : next;
-	}) });
-	const [launchArgs, setLaunchArgs] = (0, import_react.useState)("");
-	const [provision, setProvision] = (0, import_react.useState)(false);
-	const [strategy, setStrategy] = (0, import_react.useState)("worktree");
-	const [inPlace, setInPlace] = (0, import_react.useState)(true);
-	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
-	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
-	const [split, setSplit] = (0, import_react.useState)(false);
-	const [maxPieces, setMaxPieces] = (0, import_react.useState)(SPLIT_DEFAULT);
-	const [batch, setBatch] = (0, import_react.useState)(false);
-	const [runBrowse, setRunBrowse] = (0, import_react.useState)(false);
-	const [error, setError] = (0, import_react.useState)("");
-	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
-	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
-	const [promptOpen, setPromptOpen] = (0, import_react.useState)(false);
-	const [templates, setTemplates] = (0, import_react.useState)([]);
-	const [activeTemplate, setActiveTemplate] = (0, import_react.useState)("");
-	const [describeOpen, setDescribeOpen] = (0, import_react.useState)(false);
-	const [baseBranch, setBaseBranch] = (0, import_react.useState)("");
-	const [continueOn, setContinueOn] = (0, import_react.useState)("");
-	const [branches, setBranches] = (0, import_react.useState)(null);
-	const [page, setPage] = (0, import_react.useState)(2);
-	const openedPage = (0, import_react.useRef)(2);
-	const focusTitleNext = (0, import_react.useRef)(false);
-	const [describe, setDescribe] = (0, import_react.useState)("");
-	const [describing, setDescribing] = (0, import_react.useState)(false);
-	const [describeSlow, setDescribeSlow] = (0, import_react.useState)(false);
-	const [planNote, setPlanNote] = (0, import_react.useState)("");
-	const [planError, setPlanError] = (0, import_react.useState)("");
-	const [planFolder, planFolderDo] = (0, import_react.useReducer)(planFolderReducer, PLAN_FOLDER_NONE);
-	const [newFolderOk, setNewFolderOk] = (0, import_react.useState)(false);
-	const lastAnswer = (0, import_react.useRef)(null);
-	const focusFolderNext = (0, import_react.useRef)(false);
-	const foldOpenedByPlan = (0, import_react.useRef)(false);
-	const [provisioningAvailable, setProvisioningAvailable] = (0, import_react.useState)(false);
-	const [homePath, setHomePath] = (0, import_react.useState)("");
-	const [suggestions, setSuggestions] = (0, import_react.useState)([]);
-	const [folderCheck, setFolderCheck] = (0, import_react.useState)(null);
-	const [search, setSearch] = (0, import_react.useState)(null);
-	const [searchOpen, setSearchOpen] = (0, import_react.useState)(true);
-	const [searchSel, setSearchSel] = (0, import_react.useState)(0);
-	const [presetValue, setPresetValue] = (0, import_react.useState)("");
-	const [savedPresets, setSavedPresets] = (0, import_react.useState)([]);
-	const [presetName, setPresetName] = (0, import_react.useState)(null);
-	const [profileId, setProfileId] = (0, import_react.useState)("");
-	const [profileModel, setProfileModel] = (0, import_react.useState)("");
-	const [profileModels, setProfileModels] = (0, import_react.useState)({});
-	const authProfiles = useAuthProfiles().data;
-	const pendingProfile = (0, import_react.useRef)(null);
-	const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
-	const launchDefaults = (0, import_react.useRef)({});
-	const titleRef = (0, import_react.useRef)(null);
-	const describeRef = (0, import_react.useRef)(null);
-	const repoRef = (0, import_react.useRef)(null);
-	const planRun = (0, import_react.useRef)({
-		seq: 0,
-		abort: null
-	});
-	const submitArmAt = (0, import_react.useRef)(0);
-	const launchRef = (0, import_react.useRef)(null);
-	const searchListRef = (0, import_react.useRef)(null);
-	const promptRef = (0, import_react.useRef)(null);
-	const rootRef = (0, import_react.useRef)(null);
-	const failedReopen = (0, import_react.useRef)(false);
-	const [folder, folderDo] = (0, import_react.useReducer)(folderReducer, FOLDER_INIT);
-	const repoPath = folder.path;
-	const browserOpen = folder.browsing;
-	const { data: devicesResp } = useDevices();
-	const startable = (0, import_react.useMemo)(() => startableDevices(devicesResp), [devicesResp]);
-	const [devicePick, setDevicePick] = (0, import_react.useState)("");
-	const device = batch || !startable.some((d) => d.device === devicePick) ? "" : devicePick;
-	const dapi = (0, import_react.useMemo)(() => deviceApi(device), [device]);
-	const deviceRef = (0, import_react.useRef)(device);
-	deviceRef.current = device;
-	const loadedDevice = (0, import_react.useRef)(null);
-	const loadFor = (dev) => {
-		const dapi = deviceApi(dev);
-		let live = true;
-		const here = () => live && deviceRef.current === dev;
-		(async () => {
-			try {
-				const d = await dapi("/api/repos/suggest");
-				if (!here()) return;
-				const sug = d.suggestions || [];
-				setSuggestions(sug);
-				folderDo({
-					t: "suggested",
-					path: sug[0]?.path || ""
-				});
-			} catch {
-				if (here()) setSuggestions([]);
-			}
-		})();
-		(async () => {
-			const [cfgR, setR, tplR] = await Promise.allSettled([
-				dev ? dapi("/api/config") : refreshConfig().then(() => queryClient.getQueryData(["config"])),
-				dapi("/api/settings"),
-				dev ? dapi("/api/templates").then((d) => d.templates || []) : ensureTemplates(true)
-			]);
-			if (!here()) return;
-			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
-			setHomePath(cfg?.home || "");
-			folderDo({
-				t: "fallback",
-				path: cfg?.home || ""
-			});
-			setProvisioningAvailable(!!cfg?.provisioning_available);
-			let provs = [];
-			try {
-				provs = (await dapi("/api/providers/manage")).providers || [];
-			} catch {}
-			if (!here()) return;
-			setProviders(provs);
-			const prev = cfg?.default_program || "";
-			const lower = prev.toLowerCase();
-			const match = provs.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
-			const agent = match ? match.name : prev;
-			setProgram(agent);
-			const raw = setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args || {};
-			launchDefaults.current = {};
-			for (const k of Object.keys(raw)) launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
-			setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
-			const tpls = tplR.status === "fulfilled" ? tplR.value || [] : [];
-			setTemplates(tpls);
-			if (!dev) applyLastUsed.current(tpls, provs);
-		})();
-		return () => {
-			live = false;
-		};
-	};
-	(0, import_react.useEffect)(() => {
-		if (!open) {
-			cancelPlanRun(planRun.current);
-			return;
-		}
-		if (failedReopen.current) {
-			failedReopen.current = false;
-			return;
-		}
-		setTab("session");
-		setTitle("");
-		setError("");
-		setPrompt("");
-		setLaunchArgs("");
-		const prefill = useUi.getState().takeNewPrefill();
-		setDescribe(prefill);
-		setBatch(!!prefill);
-		setDescribeOpen(false);
-		setBaseBranch("");
-		setBranches(null);
-		setDescribing(false);
-		setDescribeSlow(false);
-		setPlanNote("");
-		setPlanError("");
-		openedPage.current = prefill ? 1 : 2;
-		setPage(openedPage.current);
-		setNewFolderOk(false);
-		planFolderDo({ t: "reopen" });
-		cancelPlanRun(planRun.current);
-		submitArmAt.current = 0;
-		setProvision(false);
-		setInPlace(true);
-		setInitRepo(false);
-		setPlanFirst(false);
-		setSplit(false);
-		setMaxPieces(SPLIT_DEFAULT);
-		setAdvancedOpen(false);
-		setLaunchOpen(false);
-		setPromptOpen(false);
-		folderDo({ t: "reopen" });
-		setSearch(null);
-		setSearchOpen(true);
-		setSearchSel(0);
-		setActiveTemplate("");
-		setPresetValue("");
-		setProfileId("");
-		setProfileModel("");
-		setProfileModels({});
-		setSavedPresets(loadUserPresets());
-		setPresetName(null);
-		loadedDevice.current = deviceRef.current;
-		return loadFor(deviceRef.current);
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const reload = () => setSavedPresets(loadUserPresets());
-		document.addEventListener(PRESETS_CHANGED, reload);
-		return () => document.removeEventListener(PRESETS_CHANGED, reload);
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open || loadedDevice.current === device) return;
-		loadedDevice.current = device;
-		folderDo({ t: "device" });
-		setSuggestions([]);
-		setSearch(null);
-		setFolderCheck(null);
-		setProfileId("");
-		setProfileModel("");
-		return loadFor(device);
-	}, [open, device]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const el = openedPage.current === 1 ? describeRef.current : titleRef.current;
-		const active = document.activeElement;
-		if (!el) {
-			if (openedPage.current === 2) focusTitleNext.current = true;
-			return;
-		}
-		if (mayTakeOpeningFocus({
-			activeIsTarget: active === el,
-			activeInsideDialog: !!active && !!rootRef.current?.contains(active)
-		})) el.focus();
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		const asked = repoPath.trim();
-		if (!open || !asked || !looksLikePath(asked)) {
-			setFolderCheck(null);
-			return;
-		}
-		let live = true;
-		const timer = window.setTimeout(async () => {
-			try {
-				const r = await dapi("/api/repos/check?path=" + encodeURIComponent(asked));
-				if (live) setFolderCheck({
-					asked,
-					plain: !!r.exists && !!r.is_dir && !r.is_git
-				});
-			} catch {
-				if (live) setFolderCheck(null);
-			}
-		}, CHECK_DEBOUNCE_MS);
-		return () => {
-			live = false;
-			window.clearTimeout(timer);
-		};
-	}, [
-		open,
-		repoPath,
-		dapi
-	]);
-	(0, import_react.useEffect)(() => {
-		const asked = repoPath.trim();
-		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
-			setSearch(null);
-			return;
-		}
-		let live = true;
-		const timer = window.setTimeout(async () => {
-			try {
-				const r = await dapi("/api/repos/search?q=" + encodeURIComponent(asked));
-				if (!live) return;
-				setSearch({
-					asked,
-					matches: r.matches || [],
-					truncated: !!r.truncated,
-					home: r.home || ""
-				});
-				setSearchSel(0);
-			} catch {
-				if (live) setSearch(null);
-			}
-		}, SEARCH_DEBOUNCE_MS);
-		return () => {
-			live = false;
-			window.clearTimeout(timer);
-		};
-	}, [
-		open,
-		repoPath,
-		dapi
-	]);
-	(0, import_react.useEffect)(() => {
-		const row = searchListRef.current?.querySelector("[aria-selected=\"true\"]");
-		if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
-	}, [
-		searchSel,
-		search,
-		searchOpen
-	]);
-	const setAgent = (0, import_react.useCallback)((value) => {
-		const v = (value || "").trim();
-		setProgram(v);
-		setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
-	}, []);
-	const canonAgent = (0, import_react.useCallback)((raw) => {
-		const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
-		const base = tok.split("/").pop() || tok;
-		const m = providers.find((p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base);
-		return m ? m.name : base;
-	}, [providers]);
-	const planOk = (0, import_react.useMemo)(() => {
-		const name = canonAgent(program);
-		const prov = providers.find((p) => p.name === name);
-		return !prov || prov.plan_supported !== false;
-	}, [
-		canonAgent,
-		program,
-		providers
-	]);
-	const { data: config } = useConfig();
-	const mcpOk = (0, import_react.useMemo)(() => device ? {
-		ok: false,
-		reason: "Auto-split only starts sessions on this device"
-	} : teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
-		ok: false,
-		reason: SERVER_NO_SPLIT
-	}, [
-		config?.caps,
-		canonAgent,
-		program,
-		device
-	]);
-	const togetherOk = teamRunCaps(config?.caps).together;
-	const splitLimit = teamRunCaps(config?.caps).maxPieces;
-	const ticketingOk = !!config?.caps?.ticketing;
-	const shownTab = ticketingOk ? tab : "session";
-	const draft = useRunDraft({
-		open,
-		text: page === 1 ? describe : prompt,
-		repoPath,
-		program: canonAgent(program),
-		fasttrackDefault: config?.fasttrack_default,
-		single: page !== 1,
-		batch: page === 1 && batch,
-		split: page === 2 && split && mcpOk.ok,
-		togetherOk
-	});
-	const splitOn = page === 2 && split && mcpOk.ok;
-	const runMode = page === 1 && draft.listMode || splitOn;
-	const splitSum = splitOn ? summarySentence({
-		n: 1,
-		concurrency: draft.concurrency,
-		lane: draft.lane,
-		askFirst: draft.askFirst,
-		grouping: draft.grouping,
-		split: true,
-		maxPieces: clampSplit(maxPieces, splitLimit)
-	}) : null;
-	const toggleSplit = (on) => setSplit(on);
-	(0, import_react.useEffect)(() => {
-		if (!open) setRunBrowse(false);
-	}, [open]);
-	const runBrowseRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		const el = runBrowseRef.current;
-		if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
-	}, [runBrowse]);
-	const laneAtPress = (0, import_react.useRef)({
-		lane: "leave",
-		askFirst: false
-	});
-	laneAtPress.current = {
-		lane: draft.lane,
-		askFirst: draft.askFirst
-	};
-	const laneNeedsWorktree = draft.lane !== "leave";
+function focusRowIndex(paths, leaving) {
+	if (!paths.length) return -1;
+	const i = paths.indexOf(leaving);
+	return i >= 0 ? i : 0;
+}
+//#endregion
+//#region src/lib/newSessionSubmit.ts
+function newSessionSubmit(ctx) {
+	const { title, repoPath, prompt, program, planFirst, planOk, launchArgs, profileId, profileModel, strategy, inPlace, initRepo, provision, baseBranch, baseIsRemote, continueOn, activeTemplate, maxPieces, splitLimit, runMode, splitOn, laneNeedsWorktree, newFolderBlocked, provisionBlocked, draft, laneAtPress, deviceRef, failedReopen, submitArmAt, setError, setPlanError, setPromptOpen, setPage, planFolderDo, closeDialog } = ctx;
 	const startRun = async () => {
 		const fail = splitOn ? setError : setPlanError;
 		setPlanError("");
@@ -64374,327 +64005,6 @@ function NewSessionDialog() {
 			const c = Math.min(n, draft.concurrency);
 			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`, { duration: 6e3 });
 		} else toast("Starting it — the session appears in the rail", { duration: 4e3 });
-	};
-	const setAccount = (id, agentNow) => {
-		setProfileId(id);
-		setProfileModel("");
-		const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
-		if (!prof) return;
-		const supported = prof.supported_agents || [];
-		const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-		if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
-			const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
-			setAgent(preferred);
-		}
-		if (prof.kind === "openrouter" && !profileModels[id]) (async () => {
-			try {
-				const r = await api("/api/settings/test/openrouter", { json: { profile_id: id } });
-				if (r?.ok && r.models?.length) setProfileModels((m) => ({
-					...m,
-					[id]: r.models || []
-				}));
-			} catch {}
-		})();
-	};
-	const routeWarning = (() => {
-		if (!selectedProfile) return "";
-		const supported = selectedProfile.supported_agents || [];
-		if (!!selectedProfile.env && Object.keys(selectedProfile.env).length > 0 || !supported.length) return "";
-		if (supported.includes(canonAgent(program))) return "";
-		return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
-	})();
-	const fillFromTemplate = (t, opts = {}) => {
-		if (t.program) setAgent(t.program);
-		if (t.repo_path) folderDo({
-			t: "user-set",
-			path: t.repo_path
-		});
-		if (t.prompt) setPrompt(t.prompt);
-		setProvision(!!t.provisioned);
-		if (t.workspace_strategy) setStrategy(t.workspace_strategy);
-		setInPlace(!!t.in_place && !t.provisioned);
-		setInitRepo(!!t.init_repo);
-		setActiveTemplate(t.name);
-		if (opts.quiet) return;
-		setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
-		if (t.prompt) setPromptOpen(true);
-		if (!title.trim()) setTitle(t.name || "");
-		titleRef.current?.focus();
-	};
-	const applyLastUsed = (0, import_react.useRef)(() => {});
-	applyLastUsed.current = (tpls, provs) => {
-		const { choice } = lastNewSessionChoice(repoPath);
-		if (!choice) return;
-		const t = choice.template ? tpls.find((x) => x.name === choice.template) : null;
-		if (t) fillFromTemplate(t, { quiet: true });
-		if (choice.program && provs.some((p) => p.name === choice.program)) setAgent(choice.program);
-		pendingProfile.current = choice.profile_id ? {
-			repo: repoPath,
-			id: choice.profile_id,
-			program: choice.program || void 0
-		} : null;
-		settleProfile.current();
-	};
-	const settleProfile = (0, import_react.useRef)(() => {});
-	settleProfile.current = () => {
-		const pend = pendingProfile.current;
-		if (!pend) return;
-		const verdict = rememberedProfileVerdict(pend.id, authProfiles ? authProfiles.profiles || [] : null);
-		if (verdict === "wait") return;
-		pendingProfile.current = null;
-		if (verdict === "apply") setAccount(pend.id, pend.program);
-		else if (verdict === "drop") forgetNewSessionProfile(pend.repo);
-	};
-	(0, import_react.useEffect)(() => {
-		settleProfile.current();
-	}, [authProfiles]);
-	const applyPlan = (a) => {
-		setError("");
-		folderDo({
-			t: "user-set",
-			path: a.repo_path
-		});
-		if (a.title) setTitle(a.title);
-		setPrompt(a.prompt || "");
-		setInPlace(planInPlace(a));
-		setInitRepo(!!a.init_repo);
-		planFolderDo({
-			t: "answer",
-			plan: a
-		});
-		setNewFolderOk(false);
-		setProvision(false);
-		setAdvancedOpen(true);
-		if (a.prompt) {
-			foldOpenedByPlan.current = true;
-			setPromptOpen(true);
-		}
-	};
-	const startNow = () => {
-		const cached = lastAnswer.current;
-		if (cached && cached.sentence === describe.trim()) {
-			startFromPlan(cached.answer);
-			return;
-		}
-		runDescribe("start");
-	};
-	(0, import_react.useEffect)(() => {
-		if (page !== 2 || !focusFolderNext.current) return;
-		focusFolderNext.current = false;
-		const el = repoRef.current;
-		if (!el) return;
-		const body = el.closest(".nf-body");
-		if (body) body.scrollTop = 0;
-		el.focus({ preventScroll: true });
-		el.setSelectionRange(el.value.length, el.value.length);
-	}, [page]);
-	(0, import_react.useEffect)(() => {
-		if (page !== 2 || !focusTitleNext.current) return;
-		focusTitleNext.current = false;
-		titleRef.current?.focus();
-	}, [page]);
-	(0, import_react.useEffect)(() => {
-		if (open && describeOpen && page === 2) describeRef.current?.focus();
-	}, [
-		open,
-		describeOpen,
-		page
-	]);
-	(0, import_react.useEffect)(() => {
-		if (!open || page !== 2) return;
-		const path = repoPath.trim();
-		setBaseBranch("");
-		if (!path || !looksLikePath(path)) {
-			setBranches(null);
-			return;
-		}
-		let live = true;
-		const h = window.setTimeout(async () => {
-			try {
-				const b = await dapi("/api/repos/branches?path=" + encodeURIComponent(path));
-				if (live) setBranches(b);
-			} catch {
-				if (live) setBranches(null);
-			}
-		}, CHECK_DEBOUNCE_MS);
-		return () => {
-			live = false;
-			window.clearTimeout(h);
-		};
-	}, [
-		open,
-		page,
-		repoPath,
-		dapi
-	]);
-	const cancelDescribe = () => {
-		cancelPlanRun(planRun.current);
-		setDescribing(false);
-		setDescribeSlow(false);
-	};
-	const startFromPlan = async (a) => {
-		const ask = immediateStartBlockReason({
-			folderExists: a.folder_exists === true,
-			folderLabel: a.folder_display || a.repo_path || "that folder",
-			confirmed: newFolderOk
-		});
-		if (ask) {
-			setPlanError(ask);
-			return;
-		}
-		await postCreate(buildBody({
-			title: a.title || "",
-			repoPath: a.repo_path || "",
-			prompt: a.prompt || "",
-			inPlace: planInPlace(a),
-			initRepo: !!a.init_repo,
-			provisioned: false
-		}));
-	};
-	const runDescribe = async (mode = "fill") => {
-		const started = startPlanRun(planRun.current, describing);
-		if (!started) return;
-		const { seq, ctl } = started;
-		const blocked = describeBlockReason({
-			text: describe,
-			busy: describing
-		});
-		if (blocked) {
-			setPlanError(blocked);
-			return;
-		}
-		setDescribing(true);
-		setDescribeSlow(false);
-		setPlanError("");
-		setPlanNote("");
-		const slow = window.setTimeout(() => {
-			if (planRun.current.seq === seq) setDescribeSlow(true);
-		}, DESCRIBE_SLOW_MS);
-		try {
-			const a = await dapi("/api/session-plan", {
-				json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
-				signal: ctl.signal
-			});
-			if (planRun.current.seq !== seq) return;
-			applyPlan(a);
-			setPlanNote(a.note || "");
-			lastAnswer.current = {
-				sentence: describe.trim(),
-				answer: a
-			};
-			if (mode === "start") {
-				setDescribing(false);
-				setDescribeSlow(false);
-				startFromPlan(a);
-				return;
-			}
-			setPage(2);
-			submitArmAt.current = Date.now() + SUBMIT_ARM_MS;
-			focusFolderNext.current = true;
-		} catch (err) {
-			if (planRun.current.seq !== seq) return;
-			if (err?.name === "AbortError") return;
-			setPlanError(errMsg(err) + " — fill the form in by hand instead.");
-		} finally {
-			window.clearTimeout(slow);
-			if (planRun.current.seq === seq) {
-				setDescribing(false);
-				setDescribeSlow(false);
-				planRun.current.abort = null;
-			}
-		}
-	};
-	const armInitRepo = () => {
-		setInitRepo(true);
-		setAdvancedOpen(true);
-	};
-	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialog, {});
-	const folderPath = repoPath.trim();
-	const offerProvision = provisioningAvailable || !!folderPath;
-	const plainFolder = folderCheck?.asked === folderPath && !!folderCheck?.plain;
-	const searchHits = search && search.asked === folderPath && searchOpen && !browserOpen ? search : null;
-	const selIndex = searchHits && searchHits.matches.length ? Math.min(searchSel, searchHits.matches.length - 1) : -1;
-	const provisionOn = offerProvision && provision;
-	const worktreeMode = (!inPlace || laneNeedsWorktree) && !provisionOn;
-	const baseIsRemote = !!(branches?.branches || []).find((b) => b.name === baseBranch)?.remote;
-	const canContinue = baseIsRemote && baseBranch.startsWith("origin/");
-	const foldSummary = foldSummaryFor({
-		provisioned: provisionOn,
-		strategy,
-		inPlace: inPlace && !laneNeedsWorktree,
-		baseBranch,
-		current: branches?.current || "",
-		initRepo,
-		continueBranch: !!baseBranch && continueOn === baseBranch && canContinue
-	});
-	const provisionBlocked = provisionBlockReason({
-		provision: provisionOn,
-		plainFolder,
-		initRepo,
-		folderPath
-	});
-	const worktreeClamped = worktreeClampReason({
-		inPlace,
-		provisionOn,
-		plainFolder,
-		initRepo
-	});
-	const newFolderAsk = newFolderGate({
-		planPath: planGatePath(planFolder),
-		planDisplay: planFolder.display,
-		folderPath
-	});
-	const newFolderBlocked = newFolderBlockReason({
-		gate: newFolderAsk,
-		confirmed: newFolderOk
-	});
-	const newFolderRow = newFolderAsk ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "nf-newfolder",
-		role: "group",
-		"aria-labelledby": "new-describe-newfolder-q",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			id: "new-describe-newfolder-q",
-			className: "nf-newfolder-q",
-			"aria-live": "polite",
-			children: [
-				"There is no folder at ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: newFolderAsk }),
-				" yet. Make it?"
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "check",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "new-describe-newfolder",
-					checked: newFolderOk,
-					onChange: (e) => setNewFolderOk(e.target.checked)
-				}),
-				"Yes, create ",
-				newFolderAsk,
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "— a new directory, made when you press Create. Not the same as “Create a git repo in this folder” under Git & workspace, which runs git init inside it; a new project usually wants both."
-				})
-			]
-		})]
-	}) : null;
-	const planNoteShown = planNoteFor({
-		note: planNote,
-		planPath: planFolder.path,
-		folderPath
-	});
-	const suggestRows = SUGGEST_SOURCES.map((g) => ({
-		...g,
-		items: suggestions.filter((s) => s.source === g.key)
-	})).filter((g) => g.items.length > 0);
-	const pickMatch = (path) => {
-		folderDo({
-			t: "user-set",
-			path
-		});
-		setSearchOpen(false);
 	};
 	const failCreate = (msg) => {
 		setError(msg);
@@ -64795,1246 +64105,16 @@ function NewSessionDialog() {
 			continueBranch: !!baseBranch && continueOn === baseBranch
 		}));
 	};
-	const savePreset = () => {
-		const text = prompt.trim();
-		const name = (presetName || "").trim();
-		if (!text || !name) return;
-		const { replaced } = upsertUserPreset(name, text);
-		setSavedPresets(loadUserPresets());
-		setPresetValue("u:" + name);
-		setPresetName(null);
-		toast(replaced ? `Saved prompt “${name}” — it replaced “${replaced}” (names ignore case)` : `Saved prompt “${name}”`);
+	return {
+		failCreate,
+		buildBody,
+		postCreate,
+		startRun,
+		submit
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "new-dialog",
-		className: "modal",
-		ref: rootRef,
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				if (browserOpen) folderDo({ t: "browse-cancel" });
-				else closeDialog();
-			} else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-				if (shownTab !== "session") return;
-				e.preventDefault();
-				submit();
-			}
-		},
-		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "new-ticket-form",
-			className: "ta-drop",
-			ref: dropZoneRef,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
-				tab: shownTab,
-				tabs: ticketingOk,
-				onTab: setTab,
-				onClose: closeDialog
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewTicketPane, {})]
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-			id: "new-form",
-			ref: dropZoneRef,
-			className: "ta-drop" + (page === 1 ? " nf-ask" : ""),
-			onSubmit: (e) => {
-				e.preventDefault();
-				submit();
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
-					tab: shownTab,
-					tabs: ticketingOk,
-					onTab: setTab,
-					onClose: closeDialog
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "nf-body",
-					children: [startable.length > 0 && !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						id: "new-device-row",
-						className: "rt-row rt-row-top",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "rt-label",
-							children: "Runs on"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "rt-ctl",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-								id: "new-device",
-								value: device,
-								onChange: (e) => setDevicePick(e.target.value),
-								title: "The device the session lives on — its folders, its agents, its accounts",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: "",
-									children: devicesResp?.self?.host ? devicesResp.self.host + " (this device)" : "This device"
-								}), startable.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: d.device,
-									children: deviceLabel(d, startable, devicesResp?.self?.host || "")
-								}, d.device))]
-							})
-						})]
-					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						id: "new-describe",
-						className: "new-templates nf-describe",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "nt-head",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?" })
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-describe-row",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-									id: "new-describe-text",
-									ref: describeRef,
-									rows: Math.min(8, Math.max(3, describe.split("\n").length)),
-									value: describe,
-									maxLength: DESCRIBE_MAX_CHARS,
-									autoComplete: "off",
-									spellCheck: false,
-									readOnly: describing,
-									placeholder: "e.g. fix the login bug in acme-api",
-									onChange: (e) => {
-										setDescribe(e.target.value);
-										setPlanError("");
-									},
-									onKeyDown: (e) => {
-										if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-										if (e.shiftKey || runMode) {
-											e.stopPropagation();
-											return;
-										}
-										e.preventDefault();
-										e.stopPropagation();
-										runDescribe("fill");
-									}
-								}), describing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "new-describe-cancel",
-									className: "linklike",
-									onClick: cancelDescribe,
-									children: "Cancel"
-								})]
-							}),
-							!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "nf-describe-help",
-								children: [
-									"Your coding CLI reads this and works out which folder to use, what to call the session, and what to tell the agent first.",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you pick one of the buttons below." })
-								]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "nf-describe-eg",
-								children: [
-									"Also understood:",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "start a new project called invoice-parser" }),
-									" · ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
-								]
-							})] }),
-							draft.listMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunItems, {
-								rows: draft.rows,
-								onRemove: (row) => {
-									setDescribe((d) => removeItem(d, row));
-									setPlanError("");
-								}
-							}),
-							draft.listMode && draft.previewError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "rt-note error",
-								"aria-live": "polite",
-								children: ["Couldn't read the list: ", draft.previewError]
-							}),
-							draft.listMode && draft.warnings.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "rt-note",
-								children: w
-							}, w)),
-							batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunOptions, {
-								draft,
-								n: draft.listMode ? draft.count : 1,
-								split: false,
-								repoPicker: runMode && draft.items.some((i) => i.kind === "task") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "rt-repo-pick",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-										id: "new-run-repo",
-										className: "rt-repo",
-										value: runBrowse ? BROWSE_VALUE : repoPath,
-										title: repoPath + " — each gets its own worktree there",
-										onChange: (e) => {
-											if (e.target.value === BROWSE_VALUE) {
-												setRunBrowse(true);
-												return;
-											}
-											setRunBrowse(false);
-											folderDo({
-												t: "user-set",
-												path: e.target.value
-											});
-										},
-										children: runRepoOptions(repoPath, suggestions, leafName).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: o.value,
-											children: o.label
-										}, o.value))
-									})
-								}) : null,
-								splitBox: null
-							}),
-							runMode && runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "rt-browse",
-								"data-run-browse": "",
-								ref: runBrowseRef,
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "rt-browse-head",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Pick the folder the tasks start in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: "rt-browse-done",
-										onClick: () => setRunBrowse(false),
-										children: "Done"
-									})]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-									device,
-									initialPath: repoPath || homePath || "",
-									selected: repoPath,
-									onSelect: (p) => folderDo({
-										t: "user-set",
-										path: p
-									}),
-									onPick: (p) => {
-										folderDo({
-											t: "user-set",
-											path: p
-										});
-										setRunBrowse(false);
-									}
-								})]
-							}),
-							planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "nf-describe-note",
-								"aria-live": "polite",
-								children: planNoteShown
-							}),
-							planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								id: "new-describe-error",
-								className: "error",
-								"aria-live": "polite",
-								children: planError
-							}),
-							newFolderRow
-						]
-					}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						!describeOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "nf-describe-toggle",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "new-describe-open",
-								title: "Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create.",
-								onClick: () => setDescribeOpen(true),
-								children: "✨ Describe it instead…"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted",
-								children: "or fill the form in and press Enter"
-							})]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-describe",
-							className: "new-templates nf-describe",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "nt-head",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Describe what you want to work on" }), describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "nf-describe-busy",
-										"aria-live": "polite",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "btn-spin",
-												"aria-hidden": "true"
-											}),
-											describeSlow ? "Still thinking…" : "Thinking…",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "new-describe-cancel",
-												className: "linklike",
-												onClick: cancelDescribe,
-												children: "Cancel"
-											})
-										]
-									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										id: "new-describe-close",
-										className: "linklike",
-										onClick: () => {
-											setDescribeOpen(false);
-											setPlanError("");
-										},
-										children: "Hide"
-									})]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "nf-describe-row",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-										id: "new-describe-text",
-										ref: describeRef,
-										rows: Math.min(6, Math.max(2, describe.split("\n").length)),
-										value: describe,
-										maxLength: DESCRIBE_MAX_CHARS,
-										autoComplete: "off",
-										spellCheck: false,
-										readOnly: describing,
-										placeholder: "e.g. fix the login bug in acme-api — Enter fills the form in",
-										onChange: (e) => {
-											setDescribe(e.target.value);
-											setPlanError("");
-										},
-										onKeyDown: (e) => {
-											if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
-											if (e.shiftKey) {
-												e.stopPropagation();
-												return;
-											}
-											e.preventDefault();
-											e.stopPropagation();
-											runDescribe("fill");
-										}
-									})
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									className: "nf-describe-help",
-									children: ["Your coding CLI reads this and fills in the folder, name and first instruction below. ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you press Create." })]
-								}),
-								planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "nf-describe-note",
-									"aria-live": "polite",
-									children: planNoteShown
-								}),
-								planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									id: "new-describe-error",
-									className: "error",
-									"aria-live": "polite",
-									children: planError
-								})
-							]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-templates",
-							className: "new-templates",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nt-head",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									title: "Saved New-session setups — one list on every device",
-									children: "Templates"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "new-templates-manage",
-									className: "linklike",
-									title: "Add, edit and delete templates",
-									onClick: () => {
-										closeDialog();
-										useUi.getState().openDialogFor("templates", "new");
-									},
-									children: "Manage…"
-								})]
-							}), templates.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								id: "new-templates-list",
-								className: "nt-list",
-								children: templates.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "nt-chip" + (activeTemplate === t.name ? " active" : ""),
-									"data-name": t.name,
-									"aria-pressed": activeTemplate === t.name,
-									title: (t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe"),
-									onClick: () => fillFromTemplate(t),
-									children: t.name
-								}, t.name))
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "nf-describe-note",
-								children: "No templates yet. Save this form's prompt under a name (Prompt fold), or Manage… to add one."
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Name ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "— optional; empty starts an untitled session"
-						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "new-title",
-							ref: titleRef,
-							autoComplete: "off",
-							placeholder: activeTemplate ? activeTemplate + " — Enter creates it" : "untitled — Enter creates it",
-							value: title,
-							onChange: (e) => setTitle(e.target.value)
-						})] }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "nf-quick",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "nf-folder",
-									title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
-									children: ["Folder", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "repo-path-row",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											id: "new-repo-path",
-											ref: repoRef,
-											autoComplete: "off",
-											placeholder: "/home/me/projects/foo — or a folder name to look up",
-											value: repoPath,
-											role: "combobox",
-											"aria-expanded": !!searchHits,
-											"aria-controls": "new-search-list",
-											"aria-autocomplete": "list",
-											"aria-activedescendant": selIndex >= 0 ? "new-search-hit-" + selIndex : void 0,
-											onChange: (e) => {
-												folderDo({
-													t: "user-set",
-													path: e.target.value
-												});
-												setSearchOpen(true);
-											},
-											onKeyDown: (e) => {
-												const hits = searchHits?.matches || [];
-												if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-													if (!searchHits && search && search.asked === folderPath && !browserOpen) {
-														e.preventDefault();
-														setSearchOpen(true);
-														return;
-													}
-													if (!hits.length) return;
-													e.preventDefault();
-													const step = e.key === "ArrowDown" ? 1 : -1;
-													const at = Math.min(searchSel, hits.length - 1) + step;
-													setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
-												} else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && isNameQuery(folderPath)) {
-													e.preventDefault();
-													if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
-													else if (search && search.asked === folderPath && !browserOpen) setSearchOpen(true);
-												} else if (e.key === "Escape" && searchHits) {
-													e.preventDefault();
-													e.stopPropagation();
-													setSearchOpen(false);
-												}
-											}
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "repo-browse-btn",
-											title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
-											onClick: () => folderDo(browserOpen ? {
-												t: "browse-commit",
-												path: repoPath
-											} : { t: "browse-open" }),
-											children: "Browse…"
-										})]
-									})]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "nf-agent",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "nf-agent-head",
-										children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "new-agent-manage",
-											className: "linklike",
-											title: "Manage coding CLIs in Settings",
-											onClick: () => {
-												closeDialog();
-												useUi.getState().openDialogFor("settings", "coding");
-											},
-											children: "Manage"
-										})]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-										id: "new-program",
-										title: "The coding CLI this session runs",
-										value: program,
-										onChange: (e) => setAgent(e.target.value),
-										children: [!providers.some((p) => p.name === program) && program && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: program,
-											children: program
-										}), providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: p.name,
-											children: p.name
-										}, p.name))]
-									})]
-								}),
-								!device && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "nf-agent",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "nf-agent-head",
-										children: ["Account", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "new-account-manage",
-											className: "linklike",
-											title: "Manage accounts in Settings",
-											onClick: () => {
-												closeDialog();
-												useUi.getState().openDialogFor("settings", "accounts");
-											},
-											children: "Manage"
-										})]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-										id: "new-account",
-										title: "Which identity this session's CLI runs as",
-										value: profileId,
-										onChange: (e) => {
-											pendingProfile.current = null;
-											setAccount(e.target.value);
-										},
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "",
-												children: authProfiles?.default_profile ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "default",
-												children: "CLI's own login"
-											}),
-											(authProfiles?.profiles || []).map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: p.id,
-												children: p.label || p.id
-											}, p.id))
-										]
-									})]
-								})
-							]
-						}),
-						selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "nf-quick",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "nf-agent",
-								style: { flex: 1 },
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "nf-agent-head",
-									children: "Model"
-								}), (profileModels[profileId] || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-									id: "new-account-model",
-									title: "Model this session runs on (through the selected account)",
-									value: profileModel,
-									onChange: (e) => setProfileModel(e.target.value),
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: "",
-											children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default"
-										}),
-										profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-											value: profileModel,
-											children: [profileModel, " (custom)"]
-										}),
-										(profileModels[profileId] || []).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: m,
-											children: m
-										}, m))
-									]
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									id: "new-account-model",
-									type: "text",
-									autoComplete: "off",
-									placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
-									value: profileModel,
-									onChange: (e) => setProfileModel(e.target.value)
-								})]
-							})
-						}),
-						routeWarning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "nf-git-nudge",
-							children: routeWarning
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", { id: "provider-list" }),
-						searchHits && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-search",
-							className: "new-templates nf-suggest nf-search",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "nt-head",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-										"Matches for “",
-										searchHits.asked,
-										"”"
-									] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "nf-suggest-legend",
-										children: "↑↓ choose · Enter fills · Esc closes"
-									})]
-								}),
-								searchHits.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									id: "new-search-list",
-									className: "nf-search-list",
-									ref: searchListRef,
-									role: "listbox",
-									"aria-label": "Folder matches",
-									children: searchHits.matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										id: "new-search-hit-" + i,
-										type: "button",
-										role: "option",
-										"aria-selected": i === selIndex,
-										className: "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : ""),
-										"data-path": m.path,
-										title: m.path + (m.is_git ? "" : "\nno git repo here yet"),
-										onMouseMove: () => setSearchSel(i),
-										onClick: () => pickMatch(m.path),
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "nf-search-name",
-											children: (m.is_git ? "📦 " : "📁 ") + m.name
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "nf-search-path",
-											children: homeRelative(m.path, searchHits.home || homePath)
-										})]
-									}, m.path))
-								}),
-								searchHits.matches.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "nf-search-empty muted",
-									children: searchHits.truncated ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-										"The search stopped at its time and size limit before it found “",
-										searchHits.asked,
-										"” — Browse… walks straight to it, and a path starting with / or ~ is used exactly as typed."
-									] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-										"No folder called “",
-										searchHits.asked,
-										"” in the first three levels under your home directory — the search doesn’t look inside git repos or hidden folders. Browse… reaches those and the rest of the disk, and a path starting with / or ~ is used exactly as typed."
-									] })
-								}),
-								searchHits.matches.length > 0 && searchHits.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "nf-search-note muted",
-									children: "The search stopped early, so this list may not be everything — Browse… if the folder you want isn’t here."
-								})
-							]
-						}),
-						newFolderRow,
-						plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "nf-git-nudge",
-							children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								"No git repo in this folder, so diff, commit and PR stay off.",
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "linklike",
-									title: "Ticks “Create a git repo in this folder” under Git & workspace",
-									onClick: armInitRepo,
-									children: "Create one"
-								})
-							] })
-						}),
-						suggestRows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-suggest",
-							className: "new-templates nf-suggest",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nt-head",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Folders" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "nf-suggest-legend",
-									children: "📦 git repo · 📁 plain folder"
-								})]
-							}), suggestRows.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-suggest-row",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "nf-suggest-label",
-									title: g.hint,
-									children: g.label
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FitRow, { children: g.items.map((s) => {
-									const active = folderPath === s.path;
-									return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
-										"data-path": s.path,
-										"aria-pressed": active,
-										title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
-										onClick: () => folderDo({
-											t: "user-set",
-											path: s.path
-										}),
-										children: (s.is_git ? "📦 " : "📁 ") + s.name
-									}, s.path);
-								}) })]
-							}, g.key))]
-						}),
-						browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-							device,
-							initialPath: folderPath || homePath || "",
-							selected: folderPath,
-							onSelect: (p) => folderDo({
-								t: "browse-select",
-								path: p
-							}),
-							onPick: (p) => folderDo({
-								t: "browse-commit",
-								path: p
-							})
-						}),
-						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-ft-row",
-							className: "rt-row rt-row-top",
-							"data-caps": "git",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "rt-label",
-								children: "Fast-track to"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "rt-ctl",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
-									id: "new-lane-form",
-									label: "Fast-track to",
-									value: draft.lane,
-									onChange: draft.setLane,
-									askFirst: draft.askFirst,
-									onAskFirst: draft.setAskFirst,
-									disabledReason: splitOn ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" } : void 0,
-									askReason: splitOn ? "An auto-split always asks you before anything leaves this machine" : void 0
-								})
-							})]
-						}),
-						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							id: "new-split-row",
-							"data-caps": "git",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
-								id: "new-split",
-								split,
-								onSplit: toggleSplit,
-								gate: mcpOk,
-								maxPieces: clampSplit(maxPieces, splitLimit),
-								onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
-								limit: splitLimit,
-								text: prompt || describe
-							}), splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-								className: "rt-sum",
-								"aria-live": "polite",
-								children: [
-									splitSum.lead,
-									" ",
-									splitSum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "muted",
-										children: splitSum.tail
-									}),
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "muted",
-										children: "The account, plan-first, launch flags and Git & workspace choices don't apply to a split."
-									})
-								]
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-							id: "new-advanced",
-							className: "nf-advanced",
-							"data-caps": "git",
-							open: advancedOpen,
-							onToggle: (e) => setAdvancedOpen(e.target.open),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Git & workspace", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "nf-fold-sum",
-								id: "new-advanced-sum",
-								children: ["— ", foldSummary]
-							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-advanced-body",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "nf-mode",
-										role: "radiogroup",
-										"aria-labelledby": "new-mode-label",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												id: "new-mode-label",
-												className: "nf-mode-label",
-												children: "Where the work happens"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-												className: "check",
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-														type: "radio",
-														name: "new-workspace-mode",
-														id: "new-worktree",
-														checked: (!inPlace || laneNeedsWorktree) && !provisionOn,
-														onChange: () => {
-															setInPlace(false);
-															setProvision(false);
-														}
-													}),
-													"New worktree",
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "muted",
-														children: "(a separate checkout on its own branch — nothing is installed into it)"
-													})
-												]
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-												className: "check",
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-														type: "radio",
-														name: "new-workspace-mode",
-														id: "new-in-place",
-														checked: inPlace && !laneNeedsWorktree,
-														onChange: () => {
-															if (laneNeedsWorktree) draft.setLane("leave");
-															setSplit(false);
-															setInPlace(true);
-															setProvision(false);
-														}
-													}),
-													"Work directly in this folder",
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "muted",
-														children: splitOn ? "(turns auto-split off — a split works in its own worktree)" : laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
-													})
-												]
-											}),
-											offerProvision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-												id: "new-provision-row",
-												className: "check",
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-														type: "radio",
-														name: "new-workspace-mode",
-														id: "new-provision",
-														checked: provisionOn,
-														onChange: () => {
-															setProvision(true);
-															setInPlace(false);
-														}
-													}),
-													"Provision workspace",
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-														className: "muted",
-														children: "— the same separate checkout, plus run repo setup & warm test caches (or a full clone instead of a worktree)"
-													})
-												]
-											}),
-											worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-												className: "nf-git-nudge",
-												children: worktreeClamped
-											}),
-											provisionBlocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-												className: "nf-git-nudge nf-provision-warn",
-												children: [
-													provisionBlocked,
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-														type: "button",
-														className: "linklike",
-														title: "Ticks “Create a git repo in this folder” below",
-														onClick: armInitRepo,
-														children: "Create one here"
-													})
-												]
-											}),
-											offerProvision && provision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												id: "provision-opts",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Workspace strategy", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-													id: "new-workspace-strategy",
-													value: strategy,
-													onChange: (e) => setStrategy(e.target.value),
-													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "worktree",
-														children: "shared base clone (worktree) — fast, default"
-													}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "clone",
-														children: "full clone — standalone"
-													})]
-												})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-													className: "muted provision-hint",
-													children: [
-														"Tip: paste a full branch in ",
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Name" }),
-														" (e.g.",
-														" ",
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "feature/sc-17436/grafana-dashboard-…" }),
-														") to use it as the branch verbatim — the session name becomes its last segment."
-													]
-												})]
-											})
-										]
-									}),
-									worktreeMode && branches?.is_git && branches.branches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-										className: "nf-base-branch",
-										children: [
-											"Base branch",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "muted",
-												children: "— the worktree is cut from it and diffed against it"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-												id: "new-base-branch",
-												value: baseBranch,
-												onChange: (e) => setBaseBranch(e.target.value),
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "",
-														children: (branches.current || branches.default || "the checked-out branch") + (branches.current ? " (checked out)" : "")
-													}),
-													branches.branches.some((b) => !b.remote && !b.current) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Local",
-														children: branches.branches.filter((b) => !b.remote && !b.current).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: b.name,
-															children: b.name
-														}, b.name))
-													}),
-													branches.branches.some((b) => b.remote) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Remote",
-														children: branches.branches.filter((b) => b.remote).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: b.name,
-															children: b.name
-														}, b.name))
-													})
-												]
-											}),
-											branches.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "muted",
-												children: "Showing the first 200 branches."
-											})
-										]
-									}), canContinue && remoteBranchName(baseBranch) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "nf-base-mode",
-										role: "radiogroup",
-										"aria-label": "What to do with the remote branch",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "check",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "radio",
-													name: "new-base-mode",
-													id: "new-base-mode-new",
-													checked: continueOn !== baseBranch,
-													onChange: () => setContinueOn("")
-												}),
-												"Start a new branch from ",
-												baseBranch
-											]
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "check",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-													type: "radio",
-													name: "new-base-mode",
-													id: "new-base-mode-continue",
-													checked: continueOn === baseBranch,
-													onChange: () => setContinueOn(baseBranch)
-												}),
-												"Work on ",
-												remoteBranchName(baseBranch),
-												" itself",
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "muted",
-													children: "(shared with whoever pushed it)"
-												})
-											]
-										})]
-									})] }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-										className: "check",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-												type: "checkbox",
-												id: "new-init-repo",
-												checked: initRepo,
-												onChange: (e) => setInitRepo(e.target.checked)
-											}),
-											"Create a git repo in this folder",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "muted",
-												children: "(git init + initial commit — enables diff/commit/PR)"
-											})
-										]
-									})
-								]
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-							id: "new-prompt-fold",
-							className: "nf-advanced",
-							ref: promptRef,
-							open: promptOpen,
-							onToggle: (e) => {
-								const open = e.target.open;
-								setPromptOpen(open);
-								if (foldOpenedByPlan.current) {
-									foldOpenedByPlan.current = false;
-									return;
-								}
-								if (open) promptRef.current?.scrollIntoView({
-									behavior: "smooth",
-									block: "end"
-								});
-							},
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Prompt ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted",
-								children: "— sent to the agent at launch"
-							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-advanced-body",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "preset-row",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-												id: "new-preset",
-												title: "Saved prompts — pick one to fill the prompt below (editable after)",
-												value: presetValue,
-												onChange: (e) => {
-													setPresetValue(e.target.value);
-													const p = findPreset(e.target.value);
-													if (p) setPrompt(p.prompt);
-												},
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "",
-														children: "Saved prompt…"
-													}),
-													BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Built-in",
-														children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: "b:" + p.name,
-															title: p.prompt,
-															children: p.name
-														}, "b:" + p.name))
-													}),
-													savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Saved",
-														children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: "u:" + p.name,
-															title: p.prompt,
-															children: p.name
-														}, "u:" + p.name))
-													})
-												]
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-save",
-												title: "Save the prompt below so you can pick it again",
-												"aria-expanded": presetName !== null,
-												onClick: () => setPresetName((cur) => cur === null ? "" : null),
-												children: "Save…"
-											}),
-											presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-del",
-												title: "Delete this saved prompt",
-												onClick: () => {
-													const p = findPreset(presetValue);
-													if (!p) return;
-													const list = loadUserPresets().filter((q) => q.name !== p.name);
-													saveUserPresets(list);
-													setSavedPresets(list);
-													setPresetValue("");
-												},
-												children: "✕"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-manage",
-												className: "linklike",
-												title: "Your saved prompts, in Customize → Prompts",
-												onClick: () => useUi.getState().openDialogFor("prompts"),
-												children: "Manage…"
-											})
-										]
-									}),
-									presetName !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "preset-name-row",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-												id: "preset-name",
-												type: "text",
-												autoFocus: true,
-												autoComplete: "off",
-												spellCheck: false,
-												placeholder: "Name this prompt",
-												"aria-label": "Name for the saved prompt",
-												value: presetName,
-												onChange: (e) => setPresetName(e.target.value),
-												onKeyDown: (e) => {
-													e.stopPropagation();
-													if (e.key === "Enter") {
-														e.preventDefault();
-														savePreset();
-													} else if (e.key === "Escape") {
-														e.preventDefault();
-														setPresetName(null);
-													}
-												}
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-name-save",
-												disabled: !presetName.trim() || !prompt.trim(),
-												title: prompt.trim() ? "Save it" : "Type a prompt below first",
-												onClick: savePreset,
-												children: "Save"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-name-cancel",
-												onClick: () => setPresetName(null),
-												children: "Cancel"
-											}),
-											!prompt.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "muted",
-												children: "Type a prompt below first."
-											})
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-										id: "new-prompt",
-										rows: 2,
-										autoComplete: "off",
-										spellCheck: false,
-										placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
-										value: prompt,
-										onChange: (e) => setPrompt(e.target.value)
-									})
-								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "check" + (planOk ? "" : " disabled"),
-									id: "new-plan-first-row",
-									title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "checkbox",
-											id: "new-plan-first",
-											checked: planFirst && planOk,
-											disabled: !planOk,
-											onChange: (e) => setPlanFirst(e.target.checked)
-										}),
-										"Plan first",
-										" ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "muted",
-											children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
-										})
-									]
-								})]
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-							id: "new-launch-advanced",
-							className: "nf-advanced",
-							ref: launchRef,
-							open: launchOpen,
-							onToggle: (e) => {
-								const open = e.target.open;
-								setLaunchOpen(open);
-								if (open) launchRef.current?.scrollIntoView({
-									behavior: "smooth",
-									block: "end"
-								});
-							},
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Launch flags ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted",
-								children: "— extra CLI flags for this session"
-							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-advanced-body",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-									"Flags",
-									" ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "muted",
-										children: "— e.g. --dangerously-skip-permissions; appended after the agent's saved defaults"
-									})
-								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "text",
-									id: "new-launch-args",
-									autoComplete: "off",
-									placeholder: "e.g. --verbose",
-									value: launchArgs,
-									onChange: (e) => setLaunchArgs(e.target.value)
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
-									provider: program,
-									value: launchArgs,
-									onChange: setLaunchArgs
-								})]
-							})]
-						})
-					] })]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "modal-actions nf-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "new-error",
-						className: "error",
-						children: error
-					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "new-describe-skip",
-							className: "nf-quiet",
-							title: "Go straight to the full form and choose the folder and options yourself. Nothing is read, and no model runs.",
-							onClick: () => setPage(2),
-							children: "Set it up myself instead"
-						}),
-						!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "new-describe-go",
-							disabled: describing,
-							"aria-busy": describing || void 0,
-							title: "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
-							onClick: () => void runDescribe("fill"),
-							children: describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "btn-spin",
-									"aria-hidden": "true"
-								}),
-								" ",
-								describeSlow ? "Still reading…" : "Reading…"
-							] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								"Review details first",
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "nf-key",
-									"aria-hidden": "true",
-									children: "↵"
-								})
-							] })
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "new-describe-start",
-							disabled: describing || draft.starting,
-							"aria-busy": draft.starting || void 0,
-							title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
-							onClick: runMode ? () => void startRun() : startNow,
-							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
-						})
-					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "new-back",
-						className: "linklike",
-						onClick: () => setPage(1),
-						children: "← Back"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "submit",
-						disabled: draft.starting || describing,
-						"aria-busy": draft.starting || void 0,
-						title: describing ? "Waiting for the description to be read" : void 0,
-						children: draft.starting ? "Starting…" : "Create"
-					})] })]
-				})
-			]
-		})
-	});
 }
-function NewHead({ tab, tabs, onTab, onClose }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ws-head nf-head",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New" }),
-			tabs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-				className: "nf-tabs",
-				"aria-label": "New",
-				children: NEW_TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "nf-tab" + (tab === t.key ? " active" : ""),
-					"data-new-tab": t.key,
-					"aria-current": tab === t.key ? "page" : void 0,
-					onClick: () => onTab(t.key),
-					children: t.label
-				}, t.key))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-close",
-				title: "Close (Esc)",
-				onClick: onClose,
-				children: "Close"
-			})
-		]
-	});
-}
-function focusRowIndex(paths, leaving) {
-	if (!paths.length) return -1;
-	const i = paths.indexOf(leaving);
-	return i >= 0 ? i : 0;
-}
+//#endregion
+//#region src/components/dialogs/newSession/FolderBrowser.tsx
 function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick }) {
 	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
@@ -66200,6 +64280,2322 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick })
 	});
 }
 //#endregion
+//#region src/components/dialogs/newSession/DescribeSection.tsx
+function describeFlow(ctx) {
+	const { describe, describing, newFolderOk, dapi, planRun, lastAnswer, submitArmAt, focusFolderNext, foldOpenedByPlan, folderDo, planFolderDo, setError, setTitle, setPrompt, setInPlace, setInitRepo, setNewFolderOk, setProvision, setAdvancedOpen, setPromptOpen, setPlanError, setPlanNote, setDescribing, setDescribeSlow, setPage, buildBody, postCreate } = ctx;
+	const applyPlan = (a) => {
+		setError("");
+		folderDo({
+			t: "user-set",
+			path: a.repo_path
+		});
+		if (a.title) setTitle(a.title);
+		setPrompt(a.prompt || "");
+		setInPlace(planInPlace(a));
+		setInitRepo(!!a.init_repo);
+		planFolderDo({
+			t: "answer",
+			plan: a
+		});
+		setNewFolderOk(false);
+		setProvision(false);
+		setAdvancedOpen(true);
+		if (a.prompt) {
+			foldOpenedByPlan.current = true;
+			setPromptOpen(true);
+		}
+	};
+	const startNow = () => {
+		const cached = lastAnswer.current;
+		if (cached && cached.sentence === describe.trim()) {
+			startFromPlan(cached.answer);
+			return;
+		}
+		runDescribe("start");
+	};
+	const cancelDescribe = () => {
+		cancelPlanRun(planRun.current);
+		setDescribing(false);
+		setDescribeSlow(false);
+	};
+	const startFromPlan = async (a) => {
+		const ask = immediateStartBlockReason({
+			folderExists: a.folder_exists === true,
+			folderLabel: a.folder_display || a.repo_path || "that folder",
+			confirmed: newFolderOk
+		});
+		if (ask) {
+			setPlanError(ask);
+			return;
+		}
+		await postCreate(buildBody({
+			title: a.title || "",
+			repoPath: a.repo_path || "",
+			prompt: a.prompt || "",
+			inPlace: planInPlace(a),
+			initRepo: !!a.init_repo,
+			provisioned: false
+		}));
+	};
+	const runDescribe = async (mode = "fill") => {
+		const started = startPlanRun(planRun.current, describing);
+		if (!started) return;
+		const { seq, ctl } = started;
+		const blocked = describeBlockReason({
+			text: describe,
+			busy: describing
+		});
+		if (blocked) {
+			setPlanError(blocked);
+			return;
+		}
+		setDescribing(true);
+		setDescribeSlow(false);
+		setPlanError("");
+		setPlanNote("");
+		const slow = window.setTimeout(() => {
+			if (planRun.current.seq === seq) setDescribeSlow(true);
+		}, DESCRIBE_SLOW_MS);
+		try {
+			const a = await dapi("/api/session-plan", {
+				json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
+				signal: ctl.signal
+			});
+			if (planRun.current.seq !== seq) return;
+			applyPlan(a);
+			setPlanNote(a.note || "");
+			lastAnswer.current = {
+				sentence: describe.trim(),
+				answer: a
+			};
+			if (mode === "start") {
+				setDescribing(false);
+				setDescribeSlow(false);
+				startFromPlan(a);
+				return;
+			}
+			setPage(2);
+			submitArmAt.current = Date.now() + SUBMIT_ARM_MS;
+			focusFolderNext.current = true;
+		} catch (err) {
+			if (planRun.current.seq !== seq) return;
+			if (err?.name === "AbortError") return;
+			setPlanError(errMsg(err) + " — fill the form in by hand instead.");
+		} finally {
+			window.clearTimeout(slow);
+			if (planRun.current.seq === seq) {
+				setDescribing(false);
+				setDescribeSlow(false);
+				planRun.current.abort = null;
+			}
+		}
+	};
+	return {
+		applyPlan,
+		startNow,
+		cancelDescribe,
+		startFromPlan,
+		runDescribe
+	};
+}
+function useDescribeFocus({ open, page, describeOpen, focusFolderNext, focusOpeningNext, openedFocus, openedPage, repoRef, titleRef, describeRef }) {
+	(0, import_react.useEffect)(() => {
+		if (page !== 2 || !focusFolderNext.current) return;
+		focusFolderNext.current = false;
+		const el = repoRef.current;
+		if (!el) return;
+		const body = el.closest(".nf-body");
+		if (body) body.scrollTop = 0;
+		el.focus({ preventScroll: true });
+		el.setSelectionRange(el.value.length, el.value.length);
+	}, [page]);
+	(0, import_react.useEffect)(() => {
+		if (!open || !focusOpeningNext.current || page !== openedPage.current) return;
+		const el = openedFocus.current === "title" ? titleRef.current : describeRef.current;
+		if (!el) return;
+		focusOpeningNext.current = false;
+		el.focus();
+	}, [
+		open,
+		page,
+		describeOpen
+	]);
+	const wasOpen = (0, import_react.useRef)(describeOpen);
+	(0, import_react.useEffect)(() => {
+		const reopened = describeOpen && !wasOpen.current;
+		wasOpen.current = describeOpen;
+		if (open && reopened && page === 2 && !focusOpeningNext.current) describeRef.current?.focus();
+	}, [
+		open,
+		describeOpen,
+		page
+	]);
+}
+function NewFolderRow({ ask: newFolderAsk, ok: newFolderOk, onOk: setNewFolderOk }) {
+	if (!newFolderAsk) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nf-newfolder",
+		role: "group",
+		"aria-labelledby": "new-describe-newfolder-q",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			id: "new-describe-newfolder-q",
+			className: "nf-newfolder-q",
+			"aria-live": "polite",
+			children: [
+				"There is no folder at ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: newFolderAsk }),
+				" yet. Make it?"
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "check",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "new-describe-newfolder",
+					checked: newFolderOk,
+					onChange: (e) => setNewFolderOk(e.target.checked)
+				}),
+				"Yes, create ",
+				newFolderAsk,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: "— a new directory, made when you press Create. Not the same as “Create a git repo in this folder” under Git & workspace, which runs git init inside it; a new project usually wants both."
+				})
+			]
+		})]
+	});
+}
+function DescribeSection({ page, batch, describe, setDescribe, describing, describeSlow, describeRef, describeOpen, setDescribeOpen, runMode, runDescribe, cancelDescribe, draft, planNoteShown, planError, setPlanError, newFolderRow, runBrowse, setRunBrowse, runBrowseRef, repoPath, folderDo, suggestions, device, homePath }) {
+	if (page === 1) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "new-describe",
+		className: "new-templates nf-describe",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "nt-head",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: batch ? "Starting together — one session per line or ticket ID" : "What do you want to work on?" })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nf-describe-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "new-describe-text",
+					ref: describeRef,
+					rows: Math.min(8, Math.max(3, describe.split("\n").length)),
+					value: describe,
+					maxLength: DESCRIBE_MAX_CHARS,
+					autoComplete: "off",
+					spellCheck: false,
+					readOnly: describing,
+					placeholder: "e.g. fix the login bug in acme-api",
+					onChange: (e) => {
+						setDescribe(e.target.value);
+						setPlanError("");
+					},
+					onKeyDown: (e) => {
+						if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+						if (e.shiftKey || runMode) {
+							e.stopPropagation();
+							return;
+						}
+						e.preventDefault();
+						e.stopPropagation();
+						runDescribe("fill");
+					}
+				}), describing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "new-describe-cancel",
+					className: "linklike",
+					onClick: cancelDescribe,
+					children: "Cancel"
+				})]
+			}),
+			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-describe-help",
+				children: [
+					"Your coding CLI reads this and works out which folder to use, what to call the session, and what to tell the agent first.",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you pick one of the buttons below." })
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-describe-eg",
+				children: [
+					"Also understood:",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "start a new project called invoice-parser" }),
+					" · ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
+				]
+			})] }),
+			draft.listMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunItems, {
+				rows: draft.rows,
+				onRemove: (row) => {
+					setDescribe((d) => removeItem(d, row));
+					setPlanError("");
+				}
+			}),
+			draft.listMode && draft.previewError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rt-note error",
+				"aria-live": "polite",
+				children: ["Couldn't read the list: ", draft.previewError]
+			}),
+			draft.listMode && draft.warnings.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rt-note",
+				children: w
+			}, w)),
+			batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunOptions, {
+				draft,
+				n: draft.listMode ? draft.count : 1,
+				split: false,
+				repoPicker: runMode && draft.items.some((i) => i.kind === "task") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-repo-pick",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "new-run-repo",
+						className: "rt-repo",
+						value: runBrowse ? BROWSE_VALUE : repoPath,
+						title: repoPath + " — each gets its own worktree there",
+						onChange: (e) => {
+							if (e.target.value === BROWSE_VALUE) {
+								setRunBrowse(true);
+								return;
+							}
+							setRunBrowse(false);
+							folderDo({
+								t: "user-set",
+								path: e.target.value
+							});
+						},
+						children: runRepoOptions(repoPath, suggestions, leafName).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: o.value,
+							children: o.label
+						}, o.value))
+					})
+				}) : null,
+				splitBox: null
+			}),
+			runMode && runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-browse",
+				"data-run-browse": "",
+				ref: runBrowseRef,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-browse-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Pick the folder the tasks start in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rt-browse-done",
+						onClick: () => setRunBrowse(false),
+						children: "Done"
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+					device,
+					initialPath: repoPath || homePath || "",
+					selected: repoPath,
+					onSelect: (p) => folderDo({
+						t: "user-set",
+						path: p
+					}),
+					onPick: (p) => {
+						folderDo({
+							t: "user-set",
+							path: p
+						});
+						setRunBrowse(false);
+					}
+				})]
+			}),
+			planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nf-describe-note",
+				"aria-live": "polite",
+				children: planNoteShown
+			}),
+			planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				id: "new-describe-error",
+				className: "error",
+				"aria-live": "polite",
+				children: planError
+			}),
+			newFolderRow
+		]
+	});
+	return !describeOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nf-describe-toggle",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "new-describe-open",
+			title: "Type a sentence and let your coding CLI work out the folder, name and first instruction. Nothing is created until you press Create.",
+			onClick: () => setDescribeOpen(true),
+			children: "✨ Describe it instead…"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "or fill the form in and press Enter"
+		})]
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "new-describe",
+		className: "new-templates nf-describe",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nt-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "What do you want to work on?" }), describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "nf-describe-busy",
+					"aria-live": "polite",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "btn-spin",
+							"aria-hidden": "true"
+						}),
+						describeSlow ? "Still thinking…" : "Thinking…",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "new-describe-cancel",
+							className: "linklike",
+							onClick: cancelDescribe,
+							children: "Cancel"
+						})
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "new-describe-close",
+					className: "linklike",
+					onClick: () => {
+						setDescribeOpen(false);
+						setPlanError("");
+					},
+					children: "Hide"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "nf-describe-row",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "new-describe-text",
+					ref: describeRef,
+					rows: Math.min(6, Math.max(2, describe.split("\n").length)),
+					value: describe,
+					maxLength: DESCRIBE_MAX_CHARS,
+					autoComplete: "off",
+					spellCheck: false,
+					readOnly: describing,
+					placeholder: "e.g. fix the login bug in acme-api — Enter fills the form in",
+					onChange: (e) => {
+						setDescribe(e.target.value);
+						setPlanError("");
+					},
+					onKeyDown: (e) => {
+						if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+						if (e.shiftKey) {
+							e.stopPropagation();
+							return;
+						}
+						e.preventDefault();
+						e.stopPropagation();
+						runDescribe("fill");
+					}
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-describe-help",
+				children: [
+					"Your coding CLI reads this and fills in the folder, name and first instruction below. ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you press Create." }),
+					" ",
+					"Or skip it: give the session a Name below and press Enter."
+				]
+			}),
+			planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nf-describe-note",
+				"aria-live": "polite",
+				children: planNoteShown
+			}),
+			planError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				id: "new-describe-error",
+				className: "error",
+				"aria-live": "polite",
+				children: planError
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/TemplatesStrip.tsx
+function templateFiller(ctx) {
+	const { title, titleRef, setAgent, folderDo, setPrompt, setProvision, setStrategy, setInPlace, setInitRepo, setActiveTemplate, setAdvancedOpen, setPromptOpen, setTitle } = ctx;
+	const fillFromTemplate = (t, opts = {}) => {
+		if (t.program) setAgent(t.program);
+		if (t.repo_path) folderDo({
+			t: "user-set",
+			path: t.repo_path
+		});
+		if (t.prompt) setPrompt(t.prompt);
+		setProvision(!!t.provisioned);
+		if (t.workspace_strategy) setStrategy(t.workspace_strategy);
+		setInPlace(!!t.in_place && !t.provisioned);
+		setInitRepo(!!t.init_repo);
+		setActiveTemplate(t.name);
+		if (opts.quiet) return;
+		setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
+		if (t.prompt) setPromptOpen(true);
+		if (!title.trim()) setTitle(t.name || "");
+		titleRef.current?.focus();
+	};
+	return fillFromTemplate;
+}
+function TemplatesStrip({ templates, activeTemplate, fillFromTemplate, closeDialog }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "new-templates",
+		className: "new-templates",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nt-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				title: "Saved New-session setups — one list on every device",
+				children: "Templates"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-templates-manage",
+				className: "linklike",
+				title: "Add, edit and delete templates",
+				onClick: () => {
+					closeDialog();
+					useUi.getState().openDialogFor("templates", "new");
+				},
+				children: "Manage…"
+			})]
+		}), templates.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			id: "new-templates-list",
+			className: "nt-list",
+			children: templates.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "nt-chip" + (activeTemplate === t.name ? " active" : ""),
+				"data-name": t.name,
+				"aria-pressed": activeTemplate === t.name,
+				title: (t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe"),
+				onClick: () => fillFromTemplate(t),
+				children: t.name
+			}, t.name))
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-describe-note",
+			children: "No templates yet. Save this form's prompt under a name (Prompt fold), or Manage… to add one."
+		})]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/FolderPicker.tsx
+function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, setSearchSel, searchListRef, searchSel, search, searchOpen }) {
+	(0, import_react.useEffect)(() => {
+		const asked = repoPath.trim();
+		if (!open || !asked || !looksLikePath(asked)) {
+			setFolderCheck(null);
+			return;
+		}
+		let live = true;
+		const timer = window.setTimeout(async () => {
+			try {
+				const r = await dapi("/api/repos/check?path=" + encodeURIComponent(asked));
+				if (live) setFolderCheck({
+					asked,
+					plain: !!r.exists && !!r.is_dir && !r.is_git
+				});
+			} catch {
+				if (live) setFolderCheck(null);
+			}
+		}, CHECK_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(timer);
+		};
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
+	(0, import_react.useEffect)(() => {
+		const asked = repoPath.trim();
+		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
+			setSearch(null);
+			return;
+		}
+		let live = true;
+		const timer = window.setTimeout(async () => {
+			try {
+				const r = await dapi("/api/repos/search?q=" + encodeURIComponent(asked));
+				if (!live) return;
+				setSearch({
+					asked,
+					matches: r.matches || [],
+					truncated: !!r.truncated,
+					home: r.home || ""
+				});
+				setSearchSel(0);
+			} catch {
+				if (live) setSearch(null);
+			}
+		}, SEARCH_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(timer);
+		};
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
+	(0, import_react.useEffect)(() => {
+		const row = searchListRef.current?.querySelector("[aria-selected=\"true\"]");
+		if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+	}, [
+		searchSel,
+		search,
+		searchOpen
+	]);
+}
+function matchPicker(folderDo, setSearchOpen) {
+	return (path) => {
+		folderDo({
+			t: "user-set",
+			path
+		});
+		setSearchOpen(false);
+	};
+}
+function FitRow({ children }) {
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const el = ref.current;
+		if (!el) return;
+		const fit = () => {
+			const kids = Array.from(el.children);
+			for (const k of kids) k.classList.remove("nt-clipped");
+			const right = el.getBoundingClientRect().right;
+			if (!(right > 0)) return;
+			for (const k of kids) if (!fitsWithin(k.getBoundingClientRect().right, right)) k.classList.add("nt-clipped");
+		};
+		fit();
+		const ro = new ResizeObserver(fit);
+		ro.observe(el);
+		return () => ro.disconnect();
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "nt-list",
+		ref,
+		children
+	});
+}
+function FolderField({ repoRef, repoPath, folderPath, folderDo, search, searchHits, searchSel, setSearchSel, setSearchOpen, selIndex, browserOpen, pickMatch }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-folder",
+		title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
+		children: ["Folder", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "repo-path-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "new-repo-path",
+				ref: repoRef,
+				autoComplete: "off",
+				placeholder: "/home/me/projects/foo — or a folder name to look up",
+				value: repoPath,
+				role: "combobox",
+				"aria-expanded": !!searchHits,
+				"aria-controls": "new-search-list",
+				"aria-autocomplete": "list",
+				"aria-activedescendant": selIndex >= 0 ? "new-search-hit-" + selIndex : void 0,
+				onChange: (e) => {
+					folderDo({
+						t: "user-set",
+						path: e.target.value
+					});
+					setSearchOpen(true);
+				},
+				onKeyDown: (e) => {
+					const hits = searchHits?.matches || [];
+					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+						if (!searchHits && search && search.asked === folderPath && !browserOpen) {
+							e.preventDefault();
+							setSearchOpen(true);
+							return;
+						}
+						if (!hits.length) return;
+						e.preventDefault();
+						const step = e.key === "ArrowDown" ? 1 : -1;
+						const at = Math.min(searchSel, hits.length - 1) + step;
+						setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
+					} else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && isNameQuery(folderPath)) {
+						e.preventDefault();
+						if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
+						else if (search && search.asked === folderPath && !browserOpen) setSearchOpen(true);
+					} else if (e.key === "Escape" && searchHits) {
+						e.preventDefault();
+						e.stopPropagation();
+						setSearchOpen(false);
+					}
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "repo-browse-btn",
+				title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
+				onClick: () => folderDo(browserOpen ? {
+					t: "browse-commit",
+					path: repoPath
+				} : { t: "browse-open" }),
+				children: "Browse…"
+			})]
+		})]
+	});
+}
+function FolderAids({ searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device }) {
+	const suggestRows = SUGGEST_SOURCES.map((g) => ({
+		...g,
+		items: suggestions.filter((s) => s.source === g.key)
+	})).filter((g) => g.items.length > 0);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		searchHits && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "new-search",
+			className: "new-templates nf-suggest nf-search",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "nt-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						"Matches for “",
+						searchHits.asked,
+						"”"
+					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "nf-suggest-legend",
+						children: "↑↓ choose · Enter fills · Esc closes"
+					})]
+				}),
+				searchHits.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "new-search-list",
+					className: "nf-search-list",
+					ref: searchListRef,
+					role: "listbox",
+					"aria-label": "Folder matches",
+					children: searchHits.matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						id: "new-search-hit-" + i,
+						type: "button",
+						role: "option",
+						"aria-selected": i === selIndex,
+						className: "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : ""),
+						"data-path": m.path,
+						title: m.path + (m.is_git ? "" : "\nno git repo here yet"),
+						onMouseMove: () => setSearchSel(i),
+						onClick: () => pickMatch(m.path),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nf-search-name",
+							children: (m.is_git ? "📦 " : "📁 ") + m.name
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nf-search-path",
+							children: homeRelative(m.path, searchHits.home || homePath)
+						})]
+					}, m.path))
+				}),
+				searchHits.matches.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "nf-search-empty muted",
+					children: searchHits.truncated ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"The search stopped at its time and size limit before it found “",
+						searchHits.asked,
+						"” — Browse… walks straight to it, and a path starting with / or ~ is used exactly as typed."
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"No folder called “",
+						searchHits.asked,
+						"” in the first three levels under your home directory — the search doesn’t look inside git repos or hidden folders. Browse… reaches those and the rest of the disk, and a path starting with / or ~ is used exactly as typed."
+					] })
+				}),
+				searchHits.matches.length > 0 && searchHits.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "nf-search-note muted",
+					children: "The search stopped early, so this list may not be everything — Browse… if the folder you want isn’t here."
+				})
+			]
+		}),
+		newFolderRow,
+		plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge",
+			children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				"No git repo in this folder, so diff, commit and PR stay off.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					title: "Ticks “Create a git repo in this folder” under Git & workspace",
+					onClick: armInitRepo,
+					children: "Create one"
+				})
+			] })
+		}),
+		suggestRows.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "new-suggest",
+			className: "new-templates nf-suggest",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nt-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Folders" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-suggest-legend",
+					children: "📦 git repo · 📁 plain folder"
+				})]
+			}), suggestRows.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nf-suggest-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-suggest-label",
+					title: g.hint,
+					children: g.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FitRow, { children: g.items.map((s) => {
+					const active = folderPath === s.path;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
+						"data-path": s.path,
+						"aria-pressed": active,
+						title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
+						onClick: () => folderDo({
+							t: "user-set",
+							path: s.path
+						}),
+						children: (s.is_git ? "📦 " : "📁 ") + s.name
+					}, s.path);
+				}) })]
+			}, g.key))]
+		}),
+		browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+			device,
+			initialPath: folderPath || homePath || "",
+			selected: folderPath,
+			onSelect: (p) => folderDo({
+				t: "browse-select",
+				path: p
+			}),
+			onPick: (p) => folderDo({
+				t: "browse-commit",
+				path: p
+			})
+		})
+	] });
+}
+//#endregion
+//#region src/components/dialogs/newSession/AgentAccount.tsx
+function accountSetter(ctx) {
+	const { authProfiles, program, profileModels, canonAgent, setAgent, setProfileId, setProfileModel, setProfileModels } = ctx;
+	const setAccount = (id, agentNow) => {
+		setProfileId(id);
+		setProfileModel("");
+		const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
+		if (!prof) return;
+		const supported = prof.supported_agents || [];
+		const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
+		if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
+			const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
+			setAgent(preferred);
+		}
+		if (prof.kind === "openrouter" && !profileModels[id]) (async () => {
+			try {
+				const r = await api("/api/settings/test/openrouter", { json: { profile_id: id } });
+				if (r?.ok && r.models?.length) setProfileModels((m) => ({
+					...m,
+					[id]: r.models || []
+				}));
+			} catch {}
+		})();
+	};
+	return setAccount;
+}
+function AgentFields({ program, providers, setAgent, device, authProfiles, profileId, pendingProfile, setAccount, closeDialog }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-agent",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "nf-agent-head",
+			children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-agent-manage",
+				className: "linklike",
+				title: "Manage coding CLIs in Settings",
+				onClick: () => {
+					closeDialog();
+					useUi.getState().openDialogFor("settings", "coding");
+				},
+				children: "Manage"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+			id: "new-program",
+			title: "The coding CLI this session runs",
+			value: program,
+			onChange: (e) => setAgent(e.target.value),
+			children: [!providers.some((p) => p.name === program) && program && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+				value: program,
+				children: program
+			}), providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+				value: p.name,
+				children: p.name
+			}, p.name))]
+		})]
+	}), !device && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-agent",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "nf-agent-head",
+			children: ["Account", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-account-manage",
+				className: "linklike",
+				title: "Manage accounts in Settings",
+				onClick: () => {
+					closeDialog();
+					useUi.getState().openDialogFor("settings", "accounts");
+				},
+				children: "Manage"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+			id: "new-account",
+			title: "Which identity this session's CLI runs as",
+			value: profileId,
+			onChange: (e) => {
+				pendingProfile.current = null;
+				setAccount(e.target.value);
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: authProfiles?.default_profile ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "default",
+					children: "CLI's own login"
+				}),
+				(authProfiles?.profiles || []).map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: p.id,
+					children: p.label || p.id
+				}, p.id))
+			]
+		})]
+	})] });
+}
+function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, profileModels, program, canonAgent }) {
+	const routeWarning = (() => {
+		if (!selectedProfile) return "";
+		const supported = selectedProfile.supported_agents || [];
+		if (!!selectedProfile.env && Object.keys(selectedProfile.env).length > 0 || !supported.length) return "";
+		if (supported.includes(canonAgent(program))) return "";
+		return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
+	})();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "nf-quick",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "nf-agent",
+				style: { flex: 1 },
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-agent-head",
+					children: "Model"
+				}), (profileModels[profileId] || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "new-account-model",
+					title: "Model this session runs on (through the selected account)",
+					value: profileModel,
+					onChange: (e) => setProfileModel(e.target.value),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default"
+						}),
+						profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+							value: profileModel,
+							children: [profileModel, " (custom)"]
+						}),
+						(profileModels[profileId] || []).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: m,
+							children: m
+						}, m))
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "new-account-model",
+					type: "text",
+					autoComplete: "off",
+					placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
+					value: profileModel,
+					onChange: (e) => setProfileModel(e.target.value)
+				})]
+			})
+		}),
+		routeWarning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge",
+			children: routeWarning
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", { id: "provider-list" })
+	] });
+}
+//#endregion
+//#region src/components/dialogs/newSession/WorkspaceFold.tsx
+function useBaseBranches({ open, page, repoPath, dapi, setBaseBranch, setBranches }) {
+	(0, import_react.useEffect)(() => {
+		if (!open || page !== 2) return;
+		const path = repoPath.trim();
+		setBaseBranch("");
+		if (!path || !looksLikePath(path)) {
+			setBranches(null);
+			return;
+		}
+		let live = true;
+		const h = window.setTimeout(async () => {
+			try {
+				const b = await dapi("/api/repos/branches?path=" + encodeURIComponent(path));
+				if (live) setBranches(b);
+			} catch {
+				if (live) setBranches(null);
+			}
+		}, CHECK_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(h);
+		};
+	}, [
+		open,
+		page,
+		repoPath,
+		dapi
+	]);
+}
+function WorkspaceFold({ advancedOpen, setAdvancedOpen, foldSummary, inPlace, setInPlace, provision, setProvision, provisionOn, offerProvision, laneNeedsWorktree, draft, splitOn, setSplit, worktreeClamped, provisionBlocked, armInitRepo, strategy, setStrategy, worktreeMode, branches, baseBranch, setBaseBranch, canContinue, continueOn, setContinueOn, initRepo, setInitRepo }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		id: "new-advanced",
+		className: "nf-advanced",
+		"data-caps": "git",
+		open: advancedOpen,
+		onToggle: (e) => setAdvancedOpen(e.target.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Git & workspace", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "nf-fold-sum",
+			id: "new-advanced-sum",
+			children: ["— ", foldSummary]
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nf-advanced-body",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "nf-mode",
+					role: "radiogroup",
+					"aria-labelledby": "new-mode-label",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							id: "new-mode-label",
+							className: "nf-mode-label",
+							children: "Where the work happens"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "check",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "new-workspace-mode",
+									id: "new-worktree",
+									checked: (!inPlace || laneNeedsWorktree) && !provisionOn,
+									onChange: () => {
+										setInPlace(false);
+										setProvision(false);
+									}
+								}),
+								"New worktree",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted",
+									children: "(a separate checkout on its own branch — nothing is installed into it)"
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "check",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "new-workspace-mode",
+									id: "new-in-place",
+									checked: inPlace && !laneNeedsWorktree,
+									onChange: () => {
+										if (laneNeedsWorktree) draft.setLane("leave");
+										setSplit(false);
+										setInPlace(true);
+										setProvision(false);
+									}
+								}),
+								"Work directly in this folder",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted",
+									children: splitOn ? "(turns auto-split off — a split works in its own worktree)" : laneNeedsWorktree ? "(turns fast-track off — it commits for this session, so it needs its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
+								})
+							]
+						}),
+						offerProvision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							id: "new-provision-row",
+							className: "check",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "new-workspace-mode",
+									id: "new-provision",
+									checked: provisionOn,
+									onChange: () => {
+										setProvision(true);
+										setInPlace(false);
+									}
+								}),
+								"Provision workspace",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "muted",
+									children: "— the same separate checkout, plus run repo setup & warm test caches (or a full clone instead of a worktree)"
+								})
+							]
+						}),
+						worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "nf-git-nudge",
+							children: worktreeClamped
+						}),
+						provisionBlocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "nf-git-nudge nf-provision-warn",
+							children: [
+								provisionBlocked,
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike",
+									title: "Ticks “Create a git repo in this folder” below",
+									onClick: armInitRepo,
+									children: "Create one here"
+								})
+							]
+						}),
+						offerProvision && provision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "provision-opts",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Workspace strategy", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								id: "new-workspace-strategy",
+								value: strategy,
+								onChange: (e) => setStrategy(e.target.value),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "worktree",
+									children: "shared base clone (worktree) — fast, default"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "clone",
+									children: "full clone — standalone"
+								})]
+							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "muted provision-hint",
+								children: [
+									"Tip: paste a full branch in ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Name" }),
+									" (e.g.",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "feature/sc-17436/grafana-dashboard-…" }),
+									") to use it as the branch verbatim — the session name becomes its last segment."
+								]
+							})]
+						})
+					]
+				}),
+				worktreeMode && branches?.is_git && branches.branches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "nf-base-branch",
+					children: [
+						"Base branch",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "— the worktree is cut from it and diffed against it"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							id: "new-base-branch",
+							value: baseBranch,
+							onChange: (e) => setBaseBranch(e.target.value),
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: (branches.current || branches.default || "the checked-out branch") + (branches.current ? " (checked out)" : "")
+								}),
+								branches.branches.some((b) => !b.remote && !b.current) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+									label: "Local",
+									children: branches.branches.filter((b) => !b.remote && !b.current).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: b.name,
+										children: b.name
+									}, b.name))
+								}),
+								branches.branches.some((b) => b.remote) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+									label: "Remote",
+									children: branches.branches.filter((b) => b.remote).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: b.name,
+										children: b.name
+									}, b.name))
+								})
+							]
+						}),
+						branches.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "Showing the first 200 branches."
+						})
+					]
+				}), canContinue && remoteBranchName(baseBranch) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "nf-base-mode",
+					role: "radiogroup",
+					"aria-label": "What to do with the remote branch",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "new-base-mode",
+								id: "new-base-mode-new",
+								checked: continueOn !== baseBranch,
+								onChange: () => setContinueOn("")
+							}),
+							"Start a new branch from ",
+							baseBranch
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "new-base-mode",
+								id: "new-base-mode-continue",
+								checked: continueOn === baseBranch,
+								onChange: () => setContinueOn(baseBranch)
+							}),
+							"Work on ",
+							remoteBranchName(baseBranch),
+							" itself",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: "(shared with whoever pushed it)"
+							})
+						]
+					})]
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "new-init-repo",
+							checked: initRepo,
+							onChange: (e) => setInitRepo(e.target.checked)
+						}),
+						"Create a git repo in this folder",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "(git init + initial commit — enables diff/commit/PR)"
+						})
+					]
+				})
+			]
+		})]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/PromptFold.tsx
+function PromptFold({ prompt, setPrompt, promptOpen, setPromptOpen, foldOpenedByPlan, presetValue, setPresetValue, savedPresets, setSavedPresets, presetName, setPresetName, planOk, planFirst, setPlanFirst }) {
+	const promptRef = (0, import_react.useRef)(null);
+	const savePreset = () => {
+		const text = prompt.trim();
+		const name = (presetName || "").trim();
+		if (!text || !name) return;
+		const { replaced } = upsertUserPreset(name, text);
+		setSavedPresets(loadUserPresets());
+		setPresetValue("u:" + name);
+		setPresetName(null);
+		toast(replaced ? `Saved prompt “${name}” — it replaced “${replaced}” (names ignore case)` : `Saved prompt “${name}”`);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		id: "new-prompt-fold",
+		className: "nf-advanced",
+		ref: promptRef,
+		open: promptOpen,
+		onToggle: (e) => {
+			const open = e.target.open;
+			setPromptOpen(open);
+			if (foldOpenedByPlan.current) {
+				foldOpenedByPlan.current = false;
+				return;
+			}
+			if (open) promptRef.current?.scrollIntoView({
+				behavior: "smooth",
+				block: "end"
+			});
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Prompt ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "— sent to the agent at launch"
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nf-advanced-body",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "preset-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							id: "new-preset",
+							title: "Saved prompts — pick one to fill the prompt below (editable after)",
+							value: presetValue,
+							onChange: (e) => {
+								setPresetValue(e.target.value);
+								const p = findPreset(e.target.value);
+								if (p) setPrompt(p.prompt);
+							},
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: "Saved prompt…"
+								}),
+								BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+									label: "Built-in",
+									children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "b:" + p.name,
+										title: p.prompt,
+										children: p.name
+									}, "b:" + p.name))
+								}),
+								savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+									label: "Saved",
+									children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "u:" + p.name,
+										title: p.prompt,
+										children: p.name
+									}, "u:" + p.name))
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "preset-save",
+							title: "Save the prompt below so you can pick it again",
+							"aria-expanded": presetName !== null,
+							onClick: () => setPresetName((cur) => cur === null ? "" : null),
+							children: "Save…"
+						}),
+						presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "preset-del",
+							title: "Delete this saved prompt",
+							onClick: () => {
+								const p = findPreset(presetValue);
+								if (!p) return;
+								const list = loadUserPresets().filter((q) => q.name !== p.name);
+								saveUserPresets(list);
+								setSavedPresets(list);
+								setPresetValue("");
+							},
+							children: "✕"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "preset-manage",
+							className: "linklike",
+							title: "Your saved prompts, in Customize → Prompts",
+							onClick: () => useUi.getState().openDialogFor("prompts"),
+							children: "Manage…"
+						})
+					]
+				}),
+				presetName !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "preset-name-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "preset-name",
+							type: "text",
+							autoFocus: true,
+							autoComplete: "off",
+							spellCheck: false,
+							placeholder: "Name this prompt",
+							"aria-label": "Name for the saved prompt",
+							value: presetName,
+							onChange: (e) => setPresetName(e.target.value),
+							onKeyDown: (e) => {
+								e.stopPropagation();
+								if (e.key === "Enter") {
+									e.preventDefault();
+									savePreset();
+								} else if (e.key === "Escape") {
+									e.preventDefault();
+									setPresetName(null);
+								}
+							}
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "preset-name-save",
+							disabled: !presetName.trim() || !prompt.trim(),
+							title: prompt.trim() ? "Save it" : "Type a prompt below first",
+							onClick: savePreset,
+							children: "Save"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "preset-name-cancel",
+							onClick: () => setPresetName(null),
+							children: "Cancel"
+						}),
+						!prompt.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "Type a prompt below first."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					id: "new-prompt",
+					rows: 2,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
+					value: prompt,
+					onChange: (e) => setPrompt(e.target.value)
+				})
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "check" + (planOk ? "" : " disabled"),
+				id: "new-plan-first-row",
+				title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "new-plan-first",
+						checked: planFirst && planOk,
+						disabled: !planOk,
+						onChange: (e) => setPlanFirst(e.target.checked)
+					}),
+					"Plan first",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
+					})
+				]
+			})]
+		})]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/LaunchFold.tsx
+function LaunchFold({ launchOpen, setLaunchOpen, launchArgs, setLaunchArgs, program }) {
+	const launchRef = (0, import_react.useRef)(null);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		id: "new-launch-advanced",
+		className: "nf-advanced",
+		ref: launchRef,
+		open: launchOpen,
+		onToggle: (e) => {
+			const open = e.target.open;
+			setLaunchOpen(open);
+			if (open) launchRef.current?.scrollIntoView({
+				behavior: "smooth",
+				block: "end"
+			});
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Launch flags ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "— extra CLI flags for this session"
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nf-advanced-body",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				"Flags",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: "— e.g. --dangerously-skip-permissions; appended after the agent's saved defaults"
+				})
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				id: "new-launch-args",
+				autoComplete: "off",
+				placeholder: "e.g. --verbose",
+				value: launchArgs,
+				onChange: (e) => setLaunchArgs(e.target.value)
+			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
+				provider: program,
+				value: launchArgs,
+				onChange: setLaunchArgs
+			})]
+		})]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/FooterActions.tsx
+function FooterActions({ error, page, setPage, batch, runMode, describing, describeSlow, draft, runDescribe, startRun, startNow }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "modal-actions nf-actions",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			id: "new-error",
+			className: "error",
+			children: error
+		}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-skip",
+				className: "nf-quiet",
+				title: "Go straight to the full form and choose the folder and options yourself. Nothing is read, and no model runs.",
+				onClick: () => setPage(2),
+				children: "Set it up myself instead"
+			}),
+			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-go",
+				disabled: describing,
+				"aria-busy": describing || void 0,
+				title: "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
+				onClick: () => void runDescribe("fill"),
+				children: describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "btn-spin",
+						"aria-hidden": "true"
+					}),
+					" ",
+					describeSlow ? "Still reading…" : "Reading…"
+				] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Review details first",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "nf-key",
+						"aria-hidden": "true",
+						children: "↵"
+					})
+				] })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-describe-start",
+				disabled: describing || draft.starting,
+				"aria-busy": draft.starting || void 0,
+				title: runMode ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you." : "Create the session right now from what you typed, without showing you the details first.",
+				onClick: runMode ? () => void startRun() : startNow,
+				children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1)
+			})
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [batch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "new-back",
+			className: "linklike",
+			onClick: () => setPage(1),
+			children: "← Back"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "submit",
+			disabled: draft.starting || describing,
+			"aria-busy": draft.starting || void 0,
+			title: describing ? "Waiting for the description to be read" : void 0,
+			children: draft.starting ? "Starting…" : "Create"
+		})] })]
+	});
+}
+//#endregion
+//#region src/components/dialogs/NewSessionDialog.tsx
+function NewSessionDialog() {
+	const open = useUi((s) => s.openDialog === "new-session");
+	const closeDialog = useUi((s) => s.closeDialog);
+	const [tab, setTab] = (0, import_react.useState)("session");
+	const [title, setTitle] = (0, import_react.useState)("");
+	const [program, setProgram] = (0, import_react.useState)("");
+	const [providers, setProviders] = (0, import_react.useState)([]);
+	const [prompt, setPrompt] = (0, import_react.useState)("");
+	const dropZoneRef = useFileDropTextarea({ onInsert: (text) => setDescribe((prev) => {
+		const next = (prev && !/\s$/.test(prev) ? prev + " " : prev) + text + " ";
+		return next.length > DESCRIBE_MAX_CHARS ? next.slice(0, DESCRIBE_MAX_CHARS) : next;
+	}) });
+	const [launchArgs, setLaunchArgs] = (0, import_react.useState)("");
+	const [provision, setProvision] = (0, import_react.useState)(false);
+	const [strategy, setStrategy] = (0, import_react.useState)("worktree");
+	const [inPlace, setInPlace] = (0, import_react.useState)(true);
+	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
+	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
+	const [split, setSplit] = (0, import_react.useState)(false);
+	const [maxPieces, setMaxPieces] = (0, import_react.useState)(SPLIT_DEFAULT);
+	const [batch, setBatch] = (0, import_react.useState)(false);
+	const [runBrowse, setRunBrowse] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
+	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
+	const [promptOpen, setPromptOpen] = (0, import_react.useState)(false);
+	const [templates, setTemplates] = (0, import_react.useState)([]);
+	const [activeTemplate, setActiveTemplate] = (0, import_react.useState)("");
+	const [describeOpen, setDescribeOpen] = (0, import_react.useState)(true);
+	const [baseBranch, setBaseBranch] = (0, import_react.useState)("");
+	const [continueOn, setContinueOn] = (0, import_react.useState)("");
+	const [branches, setBranches] = (0, import_react.useState)(null);
+	const [page, setPage] = (0, import_react.useState)(2);
+	const openedPage = (0, import_react.useRef)(2);
+	const openedFocus = (0, import_react.useRef)("describe");
+	const focusOpeningNext = (0, import_react.useRef)(false);
+	const [describe, setDescribe] = (0, import_react.useState)("");
+	const [describing, setDescribing] = (0, import_react.useState)(false);
+	const [describeSlow, setDescribeSlow] = (0, import_react.useState)(false);
+	const [planNote, setPlanNote] = (0, import_react.useState)("");
+	const [planError, setPlanError] = (0, import_react.useState)("");
+	const [planFolder, planFolderDo] = (0, import_react.useReducer)(planFolderReducer, PLAN_FOLDER_NONE);
+	const [newFolderOk, setNewFolderOk] = (0, import_react.useState)(false);
+	const lastAnswer = (0, import_react.useRef)(null);
+	const focusFolderNext = (0, import_react.useRef)(false);
+	const foldOpenedByPlan = (0, import_react.useRef)(false);
+	const [provisioningAvailable, setProvisioningAvailable] = (0, import_react.useState)(false);
+	const [homePath, setHomePath] = (0, import_react.useState)("");
+	const [suggestions, setSuggestions] = (0, import_react.useState)([]);
+	const [folderCheck, setFolderCheck] = (0, import_react.useState)(null);
+	const [search, setSearch] = (0, import_react.useState)(null);
+	const [searchOpen, setSearchOpen] = (0, import_react.useState)(true);
+	const [searchSel, setSearchSel] = (0, import_react.useState)(0);
+	const [presetValue, setPresetValue] = (0, import_react.useState)("");
+	const [savedPresets, setSavedPresets] = (0, import_react.useState)([]);
+	const [presetName, setPresetName] = (0, import_react.useState)(null);
+	const [profileId, setProfileId] = (0, import_react.useState)("");
+	const [profileModel, setProfileModel] = (0, import_react.useState)("");
+	const [profileModels, setProfileModels] = (0, import_react.useState)({});
+	const authProfiles = useAuthProfiles().data;
+	const pendingProfile = (0, import_react.useRef)(null);
+	const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
+	const launchDefaults = (0, import_react.useRef)({});
+	const titleRef = (0, import_react.useRef)(null);
+	const describeRef = (0, import_react.useRef)(null);
+	const repoRef = (0, import_react.useRef)(null);
+	const planRun = (0, import_react.useRef)({
+		seq: 0,
+		abort: null
+	});
+	const submitArmAt = (0, import_react.useRef)(0);
+	const searchListRef = (0, import_react.useRef)(null);
+	const rootRef = (0, import_react.useRef)(null);
+	const failedReopen = (0, import_react.useRef)(false);
+	const [folder, folderDo] = (0, import_react.useReducer)(folderReducer, FOLDER_INIT);
+	const repoPath = folder.path;
+	const browserOpen = folder.browsing;
+	const { data: devicesResp } = useDevices();
+	const startable = (0, import_react.useMemo)(() => startableDevices(devicesResp), [devicesResp]);
+	const [devicePick, setDevicePick] = (0, import_react.useState)("");
+	const device = batch || !startable.some((d) => d.device === devicePick) ? "" : devicePick;
+	const dapi = (0, import_react.useMemo)(() => deviceApi(device), [device]);
+	const deviceRef = (0, import_react.useRef)(device);
+	deviceRef.current = device;
+	const loadedDevice = (0, import_react.useRef)(null);
+	const loadFor = (dev) => {
+		const dapi = deviceApi(dev);
+		let live = true;
+		const here = () => live && deviceRef.current === dev;
+		(async () => {
+			try {
+				const d = await dapi("/api/repos/suggest");
+				if (!here()) return;
+				const sug = d.suggestions || [];
+				setSuggestions(sug);
+				folderDo({
+					t: "suggested",
+					path: sug[0]?.path || ""
+				});
+			} catch {
+				if (here()) setSuggestions([]);
+			}
+		})();
+		(async () => {
+			const [cfgR, setR, tplR] = await Promise.allSettled([
+				dev ? dapi("/api/config") : refreshConfig().then(() => queryClient.getQueryData(["config"])),
+				dapi("/api/settings"),
+				dev ? dapi("/api/templates").then((d) => d.templates || []) : ensureTemplates(true)
+			]);
+			if (!here()) return;
+			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
+			setHomePath(cfg?.home || "");
+			folderDo({
+				t: "fallback",
+				path: cfg?.home || ""
+			});
+			setProvisioningAvailable(!!cfg?.provisioning_available);
+			let provs = [];
+			try {
+				provs = (await dapi("/api/providers/manage")).providers || [];
+			} catch {}
+			if (!here()) return;
+			setProviders(provs);
+			const prev = cfg?.default_program || "";
+			const lower = prev.toLowerCase();
+			const match = provs.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
+			const agent = match ? match.name : prev;
+			setProgram(agent);
+			const raw = setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args || {};
+			launchDefaults.current = {};
+			for (const k of Object.keys(raw)) launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
+			setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
+			const tpls = tplR.status === "fulfilled" ? tplR.value || [] : [];
+			setTemplates(tpls);
+			if (!dev) applyLastUsed.current(tpls, provs);
+		})();
+		return () => {
+			live = false;
+		};
+	};
+	(0, import_react.useEffect)(() => {
+		if (!open) {
+			cancelPlanRun(planRun.current);
+			return;
+		}
+		if (failedReopen.current) {
+			failedReopen.current = false;
+			openedFocus.current = "title";
+			return;
+		}
+		openedFocus.current = "describe";
+		setTab("session");
+		setTitle("");
+		setError("");
+		setPrompt("");
+		setLaunchArgs("");
+		const prefill = useUi.getState().takeNewPrefill();
+		setDescribe(prefill);
+		setBatch(!!prefill);
+		setDescribeOpen(true);
+		setBaseBranch("");
+		setBranches(null);
+		setDescribing(false);
+		setDescribeSlow(false);
+		setPlanNote("");
+		setPlanError("");
+		openedPage.current = prefill ? 1 : 2;
+		setPage(openedPage.current);
+		setNewFolderOk(false);
+		planFolderDo({ t: "reopen" });
+		cancelPlanRun(planRun.current);
+		submitArmAt.current = 0;
+		setProvision(false);
+		setInPlace(true);
+		setInitRepo(false);
+		setPlanFirst(false);
+		setSplit(false);
+		setMaxPieces(SPLIT_DEFAULT);
+		setAdvancedOpen(false);
+		setLaunchOpen(false);
+		setPromptOpen(false);
+		folderDo({ t: "reopen" });
+		setSearch(null);
+		setSearchOpen(true);
+		setSearchSel(0);
+		setActiveTemplate("");
+		setPresetValue("");
+		setProfileId("");
+		setProfileModel("");
+		setProfileModels({});
+		setSavedPresets(loadUserPresets());
+		setPresetName(null);
+		loadedDevice.current = deviceRef.current;
+		return loadFor(deviceRef.current);
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const reload = () => setSavedPresets(loadUserPresets());
+		document.addEventListener(PRESETS_CHANGED, reload);
+		return () => document.removeEventListener(PRESETS_CHANGED, reload);
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open || loadedDevice.current === device) return;
+		loadedDevice.current = device;
+		folderDo({ t: "device" });
+		setSuggestions([]);
+		setSearch(null);
+		setFolderCheck(null);
+		setProfileId("");
+		setProfileModel("");
+		return loadFor(device);
+	}, [open, device]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const toTitle = openedFocus.current === "title";
+		const el = page === openedPage.current && (toTitle || page === 1 || describeOpen) ? toTitle ? titleRef.current : describeRef.current : null;
+		const active = document.activeElement;
+		if (!el) {
+			focusOpeningNext.current = true;
+			return;
+		}
+		if (mayTakeOpeningFocus({
+			activeIsTarget: active === el,
+			activeInsideDialog: !!active && !!rootRef.current?.contains(active)
+		})) el.focus();
+	}, [open]);
+	useFolderLookups({
+		open,
+		repoPath,
+		dapi,
+		setFolderCheck,
+		setSearch,
+		setSearchSel,
+		searchListRef,
+		searchSel,
+		search,
+		searchOpen
+	});
+	const setAgent = (0, import_react.useCallback)((value) => {
+		const v = (value || "").trim();
+		setProgram(v);
+		setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
+	}, []);
+	const canonAgent = (0, import_react.useCallback)((raw) => {
+		const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+		const base = tok.split("/").pop() || tok;
+		const m = providers.find((p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base);
+		return m ? m.name : base;
+	}, [providers]);
+	const planOk = (0, import_react.useMemo)(() => {
+		const name = canonAgent(program);
+		const prov = providers.find((p) => p.name === name);
+		return !prov || prov.plan_supported !== false;
+	}, [
+		canonAgent,
+		program,
+		providers
+	]);
+	const { data: config } = useConfig();
+	const mcpOk = (0, import_react.useMemo)(() => device ? {
+		ok: false,
+		reason: "Auto-split only starts sessions on this device"
+	} : teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
+		ok: false,
+		reason: SERVER_NO_SPLIT
+	}, [
+		config?.caps,
+		canonAgent,
+		program,
+		device
+	]);
+	const togetherOk = teamRunCaps(config?.caps).together;
+	const splitLimit = teamRunCaps(config?.caps).maxPieces;
+	const ticketingOk = !!config?.caps?.ticketing;
+	const shownTab = ticketingOk ? tab : "session";
+	const draft = useRunDraft({
+		open,
+		text: page === 1 ? describe : prompt,
+		repoPath,
+		program: canonAgent(program),
+		fasttrackDefault: config?.fasttrack_default,
+		single: page !== 1,
+		batch: page === 1 && batch,
+		split: page === 2 && split && mcpOk.ok,
+		togetherOk
+	});
+	const splitOn = page === 2 && split && mcpOk.ok;
+	const runMode = page === 1 && draft.listMode || splitOn;
+	const splitSum = splitOn ? summarySentence({
+		n: 1,
+		concurrency: draft.concurrency,
+		lane: draft.lane,
+		askFirst: draft.askFirst,
+		grouping: draft.grouping,
+		split: true,
+		maxPieces: clampSplit(maxPieces, splitLimit)
+	}) : null;
+	const toggleSplit = (on) => setSplit(on);
+	(0, import_react.useEffect)(() => {
+		if (!open) setRunBrowse(false);
+	}, [open]);
+	const runBrowseRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = runBrowseRef.current;
+		if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+	}, [runBrowse]);
+	const laneAtPress = (0, import_react.useRef)({
+		lane: "leave",
+		askFirst: false
+	});
+	laneAtPress.current = {
+		lane: draft.lane,
+		askFirst: draft.askFirst
+	};
+	const laneNeedsWorktree = draft.lane !== "leave";
+	const setAccount = accountSetter({
+		authProfiles,
+		program,
+		profileModels,
+		canonAgent,
+		setAgent,
+		setProfileId,
+		setProfileModel,
+		setProfileModels
+	});
+	const fillFromTemplate = templateFiller({
+		title,
+		titleRef,
+		setAgent,
+		folderDo,
+		setPrompt,
+		setProvision,
+		setStrategy,
+		setInPlace,
+		setInitRepo,
+		setActiveTemplate,
+		setAdvancedOpen,
+		setPromptOpen,
+		setTitle
+	});
+	const applyLastUsed = (0, import_react.useRef)(() => {});
+	applyLastUsed.current = (tpls, provs) => {
+		const { choice } = lastNewSessionChoice(repoPath);
+		if (!choice) return;
+		const t = choice.template ? tpls.find((x) => x.name === choice.template) : null;
+		if (t) fillFromTemplate(t, { quiet: true });
+		if (choice.program && provs.some((p) => p.name === choice.program)) setAgent(choice.program);
+		pendingProfile.current = choice.profile_id ? {
+			repo: repoPath,
+			id: choice.profile_id,
+			program: choice.program || void 0
+		} : null;
+		settleProfile.current();
+	};
+	const settleProfile = (0, import_react.useRef)(() => {});
+	settleProfile.current = () => {
+		const pend = pendingProfile.current;
+		if (!pend) return;
+		const verdict = rememberedProfileVerdict(pend.id, authProfiles ? authProfiles.profiles || [] : null);
+		if (verdict === "wait") return;
+		pendingProfile.current = null;
+		if (verdict === "apply") setAccount(pend.id, pend.program);
+		else if (verdict === "drop") forgetNewSessionProfile(pend.repo);
+	};
+	(0, import_react.useEffect)(() => {
+		settleProfile.current();
+	}, [authProfiles]);
+	useDescribeFocus({
+		open,
+		page,
+		describeOpen,
+		focusFolderNext,
+		focusOpeningNext,
+		openedFocus,
+		openedPage,
+		repoRef,
+		titleRef,
+		describeRef
+	});
+	useBaseBranches({
+		open,
+		page,
+		repoPath,
+		dapi,
+		setBaseBranch,
+		setBranches
+	});
+	const armInitRepo = () => {
+		setInitRepo(true);
+		setAdvancedOpen(true);
+	};
+	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialog, {});
+	const folderPath = repoPath.trim();
+	const offerProvision = provisioningAvailable || !!folderPath;
+	const plainFolder = folderCheck?.asked === folderPath && !!folderCheck?.plain;
+	const searchHits = search && search.asked === folderPath && searchOpen && !browserOpen ? search : null;
+	const selIndex = searchHits && searchHits.matches.length ? Math.min(searchSel, searchHits.matches.length - 1) : -1;
+	const provisionOn = offerProvision && provision;
+	const worktreeMode = (!inPlace || laneNeedsWorktree) && !provisionOn;
+	const baseIsRemote = !!(branches?.branches || []).find((b) => b.name === baseBranch)?.remote;
+	const canContinue = baseIsRemote && baseBranch.startsWith("origin/");
+	const foldSummary = foldSummaryFor({
+		provisioned: provisionOn,
+		strategy,
+		inPlace: inPlace && !laneNeedsWorktree,
+		baseBranch,
+		current: branches?.current || "",
+		initRepo,
+		continueBranch: !!baseBranch && continueOn === baseBranch && canContinue
+	});
+	const provisionBlocked = provisionBlockReason({
+		provision: provisionOn,
+		plainFolder,
+		initRepo,
+		folderPath
+	});
+	const worktreeClamped = worktreeClampReason({
+		inPlace,
+		provisionOn,
+		plainFolder,
+		initRepo
+	});
+	const newFolderAsk = newFolderGate({
+		planPath: planGatePath(planFolder),
+		planDisplay: planFolder.display,
+		folderPath
+	});
+	const newFolderBlocked = newFolderBlockReason({
+		gate: newFolderAsk,
+		confirmed: newFolderOk
+	});
+	const newFolderRow = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewFolderRow, {
+		ask: newFolderAsk,
+		ok: newFolderOk,
+		onOk: setNewFolderOk
+	});
+	const planNoteShown = planNoteFor({
+		note: planNote,
+		planPath: planFolder.path,
+		folderPath
+	});
+	const pickMatch = matchPicker(folderDo, setSearchOpen);
+	const { buildBody, postCreate, startRun, submit } = newSessionSubmit({
+		title,
+		repoPath,
+		prompt,
+		program,
+		planFirst,
+		planOk,
+		launchArgs,
+		profileId,
+		profileModel,
+		strategy,
+		inPlace,
+		initRepo,
+		provision,
+		baseBranch,
+		baseIsRemote,
+		continueOn,
+		activeTemplate,
+		maxPieces,
+		splitLimit,
+		runMode,
+		splitOn,
+		laneNeedsWorktree,
+		newFolderBlocked,
+		provisionBlocked,
+		draft,
+		laneAtPress,
+		deviceRef,
+		failedReopen,
+		submitArmAt,
+		setError,
+		setPlanError,
+		setPromptOpen,
+		setPage,
+		planFolderDo,
+		closeDialog
+	});
+	const { startNow, cancelDescribe, runDescribe } = describeFlow({
+		describe,
+		describing,
+		newFolderOk,
+		dapi,
+		planRun,
+		lastAnswer,
+		submitArmAt,
+		focusFolderNext,
+		foldOpenedByPlan,
+		folderDo,
+		planFolderDo,
+		setError,
+		setTitle,
+		setPrompt,
+		setInPlace,
+		setInitRepo,
+		setNewFolderOk,
+		setProvision,
+		setAdvancedOpen,
+		setPromptOpen,
+		setPlanError,
+		setPlanNote,
+		setDescribing,
+		setDescribeSlow,
+		setPage,
+		buildBody,
+		postCreate
+	});
+	const describeProps = {
+		batch,
+		describe,
+		setDescribe,
+		describing,
+		describeSlow,
+		describeRef,
+		describeOpen,
+		setDescribeOpen,
+		runMode,
+		runDescribe,
+		cancelDescribe,
+		draft,
+		planNoteShown,
+		planError,
+		setPlanError,
+		newFolderRow,
+		runBrowse,
+		setRunBrowse,
+		runBrowseRef,
+		repoPath,
+		folderDo,
+		suggestions,
+		device,
+		homePath
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "new-dialog",
+		className: "modal",
+		ref: rootRef,
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		onKeyDown: (e) => {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				if (browserOpen) folderDo({ t: "browse-cancel" });
+				else closeDialog();
+			} else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+				if (shownTab !== "session") return;
+				e.preventDefault();
+				submit();
+			}
+		},
+		children: shownTab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "new-ticket-form",
+			className: "ta-drop",
+			ref: dropZoneRef,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
+				tab: shownTab,
+				tabs: ticketingOk,
+				onTab: setTab,
+				onClose: closeDialog
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewTicketPane, {})]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+			id: "new-form",
+			ref: dropZoneRef,
+			className: "ta-drop",
+			onSubmit: (e) => {
+				e.preventDefault();
+				submit();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
+					tab: shownTab,
+					tabs: ticketingOk,
+					onTab: setTab,
+					onClose: closeDialog
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "nf-body",
+					children: [startable.length > 0 && !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "new-device-row",
+						className: "rt-row rt-row-top",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-label",
+							children: "Runs on"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "rt-ctl",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								id: "new-device",
+								value: device,
+								onChange: (e) => setDevicePick(e.target.value),
+								title: "The device the session lives on — its folders, its agents, its accounts",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: devicesResp?.self?.host ? devicesResp.self.host + " (this device)" : "This device"
+								}), startable.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: d.device,
+									children: deviceLabel(d, startable, devicesResp?.self?.host || "")
+								}, d.device))]
+							})
+						})]
+					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeSection, {
+						page: 1,
+						...describeProps
+					}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeSection, {
+							page: 2,
+							...describeProps
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesStrip, {
+							templates,
+							activeTemplate,
+							fillFromTemplate,
+							closeDialog
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Name ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "— optional; empty starts an untitled session"
+						})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "new-title",
+							ref: titleRef,
+							autoComplete: "off",
+							placeholder: activeTemplate ? activeTemplate + " — Enter creates it" : "untitled — Enter creates it",
+							value: title,
+							onChange: (e) => setTitle(e.target.value)
+						})] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "nf-quick",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderField, {
+								repoRef,
+								repoPath,
+								folderPath,
+								folderDo,
+								search,
+								searchHits,
+								searchSel,
+								setSearchSel,
+								setSearchOpen,
+								selIndex,
+								browserOpen,
+								pickMatch
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentFields, {
+								program,
+								providers,
+								setAgent,
+								device,
+								authProfiles,
+								profileId,
+								pendingProfile,
+								setAccount,
+								closeDialog
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModelRow, {
+							selectedProfile,
+							profileId,
+							profileModel,
+							setProfileModel,
+							profileModels,
+							program,
+							canonAgent
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderAids, {
+							searchHits,
+							selIndex,
+							searchListRef,
+							setSearchSel,
+							pickMatch,
+							homePath,
+							newFolderRow,
+							plainFolder,
+							initRepo,
+							armInitRepo,
+							suggestions,
+							folderPath,
+							folderDo,
+							browserOpen,
+							device
+						}),
+						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "new-ft-row",
+							className: "rt-row rt-row-top",
+							"data-caps": "git",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rt-label",
+								children: "Fast-track to"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "rt-ctl",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FastTrackChoice, {
+									id: "new-lane-form",
+									label: "Fast-track to",
+									value: draft.lane,
+									onChange: draft.setLane,
+									askFirst: draft.askFirst,
+									onAskFirst: draft.setAskFirst,
+									disabledReason: splitOn ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" } : void 0,
+									askReason: splitOn ? "An auto-split always asks you before anything leaves this machine" : void 0
+								})
+							})]
+						}),
+						config?.caps?.git !== false && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							id: "new-split-row",
+							"data-caps": "git",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+								id: "new-split",
+								split,
+								onSplit: toggleSplit,
+								gate: mcpOk,
+								maxPieces: clampSplit(maxPieces, splitLimit),
+								onMaxPieces: (n) => setMaxPieces(clampSplit(n, splitLimit)),
+								limit: splitLimit,
+								text: prompt || describe
+							}), splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "rt-sum",
+								"aria-live": "polite",
+								children: [
+									splitSum.lead,
+									" ",
+									splitSum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "muted",
+										children: splitSum.tail
+									}),
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "muted",
+										children: "The account, plan-first, launch flags and Git & workspace choices don't apply to a split."
+									})
+								]
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspaceFold, {
+							advancedOpen,
+							setAdvancedOpen,
+							foldSummary,
+							inPlace,
+							setInPlace,
+							provision,
+							setProvision,
+							provisionOn,
+							offerProvision,
+							laneNeedsWorktree,
+							draft,
+							splitOn,
+							setSplit,
+							worktreeClamped,
+							provisionBlocked,
+							armInitRepo,
+							strategy,
+							setStrategy,
+							worktreeMode,
+							branches,
+							baseBranch,
+							setBaseBranch,
+							canContinue,
+							continueOn,
+							setContinueOn,
+							initRepo,
+							setInitRepo
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptFold, {
+							prompt,
+							setPrompt,
+							promptOpen,
+							setPromptOpen,
+							foldOpenedByPlan,
+							presetValue,
+							setPresetValue,
+							savedPresets,
+							setSavedPresets,
+							presetName,
+							setPresetName,
+							planOk,
+							planFirst,
+							setPlanFirst
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LaunchFold, {
+							launchOpen,
+							setLaunchOpen,
+							launchArgs,
+							setLaunchArgs,
+							program
+						})
+					] })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FooterActions, {
+					error,
+					page,
+					setPage,
+					batch,
+					runMode,
+					describing,
+					describeSlow,
+					draft,
+					runDescribe,
+					startRun,
+					startNow
+				})
+			]
+		})
+	});
+}
+function NewHead({ tab, tabs, onTab, onClose }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ws-head nf-head",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New" }),
+			tabs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+				className: "nf-tabs",
+				"aria-label": "New",
+				children: NEW_TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "nf-tab" + (tab === t.key ? " active" : ""),
+					"data-new-tab": t.key,
+					"aria-current": tab === t.key ? "page" : void 0,
+					onClick: () => onTab(t.key),
+					children: t.label
+				}, t.key))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-close",
+				title: "Close (Esc)",
+				onClick: onClose,
+				children: "Close"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/InlineConfirm.tsx
 function InlineConfirm(props) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -66228,7 +66624,7 @@ function InlineConfirm(props) {
 				autoFocus: true,
 				disabled: props.busy,
 				onClick: props.onCancel,
-				children: "Cancel"
+				children: props.cancelLabel ?? "Cancel"
 			})]
 		})]
 	});
@@ -66494,10 +66890,6 @@ function workspaceNote(ws) {
 	}
 	return "workspace left on this machine";
 }
-function ladderLabel(depth) {
-	const d = !depth || depth === "agent" ? "off" : depth;
-	return DEPTH_LABELS[d] || d;
-}
 function ageText(iso) {
 	const t = Date.parse(iso || "");
 	return isFinite(t) ? relTime(t / 1e3, { suffix: " old" }) : "";
@@ -66699,12 +67091,12 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 	const [optsOpen, setOptsOpen] = (0, import_react.useState)(false);
 	const picked = !!(agent || depth || effortUsable && effort);
 	const showPicks = optsOpen || picked;
-	const defaultDepth = ladderLabel(configuredDepth);
-	const defaultIsOff = defaultDepth === DEPTH_LABELS.off;
+	const defaultDepth = laneLabel(configuredDepth);
+	const defaultIsOff = defaultDepth === LANE_LABEL.leave;
 	const effortDefault = configuredEffort ? effortOptionLabel(configuredEffort, effortCap) : "";
 	const uses = [
 		agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-		"Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth),
+		"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
 		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : "default effort"
 	].filter(Boolean).join(" · ");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -66846,11 +67238,11 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 									}),
 									!defaultIsOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 										value: "off",
-										children: DEPTH_LABELS.off
+										children: LANE_LABEL.leave
 									}),
 									SESSION_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 										value: d,
-										children: DEPTH_LABELS[d]
+										children: LANE_LABEL[d]
 									}, d))
 								]
 							}),
@@ -68286,10 +68678,10 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 						onChange: (e) => onChange({ depth: e.target.value }),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: "",
-							children: DEPTH_LABELS.off
-						}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							children: LANE_LABEL.leave
+						}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: d,
-							children: DEPTH_LABELS[d]
+							children: LANE_LABEL[d]
 						}, d))]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -68845,10 +69237,10 @@ function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, li
 											onChange: (e) => patch(card.repo, "depth", e.target.value),
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: "",
-												children: DEPTH_LABELS.off
-											}), SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												children: LANE_LABEL.leave
+											}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: d,
-												children: DEPTH_LABELS[d]
+												children: LANE_LABEL[d]
 											}, d))]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -79371,6 +79763,166 @@ function PromptsDialog() {
 	});
 }
 //#endregion
+//#region src/lib/verifyActions.ts
+function planPath(id) {
+	return "/api/test-plans/" + encodeURIComponent(id);
+}
+function patchPlan(id, apply) {
+	queryClient.cancelQueries({ queryKey: ["test-plans"] });
+	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+		...prev,
+		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
+	} : prev);
+}
+function requestPlanRun(planId, only) {
+	return api(planPath(planId) + "/run", {
+		method: "POST",
+		json: only ? { steps: only } : {}
+	});
+}
+function requestPlanDelete(planId) {
+	return api(planPath(planId), { method: "DELETE" });
+}
+async function startChecklistRun(plan, opts = {}) {
+	try {
+		const r = await requestPlanRun(plan.id, opts.only);
+		await refreshInstances();
+		const started = r?.plan;
+		patchPlan(plan.id, (p) => started || {
+			...p,
+			state: "running",
+			run_session: r?.session || ""
+		});
+		opts.onStarted?.();
+		await refreshTestPlans();
+		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
+	} catch (err) {
+		errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function regeneratePlan(plan, focus = "") {
+	try {
+		await api(planPath(plan.id) + "/regenerate", {
+			method: "POST",
+			json: { focus: focus.trim() }
+		});
+		patchPlan(plan.id, (p) => ({
+			...p,
+			state: "generating",
+			error: "",
+			gen_started: Date.now() / 1e3
+		}));
+		toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
+		return true;
+	} catch (err) {
+		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
+		refreshTestPlans();
+		return false;
+	}
+}
+async function cancelChecklistRun(plan) {
+	try {
+		const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+		await refreshInstances();
+		await refreshTestPlans();
+		toast(r?.session ? "Stopped " + r.session : "Run cancelled");
+	} catch (err) {
+		errorPop("Couldn't cancel the run", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fixPlanFailures(plan, only) {
+	try {
+		const r = await api(planPath(plan.id) + "/fix", {
+			method: "POST",
+			json: only ? { steps: only } : {}
+		});
+		await refreshInstances();
+		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
+	} catch (err) {
+		errorPop("Couldn't open a session to fix it", errMsg(err));
+	}
+}
+async function markPlanDeployed(plan) {
+	try {
+		const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(planName(plan) + " is ready to check");
+	} catch (err) {
+		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function removePlan(plan, opts = {}) {
+	try {
+		await requestPlanDelete(plan.id);
+		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
+		opts.onGone?.();
+		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+			...prev,
+			plans: prev.plans.filter((p) => p.id !== plan.id)
+		} : prev);
+		await refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't delete " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function recordStepAnswer(plan, step, result, note) {
+	const wasAsking = isWaitingOnYou(plan);
+	const next = (await api(planPath(plan.id) + "/result", { json: {
+		step_id: step.id,
+		result,
+		note
+	} }))?.plan;
+	if (next) patchPlan(plan.id, () => next);
+	if (next && wasAsking && !isWaitingOnYou(next)) {
+		const dest = groupPlans([next])[0]?.label || "";
+		toast("All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : ""));
+	}
+	refreshTestPlans();
+}
+async function editPlanStep(plan, step, fields) {
+	try {
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), {
+			method: "PATCH",
+			json: fields
+		});
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't change that step", errMsg(err));
+	}
+}
+async function removePlanStep(plan, step) {
+	try {
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't remove that step", errMsg(err));
+	}
+}
+async function addPlanStep(plan, fields) {
+	return (await api(planPath(plan.id) + "/steps", {
+		method: "POST",
+		json: fields
+	}))?.plan;
+}
+async function writePlanFor(target) {
+	try {
+		const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
+		toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't write a checklist", errMsg(err));
+	}
+}
+//#endregion
 //#region src/lib/rowSelection.ts
 function selectedInOrder(selected, allKeys) {
 	return allKeys.filter((k) => selected.has(k));
@@ -79491,53 +80043,8 @@ function BulkRowBar({ count, hiddenCount, noun, onClear, children }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/VerifyDialog.tsx
-var GROUPS_KEY = "mf_verify_groups";
-var PLANS_KEY = "mf_verify_plans";
-function planPath(id) {
-	return "/api/test-plans/" + encodeURIComponent(id);
-}
-function planName(plan) {
-	return plan.title || plan.id;
-}
-function ageOf(epochSeconds) {
-	if (!epochSeconds) return "";
-	return ageText((/* @__PURE__ */ new Date(epochSeconds * 1e3)).toISOString());
-}
-function agoOf(epochSeconds) {
-	const age = ageOf(epochSeconds);
-	return age ? age.replace(/ old$/, " ago") : "";
-}
-var ANSWER_LABEL = {
-	pass: "Pass",
-	fail: "Fail",
-	blocked: "Can't check"
-};
-var CHECK_LABEL = {
-	pass: "Passed",
-	fail: "Failed",
-	cant: "You couldn't check this",
-	yours: "Needs you",
-	pending: "Not checked yet"
-};
-function answerLabel(result) {
-	return ANSWER_LABEL[result] || result;
-}
-function receiptLabel(entry) {
-	if (entry.result === "blocked" && entry.by !== "human") return "for you to check";
-	return answerLabel(entry.result).toLowerCase();
-}
-function byLabel(by) {
-	return by === "human" ? "you" : by || "agent";
-}
-function patchPlan(id, apply) {
-	queryClient.cancelQueries({ queryKey: ["test-plans"] });
-	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-		...prev,
-		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
-	} : prev);
-}
-function OverflowMenu({ label, items }) {
+//#region src/components/OverflowMenu.tsx
+function OverflowMenu({ label, items, boundaryId }) {
 	const ref = (0, import_react.useRef)(null);
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [up, setUp] = (0, import_react.useState)(false);
@@ -79572,7 +80079,7 @@ function OverflowMenu({ label, items }) {
 				const next = !open;
 				if (next && ref.current) {
 					const here = ref.current.getBoundingClientRect();
-					const body = document.getElementById("verify-body");
+					const body = boundaryId ? document.getElementById(boundaryId) : null;
 					const floor = body ? body.getBoundingClientRect().bottom : window.innerHeight;
 					setUp(floor - here.bottom < 24 * items.length + 40);
 				}
@@ -79594,6 +80101,30 @@ function OverflowMenu({ label, items }) {
 		})]
 	});
 }
+//#endregion
+//#region src/components/dialogs/VerifyStep.tsx
+var ANSWER_LABEL = {
+	pass: "Pass",
+	fail: "Fail",
+	blocked: "Can't check"
+};
+var CHECK_LABEL = {
+	pass: "Passed",
+	fail: "Failed",
+	cant: "You couldn't check this",
+	yours: "Needs you",
+	pending: "Not checked yet"
+};
+function answerLabel(result) {
+	return ANSWER_LABEL[result] || result;
+}
+function receiptLabel(entry) {
+	if (entry.result === "blocked" && entry.by !== "human") return "for you to check";
+	return answerLabel(entry.result).toLowerCase();
+}
+function byLabel(by) {
+	return by === "human" ? "you" : by || "agent";
+}
 var NOTE_DRAFTS = /* @__PURE__ */ new Map();
 function noteKey(planId, stepId) {
 	return planId + "\0" + stepId;
@@ -79611,6 +80142,9 @@ function setRowUi(planId, patch) {
 function forgetNoteDrafts() {
 	NOTE_DRAFTS.clear();
 	ROW_UI.clear();
+}
+function forgetRowUi(planId) {
+	ROW_UI.delete(planId);
 }
 function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, onEdit }) {
 	const [pending, setPending] = (0, import_react.useState)(null);
@@ -79802,7 +80336,7 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 										receiptLabel(entry),
 										" · ",
 										byLabel(entry.by),
-										ageOf(entry.at) ? " · " + ageOf(entry.at) : ""
+										entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""
 									]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
@@ -79823,7 +80357,8 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 							}),
 							stepMenu.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 								label: "More for step " + (index + 1),
-								items: stepMenu
+								items: stepMenu,
+								boundaryId: "verify-body"
 							}) : null
 						]
 					}),
@@ -79866,6 +80401,241 @@ function StepRow({ step, index, plan, onRecord, onRunStep, running, onRemove, on
 			})
 		]
 	});
+}
+function StepEditor({ step, onCancel, onSave }) {
+	const [text, setText] = (0, import_react.useState)(step.text);
+	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		ref.current?.focus();
+	}, []);
+	const save = async () => {
+		if (!text.trim()) return;
+		setBusy(true);
+		try {
+			await onSave({
+				text: text.trim(),
+				expect: expect.trim()
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-step-edit",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref,
+				className: "vf-step-edit-text",
+				rows: 2,
+				"aria-label": "What to do",
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-step-edit-expect",
+				"aria-label": "What should happen",
+				placeholder: "what should happen",
+				autoComplete: "off",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						save();
+					}
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-step-edit-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy || !text.trim(),
+					onClick: () => void save(),
+					children: busy ? "Saving…" : "Save"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: onCancel,
+					children: "Cancel"
+				})]
+			})
+		]
+	});
+}
+function RewriteBox({ plan, busy, onCancel, onRewrite }) {
+	const [focus, setFocusRaw] = (0, import_react.useState)(rowUi(plan.id).focus ?? (plan.focus || ""));
+	const setFocus = (next) => {
+		setFocusRaw(next);
+		setRowUi(plan.id, { focus: next });
+	};
+	const ref = (0, import_react.useRef)(null);
+	const blocked = rewriteBlockedReason(plan);
+	const warning = rewriteWarning(plan);
+	(0, import_react.useEffect)(() => {
+		ref.current?.focus();
+	}, []);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-rewrite",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-title",
+				children: "Rewrite the checklist"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref,
+				className: "vf-rewrite-text",
+				rows: 2,
+				"aria-label": "What should the new checklist check instead?",
+				placeholder: "What should it check instead? (optional) — e.g. “focus on the coupon flow at checkout, ignore the settings refactor”",
+				value: focus,
+				disabled: busy || !!blocked,
+				onChange: (e) => setFocus(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Escape") {
+						e.stopPropagation();
+						onCancel();
+					}
+				}
+			}),
+			blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-warn",
+				children: blocked
+			}) : warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-rewrite-warn",
+				children: warning
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-rewrite-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary",
+						disabled: busy || !!blocked,
+						onClick: () => onRewrite(focus),
+						children: busy ? "Asking…" : "Rewrite"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: onCancel,
+						children: "Cancel"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vf-rewrite-note",
+						children: "It keeps the steps you wrote or edited yourself, and takes up to three minutes."
+					})
+				]
+			})
+		]
+	});
+}
+function AddStep({ plan, onAdded }) {
+	const [text, setText] = (0, import_react.useState)("");
+	const [expect, setExpect] = (0, import_react.useState)("");
+	const [actor, setActor] = (0, import_react.useState)("agent");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const add = async () => {
+		const body = text.trim();
+		if (!body) return;
+		setBusy(true);
+		try {
+			const next = await addPlanStep(plan, {
+				text: body,
+				expect: expect.trim(),
+				actor
+			});
+			if (next) onAdded(next);
+			setText("");
+			setExpect("");
+		} catch (err) {
+			errorPop("Couldn't add that step", errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-addstep",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-addstep-text",
+				placeholder: "what to do",
+				"aria-label": "New step",
+				autoComplete: "off",
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						add();
+					}
+					if (e.key === "Escape") e.stopPropagation();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "vf-addstep-expect",
+				placeholder: "what should happen (optional)",
+				"aria-label": "Expected result",
+				autoComplete: "off",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						add();
+					}
+					if (e.key === "Escape") e.stopPropagation();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				className: "vf-addstep-actor",
+				"aria-label": "Who checks this step",
+				value: actor,
+				disabled: busy,
+				onChange: (e) => setActor(e.target.value),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "agent",
+					children: "the agent"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "human",
+					children: "me"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy || !text.trim(),
+				onClick: () => void add(),
+				children: busy ? "Adding…" : "Add"
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/VerifyPlan.tsx
+function agoOf(epochSeconds) {
+	return epochSeconds ? relTime(epochSeconds) : "";
 }
 function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) {
 	const closeDialog = useUi((s) => s.closeDialog);
@@ -79933,23 +80703,10 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 		if (only) setStepBusy(only[0]);
 		else setBusy("run");
 		try {
-			const r = await api(planPath(plan.id) + "/run", {
-				method: "POST",
-				json: only ? { steps: only } : {}
+			await startChecklistRun(plan, {
+				only,
+				onStarted: () => setWatchingHere(true)
 			});
-			await refreshInstances();
-			const started = r?.plan;
-			patchPlan(plan.id, (p) => started || {
-				...p,
-				state: "running",
-				run_session: r?.session || ""
-			});
-			setWatchingHere(true);
-			await refreshTestPlans();
-			toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
-		} catch (err) {
-			errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
-			refreshTestPlans();
 		} finally {
 			setBusy("");
 			setStepBusy("");
@@ -79974,103 +80731,28 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 	const regenerate = async (focus = "") => {
 		setBusy("regen");
 		try {
-			await api(planPath(plan.id) + "/regenerate", {
-				method: "POST",
-				json: { focus: focus.trim() }
-			});
-			patchPlan(plan.id, (p) => ({
-				...p,
-				state: "generating",
-				error: "",
-				gen_started: Date.now() / 1e3
-			}));
-			setRewriting(false);
-			toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
-		} catch (err) {
-			errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-			refreshTestPlans();
+			if (await regeneratePlan(plan, focus)) setRewriting(false);
 		} finally {
 			setBusy("");
 		}
 	};
 	const runEarly = () => setConfirming("early");
-	const cancelRun = async () => {
-		setBusy("cancel");
+	const withBusy = async (key, fn) => {
+		setBusy(key);
 		try {
-			const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
-			if (r?.plan) patchPlan(plan.id, () => r.plan);
-			if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
-			await refreshInstances();
-			await refreshTestPlans();
-			toast(r?.session ? "Stopped " + r.session : "Run cancelled");
-		} catch (err) {
-			errorPop("Couldn't cancel the run", errMsg(err));
-			refreshTestPlans();
+			await fn();
 		} finally {
 			setBusy("");
 		}
 	};
-	const fixFailures = async (only) => {
-		setBusy("fix");
-		try {
-			const r = await api(planPath(plan.id) + "/fix", {
-				method: "POST",
-				json: only ? { steps: only } : {}
-			});
-			await refreshInstances();
-			toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
-		} catch (err) {
-			errorPop("Couldn't open a session to fix it", errMsg(err));
-		} finally {
-			setBusy("");
-		}
-	};
-	const markDeployed = async () => {
-		setBusy("deployed");
-		try {
-			const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
-			if (r?.plan) patchPlan(plan.id, () => r.plan);
-			await refreshTestPlans();
-			toast(planName(plan) + " is ready to check");
-		} catch (err) {
-			errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
-			refreshTestPlans();
-		} finally {
-			setBusy("");
-		}
-	};
-	const remove = async () => {
-		setBusy("delete");
-		try {
-			await api(planPath(plan.id), { method: "DELETE" });
-			if (watchSession) useUi.getState().closeVerifyPane(watchSession);
-			ROW_UI.delete(plan.id);
-			queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-				...prev,
-				plans: prev.plans.filter((p) => p.id !== plan.id)
-			} : prev);
-			await refreshTestPlans();
-		} catch (err) {
-			errorPop("Couldn't delete " + planName(plan), errMsg(err));
-			refreshTestPlans();
-		} finally {
-			setBusy("");
-		}
-	};
-	const recordStep = async (step, result, note) => {
-		const wasAsking = isWaitingOnYou(plan);
-		const next = (await api(planPath(plan.id) + "/result", { json: {
-			step_id: step.id,
-			result,
-			note
-		} }))?.plan;
-		if (next) patchPlan(plan.id, () => next);
-		if (next && wasAsking && !isWaitingOnYou(next)) {
-			const dest = groupPlans([next])[0]?.label || "";
-			toast("All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : ""));
-		}
-		refreshTestPlans();
-	};
+	const cancelRun = () => withBusy("cancel", () => cancelChecklistRun(plan));
+	const fixFailures = (only) => withBusy("fix", () => fixPlanFailures(plan, only));
+	const markDeployed = () => withBusy("deployed", () => markPlanDeployed(plan));
+	const remove = () => withBusy("delete", () => removePlan(plan, {
+		watchSession,
+		onGone: () => forgetRowUi(plan.id)
+	}));
+	const recordStep = (step, result, note) => recordStepAnswer(plan, step, result, note);
 	const doPrimary = () => {
 		if (status.action === "answer") {
 			onExpand();
@@ -80233,7 +80915,8 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 					label: "More actions for " + planName(plan),
-					items: menu
+					items: menu,
+					boundaryId: "verify-body"
 				})
 			]
 		}), expanded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -80347,10 +81030,11 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 					onCancel: () => setRewriting(false),
 					onRewrite: (focus) => void regenerate(focus)
 				}),
-				confirming === "delete" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+				confirming === "delete" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					title: "Delete the checklist for " + planName(plan) + "?",
 					body: "Every answer recorded against it goes too. " + (running ? "This also stops " + (plan.run_session || "the verify session") + "." : "A later push of the same branch writes a new one."),
 					confirmLabel: busy === "delete" ? "Deleting…" : "Delete it",
+					cancelLabel: "Keep it",
 					busy: busy !== "",
 					onCancel: () => setConfirming(""),
 					onConfirm: () => {
@@ -80358,10 +81042,11 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 						remove();
 					}
 				}),
-				confirming === "early" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+				confirming === "early" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					title: "Check it before it ships?",
 					body: planName(plan) + " hasn't reached " + (plan.live_branch || nowLive || "the live branch") + " yet, so this checks out its own commit (" + (plan.sha ? plan.sha.slice(0, 7) : "its branch") + ") rather than what users have. Once it finishes, this checklist is closed — it will NOT come back to “Not checked yet” when the branch does ship.",
 					confirmLabel: "Check it early",
+					cancelLabel: "Keep it",
 					busy: busy !== "",
 					onCancel: () => setConfirming(""),
 					onConfirm: () => {
@@ -80384,27 +81069,8 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 						onRecord: recordStep,
 						onRunStep: running || busy !== "" || stepBusy !== "" && stepBusy !== step.id ? void 0 : (s) => startRun([s.id]),
 						running: stepBusy === step.id,
-						onEdit: running ? void 0 : async (st, fields) => {
-							try {
-								const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(st.id), {
-									method: "PATCH",
-									json: fields
-								});
-								if (r?.plan) patchPlan(plan.id, () => r.plan);
-								refreshTestPlans();
-							} catch (err) {
-								errorPop("Couldn't change that step", errMsg(err));
-							}
-						},
-						onRemove: async (st) => {
-							try {
-								const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(st.id), { method: "DELETE" });
-								if (r?.plan) patchPlan(plan.id, () => r.plan);
-								refreshTestPlans();
-							} catch (err) {
-								errorPop("Couldn't remove that step", errMsg(err));
-							}
-						}
+						onEdit: running ? void 0 : (st, fields) => editPlanStep(plan, st, fields),
+						onRemove: (st) => removePlanStep(plan, st)
 					}, step.id))
 				}) : null,
 				plan.state !== "generating" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -80419,83 +81085,6 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand }) 
 				})
 			]
 		})]
-	});
-}
-function StepEditor({ step, onCancel, onSave }) {
-	const [text, setText] = (0, import_react.useState)(step.text);
-	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const ref = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		ref.current?.focus();
-	}, []);
-	const save = async () => {
-		if (!text.trim()) return;
-		setBusy(true);
-		try {
-			await onSave({
-				text: text.trim(),
-				expect: expect.trim()
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-step-edit",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				ref,
-				className: "vf-step-edit-text",
-				rows: 2,
-				"aria-label": "What to do",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-step-edit-expect",
-				"aria-label": "What should happen",
-				placeholder: "what should happen",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						save();
-					}
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-step-edit-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy || !text.trim(),
-					onClick: () => void save(),
-					children: busy ? "Saving…" : "Save"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onCancel,
-					children: "Cancel"
-				})]
-			})
-		]
 	});
 }
 function ChecksHead({ plan }) {
@@ -80545,105 +81134,6 @@ function PlanTally({ plan }) {
 		}, bit.state))
 	});
 }
-function RewriteBox({ plan, busy, onCancel, onRewrite }) {
-	const [focus, setFocusRaw] = (0, import_react.useState)(rowUi(plan.id).focus ?? (plan.focus || ""));
-	const setFocus = (next) => {
-		setFocusRaw(next);
-		setRowUi(plan.id, { focus: next });
-	};
-	const ref = (0, import_react.useRef)(null);
-	const blocked = rewriteBlockedReason(plan);
-	const warning = rewriteWarning(plan);
-	(0, import_react.useEffect)(() => {
-		ref.current?.focus();
-	}, []);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-rewrite",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-title",
-				children: "Rewrite the checklist"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				ref,
-				className: "vf-rewrite-text",
-				rows: 2,
-				"aria-label": "What should the new checklist check instead?",
-				placeholder: "What should it check instead? (optional) — e.g. “focus on the coupon flow at checkout, ignore the settings refactor”",
-				value: focus,
-				disabled: busy || !!blocked,
-				onChange: (e) => setFocus(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Escape") {
-						e.stopPropagation();
-						onCancel();
-					}
-				}
-			}),
-			blocked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-warn",
-				children: blocked
-			}) : warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-rewrite-warn",
-				children: warning
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-rewrite-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !!blocked,
-						onClick: () => onRewrite(focus),
-						children: busy ? "Asking…" : "Rewrite"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onCancel,
-						children: "Cancel"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "vf-rewrite-note",
-						children: "It keeps the steps you wrote or edited yourself, and takes up to three minutes."
-					})
-				]
-			})
-		]
-	});
-}
-function ConfirmBox({ title, body, confirmLabel, busy, onCancel, onConfirm }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-confirm",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-confirm-title",
-				children: title
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "vf-confirm-body",
-				children: body
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-confirm-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn vf-confirm-go",
-					disabled: busy,
-					onClick: onConfirm,
-					children: confirmLabel
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onCancel,
-					children: "Keep it"
-				})]
-			})
-		]
-	});
-}
 function RunWatch({ session, onPopOut, onHide }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/instances/" + encodeURIComponent(session) + "/terminal", false, true);
@@ -80682,94 +81172,10 @@ function RunWatch({ session, onPopOut, onHide }) {
 		})]
 	});
 }
-function AddStep({ plan, onAdded }) {
-	const [text, setText] = (0, import_react.useState)("");
-	const [expect, setExpect] = (0, import_react.useState)("");
-	const [actor, setActor] = (0, import_react.useState)("agent");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const add = async () => {
-		const body = text.trim();
-		if (!body) return;
-		setBusy(true);
-		try {
-			const r = await api(planPath(plan.id) + "/steps", {
-				method: "POST",
-				json: {
-					text: body,
-					expect: expect.trim(),
-					actor
-				}
-			});
-			if (r?.plan) onAdded(r.plan);
-			setText("");
-			setExpect("");
-		} catch (err) {
-			errorPop("Couldn't add that step", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "vf-addstep",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-addstep-text",
-				placeholder: "what to do",
-				"aria-label": "New step",
-				autoComplete: "off",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						add();
-					}
-					if (e.key === "Escape") e.stopPropagation();
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "vf-addstep-expect",
-				placeholder: "what should happen (optional)",
-				"aria-label": "Expected result",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						add();
-					}
-					if (e.key === "Escape") e.stopPropagation();
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				className: "vf-addstep-actor",
-				"aria-label": "Who checks this step",
-				value: actor,
-				disabled: busy,
-				onChange: (e) => setActor(e.target.value),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "agent",
-					children: "the agent"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "human",
-					children: "me"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				disabled: busy || !text.trim(),
-				onClick: () => void add(),
-				children: busy ? "Adding…" : "Add"
-			})
-		]
-	});
-}
+//#endregion
+//#region src/components/dialogs/VerifyChrome.tsx
+var GROUPS_KEY = "mf_verify_groups";
+var PLANS_KEY = "mf_verify_plans";
 function PlanList({ plans, liveBranch, selection }) {
 	const groups = useToggleSet(GROUPS_KEY, true);
 	const opened = useToggleSet(PLANS_KEY);
@@ -80799,11 +81205,7 @@ function NewPlanBar({ candidates, closed, reason }) {
 	async function write() {
 		setBusy(target);
 		try {
-			const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
-			toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
-			refreshTestPlans();
-		} catch (err) {
-			errorPop("Couldn't write a checklist", errMsg(err));
+			await writePlanFor(target);
 		} finally {
 			setBusy("");
 		}
@@ -80939,6 +81341,8 @@ function VerifyEmpty({ liveBranch }) {
 		})]
 	});
 }
+//#endregion
+//#region src/components/dialogs/VerifyDialog.tsx
 function VerifyDialog() {
 	const open = useUi((s) => s.openDialog === "verify");
 	const closeDialog = useUi((s) => s.closeDialog);
@@ -80968,17 +81372,6 @@ function VerifyDialog() {
 		setConfirmBulk(false);
 		sel.clear();
 	}, [open, sel]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const id = window.setTimeout(() => {
@@ -81075,10 +81468,7 @@ function VerifyDialog() {
 					type: "button",
 					disabled: !runnable.length || bulk !== "",
 					title: runnable.length ? "Start a verify session for each — minutes of a real agent apiece" : "None of the selected checklists is one an agent can run",
-					onClick: () => void fanOut(runnable, "Started", (plan) => api(planPath(plan.id) + "/run", {
-						method: "POST",
-						json: {}
-					})),
+					onClick: () => void fanOut(runnable, "Started", (plan) => requestPlanRun(plan.id)),
 					children: bulk === "Started" ? "Starting…" : "Run " + runnable.length + (runnable.length === picked.length ? "" : " of " + picked.length)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -81089,13 +81479,14 @@ function VerifyDialog() {
 					children: bulk === "Deleted" ? "Deleting…" : "Delete selected"
 				})]
 			}) : null,
-			confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConfirmBox, {
+			confirmBulk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 				title: "Delete " + picked.length + (picked.length === 1 ? " checklist?" : " checklists?"),
 				body: "Their steps and every answer recorded against them go too. This cannot be undone.\n" + previewList(picked.map(planName)),
 				confirmLabel: "Delete " + picked.length,
+				cancelLabel: "Keep it",
 				busy: bulk !== "",
 				onCancel: () => setConfirmBulk(false),
-				onConfirm: () => void fanOut(picked, "Deleted", (plan) => api(planPath(plan.id), { method: "DELETE" }))
+				onConfirm: () => void fanOut(picked, "Deleted", (plan) => requestPlanDelete(plan.id))
 			}) : null,
 			shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanList, {
 				plans: shown,
@@ -81113,15 +81504,12 @@ function VerifyDialog() {
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "verify-dialog",
-			className: "modal",
 			role: "dialog",
 			"aria-modal": "true",
 			"aria-labelledby": "verify-title",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "verify-panel",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

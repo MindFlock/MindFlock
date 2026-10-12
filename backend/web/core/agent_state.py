@@ -7,12 +7,13 @@ pre-commit-step parser, and the last-turn snippet — plus their module-level
 caches and tuning constants. The short-TTL ``_probe_cached`` memo that wraps
 these probes stays in ``server.py`` next to its other per-session caches.
 
-Cross-module seams (``_run_capped``, ``_pane_meta`` and friends, and the
-git/PR helpers ``_session_stage`` leans on) are resolved through the *server
-module's* attribute bindings at call time via :func:`_server`. That is
-deliberate: tests (and the server itself) monkeypatch those seams as
-``server._pane_meta`` etc., and rebinding the server attribute must keep
-steering this code exactly as it did before the split.
+Cross-module seams (``_pane_meta`` and friends, and the git/PR helpers
+``_session_stage`` leans on) are resolved through the *server module's*
+attribute bindings at call time via :func:`_server`. That is deliberate: tests
+(and the server itself) monkeypatch those seams as ``server._pane_meta`` etc.,
+and rebinding the server attribute must keep steering this code exactly as it
+did before the split. Subprocesses go through ``core.proc.run_capped``, read
+off that module (tests patch ``proc.run_capped``).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from backend.providers.usage_limits import is_limit_screen
 from backend.session import tmux
 from backend.session.storage import Loading
 from backend.web.core import events as _events
+from backend.web.core import proc as _proc
 from backend.web.core import stage_reset as _stage_reset
 from backend.web.core.terminal import _exit_marker_path
 
@@ -591,7 +593,7 @@ def _pane_meta(name: str):
     None)`` on any failure. ``pane_size`` is ``"<width>x<height>"`` (e.g.
     ``"120x30"``) — used to tell a resize-driven repaint apart from real agent
     output in the activity classifier."""
-    cp = _server()._run_capped(
+    cp = _proc.run_capped(
         [
             "tmux",
             "display-message",
@@ -645,7 +647,7 @@ def _pane_has_agent_process(pane_pid) -> bool:
         return cached[1]
     result = False
     try:
-        cp = _server()._run_capped(
+        cp = _proc.run_capped(
             ["ps", "-e", "-o", "pid=,ppid=,comm="],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -779,7 +781,7 @@ def _pane_runs_agent(pane_pid, names: frozenset) -> Optional[bool]:
     if not pane_pid or not names:
         return None
     try:
-        cp = _server()._run_capped(
+        cp = _proc.run_capped(
             # -ww: unlimited width. Without it ps cuts args at $COLUMNS (80 on
             # CI, or a server started from a narrow terminal), losing the
             # script after `python`/`node` and so the agent itself.
@@ -1094,7 +1096,7 @@ def _limit_on_pane(srv, name: str, provider, screen: Optional[str] = None) -> bo
         except Exception:  # noqa: BLE001
             return False
     try:
-        cp = srv._run_capped(
+        cp = _proc.run_capped(
             ["tmux", "capture-pane", "-p", "-t", name],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1114,7 +1116,7 @@ def _limit_on_pane(srv, name: str, provider, screen: Optional[str] = None) -> bo
 def _capture_visible(srv, name: str) -> Optional[str]:
     """The pane's visible screen, or None when the capture fails."""
     try:
-        cp = srv._run_capped(
+        cp = _proc.run_capped(
             ["tmux", "capture-pane", "-p", "-t", name],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1304,7 +1306,7 @@ def _pane_hash_activity(
     """
     # Layer 3: hardened pane-hash fallback.
     if text is None:
-        cp = srv._run_capped(
+        cp = _proc.run_capped(
             ["tmux", "capture-pane", "-p", "-t", name],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1596,7 +1598,7 @@ def _agent_activity(inst, title: str) -> str:
             return "offline"
         name = tmux.to_mindflock_tmux_name(title)
         exists = (
-            srv._run_capped(
+            _proc.run_capped(
                 ["tmux", "has-session", "-t=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -2130,7 +2132,7 @@ def _precommit_lock_path(wt: str) -> str:
     it. Falls back to the legacy worktree-root path when the git dir can't be
     resolved (e.g. ``wt`` is not a repo)."""
     try:
-        cp = _server()._run_capped(
+        cp = _proc.run_capped(
             ["git", "-C", wt, "rev-parse", "--absolute-git-dir"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

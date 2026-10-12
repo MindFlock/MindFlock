@@ -1,24 +1,19 @@
-/** The client half of the autopilot ladder — pure, so it is tested directly.
- * Mirrors tests/unit/test_autopilot.py; the two must agree on the rungs, on
- * which stage satisfies which target, and on merge never being satisfied by an
- * observed stage. */
+/** The client half of the Fast-track ladder — pure, so it is tested directly.
+ * Mirrors tests/unit/test_autopilot.py; the two must agree on the rungs and on
+ * every wire spelling of Off. */
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  DEPTHS,
-  DEPTH_ORDER,
-  DEPTH_LABELS,
-  DEPTH_STEP_LABELS,
+  LANE_LABEL,
+  LANE_ORDER,
   SESSION_DEPTHS,
   SOURCE_DEPTHS,
-  atOrPastDepth,
-  autopilotChipLabel,
   autopilotChipTitle,
-  depthLabel,
-  liveRun,
+  laneLabel,
   mergeBlockerLabel,
-  normalizeDepth,
+  normalizeLane,
 } from "../lib/autopilot";
+import * as laneActions from "../lib/laneActions";
 import {
   clearStep,
   fastTrackStep,
@@ -42,15 +37,19 @@ const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
 });
 
 describe("the ladder", () => {
-  it("matches the server's rung order", () => {
-    expect(DEPTH_ORDER).toEqual(["off", "agent", "commit", "push", "pr", "merge"]);
-    expect(DEPTHS).toEqual(["agent", "commit", "push", "pr", "merge"]);
+  it("is one ladder, nearest first", () => {
+    expect(LANE_ORDER).toEqual(["leave", "commit", "push", "pr", "merge"]);
   });
 
-  it("omits the intake-only agent rung from the session button", () => {
-    // Arming "agent" on a session that already exists would mean "do nothing".
-    expect(SESSION_DEPTHS).not.toContain("agent");
-    expect(SESSION_DEPTHS).toContain("merge");
+  it("is the same table the controls import", () => {
+    // ONE ladder and ONE label table: laneActions re-exports, never redefines.
+    expect(laneActions.LANE_LABEL).toBe(LANE_LABEL);
+    expect(laneActions.LANE_ORDER).toBe(LANE_ORDER);
+    expect(laneActions.normalizeLane).toBe(normalizeLane);
+  });
+
+  it("offers no Off rung in Intake's lists (they draw Off themselves)", () => {
+    expect(SESSION_DEPTHS).toEqual(["commit", "push", "pr", "merge"]);
   });
 
   it("omits merge from what a whole source may default to", () => {
@@ -59,61 +58,36 @@ describe("the ladder", () => {
     expect(SOURCE_DEPTHS).toContain("pr");
   });
 
-  it("labels every rung in both vocabularies", () => {
-    for (const d of DEPTH_ORDER) {
-      expect(DEPTH_LABELS[d]).toBeTruthy();
-      expect(DEPTH_STEP_LABELS[d]).toBeTruthy();
+  it("labels every rung", () => {
+    for (const d of LANE_ORDER) expect(LANE_LABEL[d]).toBeTruthy();
+  });
+
+  it("reads every wire spelling of Off as Off", () => {
+    // Lane routes say "leave", autopilot/intake "off", older intake "agent".
+    for (const v of ["leave", "off", "OFF ", "agent", "none"]) {
+      expect(normalizeLane(v)).toBe("leave");
+      expect(laneLabel(v)).toBe("Off");
     }
   });
 
   it("normalizes junk to empty rather than guessing", () => {
-    expect(normalizeDepth("PR")).toBe("pr");
-    expect(normalizeDepth("  merge ")).toBe("merge");
-    expect(normalizeDepth("off")).toBe("off");
-    expect(normalizeDepth("nonsense")).toBe("");
-    expect(normalizeDepth(null)).toBe("");
-    expect(normalizeDepth(undefined)).toBe("");
+    expect(normalizeLane("PR")).toBe("pr");
+    expect(normalizeLane("  merge ")).toBe("merge");
+    expect(normalizeLane("nonsense")).toBe("");
+    expect(normalizeLane(null)).toBe("");
+    expect(normalizeLane(undefined)).toBe("");
   });
 
-  it("falls back to the raw value for an unknown label", () => {
-    expect(depthLabel("pr")).toBe("Open PR");
-    expect(depthLabel("")).toBe("Off");
-  });
-});
-
-describe("atOrPastDepth", () => {
-  it.each([
-    ["committed", "commit", true],
-    ["committed", "push", false],
-    ["pushed", "push", true],
-    ["pushed", "commit", true],
-    ["pushed", "pr", false],
-    ["pr", "pr", true],
-    ["agent", "commit", false],
-    ["interrupt", "commit", false],
-    ["precommit", "commit", false],
-    ["provisioning", "commit", false],
-  ])("%s vs %s -> %s", (stage, depth, expected) => {
-    expect(atOrPastDepth(stage, depth)).toBe(expected);
-  });
-
-  it("is never satisfied for merge", () => {
-    // The server has no "merged" stage — a merged PR moves the stage OFF "pr" —
-    // so that rung completes when the merge call returns ok, not by observation.
-    for (const stage of ["committed", "pushed", "pr", "merged"])
-      expect(atOrPastDepth(stage, "merge")).toBe(false);
-  });
-
-  it("is false for off and for junk", () => {
-    expect(atOrPastDepth("pushed", "off")).toBe(false);
-    expect(atOrPastDepth("pushed", "")).toBe(false);
-    expect(atOrPastDepth("pushed", "nonsense")).toBe(false);
+  it("labels empty as Off and shows an unknown value as-is", () => {
+    expect(laneLabel("pr")).toBe("Open PR");
+    expect(laneLabel("")).toBe("Off");
+    expect(laneLabel(undefined)).toBe("Off");
+    expect(laneLabel("someday")).toBe("someday");
   });
 });
 
-describe("chip text", () => {
+describe("chip tooltip", () => {
   it("names the target while running", () => {
-    expect(autopilotChipLabel(run({ depth: "pr" }))).toBe("auto → Open PR");
     expect(autopilotChipTitle(run({ depth: "pr" }))).toContain("Open PR");
   });
 
@@ -121,7 +95,6 @@ describe("chip text", () => {
     // A chain that stops without saying why is the failure mode that destroys
     // trust in the feature, so the reason is surfaced unconditionally.
     const halted = run({ state: "halted", reason: "checks failed" });
-    expect(autopilotChipLabel(halted)).toBe("auto ✗");
     expect(autopilotChipTitle(halted)).toContain("checks failed");
   });
 
@@ -137,7 +110,6 @@ describe("chip text", () => {
   });
 
   it("marks a finished run", () => {
-    expect(autopilotChipLabel(run({ state: "done" }))).toBe("auto ✓");
     expect(autopilotChipTitle(run({ state: "done" }))).toContain("switched itself off");
   });
 });
@@ -466,19 +438,5 @@ describe("the Merge button refuses to lie", () => {
     });
     expect(s?.tone).toBe("blocked");
     expect(s?.label).toBe("conflicts");
-  });
-});
-
-describe("liveRun", () => {
-  it("only reports a running chain", () => {
-    expect(liveRun({ autopilot: run() })).toBeTruthy();
-    expect(liveRun({ autopilot: run({ state: "halted" }) })).toBeNull();
-    expect(liveRun({ autopilot: run({ state: "done" }) })).toBeNull();
-  });
-
-  it("is null with no record or no depth", () => {
-    expect(liveRun({})).toBeNull();
-    expect(liveRun({ autopilot: null })).toBeNull();
-    expect(liveRun({ autopilot: run({ depth: "" }) })).toBeNull();
   });
 });

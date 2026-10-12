@@ -37,14 +37,14 @@ that tells the previous driver.
 from __future__ import annotations
 
 import itertools
-import json
 import os
 import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
-from backend import config, log
+from backend import config
+from backend.web.core import title_store
 
 #: The driver lock lapses after this long without input from its holder.
 IDLE_RELEASE_S = 600.0
@@ -158,26 +158,14 @@ def _path() -> str:
 def _owners() -> Dict[str, str]:
     global _OWNERS
     if _OWNERS is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _OWNERS = (
-                {str(k): _valid(v) for k, v in d.items() if _valid(v)}
-                if isinstance(d, dict)
-                else {}
-            )
-        except (OSError, ValueError):
-            _OWNERS = {}
+        _OWNERS = title_store.load(
+            _path, lambda d: {str(k): _valid(v) for k, v in d.items() if _valid(v)}
+        )
     return _OWNERS
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_OWNERS or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save session owners: %v", err)
+    title_store.persist(_path, _OWNERS, "session owners")
 
 
 def owner(title: str) -> str:

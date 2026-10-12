@@ -25,14 +25,34 @@ def _code(text: str) -> str:
     return re.sub(r"(^|[^:\"'`\\])//.*$", r"\1", text, flags=re.M)
 
 
-_NEW = "components/dialogs/NewSessionDialog.tsx"
+# NewSessionDialog.tsx and the modules it was split into, the dialog first and
+# the rest in the order the form draws them, so the ordering checks below still
+# read top-down.
+_NEW_FILES = (
+    "components/dialogs/NewSessionDialog.tsx",
+    "components/dialogs/newSession.ts",
+    "components/dialogs/newSession/DescribeSection.tsx",
+    "components/dialogs/newSession/TemplatesStrip.tsx",
+    "components/dialogs/newSession/FolderPicker.tsx",
+    "components/dialogs/newSession/FolderBrowser.tsx",
+    "components/dialogs/newSession/AgentAccount.tsx",
+    "components/dialogs/newSession/WorkspaceFold.tsx",
+    "components/dialogs/newSession/PromptFold.tsx",
+    "components/dialogs/newSession/LaunchFold.tsx",
+    "components/dialogs/newSession/FooterActions.tsx",
+    "lib/newSessionSubmit.ts",
+)
+
+
+def _new() -> str:
+    return "\n".join(_read(rel) for rel in _NEW_FILES)
 
 
 class TestNewDialog:
     def test_saving_a_prompt_never_calls_window_prompt(self):
         # Electron implements no prompt(): the old Save… asked for a name with
         # window.prompt and silently did nothing in the desktop app.
-        code = _code(_read(_NEW))
+        code = _code(_new())
         assert "window.prompt" not in code
         assert not re.search(r"(?<![\w.])prompt\(", code)
         # The replacement is an inline row under the select.
@@ -43,21 +63,21 @@ class TestNewDialog:
         assert 'openDialogFor("prompts")' in code
 
     def test_the_tab_strip_waits_for_a_tracker(self):
-        code = _code(_read(_NEW))
+        code = _code(_new())
         assert "const ticketingOk = !!config?.caps?.ticketing;" in code
         assert 'const shownTab: NewTab = ticketingOk ? tab : "session";' in code
         assert "{tabs && (" in code
         assert "tabs={ticketingOk}" in code
 
     def test_review_details_is_not_drawn_for_a_list_or_a_split(self):
-        code = _code(_read(_NEW))
+        code = _code(_new())
         i = code.index('id="new-describe-go"')
         assert "{!runMode && (" in code[i - 400 : i]
 
     def test_the_help_line_sits_under_the_box_not_under_options(self):
         # "Your coding CLI reads this…" explains the box; with the Options fold
         # between them, "this" read as the fold.
-        code = _code(_read(_NEW))
+        code = _code(_new())
         assert code.index('className="nf-describe-help"') < code.index("<RunOptions")
 
     def test_page_one_is_only_the_prompt(self):
@@ -65,7 +85,7 @@ class TestNewDialog:
         # just prompt and it fills out the second menu if I want more detail,
         # or I just create session". Options (Fast-track, "Starts in") draw on
         # page 1 for an Intake batch only; Auto-split lives on the form.
-        code = _code(_read(_NEW))
+        code = _code(_new())
         i = code.index("<RunOptions")
         assert "{batch && (" in code[i - 400 : i]
         assert code.index('id="new-ft-row"') < code.index('id="new-split-row"')
@@ -87,7 +107,7 @@ class TestNewDialog:
         assert "if (!gate.ok && gate.reason === SERVER_NO_SPLIT) return null;" in code
 
     def test_copy_points_at_the_bell_and_the_row_not_the_outbox(self):
-        for rel in (_NEW, "lib/runStart.ts", "lib/laneActions.ts"):
+        for rel in (*_NEW_FILES, "lib/runStart.ts", "lib/laneActions.ts"):
             code = _code(_read(rel))
             assert "in the Outbox" not in code, rel
             assert "Outbox first" not in code, rel

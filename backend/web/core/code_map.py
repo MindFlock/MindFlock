@@ -47,6 +47,8 @@ import threading
 import time
 from typing import IO, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from backend.fsutil import atomic_write_bytes
+
 
 def _server():
     """The ``backend.web.server`` module, imported lazily (it imports this
@@ -604,18 +606,9 @@ def _memo_save(wt: str) -> bool:
         if len(blob) > _MEMO_DISK_MAX_BYTES:
             return False
         d = _memo_dir()
-        os.makedirs(d, exist_ok=True)
-        path = _memo_file(root)
-        fd, tmp = tempfile.mkstemp(prefix=".scan-", dir=d)
         try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(blob)
-            os.replace(tmp, path)
+            atomic_write_bytes(_memo_file(root), blob, prefix=".scan-", suffix="")
         except OSError:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
             return False
         _memo_prune(d)
         return True

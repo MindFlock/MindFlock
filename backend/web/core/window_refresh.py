@@ -18,14 +18,13 @@ overrides, for tests). ``last_fired`` is a per-provider epoch map.
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import tempfile
 import threading
 import time
 from typing import List, Optional, Tuple
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 
 _FileName = "window_refresh.json"
@@ -46,31 +45,11 @@ def config_path() -> str:
 
 
 def _load() -> dict:
-    try:
-        with open(config_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return read_json(config_path(), {}, expect=dict)
 
 
 def _save(data: dict) -> None:
-    path = config_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".wr.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(config_path(), data, prefix=".wr.")
 
 
 _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")

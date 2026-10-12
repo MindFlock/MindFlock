@@ -271,6 +271,7 @@ backend/
 ├── ticket_ingestion/     # the ticket / PR-review / issue ingestion pipeline (Shortcut, Jira, Linear, GitHub Issues, Asana)
 └── web/
     ├── server.py         # FastAPI app assembly: routes, background loops, terminal WS
+    ├── routes/           # route groups split out of server.py (one APIRouter per module)
     ├── core/             # one module per concern: engine, terminal (PTY↔WS),
     │                     # git_ops, agent_state, agent_sessions, snapshot,
     │                     # session_stats, budget, usage_api, mobile_access, …

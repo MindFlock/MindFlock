@@ -1154,6 +1154,103 @@ class TestRmCommand:
         assert "no such session" in capsys.readouterr().err
 
 
+class TestCloseDeleteCommands:
+    """`close` / `delete` are the named commands; `rm` / `rm --wipe` stay as
+    their aliases (the TestRmCommand cases above still run through rm)."""
+
+    _LISTING = TestRmCommand._LISTING
+    posted = TestRmCommand.posted
+    no_tty_stdin = TestRmCommand.no_tty_stdin
+
+    def test_close_hits_close_route(self, posted, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: pytest.fail("must not prompt with --yes")
+        )
+        assert cli.main(["close", "docs", "--yes"]) == 0
+        assert posted == ["/api/instances/docs/close"]
+        assert "closed session docs" in capsys.readouterr().out
+
+    def test_close_takes_no_wipe_flag(self):
+        with pytest.raises(SystemExit):
+            cli.main(["close", "--wipe", "docs", "--yes"])
+
+    def test_delete_hits_cleanup_route(self, posted, capsys):
+        assert cli.main(["delete", "do", "--yes"]) == 0
+        assert posted == ["/api/instances/docs/cleanup"]
+        assert "deleted session docs" in capsys.readouterr().out
+
+    def test_delete_without_tty_names_close_not_wipe(
+        self, posted, no_tty_stdin, capsys
+    ):
+        assert cli.main(["delete", "docs"]) == 1
+        assert posted == []
+        err = capsys.readouterr().err
+        assert "delete deletes" in err and "use `close`" in err
+        assert "--wipe" not in err
+
+    def test_rm_help_says_it_is_an_alias(self):
+        parser = cli._build_parser()
+        choices = next(
+            a for a in parser._actions if isinstance(a, argparse._SubParsersAction)
+        ).choices
+        rm_help = " ".join(choices["rm"].format_help().split())
+        assert "Alias of `close`" in rm_help and "`delete`" in rm_help
+        for name in ("close", "delete", "pause", "resume"):
+            assert name in choices
+
+
+class TestPauseResumeCommands:
+    _LISTING = [{"title": "fix-auth"}, {"title": "docs"}]
+
+    @pytest.fixture()
+    def posted(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+        monkeypatch.setattr(
+            client,
+            "post",
+            lambda base, path, payload=None, timeout=None: calls.append(path) or {},
+        )
+        return calls
+
+    def test_pause_posts_pause_route(self, posted, capsys):
+        assert cli.main(["pause", "fix", "docs"]) == 0
+        assert posted == [
+            "/api/instances/fix-auth/pause",
+            "/api/instances/docs/pause",
+        ]
+        assert "paused session fix-auth" in capsys.readouterr().out
+
+    def test_resume_posts_resume_route(self, posted, capsys):
+        assert cli.main(["resume", "docs"]) == 0
+        assert posted == ["/api/instances/docs/resume"]
+        assert "resumed session docs" in capsys.readouterr().out
+
+    def test_refusal_is_reported_and_others_still_run(self, monkeypatch, capsys):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._LISTING
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            calls.append(path)
+            if "fix-auth" in path:
+                raise client.ApiError(409, "peer shared sessions cannot be paused")
+            return {}
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["pause", "fix-auth", "docs"]) == 1
+        assert calls == [
+            "/api/instances/fix-auth/pause",
+            "/api/instances/docs/pause",
+        ]
+        assert "cannot be paused" in capsys.readouterr().err
+
+
 class TestClientDelete:
     def test_delete_uses_http_delete(self, monkeypatch):
         seen = {}

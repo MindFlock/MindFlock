@@ -80,6 +80,31 @@ def _region(js: str, module: str) -> str:
     return js[start:end]
 
 
+# NewSessionDialog.tsx and the modules it was split into, the dialog first.
+_NEW_DIALOG_MODULES = tuple(
+    "src/" + rel
+    for rel in (
+        "components/dialogs/NewSessionDialog.tsx",
+        "components/dialogs/newSession.ts",
+        "components/dialogs/newSession/DescribeSection.tsx",
+        "components/dialogs/newSession/TemplatesStrip.tsx",
+        "components/dialogs/newSession/FolderPicker.tsx",
+        "components/dialogs/newSession/FolderBrowser.tsx",
+        "components/dialogs/newSession/AgentAccount.tsx",
+        "components/dialogs/newSession/WorkspaceFold.tsx",
+        "components/dialogs/newSession/PromptFold.tsx",
+        "components/dialogs/newSession/LaunchFold.tsx",
+        "components/dialogs/newSession/FooterActions.tsx",
+        "lib/newSessionSubmit.ts",
+    )
+)
+
+
+def _new_dialog(js: str) -> str:
+    """The New dialog's bundled text: its own region and its split-out modules'."""
+    return "\n".join(_region(js, mod) for mod in _NEW_DIALOG_MODULES)
+
+
 def _function(js: str, name: str) -> str:
     """The text of a top-level bundled function, up to the next top-level one."""
     m = re.search(r"^(?:async )?function " + re.escape(name) + r"\(", js, re.M)
@@ -110,7 +135,7 @@ def test_the_paste_surfaces_are_absent(js):
         src = (ROOT / "frontend" / mod).read_text(encoding="utf-8")
         assert "pastePlaybook(" not in src and "runPlaybook(" not in src, mod
     # The New dialog no longer sends the split PLAYBOOK on a create.
-    dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
+    dlg = _new_dialog(js)
     assert 'playbook: "split"' not in dlg
     assert "withSplit(" not in dlg
 
@@ -243,7 +268,7 @@ def test_a_new_single_session_gets_its_fast_track_once_it_can_take_it(js):
     # 409 "workspace not ready" is retried; anything else is said.
     assert "err.status === 409" in fn
     assert "Couldn't fast-track " in fn
-    dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
+    dlg = _new_dialog(js)
     assert 'if (lane !== "leave") setLaneWhenReady(inst.title, lane, askFirst);' in dlg
 
 
@@ -474,7 +499,7 @@ def test_new_and_commit_dialogs_draw_one_fast_track_choice(js):
     fn = _function(js, "defaultLaneFor")
     assert 'return batch ? laneDefault(setting) : "leave";' in fn
     assert 'return normalizeLane(setting) || "leave";' in _function(js, "laneDefault")
-    dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
+    dlg = _new_dialog(js)
     assert 'id: "new-ft-row"' in dlg
     # Never the resolved fasttrack_depth (it reads "pr" when nothing is set),
     # and the "Set it up myself" form is a single session.
@@ -561,7 +586,7 @@ def test_pane_draws_the_thread_tab_and_falls_back_to_agent(js):
 
 
 def test_new_dialog_split_check(js):
-    dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
+    dlg = _new_dialog(js)
     # One box, on the form (page 2) beside Fast-track; page 1 is only the
     # prompt ("I should be able to just prompt and it fills out the second
     # menu"), so its options appear for an Intake batch alone.

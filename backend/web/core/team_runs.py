@@ -67,11 +67,11 @@ import random
 import re
 import shutil
 import string
-import tempfile
 import threading
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -370,30 +370,11 @@ def _lease_path(run_id: str) -> str:
 
 
 def _write_json(path: str, data: dict) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".run.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, data, prefix=".run.")
 
 
 def _read_json(path: str) -> Optional[dict]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    return read_json(path, None, expect=dict)
 
 
 def _new_id() -> str:

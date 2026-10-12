@@ -15,12 +15,12 @@ is safe.
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from typing import Dict, Optional
 
-from backend import config, log
+from backend import config
+from backend.web.core import title_store
 
 _LOCK = threading.Lock()
 _PERSON: Optional[Dict[str, str]] = None  # title -> person id
@@ -39,26 +39,14 @@ def _valid(pid: object) -> str:
 def _load() -> Dict[str, str]:
     global _PERSON
     if _PERSON is None:
-        try:
-            with open(_path()) as f:
-                d = json.load(f)
-            _PERSON = (
-                {str(k): _valid(v) for k, v in d.items() if _valid(v)}
-                if isinstance(d, dict)
-                else {}
-            )
-        except (OSError, ValueError):
-            _PERSON = {}
+        _PERSON = title_store.load(
+            _path, lambda d: {str(k): _valid(v) for k, v in d.items() if _valid(v)}
+        )
     return _PERSON
 
 
 def _persist() -> None:
-    try:
-        with open(_path(), "w") as f:
-            json.dump(_PERSON or {}, f)
-    except OSError as err:
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to save session people: %v", err)
+    title_store.persist(_path, _PERSON, "session people")
 
 
 def set_person(title: str, pid: str) -> None:

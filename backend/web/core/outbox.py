@@ -11,7 +11,8 @@ with their ``autopilot`` / ``lane`` / ``run`` blocks), the run records, the
 autopilot store and the Verify plans into the payload ``GET /api/outbox``
 serves. Rows are de-duplicated on ``(repo, branch)``: duplicate windows share a
 branch (``foo`` + ``foo-copy``), and one branch's work is one row, named
-after the window that drives it.
+after the window that drives it. :func:`outbox` is the one impure adapter: it
+gathers those inputs from the live server and calls :func:`build`.
 
 Groups, in order:
 
@@ -34,12 +35,14 @@ summary"). ``shipping``, ``shipped`` and ``queued`` are for other clients.
 
 from __future__ import annotations
 
+import datetime as _dt
+import time
 from typing import Callable, Dict, Iterable, List, Optional
 
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _runs
 
-__all__ = ["build", "WAITING_ACTIONS"]
+__all__ = ["build", "outbox", "WAITING_ACTIONS"]
 
 #: The buttons each kind of waiting item offers.
 WAITING_ACTIONS = {
@@ -552,3 +555,40 @@ def _shipped_row(row, rec, run, task, verify) -> dict:
         or None,
         "verify": verify(row) if (verify and row.get("branch")) else None,
     }
+
+
+def outbox(group: str = "all") -> dict:
+    """``GET /api/outbox``: :func:`build` over the live rows, runs, autopilot
+    store and Verify plans."""
+    from backend.web import server as srv
+    from backend.web.core import autopilot as _autopilot
+    from backend.web.core import events as _events
+
+    rows = [r for r in _events.sessions_snapshot() if isinstance(r, dict)]
+    try:
+        rows += srv._pending_rows()
+    except Exception:  # noqa: BLE001
+        pass
+    now = time.time()
+    today = _dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _verify(row: dict):
+        try:
+            pid = srv._test_plans.owner_for_branch(
+                str(row.get("title") or ""),
+                str(row.get("path") or ""),
+                str(row.get("branch") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        return {"id": pid} if pid else None
+
+    return build(
+        rows,
+        _runs.list_runs(),
+        _autopilot.snapshot(),
+        now=now,
+        today_start=today.timestamp(),
+        group=group or "all",
+        verify=_verify,
+    )

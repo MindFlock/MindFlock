@@ -37,6 +37,7 @@ _REDIRECTS = (
     "MINDFLOCK_ACTIVITY_MARKER_DIR",
     "MINDFLOCK_THREAD_MARKER_DIR",
     "MINDFLOCK_ASSISTANT_DIR",
+    "MINDFLOCK_HOOKS_DIR",
 )
 
 
@@ -48,6 +49,7 @@ def _resolvers():
     from backend.web.addons.dbclient import store as dbclient_store
     from backend.web.core import (
         autopilot,
+        events,
         mailbox,
         ports,
         prompt_queue,
@@ -70,6 +72,7 @@ def _resolvers():
         "tool feed": red_zones.feed_dir,
         "mcp run dir": mcp_attach.run_dir,
         "secret env": secret_env.run_dir,
+        "event hooks": events._hooks_root,
         "templates": templates.templates_path,
         "dbclient": dbclient_store.store_path,
         "window refresh": window_refresh.config_path,

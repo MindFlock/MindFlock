@@ -31,6 +31,7 @@ from backend.web.core import agent_state
 from backend.web.core import github_pr
 from backend.web.core import pending as pending_mod
 from backend.web.core import ship_status
+from backend.web.core import proc
 
 client = TestClient(server.app)
 
@@ -222,11 +223,11 @@ class TestMakePrOverrides:
     def _gh(self, monkeypatch):
         argv: list = []
         monkeypatch.setattr(server, "gh_available", lambda: True)
-        monkeypatch.setattr(
-            server,
-            "_run_capped",
-            lambda a, **k: argv.append(list(a)) or _cp(0, "https://gh.test/pr/9"),
+        fake_run_capped = lambda a, **k: argv.append(list(a)) or _cp(
+            0, "https://gh.test/pr/9"
         )
+        monkeypatch.setattr(server, "_run_capped", fake_run_capped)
+        monkeypatch.setattr(proc, "run_capped", fake_run_capped)
         monkeypatch.setattr(
             github_pr, "_fill", lambda wt, b, h: ("Commit subject", "commit body")
         )

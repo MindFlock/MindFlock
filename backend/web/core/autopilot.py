@@ -45,13 +45,12 @@ re-reads/writes the (tiny) file under it, and every write is atomic.
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 
@@ -198,31 +197,11 @@ def autopilot_path() -> str:
 #                "idle_since": null, "step_since": 0.0, "acted_at": 0.0,
 #                "boot": "", "started": 0.0, "updated": 0.0}}
 def _load() -> dict:
-    try:
-        with open(autopilot_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return read_json(autopilot_path(), {}, expect=dict)
 
 
 def _save(data: dict) -> None:
-    path = autopilot_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", prefix=".ap.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(autopilot_path(), data, prefix=".ap.")
 
 
 def _blank() -> dict:
@@ -313,9 +292,13 @@ def normalize_depth(value) -> str:
     """Coerce anything to a valid rung name, or ``""`` for "not a depth".
 
     ``""`` and ``"off"`` both mean "no run"; the caller decides which of the two
-    it wants to store.
+    it wants to store. ``"leave"`` (the lane routes' word for Off, see
+    :mod:`backend.web.core.lanes`) is ``"off"`` too, so either spelling works
+    on every input that takes a depth.
     """
     d = str(value or "").strip().lower()
+    if d == "leave":
+        d = "off"
     if d in ("", "off"):
         return "off" if d == "off" else ""
     return d if d in DEPTHS else ""

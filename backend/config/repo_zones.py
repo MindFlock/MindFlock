@@ -297,23 +297,9 @@ def _read_text(path: str) -> Optional[str]:
 
 
 def _write_atomic(path: str, text: str) -> None:
-    import tempfile
+    from backend.fsutil import atomic_write_text
 
-    d = os.path.dirname(path)
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, text, prefix="tmp")
 
 
 def add(

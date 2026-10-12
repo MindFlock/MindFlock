@@ -24,6 +24,7 @@ from typing import Dict
 from backend import providers
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.web.core import proc as _proc
 from backend.web.core.terminal import (
     apply_scroll_speed,
     _clear_exit_marker,
@@ -48,14 +49,12 @@ def _shell_tmux_name(title: str) -> str:
 def _live_session_name(name: str):
     """The session name if a tmux session with it exists, else None."""
     if (
-        _server()
-        ._run_capped(
+        _proc.run_capped(
             ["tmux", "has-session", "-t=" + name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
-        )
-        .returncode
+        ).returncode
         == 0
     ):
         return name
@@ -103,7 +102,7 @@ def _ensure_shell_session(title: str, wt: str):
     if live is not None:
         return live, None  # attach the existing session
     shell = os.environ.get("SHELL") or "/bin/bash"
-    created = srv._run_capped(
+    created = _proc.run_capped(
         ["tmux", "new-session", "-d", "-s", name, "-c", wt, shell],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -114,7 +113,7 @@ def _ensure_shell_session(title: str, wt: str):
         # commit both ensure this session at once; the loser gets "duplicate
         # session". If it exists now, that's success, not an error.
         if (
-            srv._run_capped(
+            _proc.run_capped(
                 ["tmux", "has-session", "-t=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -133,7 +132,7 @@ def _ensure_shell_session(title: str, wt: str):
         ("window-size", "latest"),
         ("alternate-screen", "off"),
     ):
-        srv._run_capped(
+        _proc.run_capped(
             ["tmux", "set-option", "-t", name, opt, val],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -321,7 +320,7 @@ def _ensure_agent_session(inst, title: str):
         except Exception:  # noqa: BLE001 — markers are enrichment only
             pass
     wrapped = _wrap_launch_cmd(cmd, name)
-    created = srv._run_capped(
+    created = _proc.run_capped(
         ["tmux", "new-session", "-d", "-s", name, "-c", wt, "sh", "-c", wrapped],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -331,7 +330,7 @@ def _ensure_agent_session(inst, title: str):
         # Race: two terminal clients can ensure the agent session at once; the
         # loser gets "duplicate session". If it exists now, treat as success.
         if (
-            srv._run_capped(
+            _proc.run_capped(
                 ["tmux", "has-session", "-t=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -355,7 +354,7 @@ def _ensure_agent_session(inst, title: str):
         ("window-size", "latest"),
         ("alternate-screen", "off"),
     ):
-        srv._run_capped(
+        _proc.run_capped(
             ["tmux", "set-option", "-t", name, opt, val],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -367,14 +366,13 @@ def _ensure_agent_session(inst, title: str):
 
 def _send_to_shell(name: str, command: str) -> None:
     """Type ``command`` into the shell tmux session and press Enter."""
-    srv = _server()
-    srv._run_capped(
+    _proc.run_capped(
         ["tmux", "send-keys", "-t", name, "-l", command],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=10,
     )
-    srv._run_capped(
+    _proc.run_capped(
         ["tmux", "send-keys", "-t", name, "Enter"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -410,13 +408,12 @@ def _paste_into(name: str, text: str) -> bool:
     keeps them as LF (the bytes ``send-keys -l`` sent) and ``-d`` drops the
     one-shot buffer. The same method the provisioned seeder uses
     (:func:`backend.providers.launch_script.seed_by_keys_function`)."""
-    srv = _server()
     buf = "mindflock-send-" + uuid.uuid4().hex[:12]
     fd, path = tempfile.mkstemp(prefix="mindflock-paste-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        loaded = srv._run_capped(
+        loaded = _proc.run_capped(
             ["tmux", "load-buffer", "-b", buf, path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -424,14 +421,14 @@ def _paste_into(name: str, text: str) -> bool:
         )
         if loaded.returncode != 0:
             return False
-        pasted = srv._run_capped(
+        pasted = _proc.run_capped(
             ["tmux", "paste-buffer", "-b", buf, "-p", "-r", "-d", "-t", name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
         )
         if pasted.returncode != 0:
-            srv._run_capped(
+            _proc.run_capped(
                 ["tmux", "delete-buffer", "-b", buf],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -459,11 +456,10 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
     (:func:`_paste_into`): typed as keys, a CLI that submits on LF fired it one
     line at a time. Returns False if the session doesn't exist or tmux errored,
     so callers (the single-send endpoint, the queue drain) can report/retry."""
-    srv = _server()
     if not name:
         return False
     exists = (
-        srv._run_capped(
+        _proc.run_capped(
             ["tmux", "has-session", "-t=" + name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -480,7 +476,7 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
                 return False
             settle = 0.4  # a long paste takes the TUI a moment to absorb
         else:
-            typed = srv._run_capped(
+            typed = _proc.run_capped(
                 ["tmux", "send-keys", "-t", name, "-l", "--", text],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -490,7 +486,7 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
                 return False
         if submit:
             time.sleep(settle)  # end the paste burst so Enter submits, not newlines
-            srv._run_capped(
+            _proc.run_capped(
                 ["tmux", "send-keys", "-t", name, "Enter"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -506,11 +502,10 @@ def _send_escape_to_agent(name: str) -> bool:
     leaves on screen after the window reopens — pressing Esc drops back to a
     normal prompt so the next queued message lands instead of selecting a menu
     entry. Returns False if the session is gone or tmux errored."""
-    srv = _server()
     if not name:
         return False
     exists = (
-        srv._run_capped(
+        _proc.run_capped(
             ["tmux", "has-session", "-t=" + name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -520,7 +515,7 @@ def _send_escape_to_agent(name: str) -> bool:
     )
     if not exists:
         return False
-    rc = srv._run_capped(
+    rc = _proc.run_capped(
         ["tmux", "send-keys", "-t", name, "Escape"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -531,7 +526,7 @@ def _send_escape_to_agent(name: str) -> bool:
 
 def _kill_named_session(name: str) -> None:
     """Kill the tmux session ``name`` (best-effort)."""
-    _server()._run_capped(
+    _proc.run_capped(
         ["tmux", "kill-session", "-t", name],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

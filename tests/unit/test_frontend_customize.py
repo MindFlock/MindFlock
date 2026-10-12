@@ -321,7 +321,8 @@ def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
 
 
 def test_new_page_two_templates_strip_says_what_a_template_is():
-    src = _src("components/dialogs/NewSessionDialog.tsx")
+    # The strip moved out of NewSessionDialog.tsx into its own component.
+    src = _src("components/dialogs/newSession/TemplatesStrip.tsx")
     assert (
         '<span title="Saved New-session setups — one list on every device">Templates</span>'
         in src

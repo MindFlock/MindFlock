@@ -1,44 +1,30 @@
-"""Code Atlas: symbol outlines and the semantic drill-down the Map tab reads —
-repo → directory → … → file → symbol — plus search and the entry-point list.
+"""Code Map symbol outlines: the file view and symbol search the Map tab reads.
 
-WHY THIS EXISTS. The v2 treemap drew every import as a line and nobody could
-read it ("I'm afraid of all of the lines"). What people asked for instead was
-swagger / UML / "zoom in and see imports and functions, zoom out and see
-interfaces". So a level here is a list of CARDS (the children of one
-directory), each carrying:
-
-- its INTERFACE — the symbols code outside it actually imports, ranked by how
-  many files import them (the "parts others use"), falling back to its
-  most-used symbols inside and then to what it declares public;
-- its sibling relations (``deps_out`` / ``deps_in``) and a TIER: siblings
-  are layered so each row only uses the rows below it (callers on top,
-  foundations at the bottom). Cycles are common in real code (lazy imports),
-  so the layering is a weighted feedback-arc-set order — the lighter edge of
-  each cycle is dropped and reported in ``back_edges`` ("both ways"), not
-  collapsed into one giant tier;
-- a ROLE: tests and non-code files are counted in a strip, never drawn as
-  cards, and edges FROM tests never shape the layering (a test imports
-  everything; one misread test folder would claim to "use" the whole repo).
+A FILE VIEW (:func:`file_view`) is one file's detailed outline, its imports,
+entry points, who uses it and what changed vs the session's fork point;
+SEARCH (:func:`search`) ranks files, folders, symbols and routes for a query.
+(The tiered directory "Atlas" levels and the repo-wide entry-point list that
+used to live here had no client left and were removed.)
 
 WHERE THE FACTS COME FROM. :mod:`code_map` owns reading and resolving imports
 (one memoized scan per file gives specifiers, imported NAMES and entry
-points, see ``code_map.graph_detail``). This module owns what the Atlas adds
-on top: per-file symbol outlines in two tiers — a cheap line-regex pass over
-every file for the atlas (top-level symbols only; ~20x cheaper than
-``ast.parse`` on a big Python repo) and a detailed pass (Python ``ast``,
-brace-depth scanners elsewhere) only for the ONE file a file view opens.
+points, see ``code_map.graph_detail``). This module adds per-file symbol
+outlines in two tiers — a cheap line-regex pass over every file (top-level
+symbols only; ~20x cheaper than ``ast.parse`` on a big Python repo) and a
+detailed pass (Python ``ast``, brace-depth scanners elsewhere) only for the
+ONE file a file view opens.
 
 CACHING. Every per-file result is memoized on ``(mtime_ns, size)``; the
 assembled index (file list + outlines + graph) is cached per worktree on the
 worktree's CONTENT fingerprint (HEAD + dirty set + their stats — see
 ``snapshot._worktree_fingerprint``), so an idle worktree costs one ``git
-status`` per call and a level is a few milliseconds.
+status`` per call.
 
 NEVER RAISES. Like the rest of the Map: the public functions return a
-neutral value on any failure — except :func:`file_view` (and :func:`atlas`)
-raising ``ValueError`` for a path that is absolute, escapes the worktree or
-does not exist, so the route can answer 400 instead of an empty view that
-looks like a real, empty file.
+neutral value on any failure — except :func:`file_view` raising
+``ValueError`` for a path that is absolute, escapes the worktree or does not
+exist, so the route can answer 400 instead of an empty view that looks like a
+real, empty file.
 """
 
 from __future__ import annotations
@@ -62,10 +48,6 @@ _LOCK = threading.RLock()
 INFO_BUDGET_S = 4.0
 GRAPH_SHARE_S = 6.0
 _MIN_FRESH_INFO = 64  # progress floor per call, like code_map's
-MAX_NODES = 60
-MAX_INTERFACE = 8
-TRIVIAL_LOC = 40
-MAX_ENTRY = 500
 MAX_SEARCH = 200
 _MAX_READ = 2 * 1024 * 1024
 _FULL_MAX_BYTES = 768 * 1024  # detailed (char-level) scanners stop here
@@ -125,7 +107,6 @@ _CODE_EXTS = frozenset(LANG) | frozenset(
     "erl hs ml dart zig nim jl m mm".split()
 )
 _HEADER_EXTS = ("h", "hh", "hpp", "hxx")
-_JVM_SRC = ("java", "kotlin", "scala", "groovy")
 
 
 def _ext(rel: str) -> str:
@@ -159,12 +140,8 @@ def _sym(
     }
 
 
-def _count_syms(syms: Sequence[dict]) -> int:
-    return sum(1 + _count_syms(x.get("children") or ()) for x in syms)
-
-
 # =========================================================================== #
-# Quick outlines (atlas tier): line regexes over top-level declarations
+# Quick outlines (index tier): line regexes over top-level declarations
 # =========================================================================== #
 
 _PYQ_DEF = re.compile(r"(async[ \t]+)?def[ \t]+([A-Za-z_]\w*)[ \t]*\(")
@@ -912,7 +889,7 @@ def _blank_long_lines(text: str) -> str:
 
 
 def quick_outline(text: str, rel: str) -> List[dict]:
-    """Top-level symbols of one file by line regexes (the atlas tier).
+    """Top-level symbols of one file by line regexes (the index tier).
     ``[]`` for languages without an extractor or on any failure."""
     lang = LANG.get(_ext(rel))
     text = _blank_long_lines(text)
@@ -937,7 +914,7 @@ def quick_outline(text: str, rel: str) -> List[dict]:
             return _quick_swift(text)
         if lang == "hcl":
             return _quick_hcl(text)
-    except Exception:  # noqa: BLE001 — one odd file, not the atlas
+    except Exception:  # noqa: BLE001 — one odd file, not the index
         return []
     return []
 
@@ -1596,8 +1573,8 @@ def _copy_syms(syms: Sequence[dict]) -> List[dict]:
 def _content_fp(wt: str) -> Optional[str]:
     """The worktree's CONTENT fingerprint (HEAD + dirty paths + their stats).
     Unlike the session fingerprint it does not depend on a fork point, so
-    :func:`search` / :func:`entry_points` (which have no session) and
-    :func:`atlas` share one cached index."""
+    :func:`search` (which has no session) and :func:`file_view` share one
+    cached index."""
     try:
         from backend.web.core import snapshot
 
@@ -1703,14 +1680,6 @@ def _build_index(wt: str, key: Optional[str]) -> dict:
         for k in range(len(parts) - 1):
             children.setdefault("/".join(parts[:k]), (set(), set()))[0].add(parts[k])
         children.setdefault("/".join(parts[:-1]), (set(), set()))[1].add(parts[-1])
-    hdr: Set[str] = set()
-    for r in rels:
-        if _ext(r) in _HEADER_EXTS:
-            hdr.update(
-                x["name"]
-                for x in info[r]["syms"]
-                if x["kind"] in ("function", "type", "struct")
-            )
     return {
         "wt": wt,
         "key": key,
@@ -1723,26 +1692,14 @@ def _build_index(wt: str, key: Optional[str]) -> dict:
         "entry": entry,
         "test": test,
         "children": children,
-        "hdr": frozenset(hdr),
         "partial": partial,
         "truncated": bool(truncated),
-        "levels": {},
         "search": None,
     }
 
 
-def _is_public(ix: dict, rel: str, x: dict) -> bool:
-    """A symbol's public flag, with C's rule applied at index level: a
-    non-static ``.c`` function is public only when some header declares it."""
-    if not x.get("public"):
-        return False
-    if LANG.get(_ext(rel)) == "c" and _ext(rel) not in _HEADER_EXTS:
-        return x["name"] in ix["hdr"]
-    return True
-
-
 # =========================================================================== #
-# Atlas levels
+# Paths
 # =========================================================================== #
 
 
@@ -1765,631 +1722,6 @@ def _norm_pair(path: Any) -> Tuple[str, str]:
     if any(p == ".." for p in parts) or any(p == ".." for p in lit):
         raise ValueError("path escapes the worktree")
     return "/".join(lit), "/".join(parts)
-
-
-def _norm_dir(path: Any) -> str:
-    """The lenient form of :func:`_norm_pair` (ValueError as there)."""
-    return _norm_pair(path)[1]
-
-
-def _is_source_set(ix: dict, p: str) -> bool:
-    """Whether ``p`` is a real JVM source-set dir: its ``main`` (or ``test``)
-    holds a ``java``/``kotlin``/``scala``/``groovy`` root. A Vite ``src`` with
-    a ``test/setup.ts`` is an ordinary directory (merging it lost its card
-    count, duplicated its tests node and dropped its breadcrumb)."""
-    ch = ix["children"]
-    subs = ch.get(p, ((), ()))[0]
-    for s in ("main", "test"):
-        if s in subs and set(ch.get(p + "/" + s, ((), ()))[0]) & set(_JVM_SRC):
-            return True
-    return False
-
-
-def _collapse(ix: dict, path: str) -> str:
-    """Follow a single-child directory chain (``backend`` holding only
-    ``web`` → ``backend/web``), stopping before a JVM ``src`` source set so a
-    module whose only child is ``src`` stays the module."""
-    ch = ix["children"]
-    for _ in range(128):
-        subs, files = ch.get(path, ((), ()))
-        if len(subs) == 1 and not files:
-            nxt = next(iter(subs))
-            if nxt == "src" and _is_source_set(ix, path + "/src"):
-                break
-            path = path + "/" + nxt
-            continue
-        break
-    return path
-
-
-def _jvm_root(ix: dict, module: str, lang: str) -> str:
-    base = (module + "/" if module else "") + "src/main/" + lang
-    return _collapse(ix, base)
-
-
-def _transparent(ix: dict, p: str) -> bool:
-    """Whether directory ``p`` is part of a JVM source-set chain the Atlas
-    shows through (``mod/src``, ``mod/src/main``, ``mod/src/main/java`` and
-    the single-child package chain below it) — such dirs get no breadcrumb."""
-    segs = p.split("/")
-    for k, seg in enumerate(segs):
-        if seg != "src":
-            continue
-        module = "/".join(segs[:k])
-        src = (module + "/" if module else "") + "src"
-        if not _is_source_set(ix, src):
-            continue
-        tail = segs[k + 1 :]
-        if not tail:
-            return True
-        if tail[0] == "main":
-            if len(tail) == 1:
-                return True
-            if tail[1] in _JVM_SRC:
-                root = _jvm_root(ix, module, tail[1])
-                return p == root or root.startswith(p + "/")
-    return False
-
-
-def _crumbs(ix: dict, d: str) -> List[dict]:
-    name = posixpath.basename(ix["wt"].rstrip("/")) or ix["wt"]
-    out = [{"path": "", "name": name}]
-    if not d:
-        return out
-    segs = d.split("/")
-    for k in range(1, len(segs) + 1):
-        p = "/".join(segs[:k])
-        if k < len(segs) and _transparent(ix, p):
-            continue
-        out.append({"path": p, "name": segs[k - 1]})
-    return out
-
-
-def _owners(ix: dict, d: str) -> Tuple[Dict[str, str], Dict[str, dict]]:
-    """``(owner, nodes)``: which child node of level ``d`` each file under it
-    belongs to, and the node skeletons. JVM source sets are merged:
-    ``mod/src/main/java/<package chain>`` is transparent (the module shows its
-    packages directly), ``src/test/**`` is ONE tests node and
-    ``src/main/resources`` one files node."""
-    pre = d + "/" if d else ""
-    owner: Dict[str, str] = {}
-    nodes: Dict[str, dict] = {}
-    roots: Dict[str, str] = {}
-    src_set = None
-    for r in ix["rels"]:
-        if pre and not r.startswith(pre):
-            continue
-        rest = r[len(pre) :]
-        parts = rest.split("/")
-        kind = "dir"
-        role = None
-        if parts[0] == "src" and len(parts) >= 2 and src_set is None:
-            src_set = _is_source_set(ix, pre + "src")
-        if (
-            parts[0] == "src"
-            and len(parts) >= 2
-            and (len(parts) == 2 or parts[1] not in ("main", "test"))
-            and src_set
-        ):
-            # A source set's other children (src/integrationTest, a loose
-            # file) get their OWN nodes: a catch-all `src` card would drill
-            # into main/test again and disagree with its own count.
-            if len(parts) > 2:
-                npath = _collapse(ix, pre + "src/" + parts[1])
-                name = npath[len(pre) :]
-            else:
-                npath, kind, name = r, "file", rest
-        elif (
-            parts[0] == "src"
-            and len(parts) >= 3
-            and parts[1] in ("main", "test")
-            and src_set
-        ):
-            if parts[1] == "test":
-                npath, name, role = pre + "src/test", "tests (src/test)", "tests"
-            elif len(parts) == 3:
-                npath, name = pre + "src/main", "main"
-            elif parts[2] in _JVM_SRC:
-                root = roots.get(parts[2])
-                if root is None:
-                    root = roots[parts[2]] = _jvm_root(ix, d, parts[2])
-                inner = r[len(root) + 1 :] if r.startswith(root + "/") else rest
-                if "/" in inner:
-                    npath = _collapse(ix, root + "/" + inner.split("/", 1)[0])
-                    name = npath[len(root) + 1 :]
-                else:
-                    npath, kind, name = r, "file", inner
-            elif parts[2] == "resources":
-                npath, name, role = pre + "src/main/resources", "resources", "files"
-            else:
-                npath, name = pre + "src/main/" + parts[2], parts[2]
-        elif len(parts) > 1:
-            npath = _collapse(ix, pre + parts[0])
-            name = npath[len(pre) :]
-        else:
-            npath, kind, name = r, "file", rest
-        owner[r] = npath
-        nd = nodes.get(npath)
-        if nd is None:
-            nd = nodes[npath] = {
-                "path": npath,
-                "name": name,
-                "kind": kind,
-                "_role": role,
-                "langs": {},
-                "files": 0,
-                "loc": 0,
-                "symbols": 0,
-                "public": 0,
-                "tests": 0,
-                "entry": 0,
-                "_files": [],
-            }
-        nd["_files"].append(r)
-    return owner, nodes
-
-
-def _tiering(
-    names: Sequence[str], w: Dict[Tuple[str, str], int]
-) -> Tuple[Dict[str, int], List[Tuple[str, str]]]:
-    """Weighted Eades–Lin–Smyth feedback-arc-set order over the sibling
-    graph, then longest-path layering from the sources (tier 0 = nothing
-    among the siblings uses it). Returns ``(tier, back_edges)``; nodes with
-    no relation at all get tier -1 (standalone).
-
-    WHY NOT SCC CONDENSATION. Real packages are cyclic through a handful of
-    lazy imports (``session → web`` ×1 against ``web → session`` ×40):
-    condensing strongly-connected components folded MindFlock's whole
-    backend (and a Java service's layered packages) into ONE tier. Greedy
-    FAS drops the lighter direction of each cycle instead, which keeps the
-    reading "each row uses the rows below it" true for all but the dropped
-    edges — and those are returned so the UI can say "both ways"."""
-    out: Dict[str, Dict[str, int]] = {v: {} for v in names}
-    inn: Dict[str, Dict[str, int]] = {v: {} for v in names}
-    for (a, b), x in w.items():
-        if a in out and b in out and a != b:
-            out[a][b] = x
-            inn[b][a] = x
-    iso = {v for v in names if not out[v] and not inn[v]}
-    alive = set(names) - iso
-    o = {v: dict(out[v]) for v in alive}
-    i_ = {v: dict(inn[v]) for v in alive}
-    s1: List[str] = []
-    s2: List[str] = []
-
-    def rm(v: str) -> None:
-        alive.discard(v)
-        for b in o[v]:
-            i_[b].pop(v, None)
-        for a in i_[v]:
-            o[a].pop(v, None)
-
-    while alive:
-        changed = True
-        while changed:
-            changed = False
-            for v in sorted(alive):
-                if v in alive and not o[v]:
-                    s2.insert(0, v)
-                    rm(v)
-                    changed = True
-            for v in sorted(alive):
-                if v in alive and not i_[v]:
-                    s1.append(v)
-                    rm(v)
-                    changed = True
-        if alive:
-            v = max(
-                sorted(alive),
-                key=lambda v: sum(o[v].values()) - sum(i_[v].values()),
-            )
-            s1.append(v)
-            rm(v)
-    order = {v: k for k, v in enumerate(s1 + s2)}
-    back = sorted(
-        (a, b) for (a, b) in w if a in order and b in order and order[a] > order[b]
-    )
-    tier: Dict[str, int] = {}
-    for v in s1 + s2:
-        preds = [a for a in inn[v] if order.get(a, 1 << 30) < order[v]]
-        tier[v] = 0 if not preds else 1 + max(tier[a] for a in preds)
-    for v in iso:
-        tier[v] = -1
-    return tier, back
-
-
-_KIND_RANK = {"class": 0, "interface": 0, "struct": 0, "trait": 0, "enum": 1, "type": 1}
-
-
-def _interface(
-    ix: dict,
-    files: Sequence[str],
-    used: Dict[Tuple[str, str], Set[str]],
-    internal: Dict[Tuple[str, str], Set[str]],
-    test: Optional[frozenset] = None,
-) -> Tuple[List[dict], int]:
-    """The node's interface (≤ :data:`MAX_INTERFACE` items) and how many
-    distinct names outside code imports from it.
-
-    Ranking: names imported from OUTSIDE the node (``scope: "external"``),
-    merged by name across its files (a C header and its ``.c``, a package
-    ``__init__`` re-export and the module defining it), by distinct non-test
-    importing files, ``_private`` names last. Fewer than 4 → filled with the
-    most-used names INSIDE the node (≥ 2 importers, ``"internal"``), then
-    with declared-public symbols by size (``"declared"``)."""
-    syms_by: Dict[Tuple[str, str], dict] = {}
-    by_name: Dict[str, Tuple[str, dict]] = {}
-    test = ix["test"] if test is None else test
-    for f in files:
-        if f in test:
-            continue
-        for x in ix["info"].get(f, {}).get("syms") or ():
-            syms_by[(f, x["name"])] = x
-            by_name.setdefault(x["name"], (f, x))
-        for e in ix["entry"].get(f) or ():
-            if e.get("kind") == "http":
-                nm = (
-                    (e.get("method") or "ANY").split("/")[0]
-                    + " "
-                    + (e.get("route") or "")
-                )
-                x = {
-                    "name": nm,
-                    "kind": "route",
-                    "line": e.get("line") or 0,
-                    "end": 0,
-                    "public": True,
-                    "children": [],
-                }
-                syms_by[(f, nm)] = x
-                by_name.setdefault(nm, (f, x))
-
-    def lookup(f: str, nm: str) -> Optional[Tuple[str, dict]]:
-        x = syms_by.get((f, nm))
-        if x is not None:
-            return f, x
-        return by_name.get(nm)
-
-    merged: Dict[str, dict] = {}
-    for (f, nm), imps in used.items():
-        hit = lookup(f, nm)
-        if hit is None:
-            continue
-        fx, x = hit
-        cur = merged.get(nm)
-        if cur is None:
-            cur = merged[nm] = {
-                "name": nm,
-                "kind": x["kind"],
-                "path": fx,
-                "line": x.get("line") or 0,
-                "_imps": set(),
-                "_best": -1,
-            }
-        cur["_imps"] |= imps
-        if len(imps) > cur["_best"]:
-            cur.update(
-                path=fx, line=x.get("line") or 0, kind=x["kind"], _best=len(imps)
-            )
-    ranked = []
-    for z in merged.values():
-        ranked.append(
-            {
-                "name": z["name"],
-                "kind": z["kind"],
-                "path": z["path"],
-                "line": z["line"],
-                "used_by": len(z["_imps"]),
-                "scope": "external",
-            }
-        )
-    ranked.sort(key=lambda z: (z["name"].startswith("_"), -z["used_by"], z["name"]))
-    total = len(ranked)
-    if len(ranked) < 4:
-        seen = {z["name"] for z in ranked}
-        hubs: Dict[str, dict] = {}
-        for (f, nm), imps in internal.items():
-            if nm in seen:
-                continue
-            hit = lookup(f, nm)
-            if hit is None:
-                continue
-            fx, x = hit
-            cur = hubs.get(nm)
-            if cur is None:
-                cur = hubs[nm] = {
-                    "name": nm,
-                    "kind": x["kind"],
-                    "path": fx,
-                    "line": x.get("line") or 0,
-                    "_imps": set(),
-                }
-            cur["_imps"] |= imps
-        hl = [
-            {
-                "name": z["name"],
-                "kind": z["kind"],
-                "path": z["path"],
-                "line": z["line"],
-                "used_by": len(z["_imps"]),
-                "scope": "internal",
-            }
-            for z in hubs.values()
-            if len(z["_imps"]) >= 2
-        ]
-        hl.sort(key=lambda z: (z["name"].startswith("_"), -z["used_by"], z["name"]))
-        ranked += hl[: MAX_INTERFACE - len(ranked)]
-    if len(ranked) < 4:
-        seen = {z["name"] for z in ranked}
-        pubs = []
-        for (f, nm), x in syms_by.items():
-            if nm in seen or x["kind"] == "route" or not _is_public(ix, f, x):
-                continue
-            size = (
-                (x.get("end") or x.get("line") or 0)
-                - (x.get("line") or 0)
-                + 5 * len(x.get("children") or ())
-            )
-            pubs.append((-size, _KIND_RANK.get(x["kind"], 2), nm, f, x))
-        pubs.sort(key=lambda t: t[:4])
-        for _s, _k, nm, f, x in pubs:
-            if len(ranked) >= MAX_INTERFACE:
-                break
-            if nm in seen:
-                continue
-            seen.add(nm)
-            ranked.append(
-                {
-                    "name": nm,
-                    "kind": x["kind"],
-                    "path": f,
-                    "line": x.get("line") or 0,
-                    "used_by": 0,
-                    "scope": "declared",
-                }
-            )
-    return ranked[:MAX_INTERFACE], total
-
-
-def _level(ix: dict, d: str) -> dict:
-    owner, nodes = _owners(ix, d)
-    test = ix["test"]
-    in_tests = bool(d) and cm._is_test_path(d + "/")
-    if in_tests:
-        # Drilled INTO a test tree on purpose: its files are the subject
-        # here, so they are cards with relations like any code (tests
-        # elsewhere stay tests).
-        pre = d + "/"
-        test = frozenset(r for r in test if not r.startswith(pre))
-    info = ix["info"]
-    for nd in nodes.values():
-        for r in nd["_files"]:
-            inf = info.get(r) or {}
-            nd["files"] += 1
-            nd["loc"] += int(inf.get("loc") or 0)
-            if r in test:
-                nd["tests"] += 1
-            else:
-                nd["entry"] += len(ix["entry"].get(r) or ())
-            e = _ext(r)
-            if e:
-                nd["langs"][e] = nd["langs"].get(e, 0) + 1
-            syms = inf.get("syms") or ()
-            nd["symbols"] += _count_syms(syms)
-            nd["public"] += sum(1 for x in syms if _is_public(ix, r, x))
-    deps_out: Dict[str, Set[str]] = {}
-    deps_in: Dict[str, Set[str]] = {}
-    weight: Dict[Tuple[str, str], int] = {}
-    ext_out: Dict[str, int] = {}
-    ext_in: Dict[str, int] = {}
-    tested_by: Dict[str, Set[str]] = {}
-    used: Dict[str, Dict[Tuple[str, str], Set[str]]] = {}
-    internal: Dict[str, Dict[Tuple[str, str], Set[str]]] = {}
-    names = ix["names"]
-    for s, t in ix["edges"]:
-        a, b = owner.get(s), owner.get(t)
-        if a is None and b is None:
-            continue
-        if s in test:
-            if b is not None and a != b and t not in test:
-                tested_by.setdefault(b, set()).add(s)
-            continue
-        if a is not None and b is not None:
-            if a != b:
-                deps_out.setdefault(a, set()).add(b)
-                deps_in.setdefault(b, set()).add(a)
-                weight[(a, b)] = weight.get((a, b), 0) + 1
-        elif a is not None:
-            ext_out[a] = ext_out.get(a, 0) + 1
-        else:
-            ext_in[b] = ext_in.get(b, 0) + 1
-        nm = names.get((s, t))
-        if b is not None and nm:
-            bucket = (used if a != b else internal).setdefault(b, {})
-            for n in nm:
-                bucket.setdefault((t, n), set()).add(s)
-    for p, nd in nodes.items():
-        langs = nd["langs"]
-        if nd["_role"]:
-            role = nd["_role"]
-        elif nd["tests"] and nd["tests"] >= max(1, 0.8 * nd["files"]):
-            role = "tests"
-        elif (
-            not any(e in _CODE_EXTS for e in langs)
-            and not deps_out.get(p)
-            and not deps_in.get(p)
-        ):
-            role = "files"
-        elif (
-            nd["kind"] == "file"
-            and nd["loc"] < TRIVIAL_LOC
-            and not deps_in.get(p)
-            and not ext_in.get(p)
-            and not nd["entry"]
-        ):
-            role = "files"
-        else:
-            role = "code"
-        nd["role"] = role
-    code = sorted(p for p, nd in nodes.items() if nd["role"] == "code")
-    cset = set(code)
-    w_code = {(a, b): x for (a, b), x in weight.items() if a in cset and b in cset}
-    tier, back = _tiering(code, w_code)
-    ordered = sorted(
-        nodes.values(), key=lambda nd: (nd["role"] != "code", -nd["loc"], nd["name"])
-    )
-    hidden = 0
-    more = None
-    if len(ordered) > MAX_NODES:
-        rest = ordered[MAX_NODES - 1 :]
-        ordered = ordered[: MAX_NODES - 1]
-        hidden = len(rest)
-        more = {
-            "path": (d + "/" if d else "") + "…",
-            "name": "+%d more" % hidden,
-            "kind": "more",
-            "role": "files",
-            "lang": "",
-            "langs": {},
-            "files": sum(nd["files"] for nd in rest),
-            "loc": sum(nd["loc"] for nd in rest),
-            "symbols": 0,
-            "public": 0,
-            "interface": [],
-            "interface_total": 0,
-            "deps_out": [],
-            "deps_in": [],
-            "ext_out": 0,
-            "ext_in": 0,
-            "tier": -3,
-            "entry": sum(nd["entry"] for nd in rest),
-            "tested_by": 0,
-            "tests": sum(nd["tests"] for nd in rest),
-        }
-    visible = {nd["path"] for nd in ordered}
-    out_nodes = []
-    for nd in ordered:
-        p = nd["path"]
-        itf, total = _interface(
-            ix, nd["_files"], used.get(p, {}), internal.get(p, {}), test
-        )
-        langs = dict(
-            sorted(
-                nd["langs"].items(),
-                key=lambda kv: (-(kv[0] in _CODE_EXTS), -kv[1], kv[0]),
-            )[:4]
-        )
-        role = nd["role"]
-        out_nodes.append(
-            {
-                "path": p,
-                "name": nd["name"],
-                "kind": nd["kind"],
-                "role": role,
-                "lang": next(iter(langs), ""),
-                "langs": langs,
-                "files": nd["files"],
-                "loc": nd["loc"],
-                "symbols": nd["symbols"],
-                "public": nd["public"],
-                "interface": itf,
-                "interface_total": total,
-                "deps_out": sorted(x for x in deps_out.get(p, ()) if x in visible),
-                "deps_in": sorted(x for x in deps_in.get(p, ()) if x in visible),
-                "ext_out": ext_out.get(p, 0),
-                "ext_in": ext_in.get(p, 0),
-                "tier": (
-                    tier.get(p, -1)
-                    if role == "code"
-                    else (-2 if role == "tests" else -3)
-                ),
-                "entry": nd["entry"],
-                "tested_by": len(tested_by.get(p, ())),
-                "tests": nd["tests"],
-            }
-        )
-    if more is not None:
-        out_nodes.append(more)
-    tiers = max([x["tier"] for x in out_nodes if x["role"] == "code"] + [-1]) + 1
-    extras_files = [
-        {"path": x["path"], "name": x["name"], "files": x["files"]}
-        for x in out_nodes
-        if x["role"] == "files" and x["kind"] != "more"
-    ]
-    return {
-        "path": d,
-        "crumbs": _crumbs(ix, d),
-        "nodes": out_nodes,
-        "tiers": tiers,
-        "partial": bool(ix["partial"]),
-        "truncated": bool(ix["truncated"]),
-        "hidden": hidden,
-        "back_edges": [[a, b] for a, b in back if a in visible and b in visible],
-        "extras": {
-            "tests": sum(x["files"] for x in out_nodes if x["role"] == "tests"),
-            "files": extras_files,
-        },
-        "fingerprint": ix["key"],
-    }
-
-
-def _empty_level(d: str, partial: bool = False) -> dict:
-    return {
-        "path": d,
-        "crumbs": [{"path": "", "name": ""}],
-        "nodes": [],
-        "tiers": 0,
-        "partial": partial,
-        "truncated": False,
-        "hidden": 0,
-        "back_edges": [],
-        "extras": {"tests": 0, "files": []},
-        "fingerprint": None,
-    }
-
-
-def atlas(inst: Any, wt: str, path: str = "", fp: Optional[str] = None) -> dict:
-    """One Atlas level: the children of directory ``path`` (``""`` = repo
-    root) as cards, single-child chains collapsed, JVM source sets merged.
-
-    ``{"path", "crumbs": [{"path", "name"}], "nodes": [Node], "tiers": n,
-    "partial", "truncated", "hidden", "back_edges": [[from, to]], "extras":
-    {"tests": n, "files": [{"path", "name", "files"}]}, "fingerprint"}``.
-    Node = ``{"path", "name", "kind": "dir"|"file"|"more", "role":
-    "code"|"tests"|"files", "lang", "langs", "files", "loc", "symbols",
-    "public", "interface": [{"name", "kind", "path", "line", "used_by",
-    "scope"}], "interface_total", "deps_out", "deps_in", "ext_out",
-    "ext_in", "tier", "entry", "tested_by", "tests"}``.
-
-    ``tier``: 0 = top (callers) … increasing = more depended upon; -1 =
-    standalone code (no sibling relation either way); -2 = tests; -3 =
-    project files / the "+N more" fold. ``tiers`` = number of code tiers (0 =
-    no relations at all → render a plain grid). Tests, non-code files and
-    trivial unimported files (< 40 lines) are ``role != "code"`` — the strip,
-    never cards (``extras`` summarizes them).
-
-    ``inst`` / ``fp`` are accepted for the route's convenience; the index is
-    keyed on the worktree's content fingerprint (see :func:`_content_fp`).
-    ``ValueError`` for an absolute or ``..`` path; a directory that no
-    longer exists is an empty level. Never raises otherwise."""
-    lit, d = _norm_pair(path)
-    try:
-        ix = _index(wt)
-        if lit != d and (lit in ix["children"] or lit in ix["info"]):
-            d = lit  # the exact name git tracks (` lead`, `back\\slash`)
-        with _LOCK:
-            hit = ix["levels"].get(d)
-        if hit is not None:
-            return hit
-        lvl = _level(ix, d)
-        if not ix["partial"]:
-            with _LOCK:
-                if len(ix["levels"]) > 256:
-                    ix["levels"].clear()
-                ix["levels"][d] = lvl
-        return lvl
-    except Exception:  # noqa: BLE001
-        return _empty_level(d, partial=True)
 
 
 # =========================================================================== #
@@ -2861,54 +2193,8 @@ def search(wt: str, q: str, limit: int = 40) -> dict:
         return {"items": [], "partial": True}
 
 
-_KIND_ORDER = {"http": 0, "event": 1, "cli": 2, "main": 3}
-
-
-def entry_points(wt: str) -> dict:
-    """``{"items": [{"kind", "method", "route", "path", "folder", "line",
-    "handler"}], "total", "dropped", "counts": {kind: n}, "partial"}`` —
-    every entry point outside test files (``dropped`` = how many were in
-    tests), http first, then event / cli / main, capped at
-    :data:`MAX_ENTRY` (``total`` is the uncapped count). ``folder`` groups
-    mains in the drawer. Never raises."""
-    try:
-        ix = _index(wt)
-        items = []
-        dropped = 0
-        for rel in ix["rels"]:
-            es = ix["entry"].get(rel)
-            if not es:
-                continue
-            if rel in ix["test"]:
-                dropped += len(es)
-                continue
-            folder = posixpath.dirname(rel)
-            for e in es:
-                items.append(dict(e, path=rel, folder=folder))
-        items.sort(
-            key=lambda e: (
-                _KIND_ORDER.get(e.get("kind"), 9),
-                e["path"],
-                e.get("line") or 0,
-            )
-        )
-        counts: Dict[str, int] = {}
-        for e in items:
-            counts[e["kind"]] = counts.get(e["kind"], 0) + 1
-        return {
-            "items": items[:MAX_ENTRY],
-            "total": len(items),
-            "dropped": dropped,
-            "counts": counts,
-            "partial": bool(ix["partial"]),
-        }
-    except Exception:  # noqa: BLE001
-        return {"items": [], "total": 0, "dropped": 0, "counts": {}, "partial": True}
-
-
 def forget(wt: str) -> None:
-    """Drop everything cached for ``wt`` (the index, its levels and search
-    rows, and the per-file memos under it) — for a removed worktree. Never
+    """Drop everything cached for ``wt`` (the index, its search rows, and the per-file memos under it) — for a removed worktree. Never
     raises."""
     try:
         root = os.path.join(wt, "")

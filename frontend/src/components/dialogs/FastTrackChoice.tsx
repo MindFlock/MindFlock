@@ -81,7 +81,7 @@ export function FastTrackChoice({
   askReason?: string;
 }) {
   const askWhy =
-    askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
+    askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
   return (
     <>
       <Seg

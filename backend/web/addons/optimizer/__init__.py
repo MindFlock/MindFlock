@@ -177,9 +177,4 @@ class OptimizerAddon(Addon):
                 {"ok": True, "written": len(written), "samples": written}
             )
 
-        @router.get("/samples")
-        async def samples(provider: str = "", since: float = 0.0) -> JSONResponse:
-            rows = await asyncio.to_thread(store.read, provider or None, since or None)
-            return JSONResponse({"samples": rows})
-
         return router
