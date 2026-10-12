@@ -20,6 +20,7 @@ import subprocess
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from backend.web.core import proc
 
 
 @pytest.fixture
@@ -439,6 +440,7 @@ class TestStateVocabulary:
             return subprocess.CompletedProcess(argv, 1, b"", b"")
 
         monkeypatch.setattr(server, "_run_capped", no_session)
+        monkeypatch.setattr(proc, "run_capped", no_session)
         assert A._assistant_activity() == "offline"
         # Asserted, because `_assistant_activity` also answers "offline" when
         # the read BLOWS UP — and a test that couldn't tell the two apart would

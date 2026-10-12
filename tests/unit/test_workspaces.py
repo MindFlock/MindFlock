@@ -126,40 +126,6 @@ def test_remove_deletes_dir_under_managed_root(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# /api/workspaces/clear — bulk sweep of unprotected, idle workspaces
-# --------------------------------------------------------------------------- #
-def test_clear_sweeps_unprotected_idle_only(monkeypatch, tmp_path):
-    managed = tmp_path / "ws"
-    (managed / "plain_ws").mkdir(parents=True)
-    (managed / "pr-9").mkdir()
-    (managed / "_base_repo").mkdir()  # protected: base clone
-    (managed / refresher_dirname("testmon")).mkdir()  # protected: refresher
-    active = managed / "live_ws"
-    active.mkdir()
-
-    monkeypatch.setattr(server, "_workspace_roots", lambda: [str(managed)])
-    # The sweep resolves ~/.mindflock/worktrees: never the real one under pytest.
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    # Neutralise editor/trust side effects — the test only asserts deletion.
-    monkeypatch.setattr(server, "_close_cursor_window", lambda p: None)
-    monkeypatch.setattr(server, "_remove_trust_entry", lambda p: None)
-    inst = SimpleNamespace(Title="live", GetWorktreePath=lambda: str(active))
-    monkeypatch.setattr(server.ENGINE, "instances", {"live": inst}, raising=False)
-
-    body = json.loads(asyncio.run(server.clear_workspaces({})).body)
-    assert body["ok"] is True
-    assert set(body["removed"]) == {"plain_ws", "pr-9"}
-    assert body["removed_count"] == 2
-    assert body["kept_active"] == ["live"]
-    # Unprotected idle dirs are gone; protected + active dirs stay on disk.
-    assert not (managed / "plain_ws").exists()
-    assert not (managed / "pr-9").exists()
-    assert (managed / "_base_repo").exists()
-    assert (managed / refresher_dirname("testmon")).exists()
-    assert active.exists()
-
-
-# --------------------------------------------------------------------------- #
 # _worktree_gitdir / _worktree_repo_path — the "never a repo" discriminator
 # --------------------------------------------------------------------------- #
 def test_gitdir_empty_for_a_real_repo(tmp_path):

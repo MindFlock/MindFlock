@@ -18,10 +18,10 @@ UI and the TUI (and the Go build) share the same ``~/.mindflock`` state.
 
 What lives HERE vs in ``backend.web.core``
 --------------------------------------------
-This module owns the app assembly (lifespan, middleware, auth route), every
-HTTP/websocket route, and the always-on background loops (instances tick,
-events state tick, prompt-queue drain, window-refresh keepalive) plus the
-short-TTL probe memo they share. Helper logic lives in focused modules under
+This module owns the app assembly (lifespan, middleware, auth route), the
+HTTP/websocket routes (except the route groups below), and the always-on
+background loops (instances tick, events state tick, prompt-queue drain,
+window-refresh keepalive) plus the short-TTL probe memo they share. Helper logic lives in focused modules under
 ``backend/web/core/``:
 
     agent_io         another agent's view of a session: /output views (last
@@ -33,8 +33,8 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     budget           per-session cost budgets: guardrail event + input lock
     code_map         Code Map analysis: files, change set, import graph, blast
                      radius, tool feed, declared plans, zone dry-run
-    code_outline     Code Map Atlas: symbol outlines, tiered directory levels,
-                     file view, symbol search, repo-wide entry points
+    code_outline     Code Map outlines: symbol outlines, the file view, symbol
+                     search
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
     events           the event bus behind /api/events
@@ -53,6 +53,8 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     plain_repo       base-folder selection/validation for plain sessions
     ports            per-session port-block reservations
     pr_review        automated PR-review pipeline glue
+    proc             subprocess helpers: run_capped (a hard timeout that
+                     never raises; re-exported here as _run_capped)
     prompt_queue     the per-session prompt queue store
     recently_closed  the undo store behind reopen / Ctrl+Z
     red_zone_monitor red-zone reconcile loop: guard files, hook health,
@@ -61,6 +63,7 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     repo_picker      ranked repo suggestions for the New Session folder field
     revive           background revive: relaunch agents after a restart
     outbox           what is waiting on you / shipping / shipped / queued
+                     (GET /api/outbox)
     session_create   the create route's body (POST /api/instances)
     session_end      ending a session: DELETE / /close / /cleanup / the
                      workspace delete share one path (folder-in-use 409,
@@ -77,6 +80,15 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     window_refresh   window-refresh keepalive config + scheduling
     workspaces       workspace roots, classification, guarded deletion
     worktree_setup   worktree setup/check (verification gate) runners
+
+Route groups live in ``backend/web/routes/<name>.py``: one module-level
+``router = APIRouter()`` per module, full paths (no prefix), routes that only
+translate HTTP into core calls. This module ``app.include_router``s each one
+AT THE POSITION its routes held here — route order decides path matching —
+and re-imports its helpers, so tests that patch ``server._x`` still reach it.
+
+    peer             peer links: /api/peer* (backend.peer.service does the work)
+    team_runs        team runs /api/runs* and GET /api/outbox
 
 Convention: extracted modules call back through the server namespace for
 anything monkeypatched in tests (``_server()._foo(...)``), and this module
@@ -187,6 +199,7 @@ from backend.mcp import playbooks as _playbooks
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
+from backend.web.core.proc import run_capped as _run_capped
 from backend.web.core import agent_state as _agent_state
 from backend.web.core.agent_state import (
     _ACTIVITY_CACHE,
@@ -402,6 +415,15 @@ from backend.web.core.terminal import (
     _wrap_launch_cmd,
 )
 from backend.web.addons import AppContext as _AddonContext, register_addons
+from backend.web.routes import peer as _peer_routes
+from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.routes.peer import (
+    _peer_body,
+    _peer_call,
+    _peer_remote_refusal,
+    _peer_service,
+)
+from backend.web.routes.team_runs import _run_error
 
 # --------------------------------------------------------------------------- #
 # Engine bootstrap
@@ -409,41 +431,6 @@ from backend.web.addons import AppContext as _AddonContext, register_addons
 log.Initialize(False)
 
 _STATIC = Path(__file__).parent / "static"
-
-
-def _run_capped(args, *, timeout, **kw):
-    """``subprocess.run`` with a hard timeout that never raises on expiry.
-
-    A hung child is killed and reported as a *failed* ``CompletedProcess``
-    (returncode 124, the timeout note appended to stdout/stderr), so every
-    call site's existing non-zero-exit handling applies unchanged.
-    """
-    try:
-        return subprocess.run(args, timeout=timeout, **kw)
-    except subprocess.TimeoutExpired as err:
-        msg = "timed out after %gs: %s" % (timeout, " ".join(str(a) for a in args))
-        text = bool(kw.get("text") or kw.get("universal_newlines"))
-
-        def _coerce(v):
-            if v is None:
-                return msg if text else msg.encode("utf-8")
-            if isinstance(v, bytes):
-                return (
-                    (v.decode("utf-8", "replace") + "\n" + msg)
-                    if text
-                    else v + b"\n" + msg.encode("utf-8")
-                )
-            return v + "\n" + msg
-
-        return subprocess.CompletedProcess(
-            args, 124, stdout=_coerce(err.output), stderr=_coerce(err.stderr)
-        )
-
-
-# The Personal Assistant (constants, seed, session, todos REST + chat ws) is now
-# the Assistant addon (backend/web/addons/assistant.py). The MindFlock pipeline control
-# is the MindFlock addon (backend/web/addons/ticket_ingestion.py). Both self-register via the
-# addon registry below.
 
 
 # Background asyncio tasks started by the lifespan; cancelled on shutdown.
@@ -841,29 +828,8 @@ def auth_login(payload: dict) -> JSONResponse:
     return _auth.set_auth_cookies(JSONResponse({"ok": True}))
 
 
-# Engine + the adopt/reload loop moved to core.engine. ENGINE stays a module
-# global (the process-wide singleton) so the ~50 route call-sites are unchanged.
+# The process-wide Engine singleton (core.engine).
 ENGINE = get_engine()
-
-
-# TicketIngestionController moved to the Ticket Ingestion addon (backend.web.addons.ticket_ingestion).
-
-
-# _sync_external_instances + _reload_loop moved to core.engine (imported above).
-# The reload loop is started by the lifespan handler.
-
-
-# --------------------------------------------------------------------------- #
-# Startup banner: print the mobile (/m) URL(s) to reach this server.
-# --------------------------------------------------------------------------- #
-# _server_port / _tailscale_info / _tailscale_serves_port / _qr_lines /
-# _local_only_mode / _mobile_banner moved to core.mobile_access (imported above).
-# The mobile/Tailscale banner is now printed by the lifespan handler.
-
-
-# _repo_name / _folder_label / _DIFF_STAT_CACHE / _session_fork_point /
-# _parse_shortstat / _session_diff_stat / _instance_json moved to
-# core.snapshot (imported above).
 
 
 # --------------------------------------------------------------------------- #
@@ -6262,9 +6228,6 @@ async def _red_zone_loop() -> None:
         await asyncio.sleep(_RED_ZONE_INTERVAL)
 
 
-# _mobile_svg / _mobile_info moved to core.mobile_access (imported above).
-
-
 @app.get("/api/mobile")
 def get_mobile(request: Request) -> JSONResponse:
     """Mobile (/m) URLs + a scannable QR for phone access (Settings → Your phone).
@@ -6505,8 +6468,6 @@ def get_update_state() -> JSONResponse:
 # --------------------------------------------------------------------------- #
 # System logs (Settings → System logs)
 # --------------------------------------------------------------------------- #
-# _LOG_TAIL_MAX / _log_sources / _read_log_tail moved to core.system_logs
-# (imported above).
 
 
 @app.get("/api/logs")
@@ -6550,10 +6511,6 @@ def get_logs(name: str = "server") -> JSONResponse:
                 "truncated": False,
             }
         )
-
-
-# _provider_label / _usage_window_for / _provider_usage_entry moved to
-# core.usage_api (imported above).
 
 
 @app.get("/api/usage")
@@ -7174,15 +7131,6 @@ async def post_setup_unskip(step: str, request: Request) -> JSONResponse:
     return JSONResponse({"steps": rows, "summary": _setup_steps.summary(rows)})
 
 
-# --- Plain (non-provisioned) repo selection -----------------------------------
-# _is_git_repo / _git_has_commits / _make_initial_commit moved to core.git_ops.
-# _prepare_plain_repo / _raise_on_blocked_repo moved to core.plain_repo
-# (imported above).
-
-# _PASTE_KEEP / _paste_dirs / _prune_pastes / _clear_all_pastes /
-# _safe_upload_name moved to core.uploads (imported above).
-
-
 @app.post("/api/paste-image")
 async def paste_image(request: Request) -> JSONResponse:
     """Save a file pasted or dropped in the browser so the session's CLI can read it.
@@ -7575,9 +7523,6 @@ async def session_plan(payload: dict) -> JSONResponse:
 # write the UI may ask for is a SKIP of an optional step (POST /api/setup/
 # <step>/skip, below) — the web UI's "Set up now" buttons used to mark
 # onboarded for anyone who merely clicked past the welcome tour.
-
-
-# MindFlock automation control (/api/mindflock/*) moved to the MindFlock addon.
 
 
 def _profile_id_error(profile_id: str) -> str:
@@ -8761,12 +8706,12 @@ async def instance_code_map_live(title: str, since: float = 0.0) -> JSONResponse
 
 
 # --------------------------------------------------------------------------- #
-# Code Map Atlas (the drill-down board). The analysis — per-file outlines,
-# tiered directory levels, the file view, search and entry points — lives in
-# core.code_outline and is keyed on the worktree's content fingerprint, so
-# these routes are plain reads: git gate, worktree check, off the event loop
-# (the first call on a big repo builds the index for a few seconds), and a
-# bad ``path`` (absolute / ``..`` / not a file) is a 400, not a 500.
+# Code Map file view + search. The analysis — per-file outlines, the file
+# view and search — lives in core.code_outline and is keyed on the worktree's
+# content fingerprint, so these routes are plain reads: git gate, worktree
+# check, off the event loop (the first call on a big repo builds the index for
+# a few seconds), and a bad ``path`` (absolute / ``..`` / not a file) is a
+# 400, not a 500.
 # --------------------------------------------------------------------------- #
 async def _atlas_call(title: str, fn, *args) -> JSONResponse:
     """Run ``fn(inst, wt, *args)`` for ``title``'s worktree off the loop."""
@@ -8781,19 +8726,6 @@ async def _atlas_call(title: str, fn, *args) -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=400)
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": str(err)}, status_code=500)
-
-
-@app.get("/api/instances/{title}/code-map/atlas")
-async def instance_code_map_atlas(
-    title: str, path: str = "", fp: str = ""
-) -> JSONResponse:
-    """One Atlas level: the children of directory ``path`` (``""`` = the repo
-    root) as tiered cards with their interfaces and sibling relations (shape:
-    ``code_outline.atlas``). ``fp`` is accepted and ignored — the level is
-    cached per content fingerprint server-side, so a refetch is cheap."""
-    return await _atlas_call(
-        title, lambda inst, wt: _code_outline.atlas(inst, wt, path, fp or None)
-    )
 
 
 @app.get("/api/instances/{title}/code-map/file")
@@ -8811,13 +8743,6 @@ async def instance_code_map_search(
     """Files, folders, symbols and routes matching ``q`` (camel/snake-aware,
     ranked; ``code_outline.search``)."""
     return await _atlas_call(title, lambda inst, wt: _code_outline.search(wt, q, limit))
-
-
-@app.get("/api/instances/{title}/code-map/entry-points")
-async def instance_code_map_entry_points(title: str) -> JSONResponse:
-    """The repo-wide "swagger" lens: HTTP routes, CLI commands, event
-    handlers and mains (``code_outline.entry_points``; tests excluded)."""
-    return await _atlas_call(title, lambda inst, wt: _code_outline.entry_points(wt))
 
 
 def _told_body(told, reason) -> dict:
@@ -10489,14 +10414,6 @@ def post_messages_read(title: str, payload: dict) -> JSONResponse:
     return JSONResponse({"marked": marked, "unread": unread})
 
 
-# _workspace_roots / _dir_size_bytes / _find_worktrees / _classify_workspace
-# moved to core.workspaces (imported above).
-
-
-# _shell_tmux_name / _live_session_name moved to core.agent_sessions
-# (imported above).
-
-
 # K1: the diff/stage/PR base branch is resolved PER SESSION, not from the
 # global provision settings (whose base — e.g. "staging" — is wrong for every
 # session on any other repo and used to snap the guided workflow back to
@@ -10619,32 +10536,6 @@ def _configured_pr_base() -> str:
         return (load_settings().repository.pr_base_branch or "").strip()
     except Exception:  # noqa: BLE001 — settings optional; never break a PR
         return ""
-
-
-# _ensure_shell_session moved to core.agent_sessions (imported above).
-
-
-# --------------------------------------------------------------------------- #
-# Exit markers: tell a user-intended quit (Ctrl+C / clean exit) apart from an
-# unnatural death (kill -9, OOM, crash, tmux kill) so we only auto-resume the
-# latter. claude is launched through a wrapper that records its exit code when
-# it ends; if the session is gone and the marker says it quit normally, we don't
-# relaunch it.
-# --------------------------------------------------------------------------- #
-# Exit-marker helpers + the exit-recording launch wrapper moved to core.terminal
-# (shared by the per-instance agent sessions and addon-owned sessions). Imported
-# above as _exit_marker_path / _read_exit_marker / _clear_exit_marker /
-# _is_natural_exit / _wrap_launch_cmd.
-
-# _ensure_agent_session / _send_to_shell / _send_to_agent moved to
-# core.agent_sessions (imported above).
-# _ensure_assistant_session moved to the Assistant addon
-# (backend/web/addons/assistant.py).
-
-
-# _git_count / _commits_beyond_base / _has_upstream / _is_dirty / _git_head_sha /
-# _current_branch / _origin_branch_sha (+ _ORIGIN_SHA_CACHE) moved to
-# core.git_ops (imported above).
 
 
 _PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
@@ -10803,16 +10694,6 @@ def _gh_pr_info(wt: str, branch: str):
     }
 
 
-# _TOKENS_CACHE / _created_epoch / _session_tokens moved to core.session_stats
-# (imported above). The unused local _ts_epoch copy was dropped — the live
-# implementations (and their tests) are in providers/claude.py and
-# providers/usage_history.py.
-
-
-# _kill_named_session / _kill_shell_session / _kill_agent_session moved to
-# core.agent_sessions (imported above).
-
-
 def _unique_title(base: str) -> str:
     """A title not currently in use (appends -2, -3, … on collision)."""
     if base not in ENGINE.instances:
@@ -10821,25 +10702,6 @@ def _unique_title(base: str) -> str:
     while ("%s-%d" % (base, i)) in ENGINE.instances:
         i += 1
     return "%s-%d" % (base, i)
-
-
-# _strictly_under moved to core.workspaces (imported above).
-
-
-# --------------------------------------------------------------------------- #
-# Recently-closed sessions
-#
-# Ending a session (the ✕ button / Delete key) keeps its worktree on disk and
-# stashes the instance's serialized data here, so it can be reopened later as a
-# fresh agent session pointed at the same worktree. Persisted next to the engine
-# state in ``~/.mindflock/recently_closed.json``.
-# --------------------------------------------------------------------------- #
-# _recently_closed_path / _load_recently_closed / _save_recently_closed /
-# _record_closed moved to core.recently_closed (imported above).
-
-
-# _remove_worktree_path / _worktree_in_use_by_other moved to core.workspaces
-# (imported above).
 
 
 @app.get("/api/ides")
@@ -12717,301 +12579,8 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
     return JSONResponse({"ok": True, "stopped": bool(stopped)})
 
 
-# --- Team runs: "work on these together" (core.team_runs) -----------------
-# The record and the pure planner live in core.team_runs; the loop, the side
-# effects and the operations below live in core.team_run_driver. A run never
-# commits, pushes or opens a PR itself — it arms each member's lane, and the
-# autopilot above carries it out. See docs/team-runs.md.
-
-
-def _run_error(err) -> JSONResponse:
-    body = {"error": err.message}
-    body.update(getattr(err, "extra", {}) or {})
-    return JSONResponse(body, status_code=err.status)
-
-
-@app.post("/api/runs/preview")
-async def runs_preview(payload: Optional[dict] = None) -> JSONResponse:
-    """Parse a goal into items — ``{"text", "repo_path", "program"}`` →
-    ``{"items", "name_suggestion", "lane_default", "warnings"}``. No side
-    effects. A ticket that does not resolve comes back with an ``error`` and
-    is never silently turned into a task."""
-    body = payload or {}
-    text = body.get("text")
-    if not isinstance(text, str):
-        return JSONResponse({"error": "text must be a string"}, status_code=400)
-    out = await _team_run_driver.preview(
-        text[:20000], str(body.get("repo_path") or ""), str(body.get("program") or "")
-    )
-    return JSONResponse(out)
-
-
-@app.post("/api/runs")
-async def runs_create(payload: Optional[dict] = None) -> JSONResponse:
-    """Create a group and start it → ``201 {"run": RunDTO, "warnings"}``.
-
-    ``{"name", "items": [{"kind": "ticket", "source", "id"} | {"kind": "task",
-    "text"}], "policy": {"lane", "ask_first", "grouping", "release"},
-    "concurrency", "program", "repo_path", "budget_usd", "split"}``. An item
-    whose session already exists is adopted (a warning), not a 409."""
-    if not git_available():
-        return _no_git_response()
-    try:
-        run, warnings = await _team_run_driver.create_run(payload or {})
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run, "warnings": warnings}, status_code=201)
-
-
-@app.get("/api/runs")
-def runs_list(active: int = 0) -> JSONResponse:
-    """``{"runs": [RunSummary]}``, newest first (``?active=1``: unfinished)."""
-    runs = _team_runs.list_runs(include_finished=not active)
-    return JSONResponse({"runs": [_team_runs.summary_dto(r) for r in runs]})
-
-
-@app.get("/api/runs/{run_id}")
-async def runs_get(
-    run_id: str, wait: float = 0.0, until: str = "change", rev: int = -1
-) -> JSONResponse:
-    """``{"run": RunDTO}``. With ``wait`` (seconds, ≤60) it long-polls until
-    ``until`` holds — ``change`` (``rev`` moved past the given one),
-    ``needs_you`` or ``done`` — and adds ``"reason"`` (that, or ``timeout``)."""
-    try:
-        if wait and wait > 0:
-            if until not in ("change", "needs_you", "done"):
-                return JSONResponse(
-                    {"error": "until must be change, needs_you or done"},
-                    status_code=400,
-                )
-            return JSONResponse(
-                await _team_run_driver.wait_run(run_id, until, rev, wait)
-            )
-        run = await asyncio.to_thread(_team_run_driver.get_dto, run_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/pause")
-def runs_pause(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Hold the group: nothing new starts and nothing ships; agents keep
-    working. ``{"reason": "user"}`` → ``{"run": RunSummary}``."""
-    try:
-        summary = _team_run_driver.pause(
-            run_id, str((payload or {}).get("reason") or "user")
-        )
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": summary})
-
-
-@app.post("/api/runs/{run_id}/resume")
-def runs_resume(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Re-arm what the pause held. ``{"budget_usd": N}`` raises the budget in
-    the same click (the bell's "Raise to $N"). → ``{"run": RunSummary}``."""
-    try:
-        summary = _team_run_driver.resume(run_id, (payload or {}).get("budget_usd"))
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": summary})
-
-
-@app.post("/api/runs/{run_id}/cancel")
-def runs_cancel(run_id: str) -> JSONResponse:
-    """Stop starting new work and stop shipping. Sessions and branches are
-    kept; queued tickets go back to ingestion. → ``{"run", "kept_sessions"}``."""
-    try:
-        summary, kept = _team_run_driver.cancel(run_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": summary, "kept_sessions": kept})
-
-
-@app.post("/api/runs/{run_id}/tasks")
-async def runs_add_tasks(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Add lines to a group: ``{"items": [...]}`` (as at create) →
-    ``{"run": RunDTO}``."""
-    try:
-        run = await _team_run_driver.add_tasks(run_id, (payload or {}).get("items"))
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/tasks/{task_id}/retry")
-def runs_task_retry(
-    run_id: str, task_id: str, payload: Optional[dict] = None
-) -> JSONResponse:
-    """Retry a failed task, or one waiting on you: ``{"fresh": false}``
-    re-arms (or re-creates) it; ``fresh: true`` starts ``<title>-2`` on a new
-    branch and keeps the old one. 409 for any other state."""
-    fresh = (payload or {}).get("fresh", False)
-    if not isinstance(fresh, bool):
-        return JSONResponse({"error": "fresh must be a boolean"}, status_code=400)
-    try:
-        task = _team_run_driver.retry(run_id, task_id, fresh)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"task": task})
-
-
-@app.post("/api/runs/{run_id}/tasks/{task_id}/start-now")
-def runs_task_start_now(run_id: str, task_id: str) -> JSONResponse:
-    """Start a queued task on the next pass, past the concurrency cap once."""
-    try:
-        task = _team_run_driver.start_now(run_id, task_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"task": task})
-
-
-@app.post("/api/runs/{run_id}/tasks/{task_id}/skip")
-def runs_task_skip(run_id: str, task_id: str) -> JSONResponse:
-    """Remove a queued task, or detach a running one (its session stays and
-    its lane is unchanged)."""
-    try:
-        task = _team_run_driver.skip(run_id, task_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"task": task})
-
-
-@app.post("/api/runs/{run_id}/adopt")
-def runs_adopt(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Add a live session to the group: ``{"title"}`` → ``{"task": Task}``;
-    409 ``branch already in team run <name>`` when a team run owns its branch."""
-    try:
-        task = _team_run_driver.adopt(run_id, str((payload or {}).get("title") or ""))
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"task": task})
-
-
-@app.post("/api/runs/{run_id}/plan")
-async def runs_plan(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """A split's plan — the lead proposes it through its MCP tools, or you
-    edit it: ``{"pieces": [{"title", "prompt", "paths": [...]}], "why",
-    "from"?}`` → ``{"plan", "problems": []}``. 422 with ``problems`` (two
-    pieces sharing a file, a piece wholly in a red zone, too many pieces…);
-    409 when ``from`` is a session other than the lead, when the group is
-    not a split or its plan is already approved."""
-    try:
-        out = await asyncio.to_thread(
-            _team_run_driver.propose_plan, run_id, payload or {}
-        )
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse(out)
-
-
-@app.post("/api/runs/{run_id}/plan/approve")
-async def runs_plan_approve(
-    run_id: str, payload: Optional[dict] = None
-) -> JSONResponse:
-    """Approve a split's plan: ``{"mode": "worktrees" | "same_folder"}``
-    (default ``worktrees``), recorded on the run. ``worktrees``: every piece
-    a worker of the lead in its own worktree, forked from its HEAD, fenced to
-    its paths and merged back — a lead that works directly in its folder (or
-    sits on its trunk) first gets a NEW lead of its own, started from its
-    last commit (the original is never merged into, switched or pushed).
-    ``same_folder``: every piece an extra agent in the lead's own folder,
-    fenced to its paths per session; MindFlock commits each piece's paths
-    when it is done (one commit per piece, nothing to merge).
-    → ``{"run": RunDTO}``; 400 for another mode; 409 without a proposed
-    plan, while the lead (or, for a new lead, the original) has uncommitted
-    changes (``code: "lead_dirty"`` / ``"origin_dirty"``), or — same folder
-    — while the lead's folder is on its trunk (``code: "trunk"``: start a
-    branch there first, ``POST /lead/branch``)."""
-    mode = (payload or {}).get("mode") or ""
-    if not isinstance(mode, str):
-        return JSONResponse({"error": "mode must be a string"}, status_code=400)
-    try:
-        run = await _team_run_driver.approve(run_id, mode)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/lead/branch")
-def runs_lead_branch(run_id: str) -> JSONResponse:
-    """ "Start a branch here first" — a split whose lead's folder is on its
-    trunk, before "in this folder": ``git switch -c <prefix><lead>-split``
-    in that folder (only on this click; uncommitted changes come along) and
-    the group's branch is the new one. → ``{"run": RunDTO}``; 409 once the
-    pieces started, when the lead is already on its own branch, or mid git
-    operation."""
-    try:
-        run = _team_run_driver.lead_branch(run_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/plan/reject")
-async def runs_plan_reject(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """ "Ask for a different split": ``{"note"?}`` is passed to the lead, which
-    proposes again. → ``{"run": RunDTO}``."""
-    try:
-        run = await _team_run_driver.reject_plan(
-            run_id, str((payload or {}).get("note") or "")
-        )
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/integrated")
-def runs_integrated(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """The lead merged a member by hand (it resolved a conflict):
-    ``{"task_id", "head_sha", "from"?}`` → ``{"ok", "verified"}``. The server
-    re-checks ancestry; ``verified: false`` keeps it in the merge queue."""
-    body = payload or {}
-    try:
-        out = _team_run_driver.report_integrated(
-            run_id,
-            str(body.get("task_id") or ""),
-            str(body.get("head_sha") or ""),
-            body.get("from") or "",
-        )
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse(out)
-
-
-@app.post("/api/runs/{run_id}/check")
-def runs_check(run_id: str) -> JSONResponse:
-    """Run the check on a one-for-all group's merged branch again (409 unless
-    it is checking). → ``{"run": RunDTO}``."""
-    try:
-        run = _team_run_driver.recheck(run_id)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": run})
-
-
-@app.post("/api/runs/{run_id}/release")
-def runs_release(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Release a one-for-all group: open its ONE PR (title and body built
-    from the pieces), or ``{"merge_when_green": true}`` to merge it once
-    checks pass. Allowed only in ``release_ready``. → ``{"run": RunSummary}``."""
-    merge = (payload or {}).get("merge_when_green", False)
-    if not isinstance(merge, bool):
-        return JSONResponse(
-            {"error": "merge_when_green must be a boolean"}, status_code=400
-        )
-    try:
-        summary = _team_run_driver.release(run_id, merge)
-    except _team_run_driver.RunError as err:
-        return _run_error(err)
-    return JSONResponse({"run": summary})
-
-
-@app.get("/api/outbox")
-async def outbox(group: str = "all") -> JSONResponse:
-    """What is waiting on you, shipping, shipped today and queued — for every
-    session, de-duplicated on (repo, branch). ``?group=<run id>|own|all``."""
-    return JSONResponse(await asyncio.to_thread(_team_run_driver.outbox, group))
+# --- Team runs + the outbox: routes/team_runs.py ------------------------------
+app.include_router(_team_runs_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
@@ -15080,9 +14649,6 @@ async def list_workspaces(sizes: int = 0) -> JSONResponse:
     return JSONResponse({"workspaces": entries, "roots": _workspace_roots()})
 
 
-# _base_clone_references moved to core.workspaces (imported above).
-
-
 @app.post("/api/workspaces/delete")
 async def delete_workspace(payload: dict) -> JSONResponse:
     """Delete a workspace directory (destructive). Path must be a *direct child*
@@ -15211,73 +14777,6 @@ def _realpath_or_empty(inst) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return os.path.realpath(wp) if wp else ""
-
-
-@app.post("/api/workspaces/clear")
-async def clear_workspaces(payload: Optional[dict] = None) -> JSONResponse:
-    """Delete every UNPROTECTED, idle workspace under the managed roots in one
-    sweep — a bulk "reclaim disk" action.
-
-    Left untouched: protected shared infrastructure (base clones + cache
-    refreshers, the same dirs the UI badges "protected") and any workspace that
-    is the working directory of a LIVE session. So this never kills a running
-    agent — unlike the per-row Delete, it only removes what's already idle.
-    Returns the names removed and the live sessions it skipped.
-    """
-    active = _active_worktree_titles()
-
-    def _sweep() -> dict:
-        removed: list = []
-        kept_active: list = []
-        removed_worktree = False
-        roots = _workspace_roots()
-        wt_dir = os.path.realpath(os.path.join(config.GetConfigDir(), "worktrees"))
-        for root in roots:
-            if root == wt_dir:
-                entries = [(p, os.path.basename(p)) for p in _find_worktrees(root)]
-            else:
-                entries = []
-                try:
-                    for e in sorted(os.scandir(root), key=lambda e: e.name):
-                        try:
-                            if e.is_dir():
-                                entries.append((e.path, e.name))
-                        except OSError:
-                            continue
-                except OSError:
-                    continue
-            for path, name in entries:
-                real = os.path.realpath(path)
-                base = os.path.basename(name) or name
-                # Protected shared infra: never bulk-delete (matches the UI badge).
-                if provisioning.is_base_repo_dirname(base) or _is_refresher_dirname(
-                    base
-                ):
-                    continue
-                # Idle only: leave any workspace a live session is using.
-                if real in active:
-                    kept_active.append(active[real])
-                    continue
-                # Guard: only ever remove a proper child of a managed root.
-                if not real or not os.path.isdir(real):
-                    continue
-                if not any(_strictly_under(real, r) for r in roots):
-                    continue
-                shutil.rmtree(real, ignore_errors=True)
-                _close_cursor_window(real)
-                _remove_trust_entry(real)  # GC ~/.claude.json trust entry (G3)
-                removed.append(name)
-                if os.path.dirname(real).endswith("worktrees"):
-                    removed_worktree = True
-        # A removed worktree leaves a stale registration in its base clone(s) —
-        # prune every base clone under every managed workspace dir (cheap no-op
-        # when the worktree wasn't theirs), as the single-delete path does.
-        if removed_worktree:
-            _prune_base_clone_worktrees()
-        return {"removed": removed, "kept_active": sorted(set(kept_active))}
-
-    result = await asyncio.to_thread(_sweep)
-    return JSONResponse({"ok": True, "removed_count": len(result["removed"]), **result})
 
 
 @app.get("/api/recent")
@@ -15606,242 +15105,15 @@ def set_window_refresh(payload: dict) -> JSONResponse:
 # --------------------------------------------------------------------------- #
 # Terminal websocket: bridge xterm.js <-> a `tmux attach-session` PTY
 # --------------------------------------------------------------------------- #
-# The PTY<->websocket pump moved to core.terminal.pump_pty (shared with addons).
-# Kept as _serve_pty for the existing call sites.
+# The PTY<->websocket pump is core.terminal.pump_pty (shared with addons),
+# under the name the call sites use.
 _serve_pty = pump_pty
 
 
 # --------------------------------------------------------------------------- #
-# Peer links (docs/peer-link.md): pairing with another person's MindFlock, one
-# sandboxed shared folder per link. The work lives in backend.peer.service; these
-# routes only translate. Every one refuses a request proxied by another
-# MindFlock device (X-MindFlock-Remote): tailnet remote control must never
-# manage peer links. No response carries a key or secret, except the invite
-# code in POST /api/peer/invites — the one value the user must pass on.
+# Peer links (docs/peer-link.md): routes/peer.py
 # --------------------------------------------------------------------------- #
-def _peer_service():
-    from backend.peer import service as _svc
-
-    return _svc.get_service()
-
-
-async def _peer_remote_refusal(request: Request) -> Optional[JSONResponse]:
-    """Another MindFlock relaying never manages peer links here; and a change
-    (an invite, a join, sharing a folder with someone, its perms) needs the
-    owner (``auth.may_configure``) — not an anonymous tailnet caller of a
-    gate-off device, who could otherwise share its folders with a peer of
-    their own."""
-    if _remote.from_remote(request):
-        return JSONResponse(
-            {"error": "peer links can only be managed on this device"},
-            status_code=403,
-        )
-    if request.method != "GET" and not await _auth.may_configure(request.scope):
-        return _auth.configure_refused()
-    return None
-
-
-async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
-    refused = await _peer_remote_refusal(request)
-    if refused is not None:
-        return refused
-    from backend.peer.service import PeerServiceError
-
-    try:
-        await _peer_service().reconcile()
-    except Exception as err:  # noqa: BLE001 — report, never 500 the status page
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("peer service reconcile failed: %v", err)
-    try:
-        out = fn(*args, **kwargs)
-        if asyncio.iscoroutine(out):
-            out = await out
-    except PeerServiceError as err:
-        return JSONResponse({"error": err.message}, status_code=err.status)
-    return JSONResponse(out if out is not None else {"ok": True}, status_code=status)
-
-
-async def _peer_body(request: Request) -> dict:
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001 — an empty or non-JSON body = {}
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
-@app.get("/api/peer")
-async def peer_status(request: Request) -> JSONResponse:
-    """Peer-link status: sandbox availability, this instance's identity
-    fingerprint, the listen address, links (no keys) and active invites (id and
-    expiry only — never the code)."""
-    return await _peer_call(request, lambda: _peer_service().status())
-
-
-@app.post("/api/peer/enable")
-async def peer_enable(request: Request) -> JSONResponse:
-    """Turn peer links on without minting an invite (the "they're somewhere
-    else" step: the doctor then offers cloudflared before the first invite)."""
-    return await _peer_call(request, _peer_service().enable)
-
-
-@app.post("/api/peer/invites")
-async def peer_create_invite(request: Request) -> JSONResponse:
-    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
-    message, expires_in, host, port, direct, relay?, fallback?}``.
-    ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
-    ``advertise_host`` overrides the address a direct code carries (setting
-    ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
-    ``peer.progress`` events. ``fallback: {reason, text}`` marks a direct
-    invite made because the tunnel wouldn't start. The only response that
-    ever contains an invite code; starts the listener."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _peer_service().create_invite,
-        body.get("ttl_s"),
-        str(body.get("advertise_host") or body.get("host") or ""),
-        str(body.get("reach") or "auto"),
-        str(body.get("op_id") or ""),
-        status=201,
-    )
-
-
-@app.delete("/api/peer/invites/{invite_id}")
-async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
-    return await _peer_call(request, _peer_service().revoke_invite, invite_id)
-
-
-@app.post("/api/peer/join")
-async def peer_join(request: Request) -> JSONResponse:
-    """``{code, op_id?}`` → the link (with its safety number to compare out
-    of band) and ``reconnected`` — true when the code re-paired someone
-    already linked (same link, share kept)."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _peer_service().join,
-        str(body.get("code") or ""),
-        str(body.get("op_id") or ""),
-        status=201,
-    )
-
-
-@app.delete("/api/peer/links/{link_id}")
-async def peer_unlink(link_id: str, request: Request) -> JSONResponse:
-    """Unlink: stop the shared session, forget the pinned key, close the
-    connection. ``?delete_files=1`` also deletes the shared folder."""
-    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
-    return await _peer_call(
-        request, _peer_service().unlink, link_id, delete_files=delete
-    )
-
-
-@app.post("/api/peer/links/{link_id}/address")
-async def peer_set_address(link_id: str, request: Request) -> JSONResponse:
-    """``{address}`` — point a link WE joined at the inviter's new address
-    (``host:port`` or a relay ``wss://host/path``, e.g. after their quick
-    tunnel restarted). The peer's key stays pinned, so this can only change
-    where we dial, never whom we trust."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _peer_service().set_address,
-        link_id,
-        str(body.get("address") or ""),
-    )
-
-
-@app.post("/api/peer/links/{link_id}/verified")
-async def peer_set_verified(link_id: str, request: Request) -> JSONResponse:
-    """``{verified: bool}`` — "It matches": the safety number was compared."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request, _peer_service().set_verified, link_id, body.get("verified")
-    )
-
-
-@app.get("/api/peer/links/{link_id}/messages")
-async def peer_messages(link_id: str, request: Request) -> JSONResponse:
-    """The link's message log, both directions → ``{messages: [{id, dir,
-    by, text, ts, delivered_to, read}], unread}``. Read-only."""
-    try:
-        limit = int(request.query_params.get("limit") or 100)
-    except ValueError:
-        limit = 100
-    return await _peer_call(request, _peer_service().messages, link_id, limit)
-
-
-@app.post("/api/peer/links/{link_id}/messages/read")
-async def peer_messages_read(link_id: str, request: Request) -> JSONResponse:
-    return await _peer_call(request, _peer_service().mark_messages_read, link_id)
-
-
-@app.post("/api/peer/links/{link_id}/message")
-async def peer_send_message(link_id: str, request: Request) -> JSONResponse:
-    """``{text}`` — you, messaging the peer directly (no shared session
-    needed on either side) → ``{msg_id, delivered}``."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request, _peer_service().human_message, link_id, body.get("text")
-    )
-
-
-@app.get("/api/peer/links/{link_id}/diff")
-async def peer_their_changes(link_id: str, request: Request) -> JSONResponse:
-    """The peer's shared-folder changes, read-only (their ``diff``; their
-    permissions decide) → ``{stat, diff, truncated}``."""
-    return await _peer_call(request, _peer_service().their_changes, link_id)
-
-
-@app.post("/api/peer/links/{link_id}/perms")
-async def peer_set_perms(link_id: str, request: Request) -> JSONResponse:
-    """``{"messages"?, "diff"?, "read_file"?: bool}`` — what the PEER may do to
-    us (``list_files`` follows ``read_file``)."""
-    body = await _peer_body(request)
-    perms = body.get("perms") if isinstance(body.get("perms"), dict) else body
-    return await _peer_call(request, _peer_service().set_perms, link_id, perms)
-
-
-@app.post("/api/peer/links/{link_id}/share")
-async def peer_share(link_id: str, request: Request) -> JSONResponse:
-    """``{repo_path, branch?, program?, prompt?}`` → clone the repo into a fresh
-    shared folder and start its sandboxed session (any agent CLI with a
-    sandbox profile — see ``backend.peer.launch.allowed_providers``; 409
-    without a working sandbox)."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _peer_service().share,
-        link_id,
-        str(body.get("repo_path") or ""),
-        body.get("branch") or None,
-        str(body.get("program") or ""),
-        str(body.get("prompt") or ""),
-        status=201,
-    )
-
-
-@app.delete("/api/peer/links/{link_id}/share")
-async def peer_unshare(link_id: str, request: Request) -> JSONResponse:
-    """Stop the shared session; ``?delete_files=1`` also deletes the folder."""
-    delete = request.query_params.get("delete_files", "") in ("1", "true", "yes")
-    return await _peer_call(
-        request, _peer_service().unshare, link_id, delete_files=delete
-    )
-
-
-@app.post("/api/peer/links/{link_id}/export")
-async def peer_export(link_id: str, request: Request) -> JSONResponse:
-    """``{target_repo, branch_name}`` — checkpoint the share, then fetch it into
-    your own repo as ``branch_name`` (must start with ``peer/``)."""
-    body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _peer_service().export,
-        link_id,
-        str(body.get("target_repo") or ""),
-        str(body.get("branch_name") or ""),
-    )
+app.include_router(_peer_routes.router)
 
 
 @app.websocket("/api/instances/{title}/shell")
@@ -15919,9 +15191,6 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
         )
     finally:
         _ownership.detach(conn)
-
-
-# _agent_transcript_text moved to core.session_stats (imported above).
 
 
 @app.get("/api/instances/{title}/prompt")
@@ -16881,10 +16150,6 @@ async def events_ws(ws: WebSocket) -> None:
             await ws.close()
         except Exception:  # noqa: BLE001
             pass
-
-
-# The MindFlock logs websocket + the Assistant chat websocket and todos REST
-# moved to their addons (backend/web/addons/{ticket_ingestion,assistant}.py).
 
 
 # --------------------------------------------------------------------------- #

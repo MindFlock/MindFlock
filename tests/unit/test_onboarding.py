@@ -218,7 +218,6 @@ def client(monkeypatch):
 @pytest.mark.parametrize(
     "method,path,body",
     [
-        ("post", "/api/onboarding/choice", {"choice": "first"}),
         ("post", "/api/github/device/start", None),
         ("post", "/api/github/device/poll", None),
         ("delete", "/api/github/device", None),
@@ -301,18 +300,6 @@ def test_gh_login_terminal_refuses_a_non_privileged_caller(client):
     with client.websocket_connect("/api/github/gh-login-terminal") as ws:
         msg = ws.receive_json()
     assert msg["type"] == "error" and "only allowed" in msg["message"]
-
-
-def test_choice_route_stores_the_answer(client, monkeypatch):
-    client.state["privileged"] = True
-    monkeypatch.setattr(
-        onboarding, "collect", lambda **kw: {"devices": {"choice": "first"}}
-    )
-    r = client.post("/api/onboarding/choice", json={"choice": "first"})
-    assert r.status_code == 200 and r.json()["choice"] == "first"
-    assert (
-        client.post("/api/onboarding/choice", json={"choice": "x"}).status_code == 400
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -923,32 +910,3 @@ def test_the_desktop_paste_goes_through_the_paste_a_code_router():
         "code": "ABCD-EFGH",
         "device": "laptop",
     }
-
-
-def test_setup_choice_saves_from_this_machine_on_the_real_app(tmp_path, monkeypatch):
-    """Setup writes general.setup_devices through its own privileged route
-    (not POST /api/settings, whose allow-list refuses remote callers): from
-    loopback it saves; an anonymous tailnet caller of an exposed gate-off
-    server is refused."""
-    from backend.config import settings as S
-    from backend.web.core import tailnet_trust
-    from backend.web.server import app
-
-    async def _no(scope):
-        return False
-
-    monkeypatch.setattr(tailnet_trust, "request_trusted", _no)
-    monkeypatch.setattr(onboarding, "collect", lambda **kw: {})
-    with TestClient(app):
-        monkeypatch.setenv("CS_WEB_MODE", "tailscale")
-        monkeypatch.setenv("MINDFLOCK_AUTH", "0")
-        remote = TestClient(app, client=("100.64.0.5", 41000))
-        r = remote.post("/api/onboarding/choice", json={"choice": "join"})
-        assert r.status_code == 403
-        local = TestClient(
-            app, client=("127.0.0.1", 41000), headers={"host": "127.0.0.1"}
-        )
-        r = local.post("/api/onboarding/choice", json={"choice": "join"})
-        assert r.status_code == 200, r.text
-    S.invalidate()
-    assert S.load_settings().general.setup_devices == "join"

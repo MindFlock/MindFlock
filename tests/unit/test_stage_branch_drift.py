@@ -24,6 +24,7 @@ from backend.session.storage import Status
 from backend.web import server
 from backend.web.core import agent_state
 from backend.web.core import github_pr
+from backend.web.core import proc
 
 # The autouse fixture below stubs ``server._pr_info`` out for every other test
 # in this file; the one test that is ABOUT _pr_info needs the real thing, so it
@@ -319,6 +320,7 @@ def test_merge_pr_targets_live_branch_and_resets_flow(tmp_path, monkeypatch, wit
         return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(server, "_run_capped", fake_run_capped)
+    monkeypatch.setattr(proc, "run_capped", fake_run_capped)
 
     # The REST rung resolves the branch to a PR number, then merges that number.
     asked: list = []

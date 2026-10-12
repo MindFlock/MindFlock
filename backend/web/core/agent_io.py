@@ -20,8 +20,8 @@ session through, behind two routes:
   provider (:func:`current_dialog`), for the UI's answer buttons.
 
 The validation and tmux plumbing live here; the routes in ``server.py`` own the
-registry lookups and the activity gate. tmux calls go through the server's
-``_run_capped`` (read off the server namespace so tests can patch it).
+registry lookups and the activity gate. tmux calls go through
+``core.proc.run_capped`` (read off that module so tests can patch it).
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from backend.web.core import agent_sessions as _agent_sessions
+from backend.web.core import proc as _proc
 
 #: The output views and their default/maximum sizes (characters).
 OUTPUT_VIEWS = ("last_reply", "transcript", "screen")
@@ -115,7 +116,7 @@ def capture_screen(name: str) -> Tuple[Optional[str], Optional[str]]:
     ``capture-pane -p -J`` with no ``-S``: the current screen only (not the
     scrollback), wrapped lines joined. Trailing blank rows are dropped.
     """
-    out = _server()._run_capped(
+    out = _proc.run_capped(
         ["tmux", "capture-pane", "-p", "-J", "-t", name],
         capture_output=True,
         text=True,
@@ -129,7 +130,7 @@ def capture_screen(name: str) -> Tuple[Optional[str], Optional[str]]:
 def capture_scrollback(name: str) -> Tuple[Optional[str], Optional[str]]:
     """The whole scrollback of tmux session ``name`` (``-S -``), the same
     capture ``/history`` falls back to when there is no transcript."""
-    out = _server()._run_capped(
+    out = _proc.run_capped(
         ["tmux", "capture-pane", "-p", "-J", "-t", name, "-S", "-"],
         capture_output=True,
         text=True,
@@ -288,11 +289,10 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
     False when the tmux session is gone or any send errored (keys after a
     failure are not sent — a half-driven dialog should stop, not guess).
     """
-    srv = _server()
     if not name:
         return False
     exists = (
-        srv._run_capped(
+        _proc.run_capped(
             ["tmux", "has-session", "-t=" + name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -307,7 +307,7 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
     # still went out). The lock keeps another typer out of the text-to-keys gap.
     with _agent_sessions._typing_lock(name):
         if text:
-            typed = srv._run_capped(
+            typed = _proc.run_capped(
                 ["tmux", "send-keys", "-t", name, "-l", "--", text],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -320,7 +320,7 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
         for i, key in enumerate(keys):
             if i:
                 time.sleep(_KEY_GAP_S)
-            pressed = srv._run_capped(
+            pressed = _proc.run_capped(
                 ["tmux", "send-keys", "-t", name, key],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
