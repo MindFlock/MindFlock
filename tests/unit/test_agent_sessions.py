@@ -1,7 +1,7 @@
 """tmux session plumbing for a session's two panes (agent CLI + shell):
 ``backend.web.core.agent_sessions``.
 
-Every ``tmux`` invocation is routed through ``server._run_capped``, which is
+Every ``tmux`` invocation is routed through ``proc.run_capped``, which is
 replaced here with a scripted recorder so the branches (attach-existing,
 create, the duplicate-session race, kill/teardown, typed input) are exercised
 with zero real processes. The agent-launch branch mocks the provider and the
@@ -16,6 +16,7 @@ import pytest
 
 from backend.web import server
 from backend.web.core import agent_sessions
+from backend.web.core import proc
 
 
 class FakeProc:
@@ -54,7 +55,7 @@ class Recorder:
 @pytest.fixture
 def rec(monkeypatch):
     r = Recorder()
-    monkeypatch.setattr(server, "_run_capped", r)
+    monkeypatch.setattr(proc, "run_capped", r)
     return r
 
 
@@ -189,7 +190,7 @@ def test_multi_line_text_goes_in_as_one_bracketed_paste(rec, monkeypatch):
                     seen["content"] = fh.read()
             return rec(args, **kw)
 
-    monkeypatch.setattr(server, "_run_capped", Loader())
+    monkeypatch.setattr(proc, "run_capped", Loader())
     text = "Fix the bug\n\n---\n\nRed zones: `a/`"
     assert agent_sessions._send_to_agent("s", text, submit=True) is True
     assert seen["content"] == text

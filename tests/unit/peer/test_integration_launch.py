@@ -13,6 +13,7 @@ from backend.peer import launch as peer_launch
 from backend.session import instance as inst_mod
 from backend.session.instance import InstanceOptions, new_instance
 from backend.session.storage import Status
+from backend.web.core import proc
 
 from ._integration_helpers import (
     SHARE_ID,
@@ -241,7 +242,7 @@ def tmux_rec(monkeypatch):
         calls.append(list(args))
         return _Proc(1 if "has-session" in args else 0)
 
-    monkeypatch.setattr(server, "_run_capped", rec)
+    monkeypatch.setattr(proc, "run_capped", rec)
     monkeypatch.setattr(agent_sessions, "_clear_exit_marker", lambda n: None)
     monkeypatch.setattr(agent_sessions, "_read_exit_marker", lambda n: None)
     monkeypatch.setattr(agent_sessions, "apply_scroll_speed", lambda: None)

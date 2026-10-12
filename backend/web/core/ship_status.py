@@ -34,6 +34,8 @@ import subprocess
 import time
 from typing import Optional
 
+from backend.web.core import proc as _proc
+
 #: Upper bound on ``tail`` lines and on the returned text.
 MAX_TAIL_LINES = 200
 MAX_TAIL_CHARS = 6000
@@ -50,9 +52,8 @@ def _upstream_sha(wt: str, branch: str) -> str:
     """``refs/remotes/origin/<branch>`` in ``wt``, or ``""`` when absent."""
     if not branch:
         return ""
-    srv = _server()
     try:
-        cp = srv._run_capped(
+        cp = _proc.run_capped(
             [
                 "git",
                 "-C",

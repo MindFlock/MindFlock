@@ -2,8 +2,8 @@
 
 The UI's in-place answer buttons read the dialog an agent is blocked on as
 data, then post the chosen key with the dialog's id: a click meant for one
-prompt must never answer the next. tmux is stubbed at the server seam
-(``_run_capped``) with a screen the test controls; the providers are the
+prompt must never answer the next. tmux is stubbed at the seam
+(``proc.run_capped``) with a screen the test controls; the providers are the
 real ones, so the golden screens go through their own parsers.
 """
 
@@ -20,6 +20,7 @@ from backend.providers import dialogs
 from backend.web import server
 from backend.web.core import agent_io
 from backend.web.server import app
+from backend.web.core import proc
 
 client = TestClient(app)
 DATA = Path(__file__).parent / "data" / "dialogs"
@@ -69,6 +70,7 @@ def env(monkeypatch):
     monkeypatch.setattr(server.ENGINE, "instances", instances)
     tm = _Tmux()
     monkeypatch.setattr(server, "_run_capped", tm)
+    monkeypatch.setattr(proc, "run_capped", tm)
     monkeypatch.setattr(server, "_live_session_name", lambda n: n if tm.alive else None)
     monkeypatch.setattr(agent_io.time, "sleep", lambda s: None)
     monkeypatch.setattr(server, "_budget_locked", lambda t: False)

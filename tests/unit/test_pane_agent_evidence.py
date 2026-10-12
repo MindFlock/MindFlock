@@ -15,6 +15,7 @@ import pytest
 
 from backend.web import server
 from backend.web.core import agent_state
+from backend.web.core import proc
 
 
 class _Proc:
@@ -32,6 +33,7 @@ def _ps(monkeypatch, rows, rc=0):
         return _Proc(out, rc)
 
     monkeypatch.setattr(server, "_run_capped", run)
+    monkeypatch.setattr(proc, "run_capped", run)
     return calls
 
 
@@ -112,6 +114,7 @@ def test_unreadable_process_table_is_unknown(monkeypatch):
         raise OSError("no ps")
 
     monkeypatch.setattr(server, "_run_capped", boom)
+    monkeypatch.setattr(proc, "run_capped", boom)
     assert agent_state._pane_runs_agent("1", NAMES) is None
     assert agent_state._pane_runs_agent(None, NAMES) is None
 

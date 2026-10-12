@@ -2,7 +2,7 @@
 
 Covers the timeout plumbing added to the ``cmd`` executor, the git worktree
 command runner, the provisioning ``_run`` helper, the web server's
-``_run_capped`` wrapper, and the shared aiohttp client timeout constant.
+``run_capped`` wrapper (``backend.web.core.proc``), and the shared aiohttp client timeout constant.
 """
 
 from __future__ import annotations
@@ -69,11 +69,11 @@ class TestProvisionRunTimeout:
             provisioned._run("sleep", "5", timeout=0.2, check=True)
 
 
-class TestServerRunCapped:
+class TestRunCapped:
     def test_timeout_reports_rc_124(self):
-        from backend.web import server
+        from backend.web.core import proc
 
-        cp = server._run_capped(
+        cp = proc.run_capped(
             ["sleep", "5"],
             timeout=0.2,
             stdout=subprocess.PIPE,
@@ -83,9 +83,9 @@ class TestServerRunCapped:
         assert b"timed out after" in cp.stderr
 
     def test_timeout_text_mode_coerces_str(self):
-        from backend.web import server
+        from backend.web.core import proc
 
-        cp = server._run_capped(
+        cp = proc.run_capped(
             ["sleep", "5"],
             timeout=0.2,
             capture_output=True,
@@ -95,9 +95,9 @@ class TestServerRunCapped:
         assert "timed out after" in cp.stderr
 
     def test_success_passthrough(self):
-        from backend.web import server
+        from backend.web.core import proc
 
-        cp = server._run_capped(["echo", "ok"], timeout=10, stdout=subprocess.PIPE)
+        cp = proc.run_capped(["echo", "ok"], timeout=10, stdout=subprocess.PIPE)
         assert cp.returncode == 0
         assert cp.stdout.strip() == b"ok"
 

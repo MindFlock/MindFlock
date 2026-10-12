@@ -299,7 +299,9 @@ def test_outbox_shape(env):
 
 
 def test_routes_are_registered():
-    paths = {getattr(r, "path", "") for r in server.app.routes}
+    # The OpenAPI paths include routes from included routers (routes/team_runs.py);
+    # ``app.routes`` lists an included router as one opaque entry.
+    paths = set(server.app.openapi()["paths"])
     for p in (
         "/api/runs/preview",
         "/api/runs",

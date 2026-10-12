@@ -27,6 +27,7 @@ import pytest
 from backend.web import server
 from backend.web.core import agent_state
 from backend.web.core import events as events_mod
+from backend.web.core import proc
 from backend.web.core.events import EventBus
 
 
@@ -427,13 +428,16 @@ def test_marker_working_evidence_is_marker_even_with_stale_pane_proof():
 # The forced limit probe: the first idle after a turn always captures fresh
 # --------------------------------------------------------------------------- #
 class _Srv:
-    """Stand-in for the server module: _idle_or_limit only needs _run_capped."""
+    """Stand-in for the server module, and the pane capture behind it:
+    _idle_or_limit's only subprocess is ``proc.run_capped``, which this
+    replaces with :meth:`run_capped` (the newest stand-in wins)."""
 
-    def __init__(self, pane_text):
+    def __init__(self, monkeypatch, pane_text):
         self.pane_text = pane_text
         self.captures = 0
+        monkeypatch.setattr(proc, "run_capped", self.run_capped)
 
-    def _run_capped(self, cmd, **kw):
+    def run_capped(self, cmd, **kw):
         self.captures += 1
         return types.SimpleNamespace(
             returncode=0, stdout=self.pane_text.encode("utf-8")
@@ -453,7 +457,7 @@ def test_first_idle_after_a_turn_probes_the_pane_fresh(monkeypatch):
     monkeypatch.setattr(agent_state.time, "time", lambda: 1000.0)
     # A fresh-looking cached verdict from BEFORE the turn: no banner.
     agent_state._LIMIT_PROBE["s"] = {"at": 999.0, "limit": False}
-    srv = _Srv("Claude usage limit reached · resets 3am\n❯ 1. Wait\n")
+    srv = _Srv(monkeypatch, "Claude usage limit reached · resets 3am\n❯ 1. Wait\n")
     out = agent_state._idle_or_limit(srv, "s", "s", None, force=True)
     assert out == "limit"
     assert srv.captures == 1, "the throttle was bypassed"
@@ -462,7 +466,7 @@ def test_first_idle_after_a_turn_probes_the_pane_fresh(monkeypatch):
 def test_steady_state_idle_keeps_the_throttle(monkeypatch):
     monkeypatch.setattr(agent_state.time, "time", lambda: 1000.0)
     agent_state._LIMIT_PROBE["s"] = {"at": 999.0, "limit": False}
-    srv = _Srv("Claude usage limit reached\n")
+    srv = _Srv(monkeypatch, "Claude usage limit reached\n")
     out = agent_state._idle_or_limit(srv, "s", "s", None)
     assert out == "idle", "cached verdict served — no banner known yet"
     assert srv.captures == 0, "one capture per _LIMIT_RECHECK_S, as before"
@@ -475,7 +479,7 @@ def test_a_forced_miss_does_not_buy_the_throttle_a_fresh_window(monkeypatch):
     # the fast dwell announces a limit-cut turn as finished.
     monkeypatch.setattr(agent_state.time, "time", lambda: 1000.0)
     agent_state._LIMIT_PROBE.pop("s", None)
-    srv = _Srv("a plain prompt, banner not painted yet\n")
+    srv = _Srv(monkeypatch, "a plain prompt, banner not painted yet\n")
     assert agent_state._idle_or_limit(srv, "s", "s", None, force=True) == "idle"
     # A fresh cache seeded 0.5s ago (the pre-turn steady-state probe):
     agent_state._LIMIT_PROBE["s"] = {"at": 999.5, "limit": False}
@@ -486,7 +490,7 @@ def test_a_forced_miss_does_not_buy_the_throttle_a_fresh_window(monkeypatch):
         "cadence instead of trusting a possibly pre-banner frame for 15s"
     )
     # And the banner painting late is caught by that very next poll.
-    srv2 = _Srv("Claude usage limit reached · resets 3am\n")
+    srv2 = _Srv(monkeypatch, "Claude usage limit reached · resets 3am\n")
     assert agent_state._idle_or_limit(srv2, "s", "s", None) == "limit"
 
 
