@@ -35,6 +35,7 @@ import {
   type WaitAction,
 } from "./outbox";
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
+import { releaseChoices } from "../../lib/splitRun";
 import type { RunInfo } from "../../lib/runs";
 
 /** Take the user to a session's pane (optionally a tab of it), closing any
@@ -76,8 +77,18 @@ function doWaitAction(key: WaitAction["key"], w: OutboxWaiting, runId: string, t
       return act("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
     case "approve":
       return act("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-    case "release":
-      return act("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
+    case "release": {
+      // The same words as the button: a push-only lane or a local-folder
+      // origin pushes the branch and opens no PR.
+      const pushOnly = !!w.preview?.local_origin || w.preview?.lane === "push";
+      const what = releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR";
+      return act(
+        what,
+        runPath(runId, "/release"),
+        { merge_when_green: false },
+        pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR"
+      );
+    }
     case "release_merge":
       return act(
         "Open PR",

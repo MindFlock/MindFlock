@@ -25677,7 +25677,7 @@ function shipLine(row, opts = {}) {
 	const reason = String(task?.reason || "");
 	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the bell", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
 	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
-	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
 	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
 	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
 	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
@@ -25701,7 +25701,8 @@ function shipLine(row, opts = {}) {
 	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
 		const s = stageRank(stage);
 		const note = String(ap?.note || "");
-		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+		const verb = ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging";
+		return line("⇡ " + verb, "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is " + verb + ".");
 	}
 	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — approve in the bell", "rep-ask", "approve", "It stopped where you asked: the bell shows the commit message and PR title before anything is pushed.");
 	let rest;
@@ -28685,7 +28686,15 @@ function queuedTitle(t) {
 	return ref || text || t.title || "queued line";
 }
 function shippedBadge(g) {
-	return g.shipped + "/" + g.total + " shipped";
+	return g.shipped + "/" + g.total + " done";
+}
+function laneDoneWord(lane) {
+	return {
+		commit: "committed",
+		push: "pushed",
+		pr: "PR opened",
+		merge: "merged"
+	}[lane] || "done";
 }
 function groupTitle(g) {
 	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
@@ -28749,7 +28758,7 @@ function runNote(event, data, info = {}) {
 			const shipped = num$4(d.shipped);
 			const failed = num$4(d.failed);
 			const lane = info.lane?.(run) || "";
-			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
 			const what = str$4(d.outcome) || shipped + word;
 			return {
 				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
@@ -28761,8 +28770,10 @@ function runNote(event, data, info = {}) {
 		}
 		case "run.task_shipped": {
 			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
+			const lane = info.lane?.(run) || "";
+			const did = m ? (lane === "merge" ? "merged" : "opened") + " PR #" + m[1] : laneDoneWord(lane);
 			return {
-				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				text: name + ": " + who + " " + did,
 				cls: "n-done",
 				run,
 				dedupe: [
@@ -32898,7 +32909,10 @@ function doWaitAction(key, w, runId, taskId) {
 		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
 		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
 		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
-		case "release": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the team run");
+		case "release": {
+			const pushOnly = !!w.preview?.local_origin || w.preview?.lane === "push";
+			return runAction(releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR", runPath(runId, "/release"), { merge_when_green: false }, pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR");
+		}
 		case "release_merge": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
 		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
 		case "cancel_group": return cancelRun(runId, w.run?.name || "");
@@ -35143,7 +35157,7 @@ function TopBar() {
 							id: "verify-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Verify — shipped changes nobody has checked (Alt+V)",
+							title: "Verify — merged changes nobody has checked (Alt+V)",
 							onClick: () => ui.openDialogFor("verify"),
 							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "tb-count",
