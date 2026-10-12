@@ -21,11 +21,10 @@ from __future__ import annotations
 import datetime as _datetime
 import json
 import os
-import subprocess
 import sys
 import time
 
-from backend import config, log, session
+from backend import config, gitutil, log, session
 
 
 def _server():
@@ -163,26 +162,8 @@ def _branch_exists(repo: str, branch: str) -> bool:
     ``git show-ref``). False when either is unknown or git fails."""
     if not repo or not branch or not os.path.isdir(repo):
         return False
-    try:
-        return (
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    repo,
-                    "show-ref",
-                    "--verify",
-                    "--quiet",
-                    "refs/heads/" + branch,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            ).returncode
-            == 0
-        )
-    except Exception:  # noqa: BLE001 — no git / timeout = "can't say it does"
-        return False
+    # No git / timeout = "can't say it does".
+    return gitutil.ref_exists(repo, "refs/heads/" + branch, timeout=10)
 
 
 def record_missing_workspace(data) -> None:

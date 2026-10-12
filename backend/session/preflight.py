@@ -22,9 +22,10 @@ whole preflight is bounded to well under a second on any real repo.
 from __future__ import annotations
 
 import os
-import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
+
+from backend import gitutil
 
 __all__ = ["Issue", "repo_issues", "blocking_error"]
 
@@ -47,21 +48,14 @@ class Issue:
         return text
 
 
-def _git(repo: str, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", repo, *args],
-        capture_output=True,
-        text=True,
-        timeout=_GIT_TIMEOUT_S,
-    )
+def _git(repo: str, *args: str) -> gitutil.GitResult:
+    """Never raises: a hung or missing git is ``timed_out`` / ``not_run``."""
+    return gitutil.git(args, repo, timeout=_GIT_TIMEOUT_S)
 
 
 def _git_dir(repo: str) -> Optional[str]:
     """The repo's .git directory (absolute), or None when not a git repo."""
-    try:
-        cp = _git(repo, "rev-parse", "--git-dir")
-    except (OSError, subprocess.SubprocessError):
-        return None
+    cp = _git(repo, "rev-parse", "--git-dir")
     if cp.returncode != 0:
         return None
     path = cp.stdout.strip()
@@ -134,9 +128,8 @@ def repo_issues(repo_path: str) -> List[Issue]:
             )
 
     # --- no commits yet -------------------------------------------------------
-    try:
-        head = _git(repo, "rev-parse", "--verify", "-q", "HEAD")
-    except (OSError, subprocess.SubprocessError):
+    head = _git(repo, "rev-parse", "--verify", "-q", "HEAD")
+    if head.timed_out or head.not_run:
         return issues + [
             Issue("git-failed", "block", f"git failed probing {repo} — is git working?")
         ]
@@ -153,20 +146,17 @@ def repo_issues(repo_path: str) -> List[Issue]:
         return issues  # everything below needs a HEAD
 
     # --- detached HEAD (warn: the fork works, but off a commit, not a branch) --
-    try:
-        sym = _git(repo, "symbolic-ref", "-q", "HEAD")
-        if sym.returncode != 0:
-            issues.append(
-                Issue(
-                    "detached-head",
-                    "warn",
-                    f"{repo} is on a detached HEAD — the session forks the "
-                    "current commit, not a branch tip.",
-                    f"git -C {repo} switch <branch>  # if you meant a branch",
-                )
+    sym = _git(repo, "symbolic-ref", "-q", "HEAD")
+    if sym.returncode != 0 and not (sym.timed_out or sym.not_run):
+        issues.append(
+            Issue(
+                "detached-head",
+                "warn",
+                f"{repo} is on a detached HEAD — the session forks the "
+                "current commit, not a branch tip.",
+                f"git -C {repo} switch <branch>  # if you meant a branch",
             )
-    except (OSError, subprocess.SubprocessError):
-        pass
+        )
 
     # --- shallow clone (warn: worktrees work; history-dependent flows may not) -
     if os.path.exists(os.path.join(git_dir, "shallow")):

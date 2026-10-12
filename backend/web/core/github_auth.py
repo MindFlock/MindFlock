@@ -63,7 +63,7 @@ import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
-from backend import git_auth_hints
+from backend import git_auth_hints, gitutil
 
 #: Where to make a token by hand: classic PAT, scopes pre-ticked.
 TOKEN_URL = (
@@ -481,20 +481,11 @@ def import_gh_token() -> dict:
 def _git(
     *args: str, cwd: Optional[str] = None, timeout: float = 10.0
 ) -> Tuple[int, str, str]:
-    env = dict(os.environ, **git_auth_hints.NO_PROMPT_ENV)
-    try:
-        cp = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
+    cp = gitutil.git(args, cwd, timeout=timeout, env=git_auth_hints.NO_PROMPT_ENV)
+    if cp.timed_out:
         return 124, "", "timed out"
-    except OSError as err:
-        return 127, "", str(err)
+    if cp.not_run:
+        return 127, "", cp.stderr
     return cp.returncode, cp.stdout.strip(), cp.stderr.strip()
 
 

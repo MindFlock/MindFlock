@@ -47,6 +47,7 @@ import threading
 import time
 from typing import IO, Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from backend import gitutil
 from backend.fsutil import atomic_write_bytes
 
 
@@ -123,18 +124,8 @@ def _feed_path(tmux_name: str) -> str:
 def _git(wt: str, *args: str, timeout: float = 60) -> Optional[bytes]:
     """stdout of ``git -C wt <args>``, or None on any failure (non-zero exit,
     timeout, git missing). Callers treat None as "unknown", never as empty."""
-    try:
-        cp = subprocess.run(
-            ["git", "-C", wt, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    if cp.returncode != 0:
-        return None
-    return cp.stdout
+    cp = gitutil.git(args, wt, timeout=timeout, text=False, stderr=subprocess.DEVNULL)
+    return cp.stdout if cp.returncode == 0 else None
 
 
 def _rev(rev: Any) -> Optional[str]:

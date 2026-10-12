@@ -32,7 +32,7 @@ from typing import Dict, Optional, Tuple
 
 from fastapi.responses import JSONResponse
 
-from backend import log
+from backend import gitutil, log
 from backend.session import tmux
 from backend.session.storage import Loading, Paused
 from backend.web.core import events as _events
@@ -913,34 +913,23 @@ def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
         if path:
             live.add(os.path.abspath(path))
 
-    try:
-        out = subprocess.run(
-            ["git", "-C", repo, "worktree", "list", "--porcelain"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            timeout=30,
-        )
-    except Exception:  # noqa: BLE001
-        return ""
-    if out.returncode != 0:
+    worktrees = gitutil.worktree_list(repo, timeout=30)
+    if worktrees is None:
         return ""
 
     def _remove(path: str, branch: str) -> None:
-        for argv in (
-            ["git", "-C", repo, "worktree", "remove", "--force", path],
-            ["git", "-C", repo, "worktree", "prune"],
-        ) + ((["git", "-C", repo, "branch", "-D", branch],) if branch else ()):
-            try:
-                subprocess.run(
-                    argv,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL,
-                    timeout=60,
-                )
-            except Exception:  # noqa: BLE001 — best effort, in order
-                pass
+        # Best effort, in order (a failed step never raises).
+        for args in (
+            ["worktree", "remove", "--force", path],
+            ["worktree", "prune"],
+        ) + ((["branch", "-D", branch],) if branch else ()):
+            gitutil.git(
+                args,
+                repo,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+            )
 
     # The directory name a worktree for THIS session would have:
     # ``<worktrees dir>/<sanitized branch>_<hex>``, so the basename is the last
@@ -949,22 +938,10 @@ def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
     leaf = want.rsplit("/", 1)[-1] + "_"
 
     freed = ""
-    path = ""
-    detached = False
-    for line in out.stdout.decode("utf-8", "replace").splitlines() + [""]:
-        if line.startswith("worktree "):
-            path = line[len("worktree ") :].strip()
-            detached = False
-            continue
-        if line.strip() == "detached":
-            detached = True
-            continue
-        branch = ""
-        if line.startswith("branch "):
-            branch = line[len("branch ") :].strip().split("refs/heads/", 1)[-1]
-        elif line.strip():
-            continue
-        # End of this worktree's block (a blank line), or its branch line.
+    for wt in worktrees:
+        path = str(wt["path"])
+        detached = bool(wt.get("detached"))
+        branch = str(wt.get("branch") or "").split("refs/heads/", 1)[-1]
         if not path:
             continue
         # A LEFTOVER IS NOT ALWAYS ON ITS BRANCH, and that is the case this
@@ -980,9 +957,6 @@ def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
             (detached or not branch) and os.path.basename(path).startswith(leaf)
         )
         if not mine:
-            if branch or not line.strip():
-                path = ""
-                detached = False
             continue
         if os.path.abspath(path) in live:
             # An agent is in there right now. Whatever is wrong, this is not
@@ -990,8 +964,6 @@ def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
             return ""
         _remove(path, branch if branch == want else "")
         freed = ("%s (%s)" % (branch, path)) if branch else path
-        path = ""
-        detached = False
     return freed
 
 

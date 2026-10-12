@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from typing import Dict, List, Optional
+
+from backend import gitutil
 
 __all__ = [
     "merge_into",
@@ -71,18 +72,10 @@ def _identity() -> List[str]:
 
 
 def _git(path: str, *args: str, timeout: int = _GIT_TIMEOUT_S):
-    """``git -C path args`` → CompletedProcess, or None when git could not run."""
-    env = dict(os.environ)
-    env.update(_ENV)
-    try:
-        return subprocess.run(
-            ["git", "-C", path, *args],
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    """``git -C path args`` → CompletedProcess (bytes), or None when git could
+    not run (missing, or killed at ``timeout``)."""
+    cp = gitutil.git(args, path, timeout=timeout, env=_ENV, text=False)
+    return None if cp.timed_out or cp.not_run else cp
 
 
 def _out(cp) -> str:
@@ -418,16 +411,8 @@ def _literal_env() -> dict:
 
 
 def _git_env(path: str, args, env: dict, timeout: int = _GIT_TIMEOUT_S, data=None):
-    try:
-        return subprocess.run(
-            ["git", "-C", path, *args],
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            input=data,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    cp = gitutil.git(args, path, timeout=timeout, env=env, text=False, input=data)
+    return None if cp.timed_out or cp.not_run else cp
 
 
 def changed_paths(path: str) -> Optional[List[str]]:
