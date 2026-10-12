@@ -3,7 +3,7 @@
  * A split / one-for-all group is a family under its lead (lib/runs.ts never
  * gives it a header), so its finish toast and bell row land on the lead's
  * Thread tab (lib/showGroup.ts), and that Thread holds what a header's ⋯
- * would: a queued piece's Start now / Remove and a finished group's Copy
+ * would: a queued piece's Start now / Take out of run and a finished group's Copy
  * summary (RunLeadPanel). A header's Copy summary outlives the outbox's
  * week of summaries by reading the run's own record. */
 import { createElement } from "react";
@@ -149,7 +149,7 @@ describe("RunLeadPanel: a headerless group's ⋯ items, on its lead's Thread", (
   const render = (run: RunDTO) =>
     renderToStaticMarkup(createElement(RunLeadPanel, { title: "auth-lead", me: undefined, run, rows: [] }));
 
-  it("a queued piece has Start now and Remove; a working one has neither", () => {
+  it("a queued piece has Start now and Take out of run; a working one has neither", () => {
     const html = render(dto({}));
     expect(html.match(/rb-start-now/g)?.length).toBe(1);
     expect(html.match(/rb-remove/g)?.length).toBe(1);

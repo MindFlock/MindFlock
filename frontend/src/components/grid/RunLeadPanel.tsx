@@ -210,7 +210,7 @@ export function RunLeadPanel({
       verb === "skip" ? "Take out of run" : "Start now",
       taskPath(id, t.id, verb),
       {},
-      verb === "skip" ? "Took " + name + " out of the run" : "Starting " + name,
+      verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name,
     ).finally(() => setBusy(""));
   };
   const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");

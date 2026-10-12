@@ -2611,7 +2611,7 @@ work; each thing it held now lives elsewhere:
 
 - what needs you (answers, ask-first approvals, escalations, a lead's plan
   or PR) — the bell's **Needs you** (see [Notifications](#notifications-));
-- a team run's queued lines (**Start now** / **Remove**) — the team run header's ⋯
+- a team run's queued lines (**Start now** / **Take out of run**) — the team run header's ⋯
   menu (below); for a split or one-for-all team run, which has no header, the
   same buttons sit on each queued piece in its lead's Thread tab;
 - a finished team run's summary — **Copy summary** in that same menu, or at the
@@ -2625,7 +2625,7 @@ The *Shipped today* log is gone; a session's PR and checks stay on its row.
 Sessions started together sit under a team run header — the same header family
 as device groups: `▾ Q4 PAYMENTS → PR (1) 1/6 shipped`. The gold badge is how
 many need you; a click folds the team run, and **⋯** on hover has Pause / Resume,
-Add lines…, the queued lines (**Start now** / **Remove**) and Cancel… (an
+Add lines…, the queued lines (**Start now** / **Take out of run**) and Cancel… (an
 inline confirm; sessions and branches are kept). Once the team run has finished,
 the menu has **Copy summary** instead: it copies the team run's summary as
 Markdown (*Copied the summary as Markdown*). The bell's cached copy covers a

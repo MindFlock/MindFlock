@@ -22,6 +22,7 @@ import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
 import { notePrefWrite, THEME_CHANGED } from "../lib/prefs";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
+import { openSettings } from "../lib/openSettings";
 
 function applyTheme(light: boolean) {
   document.documentElement.classList.toggle("light", light);
@@ -216,7 +217,7 @@ export function TopBar() {
             type="button"
             title="Settings"
             aria-label="Open settings"
-            onClick={() => ui.openDialogFor("settings")}
+            onClick={() => openSettings()}
           >
             Settings
           </button>

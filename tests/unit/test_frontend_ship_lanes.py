@@ -222,7 +222,7 @@ def test_a_finished_groups_menu_copies_its_summary():
     assert '"Copied the summary as Markdown"' in menu
     assert '"MindFlock has no summary for this team run"' in menu
     assert "No summary for this group yet" not in js
-    # Queued lines keep their Start now / Remove here.
+    # Queued lines keep their Start now / Take out of run here.
     assert 'taskPath(id, t.id, "start-now")' in menu
     assert 'taskPath(id, t.id, "skip")' in menu
     find = squash(_fn(js, "summaryFor"))

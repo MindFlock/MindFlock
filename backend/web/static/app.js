@@ -35437,7 +35437,7 @@ function TopBar() {
 							type: "button",
 							title: "Settings",
 							"aria-label": "Open settings",
-							onClick: () => ui.openDialogFor("settings"),
+							onClick: () => openSettings(),
 							children: "Settings"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -38113,14 +38113,14 @@ function VerifyBar() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "verify-bar",
-		title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
+		title: "Verify — writes a checklist when a session branch is pushed, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				id: "verify-dot",
 				className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
 				role: "img",
-				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
-				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch ships, and nothing new turns up to check" : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+				"aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " pushed " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
+				title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " pushed change" : " pushed changes") + " did not do what its checklist expected — open Verify to see which step, and what was observed" : !on ? "Switched off — nothing is written when a branch is pushed, and nothing new turns up to check" : due ? due + (due === 1 ? " pushed change has" : " pushed changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch is pushed"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				id: "verify-plans-btn",
@@ -38501,8 +38501,8 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 						type: "button",
 						disabled: busy,
 						title: "Take it out of the team run — it never starts",
-						onClick: () => go(() => runAction("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t))),
-						children: "Remove"
+						onClick: () => go(() => runAction("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run")),
+						children: "Take out of run"
 					})
 				]
 			}, t.id))] }),
@@ -43261,7 +43261,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 		if (busy) return;
 		setBusy(verb + ":" + t.id);
 		const name = pieceLabel(t, run).name;
-		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the run" : "Starting " + name).finally(() => setBusy(""));
+		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name).finally(() => setBusy(""));
 	};
 	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -63142,7 +63142,7 @@ function Seg({ value, options, onChange, label, id }) {
 	});
 }
 function FastTrackChoice({ id, label, value, onChange, askFirst, onAskFirst, lanes = LANE_CHOICES, laneLabel, laneTitle, disabledReason, askReason }) {
-	const askWhy = askReason || (askFirstApplies(value) ? "" : "Nothing ships while fast-track is off");
+	const askWhy = askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
 		id,
 		label,
