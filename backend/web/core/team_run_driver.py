@@ -3,7 +3,7 @@ the routes perform.
 
 :mod:`backend.web.core.team_runs` holds the record and the pure planner. This
 module is the loop that gives it effect, structured like the autopilot driver
-in ``server.py``: a 5s pass (plus a wake-up when a route changed something),
+(``core.autopilot_driver``): a 5s pass (plus a wake-up when a route changed something),
 one lease per run so two servers never drive the same one, every step wrapped
 so one bad run cannot stop the pass.
 

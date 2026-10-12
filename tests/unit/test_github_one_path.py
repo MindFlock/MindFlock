@@ -431,6 +431,8 @@ class TestRemedies:
         "rel",
         [
             "backend/web/server.py",
+            "backend/web/core/autopilot_driver.py",
+            "backend/web/core/test_plans_driver.py",
             "backend/web/addons/connections.py",
             "backend/web/addons/settings.py",
             "backend/ticket_ingestion/providers/github_issues.py",
