@@ -170,10 +170,6 @@ def MakePtyFactory() -> PtyFactory:
     return Pty()
 
 
-# snake_case alias for Pythonic call sites.
-make_pty_factory = MakePtyFactory
-
-
 class Winsize:
     """Python mirror of creack/pty's ``Winsize`` struct.
 
@@ -219,17 +215,11 @@ def set_size(f, ws: Winsize) -> Optional[Exception]:
     return None
 
 
-# Go-cased alias to mirror the creack/pty call site exactly.
-Setsize = set_size
-
-
 __all__ = [
     "PtyFile",
     "PtyFactory",
     "Pty",
     "MakePtyFactory",
-    "make_pty_factory",
     "Winsize",
     "set_size",
-    "Setsize",
 ]

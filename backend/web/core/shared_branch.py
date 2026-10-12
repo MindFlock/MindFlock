@@ -490,12 +490,6 @@ def drop(title: str) -> None:
     set_shared(title, "", "")
 
 
-def remote_for(title: str) -> str:
-    """The remote a session pushes to and rebases from."""
-    s = shared(title)
-    return (s or {}).get("remote") or "origin"
-
-
 def forget_worktree(wt: str) -> None:
     with _LOCK:
         _BEHIND.pop(wt, None)

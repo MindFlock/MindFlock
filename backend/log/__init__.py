@@ -31,12 +31,9 @@ __all__ = [
     "InfoLog",
     "ErrorLog",
     "Initialize",
-    "initialize",
     "Close",
-    "close",
     "Every",
     "NewEvery",
-    "new_every",
 ]
 
 # var logFileName = filepath.Join(os.TempDir(), "mindflock.log")
@@ -298,9 +295,3 @@ class Every:
 def NewEvery(timeout: float) -> Every:
     """Construct an :class:`Every` throttle with the given timeout (seconds)."""
     return Every(timeout)
-
-
-# snake_case aliases for Pythonic call sites.
-initialize = Initialize
-close = Close
-new_every = NewEvery

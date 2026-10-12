@@ -550,13 +550,6 @@ class Storage:
         """Remove all stored instances (Go ``DeleteAllInstances``)."""
         self.state.DeleteAllInstances()
 
-    # snake_case aliases
-    save_instances = SaveInstances
-    load_instances = LoadInstances
-    delete_instance = DeleteInstance
-    update_instance = UpdateInstance
-    delete_all_instances = DeleteAllInstances
-
 
 def new_storage(state) -> Storage:
     """Create a new :class:`Storage` (Go ``NewStorage``). Never fails."""

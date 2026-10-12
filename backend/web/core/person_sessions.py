@@ -106,8 +106,3 @@ def rename(old: str, new: str) -> int:
             return len(hits)
     except Exception:  # noqa: BLE001
         return 0
-
-
-def all_people() -> Dict[str, str]:
-    with _LOCK:
-        return dict(_load())

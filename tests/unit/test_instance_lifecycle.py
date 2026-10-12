@@ -25,7 +25,6 @@ from backend.session.instance import (
     Instance,
     InstanceOptions,
     _current_branch_of,
-    _remove_all,
     from_instance_data,
     new_instance,
 )
@@ -652,18 +651,16 @@ def test_pause_keeps_the_worktree_and_makes_no_commit():
     assert wt.calls == []
 
 
-def test_pause_stops_the_agent_even_when_the_worktree_is_orphaned(monkeypatch):
+def test_pause_stops_the_agent_even_when_the_worktree_is_orphaned():
     """An orphaned checkout (path or .git gone) is still only paused: nothing
     is deleted or pruned — Resume's legacy path rebuilds it."""
     inst = _started_instance()
     wt = FakeWorktree(valid=False)
     inst._git_worktree = wt
-    removed = []
-    monkeypatch.setattr(inst_mod, "_remove_all", lambda p: removed.append(p))
     inst.Pause()
     assert inst.Status == Status.Paused
     assert "close" in inst._tmux_session.calls
-    assert removed == [] and wt.calls == []
+    assert wt.calls == []
 
 
 def test_pause_copies_the_branch_name(monkeypatch):
@@ -1035,37 +1032,6 @@ def test_current_branch_of_empty_on_nonzero(monkeypatch):
 
     monkeypatch.setattr(inst_mod.subprocess, "run", lambda *a, **k: _R())
     assert _current_branch_of("/x") == ""
-
-
-def test_remove_all_file_dir_and_absent(tmp_path):
-    # File.
-    f = tmp_path / "f.txt"
-    f.write_text("x")
-    _remove_all(str(f))
-    assert not f.exists()
-
-    # Directory tree.
-    d = tmp_path / "d"
-    (d / "sub").mkdir(parents=True)
-    (d / "sub" / "g.txt").write_text("y")
-    _remove_all(str(d))
-    assert not d.exists()
-
-    # Absent path is a silent no-op.
-    _remove_all(str(tmp_path / "never"))
-
-
-def test_remove_all_symlink(tmp_path):
-    import os
-
-    target = tmp_path / "target"
-    target.mkdir()
-    link = tmp_path / "link"
-    os.symlink(str(target), str(link))
-    _remove_all(str(link))
-    assert not link.exists()
-    # The symlink target survives (only the link was removed).
-    assert target.exists()
 
 
 def test_clipboard_write_swallows_errors(monkeypatch):

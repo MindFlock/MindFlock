@@ -28,30 +28,9 @@ from backend.web.core.find_query import Hit, Query, find_hits
 # The tmux invocation; tests point it at a private server (``-L``).
 TMUX = ["tmux"]
 
-_CURSOR_FMT = (
-    "#{pane_in_mode}\t#{history_size}\t#{scroll_position}"
-    "\t#{copy_cursor_y}\t#{copy_cursor_x}"
-)
-
 
 def _tmux(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([*TMUX, *args], capture_output=True, text=True, timeout=10)
-
-
-def _cursor(name: str) -> Optional[tuple[bool, int, int]]:
-    """(in copy-mode, absolute cursor line counted from the oldest history
-    line, cursor column), or None when tmux can't answer."""
-    out = _tmux("display-message", "-p", "-t", name, _CURSOR_FMT)
-    if out.returncode != 0:
-        return None
-    try:
-        # rstrip("\n"), not strip(): out of copy-mode the cursor fields are
-        # empty, and strip() would eat their tab separators.
-        fields = out.stdout.rstrip("\n").split("\t")
-        mode, hist, pos, cy, cx = (int(v or 0) for v in fields)
-    except ValueError:
-        return None
-    return bool(mode), hist - pos + cy, cx
 
 
 def _capture(name: str) -> Optional[list[str]]:

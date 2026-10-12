@@ -60,8 +60,6 @@ JUMP_TICKS = 120  # burst size when running to an end without reading
 REDRAW_S = 0.15  # how long an app gets to react to one notch
 MAX_CHROME = 10  # rows at the bottom (input box, status) that can be chrome
 
-Hit = tuple[int, int]  # (index line, column)
-
 
 def _tmux(*args: str):
     return _pf._tmux(*args)
@@ -70,25 +68,6 @@ def _tmux(*args: str):
 # --------------------------------------------------------------------------- #
 # Pure screen logic
 # --------------------------------------------------------------------------- #
-
-
-def find_row_hits(lines: list[str], query: str, rows: range) -> list[Hit]:
-    """``(row, col)`` of every hit in ``rows`` of ``lines``, top-down, under
-    the same smart-case rule as the tmux path (all-lowercase ignores case)."""
-    if not query:
-        return []
-    fold = query == query.lower()
-    q = query.lower() if fold else query
-    out: list[Hit] = []
-    for r in rows:
-        if not 0 <= r < len(lines):
-            continue
-        hay = lines[r].lower() if fold else lines[r]
-        j = hay.find(q)
-        while j >= 0:
-            out.append((r, j))
-            j = hay.find(q, j + 1)
-    return out
 
 
 def _unique(rows: list[str]) -> dict[str, int]:

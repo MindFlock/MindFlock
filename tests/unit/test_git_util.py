@@ -54,7 +54,6 @@ def test_sanitize_backslash_domain_user_is_stripped():
 def test_sanitize_go_aliases_are_same_function():
     assert util.sanitizeBranchName is util.sanitize_branch_name
     assert util.checkGHCLI is util.check_gh_cli
-    assert util.IsGitRepo is util.is_git_repo
     assert util.findGitRepoRoot is util.find_git_repo_root
 
 

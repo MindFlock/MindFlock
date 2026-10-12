@@ -20,7 +20,6 @@ __all__ = [
     "check_gh_cli",
     "checkGHCLI",
     "gh_available",
-    "IsGitRepo",
     "is_git_repo",
     "find_git_repo_root",
     "findGitRepoRoot",
@@ -189,5 +188,4 @@ def _trim_prefix(s: str, prefix: str) -> str:
 # Go-name aliases so the package namespace mirrors the Go package.
 sanitizeBranchName = sanitize_branch_name
 checkGHCLI = check_gh_cli
-IsGitRepo = is_git_repo
 findGitRepoRoot = find_git_repo_root

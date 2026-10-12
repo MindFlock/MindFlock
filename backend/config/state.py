@@ -40,11 +40,8 @@ __all__ = [
     "StateManager",
     "State",
     "DefaultState",
-    "default_state",
     "LoadState",
-    "load_state",
     "SaveState",
-    "save_state",
     "state_file_lock",
 ]
 
@@ -386,12 +383,6 @@ class State(StateManager):
         self.help_screens_seen = seen
         SaveState(self)
 
-    # snake_case aliases
-    save_instances = SaveInstances
-    get_instances = GetInstances
-    delete_all_instances = DeleteAllInstances
-    set_help_screens_seen = SetHelpScreensSeen
-
 
 # ---------------------------------------------------------------------------
 # Module-level functions
@@ -515,9 +506,3 @@ def SaveState(state: State) -> None:
     data = state.marshal_indent()
     with state_file_lock():
         _write_file(state_path, data, 0o644)
-
-
-# snake_case aliases for Pythonic call sites.
-default_state = DefaultState
-load_state = LoadState
-save_state = SaveState

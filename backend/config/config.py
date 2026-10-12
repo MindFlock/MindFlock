@@ -32,15 +32,10 @@ __all__ = [
     "Profile",
     "Config",
     "GetConfigDir",
-    "get_config_dir",
     "GetClaudeCommand",
-    "get_claude_command",
     "DefaultConfig",
-    "default_config",
     "LoadConfig",
-    "load_config",
     "SaveConfig",
-    "save_config",
     "marshal_indent",
 ]
 
@@ -140,9 +135,6 @@ class Config:
             if p.name == self.default_program:
                 return p.program
         return self.default_program
-
-    # snake_case aliases
-    get_program = GetProgram
 
     # --- JSON ----------------------------------------------------------------
     def to_dict(self) -> dict:
@@ -410,11 +402,3 @@ def _write_file(path: str, data: bytes, mode: int) -> None:
     atomic_write_bytes(
         path, data, mode=mode, prefix=os.path.basename(path) + ".tmp.", suffix=""
     )
-
-
-# snake_case aliases for Pythonic call sites.
-get_config_dir = GetConfigDir
-get_claude_command = GetClaudeCommand
-default_config = DefaultConfig
-load_config = LoadConfig
-save_config = SaveConfig

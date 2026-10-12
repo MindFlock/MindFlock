@@ -3,7 +3,7 @@
 Manages the lifecycle of a tmux session that runs an AI program (claude,
 aider). Faithfully mirrors the Go ``TmuxSession`` type: byte-exact tmux argv,
 session-name sanitization, trust-prompt handling, pane capture, PTY keystrokes,
-attach/detach concurrency and cleanup, plus the package-level ``CleanupSessions``.
+attach/detach concurrency and cleanup, plus the package-level ``cleanup_sessions``.
 
 Dependency mapping:
 - ``mindflock/cmd`` (Executor / exec.Command / ToString) -> :mod:`backend.cmd`.
@@ -747,10 +747,6 @@ def cleanup_sessions(cmd_exec: cmd_pkg.Executor) -> Optional[Exception]:
     return None
 
 
-# Go-cased alias.
-CleanupSessions = cleanup_sessions
-
-
 __all__ = [
     "ProgramClaude",
     "ProgramAider",
@@ -761,5 +757,4 @@ __all__ = [
     "NewTmuxSession",
     "NewTmuxSessionWithDeps",
     "cleanup_sessions",
-    "CleanupSessions",
 ]

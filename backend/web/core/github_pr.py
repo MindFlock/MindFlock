@@ -680,15 +680,3 @@ def pr_review_state_sync(wt: str, number: Optional[int]) -> str:
         return _run_sync(pr_review_state(wt, number))
     except Exception:  # noqa: BLE001
         return ""
-
-
-def pr_checks_sync(wt: str, branch: str) -> str:
-    """:func:`pr_checks` for synchronous callers (the autopilot snapshot).
-
-    Any failure answers ``"unknown"``, never ``"ok"`` — the caller uses this to
-    decide whether to MERGE, so an error must never be mistaken for a green light.
-    """
-    try:
-        return _run_sync(pr_checks(wt, branch))
-    except Exception:  # noqa: BLE001
-        return "unknown"
