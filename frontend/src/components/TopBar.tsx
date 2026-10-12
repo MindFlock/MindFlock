@@ -15,12 +15,11 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
-import { useTestPlans } from "../state/queries";
+import { useDoctor, useTestPlans } from "../state/queries";
 import { dueCount } from "./dialogs/verify";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
-import { api } from "../api/client";
 import { notePrefWrite, THEME_CHANGED } from "../lib/prefs";
 import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 
@@ -32,15 +31,21 @@ function applyTheme(light: boolean) {
  * desktop shell's: this frontend ships inside the engine wheel, so that string
  * is the provenance of the UI you're looking at and of the sessions behind it.
  * When the shell is a different release the drift toast (electron/main.js) says
- * so explicitly — this only has to answer "what am I running". Module-level so
- * a remount doesn't flash an empty slot; one fetch per page load, and the
- * server caches the payload anyway. */
-let engineVersion = "";
+ * so explicitly — this only has to answer "what am I running". Read from the
+ * shared doctor query (cached, so a remount doesn't flash an empty slot).
+ *
+ * A source tree with no installed dist reports "0+unknown" (see
+ * backend/__init__.py). Show nothing rather than a fake-looking version — such
+ * a run is a dev shell, which the -DEV badge marks. */
+function engineVersion(raw: string | undefined): string {
+  const v = (raw || "").trim();
+  return !v || !/^\d/.test(v) || v.startsWith("0+") ? "" : v;
+}
 
 export function TopBar() {
   const ui = useUi();
   const [light, setLight] = useState(() => document.documentElement.classList.contains("light"));
-  const [version, setVersion] = useState(engineVersion);
+  const version = engineVersion(useDoctor().data?.version);
   // How much verification is waiting on you, without opening the dialog. Same
   // query and same helper the dialog itself uses, so the badge and the list can
   // never disagree — the discipline the Intake tab counts follow. The top bar is
@@ -81,25 +86,6 @@ export function TopBar() {
       off();
     };
   }, [mac]);
-
-  useEffect(() => {
-    if (engineVersion) return; // already known this page load
-    let live = true;
-    api<{ version?: string }>("/api/doctor")
-      .then((d) => {
-        const v = (d?.version || "").trim();
-        // A source tree with no installed dist reports "0+unknown" (see
-        // backend/__init__.py). Show nothing rather than a fake-looking
-        // version — such a run is a dev shell, which the -DEV badge marks.
-        if (!v || !/^\d/.test(v) || v.startsWith("0+")) return;
-        engineVersion = v;
-        if (live) setVersion(v);
-      })
-      .catch(() => {}); // an unreachable backend is the conn-banner's job
-    return () => {
-      live = false;
-    };
-  }, []);
 
 
   const toggleTheme = () => {

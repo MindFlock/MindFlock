@@ -5,7 +5,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -25,6 +24,7 @@ import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
 import { deriveSessionState } from "../../lib/sessionState";
 import { reviveSession } from "../../lib/revive";
 import { sessionLabel } from "../../lib/sessionLabel";
+import { useNow } from "../../lib/useNow";
 import {
   PR_FALLBACK_HINT,
   cleanupMissing,
@@ -299,13 +299,7 @@ export const SidebarRow = memo(function SidebarRow({
   const subline = !editing && (ship || wline || roll || lline || lineage);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
-  const [, tick] = useReducer((n: number) => n + 1, 0);
-  const counting = wline?.state === "working" || ship?.state === "working";
-  useEffect(() => {
-    if (!counting) return;
-    const t = window.setInterval(tick, 30_000);
-    return () => clearInterval(t);
-  }, [counting]);
+  useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
   const folder = inst.folder || inst.path || "";
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.

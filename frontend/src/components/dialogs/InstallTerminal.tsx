@@ -13,15 +13,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import type { InstallStep } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { useWsTerm } from "../../lib/wsTerm";
 import { Modal } from "../Modal";
 
-export interface InstallStep {
-  id: string;
-  label: string;
-  cmd: string;
-}
+export type { InstallStep };
 
 interface InstallState {
   running: boolean;

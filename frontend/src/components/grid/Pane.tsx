@@ -285,11 +285,8 @@ export function Pane({
     if (!pinOpen || ghostIsLatest || ghostCore.length < 8) return;
     if (lookup?.q === ghostCore) return;
     let dead = false;
-    fetch(
-      `/api/instances/${encodeURIComponent(title)}/prompt?q=${encodeURIComponent(ghostCore)}`
-    )
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: { text?: string | null } | null) => {
+    instApi<{ text?: string | null } | null>(title, "/prompt?q=" + encodeURIComponent(ghostCore))
+      .then((j) => {
         if (!dead && j?.text) setLookup({ q: ghostCore, text: j.text });
       })
       .catch(() => {});

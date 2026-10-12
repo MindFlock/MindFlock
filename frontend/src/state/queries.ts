@@ -17,7 +17,9 @@ import type {
   Config,
   Json,
   DevicesResponse,
+  DoctorPayload,
   Instance,
+  MindflockStatus,
   TestPlansResponse,
   TicketingCatalogEntry,
   TicketingSource,
@@ -218,6 +220,49 @@ export function useAssistantActivity() {
     placeholderData: (prev) => prev,
     retry: false,
   });
+}
+
+/** GET /api/doctor — one cached payload for every reader (the sidebar's ⚠
+ * chip, the top bar's version, the state notice, the doctor list). The server
+ * caches the probe itself; `reprobeDoctor()` forces a fresh one (?refresh=1)
+ * and writes it here, so a re-probe from one screen updates them all.
+ * `refetchInterval` lets a reader keep it warm (the 5-min background probe);
+ * the interval pauses while the page is hidden. */
+export function useDoctor(opts: { enabled?: boolean; refetchInterval?: number | false } = {}) {
+  return useQuery({
+    queryKey: ["doctor"],
+    queryFn: () => api<DoctorPayload>("/api/doctor"),
+    enabled: opts.enabled ?? true,
+    refetchInterval: opts.refetchInterval ?? false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** Fresh doctor probe (GET /api/doctor?refresh=1), shared with useDoctor's
+ * readers. Rejects like api() does; the cache keeps its last good payload. */
+export async function reprobeDoctor(refresh = true): Promise<DoctorPayload> {
+  const d = await api<DoctorPayload>("/api/doctor" + (refresh ? "?refresh=1" : ""));
+  queryClient.setQueryData(["doctor"], d);
+  return d;
+}
+
+/** GET /api/mindflock/status — ticket ingestion + the PR / issue automation.
+ * ONE definition on purpose: the sidebar's two bars and Intake's tabs share
+ * this key, and a shared key with two different intervals lets whichever
+ * component mounted first decide the poll rate. 4s matches the sessions poll —
+ * the green window can be as short as one provisioning. */
+export function useMindflockStatus() {
+  return useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () => api<MindflockStatus>("/api/mindflock/status"),
+    refetchInterval: 4_000,
+    retry: false,
+  });
+}
+
+/** Pull fresh pipeline status now (after a start/stop/toggle). */
+export function refreshMindflockStatus() {
+  return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
 }
 
 export function useDevices() {

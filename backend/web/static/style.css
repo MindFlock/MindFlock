@@ -1,9 +1,3 @@
-/* The shell takes focus when a dialog opens without focusing anything itself
-   (components/Modal.tsx) — so the keyboard leaves the terminal. It is a
-   backdrop, not a control: no focus ring on it. */
-.modal:focus {
-  outline: none;
-}
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
    three-state pills, the action column, the fix line and the Test result. */
@@ -15663,6 +15657,17 @@ button.ct-chip:hover {
 }
 
 /* 170 */
+
+@layer components{
+/* The shell takes focus when a dialog opens without focusing anything itself
+   (components/Modal.tsx) — so the keyboard leaves the terminal. It is a
+   backdrop, not a control: no focus ring on it. */
+.modal:focus {
+  outline: none;
+}
+}
+
+/* the shared <Modal> shell, after the .modal backdrop it extends */
 
 @layer components{
 

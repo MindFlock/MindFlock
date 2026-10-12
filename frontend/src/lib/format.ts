@@ -33,12 +33,17 @@ export function provLabel(name: string | null | undefined): string {
   return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export function relTime(ts: number): string {
-  const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (secs < 60) return secs + "s ago";
-  if (secs < 3600) return Math.floor(secs / 60) + "m ago";
-  if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
-  return Math.floor(secs / 86400) + "d ago";
+/** "40s ago" / "6m ago" / "2h ago" / "3d ago" since `ts` (epoch seconds) —
+ * THE relative-time formatter. `suffix` replaces " ago": "" for the bare "6m"
+ * a status line wants ("working · 6m"), " old" for an item's age. `now` pins
+ * the clock (epoch seconds; default the real one). A future `ts` reads 0s. */
+export function relTime(ts: number, opts: { suffix?: string; now?: number } = {}): string {
+  const suffix = opts.suffix ?? " ago";
+  const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1000) - ts));
+  if (secs < 60) return secs + "s" + suffix;
+  if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
+  if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
+  return Math.floor(secs / 86400) + "d" + suffix;
 }
 
 /** Compact millisecond countdown ("2h 11m" / "~7m"), rounded to the nearest

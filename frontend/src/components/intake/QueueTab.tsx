@@ -22,9 +22,8 @@
  * auto-start is off, starting from here is the whole point.
  */
 
-import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { refreshInstances, usePanelQuery } from "../../state/queries";
+import { refreshInstances, useMindflockStatus, usePanelQuery } from "../../state/queries";
 import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
@@ -76,39 +75,6 @@ interface Section {
   runsOn?: string;
   items: QueuedItem[];
   note: string;
-}
-
-interface IngestionStatus {
-  available: boolean;
-  running: boolean;
-  desired?: boolean;
-  /** github.enabled AND repos configured, folded server-side. */
-  pr_enabled?: boolean;
-  issues_enabled?: boolean;
-  /** False when PR review and issue handling run on another of your devices
-   * (Settings → Your devices); `automation_device` names it ("" when unknown).
-   * Missing from an older server: read as "here". */
-  automation_here?: boolean;
-  automation_device?: string;
-  /** Set while the next ticket waits on engine.max_sessions. */
-  held_for_slot?: { live: number; max: number } | null;
-}
-
-/** One status call answers all three switches plus the engine.
- *
- * Same query key, same 4s interval as the switch on the Tickets tab and the
- * sidebar's AutomationBar — a shared key with two different intervals lets
- * whichever component mounted first decide the poll rate. Preferred over the
- * panels' own `enabled` flags because the server folds "switched on" and "has
- * repos" together in one place here, and because the engine state has to come
- * from here anyway. */
-function useIngestionStatus() {
-  return useQuery({
-    queryKey: ["mindflock-status"],
-    queryFn: () => api<IngestionStatus>("/api/mindflock/status"),
-    refetchInterval: 4_000,
-    retry: false,
-  });
 }
 
 /** The chip beside a section heading — one vocabulary for all three kinds. */
@@ -252,7 +218,12 @@ export function QueueTab({ gotoTab }: TabProps) {
   const ticketsQ = usePanelQuery<TicketsPayload>("tickets");
   const prsQ = usePanelQuery<PrsPayload>("github-prs");
   const issuesQ = usePanelQuery<IssuesPayload>("github-issues");
-  const statusQ = useIngestionStatus();
+  // One status call answers all three switches plus the engine — the shared
+  // query the Tickets tab's switch and the sidebar's AutomationBar read too.
+  // Preferred over the panels' own `enabled` flags because the server folds
+  // "switched on" and "has repos" together in one place here, and because the
+  // engine state has to come from here anyway.
+  const statusQ = useMindflockStatus();
   const status = statusQ.data;
   const engineAvailable = !!status?.available;
   // `desired` is the switch's own last position; `running` can lag it by a boot.

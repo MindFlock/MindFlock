@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { queryClient } from "../state/queries";
+import { useNow } from "../lib/useNow";
 
 declare global {
   interface Window {
@@ -21,7 +22,6 @@ export function ConnBanner() {
   const [evtDropped, setEvtDropped] = useState(false);
   const [diag, setDiag] = useState<{ state?: string; distro?: string } | null>(null);
   const [lostAt, setLostAt] = useState(0);
-  const [, setTick] = useState(0); // elapsed-label ticker
   const [fixArmed, setFixArmed] = useState(false);
   const [fixBusy, setFixBusy] = useState(false);
   const everConnected = useRef(false);
@@ -57,6 +57,7 @@ export function ConnBanner() {
   }, []);
 
   const lost = pollFails >= 2 || evtDropped;
+  const now = useNow(lost ? 1000 : false); // the elapsed label ticks while lost
 
   // Grid staleness dim + lost-at bookkeeping.
   useEffect(() => {
@@ -68,8 +69,6 @@ export function ConnBanner() {
       return;
     }
     setLostAt((t) => t || Date.now());
-    const tick = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(tick);
   }, [lost]);
 
   // Ask the desktop shell for a diagnosis while the server isn't answering.
@@ -115,7 +114,7 @@ export function ConnBanner() {
       "The live update stream dropped — the page may lag a few seconds behind. Reconnecting automatically.";
   }
 
-  const s = Math.max(0, Math.round((Date.now() - lostAt) / 1000));
+  const s = Math.max(0, Math.round((now - lostAt) / 1000));
   const elapsed = "Retrying… (" + (s < 90 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s") + ")";
 
   const canFix = !!(fixLabel && window.mfdiag?.restartWsl);

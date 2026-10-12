@@ -20,7 +20,7 @@ import { instApi } from "../../api/client";
 import { useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { effectiveActivity, stageMeta } from "../../lib/stage";
-import { errMsg } from "../../lib/format";
+import { errMsg, relTime } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { fetchDialog } from "../../lib/flockActions";
@@ -45,7 +45,6 @@ import {
   progressOf,
   reportedCount,
   sendPlan,
-  since,
   workerRows,
   workerStatus,
   type LogEntry,
@@ -732,7 +731,7 @@ function FinishedSection({ finished }: { finished: FinishedChild[] }) {
 function FinishedItem({ f }: { f: FinishedChild }) {
   const st = finishedStatus(f);
   const ds = diffText(f.diff_stat);
-  const ended = f.ended_at ? " " + since(f.ended_at) + " ago" : "";
+  const ended = f.ended_at ? " " + relTime(f.ended_at) : "";
   return (
     <div className={"th-worker th-gone is-" + (st.cls || "none")} data-title={f.title}>
       <div className="th-w-head">

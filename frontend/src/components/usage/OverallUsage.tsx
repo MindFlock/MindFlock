@@ -4,7 +4,8 @@
  * providerSummaryRow / periodRows / toggleOverallUsage (050-usage-cost.js).
  * /api/usage comes from useUsage() (60s poll, replacing ensureUsageWindows). */
 
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNow } from "../../lib/useNow";
 import { refreshUsage, useInstances, useUsage } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { fmtUsd } from "../../lib/format";
@@ -138,11 +139,7 @@ export function OverallUsage() {
   // Vanilla repainted the pill every 4s poll so the reset countdown ticks even
   // when the payload itself is unchanged (query structural sharing would
   // otherwise freeze it). A 30s tick matches the label's minute granularity.
-  const [, tick] = useReducer((x: number) => x + 1, 0);
-  useEffect(() => {
-    const id = setInterval(tick, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  useNow(30_000);
 
   useEffect(() => {
     if (!instances.length) setOpen(false);

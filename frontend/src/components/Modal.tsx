@@ -27,7 +27,6 @@
 
 import { useEffect, useRef, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import "./Modal.css";
 
 export interface ModalProps extends Omit<HTMLAttributes<HTMLDivElement>, "onMouseDown" | "onClick"> {
   /** Dismiss — the backdrop press and Escape both call it. */
