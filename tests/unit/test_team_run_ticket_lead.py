@@ -103,6 +103,9 @@ def env(monkeypatch, tmp_path):
     _init(cwd, {"README.md": "the server\n"})
     ws = tmp_path / "workspaces"
     ws.mkdir()
+    # default_workspace_dir() goes through the home-guarded GetConfigDir.
+    (tmp_path / "default-home").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "default-home"))
 
     instances: dict = {}
     monkeypatch.setattr(server.ENGINE, "instances", instances)

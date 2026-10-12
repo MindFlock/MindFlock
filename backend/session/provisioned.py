@@ -353,7 +353,9 @@ def default_workspace_dir() -> Path:
     s = load_provision_settings()
     if s is not None:
         return s.workspace_dir
-    return Path.home() / ".mindflock" / "workspaces"
+    from backend.config.config import GetConfigDir
+
+    return Path(GetConfigDir()) / "workspaces"
 
 
 def _git_current_branch(repo: str | Path) -> str:
