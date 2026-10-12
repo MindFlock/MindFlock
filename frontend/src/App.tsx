@@ -39,6 +39,7 @@ import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog"
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
 import { Breaks } from "./components/breaks/Breaks";
+import { openSettings } from "./lib/openSettings";
 
 export default function App() {
   const { data: config } = useConfig();
@@ -236,7 +237,7 @@ export default function App() {
         selectRailKey(keys[(i + dir + keys.length) % keys.length]);
       },
       rowAt: (index) => stableKeys()[index] ?? null,
-      openDoctor: () => useUi.getState().openDialogFor("settings", "doctor"),
+      openDoctor: () => openSettings("doctor"),
     };
   }, []);
 

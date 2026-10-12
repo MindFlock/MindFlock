@@ -223,7 +223,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "New session…"',
         'label: "Open Intake"',
         'label: "Customize…"',
-        "label: `Rename… — ${t}`",
+        "label: `${actionLabel(id, c)} — ${t}`",
         'label: "Focus: " + name',
     ]
     at = [src.index(x) for x in order]
@@ -232,8 +232,8 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Prompts…", hint: "manage saved prompts"',
         'label: "Assistant agent file…"',
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
-        "label: `Open PR — ${t}`",
-        "label: `Merge PR — ${t}`",
+        '  "pr",\n',
+        '  "merge",\n',
         'label: "Verify — check what shipped"',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):

@@ -9,7 +9,7 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
+import { commitNow, redZoneBreaches, selectSession, type RedZoneBreachHit } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
 import { pickFastTrack, type Lane } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
@@ -151,7 +151,7 @@ export function CommitDialog() {
     // had written in the meantime, under the message typed before all of it. You
     // pressed Commit; the commit has to happen.
     const commit = async (proceed: boolean) => {
-      await instApi(title, "/commit", { json: { message: m, ...(proceed ? { proceed_anyway: true } : {}) } });
+      await commitNow(title, m, proceed);
       // Then fast-track the rest — the ⏩ button flips at once and says so.
       if (chosen.lane !== "leave")
         await pickFastTrack(

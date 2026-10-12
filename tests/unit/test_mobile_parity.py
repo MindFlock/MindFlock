@@ -231,11 +231,13 @@ def test_actions_hit_the_rails_routes():
 
 def test_action_words_are_the_rails():
     js = _js()
-    assert '"Close", "keeps the worktree; reopen from Recently closed"' in js
+    assert '"Close", "stops the agent and moves it to Recently closed"' in js
     assert '"Closed — reopen from Recently closed"' in js
     assert '"Delete…"' in js
     assert '"Removes the worktree and branch"' in js
-    assert '"Pause", "stops the agent, keeps the worktree"' in js
+    # Pause and Close both stop the agent; where the session goes is what
+    # each one says.
+    assert '"Pause", "stops the agent; keeps it in the list to resume"' in js
     assert '"Resume session"' in js
     assert '"Restart"' in js
     # Restart is offered only where the rail offers it (offline, restartable).

@@ -189,9 +189,10 @@ have to navigate), **Verify — check what shipped**, **Customize…**, **Prompt
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
-**Merge PR** / Open in IDE, Rename…, Queue prompt… *runs when idle*, Split…
-only where a split can actually start, **Pause session** / **Resume session**
-(whichever applies), **Close session** (*Ctrl+W · keeps the worktree*) and
+**Merge PR** once there is a PR / Open / focus IDE, Rename…, Queue prompt… *runs when idle*, Split…
+only where a split can actually start, **Pause session** (*stops the agent;
+keeps it in the sidebar to resume*) / **Resume session** (whichever applies),
+**Close session** (*Ctrl+W · stops the agent and moves it to Recently closed*) and
 **Delete session…** (*removes the worktree and branch*, asked on a card)), then one
 **Focus:** row per session, named exactly as its rail row, then extension
 commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
@@ -463,21 +464,24 @@ Copy path · **Commit…** · **Push** · **Open PR** · **Merge PR** ·
 (`Ctrl+K D`; a second in-place session on the same worktree) ·
 **Open / focus <IDE>** (`Ctrl+K O`; row double-click does the same) ·
 **Hide/Show window** (`Ctrl+K H`; the session keeps running) · **Open preview
-↗** when the session serves a port · **Pause (stops the agent, keeps the
-worktree)** / **Resume session** · then the two ways to leave a session: **✕
-Close** and **Delete…**. A row whose workspace folder is gone offers only
+↗** when the session serves a port · **Pause session** (*stops the agent;
+keeps it in the sidebar to resume*) / **Resume session** · then the two ways to
+leave a session: **✕ Close** and **Delete…**. Every verb's label, shortcut and
+when-it-applies rule comes from one table (`lib/sessionActionTable.ts`) that this
+menu, the command palette and the `Ctrl+K` chords all read. A row whose workspace folder is gone offers only
 **Delete — remove session**.
 
-**Pause keeps your work.** Pause only stops the agent: the worktree and
+**Pause keeps your work, and keeps the session here.** Pause only stops the
+agent: the session stays in the sidebar (status *Paused*), and the worktree and
 branch stay exactly as they are — no commit under your name, no removed
 checkout — and **Resume session** relaunches the agent in the same folder
 (`POST /api/instances/{title}/pause` / `/resume`). A session paused by an
 older build (checkout removed) still resumes the old way.
 
 **One way to leave a session, in two strengths.** **Close** (the ✕ on the row,
-`Ctrl+W` / `Delete`, the palette's *Close session*) stops the agent and keeps
-the worktree — the item says so under the verb (*keeps the worktree; reopen
-from Recently closed*). **Delete…** removes the worktree and its branch; the
+`Ctrl+W` / `Delete`, the palette's *Close session*) stops the agent and moves
+the session to Recently closed (its worktree is kept) — the item says so under
+the verb (*stops the agent and moves it to Recently closed*). **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Removes the worktree and
 branch* with **Delete** and **Cancel** (focus lands on Cancel, so a second
 Enter never deletes). Both land in [Recently closed](#recently-closed); only a
@@ -587,8 +591,8 @@ Messages from other agents ([Agent teams](#agent-teams-mindflock-mcp)) are
 typed by a separate lane that never shows in this tab. Your queued prompts go
 first, and the two never interleave inside one turn.
 
-The command palette has **Send message…** and **Queue prompt…** for the focused
-session. Send message… opens the session's Thread tab with its composer
+The command palette has **Message…** and **Queue prompt…** for the focused
+session. Message… opens the session's Thread tab with its composer
 addressed to that session (`Ctrl+K S` does the same). Queue prompt… opens the
 Queue tab with the caret in its box. Neither asks through a browser prompt:
 the desktop app has none, so those entries used to do nothing there.
@@ -1541,7 +1545,7 @@ built-in alias.
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
 | `Ctrl+K F` | Fast-track — the focused pane's ⏩ picker |
 | `Ctrl+K T` | Thread — the focused session's workers and messages |
-| `Ctrl+W` / `Delete` | Close the focused session — keeps the worktree (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
+| `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
@@ -2629,7 +2633,7 @@ for this team run* — only when neither has one. The header is
 A header appears only for a team run of two or more, and **On their own** only
 under at least one header. A split or one-for-all team run never gets one: it is
 a family under its lead, and its lead's Thread tab holds what the header's ⋯
-would — **Start now** / **Remove** on a queued piece and, once finished,
+would — **Start now** / **Take out of run** on a queued piece and, once finished,
 **Copy summary**. Queued lines are dim, with a hollow dot and no
 number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded team run's rows leave the numbering like a folded device's.
@@ -3699,8 +3703,9 @@ failed* / *Checks failing* / *Setup failed*, *Idle*, *Waiting on limit*
 CSS classes `tone-muted|working|attention|neutral|waiting|broken`. A row's
 **⋯** (or a long press on it), or the header's **⋯** for the current session,
 opens its actions: **Restart** (only when offline — `POST /revive`), **Pause**
-(stops the agent, keeps the worktree) / **Resume session**, **Close** (keeps the
-worktree; toast *Closed — reopen from Recently closed*) and **Delete…**, which
+(stops the agent; keeps it in the list to resume) / **Resume session**, **Close**
+(stops the agent and moves it to Recently closed; toast *Closed — reopen from
+Recently closed*) and **Delete…**, which
 asks on an inline strip (*Removes the worktree and branch*, focus on Cancel) and
 answers a 409 with *Folder in use by &lt;names&gt;. Close those first.*
 **Recently closed** (from the actions sheet or the Sessions sheet) lists

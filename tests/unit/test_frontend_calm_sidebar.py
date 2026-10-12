@@ -81,12 +81,16 @@ def test_switch_failures_are_titled_with_the_intake_switch_they_mirror():
 
 
 def test_delete_asks_inline_in_two_steps():
-    """The row menu ends a session in exactly two ways: Close (keeps the
-    worktree) and Delete… (removes worktree and branch), the latter asked on an
-    inline strip — never a native confirm(), which the desktop app lacks."""
+    """The row menu ends a session in exactly two ways: Close (moves it to
+    Recently closed) and Delete… (removes worktree and branch), the latter asked
+    on an inline strip — never a native confirm(), which the desktop app lacks.
+    The verbs' words are the session action table's."""
     row = _code("components/sidebar/SidebarRow.tsx")
+    table = _code("lib/sessionActionTable.ts")
     assert "const [deleteArmed, setDeleteArmed] = useState(false);" in row
-    assert re.search(r">\s*Delete…\s*</button>", row)  # the first click arms it
+    # the first click arms it
+    assert re.search(r">\s*\{SESSION_ACTIONS\.delete\.short\}\s*</button>", row)
+    assert 'short: "Delete…",' in table
     assert "Removes the worktree and branch" in row
     assert re.search(r">\s*Delete\s*</button>", row)
     assert re.search(r">\s*Cancel\s*</button>", row)
@@ -94,9 +98,10 @@ def test_delete_asks_inline_in_two_steps():
     assert "autoFocus onClick={() => setDeleteArmed(false)}" in row
     armed = row[row.index("(deleteArmed ? (") : row.index("end-delete")]
     assert armed.count("autoFocus") == 1
-    # Close is the other verb, and says what it keeps.
-    assert "keeps the worktree; reopen from Recently closed" in row
-    assert "killSession(title)" in row
+    # Close is the other verb, and says where the session goes.
+    assert '<span className="end-sub">{actionNote("close", ctx)}</span>' in row
+    assert 'note: "stops the agent and moves it to Recently closed",' in table
+    assert 'sessionAction("close").run(title)' in row
     for gone in ("Delete + wipe", "End session", "wipeArmed"):
         assert gone not in row, gone
 
@@ -268,8 +273,10 @@ def test_a_lane_line_waiting_on_you_opens_the_bell():
 
 def test_merge_is_named_for_what_it_merges():
     row = _src("components/sidebar/SidebarRow.tsx")
-    assert "Merge to staging" not in row
-    assert "Merge PR{" in row
+    table = _src("lib/sessionActionTable.ts")
+    assert "Merge to staging" not in row and "Merge to staging" not in table
+    assert 'label: "Merge PR",' in table
+    assert '"merge"' in row[row.index("const ROW_GIT") :]
 
 
 def test_only_a_lane_line_waiting_on_you_is_a_door():
@@ -311,7 +318,11 @@ def test_delete_only_fires_from_the_armed_state_and_closing_disarms():
 
 def test_merge_keeps_its_browser_fallback_mark():
     row = _code("components/sidebar/SidebarRow.tsx")
-    assert 'Merge PR{prSupport ? "" : " ↗"}' in row
+    table = _code("lib/sessionActionTable.ts")
+    merge = table[table.index("  merge: {") :]
+    assert "external: (c) => !c.prSupport," in merge[: merge.index("\n  },")]
+    assert '{ext ? " ↗" : ""}' in row
+    assert "title={ext ? PR_FALLBACK_HINT : undefined}" in row
 
 
 # --- Recently closed: one question at a time -----------------------------------------

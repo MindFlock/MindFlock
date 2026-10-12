@@ -175,7 +175,7 @@ There is no separate log beside it. A team run's own controls live on its rail
 header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
 Cancel, and once it has finished **Copy summary** (the team run's summary as
 Markdown). A split or one-for-all team run has no header (it is a family under
-its lead): its lead's Thread tab carries Start now / Remove on a queued piece
+its lead): its lead's Thread tab carries Start now / Take out of run on a queued piece
 and, once it has finished, **Copy summary**. What is shipping shows on each
 row's status line.
 

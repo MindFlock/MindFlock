@@ -10,8 +10,8 @@
  * the in-window toast and the bell already cover a tab that is open. Only
  * shown while the window isn't focused: a focused one has the toast. */
 
-import { useUi } from "../state/store";
 import { PEER_SCREEN } from "./peer";
+import { openSettings } from "./openSettings";
 
 interface MfNotify {
   show(o: { title: string; body: string; target: string; version?: string }): Promise<unknown> | void;
@@ -88,10 +88,9 @@ export function desktopNotify(event: string, data: Record<string, unknown> | nul
 
 /** Open what a clicked notification is about. */
 export function openNotifyTarget(target: string): void {
-  const ui = useUi.getState();
-  if (target === "devices") ui.openDialogFor("settings", "devices");
-  else if (target === "peer") ui.openDialogFor("settings", PEER_SCREEN);
-  else if (target === "update") ui.openDialogFor("settings", "advanced");
+  if (target === "devices") openSettings("devices");
+  else if (target === "peer") openSettings(PEER_SCREEN);
+  else if (target === "update") openSettings("advanced");
 }
 
 /** Listen for notification clicks (returns the unsubscribe). */

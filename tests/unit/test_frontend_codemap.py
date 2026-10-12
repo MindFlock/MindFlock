@@ -288,11 +288,15 @@ def test_push_pr_merge_offer_the_red_zone_override(js):
 
 
 def test_chord_and_palette_entries(js):
-    # Ctrl+K M → the Map tab of the focused session.
-    assert in_bundle('m: { desc: "Code map", run: (t) => {', js)
-    assert in_bundle('useUi.getState().setLastTab(t, "map")', js)
+    # Ctrl+K M → the Map tab of the focused session (the table's "map" row,
+    # which the chord and the palette both read).
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    code_map = table[table.index("\tmap: {") :]
+    code_map = code_map[: code_map.index("\n\t},")]
+    assert in_bundle('label: "Code map", keys: "Ctrl+K M", chord: "m",', code_map)
+    assert in_bundle('useUi.getState().setLastTab(t, "map")', code_map)
     # Palette: per-session Code map + the repo-level dialog.
-    assert "`Code map — ${t}`" in js
+    assert '"map",' in _region(js, "src/components/palette/CommandPalette.tsx")
     assert '"Zones…"' in js
     assert 'openDialogFor("red-zones")' in js
 

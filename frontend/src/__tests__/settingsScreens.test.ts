@@ -61,7 +61,7 @@ describe("legacy screen keys route to the renamed screens", () => {
   it("finds the sources at all", () => {
     expect(Object.keys(SCREEN_SRC)).toContain("Devices.tsx");
     expect(NAV).toContain("SCREENS");
-    expect(PALETTE).toContain("openDialogFor");
+    expect(PALETTE).toContain("openSettings");
     expect(SRC.devices).toContain("DevicesAdvanced");
   });
 
@@ -118,9 +118,9 @@ describe("the nav and the palette use the new names", () => {
   });
 
   it("palette entries", () => {
-    expect(PALETTE).toMatch(/label: "Your devices"[\s\S]{0,200}openDialogFor\("settings", "devices"\)/);
-    expect(PALETTE).toMatch(/label: "Your phone"[\s\S]{0,200}openDialogFor\("settings", "mobile"\)/);
-    expect(PALETTE).toMatch(/label: "People…"[\s\S]{0,200}openDialogFor\("settings", "peer"\)/);
+    expect(PALETTE).toMatch(/label: "Your devices"[\s\S]{0,200}openSettings\("devices"\)/);
+    expect(PALETTE).toMatch(/label: "Your phone"[\s\S]{0,200}openSettings\("mobile"\)/);
+    expect(PALETTE).toMatch(/label: "People…"[\s\S]{0,200}openSettings\("peer"\)/);
     expect(PALETTE).not.toContain("Work with someone");
   });
 });

@@ -231,12 +231,13 @@ def test_a_finished_groups_menu_copies_its_summary():
 def test_a_headerless_groups_menu_items_live_on_its_leads_thread():
     """A split / one-for-all group is a family under its lead — no rail
     header, so no ⋯. Its lead's Thread holds what that menu would: Start now
-    / Remove on a queued piece, Copy summary once it has finished."""
+    / Take out of run on a queued piece, Copy summary once it has finished."""
     js = _js()
     panel = squash(_fn(js, "RunLeadPanel"))
     assert "taskPath(id, t.id, verb)" in panel
     assert '"start-now"' in panel and '"skip"' in panel
-    assert '"Start now"' in panel and '"Remove"' in panel
+    assert '"Start now"' in panel and '"Take out of run"' in panel
+    assert '"Remove"' not in panel
     assert "summaryText(null, id, run)" in panel
     assert '"Copy summary"' in panel
     assert '"Copied the summary as Markdown"' in panel

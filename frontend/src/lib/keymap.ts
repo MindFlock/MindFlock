@@ -21,19 +21,8 @@
  * "?" cheat-sheet, so the sheet can't drift from the real bindings; alias
  * entries leave help unset. */
 
-import {
-  commitSession,
-  copySession,
-  hideSession,
-  ideSession,
-  killSession,
-  makePrSession,
-  pushSession,
-  selectRailKey,
-  selectSession,
-  undoLastClose,
-} from "./sessionActions";
-import { openFastTrackMenu } from "./laneActions";
+import { selectRailKey, undoLastClose } from "./sessionActions";
+import { CHORD_ACTIONS, chordDesc, runChordAction, sessionAction, type SessionActionId } from "./sessionActionTable";
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
@@ -360,36 +349,21 @@ export interface ChordEntry {
   run: (title: string) => void;
 }
 
-export const CHORDS: Record<string, ChordEntry> = {
-  c: { desc: "Commit…", run: (t) => commitSession(t) },
-  // Plain `git push` over the user's own remote — SSH or HTTPS, whatever they
-  // configured. Never gated on the GitHub CLI.
-  p: { desc: "Push", run: (t) => pushSession(t) },
-  // Stays bound whether or not gh/a token is present: makePrSession degrades to
-  // GitHub's prefilled compare page, so the chord never dead-ends. Gating it on
-  // a capability would just make the shortcut silently stop working.
-  r: { desc: "Open PR", run: (t) => makePrSession(t) },
-  o: { desc: "Open / focus IDE", run: (t) => ideSession(t) },
-  d: { desc: "Duplicate session", run: (t) => copySession(t) },
-  h: { desc: "Hide / show window", run: (t) => hideSession(t) },
-  // The Map tab: red zones, the plan, the blast radius. Switching tabs from
-  // outside the pane goes through lastTab, which the pane follows.
-  m: {
-    desc: "Code map",
-    run: (t) => {
-      selectSession(t, { noKeyboard: true });
-      useUi.getState().setLastTab(t, "map");
+/** Built from the session action table (lib/sessionActionTable), which names
+ * each action's chord letter, label and enable rule — the row menu, the
+ * palette and these chords read the same row. `desc` is a getter so the
+ * table is read when the "?" sheet draws, not at import. */
+export const CHORDS: Record<string, ChordEntry> = Object.fromEntries(
+  CHORD_ACTIONS.map((id: SessionActionId) => [
+    sessionAction(id).chord!,
+    {
+      get desc() {
+        return chordDesc(id);
+      },
+      run: (t: string) => runChordAction(id, t),
     },
-  },
-  // Message… opens the Thread composer addressed to the focused session —
-  // what you type there goes in as YOU, never through the agents' mailbox.
-  // Ctrl+K F opens the pane's ⏩ fast-track picker (how far MindFlock carries
-  // the session; each item acts at once, nothing is pasted), Ctrl+K T the
-  // Thread itself.
-  s: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) },
-  f: { desc: "Fast-track…", run: (t) => openFastTrackMenu(t) },
-  t: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) },
-};
+  ])
+);
 
 /** Effective second key for a chord action: the user's override or the
  * action's default letter (which doubles as its stable id). */
@@ -459,6 +433,12 @@ function _handleChordKey(e: KeyboardEvent) {
 }
 
 // --- The keymap table --------------------------------------------------------
+
+/** Ctrl+W / Delete: the table's Close, on the focused session. */
+function closeFocused() {
+  const f = useUi.getState().focused;
+  if (f) sessionAction("close").run(f);
+}
 
 export const KEYMAP: KeymapEntry[] = [
   // -- Navigation ---------------------------------------------------------
@@ -572,27 +552,21 @@ export const KEYMAP: KeymapEntry[] = [
     // "Session", not "window": the Alt+1..9 rows above use "window" for any
     // rail row (the assistant, a log tail), and this one only ever closes the
     // focused SESSION — a selected window never takes keyboard focus.
-    // Close keeps the worktree: Recently closed (Ctrl+Shift+T) brings it back.
+    // Close moves it to Recently closed (Ctrl+Shift+T brings it back).
     help: [
       "Focused session",
       "Ctrl+W / Delete",
-      "Close the focused session — keeps the worktree (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)",
+      "Close the focused session — moves it to Recently closed (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)",
     ],
     when: () => endShortcutAllowed() && !threadComposerFocused(),
-    run: () => {
-      const f = useUi.getState().focused;
-      if (f) killSession(f);
-    },
+    run: () => closeFocused(),
   },
   {
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
     when: () => endShortcutAllowed(),
-    run: () => {
-      const f = useUi.getState().focused;
-      if (f) killSession(f);
-    },
+    run: () => closeFocused(),
   },
   {
     key: "t",

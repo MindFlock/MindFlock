@@ -595,7 +595,9 @@
   background: rgba(222, 97, 62, 0.14);
 }
 
-/* The two end verbs. Close carries a sub-line (what it keeps, where it goes). */
+/* The two end verbs, and Pause just above them. Pause and Close both stop
+   the agent; each carries a sub-line saying where the session goes. */
+.inst-actions button.end-pause,
 .inst-actions button.end-close {
   display: flex;
   flex-direction: column;
