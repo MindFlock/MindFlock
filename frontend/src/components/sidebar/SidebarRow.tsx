@@ -28,19 +28,9 @@ import { useNow } from "../../lib/useNow";
 import {
   PR_FALLBACK_HINT,
   cleanupMissing,
-  commitSession,
-  copySession,
   deleteSession,
   folderInUseText,
-  hasPrSupport,
-  hideSession,
   ideSession,
-  killSession,
-  makePrSession,
-  mergeSession,
-  pauseSession,
-  pushSession,
-  resumeSession,
   selectSession,
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
@@ -67,6 +57,19 @@ import { SessionRowItems } from "./SessionRowItems";
 import { PresenceDots } from "../presence/Presence";
 import { useMe } from "../../lib/presence";
 import { PEER_SANDBOX_HINT, PEER_SCREEN, peerChip } from "../../lib/peer";
+import {
+  SESSION_ACTIONS,
+  actionCtx,
+  actionLabel,
+  actionNote,
+  sessionAction,
+  type SessionActionId,
+} from "../../lib/sessionActionTable";
+import { openSettings } from "../../lib/openSettings";
+
+/** The row menu's table-driven groups, in menu order. */
+const ROW_GIT: SessionActionId[] = ["commit", "push", "pr", "merge", "viewPr"];
+const ROW_SESSION: SessionActionId[] = ["rename", "duplicate", "ide"];
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -175,7 +178,6 @@ export const SidebarRow = memo(function SidebarRow({
   // a renamed parent or worker until the next poll.
   const aliases = useUi((s) => s.aliases);
   const alias = aliases[inst.title];
-  const openDialogFor = useUi((s) => s.openDialogFor);
   const setAlias = useUi((s) => s.setAlias);
   const picking = useUi((s) => s.bulkMode);
   const picked = useUi((s) => s.bulkSelected.has(inst.title));
@@ -187,9 +189,6 @@ export const SidebarRow = memo(function SidebarRow({
   // it exists only as this row, so nothing on it is actionable yet.
   const pending = !!inst.pending;
   const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
-  // gh/token absent: PR + Merge stay in the menu (they fall back to GitHub in
-  // the browser), but say so on hover instead of failing after the click.
-  const prSupport = hasPrSupport(caps);
   const ideName = config?.ide_name || "Cursor";
   // ONE session state for the row (lib/sessionState): the dot and the chip
   // below are painted from this same object, so they can never disagree.
@@ -331,6 +330,28 @@ export const SidebarRow = memo(function SidebarRow({
     e?.stopPropagation();
     await fn();
   };
+
+  // The › menu's verbs come from the session action table — the same rows
+  // the palette and the Ctrl+K chords read. This row only orders them.
+  const ctx = actionCtx(title, { inst, caps, ideName, hidden });
+  const rowItem = (id: SessionActionId) => {
+    const a = sessionAction(id);
+    if (!a.enabled(ctx)) return null;
+    // No gh/token: it ends on GitHub's own page, and says so.
+    const ext = !!a.external?.(ctx);
+    const keys = id === "hide" && hidden ? undefined : a.keys;
+    return (
+      <button key={id} title={ext ? PR_FALLBACK_HINT : undefined} onClick={(e) => act(() => a.run(title), e)}>
+        {actionLabel(id, ctx)}
+        {ext ? " ↗" : ""}
+        {keys && <span className="kbd">{keys}</span>}
+      </button>
+    );
+  };
+  // Pause or Resume, whichever applies — Pause stays (greyed) on a shared
+  // folder, which can be resumed but not paused.
+  const pauseId: SessionActionId = sessionAction("resume").enabled(ctx) ? "resume" : "pause";
+  const pauseOff = !sessionAction(pauseId).enabled(ctx);
 
   const clearRenameTimer = () => {
     if (renameTimer.current !== null) {
@@ -675,7 +696,7 @@ export const SidebarRow = memo(function SidebarRow({
             className={"stagechip peerchip" + (peer.connected === false ? " peer-offline" : "")}
             title={peer.title}
             aria-label={peer.title}
-            onClick={(e) => act(() => openDialogFor("settings", PEER_SCREEN), e)}
+            onClick={(e) => act(() => openSettings(PEER_SCREEN), e)}
             onDoubleClick={(e) => e.stopPropagation()}
           >
             {peer.connected !== null && <span className="peerchip-dot" aria-hidden="true" />}
@@ -704,9 +725,9 @@ export const SidebarRow = memo(function SidebarRow({
             title={
               missing
                 ? "Delete — its workspace is gone; this removes the session"
-                : "Close session — keeps the worktree (Ctrl+W / Del; reopen from Recently closed, Ctrl+Shift+T)"
+                : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
             }
-            onClick={(e) => act(() => (missing ? cleanupMissing(title) : killSession(title)), e)}
+            onClick={(e) => act(() => (missing ? cleanupMissing(title) : sessionAction("close").run(title)), e)}
           >
             {missing ? "Delete" : "✕"}
           </button>
@@ -756,42 +777,16 @@ export const SidebarRow = memo(function SidebarRow({
                   <>
                     <button
                       title="Checkpoint the shared folder and bring it into your own repo as a peer/… branch"
-                      onClick={() => openDialogFor("settings", PEER_SCREEN)}
+                      onClick={() => openSettings(PEER_SCREEN)}
                     >
                       Bring work home…
                     </button>
                     <div className="menu-sep" />
                   </>
                 )}
-                {caps.git && !peer && (
+                {ROW_GIT.some((id) => sessionAction(id).enabled(ctx)) && (
                   <>
-                    <button onClick={() => commitSession(title)}>
-                      Commit…<span className="kbd">Ctrl+K C</span>
-                    </button>
-                    <button onClick={() => pushSession(title)}>
-                      Push<span className="kbd">Ctrl+K P</span>
-                    </button>
-                    <button
-                      onClick={() => makePrSession(title)}
-                      title={prSupport ? undefined : PR_FALLBACK_HINT}
-                    >
-                      Open PR{prSupport ? "" : " ↗"}
-                      <span className="kbd">Ctrl+K R</span>
-                    </button>
-                    {inst.stage === "pr" && (
-                      // Shares mergeSession() with the pill, the palette and the
-                      // pane header so the confirm text and the
-                      // can't-merge-from-here fallback exist in exactly one place.
-                      <button
-                        onClick={() => act(() => mergeSession(title))}
-                        title={prSupport ? undefined : PR_FALLBACK_HINT}
-                      >
-                        Merge PR{prSupport ? "" : " ↗"}
-                      </button>
-                    )}
-                    {inst.pr_url && (
-                      <button onClick={() => window.open(inst.pr_url!, "_blank")}>View PR ↗</button>
-                    )}
+                    {ROW_GIT.map(rowItem)}
                     <div className="menu-sep" />
                   </>
                 )}
@@ -835,17 +830,7 @@ export const SidebarRow = memo(function SidebarRow({
                 )}
                 {/* Rename, copies and the IDE are refused for a shared
                     (sandboxed) folder — not offered rather than 409ing. */}
-                {!peer && (
-                  <>
-                    <button onClick={() => openDialogFor("rename", title)}>Rename…</button>
-                    <button onClick={() => copySession(title)}>
-                      Duplicate session<span className="kbd">Ctrl+K D</span>
-                    </button>
-                    <button onClick={() => ideSession(title)}>
-                      Open / focus {ideName}<span className="kbd">Ctrl+K O</span>
-                    </button>
-                  </>
-                )}
+                {ROW_SESSION.map(rowItem)}
                 <button
                   onClick={(e) =>
                     act(() => {
@@ -857,10 +842,9 @@ export const SidebarRow = memo(function SidebarRow({
                   {picked ? "Unselect" : "Select"}
                   <span className="kbd">Ctrl+click</span>
                 </button>
-                <button onClick={() => hideSession(title)}>
-                  {hidden ? "Show window" : "Hide window"}
-                  {!hidden && <span className="kbd">Ctrl+K H</span>}
-                </button>
+                {/* Hidden, the session can't be focused, so its chord can't
+                    reach it: the shortcut is drawn only for Hide. */}
+                {rowItem("hide")}
                 {inst.ports?.base ? (
                   <button
                     onClick={(e) =>
@@ -877,12 +861,16 @@ export const SidebarRow = memo(function SidebarRow({
                     Open preview ↗<span className="kbd">:{inst.ports.base}</span>
                   </button>
                 ) : null}
+                {/* Pause and Close both stop the agent; where the session
+                    goes is the difference, so each says it under the verb. */}
                 <button
-                  disabled={!!peer && !paused}
-                  title={peer && !paused ? PEER_SANDBOX_HINT : undefined}
-                  onClick={() => (paused ? resumeSession(title) : pauseSession(title))}
+                  className="end-pause"
+                  disabled={pauseOff}
+                  title={pauseOff && peer ? PEER_SANDBOX_HINT : undefined}
+                  onClick={(e) => act(() => sessionAction(pauseId).run(title), e)}
                 >
-                  {paused ? "Resume session" : "Pause (stops the agent, keeps the worktree)"}
+                  <span className="end-verb">{actionLabel(pauseId, ctx)}</span>
+                  <span className="end-sub">{actionNote(pauseId, ctx)}</span>
                 </button>
                 <div className="menu-sep" />
                 {/* The two ways a session ends, and only these two. Close is
@@ -890,16 +878,15 @@ export const SidebarRow = memo(function SidebarRow({
                     item (never a native confirm(): the desktop app has none). */}
                 <button
                   className="end-close"
-                  title="Stops the agent and keeps the worktree; reopen it from Recently closed (Ctrl+Shift+T)"
-                  onClick={(e) => act(() => killSession(title), e)}
+                  title="Stops the agent and moves the session to Recently closed; reopen it from there (Ctrl+Shift+T)"
+                  onClick={(e) => act(() => sessionAction("close").run(title), e)}
                 >
                   <span className="end-verb">
-                    ✕ Close<span className="kbd">Ctrl+W</span>
+                    ✕ {SESSION_ACTIONS.close.short}<span className="kbd">{SESSION_ACTIONS.close.keys}</span>
                   </span>
-                  <span className="end-sub">keeps the worktree; reopen from Recently closed</span>
+                  <span className="end-sub">{actionNote("close", ctx)}</span>
                 </button>
-                {caps.git &&
-                  !peer &&
+                {sessionAction("delete").enabled(ctx) &&
                   (deleteArmed ? (
                     <div className="del-confirm" role="group" aria-label={`Delete ${shown}?`}>
                       <span className="del-q">Removes the worktree and branch</span>
@@ -931,7 +918,7 @@ export const SidebarRow = memo(function SidebarRow({
                       title="Removes the worktree and branch (asks first)"
                       onClick={() => setDeleteArmed(true)}
                     >
-                      Delete…
+                      {SESSION_ACTIONS.delete.short}
                     </button>
                   ))}
               </>

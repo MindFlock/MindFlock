@@ -211,11 +211,16 @@ def test_palette_send_and_queue_no_longer_use_window_prompt(js):
     assert "function queuePromptPrompt(" not in js
     palette = _region(js, "src/components/palette/CommandPalette.tsx")
     assert not DEAD_DIALOG.search(palette), "the palette calls a dead dialog"
-    # The entries stay, and now open the place the text is typed.
-    assert in_bundle("label: `Send message… — ${t}`", palette)
-    assert in_bundle("run: () => ui.threadOpen(t, { composeTo: t })", palette)
-    assert in_bundle("label: `Queue prompt… — ${t}`", palette)
-    assert in_bundle("run: () => focusQueueInput(t)", palette)
+    # The entries stay (the table's Message… and Queue prompt… rows, which the
+    # palette lists), and now open the place the text is typed.
+    assert '"message",' in palette and '"queue",' in palette
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    assert not DEAD_DIALOG.search(table), "the action table calls a dead dialog"
+    assert in_bundle(
+        "run: (t) => useUi.getState().threadOpen(t, { composeTo: t })", table
+    )
+    assert in_bundle('label: "Queue prompt…",', table)
+    assert in_bundle("run: (t) => focusQueueInput(t)", table)
 
 
 def test_queue_prompt_focuses_the_queue_tab_textarea(js):
@@ -247,14 +252,14 @@ def test_fast_track_split_and_move_out_are_server_calls(js):
     assert in_bundle('api("/api/runs", { json: {', split)
     assert "split: true" in split and "lead: inst.title" in split
     assert in_bundle('grouping: "together"', split)
-    # The row › menu and the palette split through one function.
+    # The row › menu and the palette (through the action table) split
+    # through one function.
     assert "startSplitOf(inst, name," in _function(js, "splitSession")
     assert "splitSession(inst, name)" in _region(
         js, "src/components/sidebar/SessionRowItems.tsx"
     )
-    assert "splitSession(inst, name)" in _region(
-        js, "src/components/palette/CommandPalette.tsx"
-    )
+    assert "splitSession(inst, name)" in _region(js, "src/lib/sessionActionTable.ts")
+    assert '"split",' in _region(js, "src/components/palette/CommandPalette.tsx")
 
 
 def test_a_new_single_session_gets_its_fast_track_once_it_can_take_it(js):
@@ -397,9 +402,16 @@ def test_row_menu_items(js):
     row = _region(js, "src/components/sidebar/SidebarRow.tsx")
     assert in_bundle("jsx)(SessionRowItems, { inst })", row)
     group = _region(js, "src/components/sidebar/SessionRowItems.tsx")
-    # Fast-track… opens THE picker, never a second copy of its choices.
-    assert "openFastTrackMenu(title);" in group
-    assert '"Fast-track… "' in group and '"Ctrl+K F"' in group
+    # Fast-track… opens THE picker (the table's row), never a second copy of
+    # its choices.
+    assert "SESSION_ACTIONS.fastTrack.run(title);" in group
+    assert (
+        "SESSION_ACTIONS.fastTrack.label" in group
+        and "SESSION_ACTIONS.fastTrack.keys" in group
+    )
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    assert in_bundle('label: "Fast-track…", keys: "Ctrl+K F", chord: "f",', table)
+    assert "run: (t) => openFastTrackMenu(t)" in table
     assert "LANE_SHORT[cur.lane]" in group
     assert "setLane(" not in group and "pickFastTrack(" not in group
     # Split is its own action; Move out is a member's; Message… stays.
@@ -407,7 +419,7 @@ def test_row_menu_items(js):
     assert "detachableGroup(inst)" in group
     assert "moveOutOfGroup(group.id, group.task)" in group
     assert '"Move out of ", group.name' in group or "Move out of " in group
-    assert in_bundle("threadOpen(title, { composeTo: title })", group)
+    assert "SESSION_ACTIONS.message.run(title);" in group
     assert "if (inst.pending) return null;" in group
     assert in_bundle('className: "menu-sep"', group)
     assert "pb-row-sub" not in group and "When it" not in group
@@ -415,17 +427,21 @@ def test_row_menu_items(js):
 
 def test_palette_entries(js):
     palette = _region(js, "src/components/palette/CommandPalette.tsx")
-    for label in (
-        "label: `Fast-track… — ${t}`",
-        "label: `Split into parallel pieces… — ${t}`",
-        "label: `Thread — ${t}`",
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    # The palette lists the table's rows as "<label> — <session>".
+    assert in_bundle("label: `${actionLabel(id, c)} — ${t}`", palette)
+    for id_, label in (
+        ("fastTrack", 'label: "Fast-track…"'),
+        ("split", 'label: "Split into parallel pieces…"'),
+        ("thread", 'label: "Thread"'),
     ):
-        assert in_bundle(label, palette), label
+        assert f'"{id_}",' in palette, id_
+        assert in_bundle(label, table), label
     # "Start several sessions…" was New under a second name (its box takes a
     # list on its own) — one action, one entry.
     assert "Start several sessions…" not in palette
     assert 'openNewWith("")' not in palette
-    assert "run: () => openFastTrackMenu(t)" in palette
+    assert "run: (t) => openFastTrackMenu(t)" in table
     # The two hard-wired lane entries and the menu entry are gone.
     assert "Ship:" not in palette and "Ship & split" not in palette
     assert "setLane(" not in palette
@@ -433,21 +449,21 @@ def test_palette_entries(js):
 
 def test_chords_s_f_t_and_no_l(js):
     keymap = _region(js, "src/lib/keymap.ts")
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    # The chords are the action table's rows that name a letter.
+    assert in_bundle("var CHORDS = Object.fromEntries(CHORD_ACTIONS.map(", keymap)
     assert in_bundle(
-        's: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) }',
-        keymap,
+        'label: "Message…", keys: "Ctrl+K S", chord: "s", enabled: () => true, '
+        "run: (t) => useUi.getState().threadOpen(t, { composeTo: t })",
+        table,
     )
+    assert in_bundle('label: "Fast-track…", keys: "Ctrl+K F", chord: "f",', table)
     assert in_bundle(
-        'f: { desc: "Fast-track…", run: (t) => openFastTrackMenu(t) }', keymap
-    )
-    assert in_bundle(
-        't: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) }',
-        keymap,
+        'label: "Thread", keys: "Ctrl+K T", chord: "t", note: "workers and messages",',
+        table,
     )
     # Ctrl+K L only ever opened the removed menu.
-    chords = keymap[keymap.find("var CHORDS = {") :]
-    chords = chords[: chords.find("\n};")]
-    assert "\tl: {" not in chords and "\n  l: {" not in chords
+    assert 'chord: "l"' not in table
     assert "(lane)" not in keymap and "openShipMenu" not in keymap
 
 
@@ -651,8 +667,8 @@ def test_review_remote_rows_get_no_split_and_one_children_rule(js):
     assert "const remote = isRemote(inst);" in group
     assert 'const splitWhy = remote ? "" : splitBlockReason' in group
     assert "const group = remote ? null : detachableGroup(inst);" in group
-    palette = _region(js, "src/components/palette/CommandPalette.tsx")
-    assert '!inst.device && !inst.pending && !t.includes("::")' in palette
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    assert '!c.inst.device && !c.title.includes("::")' in table
     rule = _function(js, "isChildOf")
     assert in_bundle(
         'String(row.parent || "") === title && !row.pending && !row.device', rule

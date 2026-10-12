@@ -14,6 +14,15 @@ from backend.web import server
 client = TestClient(server.app)
 
 
+def _region(js: str, module: str) -> str:
+    """The bundled text of one source module (Rolldown's ``//#region`` markers)."""
+    start = js.find("//#region " + module + "\n")
+    assert start >= 0, f"{module} is not in the bundle"
+    end = js.find("//#endregion", start)
+    assert end > start
+    return js[start:end]
+
+
 def test_app_js_pane_has_queue_tab():
     js = client.get("/app.js").text
     # Queue is a first-class pane tab (beside Agent/Terminal/Diff), with a badge.
@@ -49,9 +58,12 @@ def test_app_js_queue_console_uses_backend_endpoints():
 
 def test_app_js_palette_has_send_and_queue_actions():
     js = client.get("/app.js").text
-    assert "Send message… — " in js
-    assert "Queue prompt… — " in js
-    # Both used to ask with window.prompt, a no-op in Electron. Send message…
+    # The palette lists the table's Message… and Queue prompt… rows.
+    table = _region(js, "src/lib/sessionActionTable.ts")
+    assert 'label: "Message…"' in table and 'label: "Queue prompt…"' in table
+    palette = _region(js, "src/components/palette/CommandPalette.tsx")
+    assert '"message",' in palette and '"queue",' in palette
+    # Both used to ask with window.prompt, a no-op in Electron. Message…
     # now opens the Thread composer and Queue prompt… the Queue tab's own box
     # (pinned in test_frontend_playbooks.py); the old helpers must stay gone.
     assert "function sendMessagePrompt(" not in js

@@ -36,6 +36,7 @@ import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
+import { openSettings, type SettingsScreen } from "../lib/openSettings";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -77,7 +78,7 @@ interface Notif {
   /** A join request: the row's own Approve button answers it from here. */
   approve?: { id: string; via: string; code: string; host: string } | null;
   /** An update.available row: named "Updates", opens this Settings screen. */
-  settings?: string;
+  settings?: SettingsScreen;
 }
 
 /** How long a join request's Approve stays on its bell row (the server's
@@ -106,7 +107,7 @@ export interface NotifRow {
   device?: boolean;
   peer?: boolean;
   approve?: { id: string; via: string; code: string; host: string } | null;
-  settings?: string;
+  settings?: SettingsScreen;
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
@@ -420,7 +421,7 @@ export function NotificationsBell() {
                 title="Notification settings — desktop notifications and which events notify"
                 onClick={() => {
                   setOpen(false);
-                  useUi.getState().openDialogFor("settings", "notifications");
+                  openSettings("notifications");
                 }}
               >
                 ⚙
@@ -537,13 +538,13 @@ export function NotificationsBell() {
                       } else if (n.device) {
                         // Approve / Deny, and the roster, are in Settings → Your devices.
                         setOpen(false);
-                        useUi.getState().openDialogFor("settings", "devices");
+                        openSettings("devices");
                       } else if (n.peer) {
                         setOpen(false);
-                        useUi.getState().openDialogFor("settings", PEER_SCREEN);
+                        openSettings(PEER_SCREEN);
                       } else if (n.settings) {
                         setOpen(false);
-                        useUi.getState().openDialogFor("settings", n.settings);
+                        openSettings(n.settings);
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the

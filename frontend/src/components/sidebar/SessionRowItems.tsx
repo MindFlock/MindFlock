@@ -15,13 +15,12 @@
 import { useState } from "react";
 import type { Instance } from "../../api/types";
 import { refreshInstances, useConfig } from "../../state/queries";
-import { displayName, useUi } from "../../state/store";
+import { displayName } from "../../state/store";
 import {
   LANE_SHORT,
   detachableGroup,
   laneChoice,
   moveOutOfGroup,
-  openFastTrackMenu,
   splitBlockReason,
   splitSession,
 } from "../../lib/laneActions";
@@ -29,6 +28,7 @@ import { isRemote } from "../../lib/playbooks";
 import { fastTrackStep } from "../../lib/stage";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
+import { SESSION_ACTIONS } from "../../lib/sessionActionTable";
 
 export function SessionRowItems({ inst }: { inst: Instance }) {
   const title = inst.title;
@@ -73,15 +73,15 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
           title={ft.title}
           onClick={(ev) => {
             ev.stopPropagation();
-            openFastTrackMenu(title);
+            SESSION_ACTIONS.fastTrack.run(title);
           }}
         >
           {/* The short word, as on the ⏩ button: the full sentence (and
               "asks first") is the tooltip — a row menu is narrow. */}
           <span>
-            Fast-track… <span className="muted">{LANE_SHORT[cur.lane]}</span>
+            {SESSION_ACTIONS.fastTrack.label} <span className="muted">{LANE_SHORT[cur.lane]}</span>
           </span>
-          <span className="kbd">Ctrl+K F</span>
+          <span className="kbd">{SESSION_ACTIONS.fastTrack.keys}</span>
         </button>
       )}
       {!remote && !shared && (
@@ -114,10 +114,11 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
         data-row="message"
         onClick={(ev) => {
           ev.stopPropagation();
-          useUi.getState().threadOpen(title, { composeTo: title });
+          SESSION_ACTIONS.message.run(title);
         }}
       >
-        Message…<span className="kbd">Ctrl+K S</span>
+        {SESSION_ACTIONS.message.label}
+        <span className="kbd">{SESSION_ACTIONS.message.keys}</span>
       </button>
       <div className="menu-sep" />
     </>

@@ -2004,9 +2004,9 @@
         actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
           function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
       else if (inst.status !== "loading" && !inst.workspace_missing && !inst.peer_share)
-        actListEl.appendChild(actRow("Pause", "stops the agent, keeps the worktree",
+        actListEl.appendChild(actRow("Pause", "stops the agent; keeps it in the list to resume",
           function () { sessionCall(title, "pause", "Paused " + nameOf(title) + " — the worktree is kept", "Pause failed"); }));
-      actListEl.appendChild(actRow("Close", "keeps the worktree; reopen from Recently closed",
+      actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
         function () { closeSession(title); }));
       // A peer (sandboxed shared-folder) session is unshared, never deleted —
       // the rail hides Delete for it too.

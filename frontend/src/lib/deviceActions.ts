@@ -12,11 +12,11 @@
  *    on it, with the safety number to compare. */
 
 import { api } from "../api/client";
-import { useUi } from "../state/store";
 import { routeCode } from "./fleet";
 import { joinPeerCode, PEER_SCREEN } from "./peer";
 import { openJoinWithCode } from "./peerActions";
 import { toast } from "./toast";
+import { openSettings } from "./openSettings";
 
 /** The DOM event Devices listens for while it is already open. */
 export const DEVICES_FOCUS_EVENT = "mf-devices-focus";
@@ -42,7 +42,7 @@ export function takePendingDevicesFocus(): DevicesFocus | null {
 
 export function openDevicesFor(focus: DevicesFocus = {}): void {
   pending = focus;
-  useUi.getState().openDialogFor("settings", "devices");
+  openSettings("devices");
   // Already open on that screen: it hears this instead of mounting again.
   document.dispatchEvent(new CustomEvent(DEVICES_FOCUS_EVENT, { detail: focus }));
 }
@@ -60,7 +60,7 @@ export async function joinPeerInvite(code: string): Promise<boolean> {
         (link.sas ? " — compare the safety number " + link.sas + " with them" : ""),
       { duration: 10000 }
     );
-    useUi.getState().openDialogFor("settings", PEER_SCREEN);
+    openSettings(PEER_SCREEN);
     return true;
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), { duration: 8000 });

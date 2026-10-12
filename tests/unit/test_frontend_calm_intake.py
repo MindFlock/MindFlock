@@ -227,7 +227,7 @@ def test_devices_screen_asks_inline_and_owns_settings_sync():
 
 def _screens_block() -> str:
     src = _read(_SETTINGS / "SettingsDialog.tsx")
-    return src.split("> = [", 1)[1].split("];", 1)[0]
+    return src.split("const SCREENS = [", 1)[1].split("] as const", 1)[0]
 
 
 def test_settings_nav_order_and_groups():

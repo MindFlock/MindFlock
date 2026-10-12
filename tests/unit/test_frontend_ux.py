@@ -17,6 +17,15 @@ from tests._bundle import in_bundle, squash
 client = TestClient(server.app)
 
 
+def _region(js: str, module: str) -> str:
+    """The bundled text of one source module (Rolldown's ``//#region`` markers)."""
+    start = js.find("//#region " + module + "\n")
+    assert start >= 0, f"{module} is not in the bundle"
+    end = js.find("//#endregion", start)
+    assert end > start
+    return js[start:end]
+
+
 # --------------------------------------------------------------------------- #
 # Sidebar filter
 # --------------------------------------------------------------------------- #
@@ -53,9 +62,10 @@ def test_app_js_rename_wiring():
     assert "mf_aliases" in js
     # Aliases persist client-side; the real title still keys operations.
     assert "mf_aliases" in js
-    # Rename surfaced in the row menu and the palette.
-    assert "Rename…" in js
-    assert "Rename… — " in js
+    # Rename surfaced in the row menu and the palette (one table row both read).
+    assert 'label: "Rename…"' in js
+    assert '"rename",' in _region(js, "src/components/palette/CommandPalette.tsx")
+    assert '"rename",' in _region(js, "src/components/sidebar/SidebarRow.tsx")
     # Sidebar rows carry the stable title as a data attr (so focus/lookup don't
     # depend on the displayed text, which may be an alias). Rows are keyed —
     # built once by _createSidebarRow(title) and reused across polls.

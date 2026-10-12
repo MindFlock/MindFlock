@@ -28594,7 +28594,7 @@ async function setLane(title, lane, askFirst, opts = {}) {
 	} });
 }
 async function pickFastTrack(title, name, lane, askFirst, opts = {}) {
-	const row = instances$1().find((r) => r.title === title);
+	const row = instances$2().find((r) => r.title === title);
 	const before = {
 		lane: row?.lane ?? null,
 		autopilot: row?.autopilot ?? null
@@ -28671,7 +28671,7 @@ async function setLaneWhenReady(title, lane, askFirst, delays = [
 	}
 }
 function openFastTrackMenu(title) {
-	const inst = instances$1().find((r) => r.title === title);
+	const inst = instances$2().find((r) => r.title === title);
 	if (!inst || inst.pending) {
 		toast("That session isn't ready yet");
 		return;
@@ -29076,7 +29076,7 @@ function caps() {
 function ideName() {
 	return queryClient.getQueryData(["config"])?.ide_name || "Cursor";
 }
-function instances$1() {
+function instances$2() {
 	return queryClient.getQueryData(["instances"]) || [];
 }
 function selectSession(title, opts) {
@@ -29087,7 +29087,7 @@ function selectSession(title, opts) {
 		...ui.verifyPanes.map((t) => windowKey("verify", t)),
 		...ui.extPanes.map((p) => windowKey("ext", p.key))
 	];
-	const visible = computeVisibleSlots(instances$1(), windowKeys, {
+	const visible = computeVisibleSlots(instances$2(), windowKeys, {
 		hidden: ui.hidden,
 		viewMode: ui.viewMode,
 		mru: ui.mru,
@@ -29163,7 +29163,7 @@ function forgetLocally(title) {
 	if (ui.focused === title) ui.setFocused(null);
 	releaseTerms(title);
 }
-async function killSession(title) {
+async function closeSession(title) {
 	if (!title) return;
 	let r = null;
 	try {
@@ -29287,7 +29287,7 @@ function clearStaleAlias(title) {
 }
 function addPendingSession(bare, device = "") {
 	const base = device ? device + "::" + bare : bare;
-	const taken = new Set(instances$1().map((i) => i.title));
+	const taken = new Set(instances$2().map((i) => i.title));
 	let title = base;
 	if (taken.has(base)) {
 		let i = 2;
@@ -29317,7 +29317,7 @@ function dropFromOrder(title) {
 }
 function placeAfter(title, after) {
 	const ui = useUi.getState();
-	const live = instances$1().map((i) => i.title);
+	const live = instances$2().map((i) => i.title);
 	if (!live.includes(title) || !live.includes(after)) return;
 	const seen = new Set(ui.order);
 	const merged = ui.order.concat(live.filter((t) => !seen.has(t)));
@@ -29345,6 +29345,12 @@ async function copySession(title) {
 function commitSession(title) {
 	if (!requireGit() || !title) return;
 	useUi.getState().openDialogFor("commit", title);
+}
+async function commitNow(title, message, proceedAnyway = false) {
+	await instApi(title, "/commit", { json: {
+		message,
+		...proceedAnyway ? { proceed_anyway: true } : {}
+	} });
 }
 function redZoneBreaches(err) {
 	if (!(err instanceof ApiError) || err.status !== 409) return null;
@@ -29541,6 +29547,354 @@ async function resumeSession(title) {
 	await refreshInstances();
 }
 //#endregion
+//#region src/lib/playbooks.ts
+var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
+var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
+var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
+function isRemote(inst) {
+	return !!inst.device || String(inst.title || "").includes("::");
+}
+function forkBlockReason(inst) {
+	if (inst.mcp_attached === false) return RESTART_REASON;
+	if (inst.activity === "clarify" || inst.activity === "limit") return ANSWER_FIRST_REASON;
+	return "";
+}
+function splitGate(caps, provider) {
+	const m = caps?.agent_mcp;
+	if (!m) return {
+		ok: true,
+		reason: ""
+	};
+	if (!m.enabled) return {
+		ok: false,
+		reason: "MindFlock tools are switched off for new sessions — Settings → Agent orchestration"
+	};
+	if (!(m.providers || []).includes(provider)) {
+		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
+		return {
+			ok: false,
+			reason: names.length ? `Needs a CLI that gets the MindFlock tools — ${names.join(" or ")}` : NO_TOOLS_REASON
+		};
+	}
+	return {
+		ok: true,
+		reason: ""
+	};
+}
+var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
+var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
+var NOT_A_PIECE = /* @__PURE__ */ new Set([
+	"it",
+	"them",
+	"then",
+	"also",
+	"this",
+	"that"
+]);
+function splitSuggestion(text) {
+	const s = String(text || "");
+	const m = LIST_RE.exec(s);
+	if (m) {
+		const middle = m[2].split(",").map((x) => x.trim().replace(/^the\s+/i, "")).filter(Boolean);
+		const all = [
+			m[1],
+			...middle,
+			m[3]
+		].map((x) => x.toLowerCase());
+		const pieces = all.filter((x, i) => !NOT_A_PIECE.has(x) && all.indexOf(x) === i);
+		if (pieces.length >= 3) return { pieces: pieces.slice(0, 5) };
+	}
+	if (CUE_RE.test(s)) return { pieces: [] };
+	return null;
+}
+function suggestionPill(sug) {
+	return ["suggested", ...sug.pieces].join(" · ");
+}
+async function fetchPlaybooks(title) {
+	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
+}
+var pasting = /* @__PURE__ */ new Set();
+async function pastePlaybook(title, pb, args = {}) {
+	if (pasting.has(title)) return false;
+	pasting.add(title);
+	try {
+		return await pasteNow(title, pb, args);
+	} finally {
+		pasting.delete(title);
+	}
+}
+async function pasteNow(title, pb, args) {
+	const name = displayName(title);
+	try {
+		const { text } = await api("/api/playbooks/" + encodeURIComponent(pb.id) + "/render", { json: {
+			title,
+			args
+		} });
+		if (!text) throw new Error("the server rendered an empty prompt");
+		await api("/api/instances/" + encodeURIComponent(title) + "/send", { json: {
+			text,
+			submit: false,
+			dialog_safe: true
+		} });
+		const ui = useUi.getState();
+		if (ui.lastTab[title] !== "agent") ui.setLastTab(title, "agent");
+		selectSession(title);
+		setTimeout(() => focusTerm(title), 60);
+		const label = pb.label.replace(/…$/, "");
+		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
+		return true;
+	} catch (err) {
+		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
+		return false;
+	}
+}
+async function runPlaybook(title, id, args = {}, label) {
+	let list;
+	try {
+		list = await fetchPlaybooks(title);
+	} catch (err) {
+		toast("Couldn't load the playbooks: " + errMsg(err), { duration: 6e3 });
+		return false;
+	}
+	const pb = list.find((p) => p.id === id);
+	if (!pb) {
+		toast(`That isn't available for ${displayName(title)} right now`);
+		return false;
+	}
+	if (!pb.available) {
+		toast(pb.disabled_reason || `That isn't available for ${displayName(title)} right now`, { duration: 5e3 });
+		return false;
+	}
+	return pastePlaybook(title, label ? {
+		id: pb.id,
+		label
+	} : pb, args);
+}
+function focusQueueInput(title) {
+	selectSession(title, { noKeyboard: true });
+	useUi.getState().setLastTab(title, "queue");
+	let tries = 0;
+	const tick = () => {
+		const box = document.querySelector(`.pane[data-title="${CSS.escape(title)}"]`)?.querySelector(".pane-queue .queue-input");
+		if (box) {
+			box.focus();
+			return;
+		}
+		if (++tries < 40) setTimeout(tick, 50);
+	};
+	setTimeout(tick, 0);
+}
+//#endregion
+//#region src/lib/sessionActionTable.ts
+var DEFAULT_CAPS = {
+	git: true,
+	tailscale: true,
+	ticketing: true,
+	github: true
+};
+function actionCtx(title, opts = {}) {
+	const config = queryClient.getQueryData(["config"]);
+	const inst = opts.inst ?? instances$2().find((r) => r.title === title);
+	const caps = opts.caps ?? config?.caps ?? DEFAULT_CAPS;
+	return {
+		title,
+		inst,
+		caps,
+		shared: !!inst?.peer_share,
+		prSupport: hasPrSupport(caps),
+		ideName: opts.ideName ?? (config?.ide_name || "Cursor"),
+		hidden: opts.hidden ?? useUi.getState().hidden.has(title)
+	};
+}
+var git = (c) => c.caps.git !== false;
+var gitHere = (c) => git(c) && !c.shared;
+var settled = (c) => !!c.inst && !c.inst.pending;
+var prNote = (c) => c.prSupport ? "" : "opens GitHub";
+var SESSION_ACTIONS = {
+	commit: {
+		label: "Commit…",
+		keys: "Ctrl+K C",
+		chord: "c",
+		enabled: gitHere,
+		run: (t) => commitSession(t)
+	},
+	push: {
+		label: "Push",
+		keys: "Ctrl+K P",
+		chord: "p",
+		enabled: gitHere,
+		run: (t) => pushSession(t)
+	},
+	pr: {
+		label: "Open PR",
+		keys: "Ctrl+K R",
+		chord: "r",
+		note: prNote,
+		external: (c) => !c.prSupport,
+		enabled: gitHere,
+		run: (t) => makePrSession(t)
+	},
+	merge: {
+		label: "Merge PR",
+		note: prNote,
+		external: (c) => !c.prSupport,
+		enabled: (c) => gitHere(c) && c.inst?.stage === "pr",
+		run: (t) => void mergeSession(t)
+	},
+	viewPr: {
+		label: "View PR ↗",
+		enabled: (c) => gitHere(c) && !!c.inst?.pr_url,
+		run: (t) => {
+			const url = instances$2().find((r) => r.title === t)?.pr_url;
+			if (url) window.open(url, "_blank");
+		}
+	},
+	rename: {
+		label: "Rename…",
+		enabled: (c) => !c.shared,
+		run: (t) => useUi.getState().openDialogFor("rename", t)
+	},
+	message: {
+		label: "Message…",
+		keys: "Ctrl+K S",
+		chord: "s",
+		enabled: () => true,
+		run: (t) => useUi.getState().threadOpen(t, { composeTo: t })
+	},
+	queue: {
+		label: "Queue prompt…",
+		note: "runs when idle",
+		enabled: () => true,
+		run: (t) => focusQueueInput(t)
+	},
+	fastTrack: {
+		label: "Fast-track…",
+		keys: "Ctrl+K F",
+		chord: "f",
+		note: (c) => c.inst ? LANE_LABEL[laneChoice(c.inst).lane] : "",
+		enabled: (c) => settled(c) && !c.shared && !!fastTrackStep(c.inst),
+		run: (t) => openFastTrackMenu(t)
+	},
+	split: {
+		label: "Split into parallel pieces…",
+		note: "starts a split",
+		enabled: (c) => settled(c) && !c.shared && !c.inst.device && !c.title.includes("::") && !splitBlockReason(c.caps, c.inst),
+		run: (t) => {
+			const inst = instances$2().find((r) => r.title === t);
+			if (!inst) return;
+			const name = displayName(t);
+			splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
+		}
+	},
+	thread: {
+		label: "Thread",
+		keys: "Ctrl+K T",
+		chord: "t",
+		note: "workers and messages",
+		enabled: () => true,
+		run: (t) => useUi.getState().threadOpen(t)
+	},
+	ide: {
+		label: (c) => "Open / focus " + c.ideName,
+		keys: "Ctrl+K O",
+		chord: "o",
+		enabled: (c) => !c.shared,
+		run: (t) => void ideSession(t)
+	},
+	duplicate: {
+		label: "Duplicate session",
+		keys: "Ctrl+K D",
+		chord: "d",
+		enabled: (c) => !c.shared,
+		run: (t) => void copySession(t)
+	},
+	hide: {
+		label: (c) => c.hidden ? "Show window" : "Hide window",
+		keys: "Ctrl+K H",
+		chord: "h",
+		enabled: () => true,
+		run: (t) => hideSession(t)
+	},
+	map: {
+		label: "Code map",
+		keys: "Ctrl+K M",
+		chord: "m",
+		enabled: git,
+		run: (t) => {
+			selectSession(t, { noKeyboard: true });
+			useUi.getState().setLastTab(t, "map");
+		}
+	},
+	pause: {
+		label: "Pause session",
+		note: "stops the agent; keeps it in the sidebar to resume",
+		enabled: (c) => settled(c) && c.inst.status !== "paused" && !c.shared,
+		run: (t) => void pauseSession(t)
+	},
+	resume: {
+		label: "Resume session",
+		note: "starts the agent again in the same worktree",
+		enabled: (c) => settled(c) && c.inst.status === "paused",
+		run: (t) => void resumeSession(t)
+	},
+	close: {
+		label: "Close session",
+		short: "Close",
+		keys: "Ctrl+W",
+		note: "stops the agent and moves it to Recently closed",
+		enabled: () => true,
+		run: (t) => void closeSession(t)
+	},
+	delete: {
+		label: "Delete session…",
+		short: "Delete…",
+		note: "removes the worktree and branch",
+		enabled: gitHere,
+		run: (t) => void deleteSession(t)
+	}
+};
+function sessionAction(id) {
+	return SESSION_ACTIONS[id];
+}
+function actionLabel(id, c) {
+	const l = sessionAction(id).label;
+	return typeof l === "function" ? l(c) : l;
+}
+function actionNote(id, c) {
+	const n = sessionAction(id).note;
+	return (typeof n === "function" ? n(c) : n) || "";
+}
+function actionHint(id, c) {
+	return [sessionAction(id).keys, actionNote(id, c)].filter(Boolean).join(" · ") || void 0;
+}
+var CHORD_ACTIONS = [
+	"commit",
+	"push",
+	"pr",
+	"ide",
+	"duplicate",
+	"hide",
+	"map",
+	"message",
+	"fastTrack",
+	"thread"
+];
+function chordDesc(id) {
+	if (id === "ide") return "Open / focus IDE";
+	if (id === "hide") return "Hide / show window";
+	if (id === "thread") return "Thread — " + actionNote(id, {});
+	const l = sessionAction(id).label;
+	return typeof l === "string" ? l : id;
+}
+function runChordAction(id, title) {
+	const c = actionCtx(title);
+	if (c.inst && !sessionAction(id).enabled(c)) {
+		toast(chordDesc(id) + " isn’t available for " + displayName(title));
+		return;
+	}
+	sessionAction(id).run(title);
+}
+//#endregion
 //#region src/lib/keymap.ts
 var _host = null;
 function isEditingTarget(el) {
@@ -29699,51 +30053,12 @@ var _rebindCapturing = false;
 function setRebindCapturing(on) {
 	_rebindCapturing = on;
 }
-var CHORDS = {
-	c: {
-		desc: "Commit…",
-		run: (t) => commitSession(t)
+var CHORDS = Object.fromEntries(CHORD_ACTIONS.map((id) => [sessionAction(id).chord, {
+	get desc() {
+		return chordDesc(id);
 	},
-	p: {
-		desc: "Push",
-		run: (t) => pushSession(t)
-	},
-	r: {
-		desc: "Open PR",
-		run: (t) => makePrSession(t)
-	},
-	o: {
-		desc: "Open / focus IDE",
-		run: (t) => ideSession(t)
-	},
-	d: {
-		desc: "Duplicate session",
-		run: (t) => copySession(t)
-	},
-	h: {
-		desc: "Hide / show window",
-		run: (t) => hideSession(t)
-	},
-	m: {
-		desc: "Code map",
-		run: (t) => {
-			selectSession(t, { noKeyboard: true });
-			useUi.getState().setLastTab(t, "map");
-		}
-	},
-	s: {
-		desc: "Message…",
-		run: (t) => useUi.getState().threadOpen(t, { composeTo: t })
-	},
-	f: {
-		desc: "Fast-track…",
-		run: (t) => openFastTrackMenu(t)
-	},
-	t: {
-		desc: "Thread — workers and messages",
-		run: (t) => useUi.getState().threadOpen(t)
-	}
-};
+	run: (t) => runChordAction(id, t)
+}]));
 function chordKeyFor(id) {
 	return String(_keyOv.chords[id] || id).toLowerCase();
 }
@@ -29790,6 +30105,10 @@ function _handleChordKey(e) {
 		return;
 	}
 	chord.run(focused);
+}
+function closeFocused() {
+	const f = useUi.getState().focused;
+	if (f) sessionAction("close").run(f);
 }
 var KEYMAP = [
 	{
@@ -29942,23 +30261,17 @@ var KEYMAP = [
 		help: [
 			"Focused session",
 			"Ctrl+W / Delete",
-			"Close the focused session — keeps the worktree (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)"
+			"Close the focused session — moves it to Recently closed (not while a dialog is open or you are typing; undo: Ctrl+Shift+T)"
 		],
 		when: () => endShortcutAllowed() && !threadComposerFocused(),
-		run: () => {
-			const f = useUi.getState().focused;
-			if (f) killSession(f);
-		}
+		run: () => closeFocused()
 	},
 	{
 		key: "Delete",
 		shift: "any",
 		aliasOf: "close",
 		when: () => endShortcutAllowed(),
-		run: () => {
-			const f = useUi.getState().focused;
-			if (f) killSession(f);
-		}
+		run: () => closeFocused()
 	},
 	{
 		key: "t",
@@ -31736,144 +32049,6 @@ function rewriteBlockedReason(plan) {
 	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
 	if (plan.state === "generating") return "It is already being written.";
 	return "";
-}
-//#endregion
-//#region src/lib/playbooks.ts
-var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
-var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
-var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
-function isRemote(inst) {
-	return !!inst.device || String(inst.title || "").includes("::");
-}
-function forkBlockReason(inst) {
-	if (inst.mcp_attached === false) return RESTART_REASON;
-	if (inst.activity === "clarify" || inst.activity === "limit") return ANSWER_FIRST_REASON;
-	return "";
-}
-function splitGate(caps, provider) {
-	const m = caps?.agent_mcp;
-	if (!m) return {
-		ok: true,
-		reason: ""
-	};
-	if (!m.enabled) return {
-		ok: false,
-		reason: "MindFlock tools are switched off for new sessions — Settings → Agent orchestration"
-	};
-	if (!(m.providers || []).includes(provider)) {
-		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
-		return {
-			ok: false,
-			reason: names.length ? `Needs a CLI that gets the MindFlock tools — ${names.join(" or ")}` : NO_TOOLS_REASON
-		};
-	}
-	return {
-		ok: true,
-		reason: ""
-	};
-}
-var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
-var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
-var NOT_A_PIECE = /* @__PURE__ */ new Set([
-	"it",
-	"them",
-	"then",
-	"also",
-	"this",
-	"that"
-]);
-function splitSuggestion(text) {
-	const s = String(text || "");
-	const m = LIST_RE.exec(s);
-	if (m) {
-		const middle = m[2].split(",").map((x) => x.trim().replace(/^the\s+/i, "")).filter(Boolean);
-		const all = [
-			m[1],
-			...middle,
-			m[3]
-		].map((x) => x.toLowerCase());
-		const pieces = all.filter((x, i) => !NOT_A_PIECE.has(x) && all.indexOf(x) === i);
-		if (pieces.length >= 3) return { pieces: pieces.slice(0, 5) };
-	}
-	if (CUE_RE.test(s)) return { pieces: [] };
-	return null;
-}
-function suggestionPill(sug) {
-	return ["suggested", ...sug.pieces].join(" · ");
-}
-async function fetchPlaybooks(title) {
-	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
-}
-var pasting = /* @__PURE__ */ new Set();
-async function pastePlaybook(title, pb, args = {}) {
-	if (pasting.has(title)) return false;
-	pasting.add(title);
-	try {
-		return await pasteNow(title, pb, args);
-	} finally {
-		pasting.delete(title);
-	}
-}
-async function pasteNow(title, pb, args) {
-	const name = displayName(title);
-	try {
-		const { text } = await api("/api/playbooks/" + encodeURIComponent(pb.id) + "/render", { json: {
-			title,
-			args
-		} });
-		if (!text) throw new Error("the server rendered an empty prompt");
-		await api("/api/instances/" + encodeURIComponent(title) + "/send", { json: {
-			text,
-			submit: false,
-			dialog_safe: true
-		} });
-		const ui = useUi.getState();
-		if (ui.lastTab[title] !== "agent") ui.setLastTab(title, "agent");
-		selectSession(title);
-		setTimeout(() => focusTerm(title), 60);
-		const label = pb.label.replace(/…$/, "");
-		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
-		return true;
-	} catch (err) {
-		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
-		return false;
-	}
-}
-async function runPlaybook(title, id, args = {}, label) {
-	let list;
-	try {
-		list = await fetchPlaybooks(title);
-	} catch (err) {
-		toast("Couldn't load the playbooks: " + errMsg(err), { duration: 6e3 });
-		return false;
-	}
-	const pb = list.find((p) => p.id === id);
-	if (!pb) {
-		toast(`That isn't available for ${displayName(title)} right now`);
-		return false;
-	}
-	if (!pb.available) {
-		toast(pb.disabled_reason || `That isn't available for ${displayName(title)} right now`, { duration: 5e3 });
-		return false;
-	}
-	return pastePlaybook(title, label ? {
-		id: pb.id,
-		label
-	} : pb, args);
-}
-function focusQueueInput(title) {
-	selectSession(title, { noKeyboard: true });
-	useUi.getState().setLastTab(title, "queue");
-	let tries = 0;
-	const tick = () => {
-		const box = document.querySelector(`.pane[data-title="${CSS.escape(title)}"]`)?.querySelector(".pane-queue .queue-input");
-		if (box) {
-			box.focus();
-			return;
-		}
-		if (++tries < 40) setTimeout(tick, 50);
-	};
-	setTimeout(tick, 0);
 }
 //#endregion
 //#region src/lib/flockActions.ts
@@ -33972,6 +34147,11 @@ function approvableRequest(event, data) {
 	};
 }
 //#endregion
+//#region src/lib/openSettings.ts
+function openSettings(screen) {
+	useUi.getState().openDialogFor("settings", screen ?? null);
+}
+//#endregion
 //#region src/lib/peerActions.ts
 var PEER_JOIN_EVENT = "mf-peer-join";
 var pending$1 = null;
@@ -33982,7 +34162,7 @@ function takePendingPeerJoin() {
 }
 function openJoinWithCode(code = "") {
 	pending$1 = { code };
-	useUi.getState().openDialogFor("settings", PEER_SCREEN);
+	openSettings(PEER_SCREEN);
 	document.dispatchEvent(new CustomEvent(PEER_JOIN_EVENT, { detail: { code } }));
 }
 //#endregion
@@ -33996,7 +34176,7 @@ function takePendingDevicesFocus() {
 }
 function openDevicesFor(focus = {}) {
 	pending = focus;
-	useUi.getState().openDialogFor("settings", "devices");
+	openSettings("devices");
 	document.dispatchEvent(new CustomEvent(DEVICES_FOCUS_EVENT, { detail: focus }));
 }
 async function joinPeerInvite(code) {
@@ -34004,7 +34184,7 @@ async function joinPeerInvite(code) {
 	try {
 		const link = await joinPeerCode(code);
 		toast((link.reconnected ? "Reconnected to " : "Paired with ") + (link.peer_name || "your peer") + (link.sas ? " — compare the safety number " + link.sas + " with them" : ""), { duration: 1e4 });
-		useUi.getState().openDialogFor("settings", PEER_SCREEN);
+		openSettings(PEER_SCREEN);
 		return true;
 	} catch (e) {
 		toast(e instanceof Error ? e.message : String(e), { duration: 8e3 });
@@ -34331,7 +34511,7 @@ function NotificationsBell() {
 						title: "Notification settings — desktop notifications and which events notify",
 						onClick: () => {
 							setOpen(false);
-							useUi.getState().openDialogFor("settings", "notifications");
+							openSettings("notifications");
 						},
 						children: "⚙"
 					}),
@@ -34442,13 +34622,13 @@ function NotificationsBell() {
 							}
 						} else if (n.device) {
 							setOpen(false);
-							useUi.getState().openDialogFor("settings", "devices");
+							openSettings("devices");
 						} else if (n.peer) {
 							setOpen(false);
-							useUi.getState().openDialogFor("settings", PEER_SCREEN);
+							openSettings(PEER_SCREEN);
 						} else if (n.settings) {
 							setOpen(false);
-							useUi.getState().openDialogFor("settings", n.settings);
+							openSettings(n.settings);
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -34543,10 +34723,9 @@ function desktopNotify(event, data) {
 	}
 }
 function openNotifyTarget(target) {
-	const ui = useUi.getState();
-	if (target === "devices") ui.openDialogFor("settings", "devices");
-	else if (target === "peer") ui.openDialogFor("settings", PEER_SCREEN);
-	else if (target === "update") ui.openDialogFor("settings", "advanced");
+	if (target === "devices") openSettings("devices");
+	else if (target === "peer") openSettings(PEER_SCREEN);
+	else if (target === "update") openSettings("advanced");
 }
 function installDesktopNotifyClicks() {
 	const b = bridge$1();
@@ -34707,14 +34886,14 @@ function lostKeyboardNote(env, me, sessionName) {
 	return `${typeof env.data?.name === "string" && env.data.name ? env.data.name : "Someone"} took control of ${sessionName} — you're watching now`;
 }
 //#endregion
-//#region src/components/EventToasts.tsx
+//#region src/lib/titleBadge.ts
 var BASE_TITLE = document.title || "MindFlock";
 var attentionUnseen = /* @__PURE__ */ new Set();
 var attentionWas = /* @__PURE__ */ new Set();
-function instances() {
+function instances$1() {
 	return queryClient.getQueryData(["instances"]) || [];
 }
-function badgeWanted(rows = instances()) {
+function badgeWanted(rows = instances$1()) {
 	const out = /* @__PURE__ */ new Set();
 	for (const i of rows) {
 		const ss = deriveSessionState(i);
@@ -34804,6 +34983,26 @@ function clearAttention(title) {
 function markSessionSeen(title) {
 	if (attentionUnseen.has(title)) clearAttention(title);
 }
+function useTitleBadge() {
+	const snapshot = queryClient.getQueryData(["instances"]);
+	(0, import_react.useEffect)(() => {
+		updateTitleBadge();
+	}, [snapshot]);
+	const focused = useUi((s) => s.focused);
+	(0, import_react.useEffect)(() => {
+		if (focused) markSessionSeen(focused);
+	}, [focused]);
+	(0, import_react.useEffect)(() => {
+		const onFocus = () => clearAttention();
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, []);
+}
+//#endregion
+//#region src/components/EventToasts.tsx
+function instances() {
+	return queryClient.getQueryData(["instances"]) || [];
+}
 function attentionToast(name, ss, snippet) {
 	return name + ": " + ss.label + (snippet ? " — “" + snippet + "”" : "");
 }
@@ -34844,22 +35043,12 @@ function redZoneToast(env, name) {
 	}
 }
 function EventToasts() {
-	const snapshot = queryClient.getQueryData(["instances"]);
-	(0, import_react.useEffect)(() => {
-		updateTitleBadge();
-	}, [snapshot]);
-	const focused = useUi((s) => s.focused);
-	(0, import_react.useEffect)(() => {
-		if (focused) markSessionSeen(focused);
-	}, [focused]);
+	useTitleBadge();
 	(0, import_react.useEffect)(() => {
 		const ev = window.mindflock?.events;
 		if (!ev) return;
 		const isReplay = (env) => !!(typeof ev.isReplay === "function" && ev.isReplay(env));
 		const unsubs = [];
-		const onFocus = () => clearAttention();
-		window.addEventListener("focus", onFocus);
-		unsubs.push(() => window.removeEventListener("focus", onFocus));
 		unsubs.push(ev.subscribe("session.activity_changed", (env) => {
 			forceActivity(env.session, env.new || "idle");
 			refreshInstances();
@@ -35016,7 +35205,7 @@ function EventToasts() {
 			const n = deviceEventNote(env.event, env.data);
 			if (!n?.toast) return;
 			notifyOnce("*device:" + String(env.data?.device || ""), name, n.toast, {
-				onClick: () => useUi.getState().openDialogFor("settings", "devices"),
+				onClick: () => openSettings("devices"),
 				duration: 6e3
 			});
 		}));
@@ -35031,7 +35220,7 @@ function EventToasts() {
 			const n = peerEventNote(env.event, env.data);
 			if (!n?.toast) return;
 			notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {
-				onClick: () => useUi.getState().openDialogFor("settings", PEER_SCREEN),
+				onClick: () => openSettings(PEER_SCREEN),
 				duration: 7e3
 			});
 		}));
@@ -35043,7 +35232,7 @@ function EventToasts() {
 			const n = updateNote(env.data);
 			if (!n) return;
 			notifyOnce("*update:" + String(env.data?.latest || ""), "update.available", n.toast, {
-				onClick: () => useUi.getState().openDialogFor("settings", n.screen),
+				onClick: () => openSettings(n.screen),
 				duration: 8e3
 			});
 		}));
@@ -35763,14 +35952,18 @@ function SessionRowItems({ inst }) {
 			title: ft.title,
 			onClick: (ev) => {
 				ev.stopPropagation();
-				openFastTrackMenu(title);
+				SESSION_ACTIONS.fastTrack.run(title);
 			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Fast-track… ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: LANE_SHORT[cur.lane]
-			})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				SESSION_ACTIONS.fastTrack.label,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: LANE_SHORT[cur.lane]
+				})
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
-				children: "Ctrl+K F"
+				children: SESSION_ACTIONS.fastTrack.keys
 			})]
 		}),
 		!remote && !shared && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -35794,11 +35987,11 @@ function SessionRowItems({ inst }) {
 			"data-row": "message",
 			onClick: (ev) => {
 				ev.stopPropagation();
-				useUi.getState().threadOpen(title, { composeTo: title });
+				SESSION_ACTIONS.message.run(title);
 			},
-			children: ["Message…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			children: [SESSION_ACTIONS.message.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
-				children: "Ctrl+K S"
+				children: SESSION_ACTIONS.message.keys
 			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
@@ -35852,6 +36045,18 @@ function DriveButton({ inst, me }) {
 }
 //#endregion
 //#region src/components/sidebar/SidebarRow.tsx
+var ROW_GIT = [
+	"commit",
+	"push",
+	"pr",
+	"merge",
+	"viewPr"
+];
+var ROW_SESSION = [
+	"rename",
+	"duplicate",
+	"ide"
+];
 var DBLCLICK_MS = 300;
 function displayTitle(inst) {
 	return inst.display_title || inst.title || "";
@@ -35916,7 +36121,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const hidden = useUi((s) => s.hidden.has(inst.title));
 	const aliases = useUi((s) => s.aliases);
 	const alias = aliases[inst.title];
-	const openDialogFor = useUi((s) => s.openDialogFor);
 	const setAlias = useUi((s) => s.setAlias);
 	const picking = useUi((s) => s.bulkMode);
 	const picked = useUi((s) => s.bulkSelected.has(inst.title));
@@ -35930,7 +36134,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		ticketing: true,
 		github: true
 	};
-	const prSupport = hasPrSupport(caps);
 	const ideName = config?.ide_name || "Cursor";
 	const ss = deriveSessionState(inst);
 	const me = useMe();
@@ -36007,6 +36210,32 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		e?.stopPropagation();
 		await fn();
 	};
+	const ctx = actionCtx(title, {
+		inst,
+		caps,
+		ideName,
+		hidden
+	});
+	const rowItem = (id) => {
+		const a = sessionAction(id);
+		if (!a.enabled(ctx)) return null;
+		const ext = !!a.external?.(ctx);
+		const keys = id === "hide" && hidden ? void 0 : a.keys;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			title: ext ? PR_FALLBACK_HINT : void 0,
+			onClick: (e) => act(() => a.run(title), e),
+			children: [
+				actionLabel(id, ctx),
+				ext ? " ↗" : "",
+				keys && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "kbd",
+					children: keys
+				})
+			]
+		}, id);
+	};
+	const pauseId = sessionAction("resume").enabled(ctx) ? "resume" : "pause";
+	const pauseOff = !sessionAction(pauseId).enabled(ctx);
 	const clearRenameTimer = () => {
 		if (renameTimer.current !== null) {
 			clearTimeout(renameTimer.current);
@@ -36293,7 +36522,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					className: "stagechip peerchip" + (peer.connected === false ? " peer-offline" : ""),
 					title: peer.title,
 					"aria-label": peer.title,
-					onClick: (e) => act(() => openDialogFor("settings", PEER_SCREEN), e),
+					onClick: (e) => act(() => openSettings(PEER_SCREEN), e),
 					onDoubleClick: (e) => e.stopPropagation(),
 					children: [peer.connected !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "peerchip-dot",
@@ -36313,8 +36542,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 				}),
 				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "kill" + (missing ? " cleanup" : ""),
-					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — keeps the worktree (Ctrl+W / Del; reopen from Recently closed, Ctrl+Shift+T)",
-					onClick: (e) => act(() => missing ? cleanupMissing(title) : killSession(title), e),
+					title: missing ? "Delete — its workspace is gone; this removes the session" : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)",
+					onClick: (e) => act(() => missing ? cleanupMissing(title) : sessionAction("close").run(title), e),
 					children: missing ? "Delete" : "✕"
 				})
 			]
@@ -36360,47 +36589,10 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 							peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								title: "Checkpoint the shared folder and bring it into your own repo as a peer/… branch",
-								onClick: () => openDialogFor("settings", PEER_SCREEN),
+								onClick: () => openSettings(PEER_SCREEN),
 								children: "Bring work home…"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })] }),
-							caps.git && !peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => commitSession(title),
-									children: ["Commit…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "kbd",
-										children: "Ctrl+K C"
-									})]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => pushSession(title),
-									children: ["Push", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "kbd",
-										children: "Ctrl+K P"
-									})]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => makePrSession(title),
-									title: prSupport ? void 0 : PR_FALLBACK_HINT,
-									children: [
-										"Open PR",
-										prSupport ? "" : " ↗",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "kbd",
-											children: "Ctrl+K R"
-										})
-									]
-								}),
-								inst.stage === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => act(() => mergeSession(title)),
-									title: prSupport ? void 0 : PR_FALLBACK_HINT,
-									children: ["Merge PR", prSupport ? "" : " ↗"]
-								}),
-								inst.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									onClick: () => window.open(inst.pr_url, "_blank"),
-									children: "View PR ↗"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
-							] }),
+							ROW_GIT.some((id) => sessionAction(id).enabled(ctx)) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [ROW_GIT.map(rowItem), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })] }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionRowItems, { inst }),
 							inst.setup?.state === "failed" && !peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: (e) => act(async () => {
@@ -36426,30 +36618,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								}, e),
 								children: "Run checks now"
 							}),
-							!peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									onClick: () => openDialogFor("rename", title),
-									children: "Rename…"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => copySession(title),
-									children: ["Duplicate session", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "kbd",
-										children: "Ctrl+K D"
-									})]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => ideSession(title),
-									children: [
-										"Open / focus ",
-										ideName,
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "kbd",
-											children: "Ctrl+K O"
-										})
-									]
-								})
-							] }),
+							ROW_SESSION.map(rowItem),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: (e) => act(() => {
 									useUi.getState().pickRow(title, false);
@@ -36460,13 +36629,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 									children: "Ctrl+click"
 								})]
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: () => hideSession(title),
-								children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "kbd",
-									children: "Ctrl+K H"
-								})]
-							}),
+							rowItem("hide"),
 							inst.ports?.base ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: (e) => act(() => void window.open(`http://${location.hostname}:${inst.ports.base}/`, "_blank"), e),
 								children: ["Open preview ↗", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -36474,29 +36637,40 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 									children: [":", inst.ports.base]
 								})]
 							}) : null,
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								disabled: !!peer && !paused,
-								title: peer && !paused ? PEER_SANDBOX_HINT : void 0,
-								onClick: () => paused ? resumeSession(title) : pauseSession(title),
-								children: paused ? "Resume session" : "Pause (stops the agent, keeps the worktree)"
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								className: "end-pause",
+								disabled: pauseOff,
+								title: pauseOff && peer ? PEER_SANDBOX_HINT : void 0,
+								onClick: (e) => act(() => sessionAction(pauseId).run(title), e),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "end-verb",
+									children: actionLabel(pauseId, ctx)
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "end-sub",
+									children: actionNote(pauseId, ctx)
+								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								className: "end-close",
-								title: "Stops the agent and keeps the worktree; reopen it from Recently closed (Ctrl+Shift+T)",
-								onClick: (e) => act(() => killSession(title), e),
+								title: "Stops the agent and moves the session to Recently closed; reopen it from there (Ctrl+Shift+T)",
+								onClick: (e) => act(() => sessionAction("close").run(title), e),
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 									className: "end-verb",
-									children: ["✕ Close", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "kbd",
-										children: "Ctrl+W"
-									})]
+									children: [
+										"✕ ",
+										SESSION_ACTIONS.close.short,
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "kbd",
+											children: SESSION_ACTIONS.close.keys
+										})
+									]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "end-sub",
-									children: "keeps the worktree; reopen from Recently closed"
+									children: actionNote("close", ctx)
 								})]
 							}),
-							caps.git && !peer && (deleteArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							sessionAction("delete").enabled(ctx) && (deleteArmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "del-confirm",
 								role: "group",
 								"aria-label": `Delete ${shown}?`,
@@ -36526,7 +36700,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 								className: "danger end-delete",
 								title: "Removes the worktree and branch (asks first)",
 								onClick: () => setDeleteArmed(true),
-								children: "Delete…"
+								children: SESSION_ACTIONS.delete.short
 							}))
 						] })
 					]
@@ -43087,7 +43261,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 		if (busy) return;
 		setBusy(verb + ":" + t.id);
 		const name = pieceLabel(t, run).name;
-		runAction(verb === "skip" ? "Remove" : "Start now", taskPath(id, t.id, verb), {}, (verb === "skip" ? "Removed " : "Starting ") + name).finally(() => setBusy(""));
+		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the run" : "Starting " + name).finally(() => setBusy(""));
 	};
 	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -43519,7 +43693,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 										disabled: !!busy,
 										title: "Take it out of the team run — it never starts",
 										onClick: () => pieceAct(t, "skip"),
-										children: "Remove"
+										children: "Take out of run"
 									})] })
 								]
 							}),
@@ -58622,9 +58796,9 @@ function CodeMap({ title, active }) {
 		planItems,
 		planTs
 	]);
-	const inst = instances$1().find((i) => i.title === title);
+	const inst = instances$2().find((i) => i.title === title);
 	const provider = inst?.program || inst?.provider || "";
-	const sessionsHere = sessionsOnWorktree(instances$1(), title);
+	const sessionsHere = sessionsOnWorktree(instances$2(), title);
 	const zonesEnforced = zones.filter((z) => !z.waived).length;
 	const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames);
 	const showToast = (0, import_react.useCallback)((t) => setToast(t), []);
@@ -61284,6 +61458,26 @@ function sentinel(kind, ref = "") {
 }
 //#endregion
 //#region src/components/palette/CommandPalette.tsx
+var PALETTE_ACTIONS = [
+	"rename",
+	"message",
+	"queue",
+	"fastTrack",
+	"split",
+	"thread",
+	"commit",
+	"push",
+	"pr",
+	"ide",
+	"duplicate",
+	"hide",
+	"resume",
+	"pause",
+	"close",
+	"delete",
+	"map",
+	"merge"
+];
 function fuzzyScore(query, text) {
 	query = String(query || "").toLowerCase();
 	text = String(text || "").toLowerCase();
@@ -61323,7 +61517,6 @@ function CommandPalette({ host }) {
 			ticketing: true,
 			github: true
 		};
-		const prHint = hasPrSupport(caps) ? "" : " · opens GitHub";
 		const ideName = config?.ide_name || "Cursor";
 		const acts = [];
 		acts.push({
@@ -61394,7 +61587,7 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "Open Settings",
-			run: () => ui.openDialogFor("settings")
+			run: () => openSettings()
 		});
 		acts.push({
 			label: "Open Doctor",
@@ -61403,17 +61596,17 @@ function CommandPalette({ host }) {
 		acts.push({
 			label: "Your devices",
 			hint: "add a computer you own, or join one; settings sync",
-			run: () => ui.openDialogFor("settings", "devices")
+			run: () => openSettings("devices")
 		});
 		acts.push({
 			label: "Your phone",
 			hint: "the QR code and /m link",
-			run: () => ui.openDialogFor("settings", "mobile")
+			run: () => openSettings("mobile")
 		});
 		acts.push({
 			label: "People…",
 			hint: "peer links: invite someone, or join a peer with their code",
-			run: () => ui.openDialogFor("settings", "peer")
+			run: () => openSettings("peer")
 		});
 		acts.push({
 			label: "Paste a code…",
@@ -61439,112 +61632,22 @@ function CommandPalette({ host }) {
 			hint: "?",
 			run: () => host.toggleShortcuts()
 		});
-		const { rows } = orderedInstances(instances$1(), ui.order);
+		const { rows } = orderedInstances(instances$2(), ui.order);
 		const t = ui.focused;
 		if (t) {
-			const shared = !!rows.find((r) => r.title === t)?.peer_share;
-			if (!shared) acts.push({
-				label: `Rename… — ${t}`,
-				run: () => ui.openDialogFor("rename", t)
+			const c = actionCtx(t, {
+				inst: rows.find((r) => r.title === t),
+				caps,
+				ideName
 			});
-			acts.push({
-				label: `Send message… — ${t}`,
-				hint: "Ctrl+K S",
-				run: () => ui.threadOpen(t, { composeTo: t })
-			});
-			acts.push({
-				label: `Queue prompt… — ${t}`,
-				hint: "runs when idle",
-				run: () => focusQueueInput(t)
-			});
-			const inst = rows.find((r) => r.title === t);
-			if (inst && !shared && !inst.pending && fastTrackStep(inst)) acts.push({
-				label: `Fast-track… — ${t}`,
-				hint: "Ctrl+K F · " + LANE_LABEL[laneChoice(inst).lane],
-				run: () => openFastTrackMenu(t)
-			});
-			if (inst && !shared && !inst.device && !inst.pending && !t.includes("::") && !splitBlockReason(caps, inst)) acts.push({
-				label: `Split into parallel pieces… — ${t}`,
-				hint: "starts a split",
-				run: () => {
-					const name = ui.aliases[t] || t;
-					splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
-				}
-			});
-			acts.push({
-				label: `Thread — ${t}`,
-				hint: "Ctrl+K T",
-				run: () => ui.threadOpen(t)
-			});
-			if (caps.git && !shared) {
+			for (const id of PALETTE_ACTIONS) {
+				if (!sessionAction(id).enabled(c)) continue;
 				acts.push({
-					label: `Commit… — ${t}`,
-					hint: "Ctrl+K C",
-					run: () => commitSession(t)
-				});
-				acts.push({
-					label: `Push — ${t}`,
-					hint: "Ctrl+K P",
-					run: () => pushSession(t)
-				});
-				acts.push({
-					label: `Open PR — ${t}`,
-					hint: "Ctrl+K R" + prHint,
-					run: () => makePrSession(t)
+					label: `${actionLabel(id, c)} — ${t}`,
+					hint: actionHint(id, c),
+					run: () => sessionAction(id).run(t)
 				});
 			}
-			if (!shared) {
-				acts.push({
-					label: `Open in ${ideName} — ${t}`,
-					hint: "Ctrl+K O",
-					run: () => ideSession(t)
-				});
-				acts.push({
-					label: `Duplicate session — ${t}`,
-					hint: "Ctrl+K D",
-					run: () => copySession(t)
-				});
-			}
-			acts.push({
-				label: `Hide window — ${t}`,
-				hint: "Ctrl+K H",
-				run: () => hideSession(t)
-			});
-			if (inst && !inst.pending) {
-				if (inst.status === "paused") acts.push({
-					label: `Resume session — ${t}`,
-					hint: "starts the agent again",
-					run: () => resumeSession(t)
-				});
-				else if (!shared) acts.push({
-					label: `Pause session — ${t}`,
-					hint: "stops the agent, keeps the worktree",
-					run: () => pauseSession(t)
-				});
-			}
-			acts.push({
-				label: `Close session — ${t}`,
-				hint: "Ctrl+W · keeps the worktree",
-				run: () => killSession(t)
-			});
-			if (caps.git && !shared) acts.push({
-				label: `Delete session… — ${t}`,
-				hint: "removes the worktree and branch",
-				run: () => void deleteSession(t)
-			});
-			if (caps.git) acts.push({
-				label: `Code map — ${t}`,
-				hint: "Ctrl+K M",
-				run: () => {
-					selectSession(t);
-					ui.setLastTab(t, "map");
-				}
-			});
-			if (caps.git && !shared) acts.push({
-				label: `Merge PR — ${t}`,
-				hint: prHint ? prHint.replace(" · ", "") : void 0,
-				run: () => mergeSession(t)
-			});
 		}
 		for (const inst of rows) {
 			const own = inst.display_title || inst.title;
@@ -81548,10 +81651,7 @@ function CommitDialog() {
 		useUi.getState().setLastTab(title, "shell");
 		selectSession(title);
 		const commit = async (proceed) => {
-			await instApi(title, "/commit", { json: {
-				message: m,
-				...proceed ? { proceed_anyway: true } : {}
-			} });
+			await commitNow(title, m, proceed);
 			if (chosen.lane !== "leave") await pickFastTrack(title, useUi.getState().aliases[title] || title, chosen.lane, chosen.askFirst, { message: m });
 		};
 		try {
@@ -83446,7 +83546,7 @@ function RedZonesDialog() {
 		const my = ++seq.current;
 		setLoading(true);
 		setError("");
-		const live = instances$1().filter((i) => i.started !== false && !i.pending && !i.workspace_missing && i.status !== "loading" && !i.device).slice(0, SESSION_LOOKUP_CAP);
+		const live = instances$2().filter((i) => i.started !== false && !i.pending && !i.workspace_missing && i.status !== "loading" && !i.device).slice(0, SESSION_LOOKUP_CAP);
 		const [doc, perSession] = await Promise.all([api("/api/red-zones").catch((x) => {
 			if (my === seq.current) setError(errMsg(x));
 			return null;
@@ -84610,7 +84710,7 @@ function App() {
 				selectRailKey(keys[((cur ? keys.indexOf(cur) : -1) + dir + keys.length) % keys.length]);
 			},
 			rowAt: (index) => stableKeys()[index] ?? null,
-			openDoctor: () => useUi.getState().openDialogFor("settings", "doctor")
+			openDoctor: () => openSettings("doctor")
 		};
 	}, []);
 	(0, import_react.useEffect)(() => installKeymap(host), [host]);

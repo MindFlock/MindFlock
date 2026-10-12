@@ -7,6 +7,7 @@
  * router: an `mfp1:`/`mfp2:` code goes here, a device code to Devices. */
 
 import { api } from "../api/client";
+import type { SettingsScreen } from "./openSettings";
 
 export interface PeerLink {
   link_id: string;
@@ -161,7 +162,7 @@ export const PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in P
 
 /** The settings screen key of "People" (kept as "peer" so old deep
  * links still route). */
-export const PEER_SCREEN = "peer";
+export const PEER_SCREEN = "peer" satisfies SettingsScreen;
 
 interface PeerWith {
   link_id?: string;

@@ -236,13 +236,17 @@ def test_threadopen_addresses_the_composer_and_takes_the_caret(js):
         open_thread,
     )
     assert "selectSession" not in open_thread
+    # Ctrl+K S / T are the table's Message… and Thread rows.
+    table = _region(js, "src/lib/sessionActionTable.ts")
     assert in_bundle(
-        's: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) }',
-        js,
+        'label: "Message…", keys: "Ctrl+K S", chord: "s", enabled: () => true, '
+        "run: (t) => useUi.getState().threadOpen(t, { composeTo: t })",
+        table,
     )
     assert in_bundle(
-        't: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) }',
-        js,
+        'label: "Thread", keys: "Ctrl+K T", chord: "t", note: "workers and messages", '
+        "enabled: () => true, run: (t) => useUi.getState().threadOpen(t)",
+        table,
     )
 
 
