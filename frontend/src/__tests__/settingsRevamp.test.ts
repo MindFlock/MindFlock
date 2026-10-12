@@ -212,7 +212,7 @@ describe("keyboard", () => {
     }
   });
 
-  it("New session submits on Ctrl/Cmd+Enter at the dialog level", () => {
+  it("New session handles Ctrl/Cmd+Enter at the dialog level: submits the form, or reads the sentence on page 1", () => {
     // There is more than one Ctrl/Cmd+Enter in the app — the New → Ticket pane
     // has its own, and it files rather than submits — so the dialog-level one is
     // identified by what only it sits next to (the folder browser's Escape).
@@ -222,7 +222,7 @@ describe("keyboard", () => {
       const text = dropComments(raw);
       let at = text.indexOf(marker);
       while (at >= 0) {
-        windows.push(path + "\n" + text.slice(Math.max(0, at - 400), at + 200));
+        windows.push(path + "\n" + text.slice(Math.max(0, at - 400), at + 400));
         at = text.indexOf(marker, at + 1);
       }
     }
@@ -231,6 +231,9 @@ describe("keyboard", () => {
     const handler = handlers[0];
     expect(handler.startsWith("components/dialogs/NewSessionDialog.tsx\n")).toBe(true);
     expect(handler).toContain("submit();");
+    // Page 1 shows no form, so the shortcut reads the sentence there instead
+    // of creating an unseen "untitled" session (ctrlEnterAction).
+    expect(handler).toContain("ctrlEnterAction({ page, runMode })");
     // …within the same keydown that closes the browser overlay first, then the dialog.
     expect(handler).toContain('e.key === "Escape"');
     expect(handler).toContain("browserOpen");
