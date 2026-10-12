@@ -18,6 +18,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { resolveScreenKey } from "./screenKeys";
@@ -123,18 +124,6 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
     setScreen(resolveScreenKey(target, keys) || "general");
   }, [open, target, openDialogFor, keys]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        closeDialog();
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
 
   const props: ScreenProps = {
@@ -148,13 +137,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
 
   return (
     <SettingsCtx.Provider value={model}>
-      <div
-        id="settings-dialog"
-        className="modal"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) closeDialog();
-        }}
-      >
+      <Modal id="settings-dialog" onClose={closeDialog}>
         <div id="settings-panel">
           <div className="ws-head">
             <h2>Settings</h2>
@@ -198,7 +181,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
             </div>
           </div>
         </div>
-      </div>
+      </Modal>
     </SettingsCtx.Provider>
   );
 }

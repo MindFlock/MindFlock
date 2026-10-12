@@ -17,6 +17,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
+import { Modal } from "../Modal";
 import {
   TEMPLATES_CHANGED,
   deleteTemplate,
@@ -254,18 +255,14 @@ export function TemplatesDialogView(p: ViewProps) {
   );
 
   return (
-    <div
+    <Modal
       id="templates-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) p.onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          if (ui.editing !== null || ui.confirming) p.dispatch({ t: "cancel" });
-          else p.onClose();
-        }
+      onClose={p.onClose}
+      // Escape withdraws an open editor or delete question first.
+      onEscape={() => {
+        if (ui.editing === null && !ui.confirming) return false;
+        p.dispatch({ t: "cancel" });
+        return true;
       }}
     >
       <div id="templates-card" role="dialog" aria-modal="true" aria-labelledby="templates-title">
@@ -359,7 +356,7 @@ export function TemplatesDialogView(p: ViewProps) {
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

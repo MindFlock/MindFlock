@@ -39,12 +39,15 @@ def test_customize_is_the_sidebar_picker_and_prompts_is_its_own_dialog():
     assert "PromptsPanel" not in src
     code = _code("components/customize/CustomizeDialog.tsx")
     assert "Outbox" not in code and '"outbox"' not in code
-    assert "e.defaultPrevented" in src
+    # Both close through the shared Modal shell, which leaves an Escape some
+    # child already claimed (defaultPrevented) alone.
+    assert "<Modal" in src
+    assert "e.defaultPrevented" in _src("components/Modal.tsx")
     dialog = _src("components/dialogs/PromptsDialog.tsx")
     assert "export function PromptsDialog()" in dialog
     assert 'id="prompts-dialog"' in dialog
     assert 'useUi((s) => s.openDialog === "prompts")' in dialog
-    assert "e.defaultPrevented" in dialog
+    assert "<Modal" in dialog
     app = _code("App.tsx")
     assert "<CustomizeDialog />" in app and "<PromptsDialog />" in app
     assert "OutboxDialog" not in app

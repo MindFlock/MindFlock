@@ -16,6 +16,7 @@ import type { Instance } from "../../api/types";
 import { queryClient } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { submitMakePr } from "../../lib/sessionActions";
+import { Modal } from "../Modal";
 
 interface BranchInfo {
   branches: string[];
@@ -69,20 +70,6 @@ export function MakePrDialog() {
     };
   }, [open, target, repo, prBaseByRepo]);
 
-  // Escape dismisses the open dropdown first, then the dialog.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        if (showList) setShowList(false);
-        else closeDialog();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog, showList]);
-
   const filtered = useMemo(() => {
     const all = info?.branches || [];
     const q = value.trim().toLowerCase();
@@ -130,11 +117,14 @@ export function MakePrDialog() {
   }
 
   return (
-    <div
+    <Modal
       id="make-pr-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
+      onClose={closeDialog}
+      // Escape dismisses the open dropdown first, then the dialog.
+      onEscape={() => {
+        if (!showList) return false;
+        setShowList(false);
+        return true;
       }}
     >
       <form
@@ -215,6 +205,6 @@ export function MakePrDialog() {
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

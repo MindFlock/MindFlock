@@ -9,34 +9,18 @@
  * local state: the notice describes a one-time event, so once acknowledged it
  * must not return on the next reload. */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api/client";
-
-type Notice = {
-  file_version?: number;
-  supported_version?: number;
-  backup_path?: string;
-};
+import { useDoctor } from "../state/queries";
 
 export function StateNotice() {
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const notice = useDoctor().data?.state_notice;
+  const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    api<{ state_notice?: Notice | null }>("/api/doctor")
-      .then((d) => {
-        if (live && d && d.state_notice) setNotice(d.state_notice);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  if (!notice) return null;
+  if (!notice || dismissed) return null;
 
   const dismiss = () => {
-    setNotice(null);
+    setDismissed(true);
     api("/api/doctor/ack-state-notice", { method: "POST" }).catch(() => {});
   };
 

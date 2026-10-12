@@ -18,6 +18,7 @@
  */
 
 import type { Instance, LastReport } from "../api/types";
+import { relTime } from "./format";
 
 /** The fields of a `session.message` event's `data` the UI reads. `status` is
  * read when present (a worker's report_result carries it in the message's
@@ -206,13 +207,7 @@ export function workerState(row: FamilyRow, act: string): WorkerState {
 const isReported = (s: WorkerState) => s === "done" || s === "blocked" || s === "failed";
 
 /** "40s", "6m", "2h", "3d" — how long since `ts` (epoch seconds). */
-function since(ts: number, now: number): string {
-  const secs = Math.max(0, Math.floor(now - ts));
-  if (secs < 60) return secs + "s";
-  if (secs < 3600) return Math.floor(secs / 60) + "m";
-  if (secs < 86400) return Math.floor(secs / 3600) + "h";
-  return Math.floor(secs / 86400) + "d";
-}
+const since = (ts: number, now: number) => relTime(ts, { suffix: "", now });
 
 /** The status line under a worker's name on the rail.
  *

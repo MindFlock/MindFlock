@@ -49,6 +49,7 @@
    Pane.css (.pane-head .tabs button), QueueTab.css (.queue-tab-badge, which the
    Thread tab's badge reuses) and AnswerStrip.css (the .fa-thread host) */
 @import "../components/dialogs/NewSessionDialog.css" layer(components); /* 170 */
+@import "../components/Modal.css" layer(components); /* the shared <Modal> shell, after the .modal backdrop it extends */
 @import "../components/dialogs/fileDropTextarea.css" layer(components); /* 175 — after
    NewSessionDialog so the drop cue wins over the plain textarea border it sets. */
 @import "../components/dialogs/smallDialogs.css" layer(components); /* 180 */

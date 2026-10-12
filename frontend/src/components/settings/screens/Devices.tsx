@@ -78,6 +78,7 @@ import {
   unpinReplaces,
   updateAllLine,
 } from "../../../lib/fleet";
+import { useNow } from "../../../lib/useNow";
 import { DEVICES_FOCUS_EVENT, joinPeerInvite, takePendingDevicesFocus } from "../../../lib/deviceActions";
 import type { DevicesFocus } from "../../../lib/deviceActions";
 import { GATE_ON_NOTE, turnGateOn } from "../../../lib/gateOn";
@@ -116,7 +117,6 @@ export function Devices(p: ScreenProps) {
   const [pasted, setPasted] = useState("");
   /** Remove's "also replace every device's access token" — on by default. */
   const [rotateTokens, setRotateTokens] = useState(true);
-  const [now, setNow] = useState(() => Date.now() / 1000);
   /** Make reachable's confirm is open (the This-device row, Add a device,
    * or the joined toast's click). */
   const [reachAsk, setReachAsk] = useState(false);
@@ -231,14 +231,10 @@ export function Devices(p: ScreenProps) {
     return () => offs.forEach((off) => off());
   }, [loadAll]);
 
-  // The invite countdown.
+  // The invite countdown: ticks each second while a code is live. (The clock
+  // is read at render, so the render after "Add a device" is current too.)
+  const now = useNow(liveInvite(st) ? 1000 : false) / 1000;
   const invite = liveInvite(st, now);
-  const inviteCode = invite?.code || "";
-  useEffect(() => {
-    if (!inviteCode) return;
-    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
-    return () => clearInterval(t);
-  }, [inviteCode]);
 
   // This device's own join attempt: follow it faster than the screen poll
   // while it waits on the other computer, and say how it ended.
@@ -1010,7 +1006,6 @@ export function Devices(p: ScreenProps) {
             onClick={() =>
               void run("invite", async () => {
                 const inv = await api<{ warning?: string }>("/api/fleet/invite", { json: {} });
-                setNow(Date.now() / 1000);
                 if (inv?.warning === "local_only") setReachAsk(true);
               })
             }

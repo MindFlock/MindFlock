@@ -13,6 +13,9 @@ vi.mock("../state/queries", () => ({
   queryClient: { invalidateQueries: vi.fn(), setQueryData: vi.fn() },
   useConfig: () => ({ data: undefined }),
   useInstances: () => ({ data: undefined }),
+  // The doctor list's shared query: nothing loaded yet ("Checking dependencies…").
+  useDoctor: () => ({ data: undefined, error: null }),
+  reprobeDoctor: vi.fn(),
 }));
 
 const setupData: { current: SetupStatus | undefined; error?: Error } = { current: undefined };

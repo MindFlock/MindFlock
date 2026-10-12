@@ -23,13 +23,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
+import { useNow } from "../../../lib/useNow";
 import { selectSession } from "../../../lib/sessionActions";
 import { useUi } from "../../../state/store";
-import type { EventEnvelope } from "../../../state/queries";
+import { reprobeDoctor, type EventEnvelope } from "../../../state/queries";
 import { SettingField, useSettings, InlineConfirm } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal";
-import type { DoctorPayload } from "../../dialogs/SetupDialog";
 import {
   carrierText,
   inviteExpiryText,
@@ -82,7 +82,6 @@ export function PeerLinks(_: ScreenProps) {
   const [loadedAt, setLoadedAt] = useState(nowSec());
   const [tick, setTick] = useState(0);
   const [error, setError] = useState("");
-  const [now, setNow] = useState(nowSec());
   const [install, setInstall] = useState<InstallStep[]>([]);
   const [doctorTick, setDoctorTick] = useState(0);
 
@@ -174,11 +173,7 @@ export function PeerLinks(_: ScreenProps) {
 
   // The countdowns tick while anything is counting down.
   const counting = !!invite || (st?.invites.length || 0) > 0;
-  useEffect(() => {
-    if (!counting) return;
-    const t = setInterval(() => setNow(nowSec()), 1000);
-    return () => clearInterval(t);
-  }, [counting]);
+  const now = useNow(counting ? 1000 : false) / 1000;
 
   const cloudflaredMissing = st?.relay?.setting === "auto" && st.relay.cloudflared === false;
   // Missing pieces (the sandbox, cloudflared) are installed from right here,
@@ -190,7 +185,7 @@ export function PeerLinks(_: ScreenProps) {
       return;
     }
     let live = true;
-    api<DoctorPayload>("/api/doctor?refresh=1")
+    reprobeDoctor()
       .then((d) => live && setInstall(d.install?.steps || []))
       .catch(() => live && setInstall([]));
     return () => {

@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { toast } from "../../lib/toast";
 import { nameTakenBy, windowName } from "../../lib/windowName";
 
@@ -46,16 +47,7 @@ export function RenameDialog() {
   };
 
   return (
-    <div
-      id="rename-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") closeDialog();
-      }}
-    >
+    <Modal id="rename-dialog" onClose={closeDialog}>
       <form
         id="rename-form"
         onSubmit={(e) => {
@@ -91,6 +83,6 @@ export function RenameDialog() {
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

@@ -37,6 +37,7 @@ import { refreshInstances, useProviderEfforts } from "../../state/queries";
 import { displayName } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
+import { relTime } from "../../lib/format";
 import { errorPop } from "../../lib/errorPop";
 import { shortReason } from "../../lib/failureText";
 import { DEPTH_LABELS, SESSION_DEPTHS } from "../../lib/autopilot";
@@ -82,7 +83,8 @@ export async function reopenIntakeItem(target: Record<string, unknown>): Promise
 /** "closed 2d ago" / "on disk" — what the Reopen button is pointing at. */
 function workspaceNote(ws: ItemWorkspace): string {
   if (ws.kind === "closed") {
-    const when = ageText(ws.closed_at).replace(" old", " ago");
+    const t = Date.parse(ws.closed_at || "");
+    const when = isFinite(t) ? relTime(t / 1000) : "";
     return when ? "session ended " + when : "session you ended";
   }
   return "workspace left on this machine";
@@ -101,15 +103,12 @@ export function ladderLabel(depth?: string): string {
   return DEPTH_LABELS[d] || d;
 }
 
-/** "3h old" / "20m old" / "2d old" — one implementation, three tabs. */
+/** "3h old" / "20m old" / "2d old" for an ISO timestamp (every Intake
+ * payload's spelling) — lib/format's relTime with an age's suffix; "" when
+ * the timestamp is missing or unparseable. */
 export function ageText(iso?: string): string {
   const t = Date.parse(iso || "");
-  if (!isFinite(t)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 60) return mins + "m old";
-  const h = Math.round(mins / 60);
-  if (h < 48) return h + "h old";
-  return Math.round(h / 24) + "d old";
+  return isFinite(t) ? relTime(t / 1000, { suffix: " old" }) : "";
 }
 
 /** The one-line status under a panel's Refresh button.

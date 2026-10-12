@@ -18,6 +18,7 @@ import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { hasSyncedAgentStep, readinessLine, type MemberReadiness } from "../../../lib/onboarding";
 import { toast } from "../../../lib/toast";
+import { reprobeDoctor } from "../../../state/queries";
 import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal";
 
 interface Bootstrap {
@@ -135,7 +136,7 @@ export function SyncedAgentInstall({ onDone }: { onDone(): void }) {
   const [steps, setSteps] = useState<InstallStep[] | null>(null);
   const load = useCallback(async () => {
     try {
-      const d = await api<{ install?: { steps?: InstallStep[] } }>("/api/doctor?refresh=1");
+      const d = await reprobeDoctor();
       setSteps(d.install?.steps || []);
     } catch {
       setSteps([]);

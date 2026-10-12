@@ -24122,7 +24122,7 @@ var ApiError = class extends Error {
 		this.body = body;
 	}
 };
-async function api(path, opts) {
+async function request(path, opts) {
 	const init = { ...opts };
 	if (opts && "json" in opts && opts.json !== void 0) {
 		init.method = init.method || "POST";
@@ -24137,14 +24137,9 @@ async function api(path, opts) {
 		location.reload();
 		throw new ApiError(401, "unauthorized", null);
 	}
-	let body = null;
 	const text = await r.text();
-	try {
-		body = text ? JSON.parse(text) : null;
-	} catch {
-		body = text;
-	}
 	if (!r.ok) {
+		const body = parse(text);
 		let msg = `${path} -> ${r.status}`;
 		if (body && typeof body === "object") {
 			const b = body;
@@ -24153,7 +24148,20 @@ async function api(path, opts) {
 		}
 		throw new ApiError(r.status, msg, body);
 	}
-	return body;
+	return text;
+}
+function parse(text) {
+	try {
+		return text ? JSON.parse(text) : null;
+	} catch {
+		return text;
+	}
+}
+async function api(path, opts) {
+	return parse(await request(path, opts));
+}
+function apiText(path, opts) {
+	return request(path, opts);
 }
 function instApi(title, suffix, opts) {
 	return api("/api/instances/" + encodeURIComponent(title) + suffix, opts);
@@ -24858,6 +24866,31 @@ function useAssistantActivity() {
 		retry: false
 	});
 }
+function useDoctor(opts = {}) {
+	return useQuery({
+		queryKey: ["doctor"],
+		queryFn: () => api("/api/doctor"),
+		enabled: opts.enabled ?? true,
+		refetchInterval: opts.refetchInterval ?? false,
+		refetchIntervalInBackground: false
+	});
+}
+async function reprobeDoctor(refresh = true) {
+	const d = await api("/api/doctor" + (refresh ? "?refresh=1" : ""));
+	queryClient.setQueryData(["doctor"], d);
+	return d;
+}
+function useMindflockStatus() {
+	return useQuery({
+		queryKey: ["mindflock-status"],
+		queryFn: () => api("/api/mindflock/status"),
+		refetchInterval: 4e3,
+		retry: false
+	});
+}
+function refreshMindflockStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
+}
 function useDevices() {
 	return useQuery({
 		queryKey: ["devices"],
@@ -25312,6 +25345,65 @@ function attentionReason(ss) {
 	return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
 }
 //#endregion
+//#region src/lib/format.ts
+function errMsg(err) {
+	return err?.message || "error";
+}
+function fmtTokens(n) {
+	n = n || 0;
+	if (n < 1e3) return String(n);
+	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
+	return (n / 1e6).toFixed(1) + "M";
+}
+function fmtUsd(u) {
+	u = u || 0;
+	if (u <= 0) return "$0";
+	if (u < .01) return "<$0.01";
+	if (u < 10) return "$" + u.toFixed(2);
+	if (u < 1e3) return "$" + u.toFixed(1);
+	return "$" + (u / 1e3).toFixed(1) + "k";
+}
+var PROV_LABELS = {
+	claude: "Claude",
+	codex: "Codex",
+	aider: "Aider"
+};
+function provLabel(name) {
+	if (!name) return "";
+	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+}
+function relTime(ts, opts = {}) {
+	const suffix = opts.suffix ?? " ago";
+	const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1e3) - ts));
+	if (secs < 60) return secs + "s" + suffix;
+	if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
+	if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
+	return Math.floor(secs / 86400) + "d" + suffix;
+}
+function fmtDurationShort(ms) {
+	const mm = Math.max(1, Math.round(ms / 6e4));
+	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+}
+function displayBranch(inst) {
+	const full = inst.branch || "";
+	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
+	if (m) return m[1];
+	m = full.match(/^mindflock\/(.+)$/);
+	if (m) return m[1];
+	return full || inst.program || "";
+}
+function humanSize(bytes) {
+	if (bytes < 1024) return bytes + " B";
+	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+	return (bytes / 1073741824).toFixed(2) + " GB";
+}
+function pathBasename(p) {
+	const s = (p || "").replace(/[\\/]+$/, "");
+	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+	return i >= 0 ? s.slice(i + 1) : s;
+}
+//#endregion
 //#region src/lib/agentMessages.ts
 var MESSAGE_SNIPPET = 80;
 function snippet(text, max = MESSAGE_SNIPPET) {
@@ -25395,13 +25487,10 @@ function workerState(row, act) {
 	return "idle";
 }
 var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
-function since$1(ts, now) {
-	const secs = Math.max(0, Math.floor(now - ts));
-	if (secs < 60) return secs + "s";
-	if (secs < 3600) return Math.floor(secs / 60) + "m";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h";
-	return Math.floor(secs / 86400) + "d";
-}
+var since$1 = (ts, now) => relTime(ts, {
+	suffix: "",
+	now
+});
 function workerLine(row, opts) {
 	const act = opts.act ?? rawActivity(row);
 	const now = opts.now ?? Date.now() / 1e3;
@@ -28435,64 +28524,6 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
-//#region src/lib/format.ts
-function errMsg(err) {
-	return err?.message || "error";
-}
-function fmtTokens(n) {
-	n = n || 0;
-	if (n < 1e3) return String(n);
-	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
-	return (n / 1e6).toFixed(1) + "M";
-}
-function fmtUsd(u) {
-	u = u || 0;
-	if (u <= 0) return "$0";
-	if (u < .01) return "<$0.01";
-	if (u < 10) return "$" + u.toFixed(2);
-	if (u < 1e3) return "$" + u.toFixed(1);
-	return "$" + (u / 1e3).toFixed(1) + "k";
-}
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
-};
-function provLabel(name) {
-	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
-}
-function relTime(ts) {
-	const secs = Math.max(0, Math.floor(Date.now() / 1e3 - ts));
-	if (secs < 60) return secs + "s ago";
-	if (secs < 3600) return Math.floor(secs / 60) + "m ago";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
-	return Math.floor(secs / 86400) + "d ago";
-}
-function fmtDurationShort(ms) {
-	const mm = Math.max(1, Math.round(ms / 6e4));
-	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
-}
-function displayBranch(inst) {
-	const full = inst.branch || "";
-	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
-	if (m) return m[1];
-	m = full.match(/^mindflock\/(.+)$/);
-	if (m) return m[1];
-	return full || inst.program || "";
-}
-function humanSize(bytes) {
-	if (bytes < 1024) return bytes + " B";
-	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
-	return (bytes / 1073741824).toFixed(2) + " GB";
-}
-function pathBasename(p) {
-	const s = (p || "").replace(/[\\/]+$/, "");
-	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-	return i >= 0 ? s.slice(i + 1) : s;
-}
-//#endregion
 //#region src/lib/runs.ts
 var RUN_DONE_STATES = /* @__PURE__ */ new Set([
 	"done",
@@ -28783,7 +28814,7 @@ function useOutbox() {
 function useNotifyConfig() {
 	return useQuery({
 		queryKey: ["notify-config"],
-		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
+		queryFn: () => api("/api/notify/config"),
 		staleTime: 6e4,
 		refetchInterval: 12e4,
 		retry: false
@@ -31567,6 +31598,73 @@ function extActivationError(extId) {
 	return rec?.status === "error" ? rec.error || "activation failed" : void 0;
 }
 //#endregion
+//#region src/components/Modal.tsx
+var import_react_dom = require_react_dom();
+var stack = [];
+function backdropPress(onClose) {
+	return (e) => {
+		if (e.target === e.currentTarget) onClose();
+	};
+}
+function modalEscape(token, e, p) {
+	if (e.key !== "Escape" || e.defaultPrevented) return false;
+	if (stack[stack.length - 1] !== token) return false;
+	const spent = p.onEscape?.(e) === true;
+	if (!spent && p.closeOnEscape === false) return false;
+	e.preventDefault();
+	if (p.escapeCapture) e.stopPropagation();
+	if (!spent) p.onClose();
+	return true;
+}
+function pushModal(token) {
+	stack.push(token);
+	return () => {
+		const i = stack.lastIndexOf(token);
+		if (i >= 0) stack.splice(i, 1);
+	};
+}
+function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, className, children, ...rest }) {
+	const ref = (0, import_react.useRef)(null);
+	const props = (0, import_react.useRef)({
+		onClose,
+		onEscape,
+		closeOnEscape,
+		escapeCapture
+	});
+	props.current = {
+		onClose,
+		onEscape,
+		closeOnEscape,
+		escapeCapture
+	};
+	(0, import_react.useEffect)(() => {
+		const token = {};
+		const pop = pushModal(token);
+		const onKey = (e) => {
+			modalEscape(token, e, props.current);
+		};
+		window.addEventListener("keydown", onKey, escapeCapture);
+		const node = ref.current;
+		const prev = document.activeElement;
+		if (node && !node.contains(prev)) node.focus({ preventScroll: true });
+		return () => {
+			window.removeEventListener("keydown", onKey, escapeCapture);
+			pop();
+			const now = document.activeElement;
+			if ((!now || now === document.body || (node ? node.contains(now) : false)) && prev && prev !== document.body && prev.isConnected) prev.focus({ preventScroll: true });
+		};
+	}, []);
+	const shell = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		...rest,
+		ref,
+		tabIndex: -1,
+		className: className ? "modal " + className : "modal",
+		onMouseDown: closeOnBackdrop ? backdropPress(onClose) : void 0,
+		children
+	});
+	return portal ? (0, import_react_dom.createPortal)(shell, document.body) : shell;
+}
+//#endregion
 //#region src/extensions/ExtensionDialog.tsx
 function ExtensionDialog() {
 	const open = useUi((s) => s.openDialog === "extension");
@@ -31583,25 +31681,11 @@ function ExtensionDialog() {
 			releaseDialogTarget(target);
 		};
 	}, [open, target]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open || !target) return null;
 	const view = extDialogView(target);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "ext-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "ext-dialog-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -31646,7 +31730,6 @@ function ExtensionDialog() {
 }
 //#endregion
 //#region src/lib/playbooks.ts
-var import_react_dom = require_react_dom();
 var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
 var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
 var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
@@ -35000,11 +35083,14 @@ function onFullScreenChanged(cb) {
 function applyTheme(light) {
 	document.documentElement.classList.toggle("light", light);
 }
-var engineVersion = "";
+function engineVersion(raw) {
+	const v = (raw || "").trim();
+	return !v || !/^\d/.test(v) || v.startsWith("0+") ? "" : v;
+}
 function TopBar() {
 	const ui = useUi();
 	const [light, setLight] = (0, import_react.useState)(() => document.documentElement.classList.contains("light"));
-	const [version, setVersion] = (0, import_react.useState)(engineVersion);
+	const version = engineVersion(useDoctor().data?.version);
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
@@ -35030,19 +35116,6 @@ function TopBar() {
 			off();
 		};
 	}, [mac]);
-	(0, import_react.useEffect)(() => {
-		if (engineVersion) return;
-		let live = true;
-		api("/api/doctor").then((d) => {
-			const v = (d?.version || "").trim();
-			if (!v || !/^\d/.test(v) || v.startsWith("0+")) return;
-			engineVersion = v;
-			if (live) setVersion(v);
-		}).catch(() => {});
-		return () => {
-			live = false;
-		};
-	}, []);
 	const toggleTheme = () => {
 		const next = !light;
 		setLight(next);
@@ -35222,6 +35295,17 @@ function TopBar() {
 	});
 }
 //#endregion
+//#region src/lib/useNow.ts
+function useNow(ms) {
+	const [, tick] = (0, import_react.useReducer)((n) => n + 1, 0);
+	(0, import_react.useEffect)(() => {
+		if (!ms) return;
+		const t = setInterval(tick, ms);
+		return () => clearInterval(t);
+	}, [ms]);
+	return Date.now();
+}
+//#endregion
 //#region src/components/ConnBanner.tsx
 function ConnBanner() {
 	const [pollFails, setPollFails] = (0, import_react.useState)(0);
@@ -35229,7 +35313,6 @@ function ConnBanner() {
 	const [evtDropped, setEvtDropped] = (0, import_react.useState)(false);
 	const [diag, setDiag] = (0, import_react.useState)(null);
 	const [lostAt, setLostAt] = (0, import_react.useState)(0);
-	const [, setTick] = (0, import_react.useState)(0);
 	const [fixArmed, setFixArmed] = (0, import_react.useState)(false);
 	const [fixBusy, setFixBusy] = (0, import_react.useState)(false);
 	const everConnected = (0, import_react.useRef)(false);
@@ -35257,6 +35340,7 @@ function ConnBanner() {
 		});
 	}, []);
 	const lost = pollFails >= 2 || evtDropped;
+	const now = useNow(lost ? 1e3 : false);
 	(0, import_react.useEffect)(() => {
 		document.body.classList.toggle("conn-lost", lost);
 		if (!lost) {
@@ -35266,8 +35350,6 @@ function ConnBanner() {
 			return;
 		}
 		setLostAt((t) => t || Date.now());
-		const tick = setInterval(() => setTick((n) => n + 1), 1e3);
-		return () => clearInterval(tick);
 	}, [lost]);
 	(0, import_react.useEffect)(() => {
 		if (!(lost && pollFails >= 2) || !window.mfdiag?.get) return;
@@ -35290,7 +35372,7 @@ function ConnBanner() {
 	else if (diag && pollFails >= 2 && diag.state === "starting") text = "The server is starting back up — this connects on its own, usually within a few seconds.";
 	else if (pollFails >= 2) text = /^HTTP \d/.test(lastErr) ? "The server is reachable but answering with errors (" + lastErr + "). It may recover on its own; if not, check the server logs." : "The server isn’t answering — it may have stopped or be restarting. Reconnecting automatically.";
 	else text = "The live update stream dropped — the page may lag a few seconds behind. Reconnecting automatically.";
-	const s = Math.max(0, Math.round((Date.now() - lostAt) / 1e3));
+	const s = Math.max(0, Math.round((now - lostAt) / 1e3));
 	const elapsed = "Retrying… (" + (s < 90 ? s + "s" : Math.floor(s / 60) + "m " + s % 60 + "s") + ")";
 	const canFix = !!(fixLabel && window.mfdiag?.restartWsl);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -35334,19 +35416,11 @@ function ConnBanner() {
 //#endregion
 //#region src/components/StateNotice.tsx
 function StateNotice() {
-	const [notice, setNotice] = (0, import_react.useState)(null);
-	(0, import_react.useEffect)(() => {
-		let live = true;
-		api("/api/doctor").then((d) => {
-			if (live && d && d.state_notice) setNotice(d.state_notice);
-		}).catch(() => {});
-		return () => {
-			live = false;
-		};
-	}, []);
-	if (!notice) return null;
+	const notice = useDoctor().data?.state_notice;
+	const [dismissed, setDismissed] = (0, import_react.useState)(false);
+	if (!notice || dismissed) return null;
 	const dismiss = () => {
-		setNotice(null);
+		setDismissed(true);
 		api("/api/doctor/ack-state-notice", { method: "POST" }).catch(() => {});
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -35906,13 +35980,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	};
 	const answering = (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
 	const subline = !editing && (ship || wline || roll || lline || lineage);
-	const [, tick] = (0, import_react.useReducer)((n) => n + 1, 0);
-	const counting = wline?.state === "working" || ship?.state === "working";
-	(0, import_react.useEffect)(() => {
-		if (!counting) return;
-		const t = window.setInterval(tick, 3e4);
-		return () => clearInterval(t);
-	}, [counting]);
+	useNow(wline?.state === "working" || ship?.state === "working" ? 3e4 : false);
 	const folder = inst.folder || inst.path || "";
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
@@ -37184,11 +37252,7 @@ function OverallUsage() {
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const [period, setPeriodState] = (0, import_react.useState)(loadUsagePeriod);
 	const [tab, setTabState] = (0, import_react.useState)(loadUsageTab);
-	const [, tick] = (0, import_react.useReducer)((x) => x + 1, 0);
-	(0, import_react.useEffect)(() => {
-		const id = setInterval(tick, 3e4);
-		return () => clearInterval(id);
-	}, []);
+	useNow(3e4);
 	(0, import_react.useEffect)(() => {
 		if (!instances.length) setOpen(false);
 	}, [instances.length]);
@@ -37309,12 +37373,7 @@ function AutomationBar() {
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
-	const { data: status, refetch } = useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
+	const { data: status, refetch } = useMindflockStatus();
 	const online = (0, import_react.useSyncExternalStore)(subscribeOnline, () => navigator.onLine);
 	if (config?.caps && !config.caps.ticketing) return null;
 	if (!status || !status.available) return null;
@@ -37378,7 +37437,6 @@ function useGithubToggleBar(opts) {
 	const { settingKey, reposKey, defaultOn, activeFlag, toggleLabel } = opts;
 	const { data: config } = useConfig();
 	const openDialog = useUi((s) => s.openDialog);
-	const qc = useQueryClient();
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
 	const { data: gh, refetch } = useQuery({
@@ -37389,12 +37447,7 @@ function useGithubToggleBar(opts) {
 		refetchInterval: 3e4,
 		retry: false
 	});
-	const { data: ingestion } = useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
+	const { data: ingestion } = useMindflockStatus();
 	(0, import_react.useEffect)(() => {
 		if (openDialog === null) refetch();
 	}, [openDialog, refetch]);
@@ -37419,7 +37472,7 @@ function useGithubToggleBar(opts) {
 			setBusy(false);
 			setOptimistic(null);
 			refetch();
-			qc.invalidateQueries({ queryKey: ["mindflock-status"] });
+			refreshMindflockStatus();
 		}
 	};
 	return {
@@ -38705,25 +38758,14 @@ function SignInWindow({ provider, profile, onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
 	const status = state === "streaming" ? "sign in when it asks (a browser window may open) — then close this window" : state;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "signin-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -38751,7 +38793,7 @@ function SignInWindow({ provider, profile, onClose }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function AgentSignIn({ provider, profile, label, onDone, className }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -38831,24 +38873,13 @@ function InstallWindow({ onClose, onDone }) {
 		} catch {}
 		onClose();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "install-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -38872,7 +38903,7 @@ function InstallWindow({ onClose, onDone }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function InstallMissing({ steps, onDone }) {
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -39003,7 +39034,6 @@ var DOCTOR_ICON = {
 	warn: "!",
 	fail: "✗"
 };
-var lastDoctor = null;
 var useDoctorWarnStore = create((set) => ({
 	failing: false,
 	dismissed: false,
@@ -39016,44 +39046,33 @@ function useDoctorWarn() {
 function useDoctorAutoShow() {
 	(0, import_react.useEffect)(() => {
 		if (consumeSetupIntent()) useUi.getState().openDialogFor("setup");
-		const check = async () => {
-			try {
-				const d = await api("/api/doctor");
-				lastDoctor = d;
-				useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
-			} catch {}
-		};
-		check();
-		const t = setInterval(() => {
-			if (!document.hidden) check();
-		}, 3e5);
-		return () => clearInterval(t);
 	}, []);
+	const { data } = useDoctor({ refetchInterval: 3e5 });
+	(0, import_react.useEffect)(() => {
+		if (data !== void 0) useDoctorWarnStore.getState()._setFailing(!(data && data.ok));
+	}, [data]);
 }
 function DoctorList({ reprobeKey, onChange }) {
-	const [doctor, setDoctor] = (0, import_react.useState)(lastDoctor);
-	const [error, setError] = (0, import_react.useState)("");
 	const [installed, setInstalled] = (0, import_react.useState)(0);
+	const reprobe = (reprobeKey || 0) > 0 || installed > 0;
+	const query = useDoctor({ enabled: !reprobe });
+	const [reprobeError, setReprobeError] = (0, import_react.useState)("");
 	(0, import_react.useEffect)(() => {
+		if (!reprobe) return;
 		let live = true;
-		(async () => {
-			const reprobe = (reprobeKey || 0) > 0 || installed > 0;
-			try {
-				const d = await api("/api/doctor" + (reprobe ? "?refresh=1" : ""));
-				if (!live) return;
-				lastDoctor = d;
-				useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
-				setDoctor(d);
-				setError("");
-				if (reprobe) onChange?.();
-			} catch (e) {
-				if (live) setError(e.message);
-			}
-		})();
+		reprobeDoctor().then(() => {
+			if (!live) return;
+			setReprobeError("");
+			onChange?.();
+		}, (e) => {
+			if (live) setReprobeError(e.message);
+		});
 		return () => {
 			live = false;
 		};
 	}, [reprobeKey, installed]);
+	const doctor = query.data ?? null;
+	const error = reprobe ? reprobeError : query.error ? query.error.message : "";
 	if (error) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 		className: "error",
 		children: ["doctor failed: ", error]
@@ -39566,24 +39585,10 @@ function SetupDialog() {
 	const open = useUi((s) => s.openDialog === "setup");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const { data: status } = useSetup(open);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "setup-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "setup-panel-dlg",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -40769,6 +40774,9 @@ function syncFindHighlights() {
 }
 var histCache = /* @__PURE__ */ new Map();
 var HIST_CACHE_MAX = 8;
+function fetchHistory(title, pane) {
+	return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
+}
 function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, initialFind, onClose }) {
 	const forClipboard = (text) => pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
 	const [text, setText] = (0, import_react.useState)(null);
@@ -40779,9 +40787,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		const key = title + " " + pane;
 		let t;
 		try {
-			const r = await fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
-			if (!r.ok) throw new Error(await r.text() || "HTTP " + r.status);
-			t = await r.text();
+			t = await fetchHistory(title, pane);
 		} catch (e) {
 			setError(e.message || "history fetch failed");
 			return;
@@ -41062,12 +41068,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 	};
 	const pressAt = (0, import_react.useRef)(null);
 	const copyAll = () => {
-		(text !== null ? Promise.resolve(text) : fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`).then((r) => {
-			if (!r.ok) return r.text().then((t) => {
-				throw new Error(t || "HTTP " + r.status);
-			});
-			return r.text();
-		})).then((all) => {
+		(text !== null ? Promise.resolve(text) : fetchHistory(title, pane)).then((all) => {
 			if (!all.trim()) {
 				toast("No history to copy");
 				return;
@@ -42640,13 +42641,10 @@ function finishedStatus(f) {
 		cls: ""
 	};
 }
-function since(ts, now = Date.now() / 1e3) {
-	const secs = Math.max(0, Math.floor(now - ts));
-	if (secs < 60) return secs + "s";
-	if (secs < 3600) return Math.floor(secs / 60) + "m";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h";
-	return Math.floor(secs / 86400) + "d";
-}
+var since = (ts, now) => relTime(ts, {
+	suffix: "",
+	now
+});
 function workerStatus(row, parentName, now = Date.now() / 1e3) {
 	const t = row.activitySince;
 	switch (row.state) {
@@ -44164,7 +44162,7 @@ function FinishedSection({ finished }) {
 function FinishedItem({ f }) {
 	const st = finishedStatus(f);
 	const ds = diffText(f.diff_stat);
-	const ended = f.ended_at ? " " + since(f.ended_at) + " ago" : "";
+	const ended = f.ended_at ? " " + relTime(f.ended_at) : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "th-worker th-gone is-" + (st.cls || "none"),
 		"data-title": f.title,
@@ -59956,7 +59954,7 @@ function Pane({ inst, drag, dragging }) {
 		if (!pinOpen || ghostIsLatest || ghostCore.length < 8) return;
 		if (lookup?.q === ghostCore) return;
 		let dead = false;
-		fetch(`/api/instances/${encodeURIComponent(title)}/prompt?q=${encodeURIComponent(ghostCore)}`).then((r) => r.ok ? r.json() : null).then((j) => {
+		instApi(title, "/prompt?q=" + encodeURIComponent(ghostCore)).then((j) => {
 			if (!dead && j?.text) setLookup({
 				q: ghostCore,
 				text: j.text
@@ -61584,12 +61582,9 @@ function CommandPalette({ host }) {
 		closeDialog();
 		a.run();
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "palette",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "palette-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -61614,9 +61609,6 @@ function CommandPalette({ host }) {
 					} else if (e.key === "Enter") {
 						e.preventDefault();
 						run(filtered[sel]);
-					} else if (e.key === "Escape") {
-						e.preventDefault();
-						closeDialog();
 					}
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
@@ -62117,18 +62109,13 @@ function TemplatesDialogView(p) {
 			})
 		]
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "templates-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) p.onClose();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				if (ui.editing !== null || ui.confirming) p.dispatch({ t: "cancel" });
-				else p.onClose();
-			}
+		onClose: p.onClose,
+		onEscape: () => {
+			if (ui.editing === null && !ui.confirming) return false;
+			p.dispatch({ t: "cancel" });
+			return true;
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "templates-card",
@@ -66110,6 +66097,40 @@ function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick })
 	});
 }
 //#endregion
+//#region src/components/InlineConfirm.tsx
+function InlineConfirm(props) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-confirm",
+		role: "alertdialog",
+		"aria-label": props.title,
+		id: props.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-confirm-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
+				" ",
+				props.body
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-confirm-actions",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn set-confirm-yes",
+				disabled: props.busy,
+				onClick: props.onConfirm,
+				children: props.confirmLabel
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				autoFocus: true,
+				disabled: props.busy,
+				onClick: props.onCancel,
+				children: "Cancel"
+			})]
+		})]
+	});
+}
+//#endregion
 //#region src/components/settings/useSettings.tsx
 var SECRET_MASK = "•••set";
 var EMPTY_SETTINGS = {};
@@ -66195,38 +66216,6 @@ function SettingField(props) {
 		onKeyDown: (e) => {
 			if (e.key === "Enter") e.target.blur();
 		}
-	});
-}
-function InlineConfirm(props) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-confirm",
-		role: "alertdialog",
-		"aria-label": props.title,
-		id: props.id,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-confirm-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: props.title }),
-				" ",
-				props.body
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-confirm-actions",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn set-confirm-yes",
-				disabled: props.busy,
-				onClick: props.onConfirm,
-				children: props.confirmLabel
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "test-btn",
-				autoFocus: true,
-				disabled: props.busy,
-				onClick: props.onCancel,
-				children: "Cancel"
-			})]
-		})]
 	});
 }
 //#endregion
@@ -66396,7 +66385,8 @@ async function reopenIntakeItem(target) {
 }
 function workspaceNote(ws) {
 	if (ws.kind === "closed") {
-		const when = ageText(ws.closed_at).replace(" old", " ago");
+		const t = Date.parse(ws.closed_at || "");
+		const when = isFinite(t) ? relTime(t / 1e3) : "";
 		return when ? "session ended " + when : "session you ended";
 	}
 	return "workspace left on this machine";
@@ -66407,12 +66397,7 @@ function ladderLabel(depth) {
 }
 function ageText(iso) {
 	const t = Date.parse(iso || "");
-	if (!isFinite(t)) return "";
-	const mins = Math.max(0, Math.round((Date.now() - t) / 6e4));
-	if (mins < 60) return mins + "m old";
-	const h = Math.round(mins / 60);
-	if (h < 48) return h + "h old";
-	return Math.round(h / 24) + "d old";
+	return isFinite(t) ? relTime(t / 1e3, { suffix: " old" }) : "";
 }
 function panelNote(opts) {
 	if (opts.error || opts.detail) return opts.detail || "";
@@ -67202,12 +67187,7 @@ function MergeDrawer({ row, all, hasSession, onDone, onClose }) {
 function IngestionToggle({ sourceCount }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [optimistic, setOptimistic] = (0, import_react.useState)(null);
-	const { data: status, refetch } = useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
+	const { data: status, refetch } = useMindflockStatus();
 	if (!status || !status.available) return null;
 	const running = !!status.running;
 	const desired = optimistic ?? status.desired ?? running;
@@ -69608,14 +69588,6 @@ function byGroup(items) {
 }
 //#endregion
 //#region src/components/intake/QueueTab.tsx
-function useIngestionStatus() {
-	return useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
-}
 function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "pr-open-chip",
@@ -69752,7 +69724,7 @@ function QueueTab({ gotoTab }) {
 	const ticketsQ = usePanelQuery("tickets");
 	const prsQ = usePanelQuery("github-prs");
 	const issuesQ = usePanelQuery("github-issues");
-	const status = useIngestionStatus().data;
+	const status = useMindflockStatus().data;
 	const engineAvailable = !!status?.available;
 	const engineOn = !!(status?.desired ?? status?.running);
 	const runsElsewhere = status?.automation_here === false;
@@ -70034,28 +70006,14 @@ function IntakeDialog() {
 		prefetchIntakePanels();
 		prefetchIntakeMeta();
 	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const props = { gotoTab: setTab };
 	const noTicketing = !!config?.caps && !config.caps.ticketing;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "intake-dialog",
-			className: "modal",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "intake-panel",
 				children: [
@@ -70928,7 +70886,6 @@ function PeerLinks(_) {
 	const [loadedAt, setLoadedAt] = (0, import_react.useState)(nowSec());
 	const [tick, setTick] = (0, import_react.useState)(0);
 	const [error, setError] = (0, import_react.useState)("");
-	const [now, setNow] = (0, import_react.useState)(nowSec());
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const [doctorTick, setDoctorTick] = (0, import_react.useState)(0);
 	const [invite, setInvite] = (0, import_react.useState)(null);
@@ -70998,12 +70955,7 @@ function PeerLinks(_) {
 		document.addEventListener(PEER_JOIN_EVENT, onJoin);
 		return () => document.removeEventListener(PEER_JOIN_EVENT, onJoin);
 	}, []);
-	const counting = !!invite || (st?.invites.length || 0) > 0;
-	(0, import_react.useEffect)(() => {
-		if (!counting) return;
-		const t = setInterval(() => setNow(nowSec()), 1e3);
-		return () => clearInterval(t);
-	}, [counting]);
+	const now = useNow(!!invite || (st?.invites.length || 0) > 0 ? 1e3 : false) / 1e3;
 	const cloudflaredMissing = st?.relay?.setting === "auto" && st.relay.cloudflared === false;
 	const needsInstall = !!st && (!st.sandbox.available || cloudflaredMissing);
 	(0, import_react.useEffect)(() => {
@@ -71012,7 +70964,7 @@ function PeerLinks(_) {
 			return;
 		}
 		let live = true;
-		api("/api/doctor?refresh=1").then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
+		reprobeDoctor().then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
 		return () => {
 			live = false;
 		};
@@ -72031,26 +71983,14 @@ function notifState() {
 }
 function Notifications(_) {
 	const [state, setState] = (0, import_react.useState)(notifState());
-	const [rules, setRules] = (0, import_react.useState)(null);
-	const [rulesError, setRulesError] = (0, import_react.useState)(false);
+	const config = useNotifyConfig();
+	const rules = config.data ? config.data.rules || [] : null;
+	const rulesError = config.isError && !config.data;
 	(0, import_react.useEffect)(() => {
 		const paint = () => setState(notifState());
 		document.addEventListener("mf-notify-state", paint);
 		return () => document.removeEventListener("mf-notify-state", paint);
 	}, []);
-	const loadRules = (0, import_react.useCallback)(async () => {
-		try {
-			const r = await fetch("/api/notify/config");
-			const list = r.ok && (await r.json()).rules || [];
-			setRules(list);
-			setRulesError(false);
-		} catch {
-			setRulesError(true);
-		}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		loadRules();
-	}, [loadRules]);
 	const usable = state === "on" || state === "off";
 	const status = state === "unsupported" ? notifApi()?.unavailableReason || (window.isSecureContext ? "This browser has no notification support." : "Browser notifications need a secure origin (HTTPS or localhost).") : state === "blocked" ? "Blocked for this site — allow notifications in your browser's site settings, then toggle again." : state === "on" ? "On — you'll get a desktop alert when an agent needs you, a PR merges, or a budget is exceeded." : "Off — enable to get desktop alerts even when this tab is in the background.";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -72114,13 +72054,6 @@ function Notifications(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ntfy, {})
 	] });
-}
-function ago(ts) {
-	const secs = Math.max(0, Math.round(Date.now() / 1e3 - ts));
-	if (secs < 60) return "just now";
-	if (secs < 3600) return Math.round(secs / 60) + " min ago";
-	if (secs < 86400) return Math.round(secs / 3600) + "h ago";
-	return Math.round(secs / 86400) + "d ago";
 }
 function Ntfy() {
 	const [view, setView] = (0, import_react.useState)(null);
@@ -72372,7 +72305,7 @@ function Ntfy() {
 				}),
 				!verdict && last.ts && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: last.ok ? "ntfy-verdict-ok" : "ntfy-verdict-bad",
-					children: last.ok ? "Last push sent " + ago(last.ts) : "Last push failed: " + last.error
+					children: last.ok ? "Last push sent " + relTime(last.ts) : "Last push failed: " + last.error
 				})
 			]
 		}),
@@ -72432,6 +72365,7 @@ function RuleRow({ rule }) {
 					try {
 						await api(`/api/notify/rules/${encodeURIComponent(rule.id)}`, { json: { enabled: want } });
 						notifApi()?.refreshRules?.();
+						queryClient.invalidateQueries({ queryKey: ["notify-config"] });
 						toast(want ? "Notify: " + label : "Muted: " + label);
 					} catch {
 						setOn(!want);
@@ -75596,7 +75530,7 @@ function SyncedAgentInstall({ onDone }) {
 	const [steps, setSteps] = (0, import_react.useState)(null);
 	const load = (0, import_react.useCallback)(async () => {
 		try {
-			const d = await api("/api/doctor?refresh=1");
+			const d = await reprobeDoctor();
 			setSteps(d.install?.steps || []);
 		} catch {
 			setSteps([]);
@@ -75637,7 +75571,6 @@ function Devices(p) {
 	const [code, setCode] = (0, import_react.useState)("");
 	const [pasted, setPasted] = (0, import_react.useState)("");
 	const [rotateTokens, setRotateTokens] = (0, import_react.useState)(true);
-	const [now, setNow] = (0, import_react.useState)(() => Date.now() / 1e3);
 	const [reachAsk, setReachAsk] = (0, import_react.useState)(false);
 	const [matchAsk, setMatchAsk] = (0, import_react.useState)(false);
 	const [matchLeft, setMatchLeft] = (0, import_react.useState)([]);
@@ -75727,13 +75660,8 @@ function Devices(p) {
 		].map((name) => ev.subscribe(name, () => loadAll()));
 		return () => offs.forEach((off) => off());
 	}, [loadAll]);
+	const now = useNow(liveInvite(st) ? 1e3 : false) / 1e3;
 	const invite = liveInvite(st, now);
-	const inviteCode = invite?.code || "";
-	(0, import_react.useEffect)(() => {
-		if (!inviteCode) return;
-		const t = setInterval(() => setNow(Date.now() / 1e3), 1e3);
-		return () => clearInterval(t);
-	}, [inviteCode]);
 	const joinState = st?.join?.state || "idle";
 	const lastJoin = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -76404,9 +76332,7 @@ function Devices(p) {
 				id: "devices-invite-new",
 				disabled: !!busy,
 				onClick: () => void run("invite", async () => {
-					const inv = await api("/api/fleet/invite", { json: {} });
-					setNow(Date.now() / 1e3);
-					if (inv?.warning === "local_only") setReachAsk(true);
+					if ((await api("/api/fleet/invite", { json: {} }))?.warning === "local_only") setReachAsk(true);
 				}),
 				children: busy === "invite" ? "Making a code…" : "Add a device"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -78877,17 +78803,6 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 		openDialogFor,
 		keys
 	]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				closeDialog();
-				e.preventDefault();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const props = {
 		active: true,
@@ -78899,12 +78814,9 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "settings-dialog",
-			className: "modal",
-			onClick: (e) => {
-				if (e.target === e.currentTarget) closeDialog();
-			},
+			onClose: closeDialog,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "settings-panel",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -79076,26 +78988,13 @@ function SidebarBarsPicker() {
 function CustomizeDialog() {
 	const open = useUi((s) => s.openDialog === "customize");
 	const closeDialog = useUi((s) => s.closeDialog);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			closeDialog();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "customize-dialog",
-		className: "modal",
 		role: "dialog",
 		"aria-modal": "true",
 		"aria-labelledby": "customize-title",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "customize-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -79337,26 +79236,13 @@ function PromptsPanel() {
 function PromptsDialog() {
 	const open = useUi((s) => s.openDialog === "prompts");
 	const closeDialog = useUi((s) => s.closeDialog);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			closeDialog();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "prompts-dialog",
-		className: "modal",
 		role: "dialog",
 		"aria-modal": "true",
 		"aria-labelledby": "prompts-title",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "prompts-dialog-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -81228,17 +81114,6 @@ function CommitDialog() {
 			cancelled = true;
 		};
 	}, [open, target]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				closeDialog();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	if (!open) return null;
 	const submitLabel = {
 		leave: "Commit",
@@ -81300,12 +81175,9 @@ function CommitDialog() {
 		}
 		freshStage(title);
 	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "commit-dialog",
-		className: "modal",
-		onMouseDown: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "commit-form",
 			onSubmit: (e) => {
@@ -81458,22 +81330,6 @@ function MakePrDialog() {
 		repo,
 		prBaseByRepo
 	]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				if (showList) setShowList(false);
-				else closeDialog();
-			}
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [
-		open,
-		closeDialog,
-		showList
-	]);
 	const filtered = (0, import_react.useMemo)(() => {
 		const all = info?.branches || [];
 		const q = value.trim().toLowerCase();
@@ -81511,11 +81367,13 @@ function MakePrDialog() {
 			else submit();
 		}
 	}
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "make-pr-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
+		onClose: closeDialog,
+		onEscape: () => {
+			if (!showList) return false;
+			setShowList(false);
+			return true;
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "make-pr-form",
@@ -81638,15 +81496,9 @@ function RenameDialog() {
 		closeDialog();
 		toast(`Renamed to “${next}”`);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "rename-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		onKeyDown: (e) => {
-			if (e.key === "Escape") closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "rename-form",
 			onSubmit: (e) => {
@@ -82135,12 +81987,9 @@ function RecentDialog() {
 		refreshInstances();
 		refreshRecentlyClosed();
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "recent-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "recent-panel",
 			children: [
@@ -82460,24 +82309,13 @@ function GhSignInWindow({ onClose }) {
 		} catch {}
 		closeRef.current();
 	};
-	(0, import_react.useEffect)(() => {
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			e.stopPropagation();
-			close();
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "gh-signin-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) close();
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => void close(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "prov-login-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -82500,7 +82338,7 @@ function GhSignInWindow({ onClose }) {
 				ref: hostRef
 			})]
 		})
-	}), document.body);
+	});
 }
 function ConnectGitHub({ onChange }) {
 	const [st, setSt] = (0, import_react.useState)(null);
@@ -82838,25 +82676,14 @@ function ConnectGitHubDialog() {
 		window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 		return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape" || e.defaultPrevented) return;
-			e.preventDefault();
-			setOpen(false);
-		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
-	}, [open]);
 	if (!open) return null;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "modal",
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "connect-github-dialog",
 		role: "dialog",
 		"aria-modal": "true",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) setOpen(false);
-		},
+		portal: true,
+		escapeCapture: true,
+		onClose: () => setOpen(false),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "connect-github-panel",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -82876,7 +82703,7 @@ function ConnectGitHubDialog() {
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHub, {})]
 		})
-	}), document.body);
+	});
 }
 //#endregion
 //#region src/components/dialogs/TodoDialog.tsx
@@ -82934,19 +82761,8 @@ function TodoDialog() {
 		const poll = setInterval(() => {
 			if (!document.hidden) load();
 		}, 4e3);
-		const onKey = (e) => {
-			if (e.key === "Escape") closeDialog();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => {
-			clearInterval(poll);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [
-		open,
-		load,
-		closeDialog
-	]);
+		return () => clearInterval(poll);
+	}, [open, load]);
 	if (!open) return null;
 	const add = () => {
 		const text = draft.trim();
@@ -82978,12 +82794,9 @@ function TodoDialog() {
 		editCancelled.current = true;
 		setEditing(null);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "todo-dialog",
-		className: "modal",
-		onMouseDown: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "todo-panel",
 			children: [
@@ -83153,12 +82966,9 @@ function AssistantAgentDialog() {
 			setStatus("Save failed: " + (err.message || ""));
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "assistant-agent-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "assistant-agent-panel",
 			children: [
@@ -83275,14 +83085,6 @@ function RedZonesDialog() {
 	(0, import_react.useEffect)(() => {
 		if (open) load();
 	}, [open, load]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") closeDialog();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [open, closeDialog]);
 	const panelRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -83315,12 +83117,9 @@ function RedZonesDialog() {
 	}, [repos, sessionRepos]);
 	if (!open) return null;
 	const zoneCount = rows.reduce((n, r) => n + r.zones.length, 0);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "red-zones-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
+		onClose: closeDialog,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: "red-zones-panel",
 			ref: panelRef,
@@ -83947,17 +83746,12 @@ function WelcomeTour() {
 	(0, import_react.useEffect)(() => {
 		if (!open || paused) return;
 		const onKey = (e) => {
-			if (e.key === "Escape") finishTour();
-			else if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
+			if (e.key === "ArrowRight") setI((n) => Math.min(n + 1, SLIDES.length - 1));
 			else if (e.key === "ArrowLeft") setI((n) => Math.max(n - 1, 0));
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [
-		open,
-		paused,
-		finishTour
-	]);
+	}, [open, paused]);
 	if (!open || paused) return null;
 	const last = i === SLIDES.length - 1;
 	const slide = last ? lastSlide(failing) : SLIDES[i];
@@ -83965,12 +83759,9 @@ function WelcomeTour() {
 		const tab = LEGACY_SCREEN_TABS[screen];
 		openDialogFor(tab ? "intake" : "settings", tab || screen);
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "welcome-tour",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) finishTour();
-		},
+		onClose: finishTour,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "wt-card",
 			children: [

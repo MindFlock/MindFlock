@@ -14,6 +14,7 @@
 import type { DiffStat, Instance, LastReport, ThreadItem, ThreadMember, ThreadResponse, FinishedChild } from "../api/types";
 import { childrenOf, workerState, type WorkerState } from "./agentMessages";
 import { normOrder } from "./order";
+import { relTime } from "./format";
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {});
@@ -346,13 +347,7 @@ export function finishedStatus(f: FinishedChild): { word: string; cls: string } 
 }
 
 /** "40s", "6m", "2h", "3d" since `ts` (epoch seconds). */
-export function since(ts: number, now: number = Date.now() / 1000): string {
-  const secs = Math.max(0, Math.floor(now - ts));
-  if (secs < 60) return secs + "s";
-  if (secs < 3600) return Math.floor(secs / 60) + "m";
-  if (secs < 86400) return Math.floor(secs / 3600) + "h";
-  return Math.floor(secs / 86400) + "d";
-}
+const since = (ts: number, now: number) => relTime(ts, { suffix: "", now });
 
 /** A worker row's status: the coloured word and the muted detail after it. */
 export function workerStatus(

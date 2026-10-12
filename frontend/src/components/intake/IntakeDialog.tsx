@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import {
   prefetchIntakeMeta,
   prefetchIntakePanels,
@@ -160,18 +161,6 @@ export function IntakeDialog() {
     prefetchIntakeMeta();
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        closeDialog();
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
 
   const props: TabProps = { gotoTab: setTab };
@@ -182,13 +171,7 @@ export function IntakeDialog() {
 
   return (
     <SettingsCtx.Provider value={model}>
-      <div
-        id="intake-dialog"
-        className="modal"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) closeDialog();
-        }}
-      >
+      <Modal id="intake-dialog" onClose={closeDialog}>
         <div id="intake-panel">
           <div className="ws-head">
             <h2>Intake</h2>
@@ -237,7 +220,7 @@ export function IntakeDialog() {
             </p>
           )}
         </div>
-      </div>
+      </Modal>
     </SettingsCtx.Provider>
   );
 }

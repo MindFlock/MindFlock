@@ -4,41 +4,27 @@
  * use it in the sidebar, manage the list from its "Manage".
  *
  * Esc closes the dialog unless something inside claimed it first
- * (`defaultPrevented`). The listener sits on window, which a keydown reaches
- * after every document listener, so a child's claim is always made before
- * this reads it. */
+ * (`defaultPrevented`) — the Modal shell's listener sits on window, which a
+ * keydown reaches after every document listener, so a child's claim is always
+ * made before it reads it. */
 
-import { useEffect } from "react";
 import { useUi } from "../../state/store";
+import { Modal } from "../Modal";
 import { SidebarBarsPicker } from "./SidebarBarsPicker";
 
 export function CustomizeDialog() {
   const open = useUi((s) => s.openDialog === "customize");
   const closeDialog = useUi((s) => s.closeDialog);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      closeDialog();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   if (!open) return null;
 
   return (
-    <div
+    <Modal
       id="customize-dialog"
-      className="modal"
       role="dialog"
       aria-modal="true"
       aria-labelledby="customize-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
+      onClose={closeDialog}
     >
       <div id="customize-panel">
         <div className="ws-head">
@@ -52,6 +38,6 @@ export function CustomizeDialog() {
           <SidebarBarsPicker />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

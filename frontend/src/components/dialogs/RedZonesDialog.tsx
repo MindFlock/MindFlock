@@ -30,6 +30,7 @@ import { fetchCompanions, saveCompanions, type CompanionsDoc } from "../../lib/c
 import { refreshInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { Modal } from "../Modal";
 import { instances } from "../../lib/sessionActions";
 
 interface RepoDoc {
@@ -114,18 +115,6 @@ export function RedZonesDialog() {
     if (open) void load();
   }, [open, load]);
 
-  // Escape closes from anywhere while open. Opened from the palette or a
-  // toast, focus sits on <body>, so a keydown handler on the dialog itself
-  // would never hear it (TodoDialog does the same).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDialog();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
-
   // Move focus into the dialog (the first repo's pattern input, else the
   // panel) so keys land here and not on the page behind it.
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -172,13 +161,7 @@ export function RedZonesDialog() {
   const zoneCount = rows.reduce((n, r) => n + r.zones.length, 0);
 
   return (
-    <div
-      id="red-zones-dialog"
-      className="modal"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      }}
-    >
+    <Modal id="red-zones-dialog" onClose={closeDialog}>
       <div
         id="red-zones-panel"
         ref={panelRef}
@@ -224,7 +207,7 @@ export function RedZonesDialog() {
           ))}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

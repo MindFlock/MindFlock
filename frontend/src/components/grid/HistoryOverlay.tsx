@@ -22,6 +22,7 @@
  * browser's find bar. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { apiText } from "../../api/client";
 import { copyText } from "../../lib/clipboard";
 import { agentCopyText } from "../../lib/agentCopy";
 import { peekTerm, type DragScreenCtx } from "../../lib/terminals";
@@ -274,6 +275,11 @@ function syncFindHighlights() {
 const histCache = new Map<string, string>();
 const HIST_CACHE_MAX = 8;
 
+/** A pane's full scrollback as plain text — the overlay's load and Copy all. */
+function fetchHistory(title: string, pane: "agent" | "shell"): Promise<string> {
+  return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
+}
+
 export function HistoryOverlay({
   title,
   pane,
@@ -329,11 +335,7 @@ export function HistoryOverlay({
     const key = title + " " + pane;
     let t: string;
     try {
-      const r = await fetch(
-        `/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`
-      );
-      if (!r.ok) throw new Error((await r.text()) || "HTTP " + r.status);
-      t = await r.text();
+      t = await fetchHistory(title, pane);
     } catch (e) {
       setError((e as Error).message || "history fetch failed");
       return;
@@ -695,13 +697,7 @@ export function HistoryOverlay({
     const got: Promise<string> =
       text !== null
         ? Promise.resolve(text)
-        : fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`).then((r) => {
-            if (!r.ok)
-              return r.text().then((t) => {
-                throw new Error(t || "HTTP " + r.status);
-              });
-            return r.text();
-          });
+        : fetchHistory(title, pane);
     got
       .then((all) => {
         if (!all.trim()) {

@@ -1952,3 +1952,69 @@ export interface ExtensionLoadFailure {
   error: string;
   at?: number;
 }
+
+/** One step of the one-shot "install everything missing" plan
+ * (`backend.doctor.install_plan`). */
+export interface InstallStep {
+  id: string;
+  label: string;
+  cmd: string;
+}
+
+export interface DoctorCheckItem {
+  id?: string;
+  label?: string;
+  status?: "ok" | "info" | "warn" | "fail" | string;
+  detail?: string;
+  fix?: string;
+  /** The runnable fix (an agent-auth row's declared login command). */
+  cmd?: string;
+  /** The agent provider an agent row is about (drives "Sign in to …"). */
+  provider?: string;
+}
+
+/** A state.json written by a NEWER MindFlock was moved aside (StateNotice). */
+export interface StateNotice {
+  file_version?: number;
+  supported_version?: number;
+  backup_path?: string;
+}
+
+/** GET /api/doctor (state/queries.ts `useDoctor`). */
+export interface DoctorPayload {
+  ok: boolean;
+  checks?: DoctorCheckItem[];
+  /** Everything missing that this machine needs, as one install (see
+   * `backend.doctor.install_plan`). */
+  install?: { steps?: InstallStep[]; packages?: string[] };
+  /** The engine's installed version ("0+unknown" from a bare source tree). */
+  version?: string;
+  state_notice?: StateNotice | null;
+}
+
+/** GET /api/mindflock/status — the ticket-ingestion pipeline and the PR /
+ * issue automation it hosts (state/queries.ts `useMindflockStatus`). */
+export interface MindflockStatus {
+  available: boolean;
+  running: boolean;
+  /** The last state the ticket toggle was set to (desired on + not running =
+   * starting up, or died). */
+  desired?: boolean;
+  /** A live connectivity problem (only while running). */
+  net_error?: boolean;
+  /** github.enabled AND repos configured, folded server-side. */
+  pr_enabled?: boolean;
+  /** github.issues_enabled AND repos configured. */
+  issues_enabled?: boolean;
+  /** False when PR review and issue handling run on another of your devices
+   * (Settings → Your devices); `automation_device` names it ("" when unknown).
+   * Missing from an older server: read as "here". */
+  automation_here?: boolean;
+  automation_device?: string;
+  /** True while a ticket / a PR batch / an issue is actually being brought in. */
+  tickets_active?: boolean;
+  pr_active?: boolean;
+  issues_active?: boolean;
+  /** Set while the next ticket waits on engine.max_sessions. */
+  held_for_slot?: { live: number; max: number } | null;
+}

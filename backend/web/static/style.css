@@ -15659,6 +15659,17 @@ button.ct-chip:hover {
 /* 170 */
 
 @layer components{
+/* The shell takes focus when a dialog opens without focusing anything itself
+   (components/Modal.tsx) — so the keyboard leaves the terminal. It is a
+   backdrop, not a control: no focus ring on it. */
+.modal:focus {
+  outline: none;
+}
+}
+
+/* the shared <Modal> shell, after the .modal backdrop it extends */
+
+@layer components{
 
 /* Dragging a file over the new-session dialog: the same promise the terminals
  * make — dashed accent border, a download arrow and a caption — at card scale.

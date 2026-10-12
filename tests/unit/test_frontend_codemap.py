@@ -400,7 +400,10 @@ def test_zones_dialog_is_a_modal(js):
     # Every store dialog (the zones dialog included) holds the end shortcuts.
     assert "function overlayOpen()" in km and "OVERLAY_SELECTOR" in km
     dlg = _region(js, "src/components/dialogs/RedZonesDialog.tsx")
-    assert in_bundle('document.addEventListener("keydown", onKey)', dlg)
+    # The shared Modal shell owns Escape: a window listener, whatever is focused.
+    assert in_bundle('jsx)(Modal, { id: "red-zones-dialog", onClose: closeDialog', dlg)
+    modal = _region(js, "src/components/Modal.tsx")
+    assert in_bundle('window.addEventListener("keydown", onKey, escapeCapture)', modal)
 
 
 def test_plan_first_needs_a_plan_capable_cli(js):
