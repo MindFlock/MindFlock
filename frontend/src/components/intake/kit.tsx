@@ -39,7 +39,7 @@ import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { shortReason } from "../../lib/failureText";
-import { DEPTH_LABELS, SESSION_DEPTHS } from "../../lib/autopilot";
+import { LANE_LABEL, SESSION_DEPTHS, laneLabel } from "../../lib/autopilot";
 import { searchTokens } from "../../lib/rowSearch";
 import { useUi } from "../../state/store";
 import { DialogFilter } from "../dialogs/DialogFilter";
@@ -86,19 +86,6 @@ function workspaceNote(ws: ItemWorkspace): string {
     return when ? "session ended " + when : "session you ended";
   }
   return "workspace left on this machine";
-}
-
-/** A Fast-track rung in the words every Fast-track control uses.
- *
- * ONE LADDER. The pane's ⏩, the row › menu and New's Options all read Off /
- * Commit / Push / Open a PR / Merge when green, and Intake used to add a sixth
- * word of its own: "Agent only" (stop once the agent stops). That is what Off
- * already does to a session — nothing after the agent — so a stored `agent`
- * reads as Off here and is never offered. The server still accepts it; this is
- * the vocabulary, not the config. */
-export function ladderLabel(depth?: string): string {
-  const d = !depth || depth === "agent" ? "off" : depth;
-  return DEPTH_LABELS[d] || d;
 }
 
 /** "3h old" / "20m old" / "2d old" — one implementation, three tabs. */
@@ -550,8 +537,8 @@ export function WorkItemRow({
   const showPicks = optsOpen || picked;
   // What the empty choices resolve to, named once for the options and the
   // collapsed line alike.
-  const defaultDepth = ladderLabel(configuredDepth);
-  const defaultIsOff = defaultDepth === DEPTH_LABELS.off;
+  const defaultDepth = laneLabel(configuredDepth);
+  const defaultIsOff = defaultDepth === LANE_LABEL.leave;
   const effortDefault = configuredEffort
     ? effortOptionLabel(configuredEffort, effortCap)
     : "";
@@ -559,7 +546,7 @@ export function WorkItemRow({
   // one line, with Fast-track named the way New's Options summary names it.
   const uses = [
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-    "Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth),
+    "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
     !effortUsable
       ? ""
       : effort
@@ -766,10 +753,10 @@ export function WorkItemRow({
                   explicit Off is offered only when the default is something
                   else (the start routes accept "off"). */}
               <option value="">{"Default (" + defaultDepth + ")"}</option>
-              {!defaultIsOff && <option value="off">{DEPTH_LABELS.off}</option>}
+              {!defaultIsOff && <option value="off">{LANE_LABEL.leave}</option>}
               {SESSION_DEPTHS.map((d) => (
                 <option key={d} value={d}>
-                  {DEPTH_LABELS[d]}
+                  {LANE_LABEL[d]}
                 </option>
               ))}
             </select>

@@ -734,7 +734,7 @@ token, the network) is listed in `errors` instead of failing the call.
 | `agent` | the source's | agent CLI for this ticket (a provider name) |
 | `effort` | the source's | thinking-effort rung for this launch |
 | `note` | — | ≤ 4000 chars appended after the ticket text, under "Note from session `<you>`" |
-| `autopilot` | `off` | `off`, `commit`, `push`, `pr` or `merge` (merge needs `confirm_merge: true`) |
+| `autopilot` | `off` | `off` (or `leave`), `commit`, `push`, `pr` or `merge` (merge needs `confirm_merge: true`) |
 | `report_back` | true | append the report-back footer |
 | `wait_ready` | true | wait up to 45 s for the session to finish provisioning |
 
@@ -872,7 +872,7 @@ doesn't count.
 | Argument | Default | Meaning |
 |---|---|---|
 | `title` | you | yourself or a session you manage |
-| `depth` | required | `off` (disarm), `commit`, `push`, `pr` or `merge` |
+| `depth` | required | `off` or `leave` (disarm), `commit`, `push`, `pr` or `merge` |
 | `message` | — | the commit subject to use (else a placeholder replaced at commit time by one written from the final diff) |
 | `base` | — | the PR base branch |
 | `confirm_merge` | false | required for `merge` |
@@ -906,7 +906,7 @@ it surfaces to the user.
 |---|---|---|
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
 | `name` | suggested | the team run's name |
-| `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
+| `lane` | the user's Fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` or `off` (no commit; stored as `leave`), `commit`, `push`, `pr` (a PR per item) or `merge` |
 | `ask_first` | false | stop before each item's first commit / push and wait for the user's go (in MindFlock's bell) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |

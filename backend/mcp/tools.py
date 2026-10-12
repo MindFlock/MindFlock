@@ -2341,7 +2341,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "set_autopilot",
-            "Arm a session's fast-track",
+            "Arm a session's Fast-track",
             _ship.D_AUTOPILOT,
             _ship.S_AUTOPILOT,
             box.set_autopilot,
