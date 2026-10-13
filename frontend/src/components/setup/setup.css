@@ -1,12 +1,193 @@
 /* --------------------------------------------------------------------------- *
- * The first-run checklist (components/setup): the five steps as drawn on the
- * empty grid's card and in the Setup modal, and the compact "Setup 3/5" chip.
- * The shared step/doctor rules (.setup-step, .setup-actions, .doctor-list…)
- * stay in dialogs/SetupDialog.css; this file adds what is new.
+ * The first-run checklist (components/setup): three groups (Get started ·
+ * Connect your work · Optional, later) as drawn on the empty grid's card and in
+ * the Setup modal, and the compact "Setup 3/5" chip. The shared step/doctor
+ * rules (.setup-step, .setup-actions, .doctor-list…) stay in
+ * dialogs/SetupDialog.css; this file adds what is new and, scoped to
+ * .setup-checklist, gives the steps room to breathe.
  * --------------------------------------------------------------------------- */
 .setup-progress {
-  margin: 0 0 12px;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+
+/* A group: a small caps heading, then its steps. Space between groups is
+   bigger than space between steps, so what belongs together reads together. */
+.setup-group {
+  margin-bottom: 26px;
+}
+
+.setup-group-title {
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-group-note {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.setup-group-note.st-done {
+  color: var(--ok, #4caf50);
+}
+
+.setup-checklist .setup-step {
+  margin: 0 0 6px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.setup-checklist .setup-step h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.setup-checklist .setup-step-body {
+  margin-top: 10px;
+  padding-left: 24px;
+}
+
+.setup-checklist .setup-step-body > :first-child {
+  margin-top: 0;
+}
+
+/* The one step to do now. */
+.setup-checklist .setup-step.is-next {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.setup-checklist .setup-step.st-done {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.setup-checklist .setup-step.st-done > h3 {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.setup-checklist .setup-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.setup-checklist .setup-actions {
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.setup-checklist .setup-actions button:not(.linklike) {
+  font-size: 13px;
+  padding: 7px 14px;
+}
+
+/* One obvious next action: only the next step's button is accent-coloured.
+   (.setup-new is accent everywhere else — SetupDialog.css — so it is reset
+   here unless it is the next action.) */
+.setup-checklist .setup-actions .setup-new:not(.setup-primary) {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 400;
+}
+
+.setup-checklist .setup-actions .setup-primary,
+.setup-checklist .setup-step.is-next #doctor-install-btn,
+.setup-checklist .setup-step.is-next .setup-login button:not(.linklike) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.setup-checklist .setup-actions .setup-primary:hover,
+.setup-checklist .setup-step.is-next #doctor-install-btn:hover,
+.setup-checklist .setup-step.is-next .setup-login button:not(.linklike):hover {
+  filter: brightness(1.1);
+}
+
+/* Step ①: the install button, then only what is missing. */
+.setup-checklist .doctor-install {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.setup-checklist .doctor-install .test-btn {
+  font-size: 13px;
+  padding: 7px 14px;
+}
+
+.setup-tools-ok {
+  color: var(--ok, #4caf50);
+}
+
+.setup-allchecks {
+  margin: 8px 0 12px;
   font-size: 12px;
+}
+
+.setup-allchecks > summary,
+.setup-fold > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-allchecks > summary:hover {
+  color: var(--text);
+}
+
+.setup-allchecks[open] > summary,
+.setup-checklist .setup-fold[open] > summary {
+  margin-bottom: 8px;
+}
+
+.setup-checklist .setup-fold {
+  margin: 6px 0 0 24px;
+}
+
+/* Optional, later: folded, quiet, under the two groups. */
+.setup-later {
+  margin: 4px 0 0;
+}
+
+.setup-later > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.setup-later > summary:hover {
+  color: var(--text);
+}
+
+.setup-later[open] > summary {
+  margin-bottom: 10px;
+}
+
+.setup-later .setup-step h3 {
+  margin-bottom: 10px;
+}
+
+.setup-later-more {
+  padding-left: 14px;
 }
 
 .setup-step .setup-state {
@@ -27,13 +208,6 @@
 
 .setup-step.st-skipped > h3 {
   opacity: 0.7;
-}
-
-.setup-fold > summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 6px;
 }
 
 .setup-fold > summary:hover {
@@ -145,4 +319,29 @@
 
 .setup-chip:hover {
   background: rgba(232, 161, 60, 0.22);
+}
+
+/* Narrow (a phone-width window, or the card squeezed beside the sidebar): give
+   the words the width instead of the indents. */
+.setup-checklist {
+  container-type: inline-size;
+}
+
+@container (max-width: 420px) {
+  .setup-checklist .setup-step {
+    padding: 10px 8px;
+  }
+
+  .setup-checklist .setup-step-body,
+  .setup-checklist .setup-fold,
+  .setup-later-more {
+    padding-left: 0;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  #empty .setup-card {
+    padding: 18px 14px;
+  }
 }

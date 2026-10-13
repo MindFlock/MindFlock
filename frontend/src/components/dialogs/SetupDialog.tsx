@@ -13,8 +13,7 @@
 
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
-import { SetupChecklist, progressLine } from "../setup/SetupChecklist";
-import { useSetup } from "../setup/useSetup";
+import { SetupChecklist } from "../setup/SetupChecklist";
 
 export {
   DoctorList,
@@ -29,7 +28,6 @@ export { SetupChecklist } from "../setup/SetupChecklist";
 export function SetupDialog() {
   const open = useUi((s) => s.openDialog === "setup");
   const closeDialog = useUi((s) => s.closeDialog);
-  const { data: status } = useSetup(open);
 
   if (!open) return null;
 
@@ -37,9 +35,8 @@ export function SetupDialog() {
     <Modal id="setup-dialog" onClose={closeDialog}>
       <div id="setup-panel-dlg">
         <div className="ws-head">
-          <h2>
-            Setup <span className="muted setup-head-progress">{progressLine(status)}</span>
-          </h2>
+          {/* The progress line is the checklist's own first line. */}
+          <h2>Setup</h2>
           <button type="button" id="setup-close" onClick={closeDialog}>
             Close
           </button>

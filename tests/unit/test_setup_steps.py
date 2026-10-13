@@ -1,7 +1,8 @@
-"""The five-step first-run checklist (backend.web.core.setup_steps): the
-settings shape and its migration from ``general.onboarded``, the hooks that
-mark steps (doctor / create / ticket source / phone), ``GET /api/setup`` and
-the skip route, and the wizard printing the same list."""
+"""The first-run checklist (backend.web.core.setup_steps): its three groups
+(get started / connect your work / optional, later), the settings shape and
+its migrations, the hooks that mark steps (doctor / create / GitHub credential
+/ ticket source / phone), ``GET /api/setup`` and the skip route, and the
+wizard printing the same list."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from backend.config import settings as S
 from backend.web import server
 from backend.web.core import setup_steps
 
-STEP_IDS = ("tools", "agent_login", "repo", "tracker", "phone")
+STEP_IDS = ("tools", "agent_login", "repo", "github", "tracker", "phone")
 
 
 def _check(cid, status, **kw):
@@ -24,10 +25,41 @@ def _check(cid, status, **kw):
 # settings shape + migration
 # --------------------------------------------------------------------------- #
 class TestSettings:
-    def test_definition_is_five_steps_three_required(self):
+    def test_definition_three_required_two_to_connect_one_for_later(self):
         assert setup_steps.STEP_IDS == STEP_IDS
         assert setup_steps.REQUIRED == ("tools", "agent_login", "repo")
-        assert setup_steps.OPTIONAL == ("tracker", "phone")
+        assert setup_steps.OPTIONAL == ("github", "tracker", "phone")
+        # The phone is never part of getting started: folded, uncounted.
+        assert setup_steps.LATER == ("phone",)
+        assert setup_steps.COUNTED == (
+            "tools",
+            "agent_login",
+            "repo",
+            "github",
+            "tracker",
+        )
+        groups = [s["group"] for s in setup_steps.STEPS]
+        assert groups == ["start", "start", "start", "connect", "connect", "later"]
+        # Required is exactly the "start" group, so the UI's grouping and the
+        # summary's required_done can never disagree.
+        assert all((s["group"] == "start") == s["required"] for s in setup_steps.STEPS)
+
+    def test_a_store_from_before_the_github_step_is_not_reasked(self):
+        # "Connect a tracker and GitHub" was one step: settling it settled GitHub.
+        for tracker in (
+            {"done": True, "at": "2026-01-01T00:00:00+00:00"},
+            {"skipped": True},
+        ):
+            g = S.GeneralSettings.from_dict({"setup": {"tracker": tracker}})
+            assert g.setup["github"]["skipped"] is True, tracker
+        # ...but a fresh store, or one that already has the step, is left alone.
+        assert setup_steps.normalize({})["github"]["skipped"] is False
+        assert (
+            setup_steps.normalize(
+                {"tracker": {"skipped": True}, "github": {"done": False, "at": None}}
+            )["github"]["skipped"]
+            is False
+        )
 
     def test_untouched_store_serializes_unchanged(self):
         g = S.GeneralSettings.from_dict({})
@@ -104,14 +136,14 @@ class TestMarking:
     def test_skip_is_for_optional_steps_and_done_wins(self):
         assert setup_steps.skip("tools") is False
         assert setup_steps.skip("phone") is True
-        assert setup_steps.checklist()[4]["status"] == "skipped"
+        assert setup_steps.checklist()[5]["status"] == "skipped"
         setup_steps.mark("phone")
-        row = setup_steps.checklist()[4]
+        row = setup_steps.checklist()[5]
         assert row["status"] == "done" and row["skipped"] is False
         assert setup_steps.unskip("tracker") is False
         setup_steps.skip("tracker")
         assert setup_steps.unskip("tracker") is True
-        assert setup_steps.checklist()[3]["status"] == "todo"
+        assert setup_steps.checklist()[4]["status"] == "todo"
 
     def test_summary_counts_skips_as_done_and_gates_the_card(self):
         s = setup_steps.summary()
@@ -126,11 +158,51 @@ class TestMarking:
             setup_steps.mark(sid)
         s = setup_steps.summary()
         assert s["required_done"] is True and s["complete"] is False
-        assert s["done"] == 3 and s["next"] == "tracker"
+        assert s["done"] == 3 and s["next"] == "github"
+        setup_steps.skip("github")
         setup_steps.skip("tracker")
-        setup_steps.skip("phone")
         s = setup_steps.summary()
-        assert s["complete"] is True and s["done"] == 5 and s["next"] == ""
+        # The phone (Optional, later) is neither counted nor waited on.
+        assert s["complete"] is True and s["done"] == 5 and s["total"] == 5
+        assert s["next"] == ""
+        assert setup_steps.state()["phone"]["done"] is False
+
+    def test_a_broken_optional_extra_does_not_hold_up_the_tools_step(self):
+        prog = setup_steps.doctor_progress(
+            [_check("git", "ok"), _check("tmux", "ok"), _check("tailscale", "fail")]
+        )
+        assert prog["tools"] is True
+        prog = setup_steps.doctor_progress(
+            [_check("git", "ok"), _check("tmux", "fail")]
+        )
+        assert prog["tools"] is False
+
+    def test_extra_checks_match_the_frontend(self):
+        import pathlib
+        import re
+
+        ts = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "frontend/src/components/setup/setupModel.ts"
+        ).read_text(encoding="utf-8")
+        block = ts[ts.index("export const EXTRA_CHECKS") :]
+        block = block[: block.index("]);")]
+        assert set(re.findall(r'"([a-z-]+)"', block)) == set(setup_steps.EXTRA_CHECKS)
+
+    def test_a_github_credential_marks_github(self, monkeypatch):
+        from backend.web.core import github_auth
+
+        monkeypatch.setattr(github_auth, "resolve_token", lambda *a, **k: ("none", ""))
+        assert setup_steps.github_connected([]) is False
+        assert setup_steps.github_connected([_check("gh", "warn")]) is False
+        # gh signed in (the doctor's row) — no subprocess of our own.
+        assert setup_steps.github_connected([_check("gh", "ok")]) is True
+        monkeypatch.setattr(
+            github_auth, "resolve_token", lambda *a, **k: ("settings", "tok")
+        )
+        assert setup_steps.github_connected([]) is True
+        setup_steps.status(None)
+        assert setup_steps.state()["github"]["done"] is True
 
     def test_doctor_run_marks_tools_and_agent_login(self):
         checks = [
@@ -203,13 +275,18 @@ class TestMarking:
         setup_steps.mark("tools")
         setup_steps.skip("phone")
         lines = setup_steps.format_lines()
-        assert len(lines) == 5
-        assert lines[0].startswith("  ✓ 1. Engine and tools") and lines[0].endswith(
+        assert len(lines) == 6
+        assert lines[0].startswith("  ✓ 1. Install the tools") and lines[0].endswith(
             "done"
         )
         assert lines[1].startswith("  • 2. Sign in to your agent")
-        assert lines[3].endswith("optional")
-        assert lines[4].startswith("  – 5. Your phone") and lines[4].endswith("skipped")
+        assert lines[3].startswith("  • 4. Connect GitHub") and lines[3].endswith(
+            "optional"
+        )
+        assert lines[5].startswith("  – 6. Use it from your phone")
+        assert lines[5].endswith("skipped")
+        setup_steps.unskip("phone")
+        assert setup_steps.format_lines()[5].endswith("optional, later")
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +308,8 @@ def client(monkeypatch):
     # the route's doctor summary tied to the checks above.
     monkeypatch.setattr(server, "ADDONS", [])
     monkeypatch.setattr(setup_steps, "provider_logins", lambda: [])
+    # A GH_TOKEN in the shell running the suite must not tick "Connect GitHub".
+    monkeypatch.setattr(setup_steps, "github_connected", lambda checks=(): False)
     setup_steps.set_first_run_report("")
     return TestClient(server.app)
 
@@ -245,18 +324,35 @@ class TestRoutes:
         d = r.json()
         assert [s["id"] for s in d["steps"]] == list(STEP_IDS)
         assert [s["title"] for s in d["steps"]] == [
-            "Engine and tools",
+            "Install the tools",
             "Sign in to your agent",
-            "Pick a repo",
-            "Connect a tracker and GitHub",
-            "Your phone",
+            "Start your first agent",
+            "Connect GitHub",
+            "Connect your tracker",
+            "Use it from your phone",
         ]
-        assert [s["required"] for s in d["steps"]] == [True, True, True, False, False]
+        assert [s["required"] for s in d["steps"]] == [
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+        ]
+        assert [s["group"] for s in d["steps"]] == [
+            "start",
+            "start",
+            "start",
+            "connect",
+            "connect",
+            "later",
+        ]
         for s in d["steps"]:
             assert set(s) == {
                 "id",
                 "title",
                 "required",
+                "group",
                 "done",
                 "at",
                 "skipped",
@@ -286,13 +382,16 @@ class TestRoutes:
         r = client.post("/api/setup/phone/skip")
         assert r.status_code == 200
         d = r.json()
-        assert d["steps"][4]["skipped"] is True and d["steps"][4]["status"] == "skipped"
-        assert d["summary"]["done"] == 1
+        assert d["steps"][5]["skipped"] is True and d["steps"][5]["status"] == "skipped"
+        # The phone is "Optional, later": skipping it moves no count.
+        assert d["summary"]["done"] == 0
+        r = client.post("/api/setup/github/skip")
+        assert r.status_code == 200 and r.json()["summary"]["done"] == 1
         assert client.post("/api/setup/tools/skip").status_code == 400
         assert client.post("/api/setup/bogus/skip").status_code == 400
         assert S.load_settings().general.setup["phone"]["skipped"] is True
         r = client.post("/api/setup/phone/unskip")
-        assert r.status_code == 200 and r.json()["steps"][4]["status"] == "todo"
+        assert r.status_code == 200 and r.json()["steps"][5]["status"] == "todo"
 
     def test_skip_is_owner_only(self, client, monkeypatch):
         from backend.web.core import auth as web_auth

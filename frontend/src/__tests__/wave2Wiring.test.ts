@@ -67,7 +67,7 @@ describe("wave-2 JS wiring", () => {
 
   it("C2 — the doctor-backed first-run checklist", () => {
     const model = code("components/setup/setupModel.ts");
-    expect(model).toContain("Pick a repo");
+    expect(model).toContain("Start your first agent");
     expect(model).toContain("Sign in to your agent");
   });
 
@@ -120,9 +120,9 @@ describe("wave 3", () => {
     expect(codeFilesWith("foreign-chip")).toEqual([]);
   });
 
-  it("F8 — doctor warning chip + inline Shortcut token input", () => {
+  it("F8 — doctor warning chip (the setup checklist's Shortcut token input is gone: a tracker's token goes in its Intake source)", () => {
     expect(code("components/sidebar/Sidebar.tsx")).toContain("doctor-warn");
-    expect(code("components/setup/SetupChecklist.tsx")).toContain("setup-shortcut-token");
+    expect(code("components/setup/SetupChecklist.tsx")).not.toContain("setup-shortcut-token");
   });
 
   it("wave-3 CSS rules", () => {

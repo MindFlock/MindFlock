@@ -1932,38 +1932,54 @@ first load: the grid's first-run card *is* the welcome. UI store state
 `localStorage`) covers the hints; the checklist's state is the server's.
 
 - **Get set up** — with no sessions, and while a required step is still to
-  do, the grid shows a card headed *Get set up*, *Five steps — three to a
-  running agent, two you can skip.* It holds the setup checklist
+  do, the grid shows a card headed *Get set up*, *Three steps to your first
+  agent. The rest can wait.* It holds the setup checklist
   (`setup/SetupChecklist.tsx` — the same component the Setup modal renders).
-  The five steps, their names and their order come from the server
+  The steps, their names, order and groups come from the server
   (`GET /api/setup`, `backend/web/core/setup_steps.py` — the same list
-  `mindflock init` prints, in the same state):
-  ① **Engine and tools** (the doctor list with **Install …** and
-  **Re-check**, folded once everything required is there),
-  ② **Sign in to your agent** (one row per *installed* agent CLI, the
-  default first, each green once signed in or with a **Sign in to <agent>**
-  button; *Settings → Accounts* for API keys and extra accounts),
-  ③ **Pick a repo** (**+ New session**, whose dialog has the folder browser),
-  ④ **Connect a tracker and GitHub** (**Open Settings → Connections**,
-  **Connect GitHub** — the Connect GitHub dialog below — and, folded under
-  *Optional: test a Shortcut token*, the Shortcut token test) and
-  ⑤ **Your phone** (always shown: **Install Tailscale** with the doctor's
-  hint until Tailscale is there, then **Show QR**; **Settings → Your phone**).
-  The last two have a **Skip** (and **Show again**). Steps are marked by the
-  server from the thing itself, never by a button: ① and ② by every doctor
-  run (no required check failing; the default agent CLI installed and its
-  login found), ③ by the first session create, ④ by saving the first ticket
-  source, ⑤ by the owner fetching the QR or a phone loading `/m` from off
-  this machine. The only writes from the UI are `POST /api/setup/<step>/skip`
-  (and `/unskip`) for ④ and ⑤. A step once done stays done. The state is
-  `general.setup`; `general.onboarded` is derived from ③ (an older store is
-  migrated on load). The text a first `mindflock serve` prints at boot is
-  folded at the bottom as *What the server found at first start* — the
-  desktop app's server writes it to a log nobody reads.
+  `mindflock init` prints, in the same state), drawn as three groups so the
+  few things that matter come first:
+  - **Get started** (required): ① **Install the tools** (the
+    **Install …** button, then *only* what getting started is missing —
+    optional extras such as Tailscale, peer links, a local model or the gh CLI
+    never show here; every check is folded under *All checks (N)*, and
+    Settings → Doctor lists them all; **Re-check**), ② **Sign in to your
+    agent** (one row per *installed* agent CLI, the default first, each green
+    once signed in or with a **Sign in to <agent>** button; *Using an API
+    key? Settings → Accounts*), ③ **Start your first agent** (*Pick a repo
+    folder and say what to do.* **+ New session**, whose dialog has the
+    folder browser).
+  - **Connect your work** (optional): ④ **Connect GitHub** (the Connect
+    GitHub dialog below) and ⑤ **Connect your tracker** (**Add a ticket
+    source** opens Intake → Tickets). Each has a **Skip** (and **Show
+    again**).
+  - **Optional, later** — folded, unnumbered, not counted: **Use it from
+    your phone** (**Install Tailscale** with the doctor's hint until
+    Tailscale is there, then **Show QR**; **Settings → Your phone**), plus one
+    line pointing at Settings for other computers, people, extensions and IDEs.
+  One obvious next action: the server's `summary.next` step is outlined and
+  its button is the only accent-coloured one; a done step shrinks to its
+  title. The progress line counts the three required steps until they are
+  done (*1 of 3 done · next: Sign in to your agent*), then the chip's count.
+  Steps are marked by the server from the thing itself, never by a button:
+  ① and ② by every doctor run (nothing failing but optional extras; the
+  default agent CLI installed and its login found), ③ by the first session
+  create, ④ when a GitHub credential resolves (a Settings / env token, or a
+  signed-in gh), ⑤ by saving the first ticket source, the phone by the owner
+  fetching the QR or a phone loading `/m` from off this machine. Connecting
+  GitHub or signing an agent in re-reads the checklist at once. The only
+  writes from the UI are `POST /api/setup/<step>/skip` (and `/unskip`). A
+  step once done stays done. The state is `general.setup`;
+  `general.onboarded` is derived from ③ (an older store is migrated on load;
+  one that settled the old combined "Connect a tracker and GitHub" step reads
+  ④ as skipped). The text a first `mindflock serve` prints at boot is folded
+  at the bottom as *What the server found at first start* — the desktop
+  app's server writes it to a log nobody reads.
 - **Setup 3/5** — once the three required steps are done (or a session
   exists) the card gives way to a compact chip in the sidebar footer, beside
   the doctor's *setup issues* chip, reading **Setup** *done*/*5*, until every
-  step is done or skipped. The chip, the doctor chip's **open Setup**, the
+  step of the first two groups is done or skipped (the phone, under
+  *Optional, later*, never keeps it up). The chip, the doctor chip's **open Setup**, the
   palette's **Open Setup checklist** and the desktop app's `?setup=1` (its
   older spelling `?setup=install`; once, the parameter is stripped) open the
   **Setup** modal, which renders the same checklist. The modal never opens
@@ -1978,8 +1994,10 @@ first load: the grid's first-run card *is* the welcome. UI store state
   pane's next-step button, ⏩ Fast-track, and the bell for anything waiting
   on you), **Where work comes from** (Intake, Verify for checking what you
   shipped, and ⚙ Customize for more bars, like Prompts) and **You're all
-  set** (hints, Replay tour, Doctor) — or, while the doctor still reports a
-  required tool missing, **One thing left** with an **Open Setup** button.
+  set** (Setup for GitHub and your tracker, hints, Replay tour) — or, while
+  the doctor still reports a required tool missing, **One thing left**. Both
+  end on **Open Setup** (the checklist, not the whole of Settings) and
+  **Get started**.
   The fourth slide carries **Set up now →**, which opens **Intake** on its
   Tickets tab (`LEGACY_SCREEN_TABS` decides that from the slide's `screen`
   key). The tour pauses behind Settings, Intake or Setup rather than ending,

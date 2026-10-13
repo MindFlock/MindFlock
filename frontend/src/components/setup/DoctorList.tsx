@@ -14,7 +14,7 @@ import { reprobeDoctor, useDoctor } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { InstallMissing } from "../dialogs/InstallTerminal";
 import { AgentSignIn, signInTarget } from "../dialogs/AgentSignIn";
-import { consumeSetupIntent } from "./setupModel";
+import { consumeSetupIntent, isEssentialCheck } from "./setupModel";
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -68,10 +68,41 @@ export function useDoctorAutoShow() {
   }, [data]);
 }
 
+/** One doctor row: icon, label, detail, the fix, and a sign-in button on an
+ * agent row. */
+function CheckRow({ c, onSignedIn }: { c: DoctorCheckItem; onSignedIn(): void }) {
+  return (
+    <li className={"doctor-check st-" + (c.status || "info")}>
+      <span className="doctor-ico">{DOCTOR_ICON[c.status || ""] || "•"}</span>
+      <span className="doctor-label">{c.label || c.id || ""}</span>
+      <span className="doctor-detail">
+        {c.detail || ""}
+        {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
+        {signInTarget(c) && (
+          <AgentSignIn provider={signInTarget(c) as string} className="doctor-signin" onDone={onSignedIn} />
+        )}
+      </span>
+    </li>
+  );
+}
+
 /** The doctor check list (setup checklist step 1 + Settings → Doctor).
  * `onChange` fires after an install or a sign-in finished, so the checklist
- * can re-read its steps. */
-export function DoctorList({ reprobeKey, onChange }: { reprobeKey?: number; onChange?(): void }) {
+ * can re-read its steps.
+ *
+ * `essential` is the setup checklist's view: the install button, then ONLY
+ * the problems getting started cares about (`isEssentialCheck` — no phone,
+ * Tailscale, peer-link or local-model rows), with every check folded under
+ * "All checks". Settings → Doctor draws the full list. */
+export function DoctorList({
+  reprobeKey,
+  onChange,
+  essential = false,
+}: {
+  reprobeKey?: number;
+  onChange?(): void;
+  essential?: boolean;
+}) {
   // Bumped when the install window finishes, so the list re-probes itself.
   const [installed, setInstalled] = useState(0);
   const reprobe = (reprobeKey || 0) > 0 || installed > 0;
@@ -106,28 +137,38 @@ export function DoctorList({ reprobeKey, onChange }: { reprobeKey?: number; onCh
   if (error) return <p className="error">doctor failed: {error}</p>;
   if (!doctor) return <p className="muted">Checking dependencies…</p>;
   if (!doctor.checks || !doctor.checks.length) return <p className="muted">doctor unavailable</p>;
+  const bump = () => setInstalled((n) => n + 1);
+  const all = (
+    <ul className="doctor-list">
+      {doctor.checks.map((c, i) => (
+        <CheckRow key={c.id || i} c={c} onSignedIn={bump} />
+      ))}
+    </ul>
+  );
+  if (!essential)
+    return (
+      <>
+        <InstallMissing steps={doctor.install?.steps} onDone={bump} />
+        {all}
+      </>
+    );
+  const problems = doctor.checks.filter(isEssentialCheck);
   return (
     <>
-      <InstallMissing steps={doctor.install?.steps} onDone={() => setInstalled((n) => n + 1)} />
-      <ul className="doctor-list">
-        {doctor.checks.map((c, i) => (
-          <li key={c.id || i} className={"doctor-check st-" + (c.status || "info")}>
-            <span className="doctor-ico">{DOCTOR_ICON[c.status || ""] || "•"}</span>
-            <span className="doctor-label">{c.label || c.id || ""}</span>
-            <span className="doctor-detail">
-              {c.detail || ""}
-              {c.fix && c.status !== "ok" && <span className="doctor-fix"> fix: {c.fix}</span>}
-              {signInTarget(c) && (
-                <AgentSignIn
-                  provider={signInTarget(c) as string}
-                  className="doctor-signin"
-                  onDone={() => setInstalled((n) => n + 1)}
-                />
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <InstallMissing steps={doctor.install?.steps} onDone={bump} />
+      {problems.length ? (
+        <ul className="doctor-list doctor-list-essential">
+          {problems.map((c, i) => (
+            <CheckRow key={c.id || i} c={c} onSignedIn={bump} />
+          ))}
+        </ul>
+      ) : (
+        <p className="setup-hint setup-tools-ok">✓ Everything needed is installed.</p>
+      )}
+      <details className="setup-allchecks" onClick={(e) => e.stopPropagation()}>
+        <summary>All checks ({doctor.checks.length})</summary>
+        {all}
+      </details>
     </>
   );
 }

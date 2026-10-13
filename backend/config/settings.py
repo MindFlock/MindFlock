@@ -1037,10 +1037,11 @@ class GeneralSettings:
     default) = off. Stored lower-cased and de-duplicated.
 
     ``setup``: the first-run checklist (:mod:`backend.web.core.setup_steps`),
-    ``{tools, agent_login, repo, tracker, phone}`` each ``{"done": bool, "at":
-    iso|null}`` (the two optional ones also ``"skipped": bool``). Written only by
-    the backend's own hooks (the doctor, the first session create, the first
-    ticket source, a phone QR fetch, the skip route) and only forwards. Empty
+    ``{tools, agent_login, repo, github, tracker, phone}`` each ``{"done": bool,
+    "at": iso|null}`` (the three optional ones also ``"skipped": bool``). Written
+    only by the backend's own hooks (the doctor, the first session create, a
+    GitHub credential, the first ticket source, a phone QR fetch, the skip
+    route) and only forwards. Empty
     until something is done; stored per device.
 
     ``onboarded``: DERIVED — ``True`` exactly when ``setup.repo.done``. Kept as

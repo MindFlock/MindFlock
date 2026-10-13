@@ -1,5 +1,5 @@
-/** The five-step checklist (components/setup/SetupChecklist.tsx) rendered per
- * state. The vitest environment is node, so views are checked through
+/** The first-run checklist (components/setup/SetupChecklist.tsx) rendered per
+ * state: Get started (3 required) · Connect your work · Optional, later. The vitest environment is node, so views are checked through
  * react-dom/server with the server query mocked. */
 
 import { createElement } from "react";
@@ -26,18 +26,12 @@ vi.mock("../components/setup/useSetup", () => ({
 }));
 
 import { SetupChecklist, progressLine } from "../components/setup/SetupChecklist";
-import { STEP_ORDER } from "../components/setup/setupModel";
+import { STEP_GROUP, STEP_ORDER, STEP_TITLES } from "../components/setup/setupModel";
 
 const render = () => renderToStaticMarkup(createElement(SetupChecklist));
 
 function status(over: Record<string, Partial<SetupStatus["steps"][number]>> = {}, extra: Partial<SetupStatus> = {}): SetupStatus {
-  const titles: Record<string, string> = {
-    tools: "Engine and tools",
-    agent_login: "Sign in to your agent",
-    repo: "Pick a repo",
-    tracker: "Connect a tracker and GitHub",
-    phone: "Your phone",
-  };
+  const titles: Record<string, string> = STEP_TITLES;
   const steps = STEP_ORDER.map((id) => {
     const o = over[id] || {};
     const done = !!o.done;
@@ -46,18 +40,20 @@ function status(over: Record<string, Partial<SetupStatus["steps"][number]>> = {}
       id,
       title: titles[id],
       required: id === "tools" || id === "agent_login" || id === "repo",
+      group: STEP_GROUP[id],
       done,
       at: null,
       skipped,
       status: done ? "done" : skipped ? "skipped" : "todo",
     };
   });
-  const todo = steps.filter((s) => s.status === "todo");
+  const counted = steps.filter((s) => s.group !== "later");
+  const todo = counted.filter((s) => s.status === "todo");
   return {
     steps,
     summary: {
-      done: 5 - todo.length,
-      total: 5,
+      done: counted.length - todo.length,
+      total: counted.length,
       required_done: steps.filter((s) => s.required).every((s) => s.done),
       complete: !todo.length,
       next: todo[0]?.id || "",
@@ -77,25 +73,76 @@ beforeEach(() => {
 });
 
 describe("SetupChecklist", () => {
-  it("draws all five steps, numbered, in order, even before the payload", () => {
+  it("draws every step in order, in three groups, even before the payload", () => {
     const html = render();
     for (const id of STEP_ORDER) expect(html).toContain('data-step="' + id + '"');
     const order = STEP_ORDER.map((id) => html.indexOf('data-step="' + id + '"'));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(html).toContain("①");
     expect(html).toContain("⑤");
+    expect(html).not.toContain("⑥"); // the phone is not a numbered step
     expect(html).toContain("Checking…");
+    const groups = ["start", "connect", "later"].map((g) => html.indexOf('data-group="' + g + '"'));
+    expect(groups.every((i) => i >= 0)).toBe(true);
+    expect(groups).toEqual([...groups].sort((a, b) => a - b));
+    expect(html).toContain("Get started");
+    expect(html).toContain("Connect your work");
+  });
+
+  it("keeps phone/Tailscale out of getting started: folded under Optional, later", () => {
+    setupData.current = status(
+      {},
+      { tailscale: { status: "info", detail: "not found", fix: "brew install --cask tailscale-app", docs: "" } }
+    );
+    const html = render();
+    const later = html.indexOf('<details class="setup-later"');
+    expect(later).toBeGreaterThan(0);
+    expect(html.slice(later)).toContain("Optional, later");
+    // Nothing before the fold mentions the phone or Tailscale.
+    const before = html.slice(0, later);
+    expect(before).not.toMatch(/phone|Tailscale/i);
+    expect(html.slice(later)).toContain('data-step="phone"');
+    // The fold is closed: not part of the first look.
+    expect(html.slice(later, later + 60)).not.toContain("open");
   });
 
   it("marks done and skipped steps, and names the next one", () => {
-    setupData.current = status({ tools: { done: true }, agent_login: { done: true }, phone: { skipped: true } });
+    setupData.current = status({ tools: { done: true }, agent_login: { done: true }, github: { skipped: true } });
     const html = render();
     expect(html).toContain('data-step="tools" data-status="done"');
-    expect(html).toContain('data-step="phone" data-status="skipped"');
+    expect(html).toContain('data-step="github" data-status="skipped"');
     expect(html).toContain('data-step="repo" data-status="todo"');
-    expect(html).toContain("3 of 5 done · next: Pick a repo");
+    // Until the required three are done the line counts those three.
+    expect(html).toContain("2 of 3 done · next: Start your first agent");
     expect(html).toContain("Show again"); // the skipped step can come back
-    expect(progressLine(status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true }, tracker: { skipped: true }, phone: { done: true } }))).toBe("All set");
+    expect(
+      progressLine(status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true } }))
+    ).toBe("3 of 5 done · next: Connect GitHub");
+    expect(
+      progressLine(
+        status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true }, github: { done: true }, tracker: { skipped: true } })
+      )
+    ).toBe("All set");
+  });
+
+  it("highlights one next step, whose button alone is primary", () => {
+    setupData.current = status({ tools: { done: true }, agent_login: { done: true } });
+    const html = render();
+    expect((html.match(/is-next/g) || []).length).toBe(1);
+    expect(html).toMatch(/class="setup-step st-todo is-next" data-step="repo"/);
+    expect((html.match(/setup-primary/g) || []).length).toBe(1);
+    expect(html).toContain("setup-new setup-primary");
+    // GitHub is not next: its button is plain.
+    expect(html).not.toContain("setup-connect-github setup-primary");
+  });
+
+  it("a done step shrinks to its title", () => {
+    setupData.current = status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true } });
+    const html = render();
+    const repo = html.slice(html.indexOf('data-step="repo"'), html.indexOf('data-step="github"'));
+    expect(repo).toContain("✓ done");
+    expect(repo).not.toContain("+ New session");
+    expect(repo).not.toContain("setup-step-body");
   });
 
   it("step ② offers one sign-in per INSTALLED agent CLI and shows who is signed in", () => {
@@ -121,31 +168,38 @@ describe("SetupChecklist", () => {
 
   it("step ② says what to do when no agent CLI is installed yet", () => {
     setupData.current = status({}, { logins: [] });
-    expect(render()).toContain("No agent CLI is installed yet");
+    expect(render()).toContain("Install the tools first");
   });
 
   it("step ③ opens New session until the first session exists", () => {
     setupData.current = status();
     expect(render()).toContain("+ New session");
     setupData.current = status({ repo: { done: true } });
-    const html = render();
-    expect(html).not.toContain("+ New session");
-    expect(html).toContain("Your first session was created");
+    expect(render()).not.toContain("+ New session");
   });
 
-  it("step ④ links to Settings → Connections and can be skipped", () => {
+  it("step ④ is GitHub alone: the Connect GitHub dialog, skippable", () => {
     setupData.current = status();
     const html = render();
-    expect(html).toContain("Open Settings → Connections");
-    const tracker = html.slice(html.indexOf('data-step="tracker"'), html.indexOf('data-step="phone"'));
-    expect(tracker).toContain("setup-skip");
+    const github = html.slice(html.indexOf('data-step="github"'), html.indexOf('data-step="tracker"'));
+    expect(github).toContain("setup-connect-github");
+    expect(github).toContain("setup-skip");
     // GitHub's one door is the Connect GitHub dialog, not a test of its own.
-    expect(tracker).toContain("setup-connect-github");
-    expect(tracker).not.toContain("setup-test-github");
-    expect(tracker).toContain("setup-shortcut-token");
+    expect(html).not.toContain("setup-test-github");
   });
 
-  it("step ⑤ offers Install Tailscale with the doctor's hint when it is missing", () => {
+  it("step ⑤ opens Intake to add a ticket source, and can be skipped", () => {
+    setupData.current = status();
+    const html = render();
+    const tracker = html.slice(html.indexOf('data-step="tracker"'), html.indexOf('data-group="later"'));
+    expect(tracker).toContain("setup-open-intake");
+    expect(tracker).toContain("Add a ticket source");
+    expect(tracker).toContain("setup-skip");
+    // No second token form: the Intake source form is where a tracker's token goes.
+    expect(html).not.toContain("setup-shortcut-token");
+  });
+
+  it("the phone offers Install Tailscale with the doctor's hint when it is missing", () => {
     setupData.current = status(
       {},
       { tailscale: { status: "warn", detail: "not found", fix: "curl -fsSL https://tailscale.com/install.sh | sh", docs: "https://tailscale.com/download" } }
@@ -157,7 +211,7 @@ describe("SetupChecklist", () => {
     expect(html).not.toContain("Show QR");
   });
 
-  it("step ⑤ offers the QR when Tailscale is fine, and is always visible", () => {
+  it("the phone offers the QR when Tailscale is fine, and is always there", () => {
     setupData.current = status({}, { tailscale: { status: "ok", detail: "running", fix: "", docs: "" } });
     const html = render();
     expect(html).toContain('data-phone="qr"');

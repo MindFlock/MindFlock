@@ -32,16 +32,16 @@ Between the dependency table and the folder, :func:`run` asks "first
 computer, or join one you already have?" (:mod:`backend.onboarding`) BEFORE
 offering the agent sign-in, because joining brings the default agent, the
 GitHub token and ticket sources along (not the sign-in itself — accounts stay
-on each computer). It then prints the SAME five-step checklist the web UI
+on each computer). It then prints the SAME first-run checklist the web UI
 shows (:mod:`backend.web.core.setup_steps` — one definition of the step names
 and of what done/skipped mean, read from the same stored state), so the
 terminal and the app can never disagree about where setup stands.
 
 Nothing here marks a checklist step by hand. Each step is marked by the
 backend hook that observes the thing itself — the doctor run this wizard
-performs marks "Engine and tools" and "Sign in to your agent"; the first
-session create marks "Pick a repo" — so finishing the wizard without starting
-anything leaves the app's own first-run surfaces in place.
+performs marks "Install the tools" and "Sign in to your agent"; the first
+session create marks "Start your first agent" — so finishing the wizard
+without starting anything leaves the app's own first-run surfaces in place.
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ def _git_note(candidate: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# The devices question (backend.onboarding) + the shared five-step checklist
+# The devices question (backend.onboarding) + the shared first-run checklist
 # --------------------------------------------------------------------------- #
 def _plan(checks: List["Check"]) -> Optional[dict]:
     """The devices plan for these checks, or ``None`` when it can't be built
@@ -228,7 +228,7 @@ def _plan(checks: List["Check"]) -> Optional[dict]:
 
 
 def _checklist_lines() -> List[str]:
-    """The five steps as the web UI shows them, with their stored state — or
+    """The checklist steps as the web UI shows them, with their stored state — or
     ``[]`` when the checklist can't be read (no web extras, a broken store)."""
     try:
         from backend.web.core import setup_steps
@@ -454,7 +454,7 @@ def run(assume_yes: bool = False, *, serving: bool = False) -> int:
             "  --yes never runs an installer unwatched — the fix lines above are the list."
         )
 
-    # The same five steps the app shows, in the same state: the doctor run
+    # The same steps the app shows, in the same state: the doctor run
     # above already marked what it could (tools, the agent login).
     _print_checklist()
 

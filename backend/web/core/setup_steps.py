@@ -1,23 +1,36 @@
-"""The five first-run steps — ONE definition for every surface that shows them.
+"""The first-run steps — ONE definition for every surface that shows them.
 
 The web UI's setup checklist (the empty-grid card, the Setup modal, the
 "Setup 3/5" chip), ``GET /api/setup`` and the ``mindflock init`` wizard all
 read :data:`STEPS` and the same stored state, so they can never disagree about
 what a step is called or whether it is done.
 
+The steps come in three groups (``group``), and every surface draws them as
+three groups:
+
+* ``start`` — **Get started**, the three REQUIRED steps to a running agent:
+  ``tools``, ``agent_login``, ``repo``. ``summary.required_done`` is these.
+* ``connect`` — **Connect your work**, optional but counted (the chip's "N/5"):
+  ``github``, ``tracker``. Each can be skipped.
+* ``later`` — **Optional, later**: ``phone``. Never part of getting started:
+  not counted in ``summary`` (so it never keeps the chip up), drawn folded.
+
 State lives in settings as ``general.setup``::
 
     {"tools":       {"done": bool, "at": iso|null},
      "agent_login": {"done": bool, "at": iso|null},
      "repo":        {"done": bool, "at": iso|null},
+     "github":      {"done": bool, "at": iso|null, "skipped": bool},
      "tracker":     {"done": bool, "at": iso|null, "skipped": bool},
      "phone":       {"done": bool, "at": iso|null, "skipped": bool}}
 
 Only the backend writes it, and only forwards: a step that was once done stays
-done (the doctor list in step 1 still shows a tool that went missing). The
-first three are required; the last two may be skipped (``skipped: true``).
+done (the doctor list in step 1 still shows a tool that went missing).
 ``general.onboarded`` is derived from ``repo.done`` by the settings layer so
-settings sync and every existing reader keep working.
+settings sync and every existing reader keep working. A store from before
+``github`` was its own step (``tracker`` was "Connect a tracker and GitHub")
+reads ``github`` as skipped once ``tracker`` was done or skipped, so an
+upgrade never re-asks a veteran.
 
 Who marks what:
 
@@ -26,10 +39,12 @@ Who marks what:
   agent login when the default agent CLI is installed and its login probe
   found evidence (or has nothing to look for).
 * ``repo`` — the first session create (``server._mark_onboarded``).
+* ``github`` — :func:`status` (every ``GET /api/setup``) when a GitHub
+  credential resolves: a Settings / env token, or the doctor's signed-in gh.
 * ``tracker`` — saving the first ticket source (``PUT /api/settings/ticketing/sources``).
 * ``phone`` — a QR fetch by the owner (``GET /api/mobile``) or a phone loading
   ``/m`` from off this machine.
-* ``POST /api/setup/<step>/skip`` — the two optional steps.
+* ``POST /api/setup/<step>/skip`` — the optional steps.
 
 Nothing here raises: every writer is best-effort, because none of the call
 sites (a session create, a settings save, the doctor) may fail over a
@@ -48,6 +63,8 @@ __all__ = [
     "STEP_IDS",
     "REQUIRED",
     "OPTIONAL",
+    "LATER",
+    "COUNTED",
     "TITLES",
     "empty_state",
     "normalize",
@@ -57,26 +74,72 @@ __all__ = [
     "checklist",
     "summary",
     "note_doctor",
+    "github_connected",
     "provider_logins",
     "set_first_run_report",
     "first_run_report",
     "status",
 ]
 
-#: The checklist, in the order every surface shows it.
+#: The checklist, in the order every surface shows it. ``group``: ``start``
+#: (required), ``connect`` (optional, counted), ``later`` (optional, uncounted).
 STEPS = (
-    {"id": "tools", "title": "Engine and tools", "required": True},
-    {"id": "agent_login", "title": "Sign in to your agent", "required": True},
-    {"id": "repo", "title": "Pick a repo", "required": True},
-    {"id": "tracker", "title": "Connect a tracker and GitHub", "required": False},
-    {"id": "phone", "title": "Your phone", "required": False},
+    {"id": "tools", "title": "Install the tools", "required": True, "group": "start"},
+    {
+        "id": "agent_login",
+        "title": "Sign in to your agent",
+        "required": True,
+        "group": "start",
+    },
+    {
+        "id": "repo",
+        "title": "Start your first agent",
+        "required": True,
+        "group": "start",
+    },
+    {"id": "github", "title": "Connect GitHub", "required": False, "group": "connect"},
+    {
+        "id": "tracker",
+        "title": "Connect your tracker",
+        "required": False,
+        "group": "connect",
+    },
+    {
+        "id": "phone",
+        "title": "Use it from your phone",
+        "required": False,
+        "group": "later",
+    },
 )
 STEP_IDS = tuple(str(s["id"]) for s in STEPS)
 REQUIRED = tuple(str(s["id"]) for s in STEPS if s["required"])
 OPTIONAL = tuple(str(s["id"]) for s in STEPS if not s["required"])
+#: Optional extras that are never part of getting started: drawn folded under
+#: "Optional, later" and left out of :func:`summary`.
+LATER = tuple(str(s["id"]) for s in STEPS if s["group"] == "later")
+#: What :func:`summary` counts (the chip's "N/5").
+COUNTED = tuple(sid for sid in STEP_IDS if sid not in LATER)
+GROUPS = {str(s["id"]): str(s["group"]) for s in STEPS}
 TITLES = {str(s["id"]): str(s["title"]) for s in STEPS}
 
 _GLYPH = {"done": "✓", "skipped": "–", "todo": "•"}
+
+#: Doctor rows that are optional extras (phone/tailnet access, peer links, a
+#: local model, warm caches, the clipboard, the gh CLI — a token does its job).
+#: "Install the tools" neither waits on them nor shows them; Settings → Doctor
+#: lists them. Mirrored by EXTRA_CHECKS in frontend setupModel.ts (a test pins
+#: the two together).
+EXTRA_CHECKS = frozenset(
+    {
+        "tailscale",
+        "bwrap",
+        "cloudflared",
+        "local-model",
+        "cache-seeds",
+        "clipboard",
+        "gh",
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -113,6 +176,12 @@ def normalize(raw: Any) -> Dict[str, dict]:
         out[sid]["at"] = str(at) if (done and at) else None
         if sid in OPTIONAL:
             out[sid]["skipped"] = bool(v.get("skipped", False))
+    # ``github`` used to be half of "Connect a tracker and GitHub": a store
+    # that settled that step before ``github`` existed has settled GitHub too.
+    if "github" not in raw and not out["github"]["done"]:
+        t = out["tracker"]
+        if t["done"] or t.get("skipped"):
+            out["github"]["skipped"] = True
     return out
 
 
@@ -197,8 +266,9 @@ def unskip(step: str) -> bool:
 # The checklist as every surface draws it
 # --------------------------------------------------------------------------- #
 def checklist(current: Optional[Dict[str, dict]] = None) -> List[dict]:
-    """``[{id, title, required, done, at, skipped, status}]`` in order.
-    ``status`` is ``done`` | ``skipped`` | ``todo``."""
+    """``[{id, title, required, group, done, at, skipped, status}]`` in order.
+    ``status`` is ``done`` | ``skipped`` | ``todo``; ``group`` is ``start`` |
+    ``connect`` | ``later``."""
     cur = normalize(current) if current is not None else state()
     out: List[dict] = []
     for s in STEPS:
@@ -210,6 +280,7 @@ def checklist(current: Optional[Dict[str, dict]] = None) -> List[dict]:
                 "id": sid,
                 "title": s["title"],
                 "required": bool(s["required"]),
+                "group": str(s["group"]),
                 "done": bool(v["done"]),
                 "at": v["at"],
                 "skipped": skipped,
@@ -221,8 +292,14 @@ def checklist(current: Optional[Dict[str, dict]] = None) -> List[dict]:
 
 def summary(steps: Optional[Iterable[dict]] = None) -> dict:
     """``{done, total, required_done, complete, next}`` — the chip's "3/5",
-    whether the grid card may go, and whether the chip may go too."""
-    rows = list(steps) if steps is not None else checklist()
+    whether the grid card may go, and whether the chip may go too. Counts the
+    ``start`` and ``connect`` steps only: an "Optional, later" extra (the
+    phone) never keeps the chip up or becomes ``next``."""
+    rows = [
+        r
+        for r in (list(steps) if steps is not None else checklist())
+        if r.get("group", GROUPS.get(str(r.get("id")), "")) != "later"
+    ]
     done = sum(1 for r in rows if r["done"] or r["skipped"])
     required_done = all(r["done"] for r in rows if r["required"])
     todo = [r["id"] for r in rows if r["status"] == "todo"]
@@ -246,10 +323,13 @@ def format_lines(rows: Optional[List[dict]] = None) -> List[str]:
     width = max(len(r["title"]) for r in rows)
     out = []
     for n, r in enumerate(rows, 1):
+        later = r.get("group") == "later"
         note = {
             "done": "done",
             "skipped": "skipped",
-            "todo": "" if r["required"] else "optional",
+            "todo": (
+                "" if r["required"] else ("optional, later" if later else "optional")
+            ),
         }[r["status"]]
         line = "  %s %d. %s" % (glyph(r["status"]), n, r["title"].ljust(width))
         out.append((line + "  " + note).rstrip())
@@ -272,14 +352,18 @@ def _by_id(checks: Iterable[Any]) -> Dict[str, dict]:
 
 def doctor_progress(checks: Iterable[Any]) -> Dict[str, bool]:
     """What a doctor run says about the first two steps: ``tools`` when no
-    required check fails (and there were checks at all), ``agent_login`` when
+    check fails other than an optional extra (:data:`EXTRA_CHECKS` — a broken
+    Tailscale is not a reason getting started is unfinished; there must be
+    checks at all), ``agent_login`` when
     the default agent CLI is installed and its auth row is not a warning (a
     provider that declares no credential locations has nothing to check, which
     counts as signed in — the same reading Settings → Doctor gives it)."""
     by = _by_id(checks)
     if not by:
         return {"tools": False, "agent_login": False}
-    tools = all(c.get("status") != "fail" for c in by.values())
+    tools = all(
+        c.get("status") != "fail" for cid, c in by.items() if cid not in EXTRA_CHECKS
+    )
     cli = by.get("agent-cli") or {}
     auth = by.get("agent-auth")
     agent = (
@@ -300,6 +384,28 @@ def note_doctor(checks: Iterable[Any]) -> None:
                 mark(sid)
     except Exception:  # noqa: BLE001 — the doctor must never fail over a flag
         pass
+
+
+# --------------------------------------------------------------------------- #
+# Who marks what: a GitHub credential
+# --------------------------------------------------------------------------- #
+def github_connected(checks: Iterable[Any] = ()) -> bool:
+    """Whether a GitHub credential resolves without shelling out: a Settings
+    or env token (:func:`backend.web.core.github_auth.resolve_token` with
+    ``gh=False``), or the doctor's ``gh`` row reading signed in (``ok``).
+    Never raises."""
+    try:
+        if (_by_id(checks).get("gh") or {}).get("status") == "ok":
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.web.core import github_auth
+
+        source, _tok = github_auth.resolve_token(gh=False)
+        return source != "none"
+    except Exception:  # noqa: BLE001 — unknowable reads as "not yet"
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -371,9 +477,17 @@ def first_run_report() -> str:
 def status(doctor_payload: Optional[dict] = None) -> dict:
     """The whole checklist payload. ``doctor_payload`` is the cached
     ``/api/doctor`` body when the caller has one (its checks refresh the
-    first two steps before they are read)."""
+    first two steps before they are read); a GitHub credential marks
+    ``github`` here too."""
+    checks: list = []
     if doctor_payload and isinstance(doctor_payload.get("checks"), list):
-        note_doctor(doctor_payload["checks"])
+        checks = doctor_payload["checks"]
+        note_doctor(checks)
+    try:
+        if github_connected(checks):
+            mark("github")
+    except Exception:  # noqa: BLE001 — a bookkeeping flag
+        pass
     rows = checklist()
     tailscale = None
     if doctor_payload:

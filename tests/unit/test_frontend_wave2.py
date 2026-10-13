@@ -47,9 +47,10 @@ def test_the_ui_calls_routes_the_server_serves():
     server. Reads the served bundle because the contract is between the two."""
     js = client.get("/app.js").text
     paths = server.app.openapi()["paths"]
+    # (/api/settings/test/shortcut left the bundle with the setup checklist's
+    # Shortcut token fold: a tracker's token is tested in its Intake source.)
     for path in (
         "/api/doctor",
-        "/api/settings/test/shortcut",
         "/api/settings/test/github",
         "/api/settings/test/agent",
         "/api/ides",
