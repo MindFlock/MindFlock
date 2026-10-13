@@ -1,3 +1,59 @@
+/* Basic vs advanced Settings (settingsMode.tsx).
+
+   The switch sits at the foot of the nav, pushed to the bottom of the column
+   so it reads as "there is more below the line", not as one more screen. */
+.set-mode-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.set-mode-toggle {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  padding: 10px 10px 4px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.set-mode-toggle:hover,
+.set-mode-toggle:focus-visible {
+  color: var(--text);
+}
+
+.set-mode-toggle[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.set-mode-more {
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* The "Advanced" fold on a basic screen: the screen's own sections, one
+   click away. The body keeps the screen's own rhythm, so a moved row looks
+   the same inside the fold as it did outside it. */
+.set-adv-fold > summary {
+  padding: 2px 0;
+}
+
+.set-adv-fold-body {
+  gap: 16px;
+}
+
+.set-adv-fold-body > .set-section-title:first-child {
+  margin-top: 0;
+}
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
    three-state pills, the action column, the fix line and the Test result. */
@@ -5,11 +61,11 @@
 .conn-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .conn-group + .conn-group {
-  margin-top: 10px;
+  margin-top: 16px;
 }
 
 .conn-group-title {
@@ -42,7 +98,7 @@
 .conn-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -99,14 +155,195 @@
   }
 }
 /* --------------------------------------------------------------------------- *
- * The first-run checklist (components/setup): the five steps as drawn on the
- * empty grid's card and in the Setup modal, and the compact "Setup 3/5" chip.
- * The shared step/doctor rules (.setup-step, .setup-actions, .doctor-list…)
- * stay in dialogs/SetupDialog.css; this file adds what is new.
+ * The first-run checklist (components/setup): three groups (Get started ·
+ * Connect your work · Optional, later) as drawn on the empty grid's card and in
+ * the Setup modal, and the compact "Setup 3/5" chip. The shared step/doctor
+ * rules (.setup-step, .setup-actions, .doctor-list…) stay in
+ * dialogs/SetupDialog.css; this file adds what is new and, scoped to
+ * .setup-checklist, gives the steps room to breathe.
  * --------------------------------------------------------------------------- */
 .setup-progress {
-  margin: 0 0 12px;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+
+/* A group: a small caps heading, then its steps. Space between groups is
+   bigger than space between steps, so what belongs together reads together. */
+.setup-group {
+  margin-bottom: 26px;
+}
+
+.setup-group-title {
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-group-note {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.setup-group-note.st-done {
+  color: var(--ok, #4caf50);
+}
+
+.setup-checklist .setup-step {
+  margin: 0 0 6px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.setup-checklist .setup-step h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.setup-checklist .setup-step-body {
+  margin-top: 10px;
+  padding-left: 24px;
+}
+
+.setup-checklist .setup-step-body > :first-child {
+  margin-top: 0;
+}
+
+/* The one step to do now. */
+.setup-checklist .setup-step.is-next {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.setup-checklist .setup-step.st-done {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.setup-checklist .setup-step.st-done > h3 {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.setup-checklist .setup-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.setup-checklist .setup-actions {
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.setup-checklist .setup-actions button:not(.linklike) {
+  font-size: 13px;
+  padding: 7px 14px;
+}
+
+/* One obvious next action: only the next step's button is accent-coloured.
+   (.setup-new is accent everywhere else — SetupDialog.css — so it is reset
+   here unless it is the next action.) */
+.setup-checklist .setup-actions .setup-new:not(.setup-primary) {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 400;
+}
+
+.setup-checklist .setup-actions .setup-primary,
+.setup-checklist .setup-step.is-next #doctor-install-btn,
+.setup-checklist .setup-step.is-next .setup-login button:not(.linklike) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.setup-checklist .setup-actions .setup-primary:hover,
+.setup-checklist .setup-step.is-next #doctor-install-btn:hover,
+.setup-checklist .setup-step.is-next .setup-login button:not(.linklike):hover {
+  filter: brightness(1.1);
+}
+
+/* Step ①: the install button, then only what is missing. */
+.setup-checklist .doctor-install {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.setup-checklist .doctor-install .test-btn {
+  font-size: 13px;
+  padding: 7px 14px;
+}
+
+.setup-tools-ok {
+  color: var(--ok, #4caf50);
+}
+
+.setup-allchecks {
+  margin: 8px 0 12px;
   font-size: 12px;
+}
+
+.setup-allchecks > summary,
+.setup-fold > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setup-allchecks > summary:hover {
+  color: var(--text);
+}
+
+.setup-allchecks[open] > summary,
+.setup-checklist .setup-fold[open] > summary {
+  margin-bottom: 8px;
+}
+
+.setup-checklist .setup-fold {
+  margin: 6px 0 0 24px;
+}
+
+/* Optional, later: folded, quiet, under the two groups. */
+.setup-later {
+  margin: 4px 0 0;
+}
+
+.setup-later > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.setup-later > summary:hover {
+  color: var(--text);
+}
+
+.setup-later[open] > summary {
+  margin-bottom: 10px;
+}
+
+.setup-later .setup-step h3 {
+  margin-bottom: 10px;
+}
+
+.setup-later-more {
+  padding-left: 14px;
 }
 
 .setup-step .setup-state {
@@ -127,13 +364,6 @@
 
 .setup-step.st-skipped > h3 {
   opacity: 0.7;
-}
-
-.setup-fold > summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 6px;
 }
 
 .setup-fold > summary:hover {
@@ -246,6 +476,31 @@
 .setup-chip:hover {
   background: rgba(232, 161, 60, 0.22);
 }
+
+/* Narrow (a phone-width window, or the card squeezed beside the sidebar): give
+   the words the width instead of the indents. */
+.setup-checklist {
+  container-type: inline-size;
+}
+
+@container (max-width: 420px) {
+  .setup-checklist .setup-step {
+    padding: 10px 8px;
+  }
+
+  .setup-checklist .setup-step-body,
+  .setup-checklist .setup-fold,
+  .setup-later-more {
+    padding-left: 0;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  #empty .setup-card {
+    padding: 18px 14px;
+  }
+}
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
 
@@ -330,13 +585,45 @@
 .hint.hint-footer {
   margin: 0 0 8px;
 }
+/* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
+   URL, then (with two or more) its optional hint and a Remove. */
+.tk-repo-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tk-repo-row .tk-repo-url {
+  flex: 2 1 220px;
+  min-width: 0;
+}
+
+.tk-repo-row .tk-repo-hint {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.tk-repo-row .tk-repo-remove {
+  flex: none;
+}
+
+/* Rows that wrap (a narrow window puts the hint under its URL) must still read
+   as one repo each: tighter inside a row than between rows. */
+.tk-repos {
+  gap: 10px;
+}
+
+.tk-repo-row {
+  row-gap: 4px;
+}
 /* "Tailscale on this device" (TailscaleCard.tsx). Reuses .sl-snippet,
    .sl-admin-link and .qr-card from mobileLogs.css. */
 .ts-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   min-width: 0;
@@ -366,7 +653,7 @@
 .ts-facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 12px;
+  gap: 6px 16px;
   margin: 0;
   font-size: 12.5px;
 }
@@ -497,14 +784,14 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .devices-list > li {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -558,7 +845,7 @@
 .devices-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -588,7 +875,7 @@
 }
 
 .devices-request {
-  padding: 10px 12px;
+  padding: 12px 16px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -599,7 +886,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 16px;
   border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--red) 8%, transparent);
@@ -624,9 +911,19 @@
 }
 
 .set-screen[data-screen="devices"] h4.set-subtitle {
-  margin: 4px 0 0;
-  font-size: 13px;
+  margin: 8px 0 -12px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text);
+}
+
+/* In the subhead row the row itself sits in the screen's flow. */
+.set-screen[data-screen="devices"] .devices-subhead h4.set-subtitle {
+  margin: 0;
+}
+
+.set-screen[data-screen="devices"] > .devices-subhead {
+  margin: 8px 0 -12px;
 }
 
 .devices-add {
@@ -641,7 +938,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -864,8 +1161,8 @@
 .devices-this {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 4px 0 8px;
+  gap: 8px;
+  margin: 0;
 }
 
 .devices-this p {
@@ -921,7 +1218,7 @@
 /* Advanced — other ways to trust a machine: a fold, each row leading with
    the one line that says when you would still use it. */
 .devices-advanced {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .devices-advanced > summary {
@@ -2176,16 +2473,26 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
 /* Settings dialog (a modal like #recent-panel). The panel is a FIXED size —
    width and height don't change with the selected screen; each screen's content
    scrolls inside #settings-screens instead of resizing the dialog. (Capped to
-   the viewport so it still fits small windows.) */
+   the viewport so it still fits small windows.)
+
+   Spacing inside Settings runs on one scale — 4 / 8 / 12 / 16 / 24 / 32 — and
+   one rule: things that belong together sit close, things that are different
+   sit far apart. A field's label, control and hint are 6px apart; the next
+   field starts --set-rhythm (24px) below, so a hint can never read as the
+   label of the field under it. A section title leads its group by 16px and
+   gets 40px (16 + the rhythm) above it. */
 #settings-panel {
+  --set-rhythm: 24px;
+  --set-tight: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 22px;
-  width: 640px;
-  max-width: 92vw;
-  height: 82vh;
-  max-height: 720px;
+  padding: 24px;
+  width: 780px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  height: 84vh;
+  max-height: 760px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2214,8 +2521,8 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
 .onboarding-block {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-bottom: 16px;
+  gap: 16px;
+  padding-bottom: var(--set-rhythm, 24px);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2229,13 +2536,13 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
 }
 
 .onboarding-action-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .onboarding-action .test-btn {
@@ -2251,6 +2558,29 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
 .set-hint {
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Inside Settings a hint is read, not skimmed past: one size up, real line
+   height. :where() keeps the specificity of the bare class, so a component's
+   own hint size (.devices-readiness, …) still wins. */
+:where(#settings-panel) .set-hint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Labels a step heavier than their hints, so the eye finds the field names
+   when scanning a column of label / control / hint stacks. Also sizes labels
+   outside a .set-row (the ntfy field grid), which otherwise took the body's
+   16px. */
+:where(#settings-panel) .set-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Help paragraphs keep a readable measure on a wide dialog. */
+:where(#settings-panel) :is(p.set-hint, .set-block-hint, .notif-rule-desc) {
+  max-width: 72ch;
 }
 
 /* Standalone hint paragraphs (status lines, blurbs under a section title):
@@ -2283,6 +2613,12 @@ p.set-hint {
   /* No row-wide cursor: only the switch toggles now (the row is a <div>, not a
      <label>), so the whole row must not look clickable. The .ca-slider keeps
      its own pointer cursor. */
+}
+
+/* Text and switch: a clear gutter, so a long hint never runs up against the
+   toggle it describes. */
+#settings-panel .set-switch-row {
+  gap: 16px;
 }
 
 /* The row centers the label's line box on the switch, but the desktop app's
@@ -2350,12 +2686,13 @@ p.set-hint {
 /* Security → access-token reveal row */
 .token-reveal {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
 .token-reveal code {
-  flex: 1;
+  flex: 1 1 12em;
   min-width: 0;
   overflow-x: auto;
   white-space: nowrap;
@@ -2375,10 +2712,16 @@ p.set-hint {
   flex-direction: column;
 }
 
+#notif-rules-list > p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .notif-rule {
-  gap: 14px;
+  gap: 16px;
   align-items: center;
-  padding: 8px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--border);
   cursor: pointer;
 }
@@ -2391,7 +2734,7 @@ p.set-hint {
 .notif-rule-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -2401,7 +2744,7 @@ p.set-hint {
 
 .notif-rule-desc {
   white-space: normal;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
 .notif-rule .ca-switch {
@@ -2416,10 +2759,12 @@ p.set-hint {
    uppercase as a screen's section titles, so it reads as a label for what
    follows rather than as one more place to click. */
 .set-nav-group {
-  margin: 12px 0 2px;
+  /* More room above than below: the heading belongs to the items under it,
+     not to the group it follows. */
+  margin: 16px 0 4px;
   /* Left inset matches the items' text; none on the right, where the longest
-     heading ("Troubleshooting") would otherwise overrun the 132px column. */
-  padding: 0 0 0 10px;
+     heading ("Devices and people") would otherwise overrun the column. */
+  padding: 0 0 0 12px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -2434,7 +2779,7 @@ p.set-hint {
 /* Settings → Agent orchestration: the one-line intro under each heading, and
    the cap rows' "now N" / env-override line. */
 .orch-intro {
-  margin: -2px 0 10px;
+  margin: 0;
 }
 
 .orch-cap-row .orch-cap-env {
@@ -2449,7 +2794,7 @@ p.set-hint {
    including its fixed size — lives in SettingsDialog.css. */
 #settings-body {
   display: flex;
-  gap: 16px;
+  gap: 24px;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -2460,7 +2805,9 @@ p.set-hint {
   flex-direction: column;
   gap: 2px;
   flex: none;
-  width: 132px;
+  /* Wide enough that "Agent orchestration" stays one line. */
+  width: 172px;
+  box-sizing: border-box;
   border-right: 1px solid var(--border);
   padding-right: 12px;
   /* Scroll the nav independently so the bottom items (System logs, Advanced)
@@ -2475,8 +2822,9 @@ p.set-hint {
   border: none;
   color: var(--muted);
   border-radius: 7px;
-  padding: 8px 10px;
+  padding: 7px 12px;
   font-size: 13px;
+  line-height: 1.35;
   font-family: inherit;
   cursor: pointer;
 }
@@ -2492,17 +2840,70 @@ p.set-hint {
   font-weight: 600;
 }
 
+/* A phone-width window: the 172px nav column would leave the fields a sliver,
+   so the nav becomes one scrolling row of tabs above the screen. Group
+   headings drop out (the row is read left to right, not scanned by group). */
+@media (max-width: 600px) {
+  #settings-panel {
+    padding: 16px;
+    height: 92vh;
+  }
+
+  #settings-body {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #settings-nav {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 8px;
+  }
+
+  .set-nav-item {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .set-nav-group {
+    display: none;
+  }
+
+  #settings-screens {
+    flex: 1;
+    min-height: 0;
+    padding-right: 4px;
+  }
+}
+
 #settings-screens {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  /* Room for the scrollbar beside the fields, and a little air under the
+     last one so the screen doesn't end flush against the panel edge. */
+  padding: 0 8px 16px 0;
 }
 
+/* The rhythm between fields: --set-rhythm (24px, SettingsDialog.css) — four
+   times the 6px inside a field, so each label / control / hint stack reads
+   as one unit. A section wrapper directly in the screen (Your devices' "You"
+   card) keeps the same rhythm inside it. */
 .set-screen {
   display: none;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--set-rhythm, 24px);
+}
+
+.set-screen > section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--set-rhythm, 24px);
+  min-width: 0;
 }
 
 .set-screen.active {
@@ -2512,7 +2913,7 @@ p.set-hint {
 .set-section {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--set-rhythm, 24px);
 }
 
 .set-section-title {
@@ -2522,16 +2923,50 @@ p.set-hint {
   letter-spacing: 0.06em;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
+  padding-bottom: 6px;
 }
 
 /* Consistent vertical rhythm: every screen leads flush with its title; later
-   section titles within a screen get breathing room to read as a new group. */
-.set-screen>.set-section-title {
+   section titles get 16px more than the rhythm above them (40px) so they read
+   as a new group, and pull the first field up to 16px below so the title
+   belongs to what it heads, not to what came before. */
+.set-screen>.set-section-title,
+.set-screen>section>.set-section-title,
+.set-section>.set-section-title {
   margin-top: 16px;
+  margin-bottom: -8px;
 }
 
-.set-screen>.set-section-title:first-child {
+/* A sub-heading inside a section ("Invite someone", "People you work
+   with"): text-coloured and a step up from a field label, 12px over what it
+   heads. */
+:where(#settings-panel) .set-subtitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.set-screen > .set-subtitle {
+  margin: 8px 0 -12px;
+}
+
+/* A switch row's description drawn as the NEXT sibling rather than inside the
+   row ("Scheduled refresh", "Ticket sessions in MindFlock"): it belongs to the
+   switch, so it sits at the in-field gap, not a whole rhythm away where it
+   would read as a separate item. */
+:is(.set-screen, .set-screen > section, .mobile-body) > .set-switch-row + .set-hint {
+  margin-top: calc(var(--set-tight, 6px) - var(--set-rhythm, 24px));
+}
+
+/* An empty launch-flag chip row still added its top margin under the field. */
+#settings-panel .flag-chips:empty {
+  display: none;
+}
+
+.set-screen>.set-section-title:first-child,
+.set-screen>section:first-child>.set-section-title:first-child,
+.set-section:first-child>.set-section-title:first-child {
   margin-top: 0;
 }
 
@@ -2580,12 +3015,41 @@ p.set-hint {
   border-color: var(--accent);
 }
 
+/* A text field in a Settings screen that no rule above dresses (the ntfy
+   field grid, People's invite and share boxes) got the browser's thin grey
+   box. Zero specificity: any component rule still wins. */
+:where(#settings-panel) :where(input:not([type]), input[type="text"], input[type="password"], input[type="url"], input[type="email"], input[type="search"], textarea) {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+:where(#settings-panel) :where(input:not([type]), input[type="text"], input[type="password"], input[type="url"], input[type="email"], input[type="search"], textarea):focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Fold headings ("Advanced") at label size, not the body's 16px. */
+:where(#settings-panel) details > summary {
+  font-size: 13px;
+}
+
 /* A short paragraph of guidance that sits above a block of fields. */
 .set-block-hint {
   font-size: 12px;
   color: var(--muted);
   margin: 4px 0 2px;
   line-height: 1.5;
+}
+
+/* In a Settings screen the flex gap is the spacing; the paragraph's own
+   margins would only make it uneven. */
+:where(#settings-panel) .set-block-hint {
+  margin: 0;
 }
 
 /* Advanced options fold (tuning fields hidden by default so "add a repo" is
@@ -2972,15 +3436,15 @@ p.set-hint {
 .prov-conn-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   margin-bottom: 14px;
 }
 
 .prov-conn {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px 11px;
+  gap: 8px;
+  padding: 12px 14px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3065,6 +3529,7 @@ p.set-hint {
 
 .prov-conn-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -3214,7 +3679,7 @@ p.set-hint {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin: 4px 0 0;
+  margin: 0;
 }
 
 .upd-fold {
@@ -3284,14 +3749,14 @@ p.set-hint {
 .peer-actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 4px 0 12px;
+  gap: 16px;
+  margin: 0;
 }
 .peer-action {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -3319,13 +3784,13 @@ p.set-hint {
   align-self: flex-start;
 }
 .peer-needs {
-  margin: 0 0 12px;
+  margin: 0;
   padding: 8px 12px;
   border-left: 3px solid var(--warn, #d9a441);
 }
 .peer-link-card {
-  padding: 8px 12px;
-  margin: 0 0 8px;
+  padding: 12px 16px;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -3395,12 +3860,12 @@ p.set-hint {
   font-size: 11px;
 }
 .peer-advanced {
-  margin-top: 16px;
+  margin-top: 0;
 }
 .peer-advanced > summary {
   cursor: pointer;
   color: var(--muted, inherit);
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 }
 
@@ -15613,6 +16078,42 @@ button.ct-chip:hover {
   font-size: 12px;
 }
 
+/* Schedule: a checkbox, then "Every day ▾ at 21:00" on one row once on. */
+.tpl-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.tpl-schedule-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding-left: 20px;
+}
+
+/* The card's "Every day at 21:00 · next today 21:00 · last …" line. */
+.tpl-runs {
+  font-size: 11.5px;
+  color: var(--text);
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.tpl-run-error {
+  font-size: 11.5px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.tpl-run {
+  border-color: var(--accent);
+}
+
 .tpl-row-actions {
   display: flex;
   justify-content: flex-end;
@@ -17867,18 +18368,18 @@ button.linklike {
 .conn-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 12px;
+  margin-top: 0;
 }
 
 .conn-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 12px 16px;
 }
 
 .conn-main {
@@ -17900,7 +18401,8 @@ button.linklike {
 
 .conn-detail {
   font-size: 12px;
-  margin-top: 3px;
+  line-height: 1.45;
+  margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -18012,7 +18514,7 @@ button.linklike {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 /* Compact on purpose: with the tab strip naming the surface and each tab's own
@@ -18097,13 +18599,15 @@ button.linklike {
 /* Same display contract as .set-screen, because capsGate.css hides the direct
    children of a gated panel and reveals its .caps-gate — see the rules there.
 
-   The gap is the tab's whole vertical rhythm: three sections (switch, sources,
-   work list), each already fenced by its own heading rule or border, so 16px
-   between them was spacing a boundary that was drawn anyway. */
+   The gap is the tab's whole vertical rhythm: intro, switch, work list,
+   sources, advanced. It is the BIGGEST step on the surface — bigger than the
+   18px between fields inside a card — so the hierarchy reads by space before it
+   reads by the heading rules. (12px, tried once to save height, made sections
+   and fields the same distance apart, and the tab read as one long column.) */
 .ik-panel {
   display: none;
   flex-direction: column;
-  gap: 12px;
+  gap: 22px;
 }
 
 .ik-panel.active {
@@ -18134,6 +18638,11 @@ button.linklike {
   padding-bottom: 4px;
 }
 
+/* A section's heading, toolbar and list: a step apart, still one section. */
+.ik-panel > .set-row {
+  gap: 10px;
+}
+
 .ik-panel > .set-section-title:first-child {
   margin-top: 0;
 }
@@ -18162,7 +18671,7 @@ button.linklike {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 9px;
-  padding: 9px 12px;
+  padding: 11px 14px;
 }
 
 /* Label over optional subtitle. min-width:0 so a long "nothing connected yet"
@@ -18179,7 +18688,7 @@ button.linklike {
 .ik-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 /* The card's own bottom margin is for the Settings screens it came from; inside
@@ -18902,6 +19411,110 @@ button.linklike {
 }
 .ik-secret-clear:hover {
   color: var(--text);
+}
+
+/* --- Source card form rhythm ------------------------------------------------
+   Two distances, and the gap between them is the point: a field's own parts
+   (label → control → hint) sit TIGHT, and the next field starts a clearly
+   LARGER step below. With one even 6–10px everywhere — and the catalog's
+   fields in a wrapper with no gap at all — a long hint ran flush into the next
+   label ("…doesn't comment twice." / "Claim label") and read as belonging to
+   either field. Scoped to the Intake dialog: Settings keeps its own rhythm. */
+#intake-panel .tk-source {
+  padding: 12px 16px 14px;
+}
+
+#intake-panel .tk-source .tk-body {
+  gap: 18px;
+  margin-top: 14px;
+}
+
+/* The catalog's fields are a run of ordinary fields, not a group: let them
+   join the body's column so they get the same step as the fields above. */
+#intake-panel .tk-source .tk-fields {
+  display: contents;
+}
+
+#intake-panel .tk-source .set-row {
+  gap: 5px;
+}
+
+/* A hint belongs to the control above it: a hair of space, a readable line
+   height, and nothing below it — the 18px step does that job. */
+#intake-panel .tk-source .set-row > .set-hint,
+#intake-panel .tk-source .set-row > .ik-field-error {
+  line-height: 1.45;
+  margin-top: 1px;
+}
+
+/* The ingest-state chips carry their own bottom margin from Settings; inside
+   a field the row gap already spaces them from the picker. */
+#intake-panel .tk-source .set-row > .repo-list {
+  margin-bottom: 2px;
+}
+
+/* The footer (Test / message / Remove) is the card's actions, not one more
+   field: a rule says so. */
+#intake-panel .tk-source .tk-body > .set-row:last-child {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* Basic vs Advanced: the fold under a ticket source's essential fields. Same
+   quiet summary as the tab-level `.pr-advanced`, but inside a card, so it is
+   set off by a dashed rule rather than a solid one (the solid rule is the
+   footer's). */
+#intake-panel .tk-advanced {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+
+#intake-panel .tk-advanced > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  width: fit-content;
+  list-style: revert;
+}
+
+#intake-panel .tk-advanced > summary:hover,
+#intake-panel .tk-advanced[open] > summary {
+  color: var(--text);
+}
+
+#intake-panel .tk-advanced > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+#intake-panel .tk-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+/* The tab-level Advanced fold (Pull requests / Issues): the panel gap above
+   already separates it, so its own top margin only stretched the step. */
+.ik-panel > .pr-advanced {
+  margin-top: 0;
+  padding-top: 14px;
+}
+
+/* Its fields get the card rhythm too: tight inside a field, a step between. */
+#intake-panel .pr-advanced-body {
+  gap: 18px;
+  margin-top: 16px;
+}
+
+#intake-panel .pr-advanced-body > .set-row {
+  gap: 5px;
+}
+
+#intake-panel .pr-advanced-body > .set-row > .set-hint {
+  line-height: 1.45;
 }
 }
 
@@ -20713,19 +21326,24 @@ span.pr-open-ref.ob-ref {
    rhythm: without a flex gap its rows stacked flush, and the switch row's
    label — nudged up 10px for the desktop font (.set-switch-row > .set-label)
    — landed on top of the hint above it ("…still works when this one is off."
-   drawn over "Shared link"). Same 16px gap as .set-screen, and later section
-   titles get the same lead-in as at screen level. container-type lets the URL
+   drawn over "Shared link"). Same rhythm as .set-screen (screens.css), and
+   section titles get the same lead-in as at screen level. container-type lets the URL
    grid below stack by the pane's width, not the window's. */
 .mobile-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--set-rhythm, 24px);
   min-width: 0;
   container-type: inline-size;
 }
 
 .mobile-body>.set-section-title {
   margin-top: 16px;
+  margin-bottom: -8px;
+}
+
+.mobile-body>.set-section-title:first-child {
+  margin-top: 0;
 }
 
 .mobile-body>#mobile-qr {
@@ -21077,10 +21695,10 @@ details.sl-fix[open]>*:not(summary) {
    generate/test affordance sits with the field it acts on instead of below it. */
 .ntfy-field-row {
   display: grid;
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: 140px 1fr auto;
   align-items: center;
-  gap: 6px 12px;
-  margin: 8px 0;
+  gap: 6px 16px;
+  margin: 0;
 }
 
 .ntfy-field-row .set-label {
@@ -21104,8 +21722,8 @@ details.sl-fix[open]>*:not(summary) {
   border: 1px solid var(--gold);
   border-radius: 10px;
   background: var(--panel-2);
-  padding: 10px 14px;
-  margin: 10px 0;
+  padding: 12px 16px;
+  margin: 0;
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -21114,9 +21732,9 @@ details.sl-fix[open]>*:not(summary) {
 .ntfy-test-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin: 12px 0 4px;
+  margin: 0;
 }
 
 .ntfy-verdict-ok {
@@ -21125,6 +21743,20 @@ details.sl-fix[open]>*:not(summary) {
 
 .ntfy-verdict-bad {
   color: var(--red);
+}
+
+/* Phone width: the label goes above its field instead of eating a 140px
+   column, and a field with no trailing button takes the whole row. */
+@media (max-width: 600px) {
+  .ntfy-field-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ntfy-field-row .set-label,
+  .ntfy-field-row .set-hint,
+  .ntfy-field-row > input:not(:has(+ button)) {
+    grid-column: 1 / -1;
+  }
 }
 }
 
@@ -21728,7 +22360,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: 12px 0;
+  margin: 0;
+}
+
+/* The paragraph that introduces a swatch set sits closer to it (12px) than
+   to the set above (the screen's 24px rhythm). */
+.set-screen > p.set-hint + .accent-swatches {
+  margin-top: -12px;
 }
 
 .accent-swatch {

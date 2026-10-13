@@ -25831,7 +25831,8 @@ var PREF_DEFAULTS = {
 	idle_flock: null,
 	idle_after: null,
 	hints: null,
-	map_tour: null
+	map_tour: null,
+	settings_advanced: null
 };
 var PREF_MAP = [
 	{
@@ -25906,6 +25907,11 @@ var PREF_MAP = [
 		ls: "mf_map_tour",
 		field: "map_tour",
 		kind: "json-bool"
+	},
+	{
+		ls: "mf_settings_advanced",
+		field: "settings_advanced",
+		kind: "json-bool"
 	}
 ];
 var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
@@ -25921,6 +25927,9 @@ function storage$1() {
 }
 function prefFieldFor(lsKey) {
 	return BY_LS.get(lsKey)?.field ?? null;
+}
+function lsKeyFor(field) {
+	return BY_FIELD.get(field).ls;
 }
 function coerce(p, v) {
 	switch (p.kind) {
@@ -27957,7 +27966,7 @@ function Appearance(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			children: "One bird per set, painted the way the bird actually is: most give the top bar, the sidebar and the window a hue each — Scarlet Macaw is a cobalt bar over an emerald sidebar over a scarlet window. Swallow, Raven and Heron are the quiet ones. Every set has its own light-mode palette, so the moon toggle in the top bar keeps working inside all of them. Synced to all your devices."
+			children: "One bird per set, painted the way the bird actually is: most give the top bar, the sidebar and the window a hue each — Scarlet Macaw is a cobalt bar over an emerald sidebar over a scarlet window. Swallow, Raven and Heron are the quiet ones. Every set has its own light-mode palette, so the moon toggle in the top bar keeps working inside all of them."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "surface-swatches",
@@ -30478,6 +30487,14 @@ function cleanList(raw) {
 }
 var cache$1 = null;
 var loading = null;
+var runsStatus = {
+	runs: {},
+	runs_here: true,
+	runs_on: ""
+};
+function templateRunsNow() {
+	return runsStatus;
+}
 function notify() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
 }
@@ -30505,7 +30522,13 @@ function ensureTemplates(force = false) {
 	if (loading) return loading;
 	loading = (async () => {
 		try {
-			let list = setTemplates((await api("/api/templates")).templates || []);
+			const d = await api("/api/templates");
+			runsStatus = {
+				runs: d.runs && typeof d.runs === "object" ? d.runs : {},
+				runs_here: d.runs_here !== false,
+				runs_on: String(d.runs_on || "")
+			};
+			let list = setTemplates(d.templates || []);
 			if (await migratePresetsOnce(list)) list = setTemplates((await api("/api/templates")).templates || []);
 			return list;
 		} finally {
@@ -30521,6 +30544,28 @@ async function deleteTemplate(name) {
 	const d = await api("/api/templates/" + encodeURIComponent(name), { method: "DELETE" });
 	setTemplates(templatesNow().filter((t) => presetKey(t.name) !== presetKey(name)));
 	return !!d.deleted;
+}
+function runProblem(t) {
+	return !(t.repo_path || "").trim() && !t.provisioned ? "Pick a folder for this template first" : "";
+}
+function scheduleLabel(s) {
+	if (!s || !s.at) return "";
+	return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+function whenLabel(epochSec, now = /* @__PURE__ */ new Date()) {
+	if (!epochSec) return "";
+	const d = /* @__PURE__ */ new Date(epochSec * 1e3);
+	const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+	const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+	const diff = Math.round((day(d) - day(now)) / 864e5);
+	if (diff === 0) return "today " + hm;
+	if (diff === 1) return "tomorrow " + hm;
+	if (diff === -1) return "yesterday " + hm;
+	if (Math.abs(diff) < 7) return d.toLocaleDateString(void 0, { weekday: "short" }) + " " + hm;
+	return d.toLocaleDateString(void 0, {
+		month: "short",
+		day: "numeric"
+	}) + " " + hm;
 }
 function isPromptOnly(t) {
 	return typeof t.prompt === "string" && !!t.prompt.trim() && !t.program && !t.repo_path && !t.provisioned && !t.in_place && !t.init_repo;
@@ -38707,6 +38752,60 @@ function describeConnectionTest(r) {
 	};
 }
 //#endregion
+//#region src/components/settings/settingsMode.tsx
+var ADVANCED_LS = lsKeyFor("settings_advanced");
+function readAdvancedMode(kv) {
+	return readLocal("settings_advanced", kv) === true;
+}
+function writeAdvancedMode(on, kv) {
+	writeLocal("settings_advanced", on, kv);
+	notePrefWrite(ADVANCED_LS, kv);
+}
+function navScreens(screens, advanced, active) {
+	return screens.filter((s) => advanced || !s.advanced || s.key === active);
+}
+function navHeading(shown, i, advanced) {
+	const s = shown[i];
+	if (!advanced) return s.advanced && !shown[i - 1]?.advanced ? "Advanced" : "";
+	return s.group && s.group !== shown[i - 1]?.group ? s.group : "";
+}
+var SettingsModeCtx = (0, import_react.createContext)(false);
+function useAdvancedSettings() {
+	return (0, import_react.useContext)(SettingsModeCtx);
+}
+function AdvancedToggle({ advanced, hidden, onChange }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-mode-foot",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "settings-advanced-toggle",
+			className: "set-mode-toggle",
+			"aria-pressed": advanced,
+			onClick: () => onChange(!advanced),
+			children: advanced ? "Hide advanced settings" : "Show advanced settings"
+		}), !advanced && hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-mode-more",
+			children: [hidden, " more screens"]
+		}) : null]
+	});
+}
+function AdvancedFold({ id, summary = "Advanced", children }) {
+	const advanced = useAdvancedSettings();
+	const [open, setOpen] = (0, import_react.useState)(advanced);
+	(0, import_react.useEffect)(() => setOpen(advanced), [advanced]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "pr-advanced set-adv-fold",
+		id,
+		"data-advanced-fold": "",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "pr-advanced-body set-adv-fold-body",
+			children
+		})]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Connections.tsx
 var CONNECTIONS_CHANGED_EVENT = "mf:connections-changed";
 function notifyConnectionsChanged() {
@@ -38736,6 +38835,14 @@ var KIND_LABELS = {
 	extension: "Extensions",
 	system: "System"
 };
+var BASIC_KINDS = /* @__PURE__ */ new Set([
+	"agent",
+	"github",
+	"tracker"
+]);
+function isBasicKind(kind) {
+	return BASIC_KINDS.has(kind || "other");
+}
 function groupRows(rows) {
 	const out = [];
 	const at = /* @__PURE__ */ new Map();
@@ -38962,6 +39069,25 @@ function Connections({ gotoScreen }) {
 		closeDialog
 	};
 	const groups = conns ? groupRows(conns) : [];
+	const basic = groups.filter((g) => isBasicKind(g.kind));
+	const more = groups.filter((g) => !isBasicKind(g.kind));
+	const advanced = useAdvancedSettings();
+	const counted = conns ? advanced ? conns : conns.filter((c) => isBasicKind(c.kind)) : null;
+	const renderGroup = (g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "conn-group",
+		"data-kind": g.kind,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+			className: "conn-group-title",
+			children: g.label
+		}), g.rows.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectionRowView, {
+			c,
+			deps,
+			result: results[c.id],
+			testing: testing[c.id],
+			onTest: () => void test(c),
+			onChanged: () => void load(true)
+		}, c.id || c.name))]
+	}, g.kind);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 			className: "set-section-title",
@@ -38971,7 +39097,7 @@ function Connections({ gotoScreen }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					id: "settings-connections-summary",
 					className: "muted",
-					children: conns ? summaryLine(conns) : ""
+					children: counted ? summaryLine(counted) : ""
 				})
 			]
 		}),
@@ -38988,21 +39114,10 @@ function Connections({ gotoScreen }) {
 			}) : conns === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
 				children: "Checking…"
-			}) : groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "conn-group",
-				"data-kind": g.kind,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-					className: "conn-group-title",
-					children: g.label
-				}), g.rows.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectionRowView, {
-					c,
-					deps,
-					result: results[c.id],
-					testing: testing[c.id],
-					onTest: () => void test(c),
-					onChanged: () => void load(true)
-				}, c.id || c.name))]
-			}, g.kind))
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [basic.map(renderGroup), more.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
+				id: "connections-advanced",
+				children: more.map(renderGroup)
+			}) : null] })
 		})
 	] });
 }
@@ -39211,21 +39326,31 @@ var STEP_ORDER = [
 	"tools",
 	"agent_login",
 	"repo",
+	"github",
 	"tracker",
 	"phone"
 ];
 var STEP_TITLES = {
-	tools: "Engine and tools",
+	tools: "Install the tools",
 	agent_login: "Sign in to your agent",
-	repo: "Pick a repo",
-	tracker: "Connect a tracker and GitHub",
-	phone: "Your phone"
+	repo: "Start your first agent",
+	github: "Connect GitHub",
+	tracker: "Connect your tracker",
+	phone: "Use it from your phone"
 };
 var REQUIRED_STEPS = [
 	"tools",
 	"agent_login",
 	"repo"
 ];
+var STEP_GROUP = {
+	tools: "start",
+	agent_login: "start",
+	repo: "start",
+	github: "connect",
+	tracker: "connect",
+	phone: "later"
+};
 var STATUS_GLYPH = {
 	done: "✓",
 	skipped: "–",
@@ -39237,6 +39362,7 @@ function orderedSteps(status) {
 		id,
 		title: STEP_TITLES[id],
 		required: REQUIRED_STEPS.includes(id),
+		group: STEP_GROUP[id],
 		done: false,
 		at: null,
 		skipped: false,
@@ -39259,8 +39385,27 @@ function chipLabel(status) {
 	return "Setup " + s.done + "/" + s.total;
 }
 function stepNumber(id) {
-	const i = STEP_ORDER.indexOf(id);
-	return i < 0 ? "•" : "①②③④⑤".charAt(i) || "•";
+	const i = STEP_ORDER.filter((s) => STEP_GROUP[s] !== "later").indexOf(id);
+	return i < 0 ? "" : "①②③④⑤⑥⑦⑧⑨".charAt(i);
+}
+function nextStepId(status) {
+	if (!status) return "tools";
+	return status.summary.next || "";
+}
+var EXTRA_CHECKS = /* @__PURE__ */ new Set([
+	"tailscale",
+	"bwrap",
+	"cloudflared",
+	"local-model",
+	"cache-seeds",
+	"clipboard",
+	"gh"
+]);
+function isEssentialCheck(c) {
+	const id = String(c.id || "");
+	if (EXTRA_CHECKS.has(id)) return false;
+	if (id.startsWith("agent-auth")) return false;
+	return c.status === "fail" || c.status === "warn";
 }
 function installedLogins(logins) {
 	const rows = (logins || []).filter((l) => l.installed);
@@ -39322,7 +39467,37 @@ function useDoctorAutoShow() {
 		if (data !== void 0) useDoctorWarnStore.getState()._setFailing(!(data && data.ok));
 	}, [data]);
 }
-function DoctorList({ reprobeKey, onChange }) {
+function CheckRow({ c, onSignedIn }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "doctor-check st-" + (c.status || "info"),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "doctor-ico",
+				children: DOCTOR_ICON[c.status || ""] || "•"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "doctor-label",
+				children: c.label || c.id || ""
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "doctor-detail",
+				children: [
+					c.detail || "",
+					c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "doctor-fix",
+						children: [" fix: ", c.fix]
+					}),
+					signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+						provider: signInTarget(c),
+						className: "doctor-signin",
+						onDone: onSignedIn
+					})
+				]
+			})
+		]
+	});
+}
+function DoctorList({ reprobeKey, onChange, essential = false }) {
 	const [installed, setInstalled] = (0, import_react.useState)(0);
 	const reprobe = (reprobeKey || 0) > 0 || installed > 0;
 	const query = useDoctor({ enabled: !reprobe });
@@ -39355,54 +39530,44 @@ function DoctorList({ reprobeKey, onChange }) {
 		className: "muted",
 		children: "doctor unavailable"
 	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
-		steps: doctor.install?.steps,
-		onDone: () => setInstalled((n) => n + 1)
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+	const bump = () => setInstalled((n) => n + 1);
+	const all = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 		className: "doctor-list",
-		children: doctor.checks.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-			className: "doctor-check st-" + (c.status || "info"),
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "doctor-ico",
-					children: DOCTOR_ICON[c.status || ""] || "•"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "doctor-label",
-					children: c.label || c.id || ""
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "doctor-detail",
-					children: [
-						c.detail || "",
-						c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "doctor-fix",
-							children: [" fix: ", c.fix]
-						}),
-						signInTarget(c) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
-							provider: signInTarget(c),
-							className: "doctor-signin",
-							onDone: () => setInstalled((n) => n + 1)
-						})
-					]
-				})
-			]
+		children: doctor.checks.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckRow, {
+			c,
+			onSignedIn: bump
 		}, c.id || i))
-	})] });
-}
-//#endregion
-//#region src/components/setup/githubTest.tsx
-var idleTest = { testing: false };
-function TestResult({ state }) {
-	if (state.testing) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "test-result",
-		children: "testing…"
 	});
-	if (state.msg === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "test-result" });
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "test-result " + (state.ok ? "ok" : "bad"),
-		children: (state.ok ? "✓ " : "✗ ") + state.msg
-	});
+	if (!essential) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+		steps: doctor.install?.steps,
+		onDone: bump
+	}), all] });
+	const problems = doctor.checks.filter(isEssentialCheck);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+			steps: doctor.install?.steps,
+			onDone: bump
+		}),
+		problems.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "doctor-list doctor-list-essential",
+			children: problems.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CheckRow, {
+				c,
+				onSignedIn: bump
+			}, c.id || i))
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "setup-hint setup-tools-ok",
+			children: "✓ Everything needed is installed."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			className: "setup-allchecks",
+			onClick: (e) => e.stopPropagation(),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+				"All checks (",
+				doctor.checks.length,
+				")"
+			] }), all]
+		})
+	] });
 }
 //#endregion
 //#region src/components/setup/useSetup.ts
@@ -39442,14 +39607,20 @@ function progressLine(status) {
 	const s = status.summary;
 	const next = status.steps.find((x) => x.id === s.next);
 	if (s.complete) return "All set";
-	return s.done + " of " + s.total + " done" + (next ? " · next: " + next.title : "");
+	const tail = next ? " · next: " + next.title : "";
+	if (!s.required_done) {
+		const req = status.steps.filter((x) => x.required);
+		return req.filter((x) => x.done).length + " of " + req.length + " done" + tail;
+	}
+	return s.done + " of " + s.total + " done" + tail;
 }
 function StepHead({ step }) {
-	const note = step.status === "done" ? "done" : step.status === "skipped" ? "skipped" : step.required ? "" : "optional";
+	const note = step.status === "done" ? "done" : step.status === "skipped" ? "skipped" : "";
+	const num = stepNumber(step.id);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		num && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "setup-num",
-			children: stepNumber(step.id)
+			children: num
 		}),
 		" ",
 		step.title,
@@ -39484,12 +39655,50 @@ function SkipRow({ step }) {
 		children: step.skipped ? "Show again" : "Skip"
 	});
 }
+function Step({ step, next, children, fold }) {
+	const isNext = step.id === next;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "setup-step st-" + step.status + (isNext ? " is-next" : ""),
+		"data-step": step.id,
+		"data-status": step.status,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step }),
+			step.status === "todo" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "setup-step-body",
+				children
+			}),
+			step.status === "skipped" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "setup-actions",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step })
+			}),
+			step.status === "done" && fold
+		]
+	});
+}
+function Action({ next, className, onClick, children, title }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: className + (next ? " setup-primary" : ""),
+		title,
+		onClick: (e) => {
+			e.stopPropagation();
+			onClick();
+		},
+		children
+	});
+}
 function SetupChecklist$1() {
 	const { data: status, error } = useSetup();
 	const [reprobeKey, setReprobeKey] = (0, import_react.useState)(0);
 	const steps = orderedSteps(status);
 	const by = new Map(steps.map((s) => [s.id, s]));
 	const step = (id) => by.get(id);
+	const next = nextStepId(status);
+	(0, import_react.useEffect)(() => {
+		const on = () => void refreshSetup();
+		window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
+		return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
+	}, []);
 	const closeSetup = () => {
 		if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
 	};
@@ -39500,9 +39709,15 @@ function SetupChecklist$1() {
 	const tools = step("tools");
 	const agent = step("agent_login");
 	const repo = step("repo");
+	const github = step("github");
 	const tracker = step("tracker");
 	const phone = step("phone");
 	const logins = installedLogins(status?.logins);
+	const startDone = [
+		tools,
+		agent,
+		repo
+	].every((s) => s.done);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "setup-checklist",
 		"data-setup-next": status?.summary.next || "",
@@ -39514,185 +39729,219 @@ function SetupChecklist$1() {
 				className: "muted setup-progress",
 				children: progressLine(status)
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "setup-step st-" + tools.status,
-				"data-step": "tools",
-				"data-status": tools.status,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: tools }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-					className: "setup-fold",
-					open: !tools.done,
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-group",
+				"data-group": "start",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+						className: "setup-group-title",
+						children: ["Get started", startDone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "setup-group-note st-done",
+							children: " ✓ done"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+						step: tools,
+						next,
+						fold: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+							className: "setup-fold",
 							onClick: (e) => e.stopPropagation(),
-							children: tools.done ? "Everything required is installed — show the list" : "What this computer has"
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Show checks" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "setup-doctor",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+									essential: true,
+									reprobeKey,
+									onChange: () => void refreshSetup()
+								})
+							})]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "setup-doctor",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+								essential: true,
 								reprobeKey,
 								onChange: () => void refreshSetup()
 							})
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "setup-actions",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "setup-recheck",
+								className: "linklike setup-recheck",
 								onClick: (e) => {
 									e.stopPropagation();
 									setReprobeKey((k) => k + 1);
 								},
 								children: "Re-check"
 							})
-						})
-					]
-				})]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+						step: agent,
+						next,
+						children: [!status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint",
+							children: "Checking…"
+						}) : logins.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "muted setup-hint",
+							children: [
+								"Install the tools first — that installs ",
+								status.default_provider || "your agent",
+								"."
+							]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+							className: "setup-logins",
+							children: logins.map((l) => {
+								const line = loginLine(l);
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+									className: "setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown"),
+									"data-provider": l.name,
+									"data-logged-in": String(l.logged_in),
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "setup-login-name",
+											children: [agentDisplayName(l.name), l.default && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: " (default)"
+											})]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "setup-login-state",
+											children: (line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text
+										}),
+										l.login_cmd && line.ok !== true && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
+											provider: l.name,
+											onDone: () => void refreshSetup(true)
+										})
+									]
+								}, l.name);
+							})
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "muted setup-hint",
+							children: [
+								"Using an API key?",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike setup-open-accounts",
+									onClick: (e) => {
+										e.stopPropagation();
+										go("settings", "accounts");
+									},
+									children: "Settings → Accounts"
+								})
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+						step: repo,
+						next,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint",
+							children: "Pick a repo folder and say what to do."
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "setup-actions",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Action, {
+								next: repo.id === next,
+								className: "setup-new",
+								onClick: () => go("new-session"),
+								children: "+ New session"
+							})
+						})]
+					})
+				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "setup-step st-" + agent.status,
-				"data-step": "agent_login",
-				"data-status": agent.status,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "setup-group",
+				"data-group": "connect",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: agent }),
-					!status ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "muted setup-hint",
-						children: "Checking…"
-					}) : logins.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "muted setup-hint",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+						className: "setup-group-title",
+						children: ["Connect your work ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "setup-group-note",
+							children: "optional"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+						step: github,
+						next,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint",
+							children: "Lets agents open and merge pull requests."
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "setup-actions",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Action, {
+								next: github.id === next,
+								className: "setup-connect-github",
+								title: "Sign in with GitHub, use gh, or paste a token. That token is the whole setup for opening and merging PRs — pushing is plain git push over your own remote.",
+								onClick: () => openConnectGitHub(),
+								children: "Connect GitHub"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: github })]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
+						step: tracker,
+						next,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted setup-hint",
+							children: "Turn tickets from Jira, Linear, Shortcut, Asana or GitHub Issues into sessions."
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "setup-actions",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Action, {
+								next: tracker.id === next,
+								className: "setup-open-intake",
+								onClick: () => go("intake", "tickets"),
+								children: "Add a ticket source"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: tracker })]
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "setup-later",
+				"data-group": "later",
+				onClick: (e) => e.stopPropagation(),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional, later" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "setup-step st-" + phone.status,
+						"data-step": "phone",
+						"data-status": phone.status,
 						children: [
-							"No agent CLI is installed yet — step ① installs ",
-							status.default_provider || "one",
-							"."
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: phone }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneStep, {
+								status,
+								done: phone.done
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "setup-actions",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike setup-open-mobile",
+									onClick: (e) => {
+										e.stopPropagation();
+										go("settings", "mobile");
+									},
+									children: "Settings → Your phone"
+								})
+							})
 						]
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "setup-logins",
-						children: logins.map((l) => {
-							const line = loginLine(l);
-							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-								className: "setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown"),
-								"data-provider": l.name,
-								"data-logged-in": String(l.logged_in),
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "setup-login-name",
-										children: [agentDisplayName(l.name), l.default && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "muted",
-											children: " (default)"
-										})]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "setup-login-state",
-										children: (line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text
-									}),
-									l.login_cmd && line.ok !== true && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
-										provider: l.name,
-										onDone: () => void refreshSetup(true)
-									})
-								]
-							}, l.name);
-						})
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "muted setup-hint",
+						className: "muted setup-hint setup-later-more",
 						children: [
-							"API keys and extra accounts live in",
+							"Other computers, sharing with people, extensions and IDEs are all in",
 							" ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "linklike setup-open-accounts",
+								className: "linklike setup-open-settings",
 								onClick: (e) => {
 									e.stopPropagation();
-									go("settings", "accounts");
+									go("settings");
 								},
-								children: "Settings → Accounts"
+								children: "Settings"
 							}),
 							"."
 						]
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "setup-step st-" + repo.status,
-				"data-step": "repo",
-				"data-status": repo.status,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: repo }), repo.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted setup-hint",
-					children: "Your first session was created. New (Ctrl+N) starts another."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted setup-hint",
-					children: "A session is an isolated git worktree plus a terminal running your agent. Pick the folder to work in — the folder browser is in the dialog — and say what to do."
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "setup-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "setup-new",
-						onClick: (e) => {
-							e.stopPropagation();
-							go("new-session");
-						},
-						children: "+ New session"
-					})
-				})] })]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "setup-step st-" + tracker.status,
-				"data-step": "tracker",
-				"data-status": tracker.status,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: tracker }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "muted setup-hint",
-						children: tracker.done ? "A tracker is connected — Intake turns its tickets into sessions." : "Connect GitHub for PRs and issues; your tracker (Jira, Linear, Shortcut, Asana, GitHub Issues) is a ticket source in Settings → Connections. Done once the first ticket source is saved."
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "setup-actions",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "setup-open-connections",
-								onClick: (e) => {
-									e.stopPropagation();
-									go("settings", "connections");
-								},
-								children: "Open Settings → Connections"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "setup-connect-github",
-								title: "Sign in with GitHub, use gh, or paste a token, then Test it against your first repository. That token is the whole setup for opening and merging PRs — the gh CLI is optional, and pushing is plain git push over your own remote.",
-								onClick: (e) => {
-									e.stopPropagation();
-									openConnectGitHub();
-								},
-								children: "Connect GitHub"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: tracker })
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutTest, {})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "setup-step st-" + phone.status,
-				"data-step": "phone",
-				"data-status": phone.status,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepHead, { step: phone }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PhoneStep, {
-						status,
-						done: phone.done
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "setup-actions",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "setup-open-mobile",
-							onClick: (e) => {
-								e.stopPropagation();
-								go("settings", "mobile");
-							},
-							children: "Settings → Your phone"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkipRow, { step: phone })]
 					})
 				]
 			}),
@@ -39728,13 +39977,9 @@ function PhoneStep({ status, done }) {
 			className: "setup-phone setup-phone-tailscale",
 			"data-phone": "install-tailscale",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "muted setup-hint",
-					children: [
-						"Your phone reaches MindFlock over Tailscale, which isn't ready on this computer",
-						ts.detail ? " — " + ts.detail : "",
-						"."
-					]
+					children: "Your phone reaches MindFlock over Tailscale, which isn't on this computer yet."
 				}),
 				ts.fix && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "setup-hint",
@@ -39783,78 +40028,11 @@ function PhoneStep({ status, done }) {
 		]
 	});
 }
-function ShortcutTest() {
-	const [sc, setSc] = (0, import_react.useState)(idleTest);
-	const [scToken, setScToken] = (0, import_react.useState)("");
-	const testShortcut = (0, import_react.useCallback)(async () => {
-		setSc({ testing: true });
-		const tok = scToken.trim();
-		try {
-			const r = await api("/api/settings/test/shortcut", { json: { api_token: tok || "" } });
-			if (r?.ok) {
-				setSc({
-					testing: false,
-					ok: true,
-					msg: "Shortcut OK — " + (r.name || r.mention_name || r.member_id)
-				});
-				toast("Shortcut token OK" + (r.name ? " — " + r.name : ""));
-				if (tok) {
-					try {
-						await api("/api/settings", { json: { shortcut: { api_token: tok } } });
-					} catch {}
-					setScToken("");
-				}
-				return;
-			}
-			setSc({
-				testing: false,
-				ok: false,
-				msg: String(r?.error || "test failed")
-			});
-		} catch (e) {
-			setSc({
-				testing: false,
-				ok: false,
-				msg: e.message
-			});
-		}
-	}, [scToken]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "setup-optional",
-		onClick: (e) => e.stopPropagation(),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Optional: test a Shortcut token" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "setup-acct-row setup-shortcut-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "setup-test-shortcut",
-					onClick: (e) => {
-						e.stopPropagation();
-						testShortcut();
-					},
-					children: "Test Shortcut"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "password",
-					className: "setup-shortcut-token",
-					placeholder: "Shortcut API token (optional)",
-					autoComplete: "off",
-					title: "Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token.",
-					value: scToken,
-					onChange: (e) => setScToken(e.target.value),
-					onClick: (e) => e.stopPropagation()
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestResult, { state: sc })
-			]
-		})]
-	});
-}
 //#endregion
 //#region src/components/dialogs/SetupDialog.tsx
 function SetupDialog() {
 	const open = useUi((s) => s.openDialog === "setup");
 	const closeDialog = useUi((s) => s.closeDialog);
-	const { data: status } = useSetup(open);
 	if (!open) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "setup-dialog",
@@ -39863,10 +40041,7 @@ function SetupDialog() {
 			id: "setup-panel-dlg",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ws-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["Setup ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted setup-head-progress",
-					children: progressLine(status)
-				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Setup" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					id: "setup-close",
 					onClick: closeDialog,
@@ -61519,7 +61694,7 @@ function TerminalGrid({ specialPanes }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Get set up" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "muted",
-							children: "Five steps — three to a running agent, two you can skip."
+							children: "Three steps to your first agent. The rest can wait."
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "setup-body",
@@ -61539,6 +61714,22 @@ function TerminalGrid({ specialPanes }) {
 }
 function sentinel(kind, ref = "") {
 	return windowKey(kind, ref);
+}
+//#endregion
+//#region src/lib/templateRun.ts
+async function runTemplateNow(name) {
+	try {
+		const made = await api("/api/templates/" + encodeURIComponent(name) + "/run", { method: "POST" });
+		const title = String(made?.title || "");
+		toast(`Started “${title || name}” from template “${name}”`);
+		await refreshInstances();
+		if (title) selectSession(title);
+		ensureTemplates(true).catch(() => {});
+		return title;
+	} catch (err) {
+		toast(`Couldn't run “${name}”: ${errMsg(err)}`);
+		return "";
+	}
 }
 //#endregion
 //#region src/components/palette/CommandPalette.tsx
@@ -61584,6 +61775,7 @@ function CommandPalette({ host }) {
 	const { data: extensions } = useExtensions();
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [sel, setSel] = (0, import_react.useState)(0);
+	const [tplVersion, setTplVersion] = (0, import_react.useState)(0);
 	const inputRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (open) {
@@ -61591,6 +61783,13 @@ function CommandPalette({ host }) {
 			setSel(0);
 			setTimeout(() => inputRef.current?.focus(), 0);
 		}
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const bump = () => setTplVersion((v) => v + 1);
+		document.addEventListener(TEMPLATES_CHANGED, bump);
+		ensureTemplates().catch(() => {});
+		return () => document.removeEventListener(TEMPLATES_CHANGED, bump);
 	}, [open]);
 	const actions = (0, import_react.useMemo)(() => {
 		if (!open) return [];
@@ -61655,6 +61854,14 @@ function CommandPalette({ host }) {
 			hint: "manage saved New-session setups",
 			run: () => ui.openDialogFor("templates")
 		});
+		for (const tpl of templatesNow()) {
+			if (runProblem(tpl)) continue;
+			acts.push({
+				label: "Run template: " + tpl.name,
+				hint: "fresh session, prompt sent",
+				run: () => void runTemplateNow(tpl.name)
+			});
+		}
 		acts.push({
 			label: "Recently closed…",
 			hint: "reopen or delete closed sessions",
@@ -61754,7 +61961,8 @@ function CommandPalette({ host }) {
 		open,
 		config,
 		host,
-		extensions
+		extensions,
+		tplVersion
 	]);
 	const filtered = (0, import_react.useMemo)(() => {
 		const scored = actions.map((a, i) => ({
@@ -61765,7 +61973,8 @@ function CommandPalette({ host }) {
 		scored.sort((x, y) => x.s - y.s || x.i - y.i);
 		const out = scored.map((x) => x.a);
 		const code = routeCode(query);
-		if (code.kind) out.unshift({
+		const named = scored.some((x) => x.s < 1e3);
+		if (code.kind) out[named ? "push" : "unshift"]({
 			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
 			hint: code.kind === "peer" ? "another person · People" : "your devices",
 			run: () => void routePastedCode(query)
@@ -62156,13 +62365,22 @@ function formFromTemplate(t) {
 		prompt: t?.prompt || "",
 		mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
 		workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
-		init_repo: !!t?.init_repo
+		init_repo: !!t?.init_repo,
+		scheduled: !!t?.schedule?.at,
+		at: t?.schedule?.at || "21:00",
+		days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily"
 	};
 }
 function templateBody(f) {
 	const name = f.name.trim();
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
+	const at = f.at.trim();
+	if (f.scheduled) {
+		if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+		if (!f.repo_path.trim() && f.mode !== "provisioned") return { error: "A scheduled template needs a folder to start its session in." };
+		if (!f.prompt.trim()) return { error: "A scheduled template needs a prompt — it's what the session is told to do." };
+	}
 	return { body: {
 		name,
 		program: f.program.trim(),
@@ -62171,7 +62389,11 @@ function templateBody(f) {
 		provisioned: f.mode === "provisioned",
 		in_place: f.mode === "in_place",
 		workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
-		init_repo: f.init_repo
+		init_repo: f.init_repo,
+		...f.scheduled ? { schedule: {
+			at,
+			days: f.days
+		} } : {}
 	} };
 }
 function renameLeaves(oldName, newName) {
@@ -62187,8 +62409,23 @@ function templateMeta(t) {
 	if (t.init_repo) bits.push("git init");
 	return bits.join(" · ");
 }
+function runLine(t, info, status, now = /* @__PURE__ */ new Date()) {
+	const bits = [];
+	if (t.schedule?.at) {
+		bits.push(scheduleLabel(t.schedule));
+		if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
+		else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
+	}
+	if (info.last_at) bits.push("last " + whenLabel(info.last_at, now) + (info.last_session ? " → " + info.last_session : ""));
+	return bits.join(" · ");
+}
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
+	const runs = p.runs || {
+		runs: {},
+		runs_here: true,
+		runs_on: ""
+	};
 	const loadError = p.loadError || "";
 	const editor = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 		className: "tpl-editor",
@@ -62288,6 +62525,60 @@ function TemplatesDialogView(p) {
 					})
 				]
 			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-schedule",
+				role: "group",
+				"aria-label": "Schedule",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "tpl-scheduled",
+							checked: form.scheduled,
+							onChange: (e) => p.onForm({ scheduled: e.target.checked })
+						}),
+						"Run on a schedule ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "— starts a fresh session with this prompt"
+						})
+					]
+				}), form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-schedule-when",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							id: "tpl-days",
+							"aria-label": "Which days",
+							value: form.days,
+							onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : "daily" }),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "daily",
+								children: "Every day"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "weekdays",
+								children: "Weekdays"
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "tpl-at",
+							type: "time",
+							"aria-label": "Time",
+							value: form.at,
+							onChange: (e) => p.onForm({ at: e.target.value })
+						}),
+						p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							children: [
+								"Starts on ",
+								p.runs.runs_on,
+								" — the device that runs automation."
+							]
+						})
+					]
+				})]
+			}),
 			ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error",
 				"aria-live": "polite",
@@ -62334,9 +62625,13 @@ function TemplatesDialogView(p) {
 						children: "Close"
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "tpl-intro muted",
-					children: "A template is a saved New-session setup — agent, folder, workspace and first prompt — and the list is the same on every device. The New dialog's Name → Enter reuses the one you last picked for that folder. A template that is only a prompt is also what the Prompts bar pastes."
+					children: [
+						"A template is a saved New-session setup — agent, folder, workspace and first prompt — and the list is the same on every device. The New dialog's Name → Enter reuses the one you last picked for that folder. A template that is only a prompt is also what the Prompts bar pastes.",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: " Run now" }),
+						" starts a fresh session from one, prompt already sent; give it a schedule and it starts itself every day or weekday at that time."
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "tpl-list",
@@ -62383,6 +62678,17 @@ function TemplatesDialogView(p) {
 												className: "tpl-meta",
 												children: templateMeta(t)
 											}),
+											(() => {
+												const info = runs.runs[t.name.trim().toLowerCase()] || {};
+												const line = runLine(t, info, runs);
+												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+													className: "tpl-runs",
+													children: line
+												}), info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "tpl-run-error error",
+													children: ["Last run failed: ", info.last_error]
+												})] });
+											})(),
 											t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 												className: "tpl-prompt",
 												children: t.prompt
@@ -62390,24 +62696,35 @@ function TemplatesDialogView(p) {
 										]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "tpl-actions",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "tpl-btn",
-											onClick: () => p.dispatch({
-												t: "edit",
-												name: t.name
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: "tpl-btn tpl-run",
+												disabled: !!runProblem(t) || !!p.running,
+												title: runProblem(t) || "Start a fresh session from this template, its prompt already sent",
+												onClick: () => p.onRun?.(t.name),
+												children: p.running === t.name ? "Starting…" : "Run now"
 											}),
-											children: "Edit"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "tpl-btn tpl-del",
-											onClick: () => p.dispatch({
-												t: "ask-delete",
-												name: t.name
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: "tpl-btn",
+												onClick: () => p.dispatch({
+													t: "edit",
+													name: t.name
+												}),
+												children: "Edit"
 											}),
-											disabled: busy,
-											children: "Delete"
-										})]
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: "tpl-btn tpl-del",
+												onClick: () => p.dispatch({
+													t: "ask-delete",
+													name: t.name
+												}),
+												disabled: busy,
+												children: "Delete"
+											})
+										]
 									})]
 								}),
 								ui.confirming === t.name && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -62458,6 +62775,8 @@ function TemplatesDialog() {
 	const [ui, dispatch] = (0, import_react.useReducer)(templatesReducer, TEMPLATES_UI_INIT);
 	const [form, setForm] = (0, import_react.useState)(() => formFromTemplate(null));
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [runs, setRuns] = (0, import_react.useState)(() => templateRunsNow());
+	const [running, setRunning] = (0, import_react.useState)("");
 	const editingRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -62465,11 +62784,15 @@ function TemplatesDialog() {
 		setBusy(false);
 		setLoadError("");
 		let live = true;
-		const reload = () => setList(templatesNow());
+		const reload = () => {
+			setList(templatesNow());
+			setRuns(templateRunsNow());
+		};
 		document.addEventListener(TEMPLATES_CHANGED, reload);
 		ensureTemplates(true).then((list) => {
 			if (!live) return;
 			setList(list);
+			setRuns(templateRunsNow());
 			setLoaded(true);
 		}).catch((err) => {
 			if (live) setLoadError(errMsg(err));
@@ -62505,6 +62828,7 @@ function TemplatesDialog() {
 			await saveTemplate(r.body);
 			const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
 			if (gone) await deleteTemplate(gone);
+			ensureTemplates(true).catch(() => {});
 			setList(templatesNow());
 			dispatch({ t: "saved" });
 			toast(`Saved template “${r.body.name}”`);
@@ -62533,8 +62857,19 @@ function TemplatesDialog() {
 			setBusy(false);
 		}
 	};
+	const run = async (name) => {
+		setRunning(name);
+		try {
+			if (await runTemplateNow(name)) closeDialog();
+		} finally {
+			setRunning("");
+		}
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialogView, {
 		templates,
+		runs,
+		running,
+		onRun: (name) => void run(name),
 		ui,
 		form,
 		busy,
@@ -67441,6 +67776,27 @@ var TEST_STATE_LABELS = {
 	needs_attention: "Needs attention",
 	off: "Off"
 };
+var CARD_ADVANCED_DEFAULTS = {
+	effort: [""],
+	depth: ["", "agent"]
+};
+function basicFields(meta) {
+	return (meta?.fields || []).filter((f) => !f.advanced);
+}
+function advancedFields(meta) {
+	return (meta?.fields || []).filter((f) => !!f.advanced);
+}
+function advancedHasValues(meta, source, errors = {}) {
+	for (const f of advancedFields(meta)) {
+		if (errors[f.key]) return true;
+		if (!f.auto && (source[f.key] || "").trim()) return true;
+	}
+	for (const [key, unset] of Object.entries(CARD_ADVANCED_DEFAULTS)) {
+		if (errors[key]) return true;
+		if (!unset.includes((source[key] || "").trim())) return true;
+	}
+	return false;
+}
 //#endregion
 //#region src/components/intake/search.ts
 function annotations(item) {
@@ -67651,6 +68007,150 @@ function MergeDrawer({ row, all, hasSession, onDone, onClose }) {
 					onClick: () => armed ? submit() : setArmed(true),
 					children: busy ? "Merging…" : armed ? "Confirm — delete " + row.slug : "Merge and delete " + row.slug
 				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/intake/repoList.ts
+function sourceRepos(source) {
+	const raw = source?.repos;
+	const list = Array.isArray(raw) ? cleanRepos(raw.map(toEntry)) : [];
+	if (list.length > 1) return list;
+	const url = (source?.repo_url || "").trim();
+	if (url) return [{ url }];
+	return list;
+}
+function toEntry(item) {
+	if (typeof item === "string") return { url: item };
+	if (item && typeof item === "object") {
+		const o = item;
+		return {
+			url: typeof o.url === "string" ? o.url : "",
+			hint: typeof o.hint === "string" ? o.hint : ""
+		};
+	}
+	return { url: "" };
+}
+function cleanRepos(rows) {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const r of rows) {
+		const url = (r.url || "").trim();
+		if (!url || seen.has(url)) continue;
+		seen.add(url);
+		const hint = (r.hint || "").trim();
+		out.push(hint ? {
+			url,
+			hint
+		} : { url });
+	}
+	return out;
+}
+function sameRepos(a, b) {
+	return a.length === b.length && a.every((r, i) => r.url === b[i].url && (r.hint || "") === (b[i].hint || ""));
+}
+function reposPatch(rows) {
+	const list = cleanRepos(rows);
+	return {
+		repo_url: list[0]?.url || "",
+		repos: list.length > 1 ? list : []
+	};
+}
+function addRepoRow(rows) {
+	return [...rows, {
+		url: "",
+		hint: ""
+	}];
+}
+function removeRepoRow(rows, index) {
+	const next = rows.filter((_, i) => i !== index);
+	return next.length ? next : [{
+		url: "",
+		hint: ""
+	}];
+}
+//#endregion
+//#region src/components/intake/RepoListField.tsx
+var REPO_HELP_ONE = "Required — tickets from this source clone into this repo. Tickets that span repos? Add another and each ticket starts in the one it needs.";
+var REPO_HELP_MANY = "Each ticket starts in the repo it needs: a ticket label or title word that matches a repo's name or hint decides; otherwise the agent CLI picks from the ticket text, else the first repo. A ticket that needs several starts in one and is told to open a separate PR in each of the others.";
+function rowsFor(source) {
+	const stored = sourceRepos(source);
+	return stored.length ? stored : [{
+		url: "",
+		hint: ""
+	}];
+}
+function RepoListField({ source, onChange }) {
+	const stored = sourceRepos(source);
+	const [rows, setRows] = (0, import_react.useState)(() => rowsFor(source));
+	const storedKey = JSON.stringify(stored);
+	(0, import_react.useEffect)(() => {
+		setRows((prev) => sameRepos(cleanRepos(prev), stored) ? prev : rowsFor(source));
+	}, [storedKey]);
+	const commit = (next) => {
+		setRows(next);
+		if (!sameRepos(cleanRepos(next), stored)) onChange(reposPatch(next));
+	};
+	const edit = (index, patch) => setRows((prev) => prev.map((r, i) => i === index ? {
+		...r,
+		...patch
+	} : r));
+	const many = rows.length > 1;
+	const missing = cleanRepos(rows).length === 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row tk-repos",
+		role: "group",
+		"aria-label": "Repositories",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: many ? "Repos" : "Repo URL"
+			}),
+			rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tk-repo-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						autoComplete: "off",
+						required: i === 0,
+						"data-tk-field": i === 0 ? "repo_url" : void 0,
+						"aria-label": many ? `Repo ${i + 1} URL` : "Repo URL",
+						className: "tk-repo-url" + (i === 0 && missing ? " field-missing" : ""),
+						placeholder: "git@github.com:org/repo.git",
+						value: r.url,
+						onChange: (e) => edit(i, { url: e.target.value }),
+						onBlur: () => commit(rows)
+					}),
+					many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						autoComplete: "off",
+						"aria-label": `Repo ${i + 1} hint`,
+						className: "tk-repo-hint",
+						placeholder: "hint, e.g. frontend, ui (optional)",
+						value: r.hint || "",
+						onChange: (e) => edit(i, { hint: e.target.value }),
+						onBlur: () => commit(rows)
+					}),
+					many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn tk-repo-remove",
+						"aria-label": `Remove repo ${i + 1}`,
+						title: "Remove this repo",
+						onClick: () => commit(removeRepoRow(rows, i)),
+						children: "Remove"
+					})
+				]
+			}, i)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn tk-repo-add",
+				onClick: () => setRows(addRepoRow(rows)),
+				children: "+ Add repo"
+			}) }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: many ? REPO_HELP_MANY : REPO_HELP_ONE
 			})
 		]
 	});
@@ -68375,7 +68875,7 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		title: t.name,
 		linkTitle: "Open " + t.slug + " in " + (t.source_label || t.source),
 		tooltip: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
-		meta: t.mine === false ? ageText(t.created_at) + " · " + (t.assignee || "someone else") : ageText(t.created_at),
+		meta: (t.mine === false ? ageText(t.created_at) + " · " + (t.assignee || "someone else") : ageText(t.created_at)) + (t.route?.summary ? " · → " + t.route.summary : ""),
 		hasSession: t.has_session,
 		elsewhere: t.elsewhere?.label,
 		eligible: t.eligible,
@@ -68459,7 +68959,6 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 	const detail = (source.label || source.member_id || source.repo_url || "").trim();
 	const namesProvider = [provName, source.provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length)));
 	const summary = (!detail ? provName : namesProvider ? detail : provName + " — " + detail) + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
-	const repoMissing = !(source.repo_url || "").trim();
 	const ownGithubToken = source.provider === "github_issues" && source.api_token === "•••set";
 	const testPayload = () => {
 		const payload = {
@@ -68480,6 +68979,34 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 			if (r?.ok && Array.isArray(r.states) && r.states.length) setStates(r.states);
 		} catch {}
 	};
+	const wantAdvanced = advancedHasValues(meta, source, errs);
+	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(wantAdvanced);
+	(0, import_react.useEffect)(() => {
+		if (wantAdvanced) setAdvancedOpen(true);
+	}, [wantAdvanced]);
+	const renderField = (f) => f.type === "state" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatePicker, {
+		field: f,
+		source,
+		states,
+		loadStates,
+		onChange
+	}, f.key) : f.type === "state_one" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StartStatePicker, {
+		field: f,
+		source,
+		states,
+		loadStates,
+		onChange
+	}, f.key) : f.type === "choice" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChoicePicker, {
+		field: f,
+		source,
+		onChange,
+		error: errs[f.key]
+	}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CatalogInput, {
+		field: f,
+		source,
+		error: errs[f.key],
+		onChange
+	}, f.key);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SourceCard, {
 		sourceId: source.id,
 		summary,
@@ -68559,30 +69086,9 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 					})
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Repo URL"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						autoComplete: "off",
-						required: true,
-						"data-tk-field": "repo_url",
-						className: repoMissing ? "field-missing" : "",
-						placeholder: "git@github.com:org/repo.git",
-						defaultValue: source.repo_url || "",
-						onBlur: (e) => {
-							if (e.target.value !== (source.repo_url || "")) onChange({ repo_url: e.target.value });
-						}
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Required — tickets from this source clone into this repo."
-					})
-				]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoListField, {
+				source,
+				onChange
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "set-row",
@@ -68610,89 +69116,79 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, tes
 					})
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Thinking effort"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						className: "tk-effort",
-						"data-tk-field": "effort",
-						value: effortUsable ? source.effort || "" : "",
-						disabled: !effortUsable,
-						title: effortTitle(effortProvider, effortCap),
-						onChange: (e) => onChange({ effort: e.target.value }),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: effortUsable ? "CLI default — however it thinks on its own" : "No effort setting (" + (effortProvider || "this CLI") + ")"
-						}), effortUsable && EFFORTS.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: e,
-							children: effortOptionLabel(e, effortCap)
-						}, e))]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "set-hint",
-						children: [
-							"How hard the agent thinks about ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "every" }),
-							" ticket from this source — both the ones the pipeline picks up on its own and the ones you start by hand. The rungs are neutral: whichever CLI runs the ticket translates them into its own spelling and never receives a rung it would reject, so this is safe to set higher than the CLI above can go. An individual ticket can still choose its own on its row."
-						]
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Fast-track tickets to"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						className: "tk-depth",
-						"data-tk-field": "depth",
-						value: source.depth === "agent" ? "" : source.depth || "",
-						onChange: (e) => onChange({ depth: e.target.value }),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: LANE_LABEL.leave
-						}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: d,
-							children: LANE_LABEL[d]
-						}, d))]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "How far each ticket goes after its agent finishes. Merge is per-ticket only — a source default runs with nobody watching."
-					})
-				]
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "tk-fields",
-				children: (meta?.fields || []).map((f) => f.type === "state" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatePicker, {
-					field: f,
-					source,
-					states,
-					loadStates,
-					onChange
-				}, f.key) : f.type === "state_one" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StartStatePicker, {
-					field: f,
-					source,
-					states,
-					loadStates,
-					onChange
-				}, f.key) : f.type === "choice" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChoicePicker, {
-					field: f,
-					source,
-					onChange,
-					error: errs[f.key]
-				}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CatalogInput, {
-					field: f,
-					source,
-					error: errs[f.key],
-					onChange
-				}, f.key))
+				children: basicFields(meta).map(renderField)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "tk-advanced",
+				"data-tk-advanced": source.id,
+				open: advancedOpen,
+				onToggle: (e) => setAdvancedOpen(e.currentTarget.open),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tk-advanced-body",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "set-row",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-label",
+									children: "Thinking effort"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+									className: "tk-effort",
+									"data-tk-field": "effort",
+									value: effortUsable ? source.effort || "" : "",
+									disabled: !effortUsable,
+									title: effortTitle(effortProvider, effortCap),
+									onChange: (e) => onChange({ effort: e.target.value }),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "",
+										children: effortUsable ? "CLI default — however it thinks on its own" : "No effort setting (" + (effortProvider || "this CLI") + ")"
+									}), effortUsable && EFFORTS.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: e,
+										children: effortOptionLabel(e, effortCap)
+									}, e))]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "set-hint",
+									children: [
+										"How hard the agent thinks about ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "every" }),
+										" ticket from this source — both the ones the pipeline picks up on its own and the ones you start by hand. The rungs are neutral: whichever CLI runs the ticket translates them into its own spelling and never receives a rung it would reject, so this is safe to set higher than the CLI above can go. An individual ticket can still choose its own on its row."
+									]
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "set-row",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-label",
+									children: "Fast-track tickets to"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+									className: "tk-depth",
+									"data-tk-field": "depth",
+									value: source.depth === "agent" ? "" : source.depth || "",
+									onChange: (e) => onChange({ depth: e.target.value }),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "",
+										children: LANE_LABEL.leave
+									}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: d,
+										children: LANE_LABEL[d]
+									}, d))]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint",
+									children: "How far each ticket goes after its agent finishes. Merge is per-ticket only — a source default runs with nobody watching."
+								})
+							]
+						}),
+						advancedFields(meta).map(renderField)
+					]
+				})]
 			})
 		]
 	});
@@ -70593,32 +71089,34 @@ function General(_) {
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			title: "Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown.",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Plan window budget (≈USD per window, 0 = off)"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "general",
-					field: "window_budget_usd",
-					type: "number",
-					placeholder: "0"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "Subscription plans only — the '% left' estimate in the sidebar's Usage bar is measured against this. Not billed dollars."
-				})
-			]
-		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+			id: "general-advanced",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				title: "Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown.",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Plan window budget (≈USD per window, 0 = off)"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "general",
+						field: "window_budget_usd",
+						type: "number",
+						placeholder: "0"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Subscription plans only — the '% left' estimate in the sidebar's Usage bar is measured against this. Not billed dollars."
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {})]
+		})
 	] });
 }
 function ResumeOnUsageResetRow() {
@@ -72510,7 +73008,7 @@ function Notifications(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
-			children: "Pick exactly which events notify you — turn off any you don't want. These switches apply to both channels — the browser above and phone push below."
+			children: "Pick exactly which events notify you — turn off any you don't want. These switches apply to every channel you turn on."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			id: "notif-rules-list",
@@ -72525,7 +73023,10 @@ function Notifications(_) {
 				children: "No notification rules configured."
 			}) : rules.map((rule) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RuleRow, { rule }, rule.id))
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ntfy, {})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
+			id: "notif-advanced",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ntfy, {})
+		})
 	] });
 }
 function Ntfy() {
@@ -72910,7 +73411,7 @@ function pickerOptions(statuses) {
 }
 //#endregion
 //#region src/components/settings/screens/CodingCli.tsx
-function CodingCli(_) {
+function CodingCli({ gotoScreen }) {
 	const s = useSettings();
 	const [providers, setProviders] = (0, import_react.useState)([]);
 	const [selected, setSelected] = (0, import_react.useState)("");
@@ -73013,8 +73514,15 @@ function CodingCli(_) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
 					children: [
-						"Program new sessions launch by default. A CLI that isn't installed can't be picked — install or sign in to it under ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent providers" }),
+						"Program new sessions launch by default. A CLI that isn't installed can't be picked — install or sign in to it under",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							"data-goto-screen": "providers",
+							onClick: () => gotoScreen("providers"),
+							children: "Agent providers"
+						}),
 						"."
 					]
 				})
@@ -73100,7 +73608,10 @@ function CodingCli(_) {
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedFold, {
+			id: "coding-advanced",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRefresh, {})
+		})
 	] });
 }
 function WindowRefresh() {
@@ -74181,116 +74692,121 @@ function Workspace({ gotoScreen }) {
 				})
 			]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
+			id: "workspace-advanced",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Live branch"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "repository",
-					field: "live_branch",
-					placeholder: "main"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [
-						"The branch that means ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "shipped" }),
-						". ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Verify" }),
-						" waits until a session's commit is an ancestor of it, then asks you to test the change for real. Blank = fall back to the PR base branch, then the default base branch, then",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
-						"."
-					]
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Fast-track goes as far as"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "repository",
-					field: "fasttrack_depth",
-					options: [
-						{
-							value: "",
-							label: "Off (default)"
-						},
-						{
-							value: "commit",
-							label: "Commit"
-						},
-						{
-							value: "push",
-							label: "Push"
-						},
-						{
-							value: "pr",
-							label: "Open PR"
-						},
-						{
-							value: "merge",
-							label: "Merge when green"
-						}
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Live branch"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "repository",
+							field: "live_branch",
+							placeholder: "main"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								"The branch that means ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "shipped" }),
+								". ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Verify" }),
+								" waits until a session's commit is an ancestor of it, then asks you to test the change for real. Blank = fall back to the PR base branch, then the default base branch, then",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "main" }),
+								"."
+							]
+						})
 					]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New sessions start Off; batches and ticket runs start at this default." }),
-						" ",
-						"A batch is a list in the New dialog or Intake's ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
-						". Fast-track waits for the agent to finish, then commits, pushes and carries on to this rung. Change one session any time with its ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "⏩" }),
-						" button. A ticket ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "source" }),
-						" ",
-						"keeps its own ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Fast-track tickets to" }),
-						" (Intake), which never merges."
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Fast-track goes as far as"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "repository",
+							field: "fasttrack_depth",
+							options: [
+								{
+									value: "",
+									label: "Off (default)"
+								},
+								{
+									value: "commit",
+									label: "Commit"
+								},
+								{
+									value: "push",
+									label: "Push"
+								},
+								{
+									value: "pr",
+									label: "Open PR"
+								},
+								{
+									value: "merge",
+									label: "Merge when green"
+								}
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New sessions start Off; batches and ticket runs start at this default." }),
+								" ",
+								"A batch is a list in the New dialog or Intake's ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
+								". Fast-track waits for the agent to finish, then commits, pushes and carries on to this rung. Change one session any time with its ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "⏩" }),
+								" button. A ticket ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "source" }),
+								" ",
+								"keeps its own ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Fast-track tickets to" }),
+								" (Intake), which never merges."
+							]
+						})
 					]
-				})
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Retryable pre-commit hooks"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "repository",
-					field: "precommit_retry_hooks",
-					placeholder: "gitnexus-index"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [
-						"Comma-separated pre-commit hook ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "IDs" }),
-						" (not display names — pre-commit's",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "name:" }),
-						" is free text, so ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "Black format" }),
-						" is the hook",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "black" }),
-						"). When one of these fails ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "without changing any files" }),
-						", fast-track retries the commit once and then re-runs it with",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "SKIP=<id>" }),
-						" so the commit can land, and says which hook it skipped. Test and secret-scanning hooks are refused here — a failing test always stops the run."
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Retryable pre-commit hooks"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "repository",
+							field: "precommit_retry_hooks",
+							placeholder: "gitnexus-index"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								"Comma-separated pre-commit hook ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "IDs" }),
+								" (not display names — pre-commit's",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "name:" }),
+								" is free text, so ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "Black format" }),
+								" is the hook",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "black" }),
+								"). When one of these fails ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "without changing any files" }),
+								", fast-track retries the commit once and then re-runs it with",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "SKIP=<id>" }),
+								" so the commit can land, and says which hook it skipped. Test and secret-scanning hooks are refused here — a failing test always stops the run."
+							]
+						})
 					]
 				})
 			]
@@ -79155,24 +79671,28 @@ var SCREENS = [
 		key: "providers",
 		label: "Agent providers",
 		group: "Agents",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Providers, { ...p })
 	},
 	{
 		key: "accounts",
 		label: "Accounts",
 		group: "Agents",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Accounts, { ...p })
 	},
 	{
 		key: "localmodel",
 		label: "Local model",
 		group: "Agents",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LocalModel, { ...p })
 	},
 	{
 		key: "orchestration",
 		label: "Agent orchestration",
 		group: "Agents",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentOrchestration, { ...p })
 	},
 	{
@@ -79185,12 +79705,14 @@ var SCREENS = [
 		key: "ide",
 		label: "IDE",
 		group: "Code",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Ide, { ...p })
 	},
 	{
 		key: "security",
 		label: "Security",
 		group: "This device",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Security, { ...p })
 	},
 	{
@@ -79203,48 +79725,56 @@ var SCREENS = [
 		key: "devices",
 		label: "Your devices",
 		group: "Devices and people",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Devices, { ...p })
 	},
 	{
 		key: "mobile",
 		label: "Your phone",
 		group: "Devices and people",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mobile, { ...p })
 	},
 	{
 		key: "peer",
 		label: "People",
 		group: "Devices and people",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinks, { ...p })
 	},
 	{
 		key: "extensions",
 		label: "Extensions",
 		group: "Extensions",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Extensions, { ...p })
 	},
 	{
 		key: "doctor",
 		label: "Doctor",
 		group: "Troubleshooting",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Doctor, { ...p })
 	},
 	{
 		key: "logs",
 		label: "System logs",
 		group: "Troubleshooting",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SystemLogs, { ...p })
 	},
 	{
 		key: "advanced",
 		label: "Advanced",
 		group: "Troubleshooting",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Advanced, { ...p })
 	},
 	{
 		key: "traffic",
 		label: "Site traffic",
 		group: "Troubleshooting",
+		advanced: true,
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Traffic, { ...p })
 	}
 ];
@@ -79252,11 +79782,16 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	const open = useUi((s) => s.openDialog === "settings");
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
-	const [screen, setScreen] = (0, import_react.useState)("general");
 	const model = useSettingsModel(open);
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const screens = (0, import_react.useMemo)(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
 	const keys = (0, import_react.useMemo)(() => screens.map((s) => s.key), [screens]);
+	const [screen, setScreen] = (0, import_react.useState)(() => resolveScreenKey(target, keys) || "general");
+	const [advanced, setAdvanced] = (0, import_react.useState)(readAdvancedMode);
+	const changeMode = (on) => {
+		setAdvanced(on);
+		writeAdvancedMode(on);
+	};
 	const gotoScreen = (name) => {
 		const tab = LEGACY_SCREEN_TABS[name];
 		if (tab) openDialogFor("intake", tab);
@@ -79270,6 +79805,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 			return;
 		}
 		setScreen(resolveScreenKey(target, keys) || "general");
+		setAdvanced(readAdvancedMode());
 	}, [
 		open,
 		target,
@@ -79277,6 +79813,8 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 		keys
 	]);
 	if (!open) return null;
+	const shown = navScreens(screens, advanced, screen);
+	const hiddenCount = screens.length - navScreens(screens, false, "").length;
 	const props = {
 		active: true,
 		gotoScreen,
@@ -79287,45 +79825,57 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-			id: "settings-dialog",
-			onClose: closeDialog,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "settings-panel",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Settings" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "settings-close",
-						onClick: closeDialog,
-						children: "Close"
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: "settings-body",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-						id: "settings-nav",
-						"aria-label": "Settings sections",
-						children: screens.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [s.group && s.group !== screens[i - 1]?.group ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "set-nav-group",
-							role: "presentation",
-							children: s.group
-						}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsModeCtx.Provider, {
+			value: advanced,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+				id: "settings-dialog",
+				onClose: closeDialog,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					id: "settings-panel",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ws-head",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Settings" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "set-nav-item" + (screen === s.key ? " active" : ""),
-							"data-screen": s.key,
-							onClick: () => setScreen(s.key),
-							children: s.label
-						})] }, s.key))
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						id: "settings-screens",
-						children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-							className: "set-screen" + (screen === s.key ? " active" : ""),
-							"data-screen": s.key,
-							"data-caps-need": s.key === "workspace" ? "git" : void 0,
-							children: screen === s.key && s.el(props)
-						}, s.key))
+							id: "settings-close",
+							onClick: closeDialog,
+							children: "Close"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "settings-body",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+							id: "settings-nav",
+							"aria-label": "Settings sections",
+							"data-mode": advanced ? "advanced" : "basic",
+							children: [shown.map((s, i) => {
+								const heading = navHeading(shown, i, advanced);
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [heading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "set-nav-group",
+									role: "presentation",
+									children: heading
+								}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "set-nav-item" + (screen === s.key ? " active" : ""),
+									"data-screen": s.key,
+									"data-advanced": s.advanced ? "" : void 0,
+									onClick: () => setScreen(s.key),
+									children: s.label
+								})] }, s.key);
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AdvancedToggle, {
+								advanced,
+								hidden: hiddenCount,
+								onChange: changeMode
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							id: "settings-screens",
+							children: screens.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+								className: "set-screen" + (screen === s.key ? " active" : ""),
+								"data-screen": s.key,
+								"data-caps-need": s.key === "workspace" ? "git" : void 0,
+								children: screen === s.key && s.el(props)
+							}, s.key))
+						})]
 					})]
-				})]
+				})
 			})
 		})
 	});
@@ -84168,14 +84718,13 @@ var SLIDES = [
 		logo: true,
 		title: "You're all set",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Watch for ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Setup" }),
+			" connects GitHub and your tracker whenever you're ready. Watch for ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "💡 hints" }),
-			" around the app as you go — replay this tour or turn hints off under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → General" }),
-			". ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → Doctor" }),
+			" as you go — replay this tour or turn hints off under",
 			" ",
-			"flags anything that still needs attention."
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Settings → General" }),
+			"."
 		] })
 	}
 ];
@@ -84286,16 +84835,11 @@ function WelcomeTour() {
 							children: "Back"
 						}), last ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "wt-nav-end",
-							children: [failing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "wt-btn ghost",
 								onClick: () => openDialogFor("setup"),
 								children: "Open Setup"
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "wt-btn ghost",
-								onClick: () => jumpTo("connections"),
-								children: "Open Settings"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "wt-btn primary",
