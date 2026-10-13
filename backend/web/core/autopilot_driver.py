@@ -295,6 +295,15 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
                     merge_blockers = list(ms.get("blockers") or ["cannot merge yet"])
     except Exception:  # noqa: BLE001
         pr_checks = "unknown"
+    # A job the agent backgrounded and is waiting on: its turn ended, but the
+    # job's completion will start another (see claude_background).
+    try:
+        background_waiting = activity == "idle" and any(
+            j.get("state") == "waiting"
+            for j in (srv._background_jobs(inst, title) or [])
+        )
+    except Exception:  # noqa: BLE001 — detection must never break a pass
+        background_waiting = False
     return {
         "stage": stage.get("stage") or "",
         "failed_step": stage.get("failed_step") or "",
@@ -304,6 +313,7 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
         "activity": activity,
         "limited": limited,
         "queue_pending": queue_pending,
+        "background_waiting": background_waiting,
         "check": check,
         "check_required": check_required,
         "pr_checks": pr_checks,

@@ -435,7 +435,10 @@ plus `remote`/`pending` when true, and `autopilot` (depth, state, step,
 reason, url), `pr_url`, `person` (the id of the person the session was
 created for), `owner` (who it belongs to), `driver` (who holds its keyboard)
 and `viewers` (`{person id: {name, device, devices, since, typing}}` — who has
-a terminal open on it) when set ([people.md](people.md#owner-driver-viewers)). Sessions you manage come first. Remote
+a terminal open on it) when set ([people.md](people.md#owner-driver-viewers)),
+and `background` when set: the jobs the agent backgrounded and left running
+past its turn, each `{id, pid, command, state: running|waiting|stuck, reason,
+started, quiet_s}` ([providers.md](providers.md#background-jobs)). Sessions you manage come first. Remote
 `device::title` rows are listed but are never managed. Don't poll this to wait
 for workers. Use `wait_for_session`.
 
@@ -628,7 +631,10 @@ message. The `reason`s:
   was posted. A worker that reports `blocked` still ends with `reported`; the
   status is in `report.data.status`.
 - `idle`: its turn ended without a report. It was idle for `settle_s` with
-  nothing queued and no pending message to it, and either it was seen working
+  nothing queued, no pending message to it and no background job still
+  `waiting` (a job the agent backgrounded whose completion will wake it; a
+  `stuck` one never will, so it does not hold — see the row's `background`),
+  and either it was seen working
   during this call or nothing was dispatched to it in the last 60 s.
 - `needs_input`: it is on a dialog (`clarify`). Use
   `read_output(view="screen")`, then `answer_prompt`, or ask your user. Within

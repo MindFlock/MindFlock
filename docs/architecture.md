@@ -76,6 +76,11 @@ Also home to `pricing.py` (model $ rates, cached daily), `usage_history.py`
 (rolling day/week/month/year token+cost totals scanned from agent transcripts),
 `usage_limits.py`, and the per-provider live usage-window clients
 (`claude_usage_api.py`, `codex_usage_api.py`, `antigravity_usage_api.py`).
+`claude_background.py` is a `/proc` sub-probe of Claude's activity: when the
+live `claude agents --json` signal says busy but the Stop hook says the turn
+ended, it classifies the background jobs the agent left running, caches the
+result per tmux session, and the server surfaces it as each row's `background`
+field (via `BaseProvider.background_jobs`, which never scans by itself).
 See [providers.md](providers.md).
 
 ### Web server (`backend/web`)

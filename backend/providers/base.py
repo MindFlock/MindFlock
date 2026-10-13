@@ -503,6 +503,13 @@ class BaseProvider:
         """
         return None
 
+    def background_jobs(self, session_name: str) -> Optional[list]:
+        """Background jobs the CLI left running after its turn, as last
+        classified by :meth:`activity_state` (see ``claude_background`` for the
+        shape), or None when the CLI has no such notion or it is unknown.
+        Default: None."""
+        return None
+
     def reports_activity(self) -> bool:
         """Whether this CLI announces its own state at all (hooks installed by
         :meth:`install_activity_hooks`, or a live query).

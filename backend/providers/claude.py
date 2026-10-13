@@ -25,6 +25,7 @@ from .base import (
     oneshot_command,
     seed_prompt_expr,
 )
+from . import claude_background
 from ._timeparse import ts_epoch
 
 # Activity markers live in the shared, provider-agnostic module (Codex reuses
@@ -502,10 +503,27 @@ class ClaudeProvider(BaseProvider):
         # between tool calls that leaves the hook marker aging). Fall back to the
         # per-session hook marker when the live signal is unavailable (binary too
         # old, no conversation id recorded yet, or this session not listed).
+        #
+        # One exception: Claude reports ``busy`` while ANY background job it
+        # started is alive, turn or no turn. When the Stop hook says the turn
+        # ended and every surviving job is merely waiting (or stuck — a loop
+        # that can never finish), the session is idle, not working; a job that
+        # is still burning CPU or writing output keeps it working.
         live = _live_agent_state(session_name)
         if live is not None:
+            if live == "working" and read_activity_marker(session_name) == "idle":
+                jobs = claude_background.scan(session_name)
+                if jobs and not any(j["state"] == "running" for j in jobs):
+                    return "idle"
+            else:
+                claude_background.forget(session_name)
             return live
+        claude_background.forget(session_name)
         return read_activity_marker(session_name)
+
+    def background_jobs(self, session_name: str) -> Optional[list]:
+        # The scan activity_state ran on this poll, never a fresh /proc walk.
+        return claude_background.recent(session_name)
 
     def activity_state_age(self, session_name: str) -> Optional[float]:
         # The live signal is real-time, so report a fresh age (0) — the web layer
