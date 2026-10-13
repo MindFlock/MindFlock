@@ -67,7 +67,7 @@ def mode(p):
 
 def test_create_layout_and_permissions(share, peer_home):
     assert paths.SHARE_ID_RE.match(share.share_id)
-    assert len(share.share_id) == 32
+    assert len(share.share_id) == 20  # short: it sits in macOS socket paths
     assert share.root == os.path.join(
         str(peer_home.resolve()), "shares", share.share_id
     )

@@ -3501,6 +3501,13 @@ A few screens got quieter:
   ever talks to your devices; another MindFlock on the tailnet is never a
   source. Full field list: the `/api/settings/sync*` rows in
   [web-api.md → Authentication](web-api.md#authentication).
+- **Shared with you** (rail, `sidebar/PeerSharedRows.tsx`): above the session
+  list, one row per connected peer whose end reports a shared session
+  (`their_share` on `GET /api/peer`, polled every 10 s). It opens the
+  **shared-session viewer** (`PeerSessionViewer`, dialog `peer-session`):
+  **Session** (their terminal, re-asked every 1.5 s, colours only —
+  `lib/ansiSpans` renders spans, never HTML), **Files** (their folder; click to
+  read), **Changes** (their diff), and a line that messages them.
 - **People** (screen key `peer`; was People; the Peer links screen, `/api/peer*`,
   `backend/peer`) — pair-coding with another MindFlock user. It leads with
   **Invite someone** (**Copy invite** copies a ready-to-send message with the
@@ -3508,11 +3515,14 @@ A few screens got quieter:
   the code; Your devices' **Paste a code** box routes a peer code here too); doing
   either turns peer links on, no toggle first. Each link shows its **safety
   number** to read to each other and confirm (**It matches**), the
-  permissions you granted, **Share a folder** (repo, optional branch, the
-  agent CLI — any sandbox-capable one; not aider) which starts the shared
+  permissions you granted, **Share a folder** (any folder — typed or picked
+  with **Browse…**, the New dialog's folder browser; a plain folder is shared
+  as a snapshot — optional branch, the agent CLI — any sandbox-capable one;
+  not aider) which starts the shared
   session `peer-<name>-<id>` in a sandboxed shallow clone under
   `~/.mindflock/peer/shares/`, **Export** (brings the shared work into your
-  own repo as a `peer/…` branch), **Reconnect** (paste a fresh invite when
+  own repo as a `peer/…` branch; **Browse…** picks the repo), **Watch their
+  session** (the shared-session viewer above), **Reconnect** (paste a fresh invite when
   their address changed) and **Unlink**. *Advanced* holds every setting
   (`peer.*` in [configuration.md](configuration.md#peer-links-peer-settings-store-only):
   relay `auto` / `off` / `cloudflare` / `url`, listen and advertise

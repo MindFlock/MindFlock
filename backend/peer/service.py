@@ -58,8 +58,13 @@ _OP_PERM = {
     "diff": "diff",
     "read_file": "read_file",
     "list_files": "read_file",
+    # Watching the shared session's screen (backend.peer.screen) shows what
+    # its diff and files do; keep in step with transport._OP_PERM.
+    "screen": "diff",
 }
 _SHARE_OPS = ("diff", "read_file", "list_files")
+#: Seconds a peer's reported share status is reused before re-asking.
+_THEIR_STATUS_TTL = 10.0
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
 _TITLE_SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -229,6 +234,12 @@ class PeerService:
         self._started = False
         self._pool: Optional[ThreadPoolExecutor] = None
         self._jobs: Dict[str, int] = {}
+        # What each connected peer last said about ITS shared session
+        # (their ``status`` op): link_id -> (monotonic time, payload). Feeds
+        # the rail's "Shared with you" rows; refreshed in the background by
+        # status() when older than _THEIR_STATUS_TTL.
+        self._their_status: Dict[str, tuple] = {}
+        self._their_status_inflight: set = set()
         self._jobs_lock = threading.Lock()
         # The relay (peer.relay != off): ingress + optional quick tunnel.
         self._ingress_factory = ingress_factory
@@ -757,6 +768,20 @@ class PeerService:
         perms = _get(link, "perms") or {}
         return _get(perms, key, False) is True
 
+    def _screen_op(self, link) -> dict:
+        """The shared session's visible screen (backend.peer.screen). Only
+        ever this link's own shared session — named from the link record."""
+        from backend.peer import screen
+        from backend.session import tmux
+
+        title = _get(link, "session_title") or ""
+        agent = self._agent_state(title)
+        if agent != "running":
+            return {"text": "", "cols": 0, "rows": 0, "agent": agent}
+        out = screen.capture(tmux.to_mindflock_tmux_name(title))
+        out["agent"] = agent
+        return out
+
     async def handle_request(self, link, op: str, p: dict) -> dict:
         """One inbound request from the peer, already schema-validated by the
         transport. Raises the transport's ``PeerOpError`` to refuse."""
@@ -767,6 +792,10 @@ class PeerService:
             return await self._in_thread(link, self._inbound_msg, link, p)
         if op == "status":
             return await self._in_thread(link, self._status_op, link)
+        if op == "screen":
+            if not _get(link, "share_id"):
+                raise _peer_op_error("no shared folder")
+            return await self._in_thread(link, self._screen_op, link)
         if op in _SHARE_OPS:
             share_id = _get(link, "share_id")
             if not share_id:
@@ -1092,6 +1121,12 @@ class PeerService:
             return PeerServiceError("%s doesn't allow that on this link" % name, 403)
         if "no shared folder" in text:
             return PeerServiceError("%s hasn't shared a folder yet" % name, 409)
+        if "unsupported" in text:
+            return PeerServiceError(
+                "%s's MindFlock is too old for that — they need to update "
+                "MindFlock (Settings → About, or `mindflock update`)" % name,
+                409,
+            )
         if "not connected" in text or "connection" in text or "timed out" in text:
             return PeerServiceError(
                 "%s isn't connected right now — their MindFlock may be off, or "
@@ -1143,6 +1178,78 @@ class PeerService:
         except Exception as err:  # noqa: BLE001
             raise self._peer_error(link, err) from err
 
+    async def their_screen(self, link_id: str) -> dict:
+        """What the peer's shared session shows right now (their ``screen``
+        op — their "may see my changes" permission decides), with every
+        escape but colours stripped (backend.peer.screen.sanitize)."""
+        from backend.peer import screen
+
+        link = self._link_or_404(link_id)
+        try:
+            res = await self.request(link_id, "screen", {}, timeout=15.0)
+        except Exception as err:  # noqa: BLE001
+            raise self._peer_error(link, err) from err
+        return {
+            "text": screen.sanitize(str(res.get("text") or "")),
+            "cols": int(res.get("cols") or 0),
+            "rows": int(res.get("rows") or 0),
+            "agent": str(res.get("agent") or "none"),
+        }
+
+    async def their_files(self, link_id: str) -> dict:
+        """The files in the peer's shared folder (their ``list_files`` op —
+        their "may read my files" permission decides)."""
+        link = self._link_or_404(link_id)
+        try:
+            return await self.request(link_id, "list_files", {})
+        except Exception as err:  # noqa: BLE001
+            raise self._peer_error(link, err) from err
+
+    async def their_file(self, link_id: str, path) -> dict:
+        """One file from the peer's shared folder (their ``read_file`` op)."""
+        link = self._link_or_404(link_id)
+        path = str(path or "").strip()
+        if not path or len(path) > 1024 or "\x00" in path:
+            raise PeerServiceError("pick a file")
+        try:
+            return await self.request(link_id, "read_file", {"path": path})
+        except Exception as err:  # noqa: BLE001
+            raise self._peer_error(link, err) from err
+
+    async def _refresh_their_status(self, link_id: str) -> None:
+        if link_id in self._their_status_inflight:
+            return
+        self._their_status_inflight.add(link_id)
+        try:
+            res = await self.request(link_id, "status", {}, timeout=15.0)
+            self._their_status[link_id] = (
+                time.monotonic(),
+                {
+                    "shared": bool(res.get("shared")),
+                    "agent": str(res.get("agent") or "none"),
+                },
+            )
+        except Exception:  # noqa: BLE001 — unknown stays unknown; retried later
+            pass
+        finally:
+            self._their_status_inflight.discard(link_id)
+
+    def _their_share_view(self, link_id: str, connected: bool):
+        """``{"shared", "agent"}`` the peer last reported, or None (not
+        connected, or not asked yet). Schedules a refresh when stale."""
+        if not connected:
+            self._their_status.pop(link_id, None)
+            return None
+        got = self._their_status.get(link_id)
+        if got is None or time.monotonic() - got[0] > _THEIR_STATUS_TTL:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.create_task(self._refresh_their_status(link_id))
+        return dict(got[1]) if got is not None else None
+
     # ------------------------------------------------------------------ #
     # Views (no keys, no secrets)
     # ------------------------------------------------------------------ #
@@ -1182,6 +1289,9 @@ class PeerService:
             "share_id": _get(link, "share_id") or None,
             "session_title": _get(link, "session_title") or None,
             "connected": self.is_connected(lid),
+            # THEIR shared session, as they last reported it ({shared, agent}
+            # or None): what the rail's "Shared with you" row is built from.
+            "their_share": self._their_share_view(lid, self.is_connected(lid)),
             "carrier": self._carrier_of(link),
             "sas_verified": _get(link, "sas_verified") is True,
             "unread": unread,

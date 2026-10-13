@@ -60,7 +60,7 @@ HANDSHAKE_MAX_FRAME = 4096
 MAX_DEPTH = 16
 MAX_ID = 2**53
 PROTOCOL_VERSION = 1
-OPS = ("msg", "diff", "read_file", "list_files", "status")
+OPS = ("msg", "diff", "read_file", "list_files", "status", "screen")
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -71,6 +71,8 @@ MIN_DIFF_CHARS = 1000
 MAX_DIFF_CHARS = 200_000
 MAX_LIST_ITEMS = 20_000
 MAX_STAT_STR = 4096
+MAX_SCREEN_CHARS = 200_000  # backend.peer.screen.MAX_SCREEN_CHARS
+MAX_SCREEN_DIM = 1000
 
 
 class ProtocolError(Exception):
@@ -286,6 +288,7 @@ _REQUESTS = {
     "read_file": _req_read_file,
     "list_files": _req_empty,
     "status": _req_empty,
+    "screen": _req_empty,
 }
 
 
@@ -394,12 +397,26 @@ def _res_status(p, req, strict) -> dict:
     return p
 
 
+def _res_screen(p, req, strict) -> dict:
+    p = _keys(p, ("text", "cols", "rows", "agent"), (), strict)
+    # Escapes ARE allowed here (it is a terminal screen); the viewer's side
+    # strips all but colours before a browser sees it (backend.peer.screen).
+    if not _str(p["text"], 0, MAX_SCREEN_CHARS, _BAD_ANY):
+        _fail("bad text")
+    if not _int(p["cols"], 0, MAX_SCREEN_DIM) or not _int(p["rows"], 0, MAX_SCREEN_DIM):
+        _fail("bad size")
+    if p["agent"] not in ("running", "stopped", "none"):
+        _fail("bad agent")
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
     "read_file": _res_read_file,
     "list_files": _res_list_files,
     "status": _res_status,
+    "screen": _res_screen,
 }
 
 
