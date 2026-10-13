@@ -18,6 +18,7 @@ import PRS_RAW from "../components/intake/PullRequestsTab.tsx?raw";
 import REPO_SOURCES_RAW from "../components/intake/RepoSources.tsx?raw";
 import KIT_RAW from "../components/intake/kit.tsx?raw";
 import TICKETS_RAW from "../components/intake/TicketsTab.tsx?raw";
+import REPO_FIELD_RAW from "../components/intake/RepoListField.tsx?raw";
 import SETTINGS_DIALOG_RAW from "../components/settings/SettingsDialog.tsx?raw";
 import WORKSPACE_RAW from "../components/settings/screens/Workspace.tsx?raw";
 import INDEX_HTML from "../../index.html?raw";
@@ -125,10 +126,13 @@ describe("the open-PR panel", () => {
 
 describe("ticketing source cards", () => {
   it("each card has a Repo URL field", () => {
-    // Repo URL is required per source (there is no global default repo), and
-    // saveAll() persists any [data-tk-field].
-    expect(TICKETS).toContain('data-tk-field="repo_url"');
-    expect(TICKETS).toContain('<span className="set-label">Repo URL</span>');
+    // Repo URL is required per source (there is no global default repo). The
+    // field moved into RepoListField when a source learned to hold a SET of
+    // repos; with one repo it is still labelled "Repo URL".
+    expect(TICKETS).toContain("<RepoListField source={source} onChange={onChange} />");
+    const field = code(REPO_FIELD_RAW);
+    expect(field).toContain('data-tk-field={i === 0 ? "repo_url" : undefined}');
+    expect(field).toContain('{many ? "Repos" : "Repo URL"}');
   });
 
   it("each card is collapsible, and saved sources fold by default", () => {

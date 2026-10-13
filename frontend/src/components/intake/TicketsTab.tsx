@@ -81,6 +81,7 @@ import { useMindflockStatus, useProviderEfforts } from "../../state/queries";
 import type { TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
+import { RepoListField } from "./RepoListField";
 import type {
   TicketClaimedBy,
   TicketingCatalogEntry,
@@ -701,6 +702,9 @@ interface AssignedTicket {
    * Stamped by the server (`TicketProvider.can_merge`) rather than decided from
    * the provider name here, so there is one answer rather than two. */
   merge_ready?: boolean;
+  /** On a source with several repos: which one(s) this ticket goes to and why
+   * (backend/ticket_ingestion/repo_routing.py::preview). */
+  route?: { repos: string[]; reason: string; method: string; summary: string };
 }
 
 /** "A", "A and B", "A, B and C", then "A, B and 4 more" — provider state names
@@ -1193,9 +1197,11 @@ function AssignedTicketRow({
       // Whose it is, but only when it isn't yours — on an assigned-to-me queue
       // every row would say your own name, which tells you nothing.
       meta={
-        t.mine === false
+        (t.mine === false
           ? ageText(t.created_at) + " · " + (t.assignee || "someone else")
-          : ageText(t.created_at)
+          : ageText(t.created_at)) +
+        // A source spanning several repos says where this one goes.
+        (t.route?.summary ? " · → " + t.route.summary : "")
       }
       hasSession={t.has_session}
       elsewhere={t.elsewhere?.label}
@@ -1365,7 +1371,6 @@ function TicketSourceCard({
   // looking for the picker in the first place.
   const summary =
     base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
-  const repoMissing = !(source.repo_url || "").trim();
   // A GitHub Issues source saved before the one GitHub credential path still
   // carries its own token (the server masks it as "•••set"): still read, as
   // the last fallback, this release only.
@@ -1452,22 +1457,8 @@ function TicketSourceCard({
           have two of the same provider.
         </span>
       </label>
-      <label className="set-row">
-        <span className="set-label">Repo URL</span>
-        <input
-          type="text"
-          autoComplete="off"
-          required
-          data-tk-field="repo_url"
-          className={repoMissing ? "field-missing" : ""}
-          placeholder="git@github.com:org/repo.git"
-          defaultValue={source.repo_url || ""}
-          onBlur={(e) => {
-            if (e.target.value !== (source.repo_url || "")) onChange({ repo_url: e.target.value });
-          }}
-        />
-        <span className="set-hint">Required — tickets from this source clone into this repo.</span>
-      </label>
+      {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
+      <RepoListField source={source} onChange={onChange} />
       <label className="set-row">
         <span className="set-label">Agent CLI</span>
         <select

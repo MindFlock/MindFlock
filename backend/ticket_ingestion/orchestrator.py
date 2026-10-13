@@ -965,6 +965,11 @@ class PipelineOrchestrator:
             _logger.info("Not launching %s: %s.", story.slug, elsewhere)
             return
 
+        # A source spanning several repos: pick the one(s) this ticket needs
+        # before anything is provisioned (repo_routing). A one-repo source is
+        # untouched.
+        await self._route_story(story)
+
         try:
             validation = self._validator.validate(story)
             supplemental_context: str | None = None
@@ -1026,6 +1031,31 @@ class PipelineOrchestrator:
             status="completed",
             branch=branch,
         )
+
+    async def _route_story(self, story: Ticket) -> None:
+        """Route ``story`` across its source's repos when there are several
+        (:func:`~backend.ticket_ingestion.repo_routing.apply_route`): sets its
+        ``repo_url`` to the primary and ``route`` to the rest. Never raises — a
+        routing failure leaves the ticket on the source's first repo."""
+        try:
+            from backend.ticket_ingestion.repo_routing import apply_route, targets_of
+
+            src = self._scanner_for(story.source_key)._source
+            if len(targets_of(src)) < 2:
+                return
+
+            program = getattr(story, "agent", "") or self.config.agent_for(
+                getattr(story, "provider", "")
+            )
+            await asyncio.to_thread(
+                apply_route, story, src, state_dir=_STATE_DIR, program=program
+            )
+        except Exception as e:  # noqa: BLE001
+            _logger.warning(
+                "Repo routing for %s failed (%s); using the source's first repo.",
+                story.slug,
+                e,
+            )
 
     async def _ingest_filter_miss_now(self, story: Ticket) -> str:
         """Why a queued ticket should not launch after all, or ``""``.
