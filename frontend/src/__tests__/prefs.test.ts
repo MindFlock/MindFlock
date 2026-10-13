@@ -67,6 +67,7 @@ describe("PREF_MAP", () => {
       mf_idle_after: "idle_after",
       mf_hints: "hints",
       mf_map_tour: "map_tour",
+      mf_settings_advanced: "settings_advanced",
     });
     // Every prefs field is mapped, and nothing else is.
     expect(PREF_MAP.map((p) => p.field).sort()).toEqual(Object.keys(PREF_DEFAULTS).sort());

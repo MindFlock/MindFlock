@@ -248,3 +248,26 @@ def test_map_tour_seen_on_one_device_is_seen_on_the_others(tmp_path, monkeypatch
     devices.sync("rig")
     with devices.on("rig"):
         assert devices.get("prefs", "map_tour") is True
+
+
+def test_settings_advanced_is_a_synced_bool():
+    """Settings' "Show advanced settings" follows the person to every device:
+    a prefs field settings sync carries, unset (basic) until they flip it."""
+    from backend.config.settings import PrefsSettings
+    from backend.web.core import settings_sync
+
+    on = PrefsSettings.from_dict({"settings_advanced": True})
+    assert on.to_dict() == {"settings_advanced": True}
+    off = PrefsSettings.from_dict({"settings_advanced": False})
+    assert off.to_dict() == {"settings_advanced": False}
+    assert PrefsSettings.from_dict({"settings_advanced": "x"}).settings_advanced is None
+    assert "settings_advanced" not in PrefsSettings.from_dict({}).to_dict()
+    assert "settings_advanced" in settings_sync.SYNCED["prefs"]
+
+
+def test_settings_advanced_over_the_prefs_route(client):
+    assert client.get("/api/prefs").json()["settings_advanced"] is None
+    got = client.post("/api/prefs", json={"settings_advanced": True}).json()
+    assert got["settings_advanced"] is True
+    store.invalidate()
+    assert store.load_settings().prefs.settings_advanced is True

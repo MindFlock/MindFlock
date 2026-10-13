@@ -1381,7 +1381,8 @@ notification fires either way.
 - **Browser / desktop** — the notify addon's `Notification` popup. Needs a tab
   open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
   tailnet URL and says so in the toggle's status line.
-- **Phone push (ntfy)** — optional, off until you turn it on. The *server*
+- **Phone push (ntfy)** — optional, off until you turn it on, in the
+  screen's **Advanced** fold. The *server*
   publishes to an [ntfy](https://ntfy.sh) topic your phone subscribes to, so an
   alert reaches you with MindFlock closed and no tab anywhere. Set a topic
   (**Generate** offers a random one), scan the QR into the ntfy app, and
@@ -3121,7 +3122,31 @@ is running it**.
 ## Settings (⚙)
 
 **Set-and-forget configuration and diagnostics**, from the top bar's
-**Settings**. The left nav is grouped under non-clickable headings
+**Settings**.
+
+**Basic first, advanced on request.** Out of the box the nav lists only the
+six screens a new user needs to point MindFlock at a repo and a tracker and
+run agents — **General**, **Connections**, **Notifications**, **Agent CLI**,
+**Workspace** and **Appearance** — as one flat list with no headings. **Show
+advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
+"*N* more screens" under it) reveals every other screen; **Hide advanced
+settings** puts them away again. The choice is the synced pref
+`prefs.settings_advanced` (cached in localStorage `mf_settings_advanced`), so it
+follows the person to all their devices, like the theme. The controls on a
+basic screen that only some people need sit in a collapsed **Advanced** fold
+on that screen (open by default in advanced mode): General's plan window
+budget and terminal scroll speed, Notifications' phone push (ntfy), Agent
+CLI's keep-usage-windows-warm schedule, Workspace's live branch, fast-track
+depth and retryable pre-commit hooks, and Connections' rows other than agent
+CLIs, GitHub and ticket trackers (devices and people, orchestration,
+databases, phone push, extensions, system — the summary count above covers
+only the rows shown unfolded in basic mode). A deep link to an advanced screen
+— the palette, a Connections card, an in-screen link, `openSettings(...)`, a
+legacy key — still opens it in basic mode: the open screen is always in the
+nav, under an **Advanced** heading, and the saved mode does not change. The
+rules live in `components/settings/settingsMode.tsx`.
+
+In advanced mode the nav is grouped under non-clickable headings
 (`.set-nav-group`) so it scans: **General**, **Connections** and
 **Notifications** first, then **Agents** (Agent CLI, Agent providers, Accounts,
 Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**

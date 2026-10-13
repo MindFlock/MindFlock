@@ -9,6 +9,7 @@ import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
 import { useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { AdvancedFold } from "../settingsMode";
 
 interface Provider {
   name: string;
@@ -18,7 +19,7 @@ interface Provider {
   path?: string;
 }
 
-export function CodingCli(_: ScreenProps) {
+export function CodingCli({ gotoScreen }: ScreenProps) {
   const s = useSettings();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selected, setSelected] = useState("");
@@ -147,7 +148,11 @@ export function CodingCli(_: ScreenProps) {
         />
         <span className="set-hint">
           Program new sessions launch by default. A CLI that isn't installed can't be picked —
-          install or sign in to it under <b>Agent providers</b>.
+          install or sign in to it under{" "}
+          <button type="button" className="linklike" data-goto-screen="providers" onClick={() => gotoScreen("providers")}>
+            Agent providers
+          </button>
+          .
         </span>
       </label>
       <label className="set-row">
@@ -210,7 +215,9 @@ export function CodingCli(_: ScreenProps) {
           Probes that CLI's binary and its login state — any known provider, not just the default.
         </span>
       </div>
-      <WindowRefresh />
+      <AdvancedFold id="coding-advanced">
+        <WindowRefresh />
+      </AdvancedFold>
     </>
   );
 }
