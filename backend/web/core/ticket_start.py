@@ -232,10 +232,12 @@ async def list_assigned_tickets() -> dict:
     token, network) are reported per-source instead of failing the panel."""
     from backend.ticket_ingestion.backfill import _get_existing_branches
     from backend.ticket_ingestion.providers import get_provider
+    from backend.ticket_ingestion import repo_routing as _routing
     from backend.ticket_ingestion.state import (
         load_pending_stories,
         load_processed_story_failures,
         load_processed_story_statuses,
+        load_ticket_routes,
     )
 
     cfg = _load_config()
@@ -247,6 +249,8 @@ async def list_assigned_tickets() -> dict:
     ledger = load_processed_story_statuses(_REPO_ROOT)
     failures = load_processed_story_failures(_REPO_ROOT)
     pending_ids = {e.get("story_id") for e in load_pending_stories(_REPO_ROOT)}
+    # Where each multi-repo ticket was routed when it last started.
+    routes = load_ticket_routes(_REPO_ROOT)
 
     tickets: list[dict] = []
     errors: list[dict] = []
@@ -329,13 +333,19 @@ async def list_assigned_tickets() -> dict:
         if ingest_state:
             ingest_states[source_key] = ingest_state
         repo = (src.repo_url or cfg.repo_url or "").strip()
-        if repo not in branch_cache:
-            try:
-                branch_cache[repo] = (
-                    await _get_existing_branches(repo) if repo else set()
-                )
-            except Exception:  # noqa: BLE001 — listing still works without it
-                branch_cache[repo] = set()
+        # A source spanning several repos: a ticket's branch may be in any of
+        # them (whichever it was routed to), so the branch check spans them all.
+        source_branches: set = set()
+        for one in [t.url for t in _routing.targets_of(src)] or [repo]:
+            one = (one or "").strip()
+            if one not in branch_cache:
+                try:
+                    branch_cache[one] = (
+                        await _get_existing_branches(one) if one else set()
+                    )
+                except Exception:  # noqa: BLE001 — listing still works without it
+                    branch_cache[one] = set()
+            source_branches |= branch_cache[one]
         # An any-assignee source's tickets belong to other people by design, so
         # "not assigned to you" is not a reason to skip one there.
         any_assignee = ingests_any_assignee(src)
@@ -355,11 +365,15 @@ async def list_assigned_tickets() -> dict:
         for story in stories:
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
+            # Multi-repo source: the repo this ticket goes to and why — the
+            # recorded decision, or what its labels/title say (never a model
+            # call from a listing). None for a one-repo source.
+            route = _routing.preview(story, src, routes)
             reasons = skip_reasons(
                 story,
                 ledger,
                 pending_ids,
-                branch_cache[repo],
+                source_branches,
                 member_ids,
                 ingest_state=ingest_state,
                 failures=failures,
@@ -395,7 +409,7 @@ async def list_assigned_tickets() -> dict:
                     # :mod:`backend.web.core.reopen` needs to find a workspace a
                     # previous run left behind (see the annotation in server.py).
                     "branch": branch_for(story),
-                    "repo_url": repo,
+                    "repo_url": (route or {}).get("repo_url") or repo,
                     "strategy": strategy,
                     "bucket": bucket,
                     "merge_ready": merge_ready,
@@ -416,6 +430,9 @@ async def list_assigned_tickets() -> dict:
                         if claimed
                         else {}
                     ),
+                    # Which of the source's repos it goes to ("→ vnext-frontend:
+                    # label 'frontend'"); only on a source with several repos.
+                    **({"route": route} if route else {}),
                 }
             )
     # Only buckets that actually hold tickets; No state sinks to the end.
@@ -455,6 +472,35 @@ async def find_ticket(source: str, ticket_id: str):
     raise LookupError(
         f"No ticketing source {source!r} is configured — " "check Intake → Tickets"
     )
+
+
+def route_story(story, source: str, program: str = ""):
+    """Route ``story`` across its source's repos when that source has several
+    (:func:`backend.ticket_ingestion.repo_routing.apply_route` — the same step
+    the pipeline takes before a launch). Returns the decision, or ``None`` for
+    a one-repo source or any failure (the ticket then stays on the source's
+    first repo). Blocking: it may ask the agent CLI."""
+    from backend.ticket_ingestion.repo_routing import apply_route, targets_of
+
+    try:
+        src = next(
+            (
+                s
+                for s in (_load_config().ticketing_sources or [])
+                if (s.id or s.provider) == source
+            ),
+            None,
+        )
+        if src is None or len(targets_of(src)) < 2:
+            return None
+        return apply_route(story, src, state_dir=_REPO_ROOT, program=program)
+    except Exception as err:  # noqa: BLE001
+        _logger.warning(
+            "Repo routing for %s failed (%s); using the source's first repo.",
+            getattr(story, "slug", "?"),
+            err,
+        )
+        return None
 
 
 def build_prompt(story) -> str:
@@ -740,6 +786,11 @@ async def launch(
         # unlike the PR path there is no pre-provision step.
         marked = False
         try:
+            # A source spanning several repos: pick the one(s) this ticket
+            # needs first — it decides where the worktree is cut and what the
+            # prompt says about the other repos. May ask the agent CLI, so off
+            # the event loop; a one-repo source is untouched.
+            await asyncio.to_thread(route_story, story, source, program)
             prompt = build_prompt(story)
             # A previous run of this ticket may have left a worktree holding the
             # branch: the session is long gone (nothing blocked the button) but

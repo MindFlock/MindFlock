@@ -94,6 +94,13 @@ class Ticket:
     # ("doesn't carry an ingest label"); the pipeline itself filters
     # server-side and never reads it. Empty = no labels, or unknown.
     labels: list[str] = field(default_factory=list)
+    # Which repo(s) this ticket was routed to, when its source spans several
+    # (see backend/ticket_ingestion/repo_routing.py): ``{"reason", "method",
+    # "extra": [{"name", "url", "path"}], "others": [names]}`` — ``extra`` are
+    # the repos BESIDE ``repo_url`` the ticket also needs (the prompt asks for a
+    # separate branch + PR in each), ``others`` the source's repos it was not
+    # routed to. Empty for a one-repo source, which is never routed.
+    route: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.slug:

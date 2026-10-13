@@ -1,0 +1,32 @@
+/* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
+   URL, then (with two or more) its optional hint and a Remove. */
+.tk-repo-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.tk-repo-row .tk-repo-url {
+  flex: 2 1 220px;
+  min-width: 0;
+}
+
+.tk-repo-row .tk-repo-hint {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.tk-repo-row .tk-repo-remove {
+  flex: none;
+}
+
+/* Rows that wrap (a narrow window puts the hint under its URL) must still read
+   as one repo each: tighter inside a row than between rows. */
+.tk-repos {
+  gap: 10px;
+}
+
+.tk-repo-row {
+  row-gap: 4px;
+}

@@ -105,6 +105,16 @@ workflow_state_id = 500000007   # Shortcut only — restrict the story search to
 # member_id = "…"
 # agent = "claude"             # which coding CLI this queue's tickets run on
 # effort = "xhigh"             # how hard it thinks about them — see below
+# repo_url = "git@github.com:acme/vnext-backend.git"   # the repo its tickets clone into
+#
+# # …or a SET of repos when this queue's tickets span several. Each ticket is
+# # routed to the one(s) it needs — see "A source spanning several repos" below.
+# # repo_url then mirrors the first entry (the default) and may be omitted.
+# repos = [
+#   { url = "git@github.com:acme/vnext-backend.git", hint = "api, django" },
+#   { url = "git@github.com:acme/vnext-frontend.git", hint = "frontend, ui" },
+#   "/Users/me/code/sitecheck",  # a bare URL / path: no hint
+# ]
 #
 # [[ticketing.source]]
 # id = "jira-eu"
@@ -253,7 +263,8 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 
 Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 (the repo that source's tickets clone into) — set it per source; there is no
-global default repo. `workflow_state` gates ingestion so a ticket only gets a
+global default repo. A source whose tickets span several repos lists them in
+`repos` instead (see "A source spanning several repos" below). `workflow_state` gates ingestion so a ticket only gets a
 session once it reaches the chosen state (blank = any state). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
 The same list feeds the optional **`start_state`** ("Move to state on start"),
@@ -351,6 +362,34 @@ field (a Shortcut card without its member id yet) no longer makes the pipeline
 exit: that source is skipped — the status names it and the field — and the
 other sources and PR review keep running. PR review and issue handling boot
 the pipeline on their own; they no longer need a ticketing source to exist.
+
+### A source spanning several repos
+
+A source's `repo_url` names one repo. When its tickets span several (a backend,
+a frontend, a scanner), give it `repos` instead — a list of `{url, hint}`
+(settings.json, and config.toml, which also takes bare URL strings). In Intake →
+**Tickets** that is the source card's **+ Add repo**: a URL plus an optional
+hint per row.
+
+- **Back-compat both ways.** A source with one repo is stored exactly as before:
+  `repo_url` only, no `repos` key. With two or more, `repos` is stored AND
+  `repo_url` is kept equal to its first entry, so anything that only knows
+  `repo_url` (an older MindFlock on a synced device, a script) still sees a
+  working repo. A source with no `repos` reads as the one-element set
+  `[repo_url]` (`TicketingSource.repo_entries`,
+  `TicketProviderConfig.repo_targets`).
+- **`hint`** is optional free text: comma-, semicolon- or newline-separated
+  terms (`frontend, ui`) that a ticket's labels and title are matched against.
+  The repo's own name and the words of its name no other repo shares already
+  count, so a hint is only needed for words the name doesn't contain. Hints mean
+  nothing with one repo and are not stored then.
+- **Routing**, for every ticket of a multi-repo source, the pipeline's and a
+  manual **Begin work** alike: a matching label → a title naming exactly one
+  repo → the agent CLI's one-shot answer → the first repo. A ticket that needs
+  several starts in the first and is told, by absolute path, to make the change
+  in each other repo on its own branch and open a separate PR. The full rules,
+  the recorded decision (`state.json` `ticket_routes`) and the prompt text are in
+  [ingestion-pipeline.md](ingestion-pipeline.md#a-source-spanning-several-repos).
 
 ### Local model (`[local_model]`, settings store only)
 

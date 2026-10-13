@@ -236,8 +236,20 @@ class TicketingSource:
     poll_interval_seconds: Optional[int] = None
     label: str = ""
     # Git clone URL / local path this source's tickets provision into. Empty =
-    # fall back to the global repository.url (single-repo behavior).
+    # fall back to the global repository.url (single-repo behavior). With
+    # several ``repos`` below this always mirrors the FIRST one, so a reader
+    # that only knows this field (an older MindFlock on a synced device, a
+    # hand-written script) still gets a working single repo.
     repo_url: str = ""
+    # Optional: the SET of repos this source's tickets may need, as
+    # ``[{"url": ..., "hint": ...}]`` — first = the default. Stored only when
+    # there are two or more; a one-repo source keeps the historic shape (just
+    # ``repo_url``) byte for byte. ``hint`` is free text (comma-separated words
+    # such as "frontend, ui") the ingestion router matches against a ticket's
+    # labels and title before asking the agent CLI — see
+    # backend/ticket_ingestion/repo_routing.py. Read the list through
+    # :meth:`repo_entries`, which folds the old single-field shape in.
+    repos: list = field(default_factory=list)
     # Coding-CLI provider name this source's tickets run ("claude", "codex",
     # "aider", …). Empty = fall back to engine.agent, then the engine default.
     agent: str = ""
@@ -323,6 +335,12 @@ class TicketingSource:
             v = getattr(self, k)
             if v:
                 d[k] = v
+        repos = self.repo_entries()
+        if len(repos) > 1:
+            d["repos"] = [dict(r) for r in repos]
+            d["repo_url"] = repos[0]["url"]
+        elif repos and not d.get("repo_url"):
+            d["repo_url"] = repos[0]["url"]
         if self.workflow_state_id is not None:
             d["workflow_state_id"] = self.workflow_state_id
         if self.poll_interval_seconds is not None:
@@ -346,6 +364,7 @@ class TicketingSource:
             poll_interval_seconds=_opt_int(d.get("poll_interval_seconds")),
             label=str(d.get("label", "") or ""),
             repo_url=str(d.get("repo_url", "") or ""),
+            repos=_repo_entries(d.get("repos")),
             agent=str(d.get("agent", "") or ""),
             # Coerced against the ladder rather than stored verbatim: this is
             # read on every settings load, and a hand-edited rung that no
@@ -361,6 +380,52 @@ class TicketingSource:
                 dict(d["last_test"]) if isinstance(d.get("last_test"), dict) else {}
             ),
         )
+
+    def repo_entries(self) -> list:
+        """This source's repos as ``[{"url", "hint"?}]``, first = the default.
+
+        The ``repos`` list when it names two or more, else the single
+        ``repo_url`` as a one-element list (a lone ``repos`` entry when
+        ``repo_url`` is blank; ``[]`` when neither is set) — so every source,
+        old or new, reads as a set of repos, and a one-repo source is exactly
+        its ``repo_url``."""
+        repos = _repo_entries(self.repos)
+        if len(repos) > 1:
+            return repos
+        url = (self.repo_url or "").strip()
+        if url:
+            return [{"url": url}]
+        return repos
+
+
+def _repo_entries(v: Any) -> list:
+    """Normalize a source's ``repos`` list to ``[{"url", "hint"?}]``.
+
+    Accepts the stored dicts and, for a hand-edited config, bare URL strings.
+    Blank URLs and repeats (the same URL twice) are dropped, a blank hint is
+    omitted, and anything else is ignored — tolerant like every coercion here,
+    since a bad entry must not take the settings load down."""
+    if not isinstance(v, (list, tuple)):
+        return []
+    out: list = []
+    seen: set = set()
+    for item in v:
+        if isinstance(item, str):
+            url, hint = item, ""
+        elif isinstance(item, dict):
+            url, hint = item.get("url"), item.get("hint")
+        else:
+            continue
+        url = str(url or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        entry = {"url": url}
+        hint = str(hint or "").strip()
+        if hint:
+            entry["hint"] = hint
+        out.append(entry)
+    return out
 
 
 @dataclass
