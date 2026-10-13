@@ -2255,9 +2255,13 @@ credential.
 - **Tickets** — the master **Automated ingestion** switch (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's **Tickets** bar, so the two never disagree), one card per
-  connected source (provider, optional label, Repo URL, its own **Agent CLI**,
-  its **Thinking effort**, ingest-state picker, **Move to state on start**,
-  **Comment when moved**, credentials, **Test connection**, **Remove**), then
+  connected source — up front only what a first setup needs (provider, optional
+  label, Repo URL, its own **Agent CLI**, credentials, **Whose tickets**, the
+  ingest states/labels), then a collapsed **Advanced options** fold holding the
+  per-queue tuning (**Thinking effort**, **Fast-track tickets to**) and the
+  catalog's optional extras (**Move to state on start**, **Comment when moved**,
+  **Claim label**, the optional Test-filled account ids, Jira's **Project
+  key**), and the footer (**Test connection**, **Remove**) — then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -2270,8 +2274,8 @@ credential.
   too), its unset option names the app default rather than showing a blank, and
   the collapsed card always states which CLI the queue runs — the difference
   between a queue on a hosted CLI and one on a local model is worth seeing
-  without expanding. **Thinking effort** sits directly under it, because the two
-  are one decision: a rung means different things on different CLIs (each spells
+  without expanding. **Thinking effort** opens the Advanced fold, first thing
+  in it, because it qualifies that CLI: a rung means different things on different CLIs (each spells
   it its own way and clamps its own ceiling), so the picker names *that* CLI's
   ceiling and is disabled outright for a CLI with no effort control. It applies
   to every ticket from the queue — ingested automatically or started by hand —
@@ -2311,6 +2315,19 @@ credential.
   with **Start work**, then its own repository cards (`github.issue_repos`,
   independent of review's). The same **GitHub connection** row and **Connect
   GitHub** button (`#gh-issue-connect-btn`): one credential for both tabs.
+
+**Basic vs Advanced, and one rhythm.** Which provider fields are basic is the
+catalog's call, not the form's: a field marked `advanced` in
+`backend/ticket_ingestion/providers/__init__.py` (never a `required` one — a
+hidden field can't be filled) renders inside the card's **Advanced options**
+`<details>`, with the card's own effort and fast-track pickers. The fold starts
+closed on a fresh source and **opens on its own** when anything inside already
+holds a value someone chose, or when a save refused a field inside it
+(`advancedHasValues` in `intake/sourceForm.ts`; a Test-filled id doesn't count,
+or every connected card would open). Inside a card a field's own parts sit
+tight — label, control, hint 5px apart — and the next field starts 18px below,
+so a long hint can never read as the next field's; sections of the tab sit
+22px apart, a step bigger again. The work lists keep their own density.
 
 **A ticket source is connected only after a live test.** A source card's
 header carries a three-state pill — **Connected** (the last Test passed within

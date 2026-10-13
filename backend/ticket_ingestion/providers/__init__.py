@@ -52,6 +52,10 @@ PROVIDER_REGISTRY: dict[str, Type[TicketProvider]] = {
 # UI-facing description of each provider and the fields it needs. ``field.key``
 # maps 1:1 onto a ``TicketProviderConfig`` attribute so the settings layer can
 # store/resolve it generically. ``secret`` fields are masked on read.
+# ``advanced`` fields are optional extras a first setup never needs (claim
+# label, move-on-start, the optional Test-filled ids…): the source form folds
+# them under "Advanced options", opened on its own once one holds a value.
+# Never mark a ``required`` field advanced — a hidden field can't be filled.
 #
 # ORDER MATTERS: the Settings UI defaults a newly added source to the first
 # entry, so GitHub Issues leads. It is the widest surface (every OSS maintainer
@@ -96,6 +100,7 @@ def _start_state_field(noun: str, hint: str) -> dict:
         "type": "state_one",
         "secret": False,
         "required": False,
+        "advanced": True,
         "hint": hint,
     }
 
@@ -114,6 +119,7 @@ def _start_comment_field(noun: str) -> dict:
         "type": "choice",
         "secret": False,
         "required": False,
+        "advanced": True,
         "options": [
             {"value": "", "label": "Off — move it silently"},
             {"value": "on", "label": "On — “MindFlock (you) is taking this on.”"},
@@ -139,6 +145,7 @@ def _claim_label_field(noun: str) -> dict:
         "label": "Claim label",
         "secret": False,
         "required": False,
+        "advanced": True,
         "placeholder": "mindflock",
         "hint": (
             f"When a session starts on a {noun}, MindFlock assigns it to you "
@@ -278,12 +285,14 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "filled by Test (optional)",
                 "auto": True,
+                "advanced": True,
             },
             {
                 "key": "project",
                 "label": "Project key",
                 "secret": False,
                 "required": False,
+                "advanced": True,
                 "validate": "key",
                 "placeholder": "e.g. ENG — optional",
                 "hint": (
@@ -338,6 +347,7 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "filled by Test (optional)",
                 "auto": True,
+                "advanced": True,
             },
             {
                 "key": "project",
@@ -410,6 +420,7 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "filled by Test (optional)",
                 "auto": True,
+                "advanced": True,
             },
             _scope_field(
                 "Anyone's — by section",

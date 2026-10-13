@@ -234,3 +234,48 @@ export const TEST_STATE_LABELS: Record<SourceTestState, string> = {
   needs_attention: "Needs attention",
   off: "Off",
 };
+
+/* --- Basic vs Advanced ------------------------------------------------------
+ * A source card shows what a first setup needs (provider, repo, CLI, the
+ * credential, whose tickets, which states) and folds the rest under
+ * "Advanced options": the catalog fields marked `advanced` plus the card's own
+ * per-queue tuning below. The fold opens on its own when anything in it is
+ * already set, or when the server objected to a field inside it — a value or an
+ * error hidden behind a closed fold is a setting nobody can see. */
+
+/** The card's own (non-catalog) fields that live in the fold, each with the
+ * stored values that mean "not set". `depth: "agent"` reads as Off. */
+export const CARD_ADVANCED_DEFAULTS: Record<string, readonly string[]> = {
+  effort: [""],
+  depth: ["", "agent"],
+};
+
+/** The catalog fields shown up front. */
+export function basicFields(meta: TicketingCatalogEntry | null | undefined): TicketingCatalogField[] {
+  return (meta?.fields || []).filter((f) => !f.advanced);
+}
+
+/** The catalog fields folded under Advanced options. */
+export function advancedFields(meta: TicketingCatalogEntry | null | undefined): TicketingCatalogField[] {
+  return (meta?.fields || []).filter((f) => !!f.advanced);
+}
+
+/** Whether the Advanced fold should start open: an advanced field holds a
+ * value someone chose, or carries an error. A Test-filled (`auto`) field
+ * doesn't count — Test writes it on every connect, so it would open the fold
+ * on every card. */
+export function advancedHasValues(
+  meta: TicketingCatalogEntry | null | undefined,
+  source: TicketingSource,
+  errors: FieldErrors = {}
+): boolean {
+  for (const f of advancedFields(meta)) {
+    if (errors[f.key]) return true;
+    if (!f.auto && (source[f.key] || "").trim()) return true;
+  }
+  for (const [key, unset] of Object.entries(CARD_ADVANCED_DEFAULTS)) {
+    if (errors[key]) return true;
+    if (!unset.includes((source[key] || "").trim())) return true;
+  }
+  return false;
+}
