@@ -324,6 +324,26 @@ facts a resting agent leaves behind (a blocked commit, failing checks); then
 idle. So an agent that is *working* on its failed pre-commit is **Working**,
 not in the bell — the bell lists what waits on *you*.
 
+**Background jobs.** Claude Code calls a session busy while any job the agent
+backgrounded is still alive, even after its turn ended. The server classifies
+those jobs (the row's `background` field, see
+[providers.md](providers.md#background-jobs)), and the row shows a second chip
+beside the state:
+
+- **job waiting** / **N jobs waiting**: muted and informational. The session
+  reads **Idle**, and the tooltip names the command and how long it has been
+  quiet. The agent resumes when the job finishes.
+- **job stuck ✕** / **N jobs stuck ✕**: red, for a job that has been quiet for
+  15 min or provably can't finish. It is a button that calls
+  `POST /api/instances/{title}/background/{pid}/stop` on the *first* stuck job
+  and toasts *Stopped the stuck background job in <name>* (or *Couldn't stop
+  the background job in <name> — <why>*). The tooltip says how many remain.
+  On a remote `device::title` row it is plain text, not a button.
+
+A job that is still running gets no chip, because the row already reads
+**Working**. The state chip's tooltip names the job instead (*Turn ended; a
+background job is still running: …*). A pending row draws no job chip.
+
 **Restart.** The Offline chip calls `POST /api/instances/{title}/revive`
 ([web-api.md](web-api.md)), the same lazy relaunch a terminal attach or a sent
 prompt does: the conversation resumes after a crash, a clean quit starts
@@ -755,6 +775,13 @@ server — nothing is pasted into the agent**:
 committed) and waits for your go in the bell, which shows the commit message
 and PR title before anything is pushed. It means nothing while fast-track is
 Off.
+
+"Once the agent stops" includes the jobs it backgrounded. While the session
+reads Idle but a job it started is still **waiting**
+([Background jobs](#one-session-state)), fast-track holds with *a background
+job the agent started is still waiting*, because that job's completion will
+wake the agent. The hold is bounded: after 15 quiet minutes the job counts as
+**stuck** and stops holding, so a wedged job can't block shipping forever.
 
 **The ⏩ button** in each pane head, beside the guided **Commit… / Push /
 Open PR** button, is THE per-session control. It names the target —

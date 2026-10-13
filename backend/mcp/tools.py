@@ -124,7 +124,8 @@ _D_LIST = (
     "loading | paused), activity (working | idle | clarify = blocked on a dialog "
     "| limit = usage limit | offline), activity_since, stage, program, branch, "
     "folder, parent, spawned, last_turn, is_self, managed (you may steer it), "
-    "plus autopilot and pr_url when set. "
+    "plus autopilot, pr_url and background (jobs the agent left running after "
+    "its turn, each running | waiting | stuck) when set. "
     "filter: children (default when you have children), descendants, siblings, "
     "or all (default otherwise). repo narrows to one repository (name or path). "
     "Sessions you manage come first; limit caps the rows (default 50) and "
@@ -581,6 +582,8 @@ _COMPACT_KEYS = (
 #: open (``{person id: {name, device, since, typing}}``) — docs/people.md.
 #: ``shared_branch``: it works ON a pushed branch others push to too;
 #: ``behind``: commits that remote branch has that the session lacks.
+#: ``background``: jobs the agent backgrounded and left running past its turn
+#: (an idle session with a ``waiting`` job is not finished yet).
 _COMPACT_OPTIONAL = (
     "autopilot",
     "pr_url",
@@ -590,8 +593,19 @@ _COMPACT_OPTIONAL = (
     "viewers",
     "shared_branch",
     "behind",
+    "background",
 )
 _MESSAGE_KEYS = ("id", "kind", "from", "ts", "text", "data", "reply_to", "state")
+
+
+def background_waiting(jobs) -> bool:
+    """Whether a row's ``background`` jobs include one still WAITING: the
+    agent's turn ended, but the job's completion will start another. A stuck
+    job never completes, so it holds nothing (a waiting job turns stuck after
+    ``claude_background.STUCK_AFTER_S``, which bounds the hold)."""
+    return isinstance(jobs, list) and any(
+        isinstance(j, dict) and j.get("state") == "waiting" for j in jobs
+    )
 
 
 def _compact_message(m: dict) -> dict:
@@ -1974,6 +1988,8 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
         queue = row.get("queue") if isinstance(row.get("queue"), dict) else {}
         if int(queue.get("pending") or 0) > 0:
             return None
+        if background_waiting(row.get("background")):
+            return None  # its turn ended, but a job it is waiting on will wake it
         since = row.get("activity_since")
         if not isinstance(since, (int, float)) or since <= 0:
             return None  # placeholder idle of a row the tick hasn't probed yet

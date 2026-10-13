@@ -135,6 +135,21 @@ export interface MergeState {
   blockers: string[];
 }
 
+/** A job the agent backgrounded that outlived its turn
+ * (backend/providers/claude_background.py). */
+export interface BackgroundJob {
+  /** Claude Code's task id. */
+  id: string;
+  pid: number;
+  command: string;
+  /** running: still doing work · waiting: quiet, will wake the agent when it
+   * ends · stuck: can't finish (proven, or quiet past the limit). */
+  state: "running" | "waiting" | "stuck" | string;
+  reason: string;
+  started: number;
+  quiet_s: number;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -212,6 +227,9 @@ export interface Instance {
   budget: BudgetStatus | null;
   activity: Activity | string;
   activity_since: number;
+  /** Jobs the agent backgrounded and left running after its turn ended
+   * (lib/backgroundJobs). Optional: an older server doesn't send it. */
+  background?: BackgroundJob[] | null;
   last_turn: string | null;
   /** First line of the newest USER prompt (≤120 chars) — pinned above the
    * agent terminal so you always see what the session was asked to do.

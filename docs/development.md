@@ -412,6 +412,11 @@ Re-verified against the codebase 2026-10-10; useful when touching these areas:
    (`workspace_cleanup._PRESERVED_NAMES` is empty; only the testmon refresher
    dir and workspaces with a live tmux session are kept); if the pipeline sits
    idle for 3+ days the canonical clone is pruned and re-cloned on next use.
+6. Background-job classification (`providers/claude_background.py`) is
+   Linux/WSL-only, because it reads `/proc` fd links and `stat`. On a macOS dev
+   machine the row's `background` is always null, so the rail's job chip and
+   fast-track's background-job hold can't be reproduced there
+   ([providers.md](providers.md#background-jobs)).
 
 Two other lists are kept next to the code they describe and are not repeated
 here — read them before touching those areas:

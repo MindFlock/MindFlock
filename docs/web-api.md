@@ -40,6 +40,12 @@ List all sessions. Each item:
   "stage_reset": false,       // ↺ "back to idle" pin — show the ladder from the start
   "activity": "working|clarify|idle|offline",
   "activity_since": 1756200000.0,  // epoch the reported activity last changed; 0 = no live reading
+  "background": [              // jobs the agent backgrounded and left running past its turn. Null on the
+                               // cheap/placeholder snapshot, on non-Claude and non-Linux sessions, and
+                               // whenever live and hook signals agree, so null does NOT mean "no jobs"
+    {"id": "b8o2q11hd", "pid": 3290210, "command": "until ! pgrep -f …", "state": "running|waiting|stuck",
+     "reason": "…", "started": 1791902665.0, "quiet_s": 2216.0}
+  ],
   "tokens": 0, "tokens_in": 0, "tokens_cache_read": 0, "tokens_cache_write": 0,
   "tokens_ctx": 0, "tokens_ctx_window": 200000, "tokens_cost": 0.0,
   "tokens_model": "…",
@@ -93,7 +99,10 @@ stable pane, and Claude blinks the pending tool's bullet while it waits). Then
 the provider's own authoritative signal —
 per-session `{state, ts}` markers written by the CLI's lifecycle hooks, or
 Claude's live `claude agents --json` report (see
-[providers.md](providers.md)) — then CPU sampling of the pane's process tree
+[providers.md](providers.md); Claude calls a session `busy` while any
+background job is alive, so when the Stop hook says the turn ended the
+provider reads the jobs instead — see [Background jobs](providers.md#background-jobs))
+— then CPU sampling of the pane's process tree
 (a cached `/proc` scan, 2.0 s TTL kept deliberately below the server's 2.5 s
 probe memo so two consecutive activity computations never share a snapshot and
 read a zero CPU delta — phantom idle), then the pane-hash heuristic: changing
@@ -481,6 +490,7 @@ Errors carry one human sentence and leave the form untouched:
 | POST | `/api/instances/{title}/parent` | Re-parent a session. Body `{"parent": "<title>"}` puts it under that live session; `{"parent": ""}` (or `null`) detaches it to a root. → **200** with the updated row. **404** for an unknown session. **400** for an unknown parent (`unknown parent session: X`), the session itself (`a session cannot be its own parent`), a parent that is the session's own descendant (`… that would make a cycle`), or a non-string `parent`. **409** when adopting would break a spawn limit: the new parent's live children (this one included) over `MINDFLOCK_MAX_CHILDREN`, or any session of the adopted subtree deeper than `MINDFLOCK_MAX_SPAWN_DEPTH` (the error names the knob). Detaching, and re-sending the current parent, are never limited. `spawned` is never touched. Persists |
 | POST | `/api/instances/{title}/pause` | Pause: stop the agent (its tmux session and PTY are killed) and keep the worktree and branch **exactly as they are** — no commit, no removal; `status` becomes `paused`. 400 when the engine refuses (not started, already paused) |
 | POST | `/api/instances/{title}/resume` | Resume a paused session: relaunch the agent in the same worktree. A session paused under the old scheme (worktree removed, branch kept) is rebuilt first |
+| POST | `/api/instances/{title}/background/{pid}/stop` | Stop one **background job** the agent left running past its turn — the rail's **job stuck ✕** chip. Only a pid that is a *current* job root of this session (see `background` on the row and [providers.md](providers.md#background-jobs)) is signalled: SIGTERM to the job's process group, SIGKILL after 2 s. Claude Code then reports the job as ended, which may start a short turn. → `{title, pid, stopped: true}`. **404** unknown title; **409** `no such background job in this session` |
 | POST | `/api/instances/{title}/revive` | Restart an **offline** agent — the rail chip's **Restart** action (the web UI's one session state, [web-ui.md](web-ui.md#one-session-state)). Runs the same lazy revive a terminal attach or `/send` does: a live agent tmux is reused, a dead one is relaunched (resuming the conversation after a crash, fresh after a clean quit). → `{title, revived: true}`. **404** unknown; **409** `session is paused — resume it instead`, or the revive's own reason (`workspace no longer exists`, a shared folder the agent may not launch in) |
 
 `DELETE`, `/close`, `/cleanup` and `/api/workspaces/delete` end a session

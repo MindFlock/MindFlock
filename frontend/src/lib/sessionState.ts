@@ -29,6 +29,7 @@
  * guided ship ladder keeps its import. */
 
 import type { Instance } from "../api/types";
+import { backgroundHint } from "./backgroundJobs";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -209,8 +210,9 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   const act = extras?.activity ?? effectiveActivity(inst);
   if (act === "clarify")
     return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
+  const bgHint = backgroundHint(inst);
   if (act === "working")
-    return { state: "working", label: STATE_LABEL.working, tone: "working", inBell: false, restartable: false, hint: "Agent is working" };
+    return { state: "working", label: STATE_LABEL.working, tone: "working", inBell: false, restartable: false, hint: bgHint || "Agent is working" };
   if (act === "limit") {
     const until = Number(inst.queue?.limited_until) || 0;
     const resumeAt = until > now / 1000 ? until : undefined;
@@ -254,7 +256,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       restartable: false,
       hint: "Idle " + spanWord(idleFor) + " with unfinished work — possibly stuck",
     };
-  return { state: "idle", label: STATE_LABEL.idle, tone: "neutral", inBell: false, restartable: false, hint: "Agent is idle — waiting for input" };
+  return { state: "idle", label: STATE_LABEL.idle, tone: "neutral", inBell: false, restartable: false, hint: bgHint || "Agent is idle — waiting for input" };
 }
 
 /** The bell row's words for a state that is in the bell: the label, or for a

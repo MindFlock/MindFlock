@@ -1223,6 +1223,17 @@ def _agent_activity_cached(inst, title: str) -> str:
     return _probe_cached("activity", inst, lambda: _agent_activity(inst, title))
 
 
+def _background_jobs(inst, title: str) -> Optional[list]:
+    """The background jobs the session's CLI left running past its turn, as
+    the activity probe last classified them (running / waiting / stuck), or
+    None. Read after the activity probe, never a fresh process walk."""
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        return provider.background_jobs(tmux.to_mindflock_tmux_name(title)) or None
+    except Exception:  # noqa: BLE001 — a probe never fails a poll
+        return None
+
+
 def _session_last_turn_cached(inst) -> Optional[str]:
     """``_session_last_turn(inst)`` memoized per session (last-turn timestamp)."""
     return _probe_cached("last_turn", inst, lambda: _session_last_turn(inst))
@@ -1514,6 +1525,9 @@ def _session_snapshot(i, queues: dict) -> dict:
     # feeds never rendered once; ``agent_state.state_since`` is the real thing,
     # and every layer now writes it (see agent_state._verdict).
     d["activity_since"] = _agent_state.state_since(i.Title)
+    # Jobs the agent backgrounded and left running after its turn ended: why
+    # an idle session is not finished yet (waiting), or what is wedged (stuck).
+    d["background"] = _background_jobs(i, i.Title)
     # L3: latest-turn snippet (≤120 chars) for N-session triage, or null.
     d["last_turn"] = _session_last_turn_cached(i)
     # The newest USER prompt (first line) — the panes pin it above the
@@ -1554,6 +1568,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "budget",
     "activity",
     "activity_since",
+    "background",
     "last_turn",
     "last_prompt",
     "last_prompt_full",
@@ -1591,6 +1606,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["budget"] = _budget_status_for(i.Title, 0.0)
     d["activity"] = "idle"
     d["activity_since"] = _agent_state.state_since(i.Title)
+    d["background"] = None
     d["last_turn"] = None
     d["last_prompt"] = None
     d["last_prompt_full"] = None
@@ -3837,6 +3853,26 @@ async def instance_resume(title: str) -> JSONResponse:
         new=getattr(inst.Status, "name", str(inst.Status)).lower(),
     )
     return JSONResponse(_instance_json(inst))
+
+
+@app.post("/api/instances/{title}/background/{pid}/stop")
+async def instance_background_stop(title: str, pid: int) -> JSONResponse:
+    """Stop one background job the session's agent left running (the row's
+    stuck-job chip). Only a CURRENT job root of THIS session can be signalled:
+    anything else is a **409**. The agent hears about it the way it hears
+    about any job ending, so it may take a short turn to report it.
+    → ``{"title", "pid", "stopped": true}``."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    from backend.providers import claude_background as _bg
+
+    ok = await asyncio.to_thread(_bg.stop, tmux.to_mindflock_tmux_name(title), pid)
+    if not ok:
+        return JSONResponse(
+            {"error": "no such background job in this session"}, status_code=409
+        )
+    return JSONResponse({"title": title, "pid": pid, "stopped": True})
 
 
 @app.post("/api/instances/{title}/revive")

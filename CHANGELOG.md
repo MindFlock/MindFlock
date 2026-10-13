@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session whose turn has ended no longer reads "Working" just because the
+  agent left a background job running.** Claude Code reports a session busy
+  while any of its background shells is alive, so one leftover job (a wait
+  loop that could never end, in the case that found this) kept a finished
+  session "Working" for over half an hour. MindFlock now looks at each such
+  job: one still using CPU or writing output keeps the session Working; a
+  quiet one reads Idle with a "job waiting" chip; one quiet for 15 minutes, or
+  one that provably waits on itself (a `pgrep -f` loop that only matches its
+  own command line), reads Idle with a red "job stuck ✕" chip that stops it.
+  Autopilot and the MCP `wait_for_session` tool hold while a job is waiting,
+  never for a stuck one. Linux and WSL only; macOS is unchanged.
+
 ## [0.8.4] - 2026-10-12
 
 ### Fixed

@@ -412,7 +412,8 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     ``rec`` is a normalized store record; ``snap`` is an observation::
 
         {"stage", "failed_step", "failed_hook", "dirty", "beyond_base",
-         "activity", "limited", "queue_pending", "check", "has_origin", "now"}
+         "activity", "limited", "queue_pending", "background_waiting", "check",
+         "has_origin", "now"}
 
     Returns ``(action, detail)`` where action is one of ``wait`` (nothing to do
     yet), ``commit``, ``push``, ``make_pr``, ``merge``, ``done`` (target
@@ -626,6 +627,11 @@ def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
         return "wait", {"reason": "agent is %s" % (activity or "busy")}
     if snap.get("queue_pending"):
         return "wait", {"reason": "prompt queue still has work"}
+    if snap.get("background_waiting"):
+        # The turn ended, but a job the agent backgrounded is still waiting and
+        # will wake it when it finishes. Bounded: a waiting job turns stuck
+        # (and stops holding) after claude_background.STUCK_AFTER_S.
+        return "wait", {"reason": "a background job the agent started is still waiting"}
     idle_since = rec.get("idle_since")
     now = float(snap.get("now") or 0.0)
     if idle_since is None:

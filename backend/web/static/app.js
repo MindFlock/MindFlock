@@ -24666,6 +24666,54 @@ function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
 }
 //#endregion
+//#region src/lib/backgroundJobs.ts
+function minutes(s) {
+	const m = Math.round(s / 60);
+	return m < 1 ? "<1m" : m < 90 ? m + "m" : (m / 60).toFixed(1) + "h";
+}
+function oneLine$1(cmd) {
+	const s = cmd.replace(/\s+/g, " ").trim();
+	return s.length > 140 ? s.slice(0, 139) + "…" : s;
+}
+function backgroundJobs(inst) {
+	return Array.isArray(inst.background) ? inst.background.filter((j) => j && typeof j.pid === "number") : [];
+}
+function backgroundChip(inst) {
+	const jobs = backgroundJobs(inst);
+	const stuck = jobs.filter((j) => j.state === "stuck");
+	const waiting = jobs.filter((j) => j.state === "waiting");
+	if (stuck.length) {
+		const j = stuck[0];
+		const base = "A background job the agent left running can't finish (" + j.reason + "): " + oneLine$1(j.command);
+		if (inst.device) return {
+			label: stuck.length > 1 ? stuck.length + " jobs stuck" : "job stuck",
+			cls: "bgchip bg-stuck",
+			title: base
+		};
+		return {
+			label: stuck.length > 1 ? stuck.length + " jobs stuck ✕" : "job stuck ✕",
+			cls: "bgchip bg-stuck",
+			title: base + " — click to stop it" + (stuck.length > 1 ? " (" + (stuck.length - 1) + " more after this one)" : ""),
+			stopPid: j.pid
+		};
+	}
+	if (waiting.length) {
+		const j = waiting[0];
+		return {
+			label: waiting.length > 1 ? waiting.length + " jobs waiting" : "job waiting",
+			cls: "bgchip bg-waiting",
+			title: "The turn ended, but a background job is still waiting (quiet " + minutes(j.quiet_s) + "): " + oneLine$1(j.command) + " — the agent resumes when it finishes"
+		};
+	}
+	return null;
+}
+function backgroundHint(inst) {
+	const running = backgroundJobs(inst).find((j) => j.state === "running");
+	if (running) return "Turn ended; a background job is still running: " + oneLine$1(running.command);
+	const chip = backgroundChip(inst);
+	return chip ? chip.title.replace(/ — click to stop it.*$/, "") : "";
+}
+//#endregion
 //#region src/lib/sessionState.ts
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
@@ -24800,13 +24848,14 @@ function deriveSessionState(inst, extras) {
 	if (inst.setup && inst.setup.state === "failed") return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
 	const act = extras?.activity ?? effectiveActivity(inst);
 	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
+	const bgHint = backgroundHint(inst);
 	if (act === "working") return {
 		state: "working",
 		label: STATE_LABEL.working,
 		tone: "working",
 		inBell: false,
 		restartable: false,
-		hint: "Agent is working"
+		hint: bgHint || "Agent is working"
 	};
 	if (act === "limit") {
 		const until = Number(inst.queue?.limited_until) || 0;
@@ -24851,7 +24900,7 @@ function deriveSessionState(inst, extras) {
 		tone: "neutral",
 		inBell: false,
 		restartable: false,
-		hint: "Agent is idle — waiting for input"
+		hint: bgHint || "Agent is idle — waiting for input"
 	};
 }
 function attentionReason(ss) {
@@ -35842,6 +35891,19 @@ function rowDndProps(key, cbs, draggable = true) {
 	};
 }
 //#endregion
+//#region src/lib/stopBackgroundJob.ts
+async function stopBackgroundJob(title, pid) {
+	try {
+		await instApi(title, "/background/" + pid + "/stop", { method: "POST" });
+	} catch (e) {
+		toast("Couldn't stop the background job in " + displayName(title) + " — " + errMsg(e));
+		return false;
+	}
+	toast("Stopped the stuck background job in " + displayName(title));
+	refreshInstances();
+	return true;
+}
+//#endregion
 //#region src/lib/codemapSeen.ts
 var KEY = "mf_codemap_seen";
 var MAX_TITLES = 200;
@@ -36206,6 +36268,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	});
 	const rz = extra.rz;
 	const peer = peerChip(inst);
+	const bg = pending ? null : backgroundChip(inst);
 	const act = async (fn, e) => {
 		e?.stopPropagation();
 		await fn();
@@ -36517,6 +36580,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					title: extra.check.title,
 					children: extra.check.label
 				}),
+				bg && (bg.stopPid ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "stagechip " + bg.cls,
+					title: bg.title,
+					"aria-label": bg.title,
+					onClick: (e) => act(() => void stopBackgroundJob(title, bg.stopPid), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: bg.label
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "stagechip " + bg.cls,
+					title: bg.title,
+					children: bg.label
+				})),
 				peer && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "stagechip peerchip" + (peer.connected === false ? " peer-offline" : ""),

@@ -23,6 +23,8 @@ import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
 import { deriveSessionState } from "../../lib/sessionState";
 import { reviveSession } from "../../lib/revive";
+import { backgroundChip } from "../../lib/backgroundJobs";
+import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { sessionLabel } from "../../lib/sessionLabel";
 import { useNow } from "../../lib/useNow";
 import {
@@ -325,6 +327,9 @@ export const SidebarRow = memo(function SidebarRow({
   // A shared-folder (peer-link) session: its chip, and the actions the
   // server refuses for it left out of the menu below.
   const peer = peerChip(inst);
+  // A job the agent backgrounded and left behind: waiting (will wake it) or
+  // stuck (never will; the chip stops it). lib/backgroundJobs.
+  const bg = pending ? null : backgroundChip(inst);
 
   const act = async (fn: () => void | Promise<void>, e?: MouseEvent) => {
     e?.stopPropagation();
@@ -687,6 +692,23 @@ export const SidebarRow = memo(function SidebarRow({
             {extra.check.label}
           </span>
         )}
+        {bg &&
+          (bg.stopPid ? (
+            <button
+              type="button"
+              className={"stagechip " + bg.cls}
+              title={bg.title}
+              aria-label={bg.title}
+              onClick={(e) => act(() => void stopBackgroundJob(title, bg.stopPid as number), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {bg.label}
+            </button>
+          ) : (
+            <span className={"stagechip " + bg.cls} title={bg.title}>
+              {bg.label}
+            </span>
+          ))}
         {peer && (
           // Rank 2 of the peer-link UX scan: a shared-folder session says so
           // HERE, on the rail row (a pane-head chip renders 0x0 — see

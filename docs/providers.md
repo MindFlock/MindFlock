@@ -75,8 +75,58 @@ The Claude provider launches plain `claude` (Claude Code). It:
   real-time, so it's reported with age 0 and trusted without pane
   re-verification), falling back to the per-session hook marker (below) when
   the live signal is unavailable — binary too old, no conversation id recorded
-  yet, or the session not listed
+  yet, or the session not listed. When the live signal says busy but the Stop
+  hook says the turn ended, the busy comes from background jobs, and those are
+  classified instead ([Background jobs](#background-jobs))
 - reads token usage from Claude Code transcripts (below)
+
+## Background jobs
+
+Claude Code runs every Bash tool call in its own shell whose stdout is
+`…/tasks/<task-id>.output`, and `claude agents --json` reports the session
+`busy` for as long as any **background** one is alive — turn or no turn. A
+live incident: an agent backgrounded `until ! pgrep -f "git commit -q -F"; do
+sleep 5; done`; `pgrep -f` matches the loop's *own* command line, so it could
+never end, and the session read `working` long after its turn did.
+
+`backend/providers/claude_background.py` settles it. When the live signal says
+busy and the hook marker says `idle` (the Stop hook fired, so no foreground
+call is in flight), it walks the pane's process tree in `/proc` for job roots
+(a process whose fd 1 is a `tasks/*.output` file its parent does not share)
+and classifies each:
+
+| state | meaning | the session reads |
+|---|---|---|
+| `running` | its process tree used ≥ 3% of a core, or its output file grew, in the last 60 s | `working` |
+| `waiting` | quiet, but for less than 15 min — its completion will wake the agent | `idle` (autopilot and `wait_for_session` hold) |
+| `stuck` | quiet for 15 min, or **proven** unable to finish: a `while pgrep -f P` / `until ! pgrep -f P` loop where nothing outside the job matches `P` | `idle`; the rail offers to stop it |
+
+The thresholds are the module's constants: `ACTIVE_CPU_FRACTION = 0.03`,
+`ACTIVE_GRACE_S = 60`, `STUCK_AFTER_S = 900`. The scan runs only on that
+disagreeing path, once per activity probe. Its result is kept per session for
+30 s, and that cached copy is what the row builder reads. When any job is
+`running` the live `working` stands, but the jobs are still published so the
+rail can name the running one. The cache is dropped as soon as the live and
+hook signals agree again.
+
+The classification is published as the row's `background` field (through the
+provider's `background_jobs` hook, below) and stopped with
+`POST /api/instances/{title}/background/{pid}/stop`. The route re-scans first
+and only signals a pid that is a *current* job root of that session (anything
+else is a 409). It sends SIGTERM to the job's process group when the job leads
+its own group and that group is not the server's, and otherwise to the single
+pid. A SIGKILL follows after 2 s if the job is still alive.
+
+Limits:
+
+- Off Linux (no `/proc`) nothing is scanned and the live signal is trusted as
+  before.
+- Background **sub-agents** run inside the CLI's own process, so they are not
+  jobs here: a busy session with no job process still reads `working`.
+- A turn the CLI starts on its own, when a finished job's notification wakes
+  the agent, fires no `UserPromptSubmit` hook. Until its first tool call the
+  marker still says `idle`, so if *other* quiet jobs are alive in that window
+  the session reads idle for those few seconds.
 
 ## The launcher vocabulary (`LauncherSpec`, `launch_script.py`)
 
@@ -208,6 +258,13 @@ for such a CLI is never built out of pane guesswork alone (see the arming
 ladder in [web-api.md](web-api.md)). Claude returns True outright;
 `GenericProvider` derives it from whether the TOML declares an
 `activity.hooks_file`; the base default is False (pane inspection only).
+
+**`background_jobs(session_name)`** returns the background jobs the CLI left
+running after its turn, as `activity_state` last classified them (the
+`background` row field; see [Background jobs](#background-jobs)). It must
+never scan by itself: the row builder calls it on every snapshot. The base
+default is None, and only Claude implements it, so TOML and third-party
+providers always report None.
 
 Two built-in wirings:
 

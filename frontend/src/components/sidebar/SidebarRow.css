@@ -889,6 +889,35 @@
   outline: 1px solid var(--accent);
 }
 
+/* A job the agent backgrounded and left running past its turn
+   (lib/backgroundJobs): waiting is informational, stuck is a Stop button. */
+.stagechip.bgchip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  flex: none !important;
+  white-space: nowrap;
+  color: var(--text);
+}
+.stagechip.bgchip.bg-waiting {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+}
+.stagechip.bgchip.bg-stuck {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+button.stagechip.bgchip.bg-stuck {
+  cursor: pointer;
+}
+button.stagechip.bgchip.bg-stuck:hover {
+  filter: brightness(1.15);
+}
+.stagechip.bgchip.bg-stuck:focus-visible {
+  outline: 1px solid var(--red);
+}
+
 /* Presence (lib/presence.ts, components/presence): who else is on the
    session — up to three initials dots, the driver's ringed. Drawn only once
    someone besides you watches or drives it. */
