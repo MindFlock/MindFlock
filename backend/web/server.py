@@ -86,6 +86,9 @@ modules under
     team_runs        team runs: the record store, goal parser, pure planner
     team_run_driver  team runs: the loop, reconcile, effects, run.* events,
                      the operations behind /api/runs*
+    template_schedule templates' Run now + schedules: due-time math, the
+                     per-device run record, the loop (started by the
+                     templates addon)
     test_plans_driver Verify: the push trigger, the due loop (liveness,
                      running plans, landings, orphan sweep), run-route helpers
     terminal         PTY/tmux attach plumbing shared by the websockets

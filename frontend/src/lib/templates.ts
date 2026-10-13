@@ -22,6 +22,32 @@ export interface Template {
   workspace_strategy?: string;
   in_place?: boolean;
   init_repo?: boolean;
+  /** Start a fresh session from this template on its own: daily (or
+   * weekdays) at a local "HH:MM". Absent = only by hand. */
+  schedule?: TemplateSchedule;
+}
+
+export interface TemplateSchedule {
+  at: string;
+  days: "daily" | "weekdays";
+}
+
+/** This device's record of a template's runs (GET /api/templates `runs`,
+ * keyed by lowercased name): epochs in seconds. */
+export interface TemplateRunInfo {
+  next_at?: number | null;
+  last_at?: number | null;
+  last_session?: string;
+  last_trigger?: string;
+  last_error?: string;
+}
+
+export interface TemplateRunsStatus {
+  runs: Record<string, TemplateRunInfo>;
+  /** Schedules fire on this device (the group's automation device). */
+  runs_here: boolean;
+  /** Else the device that fires them. */
+  runs_on: string;
 }
 
 /** Fired on document after every change to the list, cache or server. The
@@ -57,6 +83,16 @@ function cleanList(raw: unknown): Template[] {
 
 let cache: Template[] | null = null;
 let loading: Promise<Template[]> | null = null;
+let runsStatus: TemplateRunsStatus = { runs: {}, runs_here: true, runs_on: "" };
+
+/** Next/last run per template, as of the last fetch. */
+export function templateRunsNow(): TemplateRunsStatus {
+  return runsStatus;
+}
+
+export function runInfoFor(name: string): TemplateRunInfo {
+  return runsStatus.runs[(name || "").trim().toLowerCase()] || {};
+}
 
 function notify(): void {
   if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
@@ -105,7 +141,12 @@ export function ensureTemplates(force = false): Promise<Template[]> {
   if (loading) return loading;
   loading = (async () => {
     try {
-      const d = await api<{ templates?: Template[] }>("/api/templates");
+      const d = await api<{ templates?: Template[] } & Partial<TemplateRunsStatus>>("/api/templates");
+      runsStatus = {
+        runs: (d.runs && typeof d.runs === "object" ? d.runs : {}) as Record<string, TemplateRunInfo>,
+        runs_here: d.runs_here !== false,
+        runs_on: String(d.runs_on || ""),
+      };
       let list = setTemplates(d.templates || []);
       if (await migratePresetsOnce(list)) {
         const again = await api<{ templates?: Template[] }>("/api/templates");
@@ -132,6 +173,35 @@ export async function deleteTemplate(name: string): Promise<boolean> {
   });
   setTemplates(templatesNow().filter((t) => presetKey(t.name) !== presetKey(name)));
   return !!d.deleted;
+}
+
+/** Why a template can't start a session on its own ("" = it can): a plain
+ * session with no folder would run in the server's own directory. The
+ * server's rule (template_schedule.run_problem), mirrored so a button that
+ * can't work is never offered. */
+export function runProblem(t: Template): string {
+  return !(t.repo_path || "").trim() && !t.provisioned ? "Pick a folder for this template first" : "";
+}
+
+/** "Every day at 21:00" / "Weekdays at 21:00". */
+export function scheduleLabel(s: TemplateSchedule | undefined | null): string {
+  if (!s || !s.at) return "";
+  return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+
+/** A run time for a card: "today 21:00", "tomorrow 21:00", "Mon 21:00", or
+ * a date further out. `now` is injectable for tests. */
+export function whenLabel(epochSec: number | null | undefined, now: Date = new Date()): string {
+  if (!epochSec) return "";
+  const d = new Date(epochSec * 1000);
+  const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(d) - day(now)) / 86400000);
+  if (diff === 0) return "today " + hm;
+  if (diff === 1) return "tomorrow " + hm;
+  if (diff === -1) return "yesterday " + hm;
+  if (Math.abs(diff) < 7) return d.toLocaleDateString(undefined, { weekday: "short" }) + " " + hm;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + hm;
 }
 
 /** The templates that are a prompt — what the saved-prompt surfaces list. */

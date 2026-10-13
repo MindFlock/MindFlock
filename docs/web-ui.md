@@ -185,7 +185,9 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Templates…** (*manage saved New-session setups*), **Assistant agent file…**,
+**Templates…** (*manage saved New-session setups*), one **Run template:
+<name>** (*fresh session, prompt sent*) per template that has a folder,
+**Assistant agent file…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
@@ -1658,6 +1660,24 @@ already gone*). **+ New template** adds one. Templates live on the server
 (`/api/templates`, synced between devices); saved prompts are the templates
 that hold a prompt (see [Saved prompts](#saved-prompts)), so there is one
 list, not two. The old vanilla-JS templates modal is gone.
+
+**Run now and schedules.** Each card in the Templates dialog also has **Run
+now**: a fresh session from the template — its agent, folder and workspace —
+with its prompt already sent, titled after the template and the date
+(`rivian-update-oct13`) and focused as it starts (the dialog closes). The
+palette offers the same as **Run template: <name>** (*fresh session, prompt
+sent*), one row per template. A template with no folder (a saved prompt) can't
+start a session on its own: its Run now is disabled (*Pick a folder for this
+template first*) and the palette leaves it out. In the editor, **Run on a
+schedule** (*starts a fresh session with this prompt*) adds **Every day** /
+**Weekdays** **at** a local time; a scheduled template needs a folder and a
+prompt. The card then reads *Weekdays at 21:00 · next today 21:00 · last
+yesterday 21:00 → rivian-update-oct12* (or *starts on <device>* when another
+device in the group runs automation and fires schedules), and *Last run
+failed: …* when the create was refused. A schedule fires once per slot, starts
+counting from when it was saved, and after the server was down fires only the
+most recent missed slot — see [web-api.md](web-api.md) (Templates →
+Schedules).
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -3455,7 +3475,9 @@ A few screens got quieter:
   joins here; someone's `mfp1:`/`mfp2:` invite is joined as a peer link and
   People opens on it, with the safety number to compare. The
   palette's **Paste a code…** focuses it, and a code typed straight into the
-  palette is offered as "Join with code …" at the top.
+  palette is offered as "Join with code …" at the top (below the commands
+  instead when a command's own name contains what was typed — "run template"
+  also reads as a device name and a code).
 
   Under each of your devices, a read-only line says whether it is **ready to
   work** or what's missing there (*missing tmux · codex not signed in · can't
@@ -3682,6 +3704,9 @@ A few screens got quieter:
   devices). A template only ever *starts* a session — CLI, repo, workspace
   and an opening prompt; New's **Templates** strip lists them and its
   **Manage…** (or the palette's **Templates…**) opens the Templates dialog.
+  A template's **Run now** (its card, or the palette's **Run template: …**)
+  starts a fresh session from it with the prompt already sent, and an
+  optional schedule (every day / weekdays at a time) starts one on its own.
   Saved prompts are the templates that hold a prompt — one list. To paste text
   into a session that is already running, use the
   [Prompts bar](#saved-prompts).

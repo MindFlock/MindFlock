@@ -165,6 +165,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_TRACKER_CLAIMS_FILE",
         str(tmp_path / "mindflock" / "tracker_claims.json"),
     )
+    # Template run record (core.template_schedule): GET /api/templates reads it.
+    monkeypatch.setenv(
+        "MINDFLOCK_TEMPLATE_RUNS_FILE",
+        str(tmp_path / "mindflock" / "template_runs.json"),
+    )
     monkeypatch.setenv("MINDFLOCK_TOOL_FEED_DIR", str(tmp_path / "tool-feed"))
     # User event hooks (``~/.mindflock/hooks/<event>/*`` + ``hooks/all/*``): the
     # events bus runs them on EVERY emit, so without this a developer's real

@@ -2218,9 +2218,24 @@ different-body clash is kept as `<name> (saved prompt)`):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo}]}` |
-| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`) |
+| GET | `/api/templates` | `{templates: [{name, program, repo_path, prompt, provisioned, workspace_strategy, in_place, init_repo, schedule?}], runs: {<name lower>: {next_at, last_at, last_session, last_trigger, last_error}}, runs_here, runs_on}` — `runs` is THIS device's record of each template's runs (epoch seconds; only templates with a schedule or a past run appear); `runs_here` says whether schedules fire on this device, `runs_on` names the device that does when it isn't this one |
+| POST | `/api/templates` | Save/overwrite a template (upsert by name, ignoring case) → `{template, templates}`; owner-only (`may_configure`). `schedule` (optional): `{at: "HH:MM", days: "daily" \| "weekdays"}`, local time; 400 for a bad time/days, and for a scheduled template with no folder (`repo_path`, unless `provisioned`) or no prompt. A template without a schedule stores no `schedule` key |
 | DELETE | `/api/templates/{name}` | Remove a template → `{deleted: bool}` (false for a name that wasn't there); owner-only |
+| POST | `/api/templates/{name}/run` | **Run now**: create a fresh session from the template, its prompt already sent, through the same path as `POST /api/instances` → its **202** body (the new row + `prompt_delivery`). Titled `<template slug>-<mon><day>` (`rivian-update-oct13`; `-2`, `-3`… when taken). **404** unknown template, **400** for one with no folder (it would run in the server's own directory) or whatever the create refuses. Not owner-only — starting a session isn't configuring anything |
+
+**Schedules** (`core/template_schedule.py`). A loop (registered by the addon's
+startup, every 30 s; off under pytest) starts each scheduled template's
+session the same way Run now does, recording `last_trigger: "schedule"`. A
+slot is identified by its local date, so a DST change neither skips nor
+repeats a day; the slot is recorded (`last_slot`) before the session is
+created, so a slot never fires twice; after downtime only the most recent
+missed slot fires; a schedule counts only from when it was saved (saving 21:00
+at 22:00 waits for tomorrow; changing the time or days re-arms it). In a group
+of devices only the automation device (the one running PR review and issue
+handling) fires — the others mark each slot spent without firing, so a device
+that takes the role over never replays one. The schedule syncs with the
+template; the run record (`template_runs.json`, `$MINDFLOCK_TEMPLATE_RUNS_FILE`)
+is per device.
 
 **Notify** (addon id `notify`, prefix `/api/notify`) — the reference addon for
 the generic extension path (see [docs/extensions.md](extensions.md)):
