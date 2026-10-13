@@ -22,19 +22,24 @@
    rhythm: without a flex gap its rows stacked flush, and the switch row's
    label — nudged up 10px for the desktop font (.set-switch-row > .set-label)
    — landed on top of the hint above it ("…still works when this one is off."
-   drawn over "Shared link"). Same 16px gap as .set-screen, and later section
-   titles get the same lead-in as at screen level. container-type lets the URL
+   drawn over "Shared link"). Same rhythm as .set-screen (screens.css), and
+   section titles get the same lead-in as at screen level. container-type lets the URL
    grid below stack by the pane's width, not the window's. */
 .mobile-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--set-rhythm, 24px);
   min-width: 0;
   container-type: inline-size;
 }
 
 .mobile-body>.set-section-title {
   margin-top: 16px;
+  margin-bottom: -8px;
+}
+
+.mobile-body>.set-section-title:first-child {
+  margin-top: 0;
 }
 
 .mobile-body>#mobile-qr {

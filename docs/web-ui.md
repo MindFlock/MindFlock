@@ -3235,6 +3235,14 @@ A few screens got quieter:
 - **Notifications** holds the only desktop-notification on/off toggle; the
   bell no longer carries a copy.
 
+**Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
+`#settings-panel`): a field's label, control and hint sit 6px apart, the next
+field starts 24px below, so a hint always reads as part of the field above it.
+Section titles get 40px above and 16px below; cards and inline button rows
+use the same 4/8/12/16/24 scale. In a window narrower than 600px the nav
+becomes a scrolling row of tabs above the screen (group headings hidden) and
+the ntfy fields stack their labels above the inputs.
+
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
 - **Per-session budget (USD, 0 = off)** — cost guardrail: when a session's
   estimated cost crosses this figure the server emits a one-shot

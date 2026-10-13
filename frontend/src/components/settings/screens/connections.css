@@ -5,11 +5,11 @@
 .conn-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .conn-group + .conn-group {
-  margin-top: 10px;
+  margin-top: 16px;
 }
 
 .conn-group-title {
@@ -42,7 +42,7 @@
 .conn-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
