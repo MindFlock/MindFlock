@@ -1,0 +1,56 @@
+/* Basic vs advanced Settings (settingsMode.tsx).
+
+   The switch sits at the foot of the nav, pushed to the bottom of the column
+   so it reads as "there is more below the line", not as one more screen. */
+.set-mode-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.set-mode-toggle {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  padding: 10px 10px 4px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.set-mode-toggle:hover,
+.set-mode-toggle:focus-visible {
+  color: var(--text);
+}
+
+.set-mode-toggle[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.set-mode-more {
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* The "Advanced" fold on a basic screen: the screen's own sections, one
+   click away. The body keeps the screen's own rhythm, so a moved row looks
+   the same inside the fold as it did outside it. */
+.set-adv-fold > summary {
+  padding: 2px 0;
+}
+
+.set-adv-fold-body {
+  gap: 16px;
+}
+
+.set-adv-fold-body > .set-section-title:first-child {
+  margin-top: 0;
+}

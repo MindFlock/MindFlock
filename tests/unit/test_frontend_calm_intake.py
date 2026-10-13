@@ -282,7 +282,10 @@ def test_settings_nav_order_and_groups():
 def test_settings_nav_draws_a_heading_per_group():
     src = _read(_SETTINGS / "SettingsDialog.tsx")
     assert '"set-nav-group"' in src
-    assert "s.group !== screens[i - 1]?.group" in src
+    # The heading rule lives in settingsMode.tsx (basic mode lists its few
+    # screens flat; advanced mode heads each group).
+    assert "navHeading(shown, i, advanced)" in src
+    assert "s.group !== shown[i - 1]?.group" in _read(_SETTINGS / "settingsMode.tsx")
     assert ".set-nav-group {" in _read(_SETTINGS / "SettingsDialog.css")
 
 

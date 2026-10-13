@@ -108,7 +108,10 @@ describe("settings screens", () => {
     expect(squash(DIALOG)).toContain('{ key: "coding", label: "Agent CLI", group: "Agents"');
     // A non-clickable heading before each group's first screen.
     expect(DIALOG).toContain('className="set-nav-group"');
-    expect(DIALOG).toContain("s.group !== screens[i - 1]?.group");
+    // (Advanced mode: settingsMode.tsx's navHeading; basic mode lists the
+    // few screens flat — see settingsMode.test.ts.)
+    expect(DIALOG).toContain("navHeading(shown, i, advanced)");
+    expect(src("components/settings/settingsMode.tsx")).toContain("s.group !== shown[i - 1]?.group");
     expect(src("components/settings/SettingsDialog.css")).toContain(".set-nav-group {");
   });
 
