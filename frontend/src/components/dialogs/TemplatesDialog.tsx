@@ -6,6 +6,11 @@
  * `window.confirm` on Delete — a call that does nothing in Electron — and
  * never looked at the server's answer.
  *
+ * Each card also has **Run now** (a fresh session from the template, its
+ * prompt already sent — lib/templateRun) and may carry a **schedule** (every
+ * day or weekdays at a local time; the server's template_schedule loop
+ * starts it), with the next and last run under the name.
+ *
  * Every confirm is a row in the card, never a browser dialog: Electron has
  * no window.confirm/prompt/alert, and a Delete that silently does nothing is
  * the bug this dialog exists to not have again.
@@ -22,10 +27,17 @@ import {
   TEMPLATES_CHANGED,
   deleteTemplate,
   ensureTemplates,
+  runProblem,
   saveTemplate,
+  scheduleLabel,
+  templateRunsNow,
   templatesNow,
+  whenLabel,
   type Template,
+  type TemplateRunInfo,
+  type TemplateRunsStatus,
 } from "../../lib/templates";
+import { runTemplateNow } from "../../lib/templateRun";
 
 /** The dialog's UI state: which card is open for editing ("" = the + New
  * form, null = none) and which card is asking "delete?". One at a time —
@@ -76,6 +88,10 @@ export interface TemplateForm {
   mode: "worktree" | "in_place" | "provisioned";
   workspace_strategy: string;
   init_repo: boolean;
+  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"). */
+  scheduled: boolean;
+  at: string;
+  days: "daily" | "weekdays";
 }
 
 export function formFromTemplate(t: Template | null): TemplateForm {
@@ -87,6 +103,9 @@ export function formFromTemplate(t: Template | null): TemplateForm {
     mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
     workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
     init_repo: !!t?.init_repo,
+    scheduled: !!t?.schedule?.at,
+    at: t?.schedule?.at || "21:00",
+    days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
   };
 }
 
@@ -95,6 +114,13 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
   const name = f.name.trim();
   if (!name) return { error: "A template needs a name." };
   if (name.length > 100) return { error: "Names are at most 100 characters." };
+  const at = f.at.trim();
+  if (f.scheduled) {
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+    if (!f.repo_path.trim() && f.mode !== "provisioned")
+      return { error: "A scheduled template needs a folder to start its session in." };
+    if (!f.prompt.trim()) return { error: "A scheduled template needs a prompt — it's what the session is told to do." };
+  }
   return {
     body: {
       name,
@@ -105,6 +131,7 @@ export function templateBody(f: TemplateForm): { body: Template } | { error: str
       in_place: f.mode === "in_place",
       workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
       init_repo: f.init_repo,
+      ...(f.scheduled ? { schedule: { at, days: f.days } } : {}),
     },
   };
 }
@@ -128,6 +155,26 @@ export function templateMeta(t: Template): string {
   return bits.join(" · ");
 }
 
+/** The card's schedule line: what the schedule is, when it fires next and
+ * how the last run went ("" for a template that never ran and has no
+ * schedule). `now` is injectable for tests. */
+export function runLine(
+  t: Template,
+  info: TemplateRunInfo,
+  status: Pick<TemplateRunsStatus, "runs_here" | "runs_on">,
+  now: Date = new Date()
+): string {
+  const bits: string[] = [];
+  if (t.schedule?.at) {
+    bits.push(scheduleLabel(t.schedule));
+    if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
+    else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
+  }
+  if (info.last_at)
+    bits.push("last " + whenLabel(info.last_at, now) + (info.last_session ? " → " + info.last_session : ""));
+  return bits.join(" · ");
+}
+
 interface ViewProps {
   templates: Template[];
   ui: TemplatesUiState;
@@ -145,11 +192,19 @@ interface ViewProps {
   onSave: () => void;
   onDelete: (name: string) => void;
   onClose: () => void;
+  /** Next/last runs (GET /api/templates `runs`), and whether schedules fire
+   * here. */
+  runs?: TemplateRunsStatus;
+  /** Run now: a fresh session from the template. */
+  onRun?: (name: string) => void;
+  /** The template whose Run now is in flight. */
+  running?: string;
 }
 
 /** Markup only: everything it shows comes in as props. */
 export function TemplatesDialogView(p: ViewProps) {
   const { templates, ui, form, busy, loaded } = p;
+  const runs = p.runs || { runs: {}, runs_here: true, runs_on: "" };
   const loadError = p.loadError || "";
   const editor = (
     <form
@@ -238,6 +293,41 @@ export function TemplatesDialogView(p: ViewProps) {
           Create a git repo in the folder
         </label>
       </div>
+      <div className="tpl-schedule" role="group" aria-label="Schedule">
+        <label className="check">
+          <input
+            type="checkbox"
+            id="tpl-scheduled"
+            checked={form.scheduled}
+            onChange={(e) => p.onForm({ scheduled: e.target.checked })}
+          />
+          Run on a schedule <span className="muted">— starts a fresh session with this prompt</span>
+        </label>
+        {form.scheduled && (
+          <div className="tpl-schedule-when">
+            <select
+              id="tpl-days"
+              aria-label="Which days"
+              value={form.days}
+              onChange={(e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : "daily" })}
+            >
+              <option value="daily">Every day</option>
+              <option value="weekdays">Weekdays</option>
+            </select>
+            <span>at</span>
+            <input
+              id="tpl-at"
+              type="time"
+              aria-label="Time"
+              value={form.at}
+              onChange={(e) => p.onForm({ at: e.target.value })}
+            />
+            {p.runs && !p.runs.runs_here && p.runs.runs_on && (
+              <span className="muted">Starts on {p.runs.runs_on} — the device that runs automation.</span>
+            )}
+          </div>
+        )}
+      </div>
       {ui.error && (
         <p className="error" aria-live="polite">
           {ui.error}
@@ -276,6 +366,8 @@ export function TemplatesDialogView(p: ViewProps) {
           A template is a saved New-session setup — agent, folder, workspace and first prompt — and the
           list is the same on every device. The New dialog's Name → Enter reuses the one you last
           picked for that folder. A template that is only a prompt is also what the Prompts bar pastes.
+          <strong> Run now</strong> starts a fresh session from one, prompt already sent; give it a
+          schedule and it starts itself every day or weekday at that time.
         </p>
         <div className="tpl-list" id="templates-list">
           {ui.editing === "" ? (
@@ -312,9 +404,28 @@ export function TemplatesDialogView(p: ViewProps) {
                   <div className="tpl-card-text">
                     <div className="tpl-name">{t.name}</div>
                     <div className="tpl-meta">{templateMeta(t)}</div>
+                    {(() => {
+                      const info = runs.runs[t.name.trim().toLowerCase()] || {};
+                      const line = runLine(t, info, runs);
+                      return (
+                        <>
+                          {line && <div className="tpl-runs">{line}</div>}
+                          {info.last_error && <div className="tpl-run-error error">Last run failed: {info.last_error}</div>}
+                        </>
+                      );
+                    })()}
                     {t.prompt && <div className="tpl-prompt">{t.prompt}</div>}
                   </div>
                   <div className="tpl-actions">
+                    <button
+                      type="button"
+                      className="tpl-btn tpl-run"
+                      disabled={!!runProblem(t) || !!p.running}
+                      title={runProblem(t) || "Start a fresh session from this template, its prompt already sent"}
+                      onClick={() => p.onRun?.(t.name)}
+                    >
+                      {p.running === t.name ? "Starting…" : "Run now"}
+                    </button>
                     <button type="button" className="tpl-btn" onClick={() => p.dispatch({ t: "edit", name: t.name })}>
                       Edit
                     </button>
@@ -370,6 +481,8 @@ export function TemplatesDialog() {
   const [ui, dispatch] = useReducer(templatesReducer, TEMPLATES_UI_INIT);
   const [form, setForm] = useState<TemplateForm>(() => formFromTemplate(null));
   const [busy, setBusy] = useState(false);
+  const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
+  const [running, setRunning] = useState("");
   const editingRef = useRef<string | null>(null);
 
   // The list from the server on every open, and again whenever anything
@@ -380,12 +493,16 @@ export function TemplatesDialog() {
     setBusy(false);
     setLoadError("");
     let live = true;
-    const reload = () => setList(templatesNow());
+    const reload = () => {
+      setList(templatesNow());
+      setRuns(templateRunsNow());
+    };
     document.addEventListener(TEMPLATES_CHANGED, reload);
     ensureTemplates(true)
       .then((list) => {
         if (!live) return;
         setList(list);
+        setRuns(templateRunsNow());
         setLoaded(true);
       })
       .catch((err) => {
@@ -427,6 +544,8 @@ export function TemplatesDialog() {
       await saveTemplate(r.body);
       const gone = ui.editing ? renameLeaves(ui.editing, r.body.name) : null;
       if (gone) await deleteTemplate(gone);
+      // The next run moves with a new schedule.
+      void ensureTemplates(true).catch(() => {});
       setList(templatesNow());
       dispatch({ t: "saved" });
       toast(`Saved template “${r.body.name}”`);
@@ -453,9 +572,22 @@ export function TemplatesDialog() {
     }
   };
 
+  const run = async (name: string) => {
+    setRunning(name);
+    try {
+      // Focusing the new session is the point; the dialog steps aside.
+      if (await runTemplateNow(name)) closeDialog();
+    } finally {
+      setRunning("");
+    }
+  };
+
   return (
     <TemplatesDialogView
       templates={templates}
+      runs={runs}
+      running={running}
+      onRun={(name) => void run(name)}
       ui={ui}
       form={form}
       busy={busy}
