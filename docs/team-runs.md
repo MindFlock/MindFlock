@@ -221,6 +221,11 @@ updates.
 - **Usage limits.** While a member is limited, the team run starts nothing new on
   that CLI (`waiting_for_usage`); the stuck clock stops. The existing resume
   watcher brings members back.
+- **Memory.** While the [memory guard](session-engine.md#memory-guard) reads
+  low or critical, the team run starts no queued task (one marked `start_now`
+  still starts) and sets `waiting_for_memory` (persisted, in the run DTO), which
+  shows a *memory* badge on its rail header. Tasks stay queued and start once
+  the reading recovers. The run's own members are exempt from the spawn 409.
 - **Budget.** When the members' summed cost reaches `budget_usd` the team run
   pauses and asks once ("Raise to $N" = resume with a new budget).
   Per-session budgets still hold Fast-track as before.

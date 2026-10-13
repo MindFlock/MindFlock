@@ -58,6 +58,8 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
         <span className="dev-badge rg-paused">paused</span>
       ) : group.waitingUsage && !group.done ? (
         <span className="dev-badge rg-usage">usage</span>
+      ) : group.waitingMemory && !group.done ? (
+        <span className="dev-badge rg-usage" title="Memory is low — queued lines start once it recovers">memory</span>
       ) : null}
       <span className={"dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : "")}>{shippedBadge(group)}</span>
       {group.failed > 0 && <span className="dev-badge rg-failed">{group.failed} failed</span>}

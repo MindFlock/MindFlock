@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 from backend.ticket_ingestion.claude_runner import ClaudeCodeRunner
@@ -54,6 +55,44 @@ logger = logging.getLogger(__name__)
 # processing loop forever — on timeout the story/PR is marked failed and the
 # loop moves on.
 _INSTANCE_START_TIMEOUT = 900.0
+
+# While the machine's memory reads low (backend.memory_pressure), a launch
+# waits here instead of adding another agent to a box that is already
+# swapping: re-read every _MEMORY_POLL_SECONDS, one log line every
+# _MEMORY_LOG_SECONDS so a held pipeline says why it is quiet. The hold is
+# capped at _MEMORY_MAX_WAIT_SECONDS: a misreading must never stall ticket
+# intake for good, so past it the launch goes ahead with a warning.
+_MEMORY_POLL_SECONDS = 15.0
+_MEMORY_LOG_SECONDS = 300.0
+_MEMORY_MAX_WAIT_SECONDS = 1800.0
+
+
+async def _wait_for_memory(what: str) -> None:
+    """Return once memory headroom is back (at once when it never left, or
+    the probe has nothing to read), or after _MEMORY_MAX_WAIT_SECONDS.
+    ``is_low`` is a cached /proc read — cheap enough to call inline."""
+    from backend import memory_pressure
+
+    start = time.monotonic()
+    logged = 0.0
+    while memory_pressure.is_low():
+        now = time.monotonic()
+        if now - start >= _MEMORY_MAX_WAIT_SECONDS:
+            logger.warning(
+                "Starting %s anyway after %d minutes held for memory: %s",
+                what,
+                int(_MEMORY_MAX_WAIT_SECONDS // 60),
+                memory_pressure.describe(),
+            )
+            return
+        if now - logged >= _MEMORY_LOG_SECONDS:
+            logger.warning(
+                "Holding %s: %s — it starts once memory recovers",
+                what,
+                memory_pressure.describe(),
+            )
+            logged = now
+        await asyncio.sleep(_MEMORY_POLL_SECONDS)
 
 
 def _ensure_engine_on_path() -> None:
@@ -185,6 +224,7 @@ class SessionRunner:
                 "as part of the ticket context.\n"
             )
 
+        await _wait_for_memory("ticket %s" % story.slug)
         branch = _branch_name_for(story)
         title = story.slug
         agent = self._agent_for(story)
@@ -257,6 +297,7 @@ class SessionRunner:
         session driven by one consolidated prompt — instead of a tmux tab per
         comment. Cursor launch is skipped; the CS web terminal is the surface.
         """
+        await _wait_for_memory("PR #%s" % pr.number)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
         title = f"pr-{pr_slug(pr)}"

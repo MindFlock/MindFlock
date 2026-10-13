@@ -198,6 +198,16 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         monkeypatch.setattr(_mcp_attach, "_LAUNCHED", {})
     except Exception:  # noqa: BLE001 — import is best-effort here
         pass
+    # The memory guard (backend.memory_pressure) reads the REAL machine: a
+    # suite running beside a dozen agents would see "low" and refuse every
+    # agent-spawned create. Off by default; its tests feed it readings.
+    monkeypatch.setenv("MINDFLOCK_MEMORY_GUARD", "0")
+    try:
+        from backend import memory_pressure as _memory_pressure
+
+        _memory_pressure._reset_for_tests()
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
     # ``/answer`` remembers the dialog it just answered (a repeat within a
     # few seconds is refused): start every test with nothing answered.
     try:

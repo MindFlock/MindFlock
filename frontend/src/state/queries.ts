@@ -19,6 +19,7 @@ import type {
   DevicesResponse,
   DoctorPayload,
   Instance,
+  MemoryReading,
   MindflockStatus,
   TestPlansResponse,
   TicketingCatalogEntry,
@@ -256,6 +257,18 @@ export function useMindflockStatus() {
     queryKey: ["mindflock-status"],
     queryFn: () => api<MindflockStatus>("/api/mindflock/status"),
     refetchInterval: 4_000,
+    retry: false,
+  });
+}
+
+/** The machine's memory headroom (`GET /api/system/memory`). ONE key for
+ * the memory notice and the rail's Restart-all strip; 15s is plenty for a
+ * level the server itself only steps with hysteresis. */
+export function useMemory() {
+  return useQuery({
+    queryKey: ["system-memory"],
+    queryFn: () => api<MemoryReading>("/api/system/memory"),
+    refetchInterval: 15_000,
     retry: false,
   });
 }

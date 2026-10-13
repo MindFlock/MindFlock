@@ -145,3 +145,41 @@
 #bulk-bar .bulk-held-x:hover {
   color: var(--text);
 }
+
+/* --- "N agents offline · Restart all" (OfflineBar) --- */
+#offline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#offline-bar .ob-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+#offline-bar .ob-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+#offline-bar .ob-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+#offline-bar .ob-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

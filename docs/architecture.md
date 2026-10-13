@@ -291,6 +291,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `PATH` is inherited by **every** downstream subprocess — tmux, provider CLIs,
   git, `gh`, node. It generalises the same "works in the terminal, not in the
   GUI app" workaround `core/ide_launch` already applies to editor CLI shims.
+- **Memory guard** (`backend/memory_pressure.py`) — stdlib only, imported by
+  both the server and the ticket-pipeline process: reads `/proc/meminfo` and
+  `/proc/pressure/memory` and returns `ok` / `low` / `critical` / `unknown`.
+  Agent spawns, team-run starts, pipeline launches and the revive sweep hold
+  while it reads low; the lifespan's `_memory_watch_loop` emits
+  `system.memory_changed` on each level change. See
+  [session-engine.md](session-engine.md#memory-guard).
 - **Addons** (`web/addons/`) — self-registering feature modules with their own
   `APIRouter` and optional managed subprocess. Seven ship today: **mindflock**
   (start/stop/tail the ingestion pipeline), **assistant** (a long-lived
