@@ -1204,6 +1204,10 @@ export interface TicketingCatalogField {
   /** The shape the server checks a non-blank value against ("url", "email",
    * "key", "gid"); the message comes back per field on a 400. */
   validate?: string;
+  /** An optional extra a first setup never needs (claim label, move on
+   * start, …): the source form folds it under "Advanced options". Never set
+   * on a required field. */
+  advanced?: boolean;
 }
 
 /** One workflow state (or Asana section) a source's Test listed. */

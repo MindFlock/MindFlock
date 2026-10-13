@@ -66,6 +66,34 @@ def test_every_server_required_field_is_marked_in_the_catalog():
     assert not any(f.get("required") for f in by_id["github_issues"].values())
 
 
+def test_advanced_fields_are_the_optional_extras_never_the_setup():
+    # The form folds `advanced` fields under "Advanced options". A first setup
+    # must never need one: nothing required hides there, and what gets tickets
+    # flowing (credential, scope, ingest states/labels, the workspace) stays out.
+    essential = {
+        "api_token",
+        "base_url",
+        "email",
+        "assignee_scope",
+        "workflow_state",
+        "ingest_labels",
+    }
+    for p in PROVIDER_META:
+        for f in p["fields"]:
+            if f.get("advanced"):
+                assert not f.get("required"), (p["id"], f["key"])
+                assert f["key"] not in essential, (p["id"], f["key"])
+        keys = {f["key"]: f for f in p["fields"]}
+        # The extras every provider that has them folds away.
+        for key in ("claim_label", "start_state", "start_comment"):
+            if key in keys:
+                assert keys[key].get("advanced") is True, (p["id"], key)
+    assert provider_meta("asana")["fields"][1]["key"] == "project"
+    assert not provider_meta("asana")["fields"][1].get("advanced")
+    linear = {f["key"]: f for f in provider_meta("linear")["fields"]}
+    assert not linear["project"].get("advanced")  # Team key bounds Anyone's
+
+
 def test_jira_and_linear_name_the_field_their_code_reads():
     # jira.py files into cfg.project as a project KEY; linear.py reads
     # cfg.project as a team KEY (search scope + create). The catalog now has
