@@ -1,12 +1,17 @@
 /// <reference types="vite/client" />
-/** First-run has ONE surface: the five-step checklist. These tests pin the
+/** First-run has ONE surface: the setup checklist. These tests pin the
  * decisions around it (components/setup/setupModel.ts) and, by reading
  * source, that nothing auto-opens the welcome tour or the Setup modal. */
 import { describe, it, expect } from "vitest";
 import {
   REQUIRED_STEPS,
+  STEP_GROUP,
   STEP_ORDER,
   chipLabel,
+  isEssentialCheck,
+  nextStepId,
+  stepGroup,
+  stepNumber,
   consumeSetupIntent,
   installedLogins,
   loginLine,
@@ -26,6 +31,7 @@ function status(over: Partial<Record<string, Partial<SetupStatus["steps"][number
       id,
       title: id,
       required: REQUIRED_STEPS.includes(id),
+      group: STEP_GROUP[id],
       done,
       at: done ? "2026-10-10T00:00:00+00:00" : null,
       skipped,
@@ -33,12 +39,13 @@ function status(over: Partial<Record<string, Partial<SetupStatus["steps"][number
       ...o,
     };
   });
-  const todo = steps.filter((s) => s.status === "todo");
+  const counted = steps.filter((s) => s.group !== "later");
+  const todo = counted.filter((s) => s.status === "todo");
   return {
     steps,
     summary: {
-      done: steps.length - todo.length,
-      total: steps.length,
+      done: counted.length - todo.length,
+      total: counted.length,
       required_done: steps.filter((s) => s.required).every((s) => s.done),
       complete: todo.length === 0,
       next: todo[0]?.id || "",
@@ -90,8 +97,8 @@ describe("the Setup N/5 chip", () => {
       tools: { done: true },
       agent_login: { done: true },
       repo: { done: true },
+      github: { done: true },
       tracker: { skipped: true },
-      phone: { skipped: true },
     });
     expect(s.summary.complete).toBe(true);
     expect(showSetupChip({ sessions: 3, status: s, onboarded: true })).toBe(false);
@@ -104,10 +111,53 @@ describe("the Setup N/5 chip", () => {
 });
 
 describe("step helpers", () => {
-  it("draws the five steps in the server's order, filling gaps as to-do", () => {
+  it("draws the steps in the server's order, filling gaps as to-do", () => {
     const ids = orderedSteps({ ...status(), steps: [] }).map((s) => s.id);
-    expect(ids).toEqual(["tools", "agent_login", "repo", "tracker", "phone"]);
+    expect(ids).toEqual(["tools", "agent_login", "repo", "github", "tracker", "phone"]);
     expect(orderedSteps(undefined).every((s) => s.status === "todo")).toBe(true);
+    expect(orderedSteps(undefined).map((s) => s.group)).toEqual([
+      "start",
+      "start",
+      "start",
+      "connect",
+      "connect",
+      "later",
+    ]);
+  });
+
+  it("groups: required is exactly Get started; the phone is a later extra", () => {
+    for (const id of STEP_ORDER) expect(STEP_GROUP[id] === "start").toBe(REQUIRED_STEPS.includes(id));
+    expect(stepGroup({ id: "phone" })).toBe("later");
+    expect(stepGroup({ id: "tracker", group: "connect" })).toBe("connect");
+    expect(stepGroup({ id: "mystery" })).toBe("later");
+    expect(stepNumber("tools")).toBe("①");
+    expect(stepNumber("tracker")).toBe("⑤");
+    expect(stepNumber("phone")).toBe("");
+  });
+
+  it("the phone never keeps the chip up", () => {
+    const s = status({
+      tools: { done: true },
+      agent_login: { done: true },
+      repo: { done: true },
+      github: { skipped: true },
+      tracker: { done: true },
+    });
+    expect(s.steps.find((x) => x.id === "phone")?.status).toBe("todo");
+    expect(s.summary.complete).toBe(true);
+    expect(showSetupChip({ sessions: 2, status: s, onboarded: true })).toBe(false);
+    expect(nextStepId(s)).toBe("");
+    expect(nextStepId(undefined)).toBe("tools");
+  });
+
+  it("Install the tools shows only problems getting started needs", () => {
+    expect(isEssentialCheck({ id: "tmux", status: "fail" })).toBe(true);
+    expect(isEssentialCheck({ id: "git-identity", status: "warn" })).toBe(true);
+    expect(isEssentialCheck({ id: "git", status: "ok" })).toBe(false);
+    for (const id of ["tailscale", "bwrap", "cloudflared", "local-model", "cache-seeds", "gh"])
+      expect(isEssentialCheck({ id, status: "warn" })).toBe(false);
+    // Sign-in is step ②'s, not a missing tool.
+    expect(isEssentialCheck({ id: "agent-auth", status: "warn" })).toBe(false);
   });
 
   it("offers a sign-in button only for installed CLIs, default first", () => {

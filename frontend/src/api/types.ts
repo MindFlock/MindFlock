@@ -34,13 +34,20 @@ export interface SetupSummary {
 
 // --- First-run checklist (GET /api/setup; backend/web/core/setup_steps.py) ----
 
-export type SetupStepId = "tools" | "agent_login" | "repo" | "tracker" | "phone";
+export type SetupStepId = "tools" | "agent_login" | "repo" | "github" | "tracker" | "phone";
 
-/** One of the five steps, as stored (`general.setup`) and as drawn. */
+/** Which group a step is drawn in: `start` = Get started (the required
+ * three), `connect` = Connect your work (optional, counted), `later` =
+ * Optional, later (folded, not counted in the summary). */
+export type SetupGroup = "start" | "connect" | "later";
+
+/** One checklist step, as stored (`general.setup`) and as drawn. */
 export interface SetupStep {
   id: SetupStepId | string;
   title: string;
   required: boolean;
+  /** Absent from an older server: the client's STEP_GROUP fills it in. */
+  group?: SetupGroup | string;
   done: boolean;
   at: string | null;
   skipped: boolean;

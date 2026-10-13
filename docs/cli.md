@@ -18,7 +18,7 @@ mindflock serve --setup     # run the guided first-run setup (= `mindflock init`
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing (git is optional: info only)
 mindflock doctor --fix      # install everything missing in one go (asks once), then offer logins
 mindflock init              # guided first run: fixes dependencies, signs your agent in, picks your repo,
-                            # and prints the SAME five-step checklist the app shows, in the same state
+                            # and prints the SAME first-run checklist the app shows, in the same state
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
@@ -53,24 +53,28 @@ agent, the GitHub token and ticket sources along), picks the folder to work in
 the first session.
 
 Between the fix loop and the folder it prints **the first-run checklist** —
-the same five steps the web UI shows on the empty grid, in the Setup dialog
-and as the "Setup 3/5" chip, read from the same stored state
-(`general.setup`; one definition in `backend/web/core/setup_steps.py`):
+the same steps the web UI shows on the empty grid, in the Setup dialog and as
+the "Setup 3/5" chip, read from the same stored state (`general.setup`; one
+definition in `backend/web/core/setup_steps.py`):
 
 ```
 Your setup, in order:
-  ✓ 1. Engine and tools              done
+  ✓ 1. Install the tools       done
   • 2. Sign in to your agent
-  • 3. Pick a repo
-  • 4. Connect a tracker and GitHub  optional
-  – 5. Your phone                    skipped
+  • 3. Start your first agent
+  • 4. Connect GitHub          optional
+  • 5. Connect your tracker    optional
+  – 6. Use it from your phone  skipped
 ```
 
-Nothing in the wizard ticks a step by hand: the doctor run it performs marks
-1 and 2 when they pass, the first session (`mindflock new`, or **+ New** in
-the app) marks 3, saving the first ticket source marks 4, and a phone
-reaching `/m` (or the owner fetching the QR) marks 5. The two optional steps
-can be skipped from the app (`POST /api/setup/<step>/skip`).
+1–3 are required (the app's *Get started*), 4–5 optional (*Connect your
+work*), and 6 is an *Optional, later* extra the app keeps folded and leaves
+out of its count. Nothing in the wizard ticks a step by hand: the doctor run
+it performs marks 1 and 2 when they pass, the first session (`mindflock new`,
+or **+ New** in the app) marks 3, a GitHub credential (a token, or a
+signed-in gh) marks 4, saving the first ticket source marks 5, and a phone
+reaching `/m` (or the owner fetching the QR) marks 6. The optional steps can
+be skipped from the app (`POST /api/setup/<step>/skip`).
 
 `--yes` takes every default without asking and never runs an installer
 unwatched (the fix lines are printed instead). A piped stdin prints the

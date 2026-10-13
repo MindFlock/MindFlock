@@ -1,28 +1,60 @@
 /** The first-run checklist's small decisions, pure so vitest covers them.
  *
- * The server owns the five steps and their state (`GET /api/setup`, built by
+ * The server owns the steps and their state (`GET /api/setup`, built by
  * backend/web/core/setup_steps.py — the same definition `mindflock init`
  * prints). This module only decides what to draw from it: whether the empty
- * grid shows the card, whether the rail chip shows, what the chip says, and
- * how a step's row reads. */
+ * grid shows the card, whether the rail chip shows, what the chip says, which
+ * group a step sits in, and how a step's row reads.
+ *
+ * Three groups, drawn in this order:
+ *   Get started        tools · agent_login · repo   (required)
+ *   Connect your work  github · tracker              (optional, counted)
+ *   Optional, later    phone                         (folded, not counted) */
 
-import type { SetupLogin, SetupStatus, SetupStep, SetupStepId } from "../../api/types";
+import type {
+  DoctorCheckItem,
+  SetupGroup,
+  SetupLogin,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from "../../api/types";
 
 /** The order every surface uses — the server's, restated so a stale or
  * partial payload still draws in the right order. */
-export const STEP_ORDER: SetupStepId[] = ["tools", "agent_login", "repo", "tracker", "phone"];
+export const STEP_ORDER: SetupStepId[] = ["tools", "agent_login", "repo", "github", "tracker", "phone"];
 
 /** The server's names, kept here only as the fallback for a payload that has
- * not arrived yet (the card still draws its five rows). */
+ * not arrived yet (the card still draws its rows). */
 export const STEP_TITLES: Record<SetupStepId, string> = {
-  tools: "Engine and tools",
+  tools: "Install the tools",
   agent_login: "Sign in to your agent",
-  repo: "Pick a repo",
-  tracker: "Connect a tracker and GitHub",
-  phone: "Your phone",
+  repo: "Start your first agent",
+  github: "Connect GitHub",
+  tracker: "Connect your tracker",
+  phone: "Use it from your phone",
 };
 
 export const REQUIRED_STEPS: SetupStepId[] = ["tools", "agent_login", "repo"];
+
+/** The server's groups (`group` on each step), restated for an older or
+ * partial payload. Required is exactly the "start" group. */
+export const STEP_GROUP: Record<SetupStepId, SetupGroup> = {
+  tools: "start",
+  agent_login: "start",
+  repo: "start",
+  github: "connect",
+  tracker: "connect",
+  phone: "later",
+};
+
+/** A step's group: the payload's, else the known one, else "later" (an
+ * unknown step never lands in Get started). */
+export function stepGroup(step: Pick<SetupStep, "id" | "group">): SetupGroup {
+  const g = step.group;
+  if (g === "start" || g === "connect" || g === "later") return g;
+  return STEP_GROUP[step.id as SetupStepId] || "later";
+}
 
 export const STATUS_GLYPH: Record<string, string> = { done: "✓", skipped: "–", todo: "•" };
 
@@ -36,6 +68,7 @@ export function orderedSteps(status: SetupStatus | null | undefined): SetupStep[
         id,
         title: STEP_TITLES[id],
         required: REQUIRED_STEPS.includes(id),
+        group: STEP_GROUP[id],
         done: false,
         at: null,
         skipped: false,
@@ -77,10 +110,42 @@ export function chipLabel(status: SetupStatus | null | undefined): string {
   return "Setup " + s.done + "/" + s.total;
 }
 
-/** ①…⑤ for a step. */
+/** ①…⑤ for a counted step (Get started, then Connect your work); an
+ * "Optional, later" extra has no number — it is not a step of setup. */
 export function stepNumber(id: SetupStepId | string): string {
-  const i = STEP_ORDER.indexOf(id as SetupStepId);
-  return i < 0 ? "•" : "①②③④⑤".charAt(i) || "•";
+  const counted = STEP_ORDER.filter((s) => STEP_GROUP[s] !== "later");
+  const i = counted.indexOf(id as SetupStepId);
+  return i < 0 ? "" : "①②③④⑤⑥⑦⑧⑨".charAt(i);
+}
+
+/** The step to act on now: the server's `summary.next` (first to-do counted
+ * step), or "tools" before the payload lands. */
+export function nextStepId(status: SetupStatus | null | undefined): string {
+  if (!status) return "tools";
+  return status.summary.next || "";
+}
+
+/** Doctor rows that are optional extras — phone/tailnet access, peer links,
+ * a local model, warm caches, the clipboard, the gh CLI (a token does its
+ * job). Settings → Doctor lists them; getting started never does. */
+export const EXTRA_CHECKS = new Set([
+  "tailscale",
+  "bwrap",
+  "cloudflared",
+  "local-model",
+  "cache-seeds",
+  "clipboard",
+  "gh",
+]);
+
+/** Whether the setup checklist's "Install the tools" step shows a doctor
+ * row: only a problem (fail / warn) with something getting started needs.
+ * Agent sign-in rows belong to the next step, extras to Settings → Doctor. */
+export function isEssentialCheck(c: DoctorCheckItem): boolean {
+  const id = String(c.id || "");
+  if (EXTRA_CHECKS.has(id)) return false;
+  if (id.startsWith("agent-auth")) return false;
+  return c.status === "fail" || c.status === "warn";
 }
 
 /** The agent CLIs step 2 offers a button for: the installed ones. The default
@@ -97,7 +162,7 @@ export function loginLine(l: SetupLogin): { text: string; ok: boolean | null } {
   return { text: "sign-in can't be checked — fine if it works", ok: null };
 }
 
-/** Whether step 5 should offer to install Tailscale rather than the QR: the
+/** Whether the phone extra should offer to install Tailscale rather than the QR: the
  * doctor's Tailscale row says it is missing (or broken). A payload without
  * the row (doctor unavailable) still offers the QR — Settings → Your phone is
  * the authority on whether it can be served. */
