@@ -1117,6 +1117,44 @@ _LAST_TURN_CACHE = (
 _LAST_TURN_CACHE_MAX = 512  # one entry per workdir
 
 
+#: Block size of :func:`_tail_lines`' backward read.
+_TAIL_CHUNK = 64 * 1024
+
+
+def _tail_lines(path: str, size: int, max_bytes: int):
+    """The lines of the last ``max_bytes`` of ``path`` (as of ``size``),
+    NEWEST FIRST, each decoded (utf-8, errors replaced). When the window starts
+    mid-file its first line is cut mid-entry and is dropped. Raises OSError.
+
+    Reads backward in :data:`_TAIL_CHUNK` blocks, so a caller that stops at the
+    first match (the usual case: the newest prompt sits near the end) holds
+    one block plus one line — not the whole window. The old shape (read the
+    window, decode it, ``splitlines()``) held ~3x the window at once: 40-56 MB
+    per call on real transcripts, every snapshot poll of every working
+    session, and those transient peaks in worker threads are what grew the
+    server's malloc arenas to ~1 GB RSS."""
+    with open(path, "rb") as f:
+        start = max(0, size - max_bytes)
+        pos = size
+        carry: list = []  # pieces of the line being assembled, newest first
+        while pos > start:
+            n = min(_TAIL_CHUNK, pos - start)
+            pos -= n
+            f.seek(pos)
+            buf = f.read(n)
+            parts = buf.split(b"\n")
+            if len(parts) == 1:
+                carry.append(buf)
+                continue
+            carry.append(parts[-1])
+            yield b"".join(reversed(carry)).decode("utf-8", "replace")
+            for part in reversed(parts[1:-1]):
+                yield part.decode("utf-8", "replace")
+            carry = [parts[0]]
+        if start == 0 and carry:
+            yield b"".join(reversed(carry)).decode("utf-8", "replace")
+
+
 def _last_turn_cache_put(workdir: str, entry: dict) -> None:
     """Store a snippet-cache entry, evicting the oldest half when full so a
     long-running server with high session/workdir churn doesn't leak one entry
@@ -1279,7 +1317,6 @@ def _snippet_from_transcript(
     entry either way, so the pin's one-liner and its expansion always agree.
     None when the file is unreadable or holds no matching turn."""
     import json
-    import os
 
     # A role-filtered scan (the pinned prompt) needs a much deeper window
     # than the any-role snippet: one busy agent turn writes megabytes of
@@ -1289,14 +1326,7 @@ def _snippet_from_transcript(
     tail_bytes = _LAST_TURN_TAIL_BYTES if role is None else _LAST_PROMPT_TAIL_BYTES
     snippet = None
     try:
-        with open(path, "rb") as f:
-            if size > tail_bytes:
-                f.seek(-tail_bytes, os.SEEK_END)
-                tail = f.read().decode("utf-8", "replace")
-                lines = tail.splitlines()[1:]  # drop the partial first line
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, size, tail_bytes):
             line = line.strip()
             if not line:
                 continue
@@ -1376,15 +1406,7 @@ def _claude_last_assistant_text(
 
     result = None
     try:
-        with open(path, "rb") as f:
-            size = st.st_size
-            tail = 8 * 1024 * 1024
-            if size > tail:
-                f.seek(-tail, os.SEEK_END)
-                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, st.st_size, 8 * 1024 * 1024):
             if '"assistant"' not in line:
                 continue
             if contains and contains not in line:
@@ -1443,7 +1465,6 @@ def _claude_find_prompt_full(
     stripped). Backs the desktop prompt bar's expansion for OLDER prompts —
     the snapshot only carries the latest one. Never raises."""
     import json
-    import os
     import re
 
     def norm(s: str) -> str:
@@ -1457,13 +1478,7 @@ def _claude_find_prompt_full(
         if newest is None:
             return None
         path, size = newest[2], newest[1]
-        with open(path, "rb") as f:
-            if size > _LAST_PROMPT_TAIL_BYTES:
-                f.seek(-_LAST_PROMPT_TAIL_BYTES, os.SEEK_END)
-                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
-            else:
-                lines = f.read().decode("utf-8", "replace").splitlines()
-        for line in reversed(lines):
+        for line in _tail_lines(path, size, _LAST_PROMPT_TAIL_BYTES):
             line = line.strip()
             if not line:
                 continue
