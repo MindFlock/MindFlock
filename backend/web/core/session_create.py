@@ -41,7 +41,12 @@ def _server():
 
 
 async def create(
-    payload: dict, *, peer_share: str = "", person: str = ""
+    payload: dict,
+    *,
+    peer_share: str = "",
+    person: str = "",
+    carry_ref: str = "",
+    branched_from: str = "",
 ) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
@@ -147,6 +152,13 @@ async def create(
     (:func:`backend.web.core.auth.request_person`); blank means this
     device's own. Recorded in core.person_sessions; a peer-link session
     records none (the peer is not this person).
+
+    ``carry_ref`` and ``branched_from`` are keywords too, passed only by
+    ``POST /api/instances/{title}/branch`` (core.session_branch): a snapshot
+    commit of the source worktree's uncommitted changes, laid over the new
+    worktree before its agent starts (needs ``base_ref``; the engine's
+    ``InstanceOptions.carry_ref``), and the source's title, which
+    ``session.created`` carries as ``branched_from``.
     """
     srv = _server()
     payload = payload or {}
@@ -585,6 +597,7 @@ async def create(
             spawned=spawned,
             playbook="split" if split else "",
             peer_share=peer_share,
+            carry_ref=carry_ref if base_ref else "",
         )
     )
     # O4: every session gets a deterministic dev-server port block, injected
@@ -794,6 +807,8 @@ async def create(
         created_data["parent"] = parent
     if spawned:
         created_data["spawned"] = True
+    if branched_from:
+        created_data["branched_from"] = branched_from
     srv._events.BUS.emit(
         "session.created",
         session=title,

@@ -687,7 +687,8 @@ groups:
 - **More ▸** (folded) — **Terminal** · **Code map** · **Thread** · **Browse
   history** (pane only) · **Split into parallel pieces…** · **Move out of {team
   run}** for a team run member · **Duplicate session** (`Ctrl+K D`; a second
-  in-place session on the same worktree) · **Open in <IDE>** *your code editor*
+  in-place session on the same worktree) · **Branch session** (`Ctrl+K B`;
+  see [Branch session](#branch-session)) · **Open in <IDE>** *your code editor*
   (`Ctrl+K O`; row double-click does the same) · **Open preview ↗** `:port`
   when the session serves one · **Select** (`Ctrl+click`) · **Hide/Show
   window** (`Ctrl+K H`; the session keeps running) · **Re-run worktree setup**
@@ -696,8 +697,38 @@ groups:
 
 Every verb's label, shortcut and when-it-applies rule comes from one table
 (`lib/sessionActionTable.ts`) that this menu, the command palette and the
-`Ctrl+K` chords all read. A row whose workspace folder is gone offers only
-**Delete — remove session**.
+`Ctrl+K` chords all read. A verb that doesn't apply is left out — unless the
+table gives a reason worth saying (`why`, today only Branch outside git): then
+the menu shows it greyed with the reason as its note, the palette lists it
+with the reason as its hint, and its chord raises the reason as an error card.
+A row whose workspace folder is gone offers only **Delete — remove session**.
+
+### Branch session
+
+**Branch session** (`Ctrl+K B`, the row/pane ⋯ menu's **More ▸**, or the
+palette) is Duplicate's sibling for work that must not collide. Duplicate opens
+a second agent in the *same* worktree on the *same* branch; Branch starts a new
+session `<title>-branch` (numbered `-branch-2`, `-branch-3`… past names or
+branches already taken) in its **own worktree, on a new branch**
+(`<branch_prefix><title>-branch`) cut from the source's current `HEAD` — its
+branch tip, not the repo's default branch. The source's **uncommitted changes
+come along as a copy**: edits, deletions and untracked files (`.gitignore`d
+ones stay behind) appear in the new worktree as uncommitted changes, nothing
+staged; the source's files, index and branch are not touched. The new session
+runs the same agent CLI with the source's own launch flags, auth profile and
+model; like Duplicate it starts a fresh conversation, with no parent. Its
+recorded base is the source's branch, so its diff shows only what happens on
+the branch and **Open PR** targets the source's branch. It lands right under
+its source and takes focus; the toast says whether uncommitted changes came
+along (`POST /api/instances/{title}/branch`).
+
+Git only. On a session whose folder isn't in a git repository (an in-place
+session in a plain folder — the row's `git_repo: false`) the entry is greyed
+with *Branch needs a git repository — <folder> isn't one*, and `Ctrl+K B`
+raises that as an error card. Shared (peer) folders, another device's rows and
+sessions still starting don't offer it; the server refuses them too, plus a
+repo with no commit yet and a clone-strategy provisioned workspace (its
+repository is the session's own folder, deleted with it).
 
 **Pause keeps your work, and keeps the session here.** Pause only stops the
 agent: the session stays in the sidebar (status *Paused*), and the worktree and
@@ -1825,6 +1856,7 @@ built-in alias.
 | `Ctrl+K R` | Open PR |
 | `Ctrl+K O` | Open/focus IDE |
 | `Ctrl+K D` | Duplicate session |
+| `Ctrl+K B` | Branch session — a new worktree on a new branch from the focused session, with its uncommitted changes ([more](#branch-session)) |
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+K M` | Code map — open the focused session's Map tab |
 | `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |

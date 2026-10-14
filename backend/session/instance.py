@@ -98,6 +98,11 @@ class InstanceOptions:
       * ``base_branch``        - the branch to record as the session's
         ``BaseBranch`` (diff/stage base) instead of the inferred one; only
         honored together with ``base_ref``.
+      * ``carry_ref``          - with ``base_ref``: a snapshot commit
+        (:func:`backend.session.git.snapshot_changes` of another worktree) whose
+        files are laid over the new worktree before the agent starts, so the
+        branch begins with that worktree's uncommitted changes (left
+        uncommitted). "Branch session" passes it.
       * ``parent``             - title of the session that spawned this one
         ("" = a root).
       * ``spawned``            - True when an agent (not a human) created it.
@@ -129,6 +134,7 @@ class InstanceOptions:
         spawned: bool = False,
         playbook: str = "",
         peer_share: str = "",
+        carry_ref: str = "",
     ) -> None:
         self.title = title
         self.path = path
@@ -170,6 +176,8 @@ class InstanceOptions:
         # and the BaseBranch to record with it ("" = inferred).
         self.base_ref = base_ref
         self.base_branch = base_branch
+        # Uncommitted changes to lay over that worktree ("" = none).
+        self.carry_ref = carry_ref
         # Lineage (see Instance.Parent / Instance.Spawned).
         self.parent = parent
         self.spawned = spawned
@@ -258,6 +266,10 @@ class Instance:
         # read by the first Start; not persisted.
         self._base_ref: str = ""
         self._base_branch_override: str = ""
+        # Create-time snapshot of another worktree's uncommitted changes
+        # (InstanceOptions.carry_ref), applied once by the first Start to a
+        # new-branch worktree; not persisted.
+        self._carry_ref: str = ""
         # Whether the launch command _configure_launch_command set carries the
         # MindFlock MCP attach flags. A session loaded from storage has no
         # configured command (it relaunches the bare program), hence False.
@@ -371,6 +383,11 @@ class Instance:
                     )
                     raise setup_err from err
 
+                # Branch session: the source's uncommitted changes, before
+                # the agent can see the folder. A failure fails the start (and
+                # removes the worktree) rather than quietly leaving them out.
+                self._apply_carry()
+
                 # Resolve the coding provider and configure the launch
                 # command now that the worktree exists and before tmux starts.
                 self._configure_launch_command()
@@ -420,6 +437,27 @@ class Instance:
             raise setup_err
         else:
             self._started = True
+
+    def _apply_carry(self) -> None:
+        """Lay the create-time ``carry_ref`` snapshot over a new-branch
+        worktree, once (see :mod:`backend.session.git.carry`). Raises
+        ``RuntimeError``; a no-op for every other workspace shape."""
+        carry = getattr(self, "_carry_ref", "") or ""
+        if (
+            not carry
+            or self.Provisioned
+            or self.InPlace
+            or self._selected_branch
+            or getattr(self, "PeerShare", "")
+        ):
+            return
+        try:
+            git.apply_snapshot(self._git_worktree.GetWorktreePath(), carry)
+        except Exception as err:  # noqa: BLE001
+            raise RuntimeError(
+                "failed to carry uncommitted changes: {}".format(_err_text(err))
+            ) from err
+        self._carry_ref = ""
 
     def _create_first_time_worktree(self) -> None:
         """Create the git worktree for a first-time :meth:`Start`.
@@ -1266,6 +1304,7 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst._base_branch_override = (
         (getattr(opts, "base_branch", "") or "") if inst._base_ref else ""
     )
+    inst._carry_ref = (getattr(opts, "carry_ref", "") or "") if inst._base_ref else ""
     inst.Parent = getattr(opts, "parent", "") or ""
     inst.Spawned = bool(getattr(opts, "spawned", False))
     inst.Playbook = getattr(opts, "playbook", "") or ""

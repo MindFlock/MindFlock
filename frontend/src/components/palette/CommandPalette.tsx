@@ -13,6 +13,7 @@ import {
   actionCtx,
   actionHint,
   actionLabel,
+  runChordAction,
   sessionAction,
   type SessionActionId,
 } from "../../lib/sessionActionTable";
@@ -43,6 +44,7 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "pr",
   "ide",
   "duplicate",
+  "branch",
   "hide",
   "resume",
   "pause",
@@ -211,12 +213,25 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // Labels, shortcuts and enable rules come from the session action table
     // (lib/sessionActionTable) — the same rows the sidebar › menu and the
     // Ctrl+K chords read. Only what applies right now is listed: an entry
-    // that only explains why not is noise in a launcher.
+    // that only explains why not is noise in a launcher — except where the
+    // table says the reason IS worth saying (`why`, e.g. Branch outside git):
+    // listed with the reason as its hint, never the Enter default, and
+    // running it raises that reason as an error card.
     const { rows } = orderedInstances(instances(), ui.order);
     const t = ui.focused;
     if (t) {
       const c = actionCtx(t, { inst: rows.find((r) => r.title === t), caps, ideName });
       for (const id of PALETTE_ACTIONS) {
+        const why = sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "";
+        if (why) {
+          acts.push({
+            label: `${actionLabel(id, c)} — ${t}`,
+            hint: actionHint(id, c),
+            outward: true,
+            run: () => runChordAction(id, t),
+          });
+          continue;
+        }
         if (!sessionAction(id).enabled(c)) continue;
         acts.push({
           label: `${actionLabel(id, c)} — ${t}`,

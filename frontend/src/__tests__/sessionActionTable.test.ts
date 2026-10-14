@@ -46,6 +46,7 @@ describe("the chords are table rows", () => {
       r: "Open PR",
       o: "Open in your code editor",
       d: "Duplicate session",
+      b: "Branch session",
       h: "Hide / show window",
       m: "Code map",
       s: "Message…",

@@ -29889,6 +29889,25 @@ async function copySession(title) {
 		errorPop("Copy failed", errMsg(err));
 	}
 }
+async function branchSession(title) {
+	if (!title) return;
+	const guess = addPendingSession(title + "-branch");
+	placeAfter(guess, title);
+	try {
+		const inst = await instApi(title, "/branch", { method: "POST" });
+		if (inst?.title) clearStaleAlias(inst.title);
+		await refreshInstances();
+		if (inst?.title) {
+			if (inst.title !== guess) dropFromOrder(guess);
+			placeAfter(inst.title, title);
+			selectSession(inst.title);
+			toast(`Branched ${displayName(title)} → ${inst.title}` + (inst.carried ? " with its uncommitted changes" : ""), { duration: 4e3 });
+		}
+	} catch (err) {
+		failPendingSession(guess);
+		errorPop("Branch failed", errMsg(err));
+	}
+}
 function commitSession(title) {
 	if (!requireGit() || !title) return;
 	useUi.getState().openDialogFor("commit", title);
@@ -30257,6 +30276,12 @@ var git = (c) => c.caps.git !== false;
 var gitHere = (c) => git(c) && !c.shared;
 var settled = (c) => !!c.inst && !c.inst.pending;
 var prNote = (c) => c.prSupport ? "" : "opens GitHub";
+var branchWhy = (c) => {
+	if (!c.inst || c.shared || isRemote(c.inst)) return "";
+	if (c.caps.git === false) return "git is not installed — install git to branch sessions";
+	if (c.inst.git_repo === false) return `Branch needs a git repository — ${c.inst.folder || c.inst.path || "this folder"} isn’t one`;
+	return "";
+};
 var SESSION_ACTIONS = {
 	commit: {
 		label: "Commit…",
@@ -30356,6 +30381,15 @@ var SESSION_ACTIONS = {
 		enabled: (c) => !c.shared,
 		run: (t) => void copySession(t)
 	},
+	branch: {
+		label: "Branch session",
+		keys: "Ctrl+K B",
+		chord: "b",
+		note: (c) => branchWhy(c) || "new worktree on a new branch from this one",
+		enabled: (c) => settled(c) && c.inst.status !== "loading" && !c.shared && !isRemote(c.inst) && !branchWhy(c),
+		why: branchWhy,
+		run: (t) => void branchSession(t)
+	},
 	hide: {
 		label: (c) => c.hidden ? "Show window" : "Hide window",
 		keys: "Ctrl+K H",
@@ -30421,6 +30455,7 @@ var CHORD_ACTIONS = [
 	"pr",
 	"ide",
 	"duplicate",
+	"branch",
 	"hide",
 	"map",
 	"message",
@@ -30437,7 +30472,9 @@ function chordDesc(id) {
 function runChordAction(id, title) {
 	const c = actionCtx(title);
 	if (c.inst && !sessionAction(id).enabled(c)) {
-		toast(chordDesc(id) + " isn’t available for " + displayName(title));
+		const why = sessionAction(id).why?.(c);
+		if (why) errorPop(chordDesc(id) + " isn’t available for " + displayName(title), why);
+		else toast(chordDesc(id) + " isn’t available for " + displayName(title));
 		return;
 	}
 	sessionAction(id).run(title);
@@ -38452,7 +38489,20 @@ function sessionMenu(inst, ctx, opts = {}) {
 	const tabs = new Set(opts.visibleTabs || []);
 	const fromTable = (id, extra = {}) => {
 		const a = sessionAction(id);
-		if (!a.enabled(ctx)) return null;
+		if (!a.enabled(ctx)) {
+			const why = a.why?.(ctx);
+			if (!why) return null;
+			return {
+				key: id,
+				label: actionLabel(id, ctx),
+				keys: a.keys,
+				disabled: true,
+				title: why,
+				run: () => {},
+				...extra,
+				note: why
+			};
+		}
 		const ext = !!a.external?.(ctx);
 		return {
 			key: id,
@@ -38560,6 +38610,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 			})
 		},
 		fromTable("duplicate"),
+		fromTable("branch", { note: actionNote("branch", ctx) }),
 		fromTable("ide", { note: actionNote("ide", ctx) }),
 		!!inst.ports?.base && {
 			key: "preview",
@@ -64722,6 +64773,7 @@ var PALETTE_ACTIONS = [
 	"pr",
 	"ide",
 	"duplicate",
+	"branch",
 	"hide",
 	"resume",
 	"pause",
@@ -64936,6 +64988,15 @@ function CommandPalette({ host }) {
 				ideName
 			});
 			for (const id of PALETTE_ACTIONS) {
+				if (sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "") {
+					acts.push({
+						label: `${actionLabel(id, c)} — ${t}`,
+						hint: actionHint(id, c),
+						outward: true,
+						run: () => runChordAction(id, t)
+					});
+					continue;
+				}
 				if (!sessionAction(id).enabled(c)) continue;
 				acts.push({
 					label: `${actionLabel(id, c)} — ${t}`,

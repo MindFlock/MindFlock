@@ -512,6 +512,43 @@ export async function copySession(title: string) {
   }
 }
 
+/** The body of POST /branch: the new row plus how it was cut. */
+interface BranchResult extends Instance {
+  branched_from?: string;
+  base_branch?: string;
+  /** The source had uncommitted changes and they came along. */
+  carried?: boolean;
+}
+
+/** Branch a session: a NEW session in its own worktree, on a new branch cut
+ * from this one's current HEAD, carrying a copy of its uncommitted changes
+ * (the source is untouched). Lands under its source and takes focus, the
+ * same way a Duplicate does; a refusal (not a git repo, still starting, …) is
+ * an error card with the server's reason. */
+export async function branchSession(title: string) {
+  if (!title) return;
+  const guess = addPendingSession(title + "-branch");
+  placeAfter(guess, title);
+  try {
+    const inst = await instApi<BranchResult>(title, "/branch", { method: "POST" });
+    if (inst?.title) clearStaleAlias(inst.title);
+    await refreshInstances();
+    if (inst?.title) {
+      if (inst.title !== guess) dropFromOrder(guess);
+      placeAfter(inst.title, title);
+      selectSession(inst.title);
+      toast(
+        `Branched ${displayName(title)} → ${inst.title}` +
+          (inst.carried ? " with its uncommitted changes" : ""),
+        { duration: 4000 }
+      );
+    }
+  } catch (err) {
+    failPendingSession(guess);
+    errorPop("Branch failed", errMsg(err));
+  }
+}
+
 /** Commit… — the table's Commit action (lib/sessionActionTable): opens the
  * Commit dialog, whose submit calls commitNow. */
 export function commitSession(title: string) {

@@ -111,7 +111,12 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   const tabs = new Set(opts.visibleTabs || []);
   const fromTable = (id: SessionActionId, extra: Partial<MenuItem> = {}): MenuItem | null => {
     const a = sessionAction(id);
-    if (!a.enabled(ctx)) return null;
+    if (!a.enabled(ctx)) {
+      // Shown greyed, saying why, when the table has a reason worth saying.
+      const why = a.why?.(ctx);
+      if (!why) return null;
+      return { key: id, label: actionLabel(id, ctx), keys: a.keys, disabled: true, title: why, run: () => {}, ...extra, note: why };
+    }
     const ext = !!a.external?.(ctx);
     return {
       key: id,
@@ -244,6 +249,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
         }),
     },
     fromTable("duplicate"),
+    fromTable("branch", { note: actionNote("branch", ctx) }),
     fromTable("ide", { note: actionNote("ide", ctx) }),
     !!inst.ports?.base && {
       key: "preview",
