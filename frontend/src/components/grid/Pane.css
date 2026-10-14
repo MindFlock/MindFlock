@@ -1038,9 +1038,10 @@
   margin-left: 3px;
 }
 
-/* History and Copy all: a word in a roomy header, the glyph in a tight one
-   (the aria-label names them either way). */
-.pane-head:not(.head-icons) .act .btn-icon {
+/* History: a word in a roomy header, the glyph in a tight one (the
+   aria-label names it either way). Copy all is ALWAYS its clipboard glyph —
+   the owner preferred the icon to the words. */
+.pane-head:not(.head-icons) .act:not(.copy-history) .btn-icon {
   display: none;
 }
 
@@ -1048,8 +1049,7 @@
   display: none;
 }
 
-.pane-head:not(.head-icons) .act.pane-hist,
-.pane-head:not(.head-icons) .act.copy-history {
+.pane-head:not(.head-icons) .act.pane-hist {
   padding: 3px 8px;
   font-size: 11px;
   line-height: 14px;

@@ -568,8 +568,8 @@ newest thing you actually asked.
   messages. **A hidden tab you are on still shows** while you are on it
   (opened from ⋯, a shortcut, the commit dialog switching to the shell), so
   the active tab always has its place.
-- **Copy the whole history.** **Copy all** copies the
-  open terminal tab's entire scrollback (Agent or Terminal) — the same text as
+- **Copy the whole history.** **Copy all** (always its clipboard icon, never
+  the words) copies the open terminal tab's entire scrollback (Agent or Terminal) — the same text as
   the History view's **Copy all**, through the same loader
   (`lib/paneHistory.ts`) — and says *Copied full agent history (N chars)*,
   *No history to copy* or *Copy failed*. On Diff, Map, Queue and Thread it is
@@ -626,8 +626,8 @@ newest thing you actually asked.
   name at a reserved 110px — or its own width when shorter — plus gaps and
   padding) before paint, on every resize (a ResizeObserver) and whenever what
   it holds changes. When the words would overflow, the tabs become icons — a
-  sparkle, `>_`, `±`, a folded map, a list, two bubbles — and **History** /
-  **Copy all** their glyphs, each with a tooltip naming it and its word kept
+  sparkle, `>_`, `±`, a folded map, a list, two bubbles — and **History**
+  its glyph (**Copy all** is a glyph at every width), each with a tooltip naming it and its word kept
   for screen readers, the active tab still filled; ▶ Resume becomes ▶. The
   words come back only once there is room for them **plus 24px**
   (`fitDecision`'s hysteresis), so a header at the edge never flickers. With
