@@ -56,6 +56,16 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   ✗ tooltip and the *fast-track stopped* toast say the agent was told. Team
   run members are left to their run's own fix prompt. On by default; turn it
   off in Settings → Workspace → Advanced.
+- **Workflow Optimizer: where each ticket's time goes, start to PR.** A new
+  built-in extension (sidebar bar **Workflow**, palette "Workflow:
+  Optimizer") records every session's phase — setup, agent working, waiting
+  on your answer, your turn, idle while you're away, pre-commit hooks,
+  recovering from failed hooks, committed-not-pushed, pushed-no-PR, PR open,
+  usage limit — and breaks each work item (one branch's trip to a merged PR)
+  down by them. It shows the median time to PR (and active time, without idle
+  hours), time to merge, which phase is the bottleneck with what to change
+  about it, a weekly trend, and every item's own timeline. Recording starts
+  when you install it; server downtime shows as untracked, never as work.
 
 ### Changed
 

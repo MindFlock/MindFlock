@@ -47,10 +47,12 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    unavailable (…). This invite only works for someone on your network or
    tailnet."
 4. **Shared sessions** need Linux with
-   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`); Peer links
-   and `mindflock doctor` say whether the sandbox works here and install it if
-   it's missing. Without it — on a Mac, say — you can still pair, message and
-   view their work: each link has **Messages** (a box to write to them, and
+   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`), or macOS
+   (`sandbox-exec`, built in); Peer links and `mindflock doctor` say whether
+   the sandbox works here and install it if it's missing. (macOS caps a
+   socket path at 104 bytes; with a very long home folder name a share says
+   so and asks you to set `MINDFLOCK_PEER_HOME` to a shorter folder.)
+   Without a sandbox you can still pair, message and view their work: each link has **Messages** (a box to write to them, and
    everything either side's agent or person sent) and **Their changes** (the
    other side's shared-folder diff, read-only). A message that arrives while
    no shared session exists here waits in Messages, and is handed to the
@@ -59,7 +61,10 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
    middle: **unlink now**.
-6. **Share a folder.** On the link: repo path, optional branch, the agent
+6. **Share a folder.** On the link: the folder (type it, or **Browse…** —
+   any folder: a git repository is cloned, anything else is shared as a
+   snapshot of its files, see [The shared folder](#the-shared-folder--contract-sharepy)),
+   optional branch, the agent
    CLI (any installed one that can run sandboxed — claude, codex, opencode,
    cline, goose, antigravity; not aider, which has no MCP client) → *Share a folder* (or `mindflock peer share <link> <repo> [--branch
    B] [--program P]`). MindFlock makes a shallow clone into
@@ -73,16 +78,24 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    and team runs are switched off. The sidebar row says **Shared with
    *B*** (with their connection state), the actions it refuses aren't
    offered, and the link card's **Open session** jumps to it.
-7. **Choose what the peer may do to you.** Per link: *send messages*, *see my
+7. **Watch theirs.** When the person on the other end shares a folder, a
+   **Shared with you** row appears at the top of your rail (and **Watch their
+   session** on their link card). It opens their session: **Session** — their
+   terminal as it looks now, refreshed every 1.5 s, colours only, read-only;
+   **Files** — their shared folder, click a file to read it; **Changes** —
+   their diff. A line at the bottom messages them (their agent sees it too).
+   Their permissions decide each tab: the screen follows *see my diff*, the
+   files *read my files*. Both of you need this MindFlock version or newer.
+8. **Choose what the peer may do to you.** Per link: *send messages*, *see my
    diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
-8. **Bring the work home.** *Export* (or `mindflock peer export <link>
+9. **Bring the work home.** *Export* (or `mindflock peer export <link>
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
    your own repo as a `peer/…` branch. Review it there like any branch — don't
    run the shared folder's code outside the sandbox.
-9. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
+10. **Stop.** *Unshare* stops the session (keeps the folder unless you tick
    *delete*); *Unlink* also forgets the peer's key and closes the connection.
    Either side can unlink at any time.
-10. **Reconnect.** If a link you joined stays offline (the inviter restarted
+11. **Reconnect.** If a link you joined stays offline (the inviter restarted
     and their quick tunnel got a new address — they get a bell item saying
     so), paste a fresh invite from them into the link's **Reconnect** box (or
     **Join**, or `peer join`). Pairing again with someone you're already
@@ -290,11 +303,19 @@ unknown keys):
 | `read_file` | `{"path": str 1..1024}` | `{"path","size","encoding":"utf-8"\|"base64","content","truncated"}` |
 | `list_files` | `{}` | `{"files": [str], "truncated": bool}` |
 | `status` | `{}` | `{"shared": bool, "agent": "running"\|"stopped"\|"none", "name": str}` |
+| `screen` | `{}` | `{"text": str ≤200000, "cols": int 0..1000, "rows": int 0..1000, "agent": "running"\|"stopped"\|"none"}` — the shared session's visible screen (`tmux capture-pane -p -e`), escapes included |
 
 Each side enforces its **own** permissions on inbound ops (`link.perms`:
-`messages`, `diff`, `read_file`; `list_files` follows `read_file`; `status` is
-always allowed). A refused op returns `ok:false, err:"not permitted"`. With no
-share bound, `diff`/`read_file`/`list_files` return `err:"no shared folder"`.
+`messages`, `diff`, `read_file`; `list_files` follows `read_file`, `screen`
+follows `diff`; `status` is always allowed). A refused op returns
+`ok:false, err:"not permitted"`. With no share bound,
+`diff`/`read_file`/`list_files`/`screen` return `err:"no shared folder"`.
+`screen` captures only the link's own shared session (named from the link
+record, never from the request), and the VIEWER's side strips everything but
+SGR colour codes before a browser sees it (`backend.peer.screen.sanitize`: no
+OSC clipboard writes or hyperlinks, no cursor movement, no C1 controls). An
+older peer answers `screen` with `err:"unsupported"`, which the UI words as
+"they need to update MindFlock".
 
 Inbound limits per link: 30 `msg`/min and 120 requests/min. At most 8 requests
 in flight, each with a 60 s deadline. A ping every 30 s; 90 s without traffic
@@ -350,8 +371,17 @@ empty result becomes `peer`.
 
 `create_share(link_id, repo_path, branch=None) -> Share`:
 
-1. `share_id = secrets.token_hex(16)`; create the share dirs 0700
-   (`paths.share_paths`).
+1. `share_id = secrets.token_hex(10)` — short, because it sits in the
+   agent's socket paths and macOS caps those at 104 bytes; create the share
+   dirs 0700 (`paths.share_paths`). A folder that is not the TOP of a git
+   work tree (a plain folder, or a folder inside a repository) is first
+   **snapshotted**: its files are committed into a throwaway git dir under
+   `shares/` (`--git-dir` + `--work-tree`, so the folder itself is only
+   read), honouring its `.gitignore` plus `SNAPSHOT_EXCLUDES`
+   (`node_modules/`, `.venv/`, `dist/`, `build/`, caches…); more than
+   `SNAPSHOT_MAX_FILES` (20 000) files or `SNAPSHOT_MAX_BYTES` (500 MB) is
+   refused, as is a `branch` (there is none) or an empty folder. The clone
+   below then reads that git dir, and it is removed once the share exists.
 2. Clone from the user's (trusted) repo:
    `git clone --no-local --depth 1 --single-branch [-b branch]
    --separate-git-dir=<gitdir> file://<repo> <work>`. Then remove every remote
@@ -693,6 +723,15 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | `POST` | `/api/peer/links/{id}/messages/read` | mark them read |
   | `POST` | `/api/peer/links/{id}/message` | `{text}`: you, messaging the peer (no shared session needed) |
   | `GET` | `/api/peer/links/{id}/diff` | their shared-folder changes, read-only (their perms decide) |
+  | `GET` | `/api/peer/links/{id}/their-screen` | their shared session's screen now → `{text, cols, rows, agent}` (`text` keeps colours only) |
+  | `GET` | `/api/peer/links/{id}/their-files` | their shared folder's files → `{files, truncated}` |
+  | `GET` | `/api/peer/links/{id}/their-file?path=` | one of those files → `{path, size, encoding, content, truncated}` |
+
+  Each link in `GET /api/peer` also carries `their_share`: `{shared, agent}`
+  as the peer last answered `status` (re-asked in the background every 10 s
+  while connected), or `null` (offline, or not asked yet). An error any peer
+  route didn't anticipate answers **500** `{error: "<Type>: <message>"}` —
+  never a bare status.
 
   `POST /api/peer/invites` also takes `reach` (`auto` | `tunnel` | `direct`)
   and `op_id`; `POST /api/peer/join` takes `op_id` and answers

@@ -68,6 +68,13 @@ async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
             out = await out
     except PeerServiceError as err:
         return JSONResponse({"error": err.message}, status_code=err.status)
+    except Exception as err:  # noqa: BLE001 — say what broke, never a bare 500
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("peer %s failed: %v", request.url.path, err)
+        return JSONResponse(
+            {"error": "%s: %s" % (type(err).__name__, str(err)[:400] or "failed")},
+            status_code=500,
+        )
     return JSONResponse(out if out is not None else {"ok": True}, status_code=status)
 
 
@@ -199,6 +206,29 @@ async def peer_their_changes(link_id: str, request: Request) -> JSONResponse:
     """The peer's shared-folder changes, read-only (their ``diff``; their
     permissions decide) → ``{stat, diff, truncated}``."""
     return await _peer_call(request, _service().their_changes, link_id)
+
+
+@router.get("/api/peer/links/{link_id}/their-screen")
+async def peer_their_screen(link_id: str, request: Request) -> JSONResponse:
+    """What the peer's shared session shows right now → ``{text, cols, rows,
+    agent}`` (``text`` keeps colours only; their "may see my changes"
+    permission decides). Polled by the shared-session viewer."""
+    return await _peer_call(request, _service().their_screen, link_id)
+
+
+@router.get("/api/peer/links/{link_id}/their-files")
+async def peer_their_files(link_id: str, request: Request) -> JSONResponse:
+    """The files in the peer's shared folder → ``{files, truncated}`` (their
+    "may read my files" permission decides)."""
+    return await _peer_call(request, _service().their_files, link_id)
+
+
+@router.get("/api/peer/links/{link_id}/their-file")
+async def peer_their_file(link_id: str, request: Request) -> JSONResponse:
+    """``?path=`` one file from the peer's shared folder → ``{path, size,
+    encoding, content, truncated}``."""
+    path = request.query_params.get("path", "")
+    return await _peer_call(request, _service().their_file, link_id, path)
 
 
 @router.post("/api/peer/links/{link_id}/perms")

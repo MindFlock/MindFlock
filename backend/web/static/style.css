@@ -3120,6 +3120,18 @@ p.set-hint {
 .orch-cap-row .orch-cap-env {
   color: var(--warn, #d9a33b);
 }
+
+/* Shared MCP servers: the command basename beside the name, and the caution
+   line (a server that may not behave when shared). */
+.mcp-share-cmd {
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.mcp-share-caution {
+  color: var(--warn, #d9a33b);
+}
 }
 
 /* 040 */
@@ -5468,6 +5480,17 @@ p.set-hint {
 .inst .stagechip.chip-restart:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Sleeping (backend core/sleep.py) is calm: the Wake remedy appears only
+   on hover / keyboard focus, never as a standing call to action. */
+.inst .stagechip.chip-wake .chip-act {
+  display: none;
+}
+
+.inst .stagechip.chip-wake:hover .chip-act,
+.inst .stagechip.chip-wake:focus-visible .chip-act {
+  display: inline;
 }
 
 .inst .chevron {
@@ -9333,6 +9356,13 @@ button.stagechip.bgchip.bg-stuck:hover {
 .stagechip.s-paused {
   color: var(--tone-muted);
   background: color-mix(in srgb, var(--tone-muted) 16%, transparent);
+  animation: none;
+}
+
+/* An agent put to sleep to free memory: as quiet as Paused, nothing broken. */
+.stagechip.s-sleeping {
+  color: var(--tone-muted);
+  background: color-mix(in srgb, var(--tone-muted) 12%, transparent);
   animation: none;
 }
 
@@ -18634,6 +18664,252 @@ body.conn-lost #cs-errors {
 
 @layer components{
 /* --------------------------------------------------------------------------- *
+ * A peer's shared session, watched from here (PeerSessionViewer): a large
+ * card with Session / Files / Changes tabs and a message line at the bottom.
+ * --------------------------------------------------------------------------- */
+#peer-session-dialog .psv-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, calc(100vw - 32px));
+  height: min(86vh, 760px);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+#peer-session-dialog .psv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+#peer-session-dialog .psv-title {
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
+#peer-session-dialog .psv-state {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+#peer-session-dialog .psv-state.on {
+  color: var(--green);
+}
+
+#peer-session-dialog .psv-tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+#peer-session-dialog .psv-tab,
+#peer-session-dialog .psv-close,
+#peer-session-dialog .psv-say button {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#peer-session-dialog .psv-tab.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#peer-session-dialog .psv-close {
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 9px;
+}
+
+#peer-session-dialog .psv-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+
+#peer-session-dialog .psv-msg {
+  margin: 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+#peer-session-dialog .psv-screen,
+#peer-session-dialog .psv-code {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+}
+
+#peer-session-dialog .psv-line {
+  min-height: 1.35em;
+}
+
+#peer-session-dialog .psv-files {
+  display: flex;
+  height: 100%;
+}
+
+#peer-session-dialog .psv-filelist {
+  width: 280px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+
+#peer-session-dialog .psv-filelist input {
+  margin: 8px;
+}
+
+#peer-session-dialog .psv-filelist ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 8px;
+  overflow: auto;
+  flex: 1;
+}
+
+#peer-session-dialog .psv-filelist li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#peer-session-dialog .psv-filelist li button:hover,
+#peer-session-dialog .psv-filelist li button.active {
+  background: var(--panel-2);
+}
+
+#peer-session-dialog .psv-file {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+#peer-session-dialog .psv-filehead {
+  position: sticky;
+  top: 0;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#peer-session-dialog .psv-note {
+  margin: 6px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+#peer-session-dialog .psv-diff .add {
+  color: var(--green);
+}
+
+#peer-session-dialog .psv-diff .del {
+  color: var(--red);
+}
+
+#peer-session-dialog .psv-diff .hunk {
+  color: var(--accent);
+}
+
+#peer-session-dialog .psv-say {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+#peer-session-dialog .psv-say input {
+  flex: 1;
+}
+
+/* Rail: "Shared with you" — one row per person whose session you can watch. */
+#peer-shared-rows {
+  margin: 0 0 2px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+#peer-shared-rows .psr-head {
+  padding: 2px 4px 3px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+#peer-shared-rows .psr-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+#peer-shared-rows .psr-row:hover {
+  background: var(--panel);
+}
+
+#peer-shared-rows .psr-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+#peer-shared-rows .psr-dot.running {
+  background: var(--green);
+}
+
+#peer-shared-rows .psr-sub {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+}
+
+/* 200 */
+
+@layer components{
+/* --------------------------------------------------------------------------- *
  * Memory-pressure notice. Bottom-right, the corner ConnBanner uses (both are
  * the machine's status, not the grid's). The two never show together: a
  * server that doesn't answer has no reading, and the notice hides on error.
@@ -18673,6 +18949,10 @@ body.conn-lost #cs-errors {
 #memory-notice .mn-detail {
   margin-top: 4px;
   line-height: 1.45;
+}
+
+#memory-notice .mn-slots {
+  font-variant-numeric: tabular-nums;
 }
 
 #memory-notice .mn-what {

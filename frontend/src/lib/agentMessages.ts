@@ -138,7 +138,7 @@ export function lineageMark(
 
 /** The row fields the family wording reads. */
 export type FamilyRow = Pick<Instance, "title"> &
-  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report" | "lane" | "order">>;
+  Partial<Pick<Instance, "activity" | "activity_since" | "status" | "parent" | "last_report" | "lane" | "order" | "sleeping">>;
 
 /** THE "is a worker of" rule, shared by every surface that counts workers —
  * the fork menu's "workers · N", the palette's worker entries, the rail's
@@ -656,7 +656,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   } else if (act === "limit") {
     rest = " · usage limit — waiting";
     state = "limit";
-  } else if (act === "offline") rest = " · offline";
+  } else if (act === "offline") rest = row.sleeping ? " · sleeping" : " · offline";
   else rest = " · idle";
   return line(head, rest, "rep-lane", state);
 }

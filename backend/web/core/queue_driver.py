@@ -38,6 +38,7 @@ from backend.web.core import events as _events
 from backend.web.core import mailbox as _mailbox
 from backend.web.core import ports as _ports
 from backend.web.core import prompt_queue as _prompt_queue
+from backend.web.core import sleep as _sleep
 from backend.web.core import worktree_setup as _wt_setup
 
 
@@ -539,6 +540,9 @@ def _drain_one_queue(title: str) -> None:
         rec["idle_since"] = None
         if now - rec.get("rebooted_at", 0.0) < _QUEUE_REBOOT_COOLDOWN:
             return
+        if _sleep.is_sleeping(title):
+            # Asleep (core.sleep): the queued prompt is what wakes it.
+            _sleep.ensure_awake(inst, title, "a queued prompt")
         name, err = srv._ensure_agent_session(inst, title)
         if err is None:
             rec["rebooted_at"] = now
@@ -744,7 +748,9 @@ def _watch_limited_sessions() -> None:
 #   * no long-poll on the recipient's inbox (that poll is about to hand the
 #     message over itself), no fast-track chain mid-flight;
 #   * not inside the queue's post-reboot grace, and the CLI's tmux session
-#     alive — the lane NEVER boots an agent; offline / paused / loading wait;
+#     alive — the lane NEVER boots an agent; offline / paused / loading wait
+#     (the one exception: a SLEEPING recipient, core.sleep, is woken — it
+#     was stopped to free memory, not closed);
 #   * activity ``idle``, settled exactly as the queue settles it, and past the
 #     queue's send cooldown counted across BOTH typers; clarify / limit wait;
 #   * human intent first: a queued user prompt that is ready goes before any
@@ -879,7 +885,8 @@ def _human_at_keys(title: str, probe_tmux: bool = True) -> bool:
 
 def _drain_one_mailbox(title: str) -> None:
     """One delivery decision for one recipient: type at most its oldest pending
-    message. Never reboots, never types into clarify/limit/offline."""
+    message. Never reboots (but wakes a sleeper), never types into
+    clarify/limit/offline."""
     srv = _server()
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
@@ -891,6 +898,14 @@ def _drain_one_mailbox(title: str) -> None:
     now = time.time()
     if _typing_held(inst, title) or _mailbox.waiter_active(title, now):
         rec["idle_since"] = None
+        return
+    if _sleep.is_sleeping(title):
+        # The one boot this lane does: a SLEEPING recipient (core.sleep) was
+        # stopped on purpose to free memory, not closed — a message for it is
+        # exactly what should wake it. The wake opens the queue's boot grace,
+        # so the line below holds the typing until the CLI is ready.
+        rec["idle_since"] = None
+        _sleep.ensure_awake(inst, title, "a message arrived")
         return
     q = _QUEUE_STATE.get(title) or {}
     if now - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:

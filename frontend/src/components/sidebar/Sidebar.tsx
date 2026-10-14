@@ -20,6 +20,7 @@ import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
 import { OfflineBar } from "./OfflineBar";
+import { PeerSharedRows } from "./PeerSharedRows";
 import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -507,6 +508,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               {searchVisible && <SessionFilter />}
               <BulkBar />
               <OfflineBar />
+              <PeerSharedRows />
               <ul id="instance-list">
                 {grouped ? (
                   <>

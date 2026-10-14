@@ -126,7 +126,10 @@ export type DialogName =
   | "templates"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
-  | "extension";
+  | "extension"
+  // A peer's shared session, watched from here (PeerSessionViewer); the
+  // link id rides in dialogTarget.
+  | "peer-session";
 
 interface UiState {
   /** Logically focused session title (keyboard target, MRU head). */

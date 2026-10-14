@@ -11,6 +11,7 @@ import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
 import type { EffortCap } from "../lib/effort";
+import type { PeerStatus } from "../lib/peer";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {
   AuthProfilesResponse,
@@ -20,6 +21,7 @@ import type {
   DoctorPayload,
   Instance,
   MemoryReading,
+  SlotsReading,
   MindflockStatus,
   TestPlansResponse,
   TicketingCatalogEntry,
@@ -273,9 +275,34 @@ export function useMemory() {
   });
 }
 
+/** Heavy-job slots (`GET /api/system/slots`). Polled only while something
+ * shows them (the memory notice), so an idle app never reads the lock dir. */
+export function useSlots(enabled: boolean) {
+  return useQuery({
+    queryKey: ["system-slots"],
+    queryFn: () => api<SlotsReading>("/api/system/slots"),
+    refetchInterval: 15_000,
+    retry: false,
+    enabled,
+  });
+}
+
 /** Pull fresh pipeline status now (after a start/stop/toggle). */
 export function refreshMindflockStatus() {
   return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
+}
+
+/** Peer links (GET /api/peer) for the rail's "Shared with you" rows: each
+ * link's `their_share` says whether the person on the other end has a
+ * session to watch. 10s matches how often the server re-asks them. The
+ * People screen keeps its own fetch (it reloads on peer.* events). */
+export function usePeerLinks() {
+  return useQuery({
+    queryKey: ["peer-links"],
+    queryFn: () => api<PeerStatus>("/api/peer"),
+    refetchInterval: 10_000,
+    retry: false,
+  });
 }
 
 export function useDevices() {

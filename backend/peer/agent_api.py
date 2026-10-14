@@ -250,8 +250,12 @@ class AgentApi:
                 raise RuntimeError("refusing to replace non-socket %s" % self.path)
             os.unlink(self.path)
         # Bind under a temp name, chmod, then rename into place: the final
-        # path never exists with looser permissions than 0600.
-        tmp = os.path.join(d, ".agent-%s.sock" % secrets.token_hex(6))
+        # path never exists with looser permissions than 0600. The temp name
+        # is no longer than "agent.sock" itself: sun_path is 104 bytes on
+        # macOS, where paths.unix_addr has no /proc escape hatch, and a
+        # longer temp name was what tipped a share under an ordinary
+        # /Users/<name> past it (the share 500'd before its socket existed).
+        tmp = os.path.join(d, ".a%s.s" % secrets.token_hex(3))
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             with paths.unix_addr(tmp) as addr:

@@ -81,6 +81,8 @@ modules under
     session_removal  the teardown every removal runs (_on_session_removed +
                      hooks), failed-Start records, per-title state forgetting
     session_stats    token/cost telemetry + transcript history rendering
+    sleep            sleeping agents: stop an idle agent's CLI to free memory
+                     (the sweep, the rules), wake it on demand (ensure_awake)
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
                      session.turn_ended gates, human-input presence
@@ -372,6 +374,7 @@ from backend.web.core.engine import (
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
 from backend.web.core import revive as _revive
+from backend.web.core import sleep as _sleep
 from backend.web.core import self_update as _self_update
 from backend.web.core import update_watch as _update_watch
 from backend.web.core.mobile_access import (
@@ -834,6 +837,12 @@ async def lifespan(app: FastAPI):
     # developer's real state there, and this LAUNCHES agents.
     if _revive_on_start_loop_enabled():
         _register_task(_revive.run_on_start())
+    # Sleeping agents (core.sleep): stop the CLI (and its MCP servers) of an
+    # agent idle and unwatched for general.sleep_idle_minutes, to give its
+    # memory back. Off under pytest — ENGINE is the developer's real state,
+    # and this KILLS agents.
+    if _sleep_loop_enabled():
+        _register_task(_sleep.run_loop())
     _register_task(_memory_watch_loop())
     # The Map's snapshot warmer reads every open session's worktree — never
     # under pytest (ENGINE is the developer's real state there).
@@ -1349,6 +1358,8 @@ def _fire_window_refresh(program: str) -> bool:
         )
         if not exists:
             cmd = provider.minimal_launch_command(scratch, name) or prog
+            # An agent CLI like any other: the OOM killer's pick before us.
+            cmd = providers.launch_script.oom_score_prefix() + cmd
             r = subprocess.run(
                 ["tmux", "new-session", "-d", "-s", name, "-c", scratch, cmd],
                 capture_output=True,
@@ -1509,6 +1520,9 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
+    # A killed agent coming back by itself, or left Offline and why
+    # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
+    d["auto_revive"] = _revive.auto_state(i.Title)
     tok = _session_tokens(i)
     d["tokens"] = tok.get("out", 0)  # output tokens
     d["tokens_in"] = tok.get("in", 0)  # real input only (no cache)
@@ -1609,6 +1623,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["auto_revive"] = _revive.auto_state(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
     d["tokens_ctx"] = d["tokens_ctx_window"] = 0
@@ -1834,6 +1849,11 @@ def _instances_tick() -> None:
                 if _cfg.check_command:
                     _wt_setup.start_check(title, wt, _cfg.check_command)
                     d["check"] = _wt_setup.check_summary(wt)
+            # Before the emit: an agent the kernel just killed is queued to
+            # come back by itself (core.revive), and its Offline goes
+            # unannounced while it does.
+            _revive.observe(sys.modules[__name__], title, inst, d["activity"])
+            d["auto_revive"] = _revive.auto_state(title)
             _emit_state_changes(title, d["status"], d["activity"], d["stage"])
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -1864,6 +1884,9 @@ def _instances_tick() -> None:
         _orphan_dangling_parents()
     except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
         pass
+    # Relaunch (at most) one agent the kernel killed, once memory allows — on
+    # its own thread, so it never holds up this tick (core.revive.auto_tick).
+    _revive.auto_tick(sys.modules[__name__])
     # Publish the freshly computed state so AppContext.sessions() (Addon API
     # v2) and GET /api/instances can serve it without recomputing it.
     _events.set_sessions_snapshot(out)
@@ -2116,6 +2139,21 @@ def _revive_on_start_loop_enabled() -> bool:
     return not _restart._under_pytest()
 
 
+#: None = automatic: on in a real server, OFF under pytest (the sleep sweep
+#: stops agents of sessions in ENGINE, the developer's real state).
+_SLEEP_LOOP_ENABLED: Optional[bool] = None
+
+
+def _sleep_loop_enabled() -> bool:
+    if _SLEEP_LOOP_ENABLED is not None:
+        return bool(_SLEEP_LOOP_ENABLED)
+    # MINDFLOCK_SLEEP=0 forces it OFF at boot regardless of the setting
+    # (sandboxed servers: the e2e journeys, a scratch `serve`).
+    if os.environ.get("MINDFLOCK_SLEEP", "1") == "0":
+        return False
+    return not _restart._under_pytest()
+
+
 @app.post("/api/server/revive-all")
 async def post_server_revive_all(request: Request) -> JSONResponse:
     """Run the background-revive sweep now (:mod:`backend.web.core.revive`):
@@ -2157,6 +2195,33 @@ def get_system_memory() -> JSONResponse:
     snap = _mem.snapshot()
     snap["message"] = _mem.describe(snap)
     return JSONResponse(snap)
+
+
+@app.get("/api/system/slots")
+def get_system_slots() -> JSONResponse:
+    """Heavy-job slots (``mindflock slot``, :mod:`backend.slot`): ``{"slots":
+    N, "source": "env"|"setting"|"default", "pools": [{"name", "holders":
+    [{"slot", "pid", "cmd", "cwd", "since", "max", "session"}], "waiters":
+    [{..., "position"}]}], "running": n, "waiting": n}``. ``session`` is the
+    MindFlock session a holder or waiter runs in ("" when none), matched by
+    its tmux pane, then its working folder. Read from the lock dir: works
+    for jobs started with no server, and is empty when nobody uses slots."""
+    from backend import slot as _slot
+
+    sessions = []
+    for inst in list(ENGINE.instances.values()):
+        try:
+            folder = inst.GetWorktreePath() if inst.Started() else (inst.Path or "")
+        except Exception:  # noqa: BLE001 — a half-built row maps by name only
+            folder = getattr(inst, "Path", "") or ""
+        sessions.append(
+            {
+                "title": inst.Title,
+                "tmux_name": tmux.to_mindflock_tmux_name(inst.Title),
+                "folder": folder,
+            }
+        )
+    return JSONResponse(_slot.status(sessions))
 
 
 #: How often the memory watch re-reads (backend.memory_pressure caches 2s).
@@ -3889,6 +3954,9 @@ async def instance_pause(title: str) -> JSONResponse:
         await asyncio.to_thread(inst.Pause)
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": str(err)}, status_code=400)
+    # Paused outranks asleep: Resume relaunches through the engine, which
+    # never reads a sleep record, so none may outlive the pause.
+    _sleep.drop(title)
     ENGINE.save()
     _events.BUS.emit(
         "session.paused",
@@ -3983,6 +4051,44 @@ async def instance_revive(title: str) -> JSONResponse:
             "memory_warning": await asyncio.to_thread(_mem.describe),
         }
     )
+
+
+@app.post("/api/instances/{title}/sleep")
+async def instance_sleep(title: str) -> JSONResponse:
+    """Put the session's agent to sleep now (:mod:`backend.web.core.sleep`):
+    stop its CLI and MCP servers to give their memory back, keeping the
+    session, worktree and conversation. The sweep's safety rules hold — its
+    turn has ended (idle, no dialog, no background job), nothing is queued
+    for it, no terminal is attached — but not its timing ones (idle long
+    enough, nobody typed lately). **409** ``{"error", "veto"}`` when one
+    refuses. → ``{"title", "sleeping": {since, reason, freed_mb}}``."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    why = await asyncio.to_thread(_sleep.sleep_now, inst, title)
+    if why is not None:
+        return JSONResponse(
+            {"error": "can't sleep %s: %s" % (title, why), "veto": why},
+            status_code=409,
+        )
+    return JSONResponse({"title": title, "sleeping": _sleep.info(title)})
+
+
+@app.post("/api/instances/{title}/wake")
+async def instance_wake(title: str) -> JSONResponse:
+    """Wake a sleeping session's agent: relaunch it, resuming its
+    conversation (the rail's Wake chip; opening it or sending it anything
+    does the same). Not asleep is a no-op (``woke: false``). **409** with the
+    reason when its workspace is gone. → ``{"title", "woke": bool}``."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    woke, werr = await asyncio.to_thread(
+        _sleep.ensure_awake, inst, title, "woken on request"
+    )
+    if werr is not None:
+        return JSONResponse({"error": werr}, status_code=409)
+    return JSONResponse({"title": title, "woke": woke})
 
 
 # --------------------------------------------------------------------------- #
@@ -5265,6 +5371,36 @@ _SEND_FAILED = "failed to send to agent session"
 #: agent on a prompt: an unsubmitted paste can't be queued (the drain would
 #: submit it), so nothing happens and the caller says why.
 _SEND_IN_DIALOG = "Answer its prompt first — typing now would answer the dialog"
+#: ``_deliver_to_agent``'s reason when the agent was asleep and the text
+#: could not wait on its queue (an unsubmitted paste, or a looping queue that
+#: would re-send it forever): it is waking, and the caller sends again.
+_SEND_WAKING = "It was asleep — waking it now; send again in a few seconds"
+
+
+def _deliver_to_sleeper(inst, title: str, text: str, *, boot: bool, submit: bool):
+    """``_deliver_to_agent`` for a SLEEPING session (core.sleep): wake it,
+    then put the text on its prompt queue — at the front for a person's
+    ``/send``, at the back for a MindFlock-composed message — because a CLI
+    that is still booting loses whatever is typed at it. The wake opened the
+    queue's boot grace, so the drain sends it once the CLI has drawn its
+    prompt and settled idle. Not queueable (an unsubmitted paste; a looping
+    queue, which would re-send it forever): it just wakes →
+    ``(False, _SEND_WAKING)``."""
+    _woke, err = _sleep.ensure_awake(
+        inst,
+        title,
+        "a prompt was sent" if boot else "MindFlock sent it a message",
+    )
+    if err is not None:
+        return False, err
+    if not submit or _prompt_queue.get_state(title)["loop"]:
+        return False, _SEND_WAKING
+    try:
+        _prompt_queue.enqueue(title, text, index=0 if boot else None)
+    except ValueError as qerr:
+        return False, str(qerr)
+    _emit_queue_changed(title)
+    return "queued", None
 
 
 def _deliver_to_agent(
@@ -5298,9 +5434,16 @@ def _deliver_to_agent(
     browser's view of the agent lags by a poll or two; a digit or an Enter
     typed into a permission prompt approves it.
 
+    A SLEEPING agent (core.sleep) is woken either way, and the text queued
+    rather than typed into the booting CLI (:func:`_deliver_to_sleeper`).
+
     Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``.
     Every collaborator is read off this module so tests patch the server.
     """
+    if _sleep.is_sleeping(title):
+        if not boot and _budget_locked(title):
+            return False, "over budget"
+        return _deliver_to_sleeper(inst, title, text, boot=boot, submit=submit)
     if boot:
         name, err = _agent_session_ready(inst, title)
         if err is not None:
@@ -5448,6 +5591,7 @@ async def instance_send(
             },
             status_code=409,
         )
+    asleep = _sleep.is_sleeping(title)
     told, reason = await asyncio.to_thread(
         lambda: _deliver_to_agent(
             inst, title, text, boot=True, submit=submit, dialog_safe=dialog_safe
@@ -5457,9 +5601,14 @@ async def instance_send(
         body = {"error": reason}
         if reason == _SEND_IN_DIALOG:
             body["in_dialog"] = True
+        if reason == _SEND_WAKING:
+            body["waking"] = True
         return JSONResponse(body, status_code=502 if reason == _SEND_FAILED else 409)
     if told == "queued":
-        return JSONResponse({"sent": False, "queued": True, "submitted": False})
+        body = {"sent": False, "queued": True, "submitted": False}
+        if asleep:
+            body["woke"] = True  # it was asleep: it goes in once the agent is back
+        return JSONResponse(body)
     return JSONResponse({"sent": True, "submitted": submit})
 
 
@@ -5637,6 +5786,24 @@ async def post_queue_send_now(
             },
             status_code=409,
         )
+    if _sleep.is_sleeping(title):
+        # Asleep (core.sleep): wake it and put this item first in line — the
+        # drain sends it once the CLI has drawn its prompt (typing into a
+        # booting CLI loses it). A queue the user paused would not send it:
+        # say so, and Send now again sends it straight away.
+        _woke, err = await asyncio.to_thread(
+            _sleep.ensure_awake, inst, title, "Send now"
+        )
+        if err is not None:
+            return JSONResponse({"error": err}, status_code=409)
+        st = _prompt_queue.get_state(title)
+        if not st["enabled"] or st.get("held"):
+            return JSONResponse(
+                {"error": _SEND_WAKING, "waking": True}, status_code=409
+            )
+        _prompt_queue.move_item_to(title, item_id, 0)
+        _emit_queue_changed(title)
+        return JSONResponse({**_queue_state_json(title), "woke": True})
     name, err = await asyncio.to_thread(_agent_session_ready, inst, title)
     if err is not None:
         return JSONResponse({"error": err}, status_code=409)
@@ -5707,6 +5874,10 @@ _MSG_NOT_RUNNING = (
 _MSG_STARTING = (
     "the recipient's agent is still starting — it is typed in once it is ready"
 )
+_MSG_WAKING = (
+    "the recipient was asleep — it is waking up, and the message is typed in "
+    "once it is ready"
+)
 _MSG_HUMAN_TYPING = (
     "someone is typing in the recipient's pane — it is typed in once they stop"
 )
@@ -5751,6 +5922,13 @@ def _mail_deliver_now(inst, title: str, msg: dict):
         )
     if _mailbox.waiter_active(title):
         return "pending", "the recipient is waiting on its inbox and gets it there"
+    if _sleep.is_sleeping(title):
+        # Asleep (core.sleep): wake it; the lane types the message once the
+        # relaunched CLI has drawn its prompt (the wake opened the boot grace).
+        _woke, werr = _sleep.ensure_awake(inst, title, "a message arrived")
+        if werr is not None:
+            return "pending", _MSG_NOT_RUNNING
+        return "pending", _MSG_WAKING
     q = _QUEUE_STATE.get(title) or {}
     if time.time() - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
         # The queue just relaunched the CLI: a quiet relaunching pane reads
@@ -11352,8 +11530,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # relaunches the agent CLI). Run inline it serialized every pane's attach
     # and stalled polling/other sockets — on a multi-pane restore with dead
     # sessions that turned N reboots into one long blocking chain. In a thread
-    # they proceed concurrently and the loop keeps serving.
-    name, err = await asyncio.to_thread(_ensure_agent_session, inst, title)
+    # they proceed concurrently and the loop keeps serving. A SLEEPING agent
+    # wakes here (core.sleep): opening its terminal is the wake.
+    _woke, err = await asyncio.to_thread(
+        _sleep.ensure_awake, inst, title, "terminal opened"
+    )
+    if err is None:
+        name, err = await asyncio.to_thread(_ensure_agent_session, inst, title)
     if err is not None:
         await ws.send_text(json.dumps({"type": "error", "message": err}))
         await ws.close(code=4409)

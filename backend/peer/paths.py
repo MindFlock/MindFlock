@@ -111,7 +111,14 @@ def unix_addr(path: str):
         yield path
         return
     if not hasattr(os, "O_PATH") or not os.path.isdir("/proc/self/fd"):
-        raise OSError("unix socket path too long: %s" % path)
+        # macOS: no /proc, and sun_path is only 104 bytes. Say what to do
+        # rather than a bare OSError the share route turns into a 500.
+        raise OSError(
+            "the shared folder's socket path is %d bytes, over this system's "
+            "limit (%d) — set MINDFLOCK_PEER_HOME to a shorter folder (for "
+            "example ~/.mfpeer) and restart MindFlock: %s"
+            % (len(os.fsencode(path)), _SUN_PATH_SAFE, path)
+        )
     fd = os.open(
         os.path.dirname(path) or ".", os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC
     )

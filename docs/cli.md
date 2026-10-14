@@ -3,7 +3,7 @@
 The console entry point (`backend/cli.py`) has two kinds of commands. **Host
 commands** run things locally: `serve`, `doctor`, `uninstall`, and `mcp`, the
 MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `close`,
-`delete`, `pause`, `resume`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
+`delete`, `pause`, `resume`, `sleep`, `wake`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
 HTTP API (`backend/client.py`). Session commands never spawn an engine of
 their own: the terminal and the web UI drive the same server, so a session
 created from either shows up in both.
@@ -26,6 +26,7 @@ mindflock token             # print this machine's access token (for sign-in / p
 mindflock update            # install the newest release (the way install.json says) and restart the server onto it
 mindflock update --check    # …only print the installed and newest versions (exit 1 when behind)
 mindflock restart           # restart the running server (onto whatever is installed)
+mindflock slot -- CMD ...   # run a heavy command (tests, builds) once a machine-wide slot is free
 mindflock --version         # print the installed version
 ```
 
@@ -247,6 +248,76 @@ mindflock mcp --print-config                 # paste the line for your client
 mindflock mcp --print-config --scope all     # an external client allowed to manage every session
 ```
 
+### `mindflock slot [--pool NAME] [--max N] [--timeout SECS] [--no-wait-memory] -- CMD [ARGS...]`
+
+A machine-wide gate for heavy commands (`backend/slot.py`). The OOM that takes
+a flock down is rarely agents *starting* — the [memory guard](session-engine.md#memory-guard)
+holds those — but work inside running sessions: a repo whose pre-commit hook
+runs two `pytest -n auto` suites, a documentarian that starts two more agent
+CLIs and a code-graph index costs ~8 GB per commit, and four agents committing
+at once is 32 GB. `mindflock slot -- CMD` runs CMD once it holds one of N
+slots for the pool, so those jobs take turns.
+
+- **N**: `--max`, else `$MINDFLOCK_HEAVY_SLOTS`, else `general.heavy_slots` in
+  settings.json, else **1 below ~32 GB of RAM, 2 above** (one such commit plus
+  a dozen resident agent CLIs fits a 24 GB box; two do not).
+- **Pools**: `--pool` (default `heavy`) names an independent semaphore — e.g.
+  `--pool gpu --max 1` for jobs that contend for something else.
+- **Memory**: after taking the slot it also holds while memory reads `low` or
+  `critical` (`backend.memory_pressure`), at most `--memory-timeout` seconds
+  (default 600), then runs anyway with a warning — a misreading never wedges
+  every commit. `--no-wait-memory` skips this.
+- **`--timeout SECS`**: stop waiting for a slot after SECS and run anyway with
+  a warning (default 0: wait for one).
+- **While waiting** it prints ONE line to stderr, naming the holder: `mindflock
+  slot: waiting for a heavy-job slot (held by session "fix-auth", pid 4242: env
+  TESTMON_DATAFILE=… uv run … since 14:02:11) — it runs when one frees;
+  MINDFLOCK_SLOT=0 skips the gate`. pre-commit captures hook output, so there
+  the line shows when the hook finishes; `GET /api/system/slots` and
+  `mindflock slot --status` show the queue live.
+- **Passthrough**: stdin/stdout/stderr are CMD's own; its exit code comes back
+  exactly (a signal death is re-raised as the same signal; 127 when CMD isn't
+  found). SIGTERM and SIGHUP are forwarded to CMD, and SIGINT too unless the
+  terminal already delivered it (Ctrl-C reaches the whole foreground group —
+  forwarding it again would interrupt CMD twice).
+- **No server needed**, and cheap when nobody else holds the slot (~50 ms,
+  Python startup included). It is a counting semaphore over flock'd files in
+  `~/.mindflock/run/slots/<pool>/` (`$MINDFLOCK_RUN_DIR` overrides the run
+  dir): the kernel drops a flock when its holder dies, however it dies, so a
+  crashed or SIGKILLed holder never leaks a slot. Waiters queue first come,
+  first served. The wrapper process holds the slot while CMD runs as its
+  child, so a daemon CMD leaves behind does not keep it.
+- **Nesting**: CMD runs with `MINDFLOCK_SLOT_HELD=<pool>`; a `mindflock slot`
+  inside it for the same pool runs straight through instead of waiting on its
+  own parent.
+- **`MINDFLOCK_SLOT=0`** bypasses the gate (CMD is exec'd directly).
+- **`--status`** prints the holders and waiters and exits.
+
+**Opting a repo in.** MindFlock never edits a repo's hooks; prefix the heavy
+ones yourself. pre-commit shlex-splits `entry` and appends filenames, and a
+bare `mindflock` entry fails the hook on a machine without it (or with a
+MindFlock older than `slot`), so go through a probe that falls back to the
+plain command:
+
+```yaml
+-   id: run_tests
+    name: Run Tests
+    entry: >-
+        bash -c 'if mindflock slot --status >/dev/null 2>&1; then exec mindflock slot -- "$@"; else exec "$@"; fi' mindflock-slot
+        env TESTMON_DATAFILE=.testmondata uv run --group test pytest tests --testmon -n auto -q
+    language: system
+    pass_filenames: false
+```
+
+`mindflock-slot` is the script's `$0`; everything after it — the command and
+any filenames pre-commit appends — is `"$@"`, passed through verbatim (checked
+against pre-commit 4.7 with spaces in arguments and filenames). The same
+prefix works in a Makefile or a script. MindFlock does not set
+`PYTEST_XDIST_AUTO_NUM_WORKERS` (or any other per-tool knob) in sessions: an
+agent pane's shell sources your own rc files after the session env, and
+changing how a repo's tests run behind its back is the repo's call — `-n auto`
+inside a slot is bounded by the slot count instead.
+
 ## Session commands
 
 All of them find the server the same way:
@@ -323,6 +394,9 @@ session's tmux (the `tmux_name` field of `/api/instances`, i.e.
 any unambiguous prefix; ambiguous prefixes list the candidates. Detach with the
 normal tmux `Ctrl-b d`.
 
+A sleeping session is woken first (`POST /api/instances/{title}/wake`), so
+there is an agent to land in, back in its conversation.
+
 `attach` requires a real terminal: when stdout isn't a TTY (a pipe, a script,
 CI) it exits 1 with ``attach needs a real terminal (running in a script? use
 `mindflock ls --json`)`` instead of letting tmux fail cryptically.
@@ -368,6 +442,23 @@ the agent in place in the same worktree. They print `paused session <title>` /
 can't be paused, say) is reported on stderr, the rest still run, and the
 command exits 1. Titles resolve like `close` (unambiguous prefixes, all before
 anything runs).
+
+### `mindflock sleep TITLE...` / `mindflock wake TITLE...`
+
+**Sleep** frees an idle agent's memory now: `sleep` calls `POST
+/api/instances/{title}/sleep`, which stops the agent CLI and its MCP servers
+and keeps the session, worktree and conversation — the row reads
+**Sleeping** ([session-engine.md](session-engine.md#sleeping-agents)). It is
+refused (stderr, exit 1, the other titles still run) while the agent is
+mid-turn or on a dialog, runs a background job, has something queued or a
+message waiting, belongs to a busy team run or family, can't resume, or has a
+terminal attached. It prints `<title> is asleep (freed ~780 MB)`. Idle agents
+also fall asleep on their own after `general.sleep_idle_minutes`. `wake` calls
+`POST /api/instances/{title}/wake`, relaunching the agent into the same
+conversation, and prints `woke <title>` (or `<title> was not asleep`).
+Opening the session anywhere, or sending it anything, wakes it too — and
+`attach` wakes a sleeper before landing in its tmux. `ls` shows a sleeper's
+ACTIVITY as `sleeping`. Titles resolve like `close`.
 
 ### `mindflock open TITLE`
 

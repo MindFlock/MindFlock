@@ -1,0 +1,422 @@
+/* workflow extension styles — loaded into layer(components); every selector
+ * is scoped under .mfx-workflow (the host's surface root). Colours come from
+ * the app's tokens only (--panel, --panel-2, --border, --text, --muted,
+ * --accent, --green, --red, --gold), mixed per phase, so the dashboard
+ * follows the theme. A phase's colour says WHO holds the work: accent = the
+ * agent, gold = you, red = tooling (setup, hooks), teal = handoffs (commit →
+ * push → PR), green = review. */
+
+.mfx-workflow {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mfx-workflow .wf-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding: 2px 2px 12px;
+}
+
+.mfx-workflow .wf-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mfx-workflow .muted {
+  color: var(--muted);
+}
+
+.mfx-workflow h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mfx-workflow p {
+  margin: 4px 0;
+}
+
+/* --- top bar ------------------------------------------------------------ */
+.mfx-workflow .wf-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mfx-workflow .wf-head-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mfx-workflow .wf-controls,
+.mfx-workflow .wf-seg-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mfx-workflow .wf-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mfx-workflow .wf-btn:hover {
+  border-color: var(--accent);
+}
+
+.mfx-workflow .wf-btn.on {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+  border-color: var(--accent);
+}
+
+.mfx-workflow .wf-status {
+  min-width: 90px;
+  text-align: right;
+}
+
+/* --- cards + KPIs ------------------------------------------------------- */
+.mfx-workflow .wf-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.mfx-workflow .wf-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.mfx-workflow .wf-card-head h4 {
+  margin: 0;
+}
+
+.mfx-workflow .wf-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.mfx-workflow .wf-kpi {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.mfx-workflow .wf-kpi-num {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-workflow .wf-kpi-label {
+  font-weight: 600;
+}
+
+/* --- phase colours ------------------------------------------------------ */
+.mfx-workflow .ph-agent { background: var(--accent); }
+.mfx-workflow .ph-rework { background: color-mix(in srgb, var(--accent) 55%, var(--panel-2)); }
+.mfx-workflow .ph-question { background: var(--gold); }
+.mfx-workflow .ph-your_turn { background: color-mix(in srgb, var(--gold) 60%, var(--panel-2)); }
+.mfx-workflow .ph-away { background: color-mix(in srgb, var(--muted) 45%, var(--panel-2)); }
+.mfx-workflow .ph-setup { background: color-mix(in srgb, var(--red) 40%, var(--panel-2)); }
+.mfx-workflow .ph-precommit { background: var(--red); }
+.mfx-workflow .ph-hook_fix { background: color-mix(in srgb, var(--red) 65%, var(--gold)); }
+.mfx-workflow .ph-to_push { background: color-mix(in srgb, var(--green) 50%, var(--accent)); }
+.mfx-workflow .ph-to_pr { background: color-mix(in srgb, color-mix(in srgb, var(--green) 50%, var(--accent)) 55%, var(--panel-2)); }
+.mfx-workflow .ph-review { background: var(--green); }
+.mfx-workflow .ph-limit { background: color-mix(in srgb, var(--gold) 50%, var(--red)); }
+.mfx-workflow .ph-offline,
+.mfx-workflow .ph-paused { background: color-mix(in srgb, var(--border) 80%, var(--panel-2)); }
+.mfx-workflow .ph-untracked {
+  background: repeating-linear-gradient(45deg, var(--border) 0 3px, transparent 3px 6px);
+}
+
+/* --- bars ------------------------------------------------------------- */
+.mfx-workflow .wf-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.mfx-workflow .wf-big-bar {
+  height: 22px;
+  margin: 8px 0 6px;
+}
+
+.mfx-workflow .wf-seg {
+  display: block;
+  min-width: 2px;
+  flex-basis: 0;
+}
+
+.mfx-workflow .wf-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.mfx-workflow .wf-legend,
+.mfx-workflow .wf-groups,
+.mfx-workflow .wf-item-phases,
+.mfx-workflow .wf-after {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+}
+
+.mfx-workflow .wf-group b {
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-workflow .wf-group.g-agent b { color: var(--accent); }
+.mfx-workflow .wf-group.g-you b { color: var(--gold); }
+.mfx-workflow .wf-group.g-tooling b { color: var(--red); }
+.mfx-workflow .wf-group.g-review b { color: var(--green); }
+.mfx-workflow .wf-group.g-handoff b { color: color-mix(in srgb, var(--green) 50%, var(--accent)); }
+
+/* --- advice ------------------------------------------------------------ */
+.mfx-workflow .wf-advice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mfx-workflow .wf-tip {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--panel);
+}
+
+.mfx-workflow .wf-tip.info {
+  border-left-color: var(--muted);
+}
+
+.mfx-workflow .wf-tip-title {
+  font-weight: 600;
+}
+
+.mfx-workflow .wf-tip-stake {
+  font-weight: 400;
+}
+
+/* --- phase table --------------------------------------------------------- */
+.mfx-workflow .wf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.mfx-workflow .wf-table th,
+.mfx-workflow .wf-table td {
+  text-align: left;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.mfx-workflow .wf-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.mfx-workflow .wf-share {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.mfx-workflow .wf-share-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.mfx-workflow .wf-share-fill {
+  display: block;
+  height: 100%;
+}
+
+.mfx-workflow .wf-share-num {
+  width: 36px;
+  text-align: right;
+}
+
+/* --- trend --------------------------------------------------------------- */
+.mfx-workflow .wf-trend {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.mfx-workflow .wf-trend-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.mfx-workflow .wf-trend-plot {
+  height: 60px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.mfx-workflow .wf-trend-bar {
+  display: block;
+  width: 70%;
+  max-width: 28px;
+  border-radius: 3px 3px 0 0;
+  background: var(--accent);
+}
+
+.mfx-workflow .wf-trend-label {
+  font-size: 10.5px;
+}
+
+/* --- work items ----------------------------------------------------------- */
+.mfx-workflow .wf-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mfx-workflow .wf-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px 6px;
+  background: var(--panel);
+}
+
+.mfx-workflow .wf-item.open {
+  border-color: var(--accent);
+}
+
+.mfx-workflow .wf-item-head {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 0 4px;
+  cursor: pointer;
+  text-align: left;
+  flex-wrap: wrap;
+}
+
+.mfx-workflow .wf-item-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mfx-workflow .wf-item-branch {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mfx-workflow .wf-item-lead {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mfx-workflow .wf-chip {
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.mfx-workflow .wf-chip.s-merged { border-color: var(--green); color: var(--green); }
+.mfx-workflow .wf-chip.s-pr_open { border-color: var(--accent); color: var(--accent); }
+.mfx-workflow .wf-chip.s-abandoned,
+.mfx-workflow .wf-chip.s-closed { color: var(--muted); }
+
+.mfx-workflow .wf-item-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.mfx-workflow .wf-strip {
+  position: relative;
+  height: 16px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.mfx-workflow .wf-strip .wf-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 1px;
+}
+
+.mfx-workflow .wf-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  margin-top: -4px;
+}
+
+.mfx-workflow .wf-link {
+  color: var(--accent);
+  align-self: flex-start;
+}
+
+.mfx-workflow.wf-compact .wf-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}

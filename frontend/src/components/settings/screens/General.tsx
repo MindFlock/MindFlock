@@ -29,6 +29,7 @@ export function General(_: ScreenProps) {
       </label>
       <ResumeOnUsageResetRow />
       <ReviveOnStartRow />
+      <SleepIdleRow />
       {/* An estimate to calibrate and a wheel to fine-tune: advanced mode only. */}
       <AdvancedFold id="general-advanced">
         <label className="set-row">
@@ -85,7 +86,9 @@ function ResumeOnUsageResetRow() {
 /** Revive after a restart: once the server has booted (past its quiet
  * window) it relaunches, two at a time, every session whose agent was running
  * when it went down — the Offline chip's Restart, for all of them
- * (backend/web/core/revive.py). Unset reads as on. */
+ * (backend/web/core/revive.py). The same switch covers an agent the system
+ * killed for memory: it comes back once memory recovers, a few times an hour
+ * at most. Unset reads as on. */
 function ReviveOnStartRow() {
   const s = useSettings();
   const on = s.get("general", "revive_on_start") !== false;
@@ -94,11 +97,13 @@ function ReviveOnStartRow() {
       <span className="notif-rule-text">
         <span className="set-label">Revive sessions after a restart</span>
         <span className="set-hint notif-rule-desc">
-          Restart running agents on their own after MindFlock restarts.
+          Restart running agents on their own after MindFlock restarts, or after
+          the system kills one for memory.
         </span>
         <LearnMore>
-          Without this, they wait as Offline until you click Restart. Paused sessions and
-          sessions out of usage are left alone.
+          Without this, they wait as Offline until you click Restart. An agent killed
+          for running out of memory comes back once memory recovers, at most 3 times an
+          hour. Paused sessions and sessions out of usage are left alone.
         </LearnMore>
       </span>
       {/* label wraps only the switch, so clicking the row text doesn't flip it */}
@@ -113,6 +118,28 @@ function ReviveOnStartRow() {
         <span className="ca-slider" />
       </label>
     </div>
+  );
+}
+
+/** Sleeping agents (backend/web/core/sleep.py): an agent whose turn ended
+ * and that has sat idle, unwatched, with nothing queued or waiting for it
+ * this many minutes has its CLI and MCP servers stopped to give their memory
+ * back; opening it or sending it anything wakes it. Empty = 45, 0 = never. */
+function SleepIdleRow() {
+  return (
+    <label
+      className="set-row"
+      id="general-sleep-idle"
+      title="0 turns sleeping off. Empty = 45 minutes. While memory is low, idle agents sleep after 5 minutes."
+    >
+      <span className="set-label">Put idle agents to sleep after (minutes, 0 = never)</span>
+      <SettingField group="general" field="sleep_idle_minutes" type="number" placeholder="45" />
+      <span className="set-hint">
+        An agent that finished its turn and sits unwatched, with nothing queued, stops its CLI and MCP
+        servers to free their memory and shows Sleeping. Opening it or sending it anything wakes it, back
+        in the same conversation. While memory is low this happens after 5 minutes.
+      </span>
+    </label>
   );
 }
 

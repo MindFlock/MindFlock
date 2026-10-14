@@ -180,6 +180,17 @@
   outline-offset: 1px;
 }
 
+/* Sleeping (backend core/sleep.py) is calm: the Wake remedy appears only
+   on hover / keyboard focus, never as a standing call to action. */
+.inst .stagechip.chip-wake .chip-act {
+  display: none;
+}
+
+.inst .stagechip.chip-wake:hover .chip-act,
+.inst .stagechip.chip-wake:focus-visible .chip-act {
+  display: inline;
+}
+
 .inst .chevron {
   background: none;
   border: none;

@@ -30,6 +30,7 @@ import { CustomizeDialog } from "./components/customize/CustomizeDialog";
 import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
+import { PeerSessionViewer } from "./components/PeerSessionViewer";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
@@ -293,6 +294,7 @@ export default function App() {
       <PromptsDialog />
       <VerifyDialog />
       <CommitDialog />
+      <PeerSessionViewer />
       <MakePrDialog />
       <RenameDialog />
       <RecentDialog />

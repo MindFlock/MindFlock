@@ -58,6 +58,7 @@ from .fleet import FleetAddon
 from .notify import NotifyAddon
 from .onboarding import OnboardingAddon
 from .optimizer import OptimizerAddon
+from .workflow import WorkflowAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
@@ -121,6 +122,7 @@ RESERVED_EXTENSION_IDS = frozenset(
         "fleet",
         "onboarding",
         "github",
+        "workflow",
     }
 )
 
@@ -167,6 +169,8 @@ def build_addons(ctx: AppContext) -> List[Addon]:
         DbClientAddon(ctx),
         # Usage Optimizer: capacity score, window pacing, uptime vs. attended time.
         OptimizerAddon(ctx),
+        # Workflow Optimizer: where each ticket's time goes, start to PR.
+        WorkflowAddon(ctx),
     ]
 
 

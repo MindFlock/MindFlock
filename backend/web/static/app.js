@@ -24409,8 +24409,25 @@ function useMemory() {
 		retry: false
 	});
 }
+function useSlots(enabled) {
+	return useQuery({
+		queryKey: ["system-slots"],
+		queryFn: () => api("/api/system/slots"),
+		refetchInterval: 15e3,
+		retry: false,
+		enabled
+	});
+}
 function refreshMindflockStatus() {
 	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
+}
+function usePeerLinks() {
+	return useQuery({
+		queryKey: ["peer-links"],
+		queryFn: () => api("/api/peer"),
+		refetchInterval: 1e4,
+		retry: false
+	});
 }
 function useDevices() {
 	return useQuery({
@@ -24753,6 +24770,10 @@ var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
 function noteActivity(inst) {
 	const title = inst.title;
+	if (inst.sleeping) {
+		dropActivity(title);
+		return;
+	}
 	const raw = inst.activity || "idle";
 	if (!actShown.has(title)) {
 		actShown.set(title, raw);
@@ -24845,6 +24866,24 @@ function needsYou(reason, hint) {
 		hint
 	};
 }
+var SLEEPING_LABEL = "Sleeping";
+function sleepingState(info, now) {
+	const since = Number(info.since) || 0;
+	const freed = Number(info.freed_mb) || 0;
+	let hint = "Asleep";
+	if (since > 0) hint += " since " + fmtClock(since) + " (" + spanWord(now / 1e3 - since) + ")";
+	hint += info.reason === "memory" ? " — memory was low" : info.reason === "manual" ? "" : " — it was idle";
+	if (freed > 0) hint += "; freed ~" + (freed >= 1024 ? (freed / 1024).toFixed(1) + " GB" : freed + " MB");
+	hint += ". Opening it or sending it anything wakes it, resuming the conversation.";
+	return {
+		state: "idle",
+		label: SLEEPING_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint
+	};
+}
 function deriveSessionState(inst, extras) {
 	const now = extras?.now ?? Date.now();
 	if (inst.workspace_missing) return {
@@ -24871,6 +24910,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Provisioning workspace"
 	};
+	if (inst.sleeping) return sleepingState(inst.sleeping, now);
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -24904,14 +24944,17 @@ function deriveSessionState(inst, extras) {
 			hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
 		};
 	}
-	if (act === "offline") return {
-		state: "offline",
-		label: STATE_LABEL.offline,
-		tone: "broken",
-		inBell: true,
-		restartable: !inst.device,
-		hint: "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
-	};
+	if (act === "offline") {
+		const revive = inst.auto_revive;
+		return {
+			state: "offline",
+			label: STATE_LABEL.offline,
+			tone: "broken",
+			inBell: revive?.state !== "pending",
+			restartable: !inst.device,
+			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
+		};
+	}
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
@@ -25459,7 +25502,7 @@ function shipLine(row, opts = {}) {
 	} else if (act === "limit") {
 		rest = " · usage limit — waiting";
 		state = "limit";
-	} else if (act === "offline") rest = " · offline";
+	} else if (act === "offline") rest = row.sleeping ? " · sleeping" : " · offline";
 	else rest = " · idle";
 	return line(head, rest, "rep-lane", state);
 }
@@ -28185,7 +28228,7 @@ function adoptAccent(name) {
 function current(dim) {
 	return document.documentElement.getAttribute(dim.attr) || "";
 }
-function apply(dim, name) {
+function apply$1(dim, name) {
 	if (name) document.documentElement.setAttribute(dim.attr, name);
 	else document.documentElement.removeAttribute(dim.attr);
 	try {
@@ -28205,7 +28248,7 @@ function Appearance(_) {
 		"data-surface-choice": name,
 		onClick: () => {
 			setSurface(name);
-			apply(DIMS.surface, name);
+			apply$1(DIMS.surface, name);
 		},
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "sw-dot",
@@ -28262,7 +28305,7 @@ function Appearance(_) {
 				"data-accent-choice": name,
 				onClick: () => {
 					setAccent(name);
-					apply(DIMS.accent, name);
+					apply$1(DIMS.accent, name);
 				},
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sw-dot",
@@ -29240,6 +29283,7 @@ var STATE_CLS = {
 function stateChip(ss) {
 	let cls = STATE_CLS[ss.state];
 	if (ss.label === "Paused") cls = "s-paused";
+	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
 	return {
 		label: ss.label,
@@ -36730,12 +36774,31 @@ function memoryDetail(m) {
 	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
 	return bits.join(" · ");
 }
+function jobName(j) {
+	if (j.session) return j.session;
+	return (j.cwd || "").replace(/\/+$/, "").split("/").pop() || (j.pid ? "pid " + j.pid : "a job");
+}
+function slotsLine(s) {
+	if (!s || !s.running && !s.waiting) return "";
+	const holders = s.pools.flatMap((p) => p.holders);
+	const bits = [];
+	if (holders.length) {
+		const names = holders.slice(0, 2).map(jobName).join(", ");
+		const more = holders.length > 2 ? " +" + (holders.length - 2) : "";
+		bits.push(names + more + " running");
+	}
+	if (s.waiting) bits.push(s.waiting + " waiting for a slot");
+	return "Heavy jobs: " + bits.join(" · ");
+}
 function MemoryNotice() {
 	const { data, isError } = useMemory();
 	const [hiddenAt, setHiddenAt] = (0, import_react.useState)(0);
 	const rank = RANK$1[data?.level || "ok"] ?? 0;
+	const shown = !!data && !isError && rank > 0 && !(hiddenAt && rank <= hiddenAt);
+	const { data: slots } = useSlots(shown);
 	if (hiddenAt && (rank === 0 || rank > hiddenAt)) setHiddenAt(0);
-	if (!data || isError || rank === 0 || hiddenAt && rank <= hiddenAt) return null;
+	if (!data || !shown) return null;
+	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-notice",
@@ -36749,6 +36812,10 @@ function MemoryNotice() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail",
 				children: memoryDetail(data)
+			}),
+			heavy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mn-detail mn-slots",
+				children: heavy
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
@@ -37969,6 +38036,20 @@ function Banner({ block, title }) {
 	});
 }
 //#endregion
+//#region src/lib/wake.ts
+async function wakeSession(title) {
+	try {
+		await instApi(title, "/wake", { method: "POST" });
+	} catch (e) {
+		toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
+		return false;
+	}
+	forceActivity(title, "idle");
+	toast("Waking " + displayName(title) + "…");
+	refreshInstances();
+	return true;
+}
+//#endregion
 //#region src/lib/stopBackgroundJob.ts
 async function stopBackgroundJob(title, pid) {
 	try {
@@ -38949,6 +39030,18 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						"aria-hidden": "true",
 						children: "↻ Restart"
 					})]
+				}) : inst.sleeping && !inst.device && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "stagechip chip-restart chip-wake " + chip.cls,
+					title: chip.title,
+					"aria-label": "Sleeping — wake the agent",
+					onClick: (e) => act(() => void wakeSession(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "chip-act",
+						"aria-hidden": "true",
+						children: "Wake"
+					})]
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip " + chip.cls,
 					title: chip.title,
@@ -39509,15 +39602,18 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
+function offlineRows(instances) {
+	return instances.filter((i) => {
+		if (i.device || i.pending || i.sleeping) return false;
+		const ss = deriveSessionState(i);
+		return ss.state === "offline" && ss.restartable && i.status !== "paused";
+	});
+}
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const offline = instances.filter((i) => {
-		if (i.device || i.pending) return false;
-		const ss = deriveSessionState(i);
-		return ss.state === "offline" && ss.restartable && i.status !== "paused";
-	});
+	const offline = offlineRows(instances);
 	if (offline.length < 2 && !busy) return null;
 	const titles = offline.map((i) => i.title);
 	const low = memory?.level === "low" || memory?.level === "critical";
@@ -39552,6 +39648,42 @@ function OfflineBar() {
 			title: "Relaunch every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: restarts wait for headroom, and the rest are held back if none comes." : ""),
 			onClick: () => void run(),
 			children: "↻ Restart all"
+		})]
+	});
+}
+//#endregion
+//#region src/components/sidebar/PeerSharedRows.tsx
+function PeerSharedRows() {
+	const links = usePeerLinks().data?.links || [];
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const theirs = links.filter((l) => l.connected && l.their_share?.shared);
+	if (!theirs.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "peer-shared-rows",
+		role: "group",
+		"aria-label": "Shared with you",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psr-head",
+			children: "Shared with you"
+		}), theirs.map((l) => {
+			const running = l.their_share?.agent === "running";
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "psr-row",
+				title: "Watch " + l.peer_name + "’s shared session — their screen, files and changes",
+				onClick: () => openDialogFor("peer-session", l.link_id),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "psr-dot" + (running ? " running" : ""),
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [l.peer_name, "’s session"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "psr-sub",
+						children: running ? "running" : "stopped"
+					})
+				]
+			}, l.link_id);
 		})]
 	});
 }
@@ -42456,6 +42588,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -75207,6 +75340,7 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReviveOnStartRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SleepIdleRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "general-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
@@ -75276,9 +75410,9 @@ function ReviveOnStartRow() {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint notif-rule-desc",
-					children: "Restart running agents on their own after MindFlock restarts."
+					children: "Restart running agents on their own after MindFlock restarts, or after the system kills one for memory."
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LearnMore, { children: "Without this, they wait as Offline until you click Restart. Paused sessions and sessions out of usage are left alone." })
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LearnMore, { children: "Without this, they wait as Offline until you click Restart. An agent killed for running out of memory comes back once memory recovers, at most 3 times an hour. Paused sessions and sessions out of usage are left alone." })
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
@@ -75290,6 +75424,29 @@ function ReviveOnStartRow() {
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
+	});
+}
+function SleepIdleRow() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "general-sleep-idle",
+		title: "0 turns sleeping off. Empty = 45 minutes. While memory is low, idle agents sleep after 5 minutes.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Put idle agents to sleep after (minutes, 0 = never)"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "sleep_idle_minutes",
+				type: "number",
+				placeholder: "45"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "An agent that finished its turn and sits unwatched, with nothing queued, stops its CLI and MCP servers to free their memory and shows Sleeping. Opening it or sending it anything wakes it, back in the same conversation. While memory is low this happens after 5 minutes."
+			})
+		]
 	});
 }
 function GettingStarted() {
@@ -76535,6 +76692,7 @@ function PeerLinkCard(props) {
 	const [target, setTarget] = (0, import_react.useState)("");
 	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
 	const [confirm, setConfirm] = (0, import_react.useState)("");
+	const [browsing, setBrowsing] = (0, import_react.useState)("");
 	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
 	const [reconnect, setReconnect] = (0, import_react.useState)("");
 	const [msgsOpen, setMsgsOpen] = (0, import_react.useState)(false);
@@ -76706,6 +76864,13 @@ function PeerLinkCard(props) {
 							value: target,
 							onChange: (e) => setTarget(e.target.value)
 						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							"aria-expanded": browsing === "export",
+							onClick: () => setBrowsing(browsing === "export" ? "" : "export"),
+							children: "Browse…"
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							placeholder: "peer/branch",
 							value: exportBranch,
@@ -76723,6 +76888,15 @@ function PeerLinkCard(props) {
 						})
 					]
 				}),
+				browsing === "export" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+					initialPath: target.trim(),
+					selected: target.trim(),
+					onSelect: setTarget,
+					onPick: (p) => {
+						setTarget(p);
+						setBrowsing("");
+					}
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn",
@@ -76730,13 +76904,20 @@ function PeerLinkCard(props) {
 					onClick: () => setConfirm("unshare"),
 					children: "Stop sharing…"
 				})
-			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			] }) : sandbox ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-row",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						placeholder: "repo path to share",
+						placeholder: "folder to share",
 						value: repo,
 						onChange: (e) => setRepo(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						"aria-expanded": browsing === "share",
+						onClick: () => setBrowsing(browsing === "share" ? "" : "share"),
+						children: "Browse…"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						placeholder: "branch (optional)",
@@ -76767,7 +76948,15 @@ function PeerLinkCard(props) {
 						children: busy === "share" ? "Sharing…" : "Share a folder"
 					})
 				]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			}), browsing === "share" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+				initialPath: repo.trim(),
+				selected: repo.trim(),
+				onSelect: setRepo,
+				onPick: (p) => {
+					setRepo(p);
+					setBrowsing("");
+				}
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "set-hint",
 				children: [
 					"Here you can message ",
@@ -76794,6 +76983,14 @@ function PeerLinkCard(props) {
 						disabled: !!busy || !link.connected,
 						onClick: showDiff,
 						children: busy === "diff" ? "Loading…" : "Their changes"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !link.connected,
+						title: link.connected ? "Their screen, files and changes" : "They're offline",
+						onClick: () => useUi.getState().openDialogFor("peer-session", link.link_id),
+						children: "Watch their session"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -78611,6 +78808,129 @@ function LocalModel(_) {
 	] });
 }
 //#endregion
+//#region src/components/settings/screens/SharedMcpServers.tsx
+function SharedMcpServers() {
+	const s = useSettings();
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [failed, setFailed] = (0, import_react.useState)(false);
+	const stored = s.get("general", "mcp_shared_servers");
+	const shared = Array.isArray(stored) ? stored : [];
+	const load = (0, import_react.useCallback)(() => {
+		api("/api/settings/mcp-shared").then((r) => {
+			setInfo(r || null);
+			setFailed(false);
+		}).catch(() => setFailed(true));
+	}, []);
+	(0, import_react.useEffect)(load, [load]);
+	const toggle = async (name, on) => {
+		const next = shared.filter((n) => n !== name);
+		if (on) next.push(name);
+		await s.saveField("general", "mcp_shared_servers", next);
+		toast(on ? `${name} shared — from each session's next launch` : `${name} back to one copy per window — from each session's next launch`);
+		load();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServersView, {
+		info,
+		failed,
+		shared,
+		onToggle: toggle
+	});
+}
+function SharedMcpServersView({ info, failed, shared, onToggle }) {
+	const upstream = (name) => info?.bridge?.upstreams?.find((u) => u.name === name);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Shared MCP servers"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Every agent window starts its own copy of each MCP server in your Claude config — often hundreds of MB per window. A server switched on here runs once on this machine and every session connects to that copy. Applies on each session's next launch; needs the MindFlock MCP switch above to be on."
+		}),
+		failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Couldn't read your MCP servers."
+		}),
+		!failed && info === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Reading your MCP servers…"
+		}),
+		info && !info.available && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint mcp-share-unavailable",
+			children: "Off on this machine: the server was started with MINDFLOCK_MCP_SHARE=0 (or this OS has no bridge)."
+		}),
+		info && info.servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted mcp-share-empty",
+			children: "No MCP servers in your Claude config."
+		}),
+		info && info.servers.map((row) => {
+			const on = shared.includes(row.name);
+			const up = upstream(row.name);
+			const refused = Object.keys(up?.refused_requests || {});
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row mcp-share-row",
+				"data-mcp-server": row.name,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-label",
+						children: [
+							row.name,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted mcp-share-cmd",
+								children: row.command
+							})
+						]
+					}), row.shareable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint notif-rule-desc",
+						children: [
+							row.caution ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "mcp-share-caution",
+								children: row.caution
+							}) : "One copy for every session instead of one per window.",
+							on && up?.running && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-live",
+								children: [
+									" ",
+									"Running once (pid ",
+									up.pid,
+									") for ",
+									up.sessions,
+									" session",
+									up.sessions === 1 ? "" : "s",
+									"."
+								]
+							}),
+							on && refused.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-caution",
+								children: [
+									" ",
+									"It asked the client for ",
+									refused.join(", "),
+									", which a shared copy can't answer — switch it off."
+								]
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						children: row.reason
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ca-switch",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						"aria-label": `Share ${row.name} across sessions`,
+						checked: on && row.shareable,
+						disabled: !row.shareable || !info.available,
+						onChange: (e) => onToggle(row.name, e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+				})]
+			}, row.name);
+		})
+	] });
+}
+//#endregion
 //#region src/components/settings/screens/AgentOrchestration.tsx
 function AgentOrchestration(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -78648,7 +78968,8 @@ function AgentOrchestration(_) {
 			field: "agent_max_spawn_depth",
 			label: "Nesting depth",
 			hint: "How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServers, {})
 	] });
 }
 function CapRow({ cap, field, label, hint }) {
@@ -86938,6 +87259,389 @@ function warnZones(title, breaches, proceed) {
 	}]);
 }
 //#endregion
+//#region src/lib/ansiSpans.ts
+var BASE16 = [
+	"#000000",
+	"#cd3131",
+	"#0dbc79",
+	"#e5e510",
+	"#2472c8",
+	"#bc3fbc",
+	"#11a8cd",
+	"#e5e5e5",
+	"#666666",
+	"#f14c4c",
+	"#23d18b",
+	"#f5f543",
+	"#3b8eea",
+	"#d670d6",
+	"#29b8db",
+	"#ffffff"
+];
+function xterm256(n) {
+	if (n < 16) return BASE16[n];
+	if (n < 232) {
+		const i = n - 16;
+		const step = (v) => v === 0 ? 0 : 55 + v * 40;
+		return `rgb(${step(Math.floor(i / 36))},${step(Math.floor(i / 6) % 6)},${step(i % 6)})`;
+	}
+	const g = 8 + (n - 232) * 10;
+	return `rgb(${g},${g},${g})`;
+}
+function apply(style, params) {
+	const s = { ...style };
+	if (!params.length) params = [0];
+	for (let i = 0; i < params.length; i++) {
+		const p = params[i];
+		if (p === 0) for (const k of Object.keys(s)) delete s[k];
+		else if (p === 1) s.bold = true;
+		else if (p === 2) s.dim = true;
+		else if (p === 3) s.italic = true;
+		else if (p === 4) s.underline = true;
+		else if (p === 7) s.reverse = true;
+		else if (p === 22) s.bold = s.dim = void 0;
+		else if (p === 23) s.italic = void 0;
+		else if (p === 24) s.underline = void 0;
+		else if (p === 27) s.reverse = void 0;
+		else if (p >= 30 && p <= 37) s.color = BASE16[p - 30];
+		else if (p >= 90 && p <= 97) s.color = BASE16[p - 90 + 8];
+		else if (p === 39) s.color = void 0;
+		else if (p >= 40 && p <= 47) s.background = BASE16[p - 40];
+		else if (p >= 100 && p <= 107) s.background = BASE16[p - 100 + 8];
+		else if (p === 49) s.background = void 0;
+		else if (p === 38 || p === 48) {
+			const key = p === 38 ? "color" : "background";
+			if (params[i + 1] === 5 && params[i + 2] !== void 0) {
+				s[key] = xterm256(Math.max(0, Math.min(255, params[i + 2])));
+				i += 2;
+			} else if (params[i + 1] === 2 && params[i + 4] !== void 0) {
+				const [r, g, b] = params.slice(i + 2, i + 5).map((v) => Math.max(0, Math.min(255, v)));
+				s[key] = `rgb(${r},${g},${b})`;
+				i += 4;
+			}
+		}
+	}
+	return s;
+}
+function ansiLines(text) {
+	const lines = [];
+	let style = {};
+	for (const raw of text.split("\n")) {
+		const runs = [];
+		const re = /\x1b\[([0-9;:]*)m/g;
+		let pos = 0;
+		let m;
+		while (m = re.exec(raw)) {
+			if (m.index > pos) runs.push({
+				text: raw.slice(pos, m.index),
+				style
+			});
+			const params = m[1] ? m[1].split(/[;:]/).map((x) => Number(x) || 0) : [];
+			style = apply(style, params);
+			pos = re.lastIndex;
+		}
+		if (pos < raw.length) runs.push({
+			text: raw.slice(pos),
+			style
+		});
+		lines.push(runs);
+	}
+	while (lines.length && lines[lines.length - 1].every((r) => !r.text.trim())) lines.pop();
+	return lines;
+}
+function runCss(s) {
+	const css = {};
+	let fg = s.color;
+	let bg = s.background;
+	if (s.reverse) [fg, bg] = [bg || "var(--bg)", fg || "var(--text)"];
+	if (fg) css.color = fg;
+	if (bg) css.background = bg;
+	if (s.bold) css.fontWeight = "700";
+	if (s.dim) css.opacity = "0.7";
+	if (s.italic) css.fontStyle = "italic";
+	if (s.underline) css.textDecoration = "underline";
+	return css;
+}
+//#endregion
+//#region src/components/PeerSessionViewer.tsx
+var SCREEN_POLL_MS = 1500;
+function PeerSessionViewer() {
+	const open = useUi((s) => s.openDialog === "peer-session");
+	const linkId = useUi((s) => s.openDialog === "peer-session" ? s.dialogTarget : null);
+	const close = useUi((s) => s.closeDialog);
+	if (!open || !linkId) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Viewer, {
+		linkId,
+		onClose: close
+	});
+}
+function Viewer({ linkId, onClose }) {
+	const link = (usePeerLinks().data?.links || []).find((l) => l.link_id === linkId);
+	const name = link?.peer_name || "them";
+	const base = "/api/peer/links/" + encodeURIComponent(linkId);
+	const [tab, setTab] = (0, import_react.useState)("session");
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const send = async () => {
+		const text = draft.trim();
+		if (!text || sending) return;
+		setSending(true);
+		try {
+			const r = await api(base + "/message", { json: { text } });
+			setDraft("");
+			toast(r.delivered ? "Sent to " + name : name + " isn't taking messages right now — it's in your log");
+		} catch (e) {
+			toast("Couldn't send — " + errMsg(e));
+		}
+		setSending(false);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "peer-session-dialog",
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-card",
+			role: "dialog",
+			"aria-label": name + "'s shared session",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "psv-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "psv-title",
+							children: [name, "’s shared session"]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "psv-state" + (link?.connected ? " on" : ""),
+							children: link?.connected ? "connected" : "offline"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "psv-tabs",
+							role: "tablist",
+							children: [
+								"session",
+								"files",
+								"changes"
+							].map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								role: "tab",
+								"aria-selected": tab === t,
+								className: "psv-tab" + (tab === t ? " active" : ""),
+								onClick: () => setTab(t),
+								children: t === "session" ? "Session" : t === "files" ? "Files" : "Changes"
+							}, t))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "psv-close",
+							"aria-label": "Close",
+							onClick: onClose,
+							children: "×"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "psv-body",
+					children: [
+						tab === "session" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionTab, {
+							base,
+							name
+						}),
+						tab === "files" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FilesTab, { base }),
+						tab === "changes" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChangesTab, { base })
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+					className: "psv-say",
+					onSubmit: (e) => {
+						e.preventDefault();
+						send();
+					},
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						placeholder: "Message " + name + " (their agent sees it too)",
+						value: draft,
+						onChange: (e) => setDraft(e.target.value)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						disabled: !draft.trim() || sending,
+						children: sending ? "Sending…" : "Send"
+					})]
+				})
+			]
+		})
+	});
+}
+function SessionTab({ base, name }) {
+	const [screen, setScreen] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		let timer;
+		const tick = async () => {
+			try {
+				const s = await api(base + "/their-screen");
+				if (!live) return;
+				setScreen(s);
+				setErr("");
+			} catch (e) {
+				if (live) setErr(errMsg(e));
+			}
+			if (live) timer = setTimeout(() => void tick(), SCREEN_POLL_MS);
+		};
+		tick();
+		return () => {
+			live = false;
+			if (timer) clearTimeout(timer);
+		};
+	}, [base]);
+	const lines = (0, import_react.useMemo)(() => ansiLines(screen?.text || ""), [screen?.text]);
+	if (err && !screen) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!screen) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "psv-msg",
+		children: [
+			"Asking ",
+			name,
+			" for their screen…"
+		]
+	});
+	if (screen.agent !== "running") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: screen.agent === "stopped" ? name + "’s shared session isn’t running right now." : name + " hasn’t started a shared session."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [err && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "error psv-msg",
+		children: [err, " (showing the last screen)"]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+		className: "psv-screen",
+		style: screen.cols ? { minWidth: screen.cols + "ch" } : void 0,
+		children: lines.map((runs, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psv-line",
+			children: runs.length ? runs.map((r, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				style: runCss(r.style),
+				children: r.text
+			}, j)) : " "
+		}, i))
+	})] });
+}
+function FilesTab({ base }) {
+	const [files, setFiles] = (0, import_react.useState)(null);
+	const [truncated, setTruncated] = (0, import_react.useState)(false);
+	const [filter, setFilter] = (0, import_react.useState)("");
+	const [open, setOpen] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api(base + "/their-files").then((r) => {
+			if (!live) return;
+			setFiles(r.files || []);
+			setTruncated(!!r.truncated);
+		}).catch((e) => live && setErr(errMsg(e)));
+		return () => {
+			live = false;
+		};
+	}, [base]);
+	const read = async (path) => {
+		setErr("");
+		try {
+			setOpen(await api(base + "/their-file?path=" + encodeURIComponent(path)));
+		} catch (e) {
+			setErr(errMsg(e));
+		}
+	};
+	if (err && !files) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!files) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "Listing their folder…"
+	});
+	const q = filter.trim().toLowerCase();
+	const shown = q ? files.filter((f) => f.toLowerCase().includes(q)) : files;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "psv-files",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-filelist",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					placeholder: "Filter files",
+					value: filter,
+					onChange: (e) => setFilter(e.target.value)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: shown.slice(0, 2e3).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: open?.path === f ? "active" : "",
+					title: f,
+					onClick: () => void read(f),
+					children: f
+				}) }, f)) }),
+				(truncated || shown.length > 2e3) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "psv-note",
+					children: "Not every file is listed — filter to narrow it."
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "psv-file",
+			children: [err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error psv-msg",
+				children: err
+			}), !open ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "psv-msg",
+				children: "Pick a file to read it."
+			}) : open.encoding !== "utf-8" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "psv-msg",
+				children: [
+					open.path,
+					" is a binary file (",
+					open.size,
+					" bytes)."
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "psv-filehead",
+				children: [open.path, open.truncated ? " — only the first part is shown" : ""]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+				className: "psv-code",
+				children: open.content
+			})] })]
+		})]
+	});
+}
+function ChangesTab({ base }) {
+	const [diff, setDiff] = (0, import_react.useState)(null);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api(base + "/diff").then((r) => live && setDiff(r)).catch((e) => live && setErr(errMsg(e)));
+		return () => {
+			live = false;
+		};
+	}, [base]);
+	if (err) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "error psv-msg",
+		children: err
+	});
+	if (!diff) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "Asking for their changes…"
+	});
+	if (!diff.diff.trim()) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "psv-msg",
+		children: "No changes yet."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("pre", {
+		className: "psv-code psv-diff",
+		children: [diff.diff.split("\n").map((l, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "",
+			children: l || " "
+		}, i)), diff.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "psv-note",
+			children: "… the rest is cut off"
+		})]
+	});
+}
+//#endregion
 //#region src/components/dialogs/MakePrDialog.tsx
 function MakePrDialog() {
 	const open = useUi((s) => s.openDialog === "make-pr");
@@ -90129,6 +90833,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),

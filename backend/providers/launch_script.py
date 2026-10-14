@@ -23,6 +23,7 @@ when the engine half of the package is not installed at all.
 
 from __future__ import annotations
 
+import os
 import shlex
 from typing import Optional, Sequence
 
@@ -30,6 +31,12 @@ from .base import LauncherSpec
 
 __all__ = [
     "SEED_FN",
+    "OOM_SCORE_ADJ",
+    "KILLED_EXIT_CODE",
+    "oom_score_adj",
+    "oom_score_line",
+    "oom_score_prefix",
+    "unless_killed",
     "spec_for",
     "apply_binary_override",
     "launch_program",
@@ -50,6 +57,28 @@ _SEED_BUFFER = "mf_prompt"
 
 #: How long the keystroke seeder waits for a TUI to finish drawing, in 1s ticks.
 _SEED_WAIT_TICKS = 60
+
+#: The ``oom_score_adj`` every agent launch gives itself before it starts the
+#: CLI (Linux; -1000..1000, 0 = what every other process has). Inherited across
+#: fork and exec, so the CLI, its MCP servers and everything the agent runs —
+#: test suites, builds — carry it too. When the machine runs out of memory the
+#: kernel kills the process with the highest *badness*: its memory plus
+#: ``adj/1000`` of RAM+swap. Without this the biggest single process was the
+#: MindFlock server itself (measured 2026-10-14: the OOM killer took the 2.1 GB
+#: server rather than the 1.3 GB pytest workers agents had started), and every
+#: agent went down with it. At 500 any agent-tree process outranks the server,
+#: and the largest of them — the runaway test run, usually — goes first.
+#: Raising the value needs no privilege (only going below 0 would), and the
+#: server's own score is left alone — see docs/session-engine.md.
+#: ``MINDFLOCK_OOM_SCORE_ADJ`` overrides it (``0`` turns it off).
+OOM_SCORE_ADJ = 500
+
+#: Exit status of a CLI that died to SIGKILL (128 + 9): what the OOM killer
+#: leaves behind (and ``kill -9``). The resume fallbacks below never treat it
+#: as "the resume failed" — relaunching a CLI the kernel just killed for memory
+#: is the server's call (:mod:`backend.web.core.revive`), made once memory
+#: has recovered, not the launch chain's three seconds later.
+KILLED_EXIT_CODE = 137
 
 
 def spec_for(program: str) -> LauncherSpec:
@@ -162,6 +191,60 @@ def seed_by_keys_function(prompt_path: str, fn_name: str = SEED_FN) -> str:
     )
 
 
+def oom_score_adj() -> int:
+    """The ``oom_score_adj`` launches give themselves: :data:`OOM_SCORE_ADJ`,
+    or ``MINDFLOCK_OOM_SCORE_ADJ`` when set to an integer (clamped to 1000;
+    ``0`` or below = off, returned as 0). Garbage reads as the default."""
+    raw = os.environ.get("MINDFLOCK_OOM_SCORE_ADJ", "").strip()
+    if not raw:
+        return OOM_SCORE_ADJ
+    try:
+        value = int(raw)
+    except ValueError:
+        return OOM_SCORE_ADJ
+    return max(0, min(1000, value))
+
+
+def oom_score_line() -> str:
+    """One shell statement raising the running shell's own ``oom_score_adj``
+    (see :data:`OOM_SCORE_ADJ`), or ``""`` when turned off.
+
+    POSIX sh, bash and zsh alike, and silent wherever it can't apply: no
+    ``/proc`` (macOS), a read-only ``/proc``, or a write the kernel refuses
+    (only a value below the process's floor — 0 unless something privileged
+    set one — needs privilege; this one is positive). The brace
+    group is what makes it silent: ``echo … > f 2>/dev/null`` reports a failed
+    ``> f`` before the ``2>`` applies. A builtin ``echo`` writes from the shell
+    itself, so ``/proc/self`` is the shell that goes on to start the CLI."""
+    value = oom_score_adj()
+    if value <= 0:
+        return ""
+    return "{ echo %d >/proc/self/oom_score_adj; } 2>/dev/null || :" % value
+
+
+def oom_score_prefix() -> str:
+    """:func:`oom_score_line` as a prefix for a one-line command (``"…; "``),
+    or ``""`` when turned off."""
+    line = oom_score_line()
+    return line + "; " if line else ""
+
+
+def unless_killed(cmd: str) -> str:
+    """The body of a ``|| …`` fallback that does NOT run after a SIGKILL.
+
+    ``a || b`` runs ``b`` whenever ``a`` fails — including when ``a`` ran for
+    an hour and the OOM killer took it. Every resume chain's fallbacks (retry
+    the resume, then start fresh — re-seeded, for a CLI that takes its prompt
+    as an argument) exist for a resume that FAILED, so after
+    :data:`KILLED_EXIT_CODE` they pass the status through instead: the
+    command's own exit code stays 137 for the launch wrapper's exit marker,
+    and the relaunch waits for memory (:mod:`backend.web.core.revive`).
+    ``(exit N)`` sets the status without leaving the shell, so a wrapper's
+    trailing ``echo $? > marker`` still runs."""
+    k = KILLED_EXIT_CODE
+    return "if [ $? -eq %d ]; then (exit %d); else %s; fi" % (k, k, cmd)
+
+
 def env_exports(env) -> str:
     """``export K=V`` lines for ``env`` (sorted, values shell-quoted), or ``""``.
 
@@ -263,7 +346,10 @@ def launch_command(
     # path: local models are the privacy feature, and an auth profile quietly
     # re-routing a session off the machine is the one outcome that story cannot
     # afford.
-    preamble = env_exports({**prof_env, **local_env})
+    # The OOM score goes first, so everything after it — the CLI and all it
+    # runs — inherits it (see OOM_SCORE_ADJ).
+    oom = oom_score_line()
+    preamble = (oom + "\n" if oom else "") + env_exports({**prof_env, **local_env})
     if not prompt_path:
         return preamble, base
     if spec.prompt_arg:
