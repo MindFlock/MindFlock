@@ -65733,6 +65733,763 @@ function openingMode(o) {
 	return "fresh";
 }
 //#endregion
+//#region src/components/dialogs/newSession/AgentAccount.tsx
+function accountSetter(ctx) {
+	const { authProfiles, program, profileModels, canonAgent, setAgent, setProfileId, setProfileModel, setProfileModels } = ctx;
+	const setAccount = (id, agentNow) => {
+		setProfileId(id);
+		setProfileModel("");
+		const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
+		if (!prof) return;
+		const supported = prof.supported_agents || [];
+		const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
+		if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
+			const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
+			setAgent(preferred);
+		}
+		if (prof.kind === "openrouter" && !profileModels[id]) (async () => {
+			try {
+				const r = await api("/api/settings/test/openrouter", { json: { profile_id: id } });
+				if (r?.ok && r.models?.length) setProfileModels((m) => ({
+					...m,
+					[id]: r.models || []
+				}));
+			} catch {}
+		})();
+	};
+	return setAccount;
+}
+function AgentFields({ scope = "new", defaultLabel, program, providers, installed = null, setAgent, device, authProfiles, profileId, pendingProfile, setAccount, closeDialog }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-agent",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "nf-agent-head",
+			children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: scope + "-agent-manage",
+				className: "linklike",
+				title: "Install, sign in and pick your default agent in Settings → Agents",
+				onClick: () => {
+					closeDialog();
+					openSettings("coding");
+				},
+				children: "Manage"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+			id: scope + "-program",
+			title: defaultLabel ? "The agent each session from this template runs" : "The agent this session runs",
+			value: program,
+			onChange: (e) => setAgent(e.target.value),
+			children: [
+				defaultLabel !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: defaultLabel
+				}),
+				!providers.some((p) => p.name === program) && program && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: program,
+					children: program
+				}),
+				providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+					value: p.name,
+					children: [p.name, installed && installed[p.name] === false ? " (not installed)" : ""]
+				}, p.name))
+			]
+		})]
+	}), !device && setAccount && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-agent",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "nf-agent-head",
+			children: ["Account", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-account-manage",
+				className: "linklike",
+				title: "Manage accounts in Settings",
+				onClick: () => {
+					closeDialog();
+					openSettings("accounts");
+				},
+				children: "Manage"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+			id: "new-account",
+			title: "Which identity this session's CLI runs as",
+			value: profileId,
+			onChange: (e) => {
+				if (pendingProfile) pendingProfile.current = null;
+				setAccount(e.target.value);
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: authProfiles?.default_profile ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "default",
+					children: "CLI's own login"
+				}),
+				(authProfiles?.profiles || []).map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: p.id,
+					children: p.label || p.id
+				}, p.id))
+			]
+		})]
+	})] });
+}
+function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, profileModels, program, canonAgent }) {
+	const routeWarning = (() => {
+		if (!selectedProfile) return "";
+		const supported = selectedProfile.supported_agents || [];
+		if (!!selectedProfile.env && Object.keys(selectedProfile.env).length > 0 || !supported.length) return "";
+		if (supported.includes(canonAgent(program))) return "";
+		return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
+	})();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "nf-quick",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "nf-agent",
+				style: { flex: 1 },
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-agent-head",
+					children: "Model"
+				}), (profileModels[profileId] || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "new-account-model",
+					title: "Model this session runs on (through the selected account)",
+					value: profileModel,
+					onChange: (e) => setProfileModel(e.target.value),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default"
+						}),
+						profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+							value: profileModel,
+							children: [profileModel, " (custom)"]
+						}),
+						(profileModels[profileId] || []).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: m,
+							children: m
+						}, m))
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "new-account-model",
+					type: "text",
+					autoComplete: "off",
+					placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
+					value: profileModel,
+					onChange: (e) => setProfileModel(e.target.value)
+				})]
+			})
+		}),
+		routeWarning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge",
+			children: routeWarning
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", { id: "provider-list" })
+	] });
+}
+//#endregion
+//#region src/components/dialogs/newSession/FolderBrowser.tsx
+function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick }) {
+	const [data, setData] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
+	const [making, setMaking] = (0, import_react.useState)(false);
+	const listRef = (0, import_react.useRef)(null);
+	const newFolderRef = (0, import_react.useRef)(null);
+	const leaving = (0, import_react.useRef)(null);
+	const load = (0, import_react.useCallback)(async (path) => {
+		setError("");
+		try {
+			const q = path ? "?path=" + encodeURIComponent(path) : "";
+			setData(await deviceApi(device)("/api/browse" + q));
+		} catch (err) {
+			leaving.current = null;
+			setError(err.message);
+		}
+	}, [device]);
+	(0, import_react.useEffect)(() => {
+		load(initialPath);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const from = leaving.current;
+		if (from === null || !data) return;
+		leaving.current = null;
+		const idx = focusRowIndex((data.entries || []).map((e) => e.path), from);
+		const rows = listRef.current?.querySelectorAll(".rb-item:not(.rb-use)");
+		(idx >= 0 ? rows?.[idx] : listRef.current?.querySelector(".rb-use"))?.focus();
+	}, [data]);
+	const keyLoad = (to) => {
+		leaving.current = data?.path || "";
+		load(to);
+	};
+	const mkdir = async () => {
+		const name = (newFolder || "").trim();
+		if (!data?.path || !name || making) return;
+		setError("");
+		setMaking(true);
+		try {
+			const r = await deviceApi(device)("/api/mkdir", { json: {
+				path: data.path,
+				name
+			} });
+			setNewFolder(null);
+			onPick(r.path);
+		} catch (err) {
+			setError(err.message);
+		} finally {
+			setMaking(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "repo-browser",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "rb-up",
+						title: "Parent folder",
+						"aria-label": "Parent folder",
+						disabled: !data?.parent,
+						onClick: () => data?.parent && load(data.parent),
+						children: "←"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						id: "rb-cwd",
+						className: "rb-cwd",
+						title: data?.path || "",
+						children: data?.path || ""
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "rb-mkdir",
+						title: "Create a new folder here",
+						"aria-expanded": newFolder !== null,
+						onClick: () => {
+							setNewFolder(newFolder === null ? "" : null);
+							setError("");
+						},
+						children: "+ Folder"
+					})
+				]
+			}),
+			newFolder !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-new",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					ref: newFolderRef,
+					type: "text",
+					className: "rb-new-name",
+					value: newFolder,
+					autoFocus: true,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "New folder name",
+					"aria-label": "New folder in " + (data?.path || ""),
+					readOnly: making,
+					onChange: (e) => setNewFolder(e.target.value),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							mkdir();
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							setNewFolder(null);
+						}
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-new-go",
+					disabled: !newFolder.trim() || making,
+					onClick: mkdir,
+					children: making ? "Creating…" : "Create"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "rb-list",
+				ref: listRef,
+				children: [data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
+					title: "Use " + data.path + " and close the browser",
+					onClick: () => onPick(data.path),
+					children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
+				}), (data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
+					"aria-pressed": selected === e.path,
+					title: e.path,
+					onClick: () => onSelect(e.path),
+					onDoubleClick: () => {
+						onSelect(e.path);
+						load(e.path);
+					},
+					onKeyDown: (ev) => {
+						if (ev.key === "ArrowRight") {
+							ev.preventDefault();
+							onSelect(e.path);
+							keyLoad(e.path);
+						} else if (ev.key === "ArrowLeft" && data?.parent) {
+							ev.preventDefault();
+							keyLoad(data.parent);
+						}
+					},
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rb-name",
+						children: (e.is_git ? "📦 " : "📁 ") + e.name
+					})
+				}, e.path))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "rb-hint",
+				children: "Click selects · double-click or → opens · ← up · Esc cancels"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				id: "rb-error",
+				className: "error",
+				children: error
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/newSession/FolderPicker.tsx
+function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, setSearchSel, searchListRef, searchSel, search, searchOpen }) {
+	(0, import_react.useEffect)(() => {
+		const asked = repoPath.trim();
+		if (!open || !asked || !looksLikePath(asked)) {
+			setFolderCheck(null);
+			return;
+		}
+		let live = true;
+		const timer = window.setTimeout(async () => {
+			try {
+				const r = await dapi("/api/repos/check?path=" + encodeURIComponent(asked));
+				if (live) setFolderCheck({
+					asked,
+					plain: !!r.exists && !!r.is_dir && !r.is_git,
+					isGit: !!r.is_git,
+					resolved: r.path || "",
+					branchPrefix: r.branch_prefix || ""
+				});
+			} catch {
+				if (live) setFolderCheck(null);
+			}
+		}, CHECK_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(timer);
+		};
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
+	(0, import_react.useEffect)(() => {
+		const asked = repoPath.trim();
+		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
+			setSearch(null);
+			return;
+		}
+		let live = true;
+		const timer = window.setTimeout(async () => {
+			try {
+				const r = await dapi("/api/repos/search?q=" + encodeURIComponent(asked));
+				if (!live) return;
+				setSearch({
+					asked,
+					matches: r.matches || [],
+					truncated: !!r.truncated,
+					home: r.home || ""
+				});
+				setSearchSel(0);
+			} catch {
+				if (live) setSearch(null);
+			}
+		}, SEARCH_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(timer);
+		};
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
+	(0, import_react.useEffect)(() => {
+		const row = searchListRef.current?.querySelector("[aria-selected=\"true\"]");
+		if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+	}, [
+		searchSel,
+		search,
+		searchOpen
+	]);
+}
+function matchPicker(folderDo, setSearchOpen) {
+	return (path) => {
+		folderDo({
+			t: "user-set",
+			path
+		});
+		setSearchOpen(false);
+	};
+}
+function SuggestRow({ scope, suggestions, folderPath, folderDo }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const ref = (0, import_react.useRef)(null);
+	const moreRef = (0, import_react.useRef)(null);
+	const groups = SUGGEST_SOURCES.map((g) => ({
+		...g,
+		items: suggestions.filter((s) => s.source === g.key)
+	})).filter((g) => g.items.length > 0);
+	const total = groups.reduce((n, g) => n + g.items.length, 0);
+	(0, import_react.useLayoutEffect)(() => {
+		const el = ref.current;
+		const more = moreRef.current;
+		if (!el || !more) return;
+		const kids = Array.from(el.children).filter((k) => k !== more && !k.classList.contains("nf-suggest-break"));
+		const fit = () => {
+			for (const k of kids) k.classList.remove("nt-clipped");
+			more.classList.remove("nt-clipped");
+			if (open) {
+				more.textContent = "Fewer";
+				return;
+			}
+			const right = el.getBoundingClientRect().right;
+			if (!(right > 0)) return;
+			more.textContent = total + " more…";
+			const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+			const hidden = foldChipRow(kids.map((k) => ({
+				label: k.classList.contains("nf-suggest-label"),
+				right: k.getBoundingClientRect().right
+			})), right, more.getBoundingClientRect().width + gap);
+			kids.forEach((k, i) => k.classList.toggle("nt-clipped", hidden[i]));
+			const n = kids.filter((k, i) => hidden[i] && !k.classList.contains("nf-suggest-label")).length;
+			if (n) more.textContent = n + " more…";
+			else more.classList.add("nt-clipped");
+		};
+		fit();
+		const ro = new ResizeObserver(fit);
+		ro.observe(el);
+		return () => ro.disconnect();
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: scope + "-suggest",
+		ref,
+		className: "nf-suggest nf-folders" + (open ? " open" : ""),
+		role: "group",
+		"aria-label": "Folders you might mean",
+		children: [groups.flatMap((g, gi) => [
+			...gi ? [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nf-suggest-break",
+				"aria-hidden": "true"
+			}, "b:" + g.key)] : [],
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nf-suggest-label",
+				title: g.hint,
+				children: g.label
+			}, "l:" + g.key),
+			...g.items.map((s) => {
+				const active = folderPath === s.path;
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
+					"data-path": s.path,
+					"aria-pressed": active,
+					title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
+					onClick: () => {
+						folderDo({
+							t: "user-set",
+							path: s.path
+						});
+						setOpen(false);
+					},
+					children: (s.is_git ? "📦 " : "📁 ") + s.name
+				}, s.path);
+			})
+		]), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			ref: moreRef,
+			className: "nt-chip nf-more",
+			id: scope + "-suggest-more",
+			"aria-expanded": open,
+			title: open ? "Back to one line" : "Show all " + total + " folders",
+			onClick: () => setOpen((o) => !o)
+		})]
+	});
+}
+function folderIds(scope) {
+	return {
+		input: scope + "-repo-path",
+		browse: scope === "new" ? "repo-browse-btn" : scope + "-browse",
+		search: scope + "-search",
+		list: scope + "-search-list",
+		hit: scope + "-search-hit-"
+	};
+}
+function FolderField({ scope = "new", placeholder = "/home/me/projects/foo — or a folder name to look up", repoRef, repoPath, folderPath, folderDo, search, searchHits, searchSel, setSearchSel, setSearchOpen, selIndex, browserOpen, pickMatch }) {
+	const ids = folderIds(scope);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "nf-folder",
+		title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
+		children: ["Folder", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "repo-path-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: ids.input,
+				ref: repoRef,
+				autoComplete: "off",
+				placeholder,
+				value: repoPath,
+				role: "combobox",
+				"aria-expanded": !!searchHits,
+				"aria-controls": ids.list,
+				"aria-autocomplete": "list",
+				"aria-activedescendant": selIndex >= 0 ? ids.hit + selIndex : void 0,
+				onChange: (e) => {
+					folderDo({
+						t: "user-set",
+						path: e.target.value
+					});
+					setSearchOpen(true);
+				},
+				onKeyDown: (e) => {
+					const hits = searchHits?.matches || [];
+					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+						if (!searchHits && search && search.asked === folderPath && !browserOpen) {
+							e.preventDefault();
+							setSearchOpen(true);
+							return;
+						}
+						if (!hits.length) return;
+						e.preventDefault();
+						const step = e.key === "ArrowDown" ? 1 : -1;
+						const at = Math.min(searchSel, hits.length - 1) + step;
+						setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
+					} else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && isNameQuery(folderPath)) {
+						e.preventDefault();
+						if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
+						else if (search && search.asked === folderPath && !browserOpen) setSearchOpen(true);
+					} else if (e.key === "Escape" && searchHits) {
+						e.preventDefault();
+						e.stopPropagation();
+						setSearchOpen(false);
+					}
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: ids.browse,
+				className: "repo-browse",
+				title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
+				onClick: () => folderDo(browserOpen ? {
+					t: "browse-commit",
+					path: repoPath
+				} : { t: "browse-open" }),
+				children: "Browse…"
+			})]
+		})]
+	});
+}
+function FolderAids({ scope = "new", searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device }) {
+	const onlyCurrent = suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
+	const ids = folderIds(scope);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		searchHits && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: ids.search,
+			className: "new-templates nf-suggest nf-search",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "nt-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						"Matches for “",
+						searchHits.asked,
+						"”"
+					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "nf-suggest-legend",
+						children: "↑↓ choose · Enter fills · Esc closes"
+					})]
+				}),
+				searchHits.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: ids.list,
+					className: "nf-search-list",
+					ref: searchListRef,
+					role: "listbox",
+					"aria-label": "Folder matches",
+					children: searchHits.matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						id: ids.hit + i,
+						type: "button",
+						role: "option",
+						"aria-selected": i === selIndex,
+						className: "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : ""),
+						"data-path": m.path,
+						title: m.path + (m.is_git ? "" : "\nno git repo here yet"),
+						onMouseMove: () => setSearchSel(i),
+						onClick: () => pickMatch(m.path),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nf-search-name",
+							children: (m.is_git ? "📦 " : "📁 ") + m.name
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nf-search-path",
+							children: homeRelative(m.path, searchHits.home || homePath)
+						})]
+					}, m.path))
+				}),
+				searchHits.matches.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "nf-search-empty muted",
+					children: searchHits.truncated ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"The search stopped at its time and size limit before it found “",
+						searchHits.asked,
+						"” — Browse… walks straight to it, and a path starting with / or ~ is used exactly as typed."
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						"No folder called “",
+						searchHits.asked,
+						"” in the first three levels under your home directory — the search doesn’t look inside git repos or hidden folders. Browse… reaches those and the rest of the disk, and a path starting with / or ~ is used exactly as typed."
+					] })
+				}),
+				searchHits.matches.length > 0 && searchHits.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "nf-search-note muted",
+					children: "The search stopped early, so this list may not be everything — Browse… if the folder you want isn’t here."
+				})
+			]
+		}),
+		newFolderRow,
+		plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge",
+			children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				"No git repo in this folder, so diff, commit and PR stay off.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					title: "Ticks “Create a git repo in this folder”",
+					onClick: armInitRepo,
+					children: "Create one"
+				})
+			] })
+		}),
+		suggestions.length > 0 && !onlyCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SuggestRow, {
+			scope,
+			suggestions,
+			folderPath,
+			folderDo
+		}),
+		browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+			device,
+			initialPath: folderPath || homePath || "",
+			selected: folderPath,
+			onSelect: (p) => folderDo({
+				t: "browse-select",
+				path: p
+			}),
+			onPick: (p) => folderDo({
+				t: "browse-commit",
+				path: p
+			})
+		})
+	] });
+}
+//#endregion
+//#region src/components/dialogs/newSession/PromptFold.tsx
+var TASK_MAX_PX = 220;
+function TaskField({ scope = "new", hint = "what the agent starts on; blank starts it idle", placeholder = "e.g. add a section about setup to the README", prompt, setPrompt, presetValue = "", setPresetValue, savedPresets = [] }) {
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		const ta = ref.current;
+		if (!ta) return;
+		ta.style.height = "auto";
+		const edge = ta.offsetHeight - ta.clientHeight;
+		ta.style.height = Math.min(TASK_MAX_PX, ta.scrollHeight + edge) + "px";
+	}, [prompt]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: scope + "-prompt-fold",
+		className: "nf-task",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "nf-task-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				htmlFor: scope + "-prompt",
+				children: ["Task ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					children: ["— ", hint]
+				})]
+			}), setPresetValue && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "preset-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "new-preset",
+					"aria-label": "Insert a prompt",
+					title: "Put one of your prompts in the Task box (you can edit it after)",
+					value: presetValue,
+					onChange: (e) => {
+						setPresetValue(e.target.value);
+						const p = findPreset(e.target.value);
+						if (p) setPrompt(p.prompt);
+					},
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "Insert a prompt…"
+						}),
+						BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+							label: "Built-in",
+							children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "b:" + p.name,
+								title: p.prompt,
+								children: p.name
+							}, "b:" + p.name))
+						}),
+						savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+							label: "Saved",
+							children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "u:" + p.name,
+								title: p.prompt,
+								children: p.name
+							}, "u:" + p.name))
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "preset-manage",
+					className: "linklike",
+					title: "Add or remove prompts, or pick one for this Task — you come back here on Close",
+					onClick: () => useUi.getState().openDialogFor("prompts", "new"),
+					children: "Manage…"
+				})]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+			id: scope + "-prompt",
+			ref,
+			rows: 2,
+			autoComplete: "off",
+			spellCheck: false,
+			placeholder,
+			value: prompt,
+			onChange: (e) => setPrompt(e.target.value)
+		})]
+	});
+}
+function PlanFirstRow({ prompt, planOk, planFirst, setPlanFirst }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "check" + (planOk ? "" : " disabled"),
+		id: "new-plan-first-row",
+		title: planOk ? "Before any edit, the agent lists the files it will change and why, then waits. Review it on the session's Map tab and press Go." : "Only an agent that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				id: "new-plan-first",
+				checked: planFirst && planOk,
+				disabled: !planOk,
+				onChange: (e) => setPlanFirst(e.target.checked)
+			}),
+			"Plan first",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: !planOk ? "(needs an agent with plan support — Claude)" : prompt.trim() ? "— the agent lists the files it will change and waits for your OK (Map tab)" : "— needs a task: the agent lists the files it will change and waits for your OK"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/dialogs/newSession/WorkspaceFold.tsx
 function useBaseBranches({ open, page, repoPath, dapi, setBaseBranch, setBranches }) {
 	(0, import_react.useEffect)(() => {
@@ -65791,7 +66548,30 @@ function WorktreeText() {
 		desc: WORKTREE_HINT
 	});
 }
-function ProvisionCheck({ id, rowId, checked, onChange }) {
+function StackedCheck({ id, rowId, checked, onChange, title, desc }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		id: rowId,
+		className: "check nf-opt nf-opt-check",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "checkbox",
+			id,
+			checked,
+			onChange: (e) => onChange(e.target.checked)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+			title,
+			desc
+		})]
+	});
+}
+function ProvisionCheck({ id, rowId, checked, onChange, stacked }) {
+	if (stacked) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StackedCheck, {
+		id,
+		rowId,
+		checked,
+		onChange,
+		title: "Provision the worktree",
+		desc: "Also runs the repo's setup and warms test caches"
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		id: rowId,
 		className: "check",
@@ -65825,7 +66605,14 @@ function StrategyPicker({ id, value, onChange }) {
 		})]
 	})] });
 }
-function InitRepoCheck({ id, checked, onChange }) {
+function InitRepoCheck({ id, checked, onChange, stacked }) {
+	if (stacked) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StackedCheck, {
+		id,
+		checked,
+		onChange,
+		title: "Create a git repo in this folder",
+		desc: "git init + first commit — turns on diff, commit and PR"
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "check",
 		children: [
@@ -65861,94 +66648,108 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 	const worktree = !inPlace || laneNeedsWorktree || provisionOn;
 	const warn = sharedCheckoutWarning(sharers);
 	const othersLine = warn && !worktree ? "" : otherSessionsLine(others, worktree);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorksInGroup, {
+		scope: "new",
+		worktree,
+		onWorktree: () => setInPlace(false),
+		onInPlace: () => {
+			if (laneNeedsWorktree) draft.setLane("leave");
+			setSplit(false);
+			setInPlace(true);
+			setProvision(false);
+		},
+		inPlaceDesc: splitOn ? "Turns auto-split off — a split works in its own worktree" : laneNeedsWorktree ? "Turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT,
+		underWorktree: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			worktree && isGit && !worktreeClamped && (name || continueBranch) && (continueBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
+				parts: [
+					"Works on ",
+					continueBranch,
+					" itself"
+				],
+				muted: "shared with whoever pushed it"
+			}) : name && name.from === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, { parts: [
+				"New branch ",
+				prefix + "…",
+				" from your task" + (baseLabel ? " · cut from " : ""),
+				baseLabel
+			] }) : name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
+				parts: [
+					"New branch ",
+					name.branch,
+					baseLabel ? " · cut from " : "",
+					baseLabel
+				],
+				muted: name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""
+			}) : null),
+			name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "nf-opt-sub nf-git-nudge",
+				id: "new-name-clash",
+				role: "status",
+				children: [
+					"A session called “",
+					name.title,
+					"” already exists — give this one another name under More options, or clear it to name it from the task."
+				]
+			}),
+			othersLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nf-opt-sub nf-branch-line nf-others",
+				id: "new-others",
+				role: "status",
+				children: othersLine
+			}),
+			worktree && worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nf-opt-sub nf-git-nudge",
+				children: worktreeClamped
+			})
+		] }),
+		underInPlace: warn && !worktree ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-opt-sub nf-git-nudge nf-share-warn",
+			id: "new-share-warn",
+			role: "status",
+			children: warn
+		}) : null
+	});
+}
+function WorksInGroup({ scope, worktree, onWorktree, onInPlace, inPlaceDesc, underWorktree, underInPlace, after }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "new-works-in",
+		id: scope + "-works-in",
 		className: "rt-row rt-row-top nf-works-in",
 		"data-caps": "git",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "rt-label",
-			id: "new-mode-label",
+			id: scope + "-mode-label",
 			children: "Works in"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "rt-ctl nf-mode",
 			role: "radiogroup",
-			"aria-labelledby": "new-mode-label",
+			"aria-labelledby": scope + "-mode-label",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "check nf-opt",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "radio",
-						name: "new-workspace-mode",
-						id: "new-worktree",
+						name: scope + "-workspace-mode",
+						id: scope + "-worktree",
 						checked: worktree,
-						onChange: () => setInPlace(false)
+						onChange: onWorktree
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorktreeText, {})]
 				}),
-				worktree && isGit && !worktreeClamped && (name || continueBranch) && (continueBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
-					parts: [
-						"Works on ",
-						continueBranch,
-						" itself"
-					],
-					muted: "shared with whoever pushed it"
-				}) : name && name.from === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, { parts: [
-					"New branch ",
-					prefix + "…",
-					" from your task" + (baseLabel ? " · cut from " : ""),
-					baseLabel
-				] }) : name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
-					parts: [
-						"New branch ",
-						name.branch,
-						baseLabel ? " · cut from " : "",
-						baseLabel
-					],
-					muted: name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""
-				}) : null),
-				name?.clash && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "nf-opt-sub nf-git-nudge",
-					id: "new-name-clash",
-					role: "status",
-					children: [
-						"A session called “",
-						name.title,
-						"” already exists — give this one another name under More options, or clear it to name it from the task."
-					]
-				}),
-				othersLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-opt-sub nf-branch-line nf-others",
-					id: "new-others",
-					role: "status",
-					children: othersLine
-				}),
-				worktree && worktreeClamped && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-opt-sub nf-git-nudge",
-					children: worktreeClamped
-				}),
+				underWorktree,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "check nf-opt",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "radio",
-						name: "new-workspace-mode",
-						id: "new-in-place",
+						name: scope + "-workspace-mode",
+						id: scope + "-in-place",
 						checked: !worktree,
-						onChange: () => {
-							if (laneNeedsWorktree) draft.setLane("leave");
-							setSplit(false);
-							setInPlace(true);
-							setProvision(false);
-						}
+						onChange: onInPlace
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
 						title: "This folder directly",
-						desc: splitOn ? "Turns auto-split off — a split works in its own worktree" : laneNeedsWorktree ? "Turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
+						desc: inPlaceDesc
 					})]
 				}),
-				warn && !worktree && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-opt-sub nf-git-nudge nf-share-warn",
-					id: "new-share-warn",
-					role: "status",
-					children: warn
-				})
+				underInPlace,
+				after
 			]
 		})]
 	});
@@ -66105,50 +66906,7 @@ function GitOptions({ provision, setProvision, setInPlace, provisionOn, offerPro
 	});
 }
 //#endregion
-//#region src/components/dialogs/TemplatesDialog.tsx
-function localZone() {
-	try {
-		return new Intl.DateTimeFormat(void 0, { timeZoneName: "short" }).formatToParts(/* @__PURE__ */ new Date()).find((x) => x.type === "timeZoneName")?.value || "";
-	} catch {
-		return "";
-	}
-}
-var TEMPLATES_UI_INIT = {
-	editing: null,
-	confirming: null,
-	error: ""
-};
-function templatesReducer(s, a) {
-	switch (a.t) {
-		case "edit":
-		case "schedule": return {
-			editing: a.name,
-			confirming: null,
-			error: ""
-		};
-		case "new": return {
-			editing: "",
-			confirming: null,
-			error: ""
-		};
-		case "ask-delete": return {
-			editing: null,
-			confirming: a.name,
-			error: ""
-		};
-		case "cancel":
-		case "saved":
-		case "deleted": return {
-			editing: null,
-			confirming: null,
-			error: ""
-		};
-		case "error": return {
-			...s,
-			error: a.message
-		};
-	}
-}
+//#region src/components/dialogs/TemplateEditor.tsx
 function cadenceKey(s) {
 	if (!s) return "";
 	return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
@@ -66209,6 +66967,366 @@ function scheduleOf(f, at, cron) {
 	if (f.skip_until && sameCadence && f.skip_until > Date.now() / 1e3) out.skip_until = f.skip_until;
 	return out;
 }
+function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
+	if (!pv) return "";
+	if (!pv.ok) return pv.error || "Not a cron expression";
+	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
+	return (pv.label || "") + (next ? " — next " + next : "");
+}
+var TEMPLATE_BROWSE_INIT = {
+	browsing: false,
+	undo: null
+};
+function templateFolderStep(path, browse, a) {
+	const next = folderReducer({
+		path,
+		browsing: browse.browsing,
+		undo: browse.undo,
+		touched: true
+	}, a);
+	return {
+		path: next.path,
+		browse: {
+			browsing: next.browsing,
+			undo: next.undo
+		}
+	};
+}
+function useTemplateFolder(path, setPath) {
+	const [browse, setBrowse] = (0, import_react.useState)(TEMPLATE_BROWSE_INIT);
+	const folderDo = (a) => {
+		const next = templateFolderStep(path, browse, a);
+		if (next.path !== path) setPath(next.path);
+		setBrowse(next.browse);
+	};
+	return {
+		browsing: browse.browsing,
+		folderDo
+	};
+}
+function TemplateEditor(p) {
+	const { form, onForm } = p;
+	const path = form.repo_path;
+	const { browsing, folderDo } = useTemplateFolder(path, (repo_path) => onForm({ repo_path }));
+	const folderPath = path.trim();
+	const dapi = (0, import_react.useMemo)(() => deviceApi(""), []);
+	const [folderCheck, setFolderCheck] = (0, import_react.useState)(null);
+	const [search, setSearch] = (0, import_react.useState)(null);
+	const [searchSel, setSearchSel] = (0, import_react.useState)(0);
+	const [searchOpen, setSearchOpen] = (0, import_react.useState)(true);
+	const searchListRef = (0, import_react.useRef)(null);
+	useFolderLookups({
+		open: true,
+		repoPath: path,
+		dapi,
+		setFolderCheck,
+		setSearch,
+		setSearchSel,
+		searchListRef,
+		searchSel,
+		search,
+		searchOpen
+	});
+	const searchHits = search && search.asked === folderPath && searchOpen && !browsing ? search : null;
+	const selIndex = searchHits && searchHits.matches.length ? Math.min(searchSel, searchHits.matches.length - 1) : -1;
+	const checked = folderCheck?.asked === folderPath ? folderCheck : null;
+	const plainFolder = !!checked?.plain;
+	const isGit = !!checked?.isGit;
+	const pickMatch = matchPicker(folderDo, setSearchOpen);
+	if (p.escapeRef) p.escapeRef.current = () => {
+		if (!browsing) return false;
+		folderDo({ t: "browse-cancel" });
+		return true;
+	};
+	const setPrompt = (v) => onForm({ prompt: typeof v === "function" ? v(form.prompt) : v });
+	const elsewhere = p.runs && !p.runs.runs_here && p.runs.runs_on;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "tpl-editor",
+		onSubmit: (e) => {
+			e.preventDefault();
+			p.onSave();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "tpl-name-field",
+				children: ["Name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "tpl-name",
+					autoComplete: "off",
+					value: form.name,
+					onChange: (e) => onForm({ name: e.target.value }),
+					placeholder: "e.g. nightly-deps"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nf-quick",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderField, {
+					scope: "tpl",
+					placeholder: "Needed to Run now or schedule",
+					repoPath: path,
+					folderPath,
+					folderDo,
+					search,
+					searchHits,
+					searchSel,
+					setSearchSel,
+					setSearchOpen,
+					selIndex,
+					browserOpen: browsing,
+					pickMatch
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentFields, {
+					scope: "tpl",
+					defaultLabel: "Your default agent",
+					program: form.program,
+					providers: (p.agents || []).map((name) => ({ name })),
+					setAgent: (program) => onForm({ program }),
+					device: "",
+					closeDialog: () => useUi.getState().closeDialog()
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderAids, {
+				scope: "tpl",
+				searchHits,
+				selIndex,
+				searchListRef,
+				setSearchSel,
+				pickMatch,
+				homePath: p.homePath || "",
+				newFolderRow: null,
+				plainFolder,
+				initRepo: form.init_repo,
+				armInitRepo: () => onForm({ init_repo: true }),
+				suggestions: p.folderSuggestions || [],
+				folderPath,
+				folderDo,
+				browserOpen: browsing,
+				device: ""
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TaskField, {
+				scope: "tpl",
+				hint: "what each session from it starts on",
+				placeholder: "e.g. update dependencies, run the tests and fix what breaks",
+				prompt: form.prompt,
+				setPrompt
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-rows",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorksInGroup, {
+						scope: "tpl",
+						worktree: form.mode !== "in_place",
+						onWorktree: () => onForm({ mode: "worktree" }),
+						onInPlace: () => onForm({
+							mode: "in_place",
+							autopilot: ""
+						}),
+						inPlaceDesc: form.autopilot ? "Turns the autopilot off — it needs its own worktree" : IN_PLACE_HINT,
+						underWorktree: form.mode !== "in_place" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "nf-opt-sub tpl-provision",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProvisionCheck, {
+								stacked: true,
+								id: "tpl-provision",
+								checked: form.mode === "provisioned",
+								onChange: (on) => onForm({ mode: on ? "provisioned" : "worktree" })
+							}), form.mode === "provisioned" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StrategyPicker, {
+								id: "tpl-strategy",
+								value: form.workspace_strategy,
+								onChange: (v) => onForm({ workspace_strategy: v })
+							})]
+						}),
+						after: (!isGit || form.init_repo) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InitRepoCheck, {
+							stacked: true,
+							id: "tpl-init",
+							checked: form.init_repo,
+							onChange: (on) => onForm({ init_repo: on })
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-row rt-row-top",
+						id: "tpl-schedule-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-label",
+							id: "tpl-schedule-label",
+							children: "Schedule"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rt-ctl tpl-schedule",
+							role: "group",
+							"aria-labelledby": "tpl-schedule-label",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "check nf-opt nf-opt-check",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "checkbox",
+										id: "tpl-scheduled",
+										checked: form.scheduled,
+										onChange: (e) => onForm({ scheduled: e.target.checked })
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
+										title: "Run on a schedule",
+										desc: "Starts a new session from it, by itself"
+									})]
+								}),
+								form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "tpl-schedule-when",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+										id: "tpl-days",
+										"aria-label": "Which days",
+										value: form.days,
+										onChange: (e) => onForm({ days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily" }),
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												value: "daily",
+												children: "Every day"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												value: "weekdays",
+												children: "Weekdays"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+												value: "cron",
+												children: "Custom (cron)"
+											})
+										]
+									}), form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										id: "tpl-cron",
+										"aria-label": "Cron expression",
+										autoComplete: "off",
+										spellCheck: false,
+										value: form.cron,
+										onChange: (e) => onForm({ cron: e.target.value }),
+										placeholder: "*/30 * * * *"
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "tpl-at",
+											children: "at"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+											id: "tpl-at",
+											type: "time",
+											"aria-label": "Time",
+											autoFocus: p.scheduleFocus === true,
+											value: form.at,
+											onChange: (e) => onForm({ at: e.target.value })
+										}),
+										p.tz && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "muted tpl-tz",
+											children: [p.tz, " — this device's time"]
+										})
+									] })]
+								}),
+								form.scheduled && form.days === "cron" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted"),
+									id: "tpl-cron-preview",
+									"aria-live": "polite",
+									children: cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"
+								}),
+								form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+									className: "tpl-cron-preview muted",
+									children: [elsewhere ? "Starts on " + p.runs?.runs_on + " — the device that runs automation. " : "", "Skipped while the last run is still working or waiting on you."]
+								})
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-row",
+						id: "tpl-autopilot-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-label",
+							id: "tpl-autopilot-label",
+							children: "When a run's turn ends"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rt-ctl",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+								id: "tpl-autopilot",
+								"aria-labelledby": "tpl-autopilot-label",
+								value: form.autopilot,
+								onChange: (e) => {
+									const autopilot = e.target.value;
+									onForm(autopilot && form.mode === "in_place" ? {
+										autopilot,
+										mode: "worktree"
+									} : { autopilot });
+								},
+								children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: v,
+									children: label
+								}, v || "leave"))
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted tpl-autopilot-hint",
+								children: "each Run now and scheduled run"
+							})]
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-row-actions",
+				children: [
+					p.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "error",
+						"aria-live": "polite",
+						children: p.error
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tpl-cancel",
+						onClick: p.onCancel,
+						children: "Cancel"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						className: "tpl-save",
+						disabled: p.busy,
+						children: p.busy ? "Saving…" : "Save"
+					})
+				]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/dialogs/TemplatesDialog.tsx
+function localZone() {
+	try {
+		return new Intl.DateTimeFormat(void 0, { timeZoneName: "short" }).formatToParts(/* @__PURE__ */ new Date()).find((x) => x.type === "timeZoneName")?.value || "";
+	} catch {
+		return "";
+	}
+}
+var TEMPLATES_UI_INIT = {
+	editing: null,
+	confirming: null,
+	error: ""
+};
+function templatesReducer(s, a) {
+	switch (a.t) {
+		case "edit":
+		case "schedule": return {
+			editing: a.name,
+			confirming: null,
+			error: ""
+		};
+		case "new": return {
+			editing: "",
+			confirming: null,
+			error: ""
+		};
+		case "ask-delete": return {
+			editing: null,
+			confirming: a.name,
+			error: ""
+		};
+		case "cancel":
+		case "saved":
+		case "deleted": return {
+			editing: null,
+			confirming: null,
+			error: ""
+		};
+		case "error": return {
+			...s,
+			error: a.message
+		};
+	}
+}
 function renameLeaves(oldName, newName) {
 	const a = oldName.trim().toLowerCase();
 	const b = newName.trim().toLowerCase();
@@ -66234,12 +67352,6 @@ function historyLine(h, now = /* @__PURE__ */ new Date()) {
 	else if (h.error) line += " — failed: " + h.error;
 	else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
 	return line;
-}
-function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
-	if (!pv) return "";
-	if (!pv.ok) return pv.error || "Not a cron expression";
-	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
-	return (pv.label || "") + (next ? " — next " + next : "");
 }
 function cadenceLine(t, info) {
 	const tz = info.tz;
@@ -66276,255 +67388,22 @@ function TemplatesDialogView(p) {
 		runs_on: ""
 	};
 	const loadError = p.loadError || "";
-	const editor = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-		className: "tpl-editor",
-		onSubmit: (e) => {
-			e.preventDefault();
-			p.onSave();
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "tpl-name",
-				autoComplete: "off",
-				value: form.name,
-				onChange: (e) => p.onForm({ name: e.target.value }),
-				placeholder: "e.g. fix-tests"
-			})] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-two",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					id: "tpl-program",
-					value: form.program,
-					onChange: (e) => p.onForm({ program: e.target.value }),
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "Your default agent"
-						}),
-						form.program && !(p.agents || []).includes(form.program) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: form.program,
-							children: form.program
-						}),
-						(p.agents || []).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: a,
-							children: a
-						}, a))
-					]
-				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-					"Folder ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "— needed to Run now or schedule"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						id: "tpl-repo",
-						autoComplete: "off",
-						value: form.repo_path,
-						onChange: (e) => p.onForm({ repo_path: e.target.value }),
-						placeholder: "/home/me/projects/foo"
-					})
-				] })]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-				"Task ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "— what the session starts on"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-					id: "tpl-prompt",
-					rows: 4,
-					value: form.prompt,
-					onChange: (e) => p.onForm({ prompt: e.target.value })
-				})
-			] }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-mode",
-				role: "radiogroup",
-				"aria-label": "Works in",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "tpl-mode-label",
-						children: "Works in"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check nf-opt",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "tpl-mode",
-							id: "tpl-worktree",
-							checked: form.mode !== "in_place",
-							onChange: () => p.onForm({ mode: "worktree" })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorktreeText, {})]
-					}),
-					form.mode !== "in_place" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "tpl-mode-sub",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProvisionCheck, {
-							id: "tpl-provision",
-							checked: form.mode === "provisioned",
-							onChange: (on) => p.onForm({ mode: on ? "provisioned" : "worktree" })
-						}), form.mode === "provisioned" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StrategyPicker, {
-							id: "tpl-strategy",
-							value: form.workspace_strategy,
-							onChange: (v) => p.onForm({ workspace_strategy: v })
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check nf-opt",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "tpl-mode",
-							id: "tpl-in-place",
-							checked: form.mode === "in_place",
-							onChange: () => p.onForm({
-								mode: "in_place",
-								autopilot: ""
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModeText, {
-							title: "This folder directly",
-							desc: form.autopilot ? "Turns the autopilot off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InitRepoCheck, {
-						id: "tpl-init",
-						checked: form.init_repo,
-						onChange: (on) => p.onForm({ init_repo: on })
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-schedule",
-				role: "group",
-				"aria-label": "Schedule",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "check",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								id: "tpl-scheduled",
-								checked: form.scheduled,
-								onChange: (e) => p.onForm({ scheduled: e.target.checked })
-							}),
-							"Run on a schedule ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "muted",
-								children: "— starts a new session from it, by itself"
-							})
-						]
-					}),
-					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "tpl-schedule-when",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-								id: "tpl-days",
-								"aria-label": "Which days",
-								value: form.days,
-								onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily" }),
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-										value: "daily",
-										children: "Every day"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-										value: "weekdays",
-										children: "Weekdays"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-										value: "cron",
-										children: "Custom (cron)"
-									})
-								]
-							}),
-							form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								id: "tpl-cron",
-								"aria-label": "Cron expression",
-								autoComplete: "off",
-								spellCheck: false,
-								value: form.cron,
-								onChange: (e) => p.onForm({ cron: e.target.value }),
-								placeholder: "*/30 * * * *"
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									id: "tpl-at",
-									type: "time",
-									"aria-label": "Time",
-									autoFocus: ui.editing !== null && p.scheduleFocus === true,
-									value: form.at,
-									onChange: (e) => p.onForm({ at: e.target.value })
-								}),
-								p.tz && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "muted",
-									children: [p.tz, " — this device's time"]
-								})
-							] }),
-							p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "muted",
-								children: [
-									"Starts on ",
-									p.runs.runs_on,
-									" — the device that runs automation."
-								]
-							})
-						]
-					}),
-					form.scheduled && form.days === "cron" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted"),
-						id: "tpl-cron-preview",
-						"aria-live": "polite",
-						children: cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"
-					}),
-					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "tpl-cron-preview muted",
-						children: "A scheduled run is skipped while the previous one is still working or waiting on you."
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "tpl-autopilot",
-				children: [
-					"When a run's turn ends",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-						id: "tpl-autopilot",
-						value: form.autopilot,
-						onChange: (e) => {
-							const autopilot = e.target.value;
-							p.onForm(autopilot && form.mode === "in_place" ? {
-								autopilot,
-								mode: "worktree"
-							} : { autopilot });
-						},
-						children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: v,
-							children: label
-						}, v || "leave"))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "— each Run now and scheduled run"
-					})
-				]
-			}),
-			ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				"aria-live": "polite",
-				children: ui.error
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "tpl-row-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					onClick: () => p.dispatch({ t: "cancel" }),
-					children: "Cancel"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "submit",
-					disabled: busy,
-					children: busy ? "Saving…" : "Save"
-				})]
-			})
-		]
+	const escapeRef = (0, import_react.useRef)(null);
+	const editor = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplateEditor, {
+		form,
+		onForm: p.onForm,
+		error: ui.error,
+		busy,
+		onSave: p.onSave,
+		onCancel: () => p.dispatch({ t: "cancel" }),
+		agents: p.agents,
+		scheduleFocus: ui.editing !== null && p.scheduleFocus === true,
+		tz: p.tz,
+		cronPreview: p.cronPreview,
+		runs: p.runs,
+		folderSuggestions: p.folderSuggestions,
+		homePath: p.homePath,
+		escapeRef
 	});
 	const now = p.now || /* @__PURE__ */ new Date();
 	const infoFor = (t) => runs.runs[t.name.trim().toLowerCase()] || {};
@@ -66756,6 +67635,7 @@ function TemplatesDialogView(p) {
 		id: "templates-dialog",
 		onClose: p.onClose,
 		onEscape: () => {
+			if (ui.editing !== null && escapeRef.current?.()) return true;
 			if (ui.editing === null && !ui.confirming) return false;
 			p.dispatch({ t: "cancel" });
 			return true;
@@ -66931,6 +67811,16 @@ function TemplatesDialog() {
 	const [scheduleFocus, setScheduleFocus] = (0, import_react.useState)(false);
 	const [preview, setPreview] = (0, import_react.useState)(null);
 	const editingRef = (0, import_react.useRef)(null);
+	const [folderSuggestions, setFolderSuggestions] = (0, import_react.useState)([]);
+	const suggestAsked = (0, import_react.useRef)(false);
+	const { data: config } = useConfig();
+	const editorOpen = open && ui.editing !== null;
+	(0, import_react.useEffect)(() => {
+		if (!open) suggestAsked.current = false;
+		if (!editorOpen || suggestAsked.current) return;
+		suggestAsked.current = true;
+		api("/api/repos/suggest").then((d) => setFolderSuggestions(d.suggestions || [])).catch(() => setFolderSuggestions([]));
+	}, [open, editorOpen]);
 	const wantsPreview = open && ui.editing !== null && form.scheduled && form.days === "cron";
 	const cronText = form.cron.trim();
 	(0, import_react.useEffect)(() => {
@@ -67097,6 +67987,8 @@ function TemplatesDialog() {
 			dispatch(a);
 		},
 		agents,
+		folderSuggestions,
+		homePath: config?.home || "",
 		scheduleFocus,
 		tz: Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || localZone(),
 		onSave: () => void save(),
@@ -68516,172 +69408,6 @@ function newSessionSubmit(ctx) {
 	};
 }
 //#endregion
-//#region src/components/dialogs/newSession/FolderBrowser.tsx
-function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick }) {
-	const [data, setData] = (0, import_react.useState)(null);
-	const [error, setError] = (0, import_react.useState)("");
-	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
-	const [making, setMaking] = (0, import_react.useState)(false);
-	const listRef = (0, import_react.useRef)(null);
-	const newFolderRef = (0, import_react.useRef)(null);
-	const leaving = (0, import_react.useRef)(null);
-	const load = (0, import_react.useCallback)(async (path) => {
-		setError("");
-		try {
-			const q = path ? "?path=" + encodeURIComponent(path) : "";
-			setData(await deviceApi(device)("/api/browse" + q));
-		} catch (err) {
-			leaving.current = null;
-			setError(err.message);
-		}
-	}, [device]);
-	(0, import_react.useEffect)(() => {
-		load(initialPath);
-	}, []);
-	(0, import_react.useEffect)(() => {
-		const from = leaving.current;
-		if (from === null || !data) return;
-		leaving.current = null;
-		const idx = focusRowIndex((data.entries || []).map((e) => e.path), from);
-		const rows = listRef.current?.querySelectorAll(".rb-item:not(.rb-use)");
-		(idx >= 0 ? rows?.[idx] : listRef.current?.querySelector(".rb-use"))?.focus();
-	}, [data]);
-	const keyLoad = (to) => {
-		leaving.current = data?.path || "";
-		load(to);
-	};
-	const mkdir = async () => {
-		const name = (newFolder || "").trim();
-		if (!data?.path || !name || making) return;
-		setError("");
-		setMaking(true);
-		try {
-			const r = await deviceApi(device)("/api/mkdir", { json: {
-				path: data.path,
-				name
-			} });
-			setNewFolder(null);
-			onPick(r.path);
-		} catch (err) {
-			setError(err.message);
-		} finally {
-			setMaking(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "repo-browser",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rb-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "rb-up",
-						title: "Parent folder",
-						"aria-label": "Parent folder",
-						disabled: !data?.parent,
-						onClick: () => data?.parent && load(data.parent),
-						children: "←"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						id: "rb-cwd",
-						className: "rb-cwd",
-						title: data?.path || "",
-						children: data?.path || ""
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "rb-mkdir",
-						title: "Create a new folder here",
-						"aria-expanded": newFolder !== null,
-						onClick: () => {
-							setNewFolder(newFolder === null ? "" : null);
-							setError("");
-						},
-						children: "+ Folder"
-					})
-				]
-			}),
-			newFolder !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rb-new",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					ref: newFolderRef,
-					type: "text",
-					className: "rb-new-name",
-					value: newFolder,
-					autoFocus: true,
-					autoComplete: "off",
-					spellCheck: false,
-					placeholder: "New folder name",
-					"aria-label": "New folder in " + (data?.path || ""),
-					readOnly: making,
-					onChange: (e) => setNewFolder(e.target.value),
-					onKeyDown: (e) => {
-						e.stopPropagation();
-						if (e.key === "Enter") {
-							e.preventDefault();
-							mkdir();
-						} else if (e.key === "Escape") {
-							e.preventDefault();
-							setNewFolder(null);
-						}
-					}
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-new-go",
-					disabled: !newFolder.trim() || making,
-					onClick: mkdir,
-					children: making ? "Creating…" : "Create"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "rb-list",
-				ref: listRef,
-				children: [data && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
-					title: "Use " + data.path + " and close the browser",
-					onClick: () => onPick(data.path),
-					children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
-				}), (data?.entries || []).map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
-					"aria-pressed": selected === e.path,
-					title: e.path,
-					onClick: () => onSelect(e.path),
-					onDoubleClick: () => {
-						onSelect(e.path);
-						load(e.path);
-					},
-					onKeyDown: (ev) => {
-						if (ev.key === "ArrowRight") {
-							ev.preventDefault();
-							onSelect(e.path);
-							keyLoad(e.path);
-						} else if (ev.key === "ArrowLeft" && data?.parent) {
-							ev.preventDefault();
-							keyLoad(data.parent);
-						}
-					},
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "rb-name",
-						children: (e.is_git ? "📦 " : "📁 ") + e.name
-					})
-				}, e.path))]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "rb-hint",
-				children: "Click selects · double-click or → opens · ← up · Esc cancels"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				id: "rb-error",
-				className: "error",
-				children: error
-			})
-		]
-	});
-}
-//#endregion
 //#region src/components/dialogs/newSession/DescribeSection.tsx
 function describeFlow(ctx) {
 	const { describe, prompt, carried, startRaw, describing, newFolderOk, dapi, planRun, lastAnswer, submitArmAt, focusFolderNext, foldOpenedByPlan, folderDo, planFolderDo, setError, setTitle, setPrompt, setInPlace, setInitRepo, setNewFolderOk, setProvision, setAdvancedOpen, setPromptOpen, setPlanError, setPlanNote, setDescribing, setDescribeSlow, setDescribeMode, setDescribeSince, setDescribeFailed, setPage, buildBody, postCreate } = ctx;
@@ -69185,577 +69911,6 @@ function TemplatesStrip({ templates, activeTemplate, onPick, onRun, onSchedule, 
 				}, t.name);
 			})
 		})]
-	});
-}
-//#endregion
-//#region src/components/dialogs/newSession/FolderPicker.tsx
-function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, setSearchSel, searchListRef, searchSel, search, searchOpen }) {
-	(0, import_react.useEffect)(() => {
-		const asked = repoPath.trim();
-		if (!open || !asked || !looksLikePath(asked)) {
-			setFolderCheck(null);
-			return;
-		}
-		let live = true;
-		const timer = window.setTimeout(async () => {
-			try {
-				const r = await dapi("/api/repos/check?path=" + encodeURIComponent(asked));
-				if (live) setFolderCheck({
-					asked,
-					plain: !!r.exists && !!r.is_dir && !r.is_git,
-					isGit: !!r.is_git,
-					resolved: r.path || "",
-					branchPrefix: r.branch_prefix || ""
-				});
-			} catch {
-				if (live) setFolderCheck(null);
-			}
-		}, CHECK_DEBOUNCE_MS);
-		return () => {
-			live = false;
-			window.clearTimeout(timer);
-		};
-	}, [
-		open,
-		repoPath,
-		dapi
-	]);
-	(0, import_react.useEffect)(() => {
-		const asked = repoPath.trim();
-		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
-			setSearch(null);
-			return;
-		}
-		let live = true;
-		const timer = window.setTimeout(async () => {
-			try {
-				const r = await dapi("/api/repos/search?q=" + encodeURIComponent(asked));
-				if (!live) return;
-				setSearch({
-					asked,
-					matches: r.matches || [],
-					truncated: !!r.truncated,
-					home: r.home || ""
-				});
-				setSearchSel(0);
-			} catch {
-				if (live) setSearch(null);
-			}
-		}, SEARCH_DEBOUNCE_MS);
-		return () => {
-			live = false;
-			window.clearTimeout(timer);
-		};
-	}, [
-		open,
-		repoPath,
-		dapi
-	]);
-	(0, import_react.useEffect)(() => {
-		const row = searchListRef.current?.querySelector("[aria-selected=\"true\"]");
-		if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
-	}, [
-		searchSel,
-		search,
-		searchOpen
-	]);
-}
-function matchPicker(folderDo, setSearchOpen) {
-	return (path) => {
-		folderDo({
-			t: "user-set",
-			path
-		});
-		setSearchOpen(false);
-	};
-}
-function SuggestRow({ suggestions, folderPath, folderDo }) {
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const ref = (0, import_react.useRef)(null);
-	const moreRef = (0, import_react.useRef)(null);
-	const groups = SUGGEST_SOURCES.map((g) => ({
-		...g,
-		items: suggestions.filter((s) => s.source === g.key)
-	})).filter((g) => g.items.length > 0);
-	const total = groups.reduce((n, g) => n + g.items.length, 0);
-	(0, import_react.useLayoutEffect)(() => {
-		const el = ref.current;
-		const more = moreRef.current;
-		if (!el || !more) return;
-		const kids = Array.from(el.children).filter((k) => k !== more && !k.classList.contains("nf-suggest-break"));
-		const fit = () => {
-			for (const k of kids) k.classList.remove("nt-clipped");
-			more.classList.remove("nt-clipped");
-			if (open) {
-				more.textContent = "Fewer";
-				return;
-			}
-			const right = el.getBoundingClientRect().right;
-			if (!(right > 0)) return;
-			more.textContent = total + " more…";
-			const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
-			const hidden = foldChipRow(kids.map((k) => ({
-				label: k.classList.contains("nf-suggest-label"),
-				right: k.getBoundingClientRect().right
-			})), right, more.getBoundingClientRect().width + gap);
-			kids.forEach((k, i) => k.classList.toggle("nt-clipped", hidden[i]));
-			const n = kids.filter((k, i) => hidden[i] && !k.classList.contains("nf-suggest-label")).length;
-			if (n) more.textContent = n + " more…";
-			else more.classList.add("nt-clipped");
-		};
-		fit();
-		const ro = new ResizeObserver(fit);
-		ro.observe(el);
-		return () => ro.disconnect();
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "new-suggest",
-		ref,
-		className: "nf-suggest nf-folders" + (open ? " open" : ""),
-		role: "group",
-		"aria-label": "Folders you might mean",
-		children: [groups.flatMap((g, gi) => [
-			...gi ? [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "nf-suggest-break",
-				"aria-hidden": "true"
-			}, "b:" + g.key)] : [],
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "nf-suggest-label",
-				title: g.hint,
-				children: g.label
-			}, "l:" + g.key),
-			...g.items.map((s) => {
-				const active = folderPath === s.path;
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
-					"data-path": s.path,
-					"aria-pressed": active,
-					title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
-					onClick: () => {
-						folderDo({
-							t: "user-set",
-							path: s.path
-						});
-						setOpen(false);
-					},
-					children: (s.is_git ? "📦 " : "📁 ") + s.name
-				}, s.path);
-			})
-		]), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			ref: moreRef,
-			className: "nt-chip nf-more",
-			id: "new-suggest-more",
-			"aria-expanded": open,
-			title: open ? "Back to one line" : "Show all " + total + " folders",
-			onClick: () => setOpen((o) => !o)
-		})]
-	});
-}
-function FolderField({ repoRef, repoPath, folderPath, folderDo, search, searchHits, searchSel, setSearchSel, setSearchOpen, selIndex, browserOpen, pickMatch }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "nf-folder",
-		title: "Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo.",
-		children: ["Folder", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "repo-path-row",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "new-repo-path",
-				ref: repoRef,
-				autoComplete: "off",
-				placeholder: "/home/me/projects/foo — or a folder name to look up",
-				value: repoPath,
-				role: "combobox",
-				"aria-expanded": !!searchHits,
-				"aria-controls": "new-search-list",
-				"aria-autocomplete": "list",
-				"aria-activedescendant": selIndex >= 0 ? "new-search-hit-" + selIndex : void 0,
-				onChange: (e) => {
-					folderDo({
-						t: "user-set",
-						path: e.target.value
-					});
-					setSearchOpen(true);
-				},
-				onKeyDown: (e) => {
-					const hits = searchHits?.matches || [];
-					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-						if (!searchHits && search && search.asked === folderPath && !browserOpen) {
-							e.preventDefault();
-							setSearchOpen(true);
-							return;
-						}
-						if (!hits.length) return;
-						e.preventDefault();
-						const step = e.key === "ArrowDown" ? 1 : -1;
-						const at = Math.min(searchSel, hits.length - 1) + step;
-						setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
-					} else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && isNameQuery(folderPath)) {
-						e.preventDefault();
-						if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
-						else if (search && search.asked === folderPath && !browserOpen) setSearchOpen(true);
-					} else if (e.key === "Escape" && searchHits) {
-						e.preventDefault();
-						e.stopPropagation();
-						setSearchOpen(false);
-					}
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "repo-browse-btn",
-				title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
-				onClick: () => folderDo(browserOpen ? {
-					t: "browse-commit",
-					path: repoPath
-				} : { t: "browse-open" }),
-				children: "Browse…"
-			})]
-		})]
-	});
-}
-function FolderAids({ searchHits, selIndex, searchListRef, setSearchSel, pickMatch, homePath, newFolderRow, plainFolder, initRepo, armInitRepo, suggestions, folderPath, folderDo, browserOpen, device }) {
-	const onlyCurrent = suggestions.length > 0 && suggestions.every((s) => s.path === folderPath);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		searchHits && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "new-search",
-			className: "new-templates nf-suggest nf-search",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "nt-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-						"Matches for “",
-						searchHits.asked,
-						"”"
-					] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "nf-suggest-legend",
-						children: "↑↓ choose · Enter fills · Esc closes"
-					})]
-				}),
-				searchHits.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "new-search-list",
-					className: "nf-search-list",
-					ref: searchListRef,
-					role: "listbox",
-					"aria-label": "Folder matches",
-					children: searchHits.matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						id: "new-search-hit-" + i,
-						type: "button",
-						role: "option",
-						"aria-selected": i === selIndex,
-						className: "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : ""),
-						"data-path": m.path,
-						title: m.path + (m.is_git ? "" : "\nno git repo here yet"),
-						onMouseMove: () => setSearchSel(i),
-						onClick: () => pickMatch(m.path),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "nf-search-name",
-							children: (m.is_git ? "📦 " : "📁 ") + m.name
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "nf-search-path",
-							children: homeRelative(m.path, searchHits.home || homePath)
-						})]
-					}, m.path))
-				}),
-				searchHits.matches.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-search-empty muted",
-					children: searchHits.truncated ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						"The search stopped at its time and size limit before it found “",
-						searchHits.asked,
-						"” — Browse… walks straight to it, and a path starting with / or ~ is used exactly as typed."
-					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						"No folder called “",
-						searchHits.asked,
-						"” in the first three levels under your home directory — the search doesn’t look inside git repos or hidden folders. Browse… reaches those and the rest of the disk, and a path starting with / or ~ is used exactly as typed."
-					] })
-				}),
-				searchHits.matches.length > 0 && searchHits.truncated && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "nf-search-note muted",
-					children: "The search stopped early, so this list may not be everything — Browse… if the folder you want isn’t here."
-				})
-			]
-		}),
-		newFolderRow,
-		plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "nf-git-nudge",
-			children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-				"No git repo in this folder, so diff, commit and PR stay off.",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					title: "Ticks “Create a git repo in this folder” under More options",
-					onClick: armInitRepo,
-					children: "Create one"
-				})
-			] })
-		}),
-		suggestions.length > 0 && !onlyCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SuggestRow, {
-			suggestions,
-			folderPath,
-			folderDo
-		}),
-		browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
-			device,
-			initialPath: folderPath || homePath || "",
-			selected: folderPath,
-			onSelect: (p) => folderDo({
-				t: "browse-select",
-				path: p
-			}),
-			onPick: (p) => folderDo({
-				t: "browse-commit",
-				path: p
-			})
-		})
-	] });
-}
-//#endregion
-//#region src/components/dialogs/newSession/AgentAccount.tsx
-function accountSetter(ctx) {
-	const { authProfiles, program, profileModels, canonAgent, setAgent, setProfileId, setProfileModel, setProfileModels } = ctx;
-	const setAccount = (id, agentNow) => {
-		setProfileId(id);
-		setProfileModel("");
-		const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
-		if (!prof) return;
-		const supported = prof.supported_agents || [];
-		const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-		if (supported.length && !hasEnv && !supported.includes(canonAgent(agentNow || program))) {
-			const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
-			setAgent(preferred);
-		}
-		if (prof.kind === "openrouter" && !profileModels[id]) (async () => {
-			try {
-				const r = await api("/api/settings/test/openrouter", { json: { profile_id: id } });
-				if (r?.ok && r.models?.length) setProfileModels((m) => ({
-					...m,
-					[id]: r.models || []
-				}));
-			} catch {}
-		})();
-	};
-	return setAccount;
-}
-function AgentFields({ program, providers, installed = null, setAgent, device, authProfiles, profileId, pendingProfile, setAccount, closeDialog }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "nf-agent",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "nf-agent-head",
-			children: ["Agent", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-agent-manage",
-				className: "linklike",
-				title: "Install, sign in and pick your default agent in Settings → Agents",
-				onClick: () => {
-					closeDialog();
-					openSettings("coding");
-				},
-				children: "Manage"
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-			id: "new-program",
-			title: "The agent this session runs",
-			value: program,
-			onChange: (e) => setAgent(e.target.value),
-			children: [!providers.some((p) => p.name === program) && program && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-				value: program,
-				children: program
-			}), providers.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-				value: p.name,
-				children: [p.name, installed && installed[p.name] === false ? " (not installed)" : ""]
-			}, p.name))]
-		})]
-	}), !device && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "nf-agent",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "nf-agent-head",
-			children: ["Account", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				id: "new-account-manage",
-				className: "linklike",
-				title: "Manage accounts in Settings",
-				onClick: () => {
-					closeDialog();
-					openSettings("accounts");
-				},
-				children: "Manage"
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-			id: "new-account",
-			title: "Which identity this session's CLI runs as",
-			value: profileId,
-			onChange: (e) => {
-				pendingProfile.current = null;
-				setAccount(e.target.value);
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "",
-					children: authProfiles?.default_profile ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "default",
-					children: "CLI's own login"
-				}),
-				(authProfiles?.profiles || []).map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: p.id,
-					children: p.label || p.id
-				}, p.id))
-			]
-		})]
-	})] });
-}
-function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, profileModels, program, canonAgent }) {
-	const routeWarning = (() => {
-		if (!selectedProfile) return "";
-		const supported = selectedProfile.supported_agents || [];
-		if (!!selectedProfile.env && Object.keys(selectedProfile.env).length > 0 || !supported.length) return "";
-		if (supported.includes(canonAgent(program))) return "";
-		return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
-	})();
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "nf-quick",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "nf-agent",
-				style: { flex: 1 },
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "nf-agent-head",
-					children: "Model"
-				}), (profileModels[profileId] || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					id: "new-account-model",
-					title: "Model this session runs on (through the selected account)",
-					value: profileModel,
-					onChange: (e) => setProfileModel(e.target.value),
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default"
-						}),
-						profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-							value: profileModel,
-							children: [profileModel, " (custom)"]
-						}),
-						(profileModels[profileId] || []).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: m,
-							children: m
-						}, m))
-					]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					id: "new-account-model",
-					type: "text",
-					autoComplete: "off",
-					placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
-					value: profileModel,
-					onChange: (e) => setProfileModel(e.target.value)
-				})]
-			})
-		}),
-		routeWarning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "nf-git-nudge",
-			children: routeWarning
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", { id: "provider-list" })
-	] });
-}
-//#endregion
-//#region src/components/dialogs/newSession/PromptFold.tsx
-var TASK_MAX_PX = 220;
-function TaskField({ prompt, setPrompt, presetValue, setPresetValue, savedPresets }) {
-	const ref = (0, import_react.useRef)(null);
-	(0, import_react.useLayoutEffect)(() => {
-		const ta = ref.current;
-		if (!ta) return;
-		ta.style.height = "auto";
-		const edge = ta.offsetHeight - ta.clientHeight;
-		ta.style.height = Math.min(TASK_MAX_PX, ta.scrollHeight + edge) + "px";
-	}, [prompt]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "new-prompt-fold",
-		className: "nf-task",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "nf-task-head",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				htmlFor: "new-prompt",
-				children: ["Task ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "— what the agent starts on; blank starts it idle"
-				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "preset-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					id: "new-preset",
-					"aria-label": "Insert a prompt",
-					title: "Put one of your prompts in the Task box (you can edit it after)",
-					value: presetValue,
-					onChange: (e) => {
-						setPresetValue(e.target.value);
-						const p = findPreset(e.target.value);
-						if (p) setPrompt(p.prompt);
-					},
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "Insert a prompt…"
-						}),
-						BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-							label: "Built-in",
-							children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "b:" + p.name,
-								title: p.prompt,
-								children: p.name
-							}, "b:" + p.name))
-						}),
-						savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-							label: "Saved",
-							children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "u:" + p.name,
-								title: p.prompt,
-								children: p.name
-							}, "u:" + p.name))
-						})
-					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: "preset-manage",
-					className: "linklike",
-					title: "Add or remove prompts, or pick one for this Task — you come back here on Close",
-					onClick: () => useUi.getState().openDialogFor("prompts", "new"),
-					children: "Manage…"
-				})]
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-			id: "new-prompt",
-			ref,
-			rows: 2,
-			autoComplete: "off",
-			spellCheck: false,
-			placeholder: "e.g. add a section about setup to the README",
-			value: prompt,
-			onChange: (e) => setPrompt(e.target.value)
-		})]
-	});
-}
-function PlanFirstRow({ prompt, planOk, planFirst, setPlanFirst }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "check" + (planOk ? "" : " disabled"),
-		id: "new-plan-first-row",
-		title: planOk ? "Before any edit, the agent lists the files it will change and why, then waits. Review it on the session's Map tab and press Go." : "Only an agent that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				id: "new-plan-first",
-				checked: planFirst && planOk,
-				disabled: !planOk,
-				onChange: (e) => setPlanFirst(e.target.checked)
-			}),
-			"Plan first",
-			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: !planOk ? "(needs an agent with plan support — Claude)" : prompt.trim() ? "— the agent lists the files it will change and waits for your OK (Map tab)" : "— needs a task: the agent lists the files it will change and waits for your OK"
-			})
-		]
 	});
 }
 //#endregion

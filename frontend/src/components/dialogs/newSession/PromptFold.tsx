@@ -15,17 +15,33 @@ import { useUi } from "../../../state/store";
 type Set<T> = Dispatch<SetStateAction<T>>;
 
 export interface TaskFieldProps {
+  /** Whose box: "new" (the New form) or "tpl" (a template's editor). */
+  scope?: string;
+  /** The muted words after "Task". */
+  hint?: string;
+  placeholder?: string;
   prompt: string;
   setPrompt: Set<string>;
-  presetValue: string;
-  setPresetValue: Set<string>;
-  savedPresets: Preset[];
+  /** The "Insert a prompt…" picker — the New form's; a form without it (a
+   * template's, whose Manage… could not hand back to it) leaves these out. */
+  presetValue?: string;
+  setPresetValue?: Set<string>;
+  savedPresets?: Preset[];
 }
 
 /** The tallest the Task box grows to by itself before it scrolls. */
 const TASK_MAX_PX = 220;
 
-export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, savedPresets }: TaskFieldProps) {
+export function TaskField({
+  scope = "new",
+  hint = "what the agent starts on; blank starts it idle",
+  placeholder = "e.g. add a section about setup to the README",
+  prompt,
+  setPrompt,
+  presetValue = "",
+  setPresetValue,
+  savedPresets = [],
+}: TaskFieldProps) {
   // Two rows to start — most tasks are a sentence, and an empty four-row box
   // was a third of the card — growing with what is typed (or inserted, or
   // carried over from page 1) up to TASK_MAX_PX, then scrolling.
@@ -38,63 +54,65 @@ export function TaskField({ prompt, setPrompt, presetValue, setPresetValue, save
     ta.style.height = Math.min(TASK_MAX_PX, ta.scrollHeight + edge) + "px";
   }, [prompt]);
   return (
-    <div id="new-prompt-fold" className="nf-task">
+    <div id={scope + "-prompt-fold"} className="nf-task">
       <div className="nf-task-head">
-        <label htmlFor="new-prompt">
-          Task <span className="muted">— what the agent starts on; blank starts it idle</span>
+        <label htmlFor={scope + "-prompt"}>
+          Task <span className="muted">— {hint}</span>
         </label>
-        <span className="preset-row">
-          <select
-            id="new-preset"
-            aria-label="Insert a prompt"
-            title="Put one of your prompts in the Task box (you can edit it after)"
-            value={presetValue}
-            onChange={(e) => {
-              setPresetValue(e.target.value);
-              const p = findPreset(e.target.value);
-              if (p) setPrompt(p.prompt);
-            }}
-          >
-            <option value="">Insert a prompt…</option>
-            {BUILTIN_PRESETS.length > 0 && (
-              <optgroup label="Built-in">
-                {BUILTIN_PRESETS.map((p) => (
-                  <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
-                    {p.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {savedPresets.length > 0 && (
-              <optgroup label="Saved">
-                {savedPresets.map((p) => (
-                  <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
-                    {p.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          <button
-            type="button"
-            id="preset-manage"
-            className="linklike"
-            title="Add or remove prompts, or pick one for this Task — you come back here on Close"
-            // Not a hand-off that loses the form: Close in Prompts brings
-            // this dialog back as it was (newSessionResume).
-            onClick={() => useUi.getState().openDialogFor("prompts", "new")}
-          >
-            Manage…
-          </button>
-        </span>
+        {setPresetValue && (
+          <span className="preset-row">
+            <select
+              id="new-preset"
+              aria-label="Insert a prompt"
+              title="Put one of your prompts in the Task box (you can edit it after)"
+              value={presetValue}
+              onChange={(e) => {
+                setPresetValue(e.target.value);
+                const p = findPreset(e.target.value);
+                if (p) setPrompt(p.prompt);
+              }}
+            >
+              <option value="">Insert a prompt…</option>
+              {BUILTIN_PRESETS.length > 0 && (
+                <optgroup label="Built-in">
+                  {BUILTIN_PRESETS.map((p) => (
+                    <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {savedPresets.length > 0 && (
+                <optgroup label="Saved">
+                  {savedPresets.map((p) => (
+                    <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <button
+              type="button"
+              id="preset-manage"
+              className="linklike"
+              title="Add or remove prompts, or pick one for this Task — you come back here on Close"
+              // Not a hand-off that loses the form: Close in Prompts brings
+              // this dialog back as it was (newSessionResume).
+              onClick={() => useUi.getState().openDialogFor("prompts", "new")}
+            >
+              Manage…
+            </button>
+          </span>
+        )}
       </div>
       <textarea
-        id="new-prompt"
+        id={scope + "-prompt"}
         ref={ref}
         rows={2}
         autoComplete="off"
         spellCheck={false}
-        placeholder="e.g. add a section about setup to the README"
+        placeholder={placeholder}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
       />

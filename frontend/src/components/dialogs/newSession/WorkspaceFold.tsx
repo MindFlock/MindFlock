@@ -105,18 +105,60 @@ export function WorktreeText() {
   );
 }
 
+/** A checkbox laid out like a Works-in answer: the box in its own column,
+ * the title on line 1 and one short muted line under it, both hung on one
+ * edge — for a form whose control column is too narrow for the one-line
+ * "title — explanation" to fit (a template's editor), where the run-on
+ * sentence wrapped back under the box mid-phrase. */
+function StackedCheck({
+  id,
+  rowId,
+  checked,
+  onChange,
+  title,
+  desc,
+}: {
+  id: string;
+  rowId?: string;
+  checked: boolean;
+  onChange(on: boolean): void;
+  title: ReactNode;
+  desc: ReactNode;
+}) {
+  return (
+    <label id={rowId} className="check nf-opt nf-opt-check">
+      <input type="checkbox" id={id} checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <ModeText title={title} desc={desc} />
+    </label>
+  );
+}
+
 /** "Provision the worktree": the separate worktree plus the repo's setup. */
 export function ProvisionCheck({
   id,
   rowId,
   checked,
   onChange,
+  stacked,
 }: {
   id: string;
   rowId?: string;
   checked: boolean;
   onChange(on: boolean): void;
+  /** Title over a muted line (StackedCheck) instead of one run-on line. */
+  stacked?: boolean;
 }) {
+  if (stacked)
+    return (
+      <StackedCheck
+        id={id}
+        rowId={rowId}
+        checked={checked}
+        onChange={onChange}
+        title="Provision the worktree"
+        desc="Also runs the repo's setup and warms test caches"
+      />
+    );
   return (
     <label id={rowId} className="check">
       <input type="checkbox" id={id} checked={checked} onChange={(e) => onChange(e.target.checked)} />
@@ -152,11 +194,24 @@ export function InitRepoCheck({
   id,
   checked,
   onChange,
+  stacked,
 }: {
   id: string;
   checked: boolean;
   onChange(on: boolean): void;
+  /** Title over a muted line (StackedCheck) instead of one run-on line. */
+  stacked?: boolean;
 }) {
+  if (stacked)
+    return (
+      <StackedCheck
+        id={id}
+        checked={checked}
+        onChange={onChange}
+        title="Create a git repo in this folder"
+        desc="git init + first commit — turns on diff, commit and PR"
+      />
+    );
   return (
     <label className="check">
       <input type="checkbox" id={id} checked={checked} onChange={(e) => onChange(e.target.checked)} />
@@ -238,81 +293,132 @@ export function WorksIn({
   // In place, the shared-checkout warning below says it louder.
   const othersLine = warn && !worktree ? "" : otherSessionsLine(others, worktree);
   return (
-    <div id="new-works-in" className="rt-row rt-row-top nf-works-in" data-caps="git">
-      <span className="rt-label" id="new-mode-label">
-        Works in
-      </span>
-      <div className="rt-ctl nf-mode" role="radiogroup" aria-labelledby="new-mode-label">
-        <label className="check nf-opt">
-          <input
-            type="radio"
-            name="new-workspace-mode"
-            id="new-worktree"
-            checked={worktree}
-            onChange={() => setInPlace(false)}
-          />
-          <WorktreeText />
-        </label>
-        {worktree && isGit && !worktreeClamped && (name || continueBranch) && (
-          continueBranch ? (
-            <BranchLine parts={["Works on ", continueBranch, " itself"]} muted="shared with whoever pushed it" />
-          ) : name && name.from === "none" ? (
-            // Nothing typed yet: the name comes from the task, so say that
-            // rather than preview an "untitled" nobody means to make.
-            <BranchLine
-              parts={["New branch ", prefix + "…", " from your task" + (baseLabel ? " · cut from " : ""), baseLabel]}
-            />
-          ) : name ? (
-            <BranchLine
-              parts={["New branch ", name.branch, baseLabel ? " · cut from " : "", baseLabel]}
-              muted={name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""}
-            />
-          ) : null
-        )}
-        {name?.clash && (
-          <p className="nf-opt-sub nf-git-nudge" id="new-name-clash" role="status">
-            A session called “{name.title}” already exists — give this one another name under More
-            options, or clear it to name it from the task.
-          </p>
-        )}
-        {othersLine && (
-          <p className="nf-opt-sub nf-branch-line nf-others" id="new-others" role="status">
-            {othersLine}
-          </p>
-        )}
-        {worktree && worktreeClamped && <p className="nf-opt-sub nf-git-nudge">{worktreeClamped}</p>}
-        <label className="check nf-opt">
-          <input
-            type="radio"
-            name="new-workspace-mode"
-            id="new-in-place"
-            checked={!worktree}
-            onChange={() => {
-              // Fast-track commits for THIS session, so it never drives a
-              // checkout others share: choosing the shared folder turns it
-              // off (said on the line, not hidden).
-              if (laneNeedsWorktree) draft.setLane("leave");
-              setSplit(false);
-              setInPlace(true);
-              setProvision(false);
-            }}
-          />
-          <ModeText
-            title="This folder directly"
-            desc={
-              splitOn
-                ? "Turns auto-split off — a split works in its own worktree"
-                : laneNeedsWorktree
-                ? "Turns fast-track off (it commits for this session, so it needs its own worktree)"
-                : IN_PLACE_HINT
-            }
-          />
-        </label>
-        {warn && !worktree && (
+    <WorksInGroup
+      scope="new"
+      worktree={worktree}
+      onWorktree={() => setInPlace(false)}
+      onInPlace={() => {
+        // Fast-track commits for THIS session, so it never drives a
+        // checkout others share: choosing the shared folder turns it
+        // off (said on the line, not hidden).
+        if (laneNeedsWorktree) draft.setLane("leave");
+        setSplit(false);
+        setInPlace(true);
+        setProvision(false);
+      }}
+      inPlaceDesc={
+        splitOn
+          ? "Turns auto-split off — a split works in its own worktree"
+          : laneNeedsWorktree
+          ? "Turns fast-track off (it commits for this session, so it needs its own worktree)"
+          : IN_PLACE_HINT
+      }
+      underWorktree={
+        <>
+          {worktree && isGit && !worktreeClamped && (name || continueBranch) && (
+            continueBranch ? (
+              <BranchLine parts={["Works on ", continueBranch, " itself"]} muted="shared with whoever pushed it" />
+            ) : name && name.from === "none" ? (
+              // Nothing typed yet: the name comes from the task, so say that
+              // rather than preview an "untitled" nobody means to make.
+              <BranchLine
+                parts={["New branch ", prefix + "…", " from your task" + (baseLabel ? " · cut from " : ""), baseLabel]}
+              />
+            ) : name ? (
+              <BranchLine
+                parts={["New branch ", name.branch, baseLabel ? " · cut from " : "", baseLabel]}
+                muted={name.renumbered ? "“" + name.renumbered + "” is taken, so this one is numbered" : ""}
+              />
+            ) : null
+          )}
+          {name?.clash && (
+            <p className="nf-opt-sub nf-git-nudge" id="new-name-clash" role="status">
+              A session called “{name.title}” already exists — give this one another name under More
+              options, or clear it to name it from the task.
+            </p>
+          )}
+          {othersLine && (
+            <p className="nf-opt-sub nf-branch-line nf-others" id="new-others" role="status">
+              {othersLine}
+            </p>
+          )}
+          {worktree && worktreeClamped && <p className="nf-opt-sub nf-git-nudge">{worktreeClamped}</p>}
+        </>
+      }
+      underInPlace={
+        warn && !worktree ? (
           <p className="nf-opt-sub nf-git-nudge nf-share-warn" id="new-share-warn" role="status">
             {warn}
           </p>
-        )}
+        ) : null
+      }
+    />
+  );
+}
+
+export interface WorksInGroupProps {
+  /** Id prefix: "new" (the New form) or "tpl" (a template's editor). */
+  scope: string;
+  /** "Separate worktree" is the picked answer. */
+  worktree: boolean;
+  onWorktree(): void;
+  onInPlace(): void;
+  /** "This folder directly"'s muted line: IN_PLACE_HINT, or what picking it
+   * turns off. */
+  inPlaceDesc: ReactNode;
+  /** Lines hung under "Separate worktree" (.nf-opt-sub): the branch it cuts,
+   * the provisioning box. */
+  underWorktree?: ReactNode;
+  /** Lines hung under "This folder directly" (a shared-checkout warning). */
+  underInPlace?: ReactNode;
+  /** What follows both answers and is not a third one (git init). */
+  after?: ReactNode;
+}
+
+/** The "Works in" row itself — its label in the form's label column, the two
+ * structured answers beside it — drawn by the New form (WorksIn) and a
+ * template's editor alike, so the two can never describe the choice in other
+ * words or lay it out another way. What hangs under each answer is the
+ * caller's. */
+export function WorksInGroup({
+  scope,
+  worktree,
+  onWorktree,
+  onInPlace,
+  inPlaceDesc,
+  underWorktree,
+  underInPlace,
+  after,
+}: WorksInGroupProps) {
+  return (
+    <div id={scope + "-works-in"} className="rt-row rt-row-top nf-works-in" data-caps="git">
+      <span className="rt-label" id={scope + "-mode-label"}>
+        Works in
+      </span>
+      <div className="rt-ctl nf-mode" role="radiogroup" aria-labelledby={scope + "-mode-label"}>
+        <label className="check nf-opt">
+          <input
+            type="radio"
+            name={scope + "-workspace-mode"}
+            id={scope + "-worktree"}
+            checked={worktree}
+            onChange={onWorktree}
+          />
+          <WorktreeText />
+        </label>
+        {underWorktree}
+        <label className="check nf-opt">
+          <input
+            type="radio"
+            name={scope + "-workspace-mode"}
+            id={scope + "-in-place"}
+            checked={!worktree}
+            onChange={onInPlace}
+          />
+          <ModeText title="This folder directly" desc={inPlaceDesc} />
+        </label>
+        {underInPlace}
+        {after}
       </div>
     </div>
   );

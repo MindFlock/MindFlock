@@ -12,7 +12,10 @@ import MAIN from "../main.tsx?raw";
 describe("addon slots and the agent picker", () => {
   it("the New-session agent picker is a <select>, populated from /api/providers", () => {
     // (was a datalist-bound free-text "Program" input)
-    expect(AGENT).toMatch(/<select\s+id="new-program"/);
+    // Its id is per form ("new-program" in New, "tpl-program" in a template's
+    // editor, which draws the same picker).
+    expect(AGENT).toMatch(/<select\s+id=\{scope \+ "-program"\}/);
+    expect(AGENT).toContain('scope = "new"');
   });
 
   it("the sidebar mounts #addon-bars", () => {

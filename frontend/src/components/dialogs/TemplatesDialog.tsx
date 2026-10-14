@@ -28,7 +28,6 @@ import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import { Modal } from "../Modal";
 import {
-  AUTOPILOT_CHOICES,
   TEMPLATES_CHANGED,
   cronPreview,
   deleteTemplate,
@@ -53,15 +52,13 @@ import {
 } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { api } from "../../api/client";
-import { leafName, newSessionResume } from "./newSession";
-import {
-  IN_PLACE_HINT,
-  InitRepoCheck,
-  ModeText,
-  ProvisionCheck,
-  StrategyPicker,
-  WorktreeText,
-} from "./newSession/WorkspaceFold";
+import { useConfig } from "../../state/queries";
+import { leafName, newSessionResume, type RepoSuggestion } from "./newSession";
+import { TemplateEditor, formFromTemplate, templateBody, type TemplateForm } from "./TemplateEditor";
+
+// The editor's form and its helpers live with the editor; the dialog's tests
+// (and anything else) keep importing them from here.
+export { cronPreviewLine, formFromTemplate, templateBody, type TemplateForm } from "./TemplateEditor";
 
 /** A run row, with the time zone the schedule's "at" is in. */
 type RunInfoX = TemplateRunInfo & { tz?: string };
@@ -117,103 +114,6 @@ export function templatesReducer(s: TemplatesUiState, a: TemplatesUiAction): Tem
   }
 }
 
-/** The fields the form edits, in the shape POST /api/templates stores. */
-export interface TemplateForm {
-  name: string;
-  program: string;
-  repo_path: string;
-  prompt: string;
-  /** "worktree" | "in_place" | "provisioned" — the New dialog's three answers
-   * to "where does the work happen", stored as the two booleans. */
-  mode: "worktree" | "in_place" | "provisioned";
-  workspace_strategy: string;
-  init_repo: boolean;
-  /** Run on a schedule: every day / weekdays at `at` (local "HH:MM"), or
-   * on the cron expression `cron` ("cron"). */
-  scheduled: boolean;
-  at: string;
-  days: "daily" | "weekdays" | "cron";
-  cron: string;
-  /** How far each run carries its work on its own ("" = leave it). */
-  autopilot: TemplateAutopilot | "";
-  /** The row's Pause / Skip next, carried through an edit untouched (the
-   * editor doesn't show them; the card does). */
-  paused: boolean;
-  skip_until: number;
-  /** The cadence the form was seeded with: a skip is for a slot of THAT
-   * cadence, so changing it drops the skip. */
-  seeded: string;
-}
-
-/** A schedule's cadence as one comparable string ("" = none). */
-function cadenceKey(s: { at?: string; days?: string; cron?: string } | null | undefined): string {
-  if (!s) return "";
-  return s.cron ? "cron:" + s.cron.trim().replace(/\s+/g, " ") : s.at ? s.at + "/" + (s.days || "daily") : "";
-}
-
-export function formFromTemplate(t: Template | null): TemplateForm {
-  return {
-    name: t?.name || "",
-    program: t?.program || "",
-    repo_path: t?.repo_path || "",
-    prompt: t?.prompt || "",
-    mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
-    workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
-    init_repo: !!t?.init_repo,
-    scheduled: !!t && hasSchedule(t),
-    at: t?.schedule?.at || "21:00",
-    days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
-    cron: t?.schedule?.cron || "0 21 * * 1-5",
-    autopilot: t?.autopilot || "",
-    paused: !!t?.schedule?.paused,
-    skip_until: Number(t?.schedule?.skip_until) || 0,
-    seeded: t && hasSchedule(t) ? cadenceKey(t.schedule) : "",
-  };
-}
-
-/** The POST body for a form, or the reason it cannot be saved. */
-export function templateBody(f: TemplateForm): { body: Template } | { error: string } {
-  const name = f.name.trim();
-  if (!name) return { error: "A template needs a name." };
-  if (name.length > 100) return { error: "Names are at most 100 characters." };
-  const at = f.at.trim();
-  const cron = f.cron.trim().replace(/\s+/g, " ");
-  if (f.scheduled) {
-    if (f.days === "cron") {
-      if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
-    } else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
-    if (!f.repo_path.trim() && f.mode !== "provisioned")
-      return { error: "A scheduled template needs a folder to start its session in." };
-    if (!f.prompt.trim()) return { error: "A scheduled template needs a task — it's what the session is told to do." };
-  }
-  return {
-    body: {
-      name,
-      program: f.program.trim(),
-      repo_path: f.repo_path.trim(),
-      prompt: f.prompt,
-      provisioned: f.mode === "provisioned",
-      in_place: f.mode === "in_place",
-      workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
-      init_repo: f.init_repo,
-      ...(f.scheduled ? { schedule: scheduleOf(f, at, cron) } : {}),
-      ...(f.autopilot ? { autopilot: f.autopilot } : {}),
-    },
-  };
-}
-
-/** The schedule a form saves: its cadence, plus the card's Pause and (for
- * the same cadence, still ahead) Skip next. */
-function scheduleOf(f: TemplateForm, at: string, cron: string): NonNullable<Template["schedule"]> {
-  const cadence: NonNullable<Template["schedule"]> =
-    f.days === "cron" ? { cron } : { at, days: f.days === "weekdays" ? "weekdays" : "daily" };
-  const out = { ...cadence };
-  if (f.paused) out.paused = true;
-  const sameCadence = (f.seeded || "") === cadenceKey(cadence);
-  if (f.skip_until && sameCadence && f.skip_until > Date.now() / 1000) out.skip_until = f.skip_until;
-  return out;
-}
-
 /** A rename is a save under the new name AND a delete of the old one — the
  * server upserts by name, so without the delete both would remain. Same
  * name ignoring case is the server's own overwrite: nothing to delete. */
@@ -260,15 +160,6 @@ export function historyLine(h: TemplateRunEntry, now: Date = new Date()): string
   else if (h.error) line += " — failed: " + h.error;
   else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
   return line;
-}
-
-/** The line under a cron field: its words and next runs, or why it can't be
- * saved ("" while nothing is known yet). */
-export function cronPreviewLine(pv: CronPreview | null | undefined, now: Date = new Date()): string {
-  if (!pv) return "";
-  if (!pv.ok) return pv.error || "Not a cron expression";
-  const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
-  return (pv.label || "") + (next ? " — next " + next : "");
 }
 
 /** A scheduled card's cadence, in this device's zone: "Weekdays at 21:00
@@ -358,6 +249,9 @@ interface ViewProps {
   onSkip?: (name: string, until: number) => void;
   /** The template whose Pause / Skip is being saved. */
   flagging?: string;
+  /** The editor's folder chips (GET /api/repos/suggest) and $HOME. */
+  folderSuggestions?: RepoSuggestion[];
+  homePath?: string;
   /** Injectable clock for the "in 2h" words (tests). */
   now?: Date;
 }
@@ -367,217 +261,25 @@ export function TemplatesDialogView(p: ViewProps) {
   const { templates, ui, form, busy, loaded } = p;
   const runs = p.runs || { runs: {}, runs_here: true, runs_on: "" };
   const loadError = p.loadError || "";
+  // The editor's folder browser takes Escape first (it puts the folder back).
+  const escapeRef = useRef<(() => boolean) | null>(null);
   const editor = (
-    <form
-      className="tpl-editor"
-      onSubmit={(e) => {
-        e.preventDefault();
-        p.onSave();
-      }}
-    >
-      <label>
-        Name
-        <input
-          id="tpl-name"
-          autoComplete="off"
-          value={form.name}
-          onChange={(e) => p.onForm({ name: e.target.value })}
-          placeholder="e.g. fix-tests"
-        />
-      </label>
-      <div className="tpl-two">
-        <label>
-          Agent
-          <select
-            id="tpl-program"
-            value={form.program}
-            onChange={(e) => p.onForm({ program: e.target.value })}
-          >
-            <option value="">Your default agent</option>
-            {form.program && !(p.agents || []).includes(form.program) && (
-              <option value={form.program}>{form.program}</option>
-            )}
-            {(p.agents || []).map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Folder <span className="muted">— needed to Run now or schedule</span>
-          <input
-            id="tpl-repo"
-            autoComplete="off"
-            value={form.repo_path}
-            onChange={(e) => p.onForm({ repo_path: e.target.value })}
-            placeholder="/home/me/projects/foo"
-          />
-        </label>
-      </div>
-      <label>
-        Task <span className="muted">— what the session starts on</span>
-        <textarea
-          id="tpl-prompt"
-          rows={4}
-          value={form.prompt}
-          onChange={(e) => p.onForm({ prompt: e.target.value })}
-        />
-      </label>
-      {/* Where it works: the New form's own controls and words — two answers,
-          and "Provision the worktree" as a box on the worktree, not a third. */}
-      <div className="tpl-mode" role="radiogroup" aria-label="Works in">
-        <span className="tpl-mode-label">Works in</span>
-        <label className="check nf-opt">
-          <input
-            type="radio"
-            name="tpl-mode"
-            id="tpl-worktree"
-            checked={form.mode !== "in_place"}
-            onChange={() => p.onForm({ mode: "worktree" })}
-          />
-          <WorktreeText />
-        </label>
-        {form.mode !== "in_place" && (
-          <div className="tpl-mode-sub">
-            <ProvisionCheck
-              id="tpl-provision"
-              checked={form.mode === "provisioned"}
-              onChange={(on) => p.onForm({ mode: on ? "provisioned" : "worktree" })}
-            />
-            {form.mode === "provisioned" && (
-              <StrategyPicker
-                id="tpl-strategy"
-                value={form.workspace_strategy}
-                onChange={(v) => p.onForm({ workspace_strategy: v })}
-              />
-            )}
-          </div>
-        )}
-        <label className="check nf-opt">
-          <input
-            type="radio"
-            name="tpl-mode"
-            id="tpl-in-place"
-            checked={form.mode === "in_place"}
-            // Autopilot commits for its own session, so it never drives a
-            // shared checkout — the same rule as the New form.
-            onChange={() => p.onForm({ mode: "in_place", autopilot: "" })}
-          />
-          <ModeText
-            title="This folder directly"
-            desc={
-              form.autopilot
-                ? "Turns the autopilot off (it commits for this session, so it needs its own worktree)"
-                : IN_PLACE_HINT
-            }
-          />
-        </label>
-        <InitRepoCheck id="tpl-init" checked={form.init_repo} onChange={(on) => p.onForm({ init_repo: on })} />
-      </div>
-      <div className="tpl-schedule" role="group" aria-label="Schedule">
-        <label className="check">
-          <input
-            type="checkbox"
-            id="tpl-scheduled"
-            checked={form.scheduled}
-            onChange={(e) => p.onForm({ scheduled: e.target.checked })}
-          />
-          Run on a schedule <span className="muted">— starts a new session from it, by itself</span>
-        </label>
-        {form.scheduled && (
-          <div className="tpl-schedule-when">
-            <select
-              id="tpl-days"
-              aria-label="Which days"
-              value={form.days}
-              onChange={(e) =>
-                p.onForm({
-                  days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily",
-                })
-              }
-            >
-              <option value="daily">Every day</option>
-              <option value="weekdays">Weekdays</option>
-              <option value="cron">Custom (cron)</option>
-            </select>
-            {form.days === "cron" ? (
-              <input
-                id="tpl-cron"
-                aria-label="Cron expression"
-                autoComplete="off"
-                spellCheck={false}
-                value={form.cron}
-                onChange={(e) => p.onForm({ cron: e.target.value })}
-                placeholder="*/30 * * * *"
-              />
-            ) : (
-              <>
-                <span>at</span>
-                <input
-                  id="tpl-at"
-                  type="time"
-                  aria-label="Time"
-                  autoFocus={ui.editing !== null && p.scheduleFocus === true}
-                  value={form.at}
-                  onChange={(e) => p.onForm({ at: e.target.value })}
-                />
-                {p.tz && <span className="muted">{p.tz} — this device's time</span>}
-              </>
-            )}
-            {p.runs && !p.runs.runs_here && p.runs.runs_on && (
-              <span className="muted">Starts on {p.runs.runs_on} — the device that runs automation.</span>
-            )}
-          </div>
-        )}
-        {form.scheduled && form.days === "cron" && (
-          <div
-            className={"tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted")}
-            id="tpl-cron-preview"
-            aria-live="polite"
-          >
-            {cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"}
-          </div>
-        )}
-        {form.scheduled && (
-          <div className="tpl-cron-preview muted">
-            A scheduled run is skipped while the previous one is still working or waiting on you.
-          </div>
-        )}
-      </div>
-      <label className="tpl-autopilot">
-        When a run's turn ends
-        <select
-          id="tpl-autopilot"
-          value={form.autopilot}
-          onChange={(e) => {
-            const autopilot = e.target.value as TemplateForm["autopilot"];
-            // Autopilot commits for this session, so it needs its own worktree.
-            p.onForm(autopilot && form.mode === "in_place" ? { autopilot, mode: "worktree" } : { autopilot });
-          }}
-        >
-          {AUTOPILOT_CHOICES.map(([v, label]) => (
-            <option key={v || "leave"} value={v}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <span className="muted">— each Run now and scheduled run</span>
-      </label>
-      {ui.error && (
-        <p className="error" aria-live="polite">
-          {ui.error}
-        </p>
-      )}
-      <div className="tpl-row-actions">
-        <button type="button" className="linklike" onClick={() => p.dispatch({ t: "cancel" })}>
-          Cancel
-        </button>
-        <button type="submit" disabled={busy}>
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </form>
+    <TemplateEditor
+      form={form}
+      onForm={p.onForm}
+      error={ui.error}
+      busy={busy}
+      onSave={p.onSave}
+      onCancel={() => p.dispatch({ t: "cancel" })}
+      agents={p.agents}
+      scheduleFocus={ui.editing !== null && p.scheduleFocus === true}
+      tz={p.tz}
+      cronPreview={p.cronPreview}
+      runs={p.runs}
+      folderSuggestions={p.folderSuggestions}
+      homePath={p.homePath}
+      escapeRef={escapeRef}
+    />
   );
 
   const now = p.now || new Date();
@@ -793,6 +495,7 @@ export function TemplatesDialogView(p: ViewProps) {
       onClose={p.onClose}
       // Escape withdraws an open editor or delete question first.
       onEscape={() => {
+        if (ui.editing !== null && escapeRef.current?.()) return true;
         if (ui.editing === null && !ui.confirming) return false;
         p.dispatch({ t: "cancel" });
         return true;
@@ -912,6 +615,23 @@ export function TemplatesDialog() {
   const [scheduleFocus, setScheduleFocus] = useState(false);
   const [preview, setPreview] = useState<CronPreview | null>(null);
   const editingRef = useRef<string | null>(null);
+  const [folderSuggestions, setFolderSuggestions] = useState<RepoSuggestion[]>([]);
+  const suggestAsked = useRef(false);
+  const { data: config } = useConfig();
+
+  // The editor's folder chips — the New form's Recent / Home line. Asked
+  // once per opening, and only when an editor opens: the endpoint walks the
+  // disk, which a glance at the list should not pay for.
+  const editorOpen = open && ui.editing !== null;
+  useEffect(() => {
+    if (!open) suggestAsked.current = false;
+    if (!editorOpen || suggestAsked.current) return;
+    suggestAsked.current = true;
+    api<{ suggestions?: RepoSuggestion[] }>("/api/repos/suggest")
+      .then((d) => setFolderSuggestions(d.suggestions || []))
+      // Chips are sugar: the field and Browse… work without them.
+      .catch(() => setFolderSuggestions([]));
+  }, [open, editorOpen]);
 
   // The cron field's meaning, asked of the server as it is typed (debounced;
   // a stale answer never overwrites a newer one).
@@ -1110,6 +830,8 @@ export function TemplatesDialog() {
         dispatch(a);
       }}
       agents={agents}
+      folderSuggestions={folderSuggestions}
+      homePath={config?.home || ""}
       scheduleFocus={scheduleFocus}
       tz={Object.values(runs.runs || {}).map((r) => (r as RunInfoX).tz).find(Boolean) || localZone()}
       onSave={() => void save()}

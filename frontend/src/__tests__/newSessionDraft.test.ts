@@ -15,6 +15,7 @@ import FOLDER from "../components/dialogs/newSession/FolderPicker.tsx?raw";
 import WORKSPACE from "../components/dialogs/newSession/WorkspaceFold.tsx?raw";
 import PROMPT from "../components/dialogs/newSession/PromptFold.tsx?raw";
 import TEMPLATES_DIALOG from "../components/dialogs/TemplatesDialog.tsx?raw";
+import TEMPLATE_EDITOR from "../components/dialogs/TemplateEditor.tsx?raw";
 import PROMPTS_DIALOG from "../components/dialogs/PromptsDialog.tsx?raw";
 import FASTTRACK from "../components/dialogs/FastTrackChoice.tsx?raw";
 import SUBMIT from "../lib/newSessionSubmit.ts?raw";
@@ -186,18 +187,21 @@ describe("templates have a visible door", () => {
 
 describe("one vocabulary and one set of controls, New and Templates", () => {
   it("the Templates editor draws the New form's where-it-works controls", () => {
-    for (const c of ["<WorktreeText />", "<ProvisionCheck", "<StrategyPicker", "<InitRepoCheck"])
-      expect(TEMPLATES_DIALOG).toContain(c);
-    expect(TEMPLATES_DIALOG).not.toContain("Provisioned worktree");
-    expect(TEMPLATES_DIALOG).not.toContain("Create a git repo in the folder");
+    for (const c of ["<WorksInGroup", "<ProvisionCheck", "<StrategyPicker", "<InitRepoCheck"])
+      expect(TEMPLATE_EDITOR).toContain(c);
+    expect(TEMPLATES_DIALOG).toContain("<TemplateEditor");
+    for (const src of [TEMPLATES_DIALOG, TEMPLATE_EDITOR]) {
+      expect(src).not.toContain("Provisioned worktree");
+      expect(src).not.toContain("Create a git repo in the folder");
+    }
   });
 
   it("a template carries its run as far as an autopilot depth", () => {
     // Templates store `autopilot` (commit / push / pr — never an unattended
     // merge); the editor offers exactly those, the New form's Fast-track keeps
     // its own control (and "Ask me before it ships" says why it is grey).
-    expect(TEMPLATES_DIALOG).toContain('id="tpl-autopilot"');
-    expect(TEMPLATES_DIALOG).toContain("AUTOPILOT_CHOICES.map");
+    expect(TEMPLATE_EDITOR).toContain('id="tpl-autopilot"');
+    expect(TEMPLATE_EDITOR).toContain("AUTOPILOT_CHOICES.map");
     expect(FASTTRACK).toContain("(needs fast-track)");
   });
 

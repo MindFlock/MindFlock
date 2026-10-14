@@ -109,7 +109,8 @@ describe("J3 — session context line (diff stat)", () => {
 describe("J4 — prompt presets in the New-session dialog", () => {
   it("renders the Task box and the saved-prompt picker (saving lives in Prompts)", () => {
     const fold = code("components/dialogs/newSession/PromptFold.tsx");
-    for (const id of ['"new-prompt"', '"new-preset"', '"preset-manage"']) {
+    // #new-prompt is the box's id in New (scope "new"; "tpl" in a template's editor).
+    for (const id of ['scope = "new"', 'id={scope + "-prompt"}', '"new-preset"', '"preset-manage"']) {
       expect(fold, id).toContain(id);
     }
     // One save on the New form: "Save as template…" (the whole setup). Saved

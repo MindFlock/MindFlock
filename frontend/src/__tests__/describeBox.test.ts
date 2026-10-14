@@ -96,12 +96,20 @@ describe("the workspace mode is a choice with something always selected", () => 
   // are radios sharing one name — exactly one of them is always on.
   // Provisioning is the THIRD answer to the same question (the worktree answer
   // plus setup), not a checkbox beside it.
-  it.each(["new-worktree", "new-in-place"])("%s is a radio of new-workspace-mode", (id) => {
-    for (const t of tags(WORKSPACE, id)) {
-      expect(t.name).toBe("input");
-      expect(attr(t, "type")).toBe("radio");
-      expect(attr(t, "name")).toBe("new-workspace-mode");
-    }
+  // The row is WorksInGroup (New draws it as scope "new": #new-worktree and
+  // #new-in-place in the radio group new-workspace-mode).
+  it.each(['scope + "-worktree"', 'scope + "-in-place"'])("%s is a radio of the scope's workspace-mode", (id) => {
+    const group = WORKSPACE.slice(WORKSPACE.indexOf("export function WorksInGroup("));
+    const at = group.indexOf("id={" + id + "}");
+    expect(at).toBeGreaterThan(0);
+    const input = group.slice(group.lastIndexOf("<input", at), group.indexOf("/>", at));
+    expect(input).toContain('type="radio"');
+    expect(input).toContain('name={scope + "-workspace-mode"}');
+  });
+  it("New draws that row as scope new", () => {
+    const worksIn = WORKSPACE.slice(WORKSPACE.indexOf("export function WorksIn("), WORKSPACE.indexOf("export interface WorksInGroupProps"));
+    expect(worksIn).toContain("<WorksInGroup");
+    expect(worksIn).toContain('scope="new"');
   });
 
   it("provisioning is a box on top of the separate worktree, not a third answer", () => {

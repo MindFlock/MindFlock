@@ -9,7 +9,7 @@ import { cssRule, squash, src } from "./sourceText";
 const CSS = src("components/dialogs/NewSessionDialog.css");
 const FOLDER = src("components/dialogs/newSession/FolderPicker.tsx");
 const WORKSPACE = src("components/dialogs/newSession/WorkspaceFold.tsx");
-const TEMPLATES = src("components/dialogs/TemplatesDialog.tsx");
+const TEMPLATES = src("components/dialogs/TemplateEditor.tsx");
 const PROMPT = src("components/dialogs/newSession/PromptFold.tsx");
 
 describe("foldChipRow: which suggestion chips the one line hides", () => {
@@ -56,7 +56,8 @@ describe("the folder suggestions are one quiet line", () => {
   });
 
   it("puts the rest behind an N more… chip that unfolds the line", () => {
-    expect(FOLDER).toContain('id="new-suggest-more"');
+    // #new-suggest-more in New (scope "new"), #tpl-suggest-more in a template's editor.
+    expect(FOLDER).toContain('id={scope + "-suggest-more"}');
     expect(FOLDER).toContain("aria-expanded={open}");
     expect(FOLDER).toContain('more.textContent = n + " more…";');
     expect(cssRule(CSS, ".nf-suggest.nf-folders.open")).toContain("flex-wrap: wrap;");
@@ -89,9 +90,13 @@ describe("Works in: two structured answers", () => {
     expect(cssRule(CSS, ".nf-works-in .nf-mode")).toContain("flex-wrap: nowrap;");
   });
 
-  it("the Templates editor draws the same two answers", () => {
-    expect(TEMPLATES.split('<label className="check nf-opt">').length - 1).toBe(2);
-    expect(TEMPLATES).toContain("<ModeText");
+  it("the Templates editor draws the same row, not a copy of it", () => {
+    // WorksInGroup is the one place the two answers are drawn; the editor
+    // only hangs its provisioning box and git init on it.
+    expect(TEMPLATES).toContain("<WorksInGroup");
+    expect(TEMPLATES).toContain('scope="tpl"');
+    expect(TEMPLATES).not.toContain('type="radio"');
+    expect(TEMPLATES).not.toContain("<WorktreeText");
   });
 });
 
