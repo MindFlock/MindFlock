@@ -919,6 +919,11 @@ class Instance:
         if self.Status == Status.Paused:
             raise RuntimeError("instance is already paused")
 
+        # Paused BEFORE the kill: an open terminal socket sees its tmux die and
+        # reconnects at once, and the web relaunch path refuses a Paused
+        # session — marked any later, that reconnect could revive the agent.
+        self.SetStatus(Status.Paused)
+
         errs: List[BaseException] = []
         cerr = self._tmux_session.close()
         if cerr is not None:
@@ -929,7 +934,6 @@ class Instance:
                 log.ErrorLog.Print(cerr)
             # The agent may be gone already (a tmux that died); pause anyway.
 
-        self.SetStatus(Status.Paused)
         _clipboard_write(self._git_worktree.GetBranchName())
 
         combined = self._combine_errors(errs)

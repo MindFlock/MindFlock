@@ -20,8 +20,9 @@ other's dead sessions:
 * **Liveness validation** — adopt and merge skip/drop instances whose worktree
   directory is gone AND whose tmux session no longer exists, with a ~120s
   grace window from creation/last-known activity so in-flight provisioning is
-  never culled. Paused sessions are exempt (their worktree is removed by
-  design; the branch lives on). A session culled this way when the engine
+  never culled. Paused sessions are exempt (no tmux by design; and one
+  paused by a build up to 0.7.5 has no worktree either — only its branch).
+  A session culled this way when the engine
   LOADS is never dropped silently: it lands in Recently closed with
   ``reason: "workspace missing"``, ``wiped`` and ``branch_exists`` (see
   :func:`backend.web.core.recently_closed.record_missing_workspace`).
@@ -132,8 +133,9 @@ def _data_looks_dead(data, now: float) -> bool:
     """True when a serialized instance's workspace is gone AND its tmux
     session no longer exists (outside the provisioning grace window).
 
-    Paused sessions are never dead this way — their worktree is removed by
-    design and the branch preserved. An instance with no recorded worktree
+    Paused sessions are never dead this way — their agent's tmux is stopped
+    by design, and one paused by a build up to 0.7.5 has no worktree either
+    (only its branch). An instance with no recorded worktree
     path can't be judged and is kept.
     """
     try:

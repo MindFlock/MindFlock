@@ -132,7 +132,9 @@ servers were stopped on purpose, idle, to free memory (`freed_mb` ≈ what they
 held); `activity` reads `offline` meanwhile, but it is not a crash — the UI
 paints it **Sleeping**, outside Offline, the bell and "Restart all". Opening
 its terminal, `/send`, the queue, Send now, a mailbox message or `/wake`
-wakes it, resuming the conversation.
+wakes it, resuming the conversation. A **paused** session is never woken or
+relaunched by any of these: its terminal socket closes with 4423, and `/send`
+and Send now answer 409 `{paused: true}` — only `/resume` starts its agent.
 
 `workspace_missing` (L1c) is `true` for a started, non-paused session whose
 workspace directory no longer exists (deleted outside MindFlock). The UI renders
@@ -1115,7 +1117,7 @@ row, unless it is waived here). The per-session zones read also answers
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
+| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. → `{sent, submitted}` (409 if the workspace is gone, `{paused: true}` when the session is paused — nothing typed, the agent not relaunched — or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
 | POST | `/api/instances/{title}/driver` | Take or release the session's keyboard ([people.md](people.md#owner-driver-viewers)). `{"take": true}` makes the caller's person the driver — anyone who can reach the session may; the previous driver hears it as a `session.driver_changed` event and their open terminals turn read-only. `{"release": true}` gives it up (**409** `{error: "driven by <name>", driver}` when another person holds it). → `{owner, driver, driver_name, viewers}` (+ `previous`, the old driver's id, on a take). **400** neither, **404** unknown. A remote row (`<device>::<title>`) is forwarded like every per-session route, carrying the caller's person |
 | POST | `/api/instances/{title}/owner` | `{"person": "<id>"}` — give the session to another person. The owner otherwise never changes (it defaults to the person the session was created for). This device's owner only (`may_configure`, **403**; so not through a gateway). → the presence fields; **400** not a person id, **404** unknown |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
@@ -1124,7 +1126,7 @@ row, unless it is waived here). The per-session zones read also answers
 | POST | `/api/instances/{title}/queue/reorder` | Body `{id, index}` — move to an absolute 0-based position (clamped; the drag-and-drop path) — or `{id, direction}` (`up`/`down`) to nudge one slot |
 | POST | `/api/instances/{title}/queue/edit` | Body `{id, text}` — rewrite a queued prompt in place |
 | DELETE | `/api/instances/{title}/queue?item=<id>` | Remove one item; omit `item` to clear the whole queue |
-| POST | `/api/instances/{title}/queue/send_now` | Body `{id}` — send one queued item now, skipping the drain's waits. On a **sleeping** agent: wakes it and moves the item to the front (the drain sends it once the CLI is ready) → the queue state plus `woke: true`; **409** `{error, waking: true}` when the queue is paused |
+| POST | `/api/instances/{title}/queue/send_now` | Body `{id}` — send one queued item now, skipping the drain's waits. On a **sleeping** agent: wakes it and moves the item to the front (the drain sends it once the CLI is ready) → the queue state plus `woke: true`; **409** `{error, waking: true}` when the queue is paused; **409** `{error, paused: true}` when the session is paused (the item stays queued) |
 
 **One keyboard per session.** `/send`, the queue's add (`POST /queue`) and
 Send now (`POST /queue/send_now`) — like `/answer` below and the terminal
@@ -1524,8 +1526,11 @@ Protocol (shared by all terminal sockets, implemented in
   probes (cursor position, device attributes, OSC colours, focus reports —
   `core/terminal.py::is_terminal_reply`) always pass and are never presence.
   Old clients ignore both frames (they are JSON without `type: "error"`)
-- close codes: **4404** session gone, **4409** workspace not ready, **4500**
-  spawn failure — clients stop reconnecting on 4404/4409, otherwise retry ~2.5 s
+- close codes: **4404** session gone, **4409** workspace not ready, **4423**
+  session paused (agent terminal only: the agent is never relaunched for a
+  paused session — Resume does that — preceded by an error frame with
+  `paused: true`), **4500** spawn failure — clients stop reconnecting on
+  4404/4409/4423, otherwise retry ~2.5 s
 - auth close codes (any websocket, from the middleware): **4401**
   unauthenticated — the SPA/mobile head reload to the login page; **4403**
   cross-origin refusal — a hard refusal, not a login prompt (don't retry or

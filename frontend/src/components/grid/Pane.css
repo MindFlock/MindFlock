@@ -263,6 +263,55 @@
   order: 1;
 }
 
+/* A PAUSED session's Agent tab (PausedBody): a calm placeholder in place of
+   the terminal — no socket, nothing alarming; the Resume button is the way
+   back. Muted like the rail's Paused row. */
+.pane-term.pane-paused {
+  justify-content: center;
+}
+
+.paused-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.paused-body p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.paused-body .paused-head {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.paused-body .paused-resume {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.paused-body .paused-resume:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.paused-body .paused-resume:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* The pin belongs above the terminal whichever lands in the DOM first. The
    terminal container is appended imperatively (it is not a React child), so
    React has no following sibling to insert before once it exists and appends

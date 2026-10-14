@@ -49,7 +49,8 @@ class Status(enum.IntEnum):
       * ``Running`` (0): instance running, Claude is working.
       * ``Ready``   (1): ready for user interaction (waiting for input).
       * ``Loading`` (2): loading / starting up.
-      * ``Paused``  (3): worktree removed but branch preserved.
+      * ``Paused``  (3): agent stopped; worktree and branch kept as they were
+        (a session paused by a build up to 0.7.5 had its worktree removed).
     """
 
     Running = 0

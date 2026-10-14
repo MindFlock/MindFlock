@@ -27227,6 +27227,7 @@ function agentCopyText(text, session, cols, startCol = 0) {
 //#region src/lib/wsTerm.ts
 var NOT_YET = 4404;
 var NOT_READY = 4409;
+var PAUSED_CLOSE = 4423;
 var RETRY_MS = [
 	700,
 	1500,
@@ -27235,7 +27236,7 @@ var RETRY_MS = [
 var RETRY_MAX_MS = 3e3;
 var RETRY_LIMIT = 100;
 function retryAfter(code, attempts, reconnect) {
-	if (!reconnect || attempts >= RETRY_LIMIT) return null;
+	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE) return null;
 	if (code === NOT_YET || code === NOT_READY) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
 	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS[attempts] ?? RETRY_MAX_MS;
 	return null;
@@ -27335,7 +27336,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 				if (dead) return;
 				const wait = retryAfter(ev.code, attempts, reconnect);
 				if (wait === null) {
-					setState("disconnected");
+					setState(ev.code === PAUSED_CLOSE ? "paused" : "disconnected");
 					return;
 				}
 				const transient = isStarting(ev.code);
@@ -27780,9 +27781,10 @@ function makeTerm(title, wsPath, interactive) {
 			sock.onclose = (ev) => {
 				handle._setState("disconnected");
 				if (closed) return;
-				if (ev && (ev.code === 4404 || ev.code === 4409)) {
+				const action = closeAction(ev?.code);
+				if (action !== "retry") {
 					closed = true;
-					handle._setState("gone");
+					handle._setState(action);
 					if (!booted) {
 						booted = true;
 						handle.onBoot?.();
@@ -27817,6 +27819,11 @@ function makeTerm(title, wsPath, interactive) {
 	}
 	return handle;
 }
+function closeAction(code) {
+	if (code === 4404 || code === 4409) return "gone";
+	if (code === PAUSED_CLOSE) return "paused";
+	return "retry";
+}
 var registry = /* @__PURE__ */ new Map();
 var termStateListeners = /* @__PURE__ */ new Set();
 function subscribeTermStates(cb) {
@@ -27835,6 +27842,10 @@ function getTerm(title, kind) {
 		registry.set(title, entry);
 	}
 	let h = entry[kind];
+	if (h && h.state === "paused") {
+		h.dispose();
+		h = void 0;
+	}
 	if (!h) {
 		h = makeTerm(title, kind === "agent" ? "/terminal" : "/shell", true);
 		h.connect();
@@ -27844,6 +27855,17 @@ function getTerm(title, kind) {
 }
 function peekTerm(title, kind) {
 	return registry.get(title)?.[kind];
+}
+function releaseTerm(title, kind) {
+	const entry = registry.get(title);
+	const h = entry?.[kind];
+	if (!entry || !h) return;
+	h.onState = void 0;
+	h.onBoot = void 0;
+	h.dispose();
+	delete entry[kind];
+	if (!entry.agent && !entry.shell) registry.delete(title);
+	notifyTermStates();
 }
 function releaseTerms(title) {
 	const entry = registry.get(title);
@@ -44289,6 +44311,41 @@ function PaneFindBar({ title, pane, mode, initialQuery, onClose }) {
 			]
 		}) : null]
 	})] });
+}
+//#endregion
+//#region src/components/grid/PausedBody.tsx
+var PAUSED_TEXT = "The agent is stopped; your worktree and conversation are kept.";
+function PausedBody({ title, hidden }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "pane-term agent-term pane-paused" + (hidden ? " hidden" : ""),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "paused-body",
+			role: "status",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "paused-head",
+					children: "Paused"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "paused-text",
+					children: PAUSED_TEXT
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "paused-resume",
+					type: "button",
+					disabled: busy,
+					title: "Resume — starts the agent again in the same worktree",
+					onClick: (e) => {
+						e.stopPropagation();
+						setBusy(true);
+						resumeSession(title).finally(() => setBusy(false));
+					},
+					children: busy ? "Resuming…" : "▶ Resume"
+				})
+			]
+		})
+	});
 }
 //#endregion
 //#region src/components/grid/queueDnd.ts
@@ -62570,6 +62627,7 @@ function Pane({ inst, drag, dragging }) {
 	};
 	const missing = !!inst.workspace_missing;
 	const loading = inst.status === "loading";
+	const paused = inst.status === "paused";
 	const savedTab = (inst.peer_share && lastTab === "shell" ? "agent" : lastTab) || "agent";
 	const [tab, setTab] = (0, import_react.useState)(paneTab(savedTab, caps.git));
 	const [booted, setBooted] = (0, import_react.useState)(false);
@@ -62607,7 +62665,7 @@ function Pane({ inst, drag, dragging }) {
 		children: kindTag
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: displayName.slice(kindTag.length) })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: displayName });
 	const adopt = (0, import_react.useCallback)((kind) => (el) => {
-		if (!el || missing || loading) return;
+		if (!el || missing || loading || kind === "agent" && paused) return;
 		const handle = getTerm(title, kind);
 		if (!el.contains(handle.container)) el.appendChild(handle.container);
 		handle.onHistoryDrag = (sel, edge, ctx) => setHistPane({
@@ -62633,8 +62691,15 @@ function Pane({ inst, drag, dragging }) {
 	}, [
 		title,
 		missing,
-		loading
+		loading,
+		paused
 	]);
+	(0, import_react.useEffect)(() => {
+		if (!paused) return;
+		releaseTerm(title, "agent");
+		setBooted(false);
+		setWsState("paused");
+	}, [paused, title]);
 	const fitSoon = (0, import_react.useCallback)(() => {
 		clearTimeout(fitTimer.current);
 		fitTimer.current = setTimeout(() => {
@@ -63249,7 +63314,10 @@ function Pane({ inst, drag, dragging }) {
 				className: "pane-body",
 				ref: bodyRef,
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PausedBody, {
+						title,
+						hidden: tab !== "agent"
+					}, "paused") : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""),
 						ref: adopt("agent"),
 						children: [pinLine ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -63287,7 +63355,7 @@ function Pane({ inst, drag, dragging }) {
 							className: "term-loading",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Loading session…" })]
 						})]
-					}),
+					}, "agent-term"),
 					shellStarted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""),
 						ref: adopt("shell")

@@ -2107,8 +2107,9 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
             return
         folder = str(row.get("folder") or "")
         has_dir = bool(folder) and os.path.isdir(folder)
-        # Paused sessions have no worktree on disk (pause commits and removes
-        # it); their branch still lives in the canonical repo.
+        # A session paused by a build up to 0.7.5 has no worktree on disk
+        # (that pause committed and removed it); its branch still lives in the
+        # canonical repo. Today's pause keeps the worktree.
         where = folder if has_dir else str(row.get("path") or "")
         tip = "HEAD" if has_dir else ("refs/heads/" + str(row.get("branch") or ""))
         me = flock.self_title

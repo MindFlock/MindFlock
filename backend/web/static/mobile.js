@@ -9,6 +9,7 @@
  *   - keystrokes are sent verbatim via term.onData
  *   - a resize is a JSON text frame {type:"resize", cols, rows}
  *   - reconnect on close unless code 4404 (instance gone) / 4409 (workspace gone)
+ *     / 4423 (session paused — waits for Resume, then attaches)
  */
 (function () {
   "use strict";
@@ -65,9 +66,14 @@
   var ctrlActive = false;       // sticky Ctrl modifier
   var instances = [];
   // Title whose terminal we are deliberately NOT attaching to yet because the
-  // server is still provisioning it (status "loading"). See select() and
+  // server is still provisioning it (status "loading"), or because it is
+  // PAUSED and this is its agent tab (the server refuses that socket with
+  // 4423 rather than relaunch an agent Pause stopped). See select() and
   // attachWhenReady().
   var awaitingReady = "";
+  var PAUSED_CLOSE = 4423;
+  var PAUSED_LINE = "Paused · the agent is stopped; your worktree and " +
+    "conversation are kept. ⋯ → Resume session starts it again.";
 
   // --- terminal bootstrap --------------------------------------------------
   function buildTerm() {
@@ -151,6 +157,13 @@
         setStatus(ev.code === 4404 ? "session gone" : "workspace gone");
         return;
       }
+      // Paused (the pause just landed, or the list is a tick behind): no
+      // retry loop — wait for Resume; the poll tick attaches after it.
+      if (ev && ev.code === PAUSED_CLOSE) {
+        awaitingReady = current;
+        setStatus(PAUSED_LINE);
+        return;
+      }
       setStatus("reconnecting…");
       setTimeout(function () { if (!closedByUs && sock === ws) connect(); }, 2500);
     };
@@ -183,6 +196,10 @@
     if (isLoading(title)) {
       awaitingReady = title;
       setStatus("starting " + nameOf(title) + " — setting up the workspace…");
+    } else if (agentPaused(title)) {
+      // The shell tab still attaches: Pause stops only the agent.
+      awaitingReady = title;
+      setStatus(PAUSED_LINE);
     } else {
       connect();
     }
@@ -246,6 +263,10 @@
   }
   function isLoading(title) {
     return statusOf(title) === "loading";
+  }
+  // A paused session's AGENT tab has nothing to attach to until Resume.
+  function agentPaused(title) {
+    return tab !== "shell" && statusOf(title) === "paused";
   }
   // What a session is CALLED: the server's `name` (the rename, else the label
   // the desktop rail shows), else the title. Display only — every route below
@@ -1823,6 +1844,8 @@
     // Selection moved on; that select() already decided whether to connect.
     if (awaitingReady !== current) { awaitingReady = ""; return; }
     if (isLoading(current)) return;
+    // Paused: the Paused line stays up; attach once Resume flips the status.
+    if (agentPaused(current)) return;
     awaitingReady = "";
     connect();                 // onopen clears the provisioning line
   }

@@ -23,6 +23,7 @@ import uuid
 from typing import Dict
 
 from backend import providers
+from backend import session
 from backend.session import provisioned as provisioning
 from backend.session import tmux
 from backend.web.core import proc as _proc
@@ -60,6 +61,24 @@ def _live_session_name(name: str):
     ):
         return name
     return None
+
+
+#: ``_ensure_agent_session``'s error for a PAUSED session whose agent is not
+#: running. Pause stopped the agent on purpose; only Resume (the engine's
+#: ``Instance.Resume``, which never comes through here) starts it again. Every
+#: relaunch-on-touch path — the terminal socket, ``/send``, Send now, the
+#: queue drain, a wake, a revive — gets this instead of a fresh agent, and the
+#: routes answer it with 409 (the terminal socket with close code 4423).
+PAUSED_REFUSED = "session is paused — resume it first"
+
+
+def _is_paused(inst) -> bool:
+    """Whether ``inst`` is Paused. An unreadable status is not paused (the
+    caller's other gates still hold)."""
+    try:
+        return getattr(inst, "Status", None) == session.Paused
+    except Exception:  # noqa: BLE001
+        return False
 
 
 PEER_SHELL_REFUSED = (
@@ -173,7 +192,11 @@ def _ensure_agent_session(inst, title: str):
 
     A SLEEPING session (:mod:`backend.web.core.sleep`) always resumes —
     its agent was stopped on purpose at the end of a turn, and the exit code
-    the hangup left says nothing — and its launch ends the sleep."""
+    the hangup left says nothing — and its launch ends the sleep.
+
+    A PAUSED session is never relaunched here: with no live agent it is
+    :data:`PAUSED_REFUSED`. (One whose agent is somehow still alive is just
+    attached — nothing is started.) Resume goes through the engine instead."""
     from backend.web.core import sleep as _sleep
 
     srv = _server()
@@ -186,6 +209,8 @@ def _ensure_agent_session(inst, title: str):
         if asleep:
             _sleep.woke(title)  # someone relaunched it meanwhile
         return live, None
+    if _is_paused(inst):
+        return name, PAUSED_REFUSED
     wt = inst.GetWorktreePath()
     if not wt or not os.path.isdir(wt):
         return name, "workspace no longer exists"

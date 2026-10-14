@@ -31,10 +31,10 @@ export interface PromptTarget {
 
 /** "Running" = the filter the templates' old send row used: status running,
  * or a session that has started — minus a PAUSED one. Pausing keeps
- * `started` true but removes the tmux session (and usually the worktree), so
- * the old filter counted paused sessions into "All running (n)" and pasted
- * into them: /send either failed ("workspace no longer exists") or rebooted
- * an agent nobody asked for. Verify sessions are left out too — the rail
+ * `started` true but stops the agent (the worktree is kept), so the old
+ * filter counted paused sessions into "All running (n)" and pasted into
+ * them: /send rebooted an agent nobody asked for (the server now refuses a
+ * paused session with 409). Verify sessions are left out too — the rail
  * hides them, so a paste there could never be followed by your Enter. */
 export function isRunningTarget(row: TargetRow | null | undefined): boolean {
   if (!row || !row.title) return false;

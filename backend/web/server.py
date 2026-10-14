@@ -289,6 +289,7 @@ from backend.web.core.cursor_windows import (
     _win_title_condition,
 )
 from backend.web.core.agent_sessions import (
+    PAUSED_REFUSED,
     _ensure_agent_session,
     _ensure_shell_session,
     _kill_agent_session,
@@ -5437,9 +5438,14 @@ def _deliver_to_agent(
     A SLEEPING agent (core.sleep) is woken either way, and the text queued
     rather than typed into the booting CLI (:func:`_deliver_to_sleeper`).
 
+    A PAUSED session is never typed into nor relaunched, either way:
+    ``(False, PAUSED_REFUSED)`` — Resume starts its agent again.
+
     Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``.
     Every collaborator is read off this module so tests patch the server.
     """
+    if getattr(inst, "Status", None) == Paused:
+        return False, PAUSED_REFUSED
     if _sleep.is_sleeping(title):
         if not boot and _budget_locked(title):
             return False, "over budget"
@@ -5571,7 +5577,9 @@ async def instance_send(
     409 ``{"in_dialog": true}`` with nothing typed.
 
     Another person holding the keyboard (core.ownership) is 409 ``{"error":
-    "driven by <name>", "driver"}`` unless ``"take": true``."""
+    "driven by <name>", "driver"}`` unless ``"take": true``. A paused session
+    is 409 ``{"error": "session is paused — resume it first", "paused":
+    true}``: nothing is typed and the agent is not relaunched."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -5603,6 +5611,8 @@ async def instance_send(
             body["in_dialog"] = True
         if reason == _SEND_WAKING:
             body["waking"] = True
+        if reason == PAUSED_REFUSED:
+            body["paused"] = True
         return JSONResponse(body, status_code=502 if reason == _SEND_FAILED else 409)
     if told == "queued":
         body = {"sent": False, "queued": True, "submitted": False}
@@ -5764,7 +5774,8 @@ async def post_queue_send_now(
     """Send one queued item to the agent NOW (manual override): skips the
     drain's idle wait, cooldowns, and the usage-limit hold — the user clicked,
     so deliver. ``{"id": "<item id>"}``. The item leaves the queue exactly as
-    a drained send would (popped; re-appended when ``loop`` is on)."""
+    a drained send would (popped; re-appended when ``loop`` is on). A paused
+    session is 409 ``{"paused": true}`` and the item stays queued."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -5778,6 +5789,10 @@ async def post_queue_send_now(
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
+    if getattr(inst, "Status", None) == Paused:
+        # Pause stopped the agent on purpose: Send now neither types into it
+        # nor relaunches it (the item stays queued for after Resume).
+        return JSONResponse({"error": PAUSED_REFUSED, "paused": True}, status_code=409)
     if _budget_locked(title):
         return JSONResponse(
             {
@@ -11531,15 +11546,22 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # and stalled polling/other sockets — on a multi-pane restore with dead
     # sessions that turned N reboots into one long blocking chain. In a thread
     # they proceed concurrently and the loop keeps serving. A SLEEPING agent
-    # wakes here (core.sleep): opening its terminal is the wake.
+    # wakes here (core.sleep): opening its terminal is the wake. A PAUSED one
+    # does not: both helpers refuse to relaunch it (PAUSED_REFUSED), and the
+    # socket closes with 4423 so the pane shows its Paused placeholder and
+    # does not reconnect. (Its agent still alive somehow → just attached.)
     _woke, err = await asyncio.to_thread(
         _sleep.ensure_awake, inst, title, "terminal opened"
     )
     if err is None:
         name, err = await asyncio.to_thread(_ensure_agent_session, inst, title)
     if err is not None:
-        await ws.send_text(json.dumps({"type": "error", "message": err}))
-        await ws.close(code=4409)
+        paused = err == PAUSED_REFUSED
+        frame = {"type": "error", "message": err}
+        if paused:
+            frame["paused"] = True
+        await ws.send_text(json.dumps(frame))
+        await ws.close(code=4423 if paused else 4409)
         return
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.
