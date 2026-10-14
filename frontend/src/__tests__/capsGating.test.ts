@@ -54,8 +54,10 @@ describe("screens and panels declare what they need, and say how to get it", () 
   });
 
   it("tags the git-only entry points so they vanish without git", () => {
-    const advanced = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-advanced");
-    expect(advanced.map((t) => attr(t, "data-caps"))).toEqual(["git"]);
+    // New's "Works in" choice (separate worktree / this folder directly) is
+    // git-only; More options holds the Name too, so it stays.
+    const worksIn = tagsWithId(src("components/dialogs/newSession/WorkspaceFold.tsx"), "new-works-in");
+    expect(worksIn.map((t) => attr(t, "data-caps"))).toEqual(["git"]);
     // The disk manager's git-only action: the unused-worktree sweep.
     const prune = tagsWithId(src("components/dialogs/RecentDialog.tsx"), "recent-prune");
     expect(prune.map((t) => attr(t, "data-caps"))).toEqual(["git"]);

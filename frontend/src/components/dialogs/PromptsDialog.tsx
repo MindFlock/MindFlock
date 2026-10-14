@@ -14,6 +14,7 @@ import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
 import { Modal } from "../Modal";
+import { newSessionResume } from "./newSession";
 import { ALL_RUNNING, promptTargets, resolveTarget, runningTitles } from "../../lib/promptTargets";
 import { pastePrompt as pasteInto } from "../../lib/promptPaste";
 import {
@@ -209,7 +210,7 @@ export function PromptsPanel() {
       </div>
       <p className="prompts-hint">
         Click a prompt to paste it into the chosen session — nothing is sent until you press Enter
-        there. The same prompts sit in the sidebar's Prompts bar and in New → Saved prompt.
+        there.
       </p>
       <div id="prompts-list" ref={listRef}>
         {section("Built-in", BUILTIN_PRESETS, false, "b")}
@@ -257,7 +258,17 @@ export function PromptsPanel() {
  * bar's "Manage", New's "Manage…" and the palette. */
 export function PromptsDialog() {
   const open = useUi((s) => s.openDialog === "prompts");
-  const closeDialog = useUi((s) => s.closeDialog);
+  const target = useUi((s) => s.dialogTarget);
+  const closeUi = useUi((s) => s.closeDialog);
+  // Opened from New's Task box (Manage…): Close hands the person back to the
+  // New dialog as they left it.
+  const closeDialog = () => {
+    closeUi();
+    if (target === "new") {
+      newSessionResume.keep = true;
+      useUi.getState().openDialogFor("new-session");
+    }
+  };
 
   if (!open) return null;
   return (
@@ -271,7 +282,10 @@ export function PromptsDialog() {
       <div id="prompts-dialog-panel">
         <div className="ws-head">
           <h2 id="prompts-title">Prompts</h2>
-          <span className="ik-subtitle">Saved text you paste into sessions</span>
+          <span className="ik-subtitle">
+            Saved text you send to a running session. To start a new session from a saved setup, use
+            Templates.
+          </span>
           <button type="button" id="prompts-close" onClick={closeDialog}>
             Close
           </button>

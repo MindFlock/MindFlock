@@ -217,11 +217,14 @@ describe("undo toasts, favicon dot, no maximize", () => {
 });
 
 describe("New-session dialog progressive disclosure", () => {
-  it("folds the git/workspace options, open by default", () => {
+  it("shows Works in on the form and folds the rest under More options", () => {
     const fold = normCode("components/dialogs/newSession/WorkspaceFold.tsx");
-    expect(has(fold, 'id="new-advanced" className="nf-advanced"')).toBe(true);
-    expect(has(fold, 'id="new-in-place"')).toBe(true); // work-in-place toggle
+    expect(has(fold, 'id="new-in-place"')).toBe(true); // this folder directly
+    expect(has(fold, 'id="new-worktree"')).toBe(true); // separate worktree
     expect(has(fold, 'id="new-init-repo"')).toBe(true); // git init lives here
+    const dlg = normCode("components/dialogs/NewSessionDialog.tsx");
+    expect(has(dlg, 'id="new-advanced" className="nf-advanced"')).toBe(true);
+    expect(dlg).toContain("More options");
   });
 
   it("picks the agent from the configured providers, with a Manage link to Coding CLI", () => {
@@ -239,7 +242,7 @@ describe("New-session dialog progressive disclosure", () => {
     expect(has(strip, 'id="new-templates-manage"')).toBe(true);
     // A chip prefills the form; Manage… opens the templates editor.
     expect(has(strip, "onClick={() => fillFromTemplate(t)}")).toBe(true);
-    expect(has(strip, 'useUi.getState().openDialogFor("templates", "new");')).toBe(true);
+    expect(has(strip, 'useUi.getState().openDialogFor("templates", "new")')).toBe(true);
     expect(normCode("components/dialogs/NewSessionDialog.tsx")).toContain('"/api/templates"');
     // A plain folder works — git is offered as an init-repo toggle.
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain('id="new-init-repo"');

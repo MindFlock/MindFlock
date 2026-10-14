@@ -24,7 +24,7 @@ from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
 
-__all__ = ["create", "create_result"]
+__all__ = ["create", "create_result", "free_title", "title_from_prompt"]
 
 
 def _server():
@@ -41,8 +41,10 @@ async def create(
 
     Accepted ``payload`` keys:
 
-    * ``title`` — session name (also the ENGINE.instances key). Blank quick-
-      launches an auto-numbered ``untitled`` / ``untitled-N``. For a provisioned
+    * ``title`` — session name (also the ENGINE.instances key). Blank is
+      named from the ``prompt`` (:func:`title_from_prompt`, numbered ``-N`` to
+      stay unique), or with no prompt quick-launches an auto-numbered
+      ``untitled`` / ``untitled-N``. For a provisioned
       session a title that is itself a branch path (``feature/sc-123/foo``,
       matching ``^[A-Za-z0-9._/-]+$``) is used verbatim as ``new_branch`` and the
       title becomes its last segment.
@@ -366,10 +368,13 @@ async def create(
     # has to keep doing rather than answering 409 for a request in which nobody
     # typed a name at all.
     auto_title = not title
+    # An empty Name with a task is named FROM the task ("add-readme-section-
+    # setup"), so the row says what it is doing; with no task either it is an
+    # "untitled" quick launch. Either way numbered to stay unique (titles key
+    # ENGINE.instances).
+    title_base = "" if title else title_from_prompt(prompt)
     if not title:
-        # Quick launch: an empty Name starts an "untitled" session, numbered to
-        # stay unique (titles key ENGINE.instances).
-        title = srv._free_untitled()
+        title = free_title(title_base) if title_base else srv._free_untitled()
         # Provisioned sessions derive their branch from the title; the empty
         # title skipped that above, so derive it from the generated one.
         if is_provisioned and not new_branch:
@@ -493,6 +498,20 @@ async def create(
                 plain_path,
                 srv._session_branch_name(title),
             )
+            # A name WE derived from the task is ours to renumber: a closed
+            # namesake's branch is no reason to refuse a request that typed
+            # no name at all.
+            n = 2
+            while err and auto_title and title_base and n < 10:
+                cand = free_title("%s-%d" % (title_base, n))
+                n += 1
+                err = await asyncio.to_thread(
+                    srv._lineage.branch_taken_error,
+                    plain_path,
+                    srv._session_branch_name(cand),
+                )
+                if not err:
+                    title = cand
             if err:
                 return JSONResponse({"error": err}, status_code=409)
     # The provisioned twin: a closed session keeps its worktree (holding the
@@ -589,7 +608,7 @@ async def create(
             # from the title too, and re-naming here would leave the two saying
             # different things.
             if auto_title and not is_provisioned:
-                title = srv._free_untitled()
+                title = free_title(title_base) if title_base else srv._free_untitled()
                 inst.Title = title
             else:
                 return JSONResponse(
@@ -783,6 +802,47 @@ async def create(
     except Exception:  # noqa: BLE001 — the note is enrichment only
         pass
     return JSONResponse(body, status_code=202)
+
+
+# Words that say nothing about a task, dropped from a name made from it.
+_TITLE_FILLER = frozenset(
+    "a an the to of in on at for and or with by from into please can could "
+    "you we i my our your this that it is be some".split()
+)
+#: Longest name made from a task (a branch is ``<prefix><name>``).
+TITLE_FROM_PROMPT_MAX = 32
+
+
+def title_from_prompt(prompt: str) -> str:
+    """A session name made from its task: the first non-empty line's first
+    few words, lowercased and hyphenated, filler dropped — "Add a README
+    section about setup" → ``add-readme-section-about-setup``. "" when the
+    task has no letters or digits. The New dialog previews the same rule
+    (``frontend/src/components/dialogs/newSession.ts``: titleFromPrompt)."""
+    first = next((ln for ln in str(prompt or "").splitlines() if ln.strip()), "")
+    words = re.findall(r"[a-z0-9]+", first.lower())
+    kept = [w for w in words if w not in _TITLE_FILLER] or words
+    out = ""
+    for w in kept[:6]:
+        nxt = out + "-" + w if out else w
+        if len(nxt) > TITLE_FROM_PROMPT_MAX:
+            break
+        out = nxt
+    if not out and kept:
+        out = kept[0][:TITLE_FROM_PROMPT_MAX]
+    return out
+
+
+def free_title(base: str) -> str:
+    """``base``, or ``base-2``, ``base-3``… — the first name no session (live
+    or renamed) has. :func:`server._free_untitled` for a name made from a task."""
+    srv = _server()
+    branches = srv._session_branches()
+    title, n = base, 2
+    while title in srv.ENGINE.instances or srv._aliases.owner_of(title, branches):
+        title = "%s-%d" % (base, n)
+        n += 1
+    return title
 
 
 def _creator(person: str) -> str:

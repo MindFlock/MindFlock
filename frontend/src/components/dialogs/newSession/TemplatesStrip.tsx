@@ -1,16 +1,21 @@
 /** The New form's Templates strip: one server-side list (managed in
  * TemplatesDialog), and the fill that writes a template into the form. */
 
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { Template } from "../../../lib/templates";
 import { useUi } from "../../../state/store";
 import type { FolderAction } from "../newSession";
+import type { Lane } from "../../../lib/laneActions";
+
+/** A template as the server stores it, fast-track included (lib/templates'
+ * Template predates the field). */
+export type TemplateWithLane = Template & { fasttrack?: string; ask_first?: boolean };
+
+const LANES: readonly string[] = ["leave", "commit", "push", "pr", "merge"];
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
 export interface TemplateFillCtx {
-  title: string;
-  titleRef: MutableRefObject<HTMLInputElement | null>;
   setAgent(value: string): void;
   folderDo: Dispatch<FolderAction>;
   setPrompt: Set<string>;
@@ -20,15 +25,14 @@ export interface TemplateFillCtx {
   setInitRepo: Set<boolean>;
   setActiveTemplate: Set<string>;
   setAdvancedOpen: Set<boolean>;
-  setPromptOpen: Set<boolean>;
-  setTitle: Set<string>;
+  /** The template's fast-track ("" / "leave" = off). */
+  setLane(lane: Lane): void;
+  setAskFirst(on: boolean): void;
 }
 
 /** fillFromTemplate, built per render from the form it writes into. */
 export function templateFiller(ctx: TemplateFillCtx) {
   const {
-    title,
-    titleRef,
     setAgent,
     folderDo,
     setPrompt,
@@ -38,8 +42,8 @@ export function templateFiller(ctx: TemplateFillCtx) {
     setInitRepo,
     setActiveTemplate,
     setAdvancedOpen,
-    setPromptOpen,
-    setTitle,
+    setLane,
+    setAskFirst,
   } = ctx;
   /** Put a template into the form. `quiet` is the opening's own pre-fill
    * (the last-used template): the fields change, nothing else does — no
@@ -60,14 +64,16 @@ export function templateFiller(ctx: TemplateFillCtx) {
     // an ordinary combination.
     setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
+    const ft = (t as TemplateWithLane).fasttrack;
+    setLane(ft && LANES.includes(ft as Lane) ? (ft as Lane) : "leave");
+    setAskFirst(!!(t as TemplateWithLane).ask_first);
     setActiveTemplate(t.name);
     if (opts.quiet) return;
-    setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
-    // A template that brings a prompt has just written into a fold that
-    // defaults shut; leaving it shut hides the text it filled in.
-    if (t.prompt) setPromptOpen(true);
-    if (!title.trim()) setTitle(t.name || "");
-    titleRef.current?.focus();
+    // The extras it set live under More options: show them.
+    setAdvancedOpen(!!(t.provisioned || t.init_repo || (ft && ft !== "leave")));
+    // The Name is NOT written: a session from a template is named from its
+    // task (or the Name you type), so two runs never collide on the
+    // template's own name.
   };
   return fillFromTemplate;
 }
@@ -76,52 +82,45 @@ export function TemplatesStrip({
   templates,
   activeTemplate,
   fillFromTemplate,
-  closeDialog,
 }: {
   templates: Template[];
   activeTemplate: string;
   fillFromTemplate(t: Template): void;
-  closeDialog(): void;
 }) {
+  // Nothing to pick: no strip at all (a new user's first form is short).
+  // Templates are made with "Save as template…" at the bottom of this form.
+  if (!templates.length) return null;
   return (
     <div id="new-templates" className="new-templates">
       <div className="nt-head">
-        <span title="Saved New-session setups — one list on every device">Templates</span>
+        <span title="Saved session setups — one list on every device">
+          Templates <span className="muted">— click one to fill the form</span>
+        </span>
         <button
           type="button"
           id="new-templates-manage"
           className="linklike"
-          title="Add, edit and delete templates"
-          onClick={() => {
-            closeDialog();
-            useUi.getState().openDialogFor("templates", "new");
-          }}
+          title="Run, schedule, edit and delete templates — you come back here on Close"
+          onClick={() => useUi.getState().openDialogFor("templates", "new")}
         >
           Manage…
         </button>
       </div>
-      {templates.length > 0 ? (
-        <div id="new-templates-list" className="nt-list">
-          {templates.map((t) => (
-            <button
-              key={t.name}
-              type="button"
-              className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
-              data-name={t.name}
-              aria-pressed={activeTemplate === t.name}
-              title={(t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe")}
-              onClick={() => fillFromTemplate(t)}
-            >
-              {t.name}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="nf-describe-note">
-          No templates yet. Save this form's prompt under a name (Prompt fold), or
-          Manage… to add one.
-        </p>
-      )}
+      <div id="new-templates-list" className="nt-list">
+        {templates.map((t) => (
+          <button
+            key={t.name}
+            type="button"
+            className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
+            data-name={t.name}
+            aria-pressed={activeTemplate === t.name}
+            title={"Fill the form from “" + t.name + "”" + (t.prompt ? ": " + t.prompt : "")}
+            onClick={() => fillFromTemplate(t)}
+          >
+            {t.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

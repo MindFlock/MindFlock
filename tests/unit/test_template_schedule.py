@@ -314,3 +314,61 @@ def test_loop_is_off_under_pytest():
 
     asyncio.run(TemplatesAddon().on_startup(Ctx()))
     assert started == []
+
+
+# --------------------------------------------------------------------------- #
+# Fast-track on a template
+# --------------------------------------------------------------------------- #
+def test_fasttrack_round_trips_only_when_set(stores, fake_create):
+    r = client.post("/api/templates", json=tpl("ships", fasttrack="pr", ask_first=True))
+    assert r.status_code == 200
+    saved = r.json()["template"]
+    assert saved["fasttrack"] == "pr" and saved["ask_first"] is True
+    # Off is no key at all (older devices and settings sync see no edit).
+    for off in ("off", "leave", "", None):
+        got = client.post("/api/templates", json=tpl("quiet", fasttrack=off))
+        assert got.status_code == 200, off
+        assert "fasttrack" not in got.json()["template"]
+        assert "ask_first" not in got.json()["template"]
+    bad = client.post("/api/templates", json=tpl("bad", fasttrack="yolo"))
+    assert bad.status_code == 400 and "fasttrack" in bad.json()["error"]
+
+
+def test_a_fasttrack_template_arms_its_session(stores, fake_create):
+    armed = []
+
+    def arm(title, lane, ask_first):
+        armed.append((title, lane, ask_first))
+
+    t = tpl(schedule=None, in_place=True, fasttrack="pr", ask_first=True)
+    status, body = asyncio.run(
+        ts.fire(t, "schedule", now=at(2026, 10, 13, 21, 0), arm=arm)
+    )
+    assert status == 202
+    assert armed == [(body["title"], "pr", True)]
+    # It commits for THIS session, so never in a checkout others share.
+    assert "in_place" not in fake_create[0]
+    # Without one nothing is armed and in_place is kept.
+    asyncio.run(ts.fire(tpl("plain", schedule=None, in_place=True), "manual", arm=arm))
+    assert len(armed) == 1 and fake_create[1]["in_place"] is True
+
+
+def test_a_failed_arm_is_recorded_but_the_run_stands(stores, fake_create):
+    def arm(title, lane, ask_first):
+        raise RuntimeError("workspace gone")
+
+    status, _ = asyncio.run(ts.fire(tpl(fasttrack="commit"), "manual", arm=arm))
+    assert status == 202
+    rec = ts.load_runs()["nightly"]
+    assert rec["last_session"] and "fast-track" in rec["last_error"]
+
+
+def test_status_names_the_time_zone(ny_tz, stores, fake_create):
+    from backend.web.addons import templates
+
+    templates.save_template(tpl())
+    st = ts.status_for(templates.list_templates(), now=at(2026, 10, 13, 12, 0))
+    assert st["runs"]["nightly"]["tz"] == "EDT"
+    assert st["tz"] == "EDT"
+    st = ts.status_for(templates.list_templates(), now=at(2026, 12, 1, 12, 0))
+    assert st["runs"]["nightly"]["tz"] == "EST"

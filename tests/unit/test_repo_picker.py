@@ -875,6 +875,9 @@ class TestRepoPickerApi:
 
         body = client.get("/api/repos/check", params={"path": repo}).json()
 
+        # A repo also says what its new worktrees' branches start with, so New
+        # can show the branch before Create.
+        assert isinstance(body.pop("branch_prefix"), str)
         assert body == {
             "path": repo,
             "exists": True,

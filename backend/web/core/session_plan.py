@@ -34,13 +34,12 @@ from typing import Iterable, List, Optional
 from backend.web.core import commit_message as _commit_message
 from backend.web.core import repo_picker
 
-TIMEOUT_PLAN = 75.0
-#: The Describe box's budget. Between the autopilot's 45s and the ✨ button's
-#: 120s, and deliberately not either. Shorter than ✨ because the person is
-#: staring at one empty box rather than a textarea already full of their own
-#: words, and because the fallback here is a form that is still on screen and
-#: still works — failing over sooner strictly improves the worst case. Longer
-#: than the autopilot's because nothing else is waiting on this one.
+TIMEOUT_PLAN = 30.0
+#: The Describe box's budget. Shorter than the autopilot's 45s and the ✨
+#: button's 120s: the person is staring at one box with a ticking timer, and
+#: the fallback (the form, pre-filled with what they typed) still works —
+#: failing over sooner strictly improves the worst case. A cold CLI start plus
+#: a real turn is ~10s; the dialog gives up at the same 30s.
 
 #: Wall-clock budget for building the folder menu. The walks inside it are
 #: bounded already (each name search by its own deadline, the sweep by count),

@@ -109,9 +109,13 @@ describe("page 1 — the sentence card, as in v0.7", () => {
   it("draws the box, its explanation and examples, and nothing of the form", () => {
     expect(DESCRIBE).toContain('"What do you want to work on?"');
     expect(DESCRIBE).toContain('placeholder="e.g. fix the login bug in acme-api"');
-    expect(DESCRIBE).toContain("Your coding CLI reads this and works out which folder to use");
-    expect(DESCRIBE).toContain("<b>Nothing is created until you pick one of the buttons below.</b>");
-    expect(DESCRIBE).toContain("Also understood:");
+    // Says what each button does rather than "nothing is created until…"
+    // (one of those buttons IS Create).
+    expect(DESCRIBE).toContain("Your agent reads this and fills in the folder");
+    expect(DESCRIBE).toContain("<b>Review details first</b> shows them to you");
+    expect(DESCRIBE).toContain("<b>Create session</b> starts right away.");
+    expect(DESCRIBE).not.toContain("Nothing is created until");
+    expect(DESCRIBE).toContain("Examples:");
     // The form's own sections are page 2's alone — the box is not on the form.
     const p1 = DIALOG.slice(DIALOG.indexOf("{page === 1 ? ("), DIALOG.indexOf("<TemplatesStrip"));
     expect(p1).toContain("<DescribeSection {...describeProps} />");
@@ -156,7 +160,9 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(run).toContain("setPage(2);");
     expect(run).toContain("submitArmAt.current = Date.now() + SUBMIT_ARM_MS");
     // A failed read names the way out page 1 offers.
-    expect(run).toContain('" — use Set it up myself instead."');
+    // A failure (or the 30s cap) offers the form, pre-filled with the text.
+    expect(run).toContain('" — fill the form instead."');
+    expect(run).toContain("setDescribeFailed(true);");
   });
 
   it("page 2 has ← Back to the sentence, and Create is held while the model is reading", () => {
@@ -250,12 +256,13 @@ describe("Base branch — the Git & workspace fold's picker", () => {
   });
 });
 
-describe("Templates strip — one list, always manageable", () => {
-  it("shows Manage… whether or not a template exists, and opens the React dialog", () => {
+describe("Templates strip — one list, shown once there is one", () => {
+  it("hides when empty, and its Manage… opens the React dialog", () => {
     const strip = TEMPLATES.slice(TEMPLATES.indexOf('id="new-templates"'));
     expect(strip).toContain('id="new-templates-manage"');
     expect(strip).toContain('openDialogFor("templates", "new")');
-    expect(strip).toContain("No templates yet");
+    // No templates: no strip at all (Save as template… makes the first).
+    expect(TEMPLATES).toContain("if (!templates.length) return null;");
     expect(SRC).not.toContain("mindflockAddons");
   });
 });

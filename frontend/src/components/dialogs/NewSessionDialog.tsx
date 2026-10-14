@@ -24,6 +24,8 @@ import {
   useReducer,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import type { Config, PlanAnswer, RepoBranches } from "../../api/types";
 import {
@@ -32,6 +34,7 @@ import {
   useAuthProfiles,
   useConfig,
   useDevices,
+  useInstances,
 } from "../../state/queries";
 import {
   deviceApi,
@@ -48,7 +51,9 @@ import {
   loadUserPresets,
   type Preset,
 } from "../../lib/presets";
-import { ensureTemplates, type Template } from "../../lib/templates";
+import { ensureTemplates, saveTemplate, templatesNow, type Template } from "../../lib/templates";
+import { toast } from "../../lib/toast";
+import { errMsg } from "../../lib/format";
 import { TemplatesDialog } from "./TemplatesDialog";
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { NewTicketPane } from "./NewTicketPane";
@@ -75,7 +80,6 @@ import {
   cancelPlanRun,
   ctrlEnterAction,
   folderReducer,
-  foldSummaryFor,
   mayTakeOpeningFocus,
   newFolderBlockReason,
   newFolderGate,
@@ -85,6 +89,15 @@ import {
   provisionBlockReason,
   rememberedProfileVerdict,
   worktreeClampReason,
+  agentMissingReason,
+  branchPreview,
+  newSessionResume,
+  preferInstalled,
+  remoteBranchName,
+  sessionsInFolder,
+  templateFromForm,
+  titleFromPrompt,
+  type InstalledMap,
   type NewTab,
   type PlanRun,
   type Provider,
@@ -92,10 +105,10 @@ import {
 } from "./newSession";
 import { DescribeSection, NewFolderRow, describeFlow, useDescribeFocus } from "./newSession/DescribeSection";
 import { TemplatesStrip, templateFiller } from "./newSession/TemplatesStrip";
-import { FolderAids, FolderField, matchPicker, useFolderLookups } from "./newSession/FolderPicker";
+import { FolderAids, FolderField, matchPicker, useFolderLookups, type FolderCheck } from "./newSession/FolderPicker";
 import { AgentFields, ModelRow, accountSetter } from "./newSession/AgentAccount";
-import { WorkspaceFold, useBaseBranches } from "./newSession/WorkspaceFold";
-import { PromptFold } from "./newSession/PromptFold";
+import { GitOptions, WorksIn, useBaseBranches } from "./newSession/WorkspaceFold";
+import { PlanFirstRow, TaskField } from "./newSession/PromptFold";
 import { LaunchFold } from "./newSession/LaunchFold";
 import { FooterActions } from "./newSession/FooterActions";
 
@@ -141,7 +154,9 @@ export function NewSessionDialog() {
   const [launchArgs, setLaunchArgs] = useState("");
   const [provision, setProvision] = useState(false);
   const [strategy, setStrategy] = useState("worktree");
-  const [inPlace, setInPlace] = useState(true);
+  // A separate worktree is the default: a session on its own branch can't
+  // overwrite another's edits. "This folder directly" is one click away.
+  const [inPlace, setInPlace] = useState(false);
   const [initRepo, setInitRepo] = useState(false);
   // Plan first: the launch prompt also asks the agent to list every file it
   // means to touch (with intent) and wait — the Map tab turns that list into
@@ -168,12 +183,9 @@ export function NewSessionDialog() {
   // of the dialog.
   const [advancedOpen, setAdvancedOpen] = useState(true);
   const [launchOpen, setLaunchOpen] = useState(false);
-  // The prompt is a fold too, and a closed one: a session started with no
-  // prompt is the common case (you drive it by hand from the terminal), and
-  // the textarea plus its preset row was the tallest block on the card. It
-  // sits BELOW the git/workspace options, where the things you set before
-  // launching are grouped.
-  const [promptOpen, setPromptOpen] = useState(false);
+  // The Task box is always on the form now (it is what a session is for), so
+  // the plan and submit code's "open the Prompt fold" has nothing to open.
+  const setPromptOpen: Dispatch<SetStateAction<boolean>> = () => {};
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
   /** Base branch for a NEW WORKTREE: "" = whatever the server would pick (the
@@ -212,6 +224,17 @@ export function NewSessionDialog() {
   const [describe, setDescribe] = useState("");
   const [describing, setDescribing] = useState(false);
   const [describeSlow, setDescribeSlow] = useState(false);
+  // Which page-1 button started the read (its label carries the clock), when,
+  // and whether it failed or ran out of time (the form is offered instead).
+  const [describeMode, setDescribeMode] = useState<"fill" | "start">("fill");
+  const [describeSince, setDescribeSince] = useState(0);
+  const [describeFailed, setDescribeFailed] = useState(false);
+  /** Agent name → installed on THIS device (GET /api/providers/status); null
+   * = unknown (another device, an older server, still loading). */
+  const [installed, setInstalled] = useState<InstalledMap | null>(null);
+  /** "Save as template…": the inline name row (null = closed). */
+  const [saveTplName, setSaveTplName] = useState<string | null>(null);
+  const [saveTplBusy, setSaveTplBusy] = useState(false);
   // The server-composed sentence about what it chose and why, and the inline
   // failure. Two states rather than one because they are different registers
   // in the same place: the note is muted, the error is red, and a run that
@@ -253,7 +276,7 @@ export function NewSessionDialog() {
   const [suggestions, setSuggestions] = useState<RepoSuggestion[]>([]);
   // The server's verdict on the folder in the field, stamped with the path we
   // asked about — see the debounce effect for why the stamp is load-bearing.
-  const [folderCheck, setFolderCheck] = useState<{ asked: string; plain: boolean } | null>(null);
+  const [folderCheck, setFolderCheck] = useState<FolderCheck | null>(null);
   // What /api/repos/search last answered, stamped with the query it answers.
   // Same trick as folderCheck, load-bearing for the same reason: a walk started
   // three keystrokes ago must not drop its matches under a field that has moved
@@ -276,9 +299,6 @@ export function NewSessionDialog() {
   const [searchSel, setSearchSel] = useState(0);
   const [presetValue, setPresetValue] = useState("");
   const [savedPresets, setSavedPresets] = useState<Preset[]>([]);
-  // "Save…" opens an inline name row under the select (null = closed). It is
-  // a row, not a dialog box, because Electron has no window.prompt at all.
-  const [presetName, setPresetName] = useState<string | null>(null);
   // Auth profile pin: "" = inherit the app-wide default account; "default" =
   // explicitly the CLI's own login; anything else = a configured profile id.
   const [profileId, setProfileId] = useState("");
@@ -398,14 +418,24 @@ export function NewSessionDialog() {
       folderDo({ t: "fallback", path: cfg?.home || "" });
       setProvisioningAvailable(!!cfg?.provisioning_available);
       let provs: Provider[] = [];
-      try {
-        const d = await dapi<{ providers?: Provider[] }>("/api/providers/manage");
-        provs = d.providers || [];
-      } catch {
-        /* providers are optional */
+      let have: InstalledMap | null = null;
+      const [manageR, statusR] = await Promise.allSettled([
+        dapi<{ providers?: Provider[] }>("/api/providers/manage"),
+        // Which agents are installed — this device only: another device's
+        // agents are its own business, and unknown never blocks.
+        dev
+          ? Promise.reject(new Error("remote"))
+          : dapi<{ providers?: Array<{ name: string; installed?: boolean }> }>("/api/providers/status"),
+      ]);
+      if (manageR.status === "fulfilled") provs = manageR.value.providers || [];
+      if (statusR.status === "fulfilled") {
+        have = {};
+        for (const p of statusR.value.providers || [])
+          if (typeof p.installed === "boolean") have[p.name] = p.installed;
       }
       if (!here()) return;
       setProviders(provs);
+      setInstalled(have);
       // Map the saved default (name / alias / raw command) to the provider NAME.
       const prev = cfg?.default_program || "";
       const lower = prev.toLowerCase();
@@ -415,7 +445,11 @@ export function NewSessionDialog() {
           (p.aliases || []).some((a) => String(a).toLowerCase() === lower) ||
           String(p.command || "").toLowerCase() === lower
       );
-      const agent = match ? match.name : prev;
+      const agent = preferInstalled(
+        match ? match.name : prev,
+        provs.map((p) => p.name),
+        have
+      );
       setProgram(agent);
       // Per-provider default launch flags pre-fill the field so the default
       // chips start ON; the field is sent explicitly, so toggling one off
@@ -467,9 +501,27 @@ export function NewSessionDialog() {
     }
     if (failedReopen.current) {
       failedReopen.current = false;
-      // failCreate has already put the form (page 2) back on screen.
+      newSessionResume.keep = false;
+      // failCreate has already put the form (page 2) back on screen. Name
+      // lives under More options, so open it for the caret to land there.
       openedPage.current = 2;
       openedFocus.current = "title";
+      setAdvancedOpen(true);
+      return;
+    }
+    if (newSessionResume.keep) {
+      // Back from Templates / Prompts (New → Manage…): the form exactly as it
+      // was left, with the lists it reads fetched again — that is what the
+      // trip was for.
+      newSessionResume.keep = false;
+      openedPage.current = page;
+      openedFocus.current = page === 2 ? "title" : "describe";
+      setSaveTplName(null);
+      setSavedPresets(loadUserPresets());
+      if (!deviceRef.current)
+        void ensureTemplates(true)
+          .then((list) => setTemplates(list))
+          .catch(() => {});
       return;
     }
     openedFocus.current = "describe";
@@ -498,6 +550,9 @@ export function NewSessionDialog() {
     setBranches(null);
     setDescribing(false);
     setDescribeSlow(false);
+    setDescribeFailed(false);
+    setSaveTplName(null);
+    setSaveTplBusy(false);
     setPlanNote("");
     setPlanError("");
     // The tick, and ONLY the tick. Last opening's "yes, make that folder" is
@@ -528,7 +583,7 @@ export function NewSessionDialog() {
     // carried over from last opening would refuse the first Enter of this one.
     submitArmAt.current = 0;
     setProvision(false);
-    setInPlace(true);
+    setInPlace(false);
     setInitRepo(false);
     setPlanFirst(false);
     setSplit(false);
@@ -539,7 +594,6 @@ export function NewSessionDialog() {
     // this reset runs on EVERY open.
     setAdvancedOpen(false);
     setLaunchOpen(false);
-    setPromptOpen(false);
     folderDo({ t: "reopen" });
     // Last opening's matches answered last opening's query, and the reducer's
     // "reopen" keeps the folder itself — so the list would come back up over a
@@ -555,7 +609,6 @@ export function NewSessionDialog() {
     // rotated OpenRouter key must not keep offering the old key's catalog.
     setProfileModels({});
     setSavedPresets(loadUserPresets());
-    setPresetName(null);
     loadedDevice.current = deviceRef.current;
     return loadFor(deviceRef.current);
   }, [open]);
@@ -565,7 +618,12 @@ export function NewSessionDialog() {
   // changes it while the form is open.
   useEffect(() => {
     if (!open) return;
-    const reload = () => setSavedPresets(loadUserPresets());
+    const reload = () => {
+      setSavedPresets(loadUserPresets());
+      // The strip too (Save as template…, the Templates dialog, a sync pull)
+      // — for this device's list; another device's is its own.
+      if (!deviceRef.current) setTemplates(templatesNow());
+    };
     document.addEventListener(PRESETS_CHANGED, reload);
     return () => document.removeEventListener(PRESETS_CHANGED, reload);
   }, [open]);
@@ -775,8 +833,6 @@ export function NewSessionDialog() {
    * caret move, no fold opened, no title written over the one the person is
    * about to type. A click on a chip is the loud version. */
   const fillFromTemplate = templateFiller({
-    title,
-    titleRef,
     setAgent,
     folderDo,
     setPrompt,
@@ -786,8 +842,8 @@ export function NewSessionDialog() {
     setInitRepo,
     setActiveTemplate,
     setAdvancedOpen,
-    setPromptOpen,
-    setTitle,
+    setLane: draft.setLane,
+    setAskFirst: draft.setAskFirst,
   });
 
   /** The opening's pre-fill from the last session started in this folder:
@@ -857,6 +913,9 @@ export function NewSessionDialog() {
     setAdvancedOpen(true);
   };
 
+  // Live sessions, for "is anyone already editing this folder directly?".
+  const { data: liveRows } = useInstances();
+
   // The Templates dialog is this dialog's manager (New → Manage… hands over
   // to it and it hands back), so it rides here, in the one component that is
   // always mounted — the two never show at once, and nothing else has to
@@ -899,16 +958,34 @@ export function NewSessionDialog() {
   /** "Work on x itself" is offered for origin's branches only: push, the
    * divergence check and the rebase all go through origin. */
   const canContinue = baseIsRemote && baseBranch.startsWith("origin/");
-  /** What the shut "Git & workspace" fold says on its summary line. */
-  const foldSummary = foldSummaryFor({
-    provisioned: provisionOn,
-    strategy,
-    inPlace: inPlace && !laneNeedsWorktree,
-    baseBranch,
-    current: branches?.current || "",
-    initRepo,
-    continueBranch: !!baseBranch && continueOn === baseBranch && canContinue,
-  });
+  /** The folder in the field is a git repo (as the server last said). */
+  const isGit = folderCheck?.asked === folderPath && !!folderCheck?.isGit;
+  /** Sessions on this device already editing the folder directly. */
+  const sharers = device
+    ? []
+    : sessionsInFolder(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
+  const continueBranch =
+    !!baseBranch && continueOn === baseBranch && canContinue ? remoteBranchName(baseBranch) : "";
+  const branchName =
+    isGit && folderCheck?.branchPrefix !== undefined
+      ? branchPreview({ prefix: folderCheck.branchPrefix || "", title, prompt })
+      : "";
+  const baseLabel = baseBranch || branches?.current || "";
+  /** Why Create must not launch the agent in the field ("" = go ahead). */
+  const agentMissing = device ? "" : agentMissingReason(canonAgent(program), installed);
+  /** More options' summary line: what in it is NOT the default. */
+  const moreBits: string[] = [];
+  if (title.trim()) moreBits.push("named " + title.trim());
+  if (draft.lane !== "leave") moreBits.push("fast-track on");
+  if (splitOn) moreBits.push("auto-split");
+  if (provisionOn) moreBits.push("provisioned");
+  if (baseBranch) moreBits.push("from " + baseBranch);
+  if (initRepo) moreBits.push("git init");
+  if (planFirst && planOk) moreBits.push("plan first");
+  if (launchArgs.trim()) moreBits.push("flags");
+  const moreSummary = moreBits.length
+    ? moreBits.join(" · ")
+    : "name, fast-track, base branch, flags";
   // Computed once for both readers: the aside inside the Git & workspace fold,
   // and submit's refusal to post a create the server is certain to refuse.
   const provisionBlocked = provisionBlockReason({
@@ -971,7 +1048,12 @@ export function NewSessionDialog() {
 
   const pickMatch = matchPicker(folderDo, setSearchOpen);
 
-  const { buildBody, postCreate, startRun, submit } = newSessionSubmit({
+  const {
+    buildBody,
+    postCreate: postCreateRaw,
+    startRun,
+    submit: submitRaw,
+  } = newSessionSubmit({
     title,
     repoPath,
     prompt,
@@ -1008,8 +1090,69 @@ export function NewSessionDialog() {
     planFolderDo,
     closeDialog,
   });
+  // Never launch an agent this device doesn't have: the session would sit
+  // "Idle" on "command not found". Said where the button was pressed.
+  const submit = () => {
+    if (agentMissing && !runMode) {
+      // The why is already under the Agent field; this says it was Create
+      // that refused.
+      setError("Can't create yet — pick an agent that's installed.");
+      return;
+    }
+    void submitRaw();
+  };
+  const postCreate = async (body: Record<string, unknown>) => {
+    if (agentMissing) {
+      setPlanError(agentMissing);
+      return;
+    }
+    await postCreateRaw(body);
+  };
 
-  const { startNow, cancelDescribe, runDescribe } = describeFlow({
+  /** Save as template…: the whole form, under the typed name. */
+  const saveTplBlocked = !(saveTplName || "").trim()
+    ? "Give it a name."
+    : !folderPath && !prompt.trim()
+    ? "Pick a folder or write a task first."
+    : "";
+  const saveAsTemplate = async () => {
+    if (saveTplBlocked || saveTplName === null) return;
+    const body = templateFromForm(
+      {
+        name: saveTplName,
+        program: canonAgent(program),
+        repoPath: folderPath,
+        prompt,
+        inPlace: inPlace && !laneNeedsWorktree,
+        provision: provisionOn,
+        strategy,
+        initRepo,
+        lane: draft.lane,
+        askFirst: draft.askFirst,
+      },
+      device ? templates : templatesNow()
+    );
+    setSaveTplBusy(true);
+    try {
+      if (device) {
+        const d = await dapi<{ templates?: Template[] }>("/api/templates", { json: body });
+        setTemplates(d.templates || []);
+      } else {
+        setTemplates(await saveTemplate(body as unknown as Template));
+      }
+      setActiveTemplate(String(body.name));
+      setSaveTplName(null);
+      toast(
+        `Saved template “${body.name}” — start it from Templates (Run now) or give it a schedule there`
+      );
+    } catch (err) {
+      setError("Couldn't save the template: " + errMsg(err));
+    } finally {
+      setSaveTplBusy(false);
+    }
+  };
+
+  const { startNow, cancelDescribe, runDescribe, fillFormInstead } = describeFlow({
     describe,
     describing,
     newFolderOk,
@@ -1034,6 +1177,9 @@ export function NewSessionDialog() {
     setPlanNote,
     setDescribing,
     setDescribeSlow,
+    setDescribeMode,
+    setDescribeSince,
+    setDescribeFailed,
     setPage,
     buildBody,
     postCreate,
@@ -1053,6 +1199,8 @@ export function NewSessionDialog() {
     planNoteShown,
     planError,
     setPlanError,
+    describeFailed,
+    fillFormInstead,
     newFolderRow,
     runBrowse,
     setRunBrowse,
@@ -1070,7 +1218,10 @@ export function NewSessionDialog() {
       // The two landing panes — page 1 and the Ticket tab — share one fixed
       // top edge and are each their own natural height (NewSessionDialog.css),
       // so a tab click never moves the card; the full form is centred.
-      className={"modal" + (shownTab === "ticket" || page === 1 ? " nf-landing" : "")}
+      // The full form too, since round 2: its own natural height under a
+      // fixed top edge (.nf-form-page), so More options grows it downward
+      // instead of leaving a tall card mostly empty.
+      className={"modal nf-landing" + (shownTab === "ticket" || page === 1 ? "" : " nf-form-page")}
       ref={rootRef}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeDialog();
@@ -1155,22 +1306,7 @@ export function NewSessionDialog() {
                 templates={templates}
                 activeTemplate={activeTemplate}
                 fillFromTemplate={fillFromTemplate}
-                closeDialog={closeDialog}
               />
-
-              <label>
-                <span>
-                  Name <span className="muted">— optional; empty starts an untitled session</span>
-                </span>
-                <input
-                  id="new-title"
-                  ref={titleRef}
-                  autoComplete="off"
-                  placeholder={activeTemplate ? activeTemplate + " — Enter creates it" : "untitled — Enter creates it"}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-              </label>
 
               <div className="nf-quick">
                 <FolderField
@@ -1190,6 +1326,7 @@ export function NewSessionDialog() {
                 <AgentFields
                   program={program}
                   providers={providers}
+                  installed={installed}
                   setAgent={setAgent}
                   device={device}
                   authProfiles={authProfiles}
@@ -1199,6 +1336,11 @@ export function NewSessionDialog() {
                   closeDialog={closeDialog}
                 />
               </div>
+              {agentMissing && (
+                <p className="nf-git-nudge nf-agent-missing" id="new-agent-missing" role="status">
+                  {agentMissing}
+                </p>
+              )}
 
               <ModelRow
                 selectedProfile={selectedProfile}
@@ -1228,115 +1370,165 @@ export function NewSessionDialog() {
                 device={device}
               />
 
-              {config?.caps?.git !== false && (
-                // The one fast-track choice for a single session (page 1 holds
-                // only the prompt): a session made from the form goes as far as
-                // this says, and it is never set out of sight.
-                <div id="new-ft-row" className="rt-row rt-row-top" data-caps="git">
-                  <span className="rt-label">Fast-track to</span>
-                  <div className="rt-ctl">
-                    <FastTrackChoice
-                      id="new-lane-form"
-                      label="Fast-track to"
-                      value={draft.lane}
-                      onChange={draft.setLane}
-                      askFirst={draft.askFirst}
-                      onAskFirst={draft.setAskFirst}
-                      // A split commits each piece into the group's branch, so
-                      // Off reads Commit and the release always asks — the same
-                      // rule RunOptions draws for one-PR-for-all.
-                      disabledReason={
-                        splitOn
-                          ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" }
-                          : undefined
-                      }
-                      askReason={
-                        splitOn ? "An auto-split always asks you before anything leaves this machine" : undefined
-                      }
-                    />
-                  </div>
-                </div>
-              )}
-
-              {config?.caps?.git !== false && (
-                // "Auto-split into up to N sessions if it's worth it": the form's
-                // folder and Prompt become the lead's, and Create starts the run.
-                <div id="new-split-row" data-caps="git">
-                  <SplitCheck
-                    id="new-split"
-                    split={split}
-                    onSplit={toggleSplit}
-                    gate={mcpOk}
-                    maxPieces={clampSplit(maxPieces, splitLimit)}
-                    onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
-                    limit={splitLimit}
-                    text={prompt || describe}
-                  />
-                  {splitSum && (
-                    <p className="rt-sum" aria-live="polite">
-                      {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
-                      <span className="muted">
-                        The account, plan-first, launch flags and Git &amp; workspace choices don't apply to a split.
-                      </span>
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <WorkspaceFold
-                advancedOpen={advancedOpen}
-                setAdvancedOpen={setAdvancedOpen}
-                foldSummary={foldSummary}
-                inPlace={inPlace}
-                setInPlace={setInPlace}
-                provision={provision}
-                setProvision={setProvision}
-                provisionOn={provisionOn}
-                offerProvision={offerProvision}
-                laneNeedsWorktree={laneNeedsWorktree}
-                draft={draft}
-                splitOn={splitOn}
-                setSplit={setSplit}
-                worktreeClamped={worktreeClamped}
-                provisionBlocked={provisionBlocked}
-                armInitRepo={armInitRepo}
-                strategy={strategy}
-                setStrategy={setStrategy}
-                worktreeMode={worktreeMode}
-                branches={branches}
-                baseBranch={baseBranch}
-                setBaseBranch={setBaseBranch}
-                canContinue={canContinue}
-                continueOn={continueOn}
-                setContinueOn={setContinueOn}
-                initRepo={initRepo}
-                setInitRepo={setInitRepo}
-              />
-
-              <PromptFold
+              <TaskField
                 prompt={prompt}
                 setPrompt={setPrompt}
-                promptOpen={promptOpen}
-                setPromptOpen={setPromptOpen}
-                foldOpenedByPlan={foldOpenedByPlan}
                 presetValue={presetValue}
                 setPresetValue={setPresetValue}
                 savedPresets={savedPresets}
-                setSavedPresets={setSavedPresets}
-                presetName={presetName}
-                setPresetName={setPresetName}
-                planOk={planOk}
-                planFirst={planFirst}
-                setPlanFirst={setPlanFirst}
               />
 
-              <LaunchFold
-                launchOpen={launchOpen}
-                setLaunchOpen={setLaunchOpen}
-                launchArgs={launchArgs}
-                setLaunchArgs={setLaunchArgs}
-                program={program}
-              />
+              {config?.caps?.git !== false && (
+                <WorksIn
+                  inPlace={inPlace}
+                  setInPlace={setInPlace}
+                  setProvision={setProvision}
+                  provisionOn={provisionOn}
+                  laneNeedsWorktree={laneNeedsWorktree}
+                  draft={draft}
+                  splitOn={splitOn}
+                  setSplit={setSplit}
+                  worktreeClamped={worktreeClamped}
+                  isGit={isGit}
+                  branch={branchName}
+                  baseLabel={baseLabel}
+                  continueBranch={continueBranch}
+                  sharers={sharers}
+                />
+              )}
+
+              {/* Everything a first session doesn't need: shut by default,
+                  with a summary of anything in it that is not the default. */}
+              <details
+                id="new-advanced"
+                className="nf-advanced"
+                open={advancedOpen}
+                onToggle={(e) => {
+                  const el = e.target as HTMLDetailsElement;
+                  setAdvancedOpen(el.open);
+                  // Opened: bring what it holds on screen, rather than leave
+                  // it below the fold of the scrolling body.
+                  if (el.open && typeof el.scrollIntoView === "function")
+                    el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                <summary>
+                  More options
+                  <span className="nf-fold-sum" id="new-advanced-sum">
+                    — {moreSummary}
+                  </span>
+                </summary>
+                <div className="nf-advanced-body">
+                  <label>
+                    <span>
+                      Name{" "}
+                      <span className="muted">
+                        — optional; empty names it from the task
+                      </span>
+                    </span>
+                    <input
+                      id="new-title"
+                      ref={titleRef}
+                      autoComplete="off"
+                      placeholder={(titleFromPrompt(prompt) || "untitled") + " — Enter creates it"}
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                    />
+                  </label>
+
+                  {config?.caps?.git !== false && (
+                    // The one fast-track choice for a single session: a
+                    // session made from the form goes as far as this says.
+                    <div id="new-ft-row" className="rt-row rt-row-top" data-caps="git">
+                      <span className="rt-label">Fast-track to</span>
+                      <div className="rt-ctl">
+                        <FastTrackChoice
+                          id="new-lane-form"
+                          label="Fast-track to"
+                          value={draft.lane}
+                          onChange={draft.setLane}
+                          askFirst={draft.askFirst}
+                          onAskFirst={draft.setAskFirst}
+                          // A split commits each piece into the group's branch,
+                          // so Off reads Commit and the release always asks.
+                          disabledReason={
+                            splitOn
+                              ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" }
+                              : undefined
+                          }
+                          askReason={
+                            splitOn ? "An auto-split always asks you before anything leaves this machine" : undefined
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {config?.caps?.git !== false && (
+                    // "Auto-split into up to N sessions if it's worth it": the
+                    // form's folder and Task become the lead's.
+                    <div id="new-split-row" data-caps="git">
+                      <SplitCheck
+                        id="new-split"
+                        split={split}
+                        onSplit={toggleSplit}
+                        gate={mcpOk}
+                        maxPieces={clampSplit(maxPieces, splitLimit)}
+                        onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
+                        limit={splitLimit}
+                        text={prompt || describe}
+                      />
+                      {splitSum && (
+                        <p className="rt-sum" aria-live="polite">
+                          {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
+                          <span className="muted">
+                            The account, plan-first, launch flags and git options don't apply to a split.
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {config?.caps?.git !== false && (
+                    <GitOptions
+                      provision={provision}
+                      setProvision={setProvision}
+                      setInPlace={setInPlace}
+                      provisionOn={provisionOn}
+                      offerProvision={offerProvision}
+                      provisionBlocked={provisionBlocked}
+                      armInitRepo={armInitRepo}
+                      strategy={strategy}
+                      setStrategy={setStrategy}
+                      worktreeMode={worktreeMode}
+                      branches={branches}
+                      baseBranch={baseBranch}
+                      setBaseBranch={setBaseBranch}
+                      canContinue={canContinue}
+                      continueOn={continueOn}
+                      setContinueOn={setContinueOn}
+                      initRepo={initRepo}
+                      setInitRepo={setInitRepo}
+                      isGit={isGit}
+                    />
+                  )}
+
+                  <PlanFirstRow
+                    prompt={prompt}
+                    planOk={planOk}
+                    planFirst={planFirst}
+                    setPlanFirst={setPlanFirst}
+                  />
+
+                  <LaunchFold
+                    launchOpen={launchOpen}
+                    setLaunchOpen={setLaunchOpen}
+                    launchArgs={launchArgs}
+                    setLaunchArgs={setLaunchArgs}
+                    program={program}
+                  />
+                </div>
+              </details>
             </>
           )}
         </div>
@@ -1347,10 +1539,19 @@ export function NewSessionDialog() {
           runMode={runMode}
           describing={describing}
           describeSlow={describeSlow}
+          describeMode={describeMode}
+          describeSince={describeSince}
           draft={draft}
           runDescribe={runDescribe}
           startRun={startRun}
           startNow={startNow}
+          saveTpl={{
+            name: saveTplName,
+            setName: setSaveTplName,
+            busy: saveTplBusy,
+            save: () => void saveAsTemplate(),
+            blocked: saveTplBlocked,
+          }}
         />
       </form>
       )}

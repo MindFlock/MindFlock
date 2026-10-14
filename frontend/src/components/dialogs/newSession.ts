@@ -40,8 +40,8 @@ export interface RepoSuggestion {
  * under $HOME, and the user can't judge a suggestion they can't account for. */
 export const SUGGEST_SOURCES: Array<{ key: string; label: string; hint: string }> = [
   { key: "recent", label: "Recent", hint: "folders your recent sessions ran in" },
-  { key: "cwd", label: "Here", hint: "the folder MindFlock itself was started in" },
-  { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" },
+  { key: "cwd", label: "Started in", hint: "the folder MindFlock itself was started in" },
+  { key: "nearby", label: "Home", hint: "repos and folders sitting under your home directory" },
 ];
 
 /** How long the Folder field must sit still before we ask the server what it
@@ -728,3 +728,155 @@ export function focusRowIndex(paths: string[], leaving: string): number {
   const i = paths.indexOf(leaving);
   return i >= 0 ? i : 0;
 }
+
+// --- Round 2: defaults, previews and guards -----------------------------------
+
+/** The describe box gives up after this long and offers the form instead,
+ * pre-filled with what was typed. The server's own budget is the same 30s
+ * (session_plan.TIMEOUT_PLAN); a cold CLI start plus a real turn is ~10s. */
+export const DESCRIBE_CAP_MS = 30000;
+
+/** Words that say nothing about a task — the server's _TITLE_FILLER. */
+const TITLE_FILLER = new Set(
+  (
+    "a an the to of in on at for and or with by from into please can could " +
+    "you we i my our your this that it is be some"
+  ).split(" ")
+);
+export const TITLE_FROM_PROMPT_MAX = 32;
+
+/** The name a session with an empty Name gets from its task: the mirror of
+ * the server's session_create.title_from_prompt ("Add a README section about
+ * setup" → "add-readme-section-about-setup"). "" when the task has no
+ * letters or digits — the server then calls it "untitled". */
+export function titleFromPrompt(prompt: string): string {
+  const first = (prompt || "").split(/\r?\n/).find((l) => l.trim()) || "";
+  const words = first.toLowerCase().match(/[a-z0-9]+/g) || [];
+  const kept = words.filter((w) => !TITLE_FILLER.has(w));
+  const use = kept.length ? kept : words;
+  let out = "";
+  for (const w of use.slice(0, 6)) {
+    const next = out ? out + "-" + w : w;
+    if (next.length > TITLE_FROM_PROMPT_MAX) break;
+    out = next;
+  }
+  if (!out && use.length) out = use[0].slice(0, TITLE_FROM_PROMPT_MAX);
+  return out;
+}
+
+/** git-branch-safe, as the engine's sanitize_branch_name builds it. */
+export function sanitizeBranch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/ /g, "-")
+    .replace(/[^a-z0-9\-_/.]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^[-/]+|[-/]+$/g, "");
+}
+
+/** The branch a new worktree will be cut on — `<prefix><name>`, the name
+ * being what the session will be called (typed, else made from the task,
+ * else "untitled"). A preview: the server numbers a taken name `-2`. */
+export function branchPreview(where: { prefix: string; title: string; prompt: string }): string {
+  const name = where.title.trim() || titleFromPrompt(where.prompt) || "untitled";
+  return sanitizeBranch((where.prefix || "") + name);
+}
+
+/** "/a/b/" and "/a/b" are one folder; "~" is left as typed. */
+function samePath(a: string, b: string): boolean {
+  const n = (p: string) => (p || "").trim().replace(/\/+$/, "");
+  return !!n(a) && n(a) === n(b);
+}
+
+/** The sessions already editing `paths` (the folder as typed, and as the
+ * server resolved it) DIRECTLY — the ones a second in-place session would
+ * share a checkout with. */
+export function sessionsInFolder(
+  rows: Array<{ title: string; path: string; in_place?: boolean }>,
+  paths: string[]
+): string[] {
+  return rows
+    .filter((r) => r.in_place && paths.some((p) => samePath(r.path, p)))
+    .map((r) => r.title);
+}
+
+/** The warning under "This folder directly" when others already edit it. */
+export function sharedCheckoutWarning(titles: string[]): string {
+  if (!titles.length) return "";
+  const who =
+    titles.length === 1 ? "“" + titles[0] + "” is" : titles.length + " sessions are";
+  return (
+    who +
+    " already editing this folder directly. Pick “Separate worktree” so they " +
+    "don't overwrite each other."
+  );
+}
+
+/** What GET /api/providers/status says about each agent on this device:
+ * name → installed. Absent = unknown (another device, an older server). */
+export type InstalledMap = Record<string, boolean>;
+
+/** Why Create must not launch `agent` ("" = go ahead). Only a KNOWN miss
+ * blocks: an agent nobody asked about may well be there. */
+export function agentMissingReason(agent: string, installed: InstalledMap | null): string {
+  if (!installed || !agent) return "";
+  if (installed[agent] !== false) return "";
+  return (
+    agent +
+    " isn't installed on this device. Install it in Settings → Agents, or pick another agent."
+  );
+}
+
+/** The agent the form should start on: the configured default, unless that
+ * one is known to be missing and another is installed. */
+export function preferInstalled(agent: string, names: string[], installed: InstalledMap | null): string {
+  if (!installed || installed[agent] !== false) return agent;
+  return names.find((n) => installed[n] === true) || agent;
+}
+
+/** The fields a template carries, from the form — the WHOLE setup, so Run now
+ * and a schedule start the same session the form would have. A template of
+ * the same name keeps its schedule (saving over it must not silently stop a
+ * nightly run). Pure, so what is saved is pinned by tests. */
+export function templateFromForm(
+  f: {
+    name: string;
+    program: string;
+    repoPath: string;
+    prompt: string;
+    inPlace: boolean;
+    provision: boolean;
+    strategy: string;
+    initRepo: boolean;
+    lane: string;
+    askFirst: boolean;
+  },
+  existing: Array<{ name: string; schedule?: unknown }>
+): Record<string, unknown> {
+  const name = f.name.trim();
+  const prior = existing.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
+  const lane = f.lane && f.lane !== "leave" ? f.lane : "";
+  return {
+    name,
+    program: f.program.trim(),
+    repo_path: f.repoPath.trim(),
+    prompt: f.prompt,
+    provisioned: f.provision,
+    in_place: f.inPlace && !f.provision && !lane,
+    workspace_strategy: f.strategy === "clone" ? "clone" : "worktree",
+    init_repo: f.initRepo,
+    ...(lane ? { fasttrack: lane, ...(f.askFirst ? { ask_first: true } : {}) } : {}),
+    ...(prior?.schedule ? { schedule: prior.schedule } : {}),
+  };
+}
+
+/** "0:07" for an elapsed count of seconds. */
+export function elapsedLabel(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+/** Set by the Templates dialog when it hands the person back to New (its
+ * Close, after New → Manage…): the reopen keeps the form as it was instead of
+ * resetting it, and only reloads the template list. One-shot. */
+export const newSessionResume = { keep: false };

@@ -88,8 +88,8 @@ describe("templateBody / formFromTemplate — the stored shape both ways", () =>
     expect(renameLeaves("", "x")).toBeNull();
   });
   it("sums a template up in one line", () => {
-    expect(templateMeta(T[0])).toBe("claude · new worktree");
-    expect(templateMeta(T[1])).toBe("in this folder · git init");
+    expect(templateMeta(T[0])).toBe("claude · separate worktree");
+    expect(templateMeta(T[1])).toBe("this folder directly · git init");
     expect(templateMeta({ name: "c", repo_path: "/r", provisioned: true, workspace_strategy: "clone" })).toBe("/r · provisioned (clone)");
   });
 });

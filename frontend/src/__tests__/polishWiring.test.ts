@@ -73,8 +73,8 @@ describe("provisioning fields: current names, repo-neutral copy, no sitecheck-er
       expect(fold, id).toContain(id);
     }
     const text = squash(fold);
-    expect(text).toContain("Provision workspace");
-    expect(text).toContain("run repo setup");
+    expect(text).toContain("Provision the worktree");
+    expect(text).toContain("run the repo's setup");
     expect(text).toContain("warm test caches");
     expect(text).toContain("Workspace strategy");
     expect(text).toContain("shared base clone (worktree)");
