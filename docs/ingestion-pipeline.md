@@ -67,7 +67,7 @@ labels (`Ticket.labels`) for the claim check.
 | `asana` | Asana has no workflow states; its **sections** play that part. `list_states` is every section of every unarchived project in the workspace (up to 50 projects, one call each), named `Project · Section` with `group`/`label` split out; `set_state` is `POST /sections/{gid}/addTask`, which moves a task already in that project and adds one that isn't. A ticket's `state`/`state_id` is the section it sits in — the ingested one when it is in several projects. `start_comment` posts through `POST /tasks/{gid}/stories` |
 | `jira` | Statuses are not writable directly: `GET /rest/api/3/issue/{id}/transitions`, pick the transition whose **destination** matches the configured status — by id, then by name, since `list_states` stores ids but a hand-edited config may hold a name — and execute it. A status that is real but **not reachable** from where the issue currently sits is the common failure, and it is a configuration answer rather than a bug, so the error names the transitions that *were* offered |
 
-Failures here are warnings, never failed launches — see step 8 of the story flow
+Failures here are warnings, never failed launches — see step 9 of the story flow
 below.
 
 **Reading one ticket back (`fetch(ticket_id)`)** has an error contract the
@@ -450,15 +450,22 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    not picked up. Force-starts (Intake's **Start now**,
    `POST /api/tickets/start`) bypass this path, so a manual start of a ticket
    outside the ingest state still launches, by design.
-3. **Parse** — the description is mined for an `## Acceptance Criteria` section
+   On a source with several repos (see [A source spanning several
+   repos](#a-source-spanning-several-repos)) the branch check spans every one
+   of them — the branch lives in whichever repo the ticket was routed to.
+3. **Route** (only on a source with several repos) — pick the repo(s) this
+   ticket needs before anything is provisioned; see [A source spanning several
+   repos](#a-source-spanning-several-repos). A one-repo source skips this step
+   entirely, and so does every source configured before it existed.
+4. **Parse** — the description is mined for an `## Acceptance Criteria` section
    (bullets, numbered items, or WHEN/THEN/AND blocks); comments and attachments
    (Shortcut-hosted files get authenticated downloads) are collected.
-4. **Validate** — description non-empty, at least `min_description_length` chars,
+5. **Validate** — description non-empty, at least `min_description_length` chars,
    and acceptance criteria present.
-5. **Invalid → clarification session** — instead of skipping, a workspace is
+6. **Invalid → clarification session** — instead of skipping, a workspace is
    provisioned and Claude is launched with a "Clarification Needed" prompt listing
    what's missing, so you can fix the ticket interactively.
-6. **Valid → launch** (two paths, chosen by `[mindflock].enabled`):
+7. **Valid → launch** (two paths, chosen by `[mindflock].enabled`):
    - **Engine path** (enabled — **the default**, also when `[mindflock]` is
      absent entirely) — `SessionRunner` creates an engine instance
      (`title sc-<id>`, provisioned workspace, branch
@@ -490,8 +497,16 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      rather than raised — so the launch never fails the invoke (this covers
      the story runner, PR runner, and IDE launch alike) and the session is
      always reachable over tmux even when no GUI tab opens.
-7. **Record** — the story id, branch, and status land in `state.json`.
-8. **Move it on the board** (optional, per source) — when the source sets
+   - **Memory hold.** Before each launch (stories and PR reviews alike)
+     `SessionRunner` checks the [memory guard](session-engine.md#memory-guard).
+     While it reads low or critical the launch waits: it re-reads every 15 s,
+     logs `Holding ticket <slug>: … — it starts once memory recovers` (or
+     `Holding PR #<n>: …`) every 5 minutes, and after 30 minutes launches anyway with a warning, so a
+     misreading delays the queue but never stalls it. This is not the
+     [cache refreshers](#cache-refreshers)' PSI ≥ 10 % skip: that is a
+     different, lower threshold on a background job, not on a launch.
+8. **Record** — the story id, branch, and status land in `state.json`.
+9. **Move it on the board** (optional, per source) — when the source sets
    `start_state`, the ticket is moved into that state right after the session is
    live, so the board stops showing work an agent is already doing as untouched.
    Shortcut and Linear write the state directly; Jira executes the transition
@@ -514,7 +529,7 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    card on the wrong board with the wrong credentials. The stamp is the
    load-bearing part of this step.
 
-9. **Say on the ticket who is on it** (every source) — right after the move,
+10. **Say on the ticket who is on it** (every source) — right after the move,
    on both launch paths, MindFlock **mirrors the claim into the tracker**
    (`ticket_ingestion/tracker_claims.py`) so a teammate whose MindFlock is not
    paired with yours sees it: the ticket is assigned to your tracker identity
@@ -530,6 +545,57 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    off again (not while a retry session of the same ticket still holds it).
    The assignment is never undone. Best-effort like the move: a refused write
    is a warning, never a failed launch.
+
+### A source spanning several repos
+
+A ticketing source can point at a SET of repos instead of one — a board whose
+tickets land in a backend, a frontend and a scanner. In Intake → Tickets the
+source card's **Repo URL** becomes a list with **+ Add repo**; each repo can
+carry an optional **hint** (comma-separated words like `frontend, ui`). Stored
+as `repos: [{url, hint?}]` with `repo_url` mirroring the first (see
+[configuration.md](configuration.md#a-source-spanning-several-repos)); one repo
+is stored exactly as before.
+
+With two or more, each ticket is **routed** before it launches
+(`backend/ticket_ingestion/repo_routing.py`), on the pipeline path
+(`PipelineOrchestrator._route_story`, right after the claim checks) and on a
+forced start alike (`ticket_start.route_story`, before the prompt is built). The
+order, cheapest and most predictable first:
+
+1. **Labels.** A ticket label that names a repo — its full name
+   (`vnext-frontend`), a word of its name no other repo of the source shares
+   (`frontend`; a shared word like `vnext` says nothing), or one of its hint
+   terms. Every repo a label names is routed to, in the source's order: labels
+   for two repos make a two-repo ticket.
+2. **Title.** The same words in the ticket's title. Exactly one repo named is a
+   decision; several is ambiguous and goes on to step 3.
+3. **The agent CLI.** The one-shot headless question every MindFlock model
+   question uses (`commit_message.pick_argv` — `claude -p`, `codex exec`, …, run
+   in MindFlock's neutral directory): the ticket's title, labels and description
+   plus each repo's name, hint and README opening, answered as
+   `<repos>…</repos><reason>…</reason>`. The ticket's own CLI is asked, else the
+   default one. A decision the model made earlier for the same ticket is reused
+   (its workspace lives in that repo) unless a label or the title now names a
+   repo — so adding a label is how a misroute is corrected.
+4. **Fallback.** The first repo the title named, else the source's first repo.
+
+The decision lands in `state.json` → `ticket_routes[<slug>] = {repos, reason,
+method, at}` and on the Intake ticket row as `→ vnext-frontend: label
+'frontend'` (`GET /api/tickets` rows carry `route: {repos, reason, method,
+summary, repo_url}`). The listing never asks a model: a ticket that no label or
+title decides, and that has not started yet, reads `→ repo picked when it
+starts`.
+
+**The session starts in the PRIMARY repo** (the first routed). Every other repo
+the ticket needs goes into the prompt under **Other repositories this ticket
+needs**, by absolute local path — the repo itself when it is a local path,
+MindFlock's base clone otherwise (cloned on the spot when there is none yet) —
+with the steps to make that change in a separate `git worktree` on the ticket's
+own branch name, push it, and open a **separate PR** there, linking the PRs to
+each other. A ticket routed to one repo of several gets a short **Repository**
+note instead: where it went, why, and the repos it was not sent to, so a
+misroute is said rather than forced. There is no multi-session orchestration —
+one session does the whole ticket.
 
 ### Shared claims: a ticket someone else is on
 
@@ -706,7 +772,7 @@ artifact `.testmondata`, refresh command `pytest --testmon` with
 
 | File | Contents |
 |---|---|
-| `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}]}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. Corrupt/missing → starts fresh. |
+| `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}], ticket_routes: {<slug>: {repos, reason, method, at}}}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. `ticket_routes` keeps the last 500 multi-repo routing decisions (see "A source spanning several repos"). Corrupt/missing → starts fresh. |
 | `./automation_here.json` | `{here, runner}` — whether PR review and issue handling last ran on this device or on another of "Your devices" (`runner`, its name). The web server records "elsewhere"; when they move here the pipeline, before its first PR / issue scan, adds every PR and issue open right now to `processed_prs` / the processed-issues ledger with status `handed_over` (logging "PR review moved here — n open PRs already handled on X are skipped"), then records "here". The same seeding runs, once per loop, when this device is in a group with another live device (`MINDFLOCK_PIPELINE_FLEET=1` from the server) and that loop has never run here — no ledger entry or attempt and no `ledger_started.<prs\|issues>` in `state.json` — so a device that was chosen before the group's repos reached it never re-reviews what another device handled (the log names "another device"). After the check each enabled loop is marked in `state.json`'s `ledger_started`, so a device that has been running alone is never seeded later. If GitHub can't be listed it seeds, marks and scans nothing and retries next poll |
 | `./.mindflock-pipeline.lock` | Singleton flock; contains the winner's PID |
 | `./.mindflock-pipeline-activity.json` | Activity beacon `{pid, ticket_busy, pr_busy, issue_busy, held_for_slot, config_errors: [{source, field, message}], updated}` the web status reads (counts only while `pid` is the running pipeline's) |

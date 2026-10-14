@@ -123,6 +123,19 @@ class GithubConfig:
 
 
 @dataclass
+class RepoTarget:
+    """One repo a ticketing source's tickets may be worked in.
+
+    ``url`` is a clone URL or a local path (anything ``repo_url`` accepts);
+    ``hint`` is optional free text — comma-separated words like
+    ``"frontend, ui"`` — that :mod:`backend.ticket_ingestion.repo_routing`
+    matches against a ticket's labels and title."""
+
+    url: str
+    hint: str = ""
+
+
+@dataclass
 class TicketProviderConfig:
     """Selected ticketing provider + its credentials/scope.
 
@@ -215,6 +228,12 @@ class TicketProviderConfig:
     #: single-repo setup keeps working unchanged; set it per source to run
     #: ingestion across many repos.
     repo_url: str = ""
+    #: The set of repos this source's tickets may need, first = the default
+    #: (and always equal to ``repo_url``). Empty for a one-repo source — read
+    #: it through :meth:`repo_targets`, which folds ``repo_url`` in. With two or
+    #: more, each ticket is routed to the repo(s) it needs before it launches:
+    #: see :mod:`backend.ticket_ingestion.repo_routing`.
+    repos: list[RepoTarget] = field(default_factory=list)
     #: Agent CLI that tickets from THIS source run — a coding-provider name
     #: (``claude`` | ``codex`` | ``aider`` | ``goose`` | ``opencode`` | … or a
     #: user-defined provider). Empty = fall back to ``[mindflock].agent`` and
@@ -234,6 +253,21 @@ class TicketProviderConfig:
     #: ticket translates and clamps them — so a source may ask for more than its
     #: CLI can give without breaking the launch.
     effort: str = ""
+
+    def repo_targets(self) -> list[RepoTarget]:
+        """This source's repos, first = the default: ``repos`` when it names
+        two or more, else ``repo_url`` as a one-element list (``[]`` when
+        unset — the global ``[repository].url`` applies downstream)."""
+        if len(self.repos or []) > 1:
+            return list(self.repos)
+        url = (self.repo_url or "").strip()
+        if url:
+            return [RepoTarget(url=url)]
+        return list(self.repos or [])
+
+    def repo_urls(self) -> list[str]:
+        """The URLs of :meth:`repo_targets`, in order."""
+        return [t.url for t in self.repo_targets()]
 
 
 #: Providers the pipeline knows how to ingest from. GitHub Issues leads: it is
@@ -1070,6 +1104,20 @@ def _parse_source(
             f"workflow states to move a ticket into"
         )
         start_state = ""
+    # The repo set: ``repos`` (settings.json's list of {url, hint}, or bare URL
+    # strings in a hand-written config.toml) when it names two or more, with
+    # ``repo_url`` mirroring its first; otherwise the one ``repo_url``, exactly
+    # as before the set existed.
+    from backend.config.settings import _repo_entries
+
+    repo_url = str(src.get("repo_url", "") or "").strip()
+    entries = _repo_entries(src.get("repos"))
+    repos: list[RepoTarget] = []
+    if len(entries) > 1:
+        repos = [RepoTarget(url=e["url"], hint=e.get("hint", "")) for e in entries]
+        repo_url = repos[0].url
+    elif entries and not repo_url:
+        repo_url = entries[0]["url"]
     cfg = TicketProviderConfig(
         provider=provider,
         api_token=str(src.get("api_token", "") or ""),
@@ -1087,7 +1135,8 @@ def _parse_source(
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),
-        repo_url=str(src.get("repo_url", "") or ""),
+        repo_url=repo_url,
+        repos=repos,
         agent=_validate_agent(src.get("agent"), f"{label}.agent", problems),
         effort=_validate_effort(src.get("effort"), f"{label}.effort", problems),
     )

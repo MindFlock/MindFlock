@@ -12,8 +12,17 @@ list is one list everywhere: settings sync carries it between devices as the
 Storage is a small JSON file (``~/.mindflock/session_templates.json``), atomic
 writes, tolerant of a missing/corrupt file — the same pattern as
 ``web/core/prompt_queue.py``. This addon ONLY stores templates; launching a
-session stays with the existing ``POST /api/instances`` (the frontend posts the
-template's fields there), so session creation keeps one code path.
+session from the New dialog stays with the existing ``POST /api/instances``
+(the frontend posts the template's fields there).
+
+Two ways to start one WITHOUT the dialog — **Run now** (``POST
+/api/templates/{name}/run``, also ``mindflock run <name>``) and an optional
+per-template **schedule** (``{"at": "HH:MM", "days": "daily" | "weekdays"}``
+or a cron expression, ``{"cron": "0 21 * * 1-5"}``) — live in
+:mod:`backend.web.core.template_schedule`; both go through the same
+``core.session_create`` path, so session creation still has one code path.
+A template may also carry ``autopilot`` (``commit`` / ``push`` / ``pr``): how
+far each run's session carries its work on its own.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ from fastapi.responses import JSONResponse
 from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.web.core import auth as _web_auth
+from backend.web.core import template_schedule as _schedule
 
 from .base import Addon, AppContext, FrontendDescriptor
 
@@ -81,6 +91,19 @@ def _clean(body: dict) -> dict:
         out[f] = bool(body.get(f, False))
     if out["workspace_strategy"] not in _VALID_STRATEGIES:
         out["workspace_strategy"] = "worktree"
+    # Only a template WITH a schedule carries the key: a device that predates
+    # schedules stores none, and settings sync must not read the two shapes
+    # of "no schedule" as an edit.
+    sched = _schedule.schedule_or_none(body.get("schedule"))
+    if sched:
+        out["schedule"] = sched
+    # Same rule for the autopilot depth: only a template that has one stores it.
+    try:
+        depth = _schedule.normalize_autopilot(body.get("autopilot"))
+    except ValueError:
+        depth = ""
+    if depth:
+        out["autopilot"] = depth
     return out
 
 
@@ -133,7 +156,25 @@ class TemplatesAddon(Addon):
 
         @router.get("")
         def get_templates() -> JSONResponse:
-            return JSONResponse({"templates": list_templates()})
+            items = list_templates()
+            # ``runs``: next/last run per template (by lowercased name), from
+            # this device's run record; ``runs_here`` / ``runs_on``: whether
+            # schedules fire here or on which other device.
+            return JSONResponse({"templates": items, **_schedule.status_for(items)})
+
+        # What a cron field means, as it is typed: its words and next runs
+        # (or why it can't be saved). Read-only.
+        @router.get("/cron-preview")
+        def cron_preview(expr: str = "") -> JSONResponse:
+            return JSONResponse(_schedule.preview(expr))
+
+        # Run now: a fresh session from the template, its prompt already
+        # sent — the same create path as the New dialog (no may_configure:
+        # starting a session isn't configuring anything).
+        @router.post("/{name}/run")
+        async def run_template(name: str) -> JSONResponse:
+            status, body = await _schedule.run_template(name)
+            return JSONResponse(body, status_code=status)
 
         # A template names a program and a prompt that start sessions, and
         # settings sync spreads templates: saving or deleting one is the
@@ -171,6 +212,22 @@ class TemplatesAddon(Addon):
                         {"error": f"{f} too long (max {_MAX_FIELD} chars)"},
                         status_code=400,
                     )
+            try:
+                sched = _schedule.normalize_schedule(body.get("schedule"))
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            try:
+                _schedule.normalize_autopilot(body.get("autopilot"))
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            if sched:
+                problem = _schedule.run_problem(body)
+                if not problem and not str(body.get("prompt", "") or "").strip():
+                    problem = "a scheduled template needs a prompt"
+                if problem:
+                    return JSONResponse(
+                        {"error": "can't schedule it: " + problem}, status_code=400
+                    )
             saved = save_template(body)
             return JSONResponse({"template": saved, "templates": list_templates()})
 
@@ -187,6 +244,15 @@ class TemplatesAddon(Addon):
     @property
     def router(self) -> APIRouter:
         return self._router
+
+    async def on_startup(self, ctx: AppContext) -> None:
+        # The schedule loop. Off under pytest: tests drive template_schedule.tick
+        # with an injected clock, and the engine there is the developer's own.
+        from backend.web.core import restart as _restart
+
+        if _restart._under_pytest():
+            return
+        ctx.register_task(_schedule.run_loop())
 
     def frontend(self) -> List[FrontendDescriptor]:
         return [

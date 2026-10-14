@@ -219,7 +219,7 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
           <div id="empty" data-mode="setup">
             <div className="setup-card">
               <h2>Get set up</h2>
-              <p className="muted">Five steps — three to a running agent, two you can skip.</p>
+              <p className="muted">Three steps to your first agent. The rest can wait.</p>
               <div className="setup-body">
                 <SetupChecklist />
               </div>

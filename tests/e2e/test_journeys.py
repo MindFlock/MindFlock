@@ -72,13 +72,19 @@ def test_first_run(mf_server, page, open_app):
         expect(page.locator("#welcome-tour")).to_have_count(0)
     expect(card).to_be_visible()
 
-    # Doctor items: real check rows with labels (doctor takes a few seconds).
-    items = card.locator("ul.doctor-list li.doctor-check")
-    expect(items.first).to_be_visible(timeout=30_000)
+    # Doctor items (the doctor takes a few seconds): the card lists only what
+    # getting started is missing — the agent CLI here...
+    missing = card.locator("ul.doctor-list-essential li.doctor-check")
+    expect(missing.first).to_be_visible(timeout=30_000)
+    labels = [t.strip() for t in missing.locator(".doctor-label").all_inner_texts()]
+    assert any("agent" in t.lower() for t in labels), labels
+    # ...and every check, tmux included, is one click away under "All checks".
+    card.locator(".setup-allchecks > summary").first.click()
+    items = card.locator(".setup-allchecks ul.doctor-list li.doctor-check")
+    expect(items.first).to_be_visible()
     labels = [t.strip() for t in items.locator(".doctor-label").all_inner_texts()]
     assert labels and all(labels), labels
     assert any("tmux" in t for t in labels), labels
-    assert any("agent" in t.lower() for t in labels), labels
 
     # The install button names what is missing (the agent CLI here).
     install = card.locator("#doctor-install-btn")
@@ -197,6 +203,12 @@ def test_connections(mf_server, page, open_app):
 
     rows = screen.locator(".conn-row")
     expect(rows.first).to_be_visible(timeout=45_000)
+    # Basic mode keeps all but the everyday rows in a collapsed Advanced fold,
+    # and a hidden row's inner_text is "": open it so every row is checked.
+    fold = screen.locator("details#connections-advanced")
+    if fold.count() and fold.get_attribute("open") is None:
+        fold.locator("summary").click()
+        expect(fold).to_have_attribute("open", "")
     n = rows.count()
     assert n >= 1
     seen = []

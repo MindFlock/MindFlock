@@ -1,7 +1,9 @@
 /** Settings → Workspace (partial 108): checkout dir + base branches. */
 
-import { SettingField } from "../useSettings";
+import { toast } from "../../../lib/toast";
+import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { AdvancedFold } from "../settingsMode";
 
 export function Workspace({ gotoScreen }: ScreenProps) {
   return (
@@ -47,53 +49,92 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           to always PR there. Blank = PR into whatever branch the session was created from.
         </span>
       </label>
-      <label className="set-row">
-        <span className="set-label">Live branch</span>
-        <SettingField group="repository" field="live_branch" placeholder="main" />
-        <span className="set-hint">
-          The branch that means <em>shipped</em>. <strong>Verify</strong> waits until a
-          session's commit is an ancestor of it, then asks you to test the change for real.
-          Blank = fall back to the PR base branch, then the default base branch, then{" "}
-          <code>main</code>.
-        </span>
-      </label>
-      <label className="set-row">
-        <span className="set-label">Fast-track goes as far as</span>
-        <SettingField
-          group="repository"
-          field="fasttrack_depth"
-          options={[
-            { value: "", label: "Off (default)" },
-            { value: "commit", label: "Commit" },
-            { value: "push", label: "Push" },
-            { value: "pr", label: "Open PR" },
-            { value: "merge", label: "Merge when green" },
-          ]}
-        />
-        <span className="set-hint">
-          <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
-          A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
-          waits for the agent to finish, then commits, pushes and carries on to this rung. Change
-          one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
-          keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.
-        </span>
-      </label>
-      <label className="set-row">
-        <span className="set-label">Retryable pre-commit hooks</span>
-        <SettingField
-          group="repository"
-          field="precommit_retry_hooks"
-          placeholder="gitnexus-index"
-        />
-        <span className="set-hint">
-          Comma-separated pre-commit hook <strong>IDs</strong> (not display names — pre-commit's{" "}
-          <code>name:</code> is free text, so <code>Black format</code> is the hook{" "}
-          <code>black</code>). When one of these fails <em>without changing any files</em>,
-          fast-track retries the commit once and then re-runs it with{" "}
-          <code>SKIP=&lt;id&gt;</code> so the commit can land, and says which hook it skipped.
-          Test and secret-scanning hooks are refused here — a failing test always stops the run.
-        </span>
-      </label>
+      {/* What "shipped" means, fast-track's default reach and its hook
+          retries: tuning for a flow that already works — folded. */}
+      <AdvancedFold id="workspace-advanced">
+        <label className="set-row">
+          <span className="set-label">Live branch</span>
+          <SettingField group="repository" field="live_branch" placeholder="main" />
+          <span className="set-hint">
+            The branch that means <em>shipped</em>. <strong>Verify</strong> waits until a
+            session's commit is an ancestor of it, then asks you to test the change for real.
+            Blank = fall back to the PR base branch, then the default base branch, then{" "}
+            <code>main</code>.
+          </span>
+        </label>
+        <label className="set-row">
+          <span className="set-label">Fast-track goes as far as</span>
+          <SettingField
+            group="repository"
+            field="fasttrack_depth"
+            options={[
+              { value: "", label: "Off (default)" },
+              { value: "commit", label: "Commit" },
+              { value: "push", label: "Push" },
+              { value: "pr", label: "Open PR" },
+              { value: "merge", label: "Merge when green" },
+            ]}
+          />
+          <span className="set-hint">
+            <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
+            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+            waits for the agent to finish, then commits, pushes and carries on to this rung. Change
+            one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
+            keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.
+          </span>
+        </label>
+        <label className="set-row">
+          <span className="set-label">Retryable pre-commit hooks</span>
+          <SettingField
+            group="repository"
+            field="precommit_retry_hooks"
+            placeholder="gitnexus-index"
+          />
+          <span className="set-hint">
+            Comma-separated pre-commit hook <strong>IDs</strong> (not display names — pre-commit's{" "}
+            <code>name:</code> is free text, so <code>Black format</code> is the hook{" "}
+            <code>black</code>). When one of these fails <em>without changing any files</em>,
+            fast-track retries the commit once and then re-runs it with{" "}
+            <code>SKIP=&lt;id&gt;</code> so the commit can land, and says which hook it skipped.
+            Test and secret-scanning hooks are refused here — a failing test always stops the run.
+          </span>
+        </label>
+        <FailureNotesRow />
+      </AdvancedFold>
     </>
+  );
+}
+
+/** When fast-track stops on something the agent can fix (a pre-commit step or
+ * the check failed, red CI, a conflicting PR), MindFlock types a short note
+ * into that agent saying what failed (backend/web/core/autopilot_driver.py
+ * `_autopilot_tell_agent`). Unset reads as on. */
+function FailureNotesRow() {
+  const s = useSettings();
+  const on = s.get("repository", "fasttrack_failure_notes") !== false;
+  return (
+    <div className="set-row set-switch-row" id="workspace-failure-notes">
+      <span className="notif-rule-text">
+        <span className="set-label">Tell the agent when fast-track stops</span>
+        <span className="set-hint notif-rule-desc">
+          When a pre-commit step or the verification check fails, CI goes red or the PR
+          conflicts with its base, fast-track stops and leaves the agent a one-line note: what
+          failed and to fix it — or, when it is a conflict with someone else's change, to stop
+          and tell you. You still get the usual &quot;fast-track stopped&quot; notice.
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text doesn't flip it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
+            toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
   );
 }

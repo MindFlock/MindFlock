@@ -1,6 +1,6 @@
 [project]
 name = "mindflock"
-version = "0.8.5"
+version = "0.8.6"
 description = "MindFlock — a private flock of AI coding agents, each in its own git worktree on your own machine; started by your ticket queue (GitHub Issues, Jira, Linear, Shortcut, Asana), merged by you"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -70,7 +70,7 @@ web = [
     "cryptography>=41",  # peer links: Ed25519 identity + self-signed TLS cert
 ]
 [build-system]
-requires = ["uv_build>=0.11.6,<0.13.0"]
+requires = ["uv_build>=0.11.6,<0.14.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]

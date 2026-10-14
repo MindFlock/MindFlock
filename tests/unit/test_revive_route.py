@@ -50,7 +50,12 @@ def test_revive_calls_the_lazy_revive_helper(instances, monkeypatch):
     monkeypatch.setattr(server, "_ensure_agent_session", fake_ensure)
     r = client.post("/api/instances/rv-1/revive")
     assert r.status_code == 200
-    assert r.json() == {"title": "rv-1", "revived": True}
+    assert r.json() == {
+        "title": "rv-1",
+        "revived": True,
+        "continued": False,
+        "memory_warning": "",
+    }
     assert calls == [(inst, "rv-1")]
 
 

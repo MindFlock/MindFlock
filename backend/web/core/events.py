@@ -216,6 +216,19 @@ EVENT_NAMES = (
     # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
     # "detail"}).
     "run.finished",
+    # Template runs (core.template_schedule is their one emitter). A template
+    # started a fresh session — Run now or its schedule (``session`` is the
+    # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI
+    # refetch only; no rule notifies on it.
+    "template.run_started",
+    # A SCHEDULED run couldn't start (``session`` ""; data: {"template",
+    # "trigger", "error", "detail"}). Run now's own failures are a toast.
+    "template.run_failed",
+    # A scheduled run was skipped because the template's previous run is
+    # still working / waiting on a question / at a usage limit (``session``
+    # is that previous run; data: {"template", "trigger", "reason",
+    # "detail"}).
+    "template.run_skipped",
     # "Your devices" (core.fleet is their emitter; ``session`` is always "").
     #
     # A computer asked to join and waits for approval HERE (data: {"device",
@@ -277,6 +290,11 @@ EVENT_NAMES = (
     # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
     # "count", "detail"}).
     "update.available",
+    # The machine's memory headroom changed level (backend.memory_pressure,
+    # the server's memory watch; ``session`` is ""). ``old``/``new`` are
+    # "ok" | "low" | "critical"; while low or critical, agent spawns, team-run
+    # starts and the revive sweep hold back (data: {"message", "memory"}).
+    "system.memory_changed",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

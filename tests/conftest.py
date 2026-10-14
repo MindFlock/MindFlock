@@ -165,6 +165,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         "MINDFLOCK_TRACKER_CLAIMS_FILE",
         str(tmp_path / "mindflock" / "tracker_claims.json"),
     )
+    # Template run record (core.template_schedule): GET /api/templates reads it.
+    monkeypatch.setenv(
+        "MINDFLOCK_TEMPLATE_RUNS_FILE",
+        str(tmp_path / "mindflock" / "template_runs.json"),
+    )
     monkeypatch.setenv("MINDFLOCK_TOOL_FEED_DIR", str(tmp_path / "tool-feed"))
     # User event hooks (``~/.mindflock/hooks/<event>/*`` + ``hooks/all/*``): the
     # events bus runs them on EVERY emit, so without this a developer's real
@@ -191,6 +196,16 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         from backend.providers import mcp_attach as _mcp_attach
 
         monkeypatch.setattr(_mcp_attach, "_LAUNCHED", {})
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
+    # The memory guard (backend.memory_pressure) reads the REAL machine: a
+    # suite running beside a dozen agents would see "low" and refuse every
+    # agent-spawned create. Off by default; its tests feed it readings.
+    monkeypatch.setenv("MINDFLOCK_MEMORY_GUARD", "0")
+    try:
+        from backend import memory_pressure as _memory_pressure
+
+        _memory_pressure._reset_for_tests()
     except Exception:  # noqa: BLE001 — import is best-effort here
         pass
     # ``/answer`` remembers the dialog it just answered (a repeat within a

@@ -9,7 +9,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: 12px 0;
+  margin: 0;
+}
+
+/* The paragraph that introduces a swatch set sits closer to it (12px) than
+   to the set above (the screen's 24px rhythm). */
+.set-screen > p.set-hint + .accent-swatches {
+  margin-top: -12px;
 }
 
 .accent-swatch {

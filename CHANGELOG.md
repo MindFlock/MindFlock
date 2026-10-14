@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cron sessions: templates run on any cron schedule.** Besides every day /
+  weekdays at a time, a template's schedule can be a cron expression
+  (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`), previewed in words with its next
+  runs as you type. Each fire starts a fresh session with the prompt sent; a
+  scheduled run is skipped while the previous one is still working or waiting
+  on you, so a slow job never stacks sessions. A template can also carry an
+  autopilot depth (commit, push or open a PR) that every run is armed with.
+  Cards show the last 20 runs; a scheduled run that can't start is a bell row
+  and a push. `mindflock run <template>` starts one from a shell and
+  `mindflock templates` lists them.
+- **Fast-track tells the agent what failed.** When a run stops on something
+  the agent can fix (a pre-commit step or the verification check failed, CI
+  went red, the PR conflicts with or is behind its base), the agent gets a
+  one-line `[MindFlock note …]`: what failed, where to look, and to fix it
+  and commit, or to stop and tell you when it clashes with someone else's
+  work. It is typed only once the agent is idle and never while you type. The
+  ✗ tooltip and the *fast-track stopped* toast say the agent was told. Team
+  run members are left to their run's own fix prompt. On by default; turn it
+  off in Settings → Workspace → Advanced.
+
+### Changed
+
+- **Workers always stay with their orchestrator on the rail.** A worker now
+  draws directly under its parent's family whatever the saved order says.
+  Dragging a worker elsewhere no longer un-nests it (it only reorders among
+  its siblings), dragging an orchestrator carries its workers, and the row
+  numbers, Alt+N and Ctrl+Tab follow the family order.
+
+## [0.8.6] - 2026-10-13
+
+### Added
+
+- **An intake source can span several repos.** Add more than one repo to a
+  ticket source (each with optional hint words) and every ticket is routed to
+  the repo(s) it needs: by its labels, then its title, then a one-shot ask to
+  the agent CLI when those can't decide, else the first repo. The ticket row
+  shows the choice and why ("→ vnext-frontend: label 'frontend'"). A ticket
+  that needs two repos starts in the first, and its prompt lists the other
+  repo's path with the steps to branch and open a separate PR there. A source
+  with one repo works exactly as before.
+- **Templates can run on their own.** Each template card, and a "Run template:
+  …" row in the command palette, has **Run now**: it starts a fresh session in
+  the template's folder with its prompt already sent. A template can also run
+  on a schedule (every day or weekdays, at a local time). Only the automation
+  device fires schedules, a slot never fires twice, and after downtime only the
+  most recent missed run fires.
+
+### Changed
+
+- **Settings opens on the basics.** Six screens (General, Connections,
+  Notifications, Agent CLI, Workspace, Appearance) by default; the other
+  thirteen — other devices, your phone, people, providers, accounts, security,
+  troubleshooting — sit behind "Show advanced settings", a preference that
+  syncs across your devices. Advanced controls on the basic screens (phone
+  push, usage-window warming, fast-track depth, …) moved into collapsed
+  "Advanced" folds. Deep links to an advanced screen still open it.
+- **Settings and Intake are easier to scan.** A field's hint sits close under
+  its own control and the next field starts clearly below it, so a hint can no
+  longer read as the label of the field after it. Sections, cards and button
+  rows got room to breathe, and on a narrow window the Settings nav becomes a
+  row of tabs.
+- **Ticket source cards show the essentials first.** The claim label, "move to
+  state on start", "comment when moved", Test-filled IDs, thinking effort and
+  fast-track depth moved into an "Advanced options" fold that opens by itself
+  when one of them holds a value you set.
+- **First-run setup is three steps.** Install the tools, sign in to your agent,
+  start your first agent; connecting GitHub and a tracker are two optional
+  steps, and the phone (Tailscale) moved to a closed "Optional, later" group
+  that no longer counts toward the setup chip. Optional tools (Tailscale,
+  bubblewrap, cloudflared, …) no longer hold the install step open.
+
 ## [0.8.5] - 2026-10-13
 
 ### Fixed
@@ -3573,7 +3646,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.6
 [0.8.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.5
 [0.8.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.4
 [0.8.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.8.3

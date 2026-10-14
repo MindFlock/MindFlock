@@ -21,6 +21,8 @@ import { sessionLabel } from "../../lib/sessionLabel";
 import { openDevicesFor, routePastedCode } from "../../lib/deviceActions";
 import { routeCode } from "../../lib/fleet";
 import { openSettings } from "../../lib/openSettings";
+import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
+import { runTemplateNow } from "../../lib/templateRun";
 
 interface PaletteAction {
   label: string;
@@ -80,6 +82,9 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   const { data: extensions } = useExtensions();
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
+  // Bumped when the Templates list lands or changes, so "Run template: …"
+  // rows follow it (the first paint uses the cached/mirrored list).
+  const [tplVersion, setTplVersion] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -88,6 +93,14 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       setSel(0);
       setTimeout(() => inputRef.current?.focus(), 0);
     }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const bump = () => setTplVersion((v) => v + 1);
+    document.addEventListener(TEMPLATES_CHANGED, bump);
+    void ensureTemplates().catch(() => {});
+    return () => document.removeEventListener(TEMPLATES_CHANGED, bump);
   }, [open]);
 
   const actions = useMemo<PaletteAction[]>(() => {
@@ -130,6 +143,16 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
     acts.push({ label: "Templates…", hint: "manage saved New-session setups", run: () => ui.openDialogFor("templates") });
+    // Run now: a fresh session from a template, its prompt already sent —
+    // one row per template that can start one on its own (it has a folder).
+    for (const tpl of templatesNow()) {
+      if (runProblem(tpl)) continue;
+      acts.push({
+        label: "Run template: " + tpl.name,
+        hint: "fresh session, prompt sent",
+        run: () => void runTemplateNow(tpl.name),
+      });
+    }
     acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
     acts.push({ label: "Assistant agent file…", run: () => ui.openDialogFor("assistant-agent") });
     if (caps.git)
@@ -210,7 +233,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       }
     }
     return acts;
-  }, [open, config, host, extensions]);
+  }, [open, config, host, extensions, tplVersion]);
 
   const filtered = useMemo(() => {
     const scored = actions
@@ -220,9 +243,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const out = scored.map((x) => x.a);
     // The query IS a code (pasted straight into the palette): joining with
     // it is the first thing offered, routed by its format.
+    // Second, not first, when a command's own name contains the query: "run
+    // template" reads as a device name + an 8-letter code too, and Enter must
+    // run the command that was typed, not try to join.
     const code = routeCode(query);
+    const named = scored.some((x) => x.s < 1000);
     if (code.kind)
-      out.unshift({
+      out[named ? "push" : "unshift"]({
         label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
         hint: code.kind === "peer" ? "another person · People" : "your devices",
         run: () => void routePastedCode(query),

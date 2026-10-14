@@ -23,7 +23,7 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 /* Compact on purpose: with the tab strip naming the surface and each tab's own
@@ -108,13 +108,15 @@
 /* Same display contract as .set-screen, because capsGate.css hides the direct
    children of a gated panel and reveals its .caps-gate — see the rules there.
 
-   The gap is the tab's whole vertical rhythm: three sections (switch, sources,
-   work list), each already fenced by its own heading rule or border, so 16px
-   between them was spacing a boundary that was drawn anyway. */
+   The gap is the tab's whole vertical rhythm: intro, switch, work list,
+   sources, advanced. It is the BIGGEST step on the surface — bigger than the
+   18px between fields inside a card — so the hierarchy reads by space before it
+   reads by the heading rules. (12px, tried once to save height, made sections
+   and fields the same distance apart, and the tab read as one long column.) */
 .ik-panel {
   display: none;
   flex-direction: column;
-  gap: 12px;
+  gap: 22px;
 }
 
 .ik-panel.active {
@@ -145,6 +147,11 @@
   padding-bottom: 4px;
 }
 
+/* A section's heading, toolbar and list: a step apart, still one section. */
+.ik-panel > .set-row {
+  gap: 10px;
+}
+
 .ik-panel > .set-section-title:first-child {
   margin-top: 0;
 }
@@ -173,7 +180,7 @@
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 9px;
-  padding: 9px 12px;
+  padding: 11px 14px;
 }
 
 /* Label over optional subtitle. min-width:0 so a long "nothing connected yet"
@@ -190,7 +197,7 @@
 .ik-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 /* The card's own bottom margin is for the Settings screens it came from; inside
@@ -913,4 +920,108 @@
 }
 .ik-secret-clear:hover {
   color: var(--text);
+}
+
+/* --- Source card form rhythm ------------------------------------------------
+   Two distances, and the gap between them is the point: a field's own parts
+   (label → control → hint) sit TIGHT, and the next field starts a clearly
+   LARGER step below. With one even 6–10px everywhere — and the catalog's
+   fields in a wrapper with no gap at all — a long hint ran flush into the next
+   label ("…doesn't comment twice." / "Claim label") and read as belonging to
+   either field. Scoped to the Intake dialog: Settings keeps its own rhythm. */
+#intake-panel .tk-source {
+  padding: 12px 16px 14px;
+}
+
+#intake-panel .tk-source .tk-body {
+  gap: 18px;
+  margin-top: 14px;
+}
+
+/* The catalog's fields are a run of ordinary fields, not a group: let them
+   join the body's column so they get the same step as the fields above. */
+#intake-panel .tk-source .tk-fields {
+  display: contents;
+}
+
+#intake-panel .tk-source .set-row {
+  gap: 5px;
+}
+
+/* A hint belongs to the control above it: a hair of space, a readable line
+   height, and nothing below it — the 18px step does that job. */
+#intake-panel .tk-source .set-row > .set-hint,
+#intake-panel .tk-source .set-row > .ik-field-error {
+  line-height: 1.45;
+  margin-top: 1px;
+}
+
+/* The ingest-state chips carry their own bottom margin from Settings; inside
+   a field the row gap already spaces them from the picker. */
+#intake-panel .tk-source .set-row > .repo-list {
+  margin-bottom: 2px;
+}
+
+/* The footer (Test / message / Remove) is the card's actions, not one more
+   field: a rule says so. */
+#intake-panel .tk-source .tk-body > .set-row:last-child {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* Basic vs Advanced: the fold under a ticket source's essential fields. Same
+   quiet summary as the tab-level `.pr-advanced`, but inside a card, so it is
+   set off by a dashed rule rather than a solid one (the solid rule is the
+   footer's). */
+#intake-panel .tk-advanced {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+
+#intake-panel .tk-advanced > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  width: fit-content;
+  list-style: revert;
+}
+
+#intake-panel .tk-advanced > summary:hover,
+#intake-panel .tk-advanced[open] > summary {
+  color: var(--text);
+}
+
+#intake-panel .tk-advanced > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+#intake-panel .tk-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+/* The tab-level Advanced fold (Pull requests / Issues): the panel gap above
+   already separates it, so its own top margin only stretched the step. */
+.ik-panel > .pr-advanced {
+  margin-top: 0;
+  padding-top: 14px;
+}
+
+/* Its fields get the card rhythm too: tight inside a field, a step between. */
+#intake-panel .pr-advanced-body {
+  gap: 18px;
+  margin-top: 16px;
+}
+
+#intake-panel .pr-advanced-body > .set-row {
+  gap: 5px;
+}
+
+#intake-panel .pr-advanced-body > .set-row > .set-hint {
+  line-height: 1.45;
 }

@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Instance } from "../api/types";
 import {
   NEST_MAX,
+  keepFamiliesTogether,
   movedRailOrder,
   orderWithAfter,
   orderedKeys,
@@ -110,6 +111,43 @@ describe("railNesting: visual only, adjacency only", () => {
     expect(railNesting(input)).toHaveLength(input.length);
     expect(JSON.stringify(input)).toBe(before);
     expect(railNesting([])).toEqual([]);
+  });
+});
+
+describe("keepFamiliesTogether: a worker is never separated from its parent", () => {
+  const parents = (spec: Record<string, string>) => (k: string) => spec[k];
+
+  it("pulls a stranded worker up under its family, siblings in saved order", () => {
+    const keys = ["web", "api", "w1", "copy", "copy2", "w2", "w3"];
+    const out = keepFamiliesTogether(keys, parents({ w1: "api", w2: "api", w3: "api" }));
+    expect(out).toEqual(["web", "api", "w1", "w2", "w3", "copy", "copy2"]);
+  });
+
+  it("carries a whole subtree, grandchildren included, and windows stay put", () => {
+    const keys = ["api", "\u0000assistant", "g1", "w1", "web"];
+    const out = keepFamiliesTogether(keys, parents({ w1: "api", g1: "w1" }));
+    expect(out).toEqual(["api", "w1", "g1", "\u0000assistant", "web"]);
+  });
+
+  it("moves a family with its parent, even when a worker sits above it", () => {
+    const out = keepFamiliesTogether(["w1", "web", "api"], parents({ w1: "api" }));
+    expect(out).toEqual(["web", "api", "w1"]);
+  });
+
+  it("leaves a worker whose parent is absent where it is", () => {
+    const keys = ["web", "w1", "other"];
+    expect(keepFamiliesTogether(keys, parents({ w1: "gone" }))).toBe(keys);
+  });
+
+  it("returns the same array when every family is already together", () => {
+    const keys = ["api", "w1", "w2", "web"];
+    expect(keepFamiliesTogether(keys, parents({ w1: "api", w2: "api" }))).toBe(keys);
+  });
+
+  it("survives a parent cycle without dropping or duplicating a row", () => {
+    const out = keepFamiliesTogether(["a", "x", "b", "c"], parents({ a: "b", b: "a", c: "a" }));
+    expect([...out].sort()).toEqual(["a", "b", "c", "x"]);
+    expect(out.indexOf("c")).toBe(out.indexOf("a") + 1);
   });
 });
 
@@ -330,7 +368,7 @@ describe("inFamily: who gets the one-click answer strip", () => {
   });
 });
 
-describe("Sidebar: family nesting leaves rail order and numbering alone", () => {
+describe("Sidebar: families stay together and numbering follows the rendered order", () => {
   beforeEach(() => {
     useUi.setState({ order: ["web", "api", "w1", "other", "w2"], filter: "", hidden: new Set() });
   });
@@ -340,20 +378,35 @@ describe("Sidebar: family nesting leaves rail order and numbering alone", () => 
       inst("web"),
       inst("api", { activity: "working" }),
       inst("w1", { parent: "api", spawned: true, last_report: { id: "m", status: "done", summary: "", ts: 1 } }),
-      inst("other"),
       inst("w2", { parent: "api", spawned: true, activity: "working" }),
+      inst("other"),
     ];
+    useUi.setState({ order: ["web", "api", "w1", "w2", "other"] });
     const flat = family.map((i) => ({ ...i, parent: "", spawned: false }));
     const nested = renderRail(family);
     const plain = renderRail(flat);
     expect(nested.map((r) => [r.title, r.idx])).toEqual(plain.map((r) => [r.title, r.idx]));
     expect(nested.map((r) => r.idx)).toEqual(["1", "2", "3", "4", "5"]);
-    // The saved order drives the sequence; w2 sits under "other", so it is
-    // not adjacent to its family and stays flat.
-    expect(nested.map((r) => r.title)).toEqual(["web", "api", "w1", "other", "w2"]);
     expect(nested.find((r) => r.title === "w1")!.cls).toContain("nest-1");
-    expect(nested.find((r) => r.title === "w2")!.cls).not.toContain("nest-");
+    expect(nested.find((r) => r.title === "w2")!.cls).toContain("nest-1");
     expect(plain.some((r) => r.cls.includes("nest-"))).toBe(false);
+  });
+
+  it("never separates a worker from its parent, whatever the saved order says", () => {
+    // w2 was dragged below "other" (or a duplicate was slotted in between):
+    // it still draws, and numbers, directly under its family.
+    const family = [
+      inst("web"),
+      inst("api", { activity: "working" }),
+      inst("w1", { parent: "api", spawned: true }),
+      inst("other"),
+      inst("w2", { parent: "api", spawned: true, activity: "working" }),
+    ];
+    const nested = renderRail(family);
+    expect(nested.map((r) => r.title)).toEqual(["web", "api", "w1", "w2", "other"]);
+    expect(nested.map((r) => r.idx)).toEqual(["1", "2", "3", "4", "5"]);
+    expect(nested.find((r) => r.title === "w2")!.cls).toContain("nest-1");
+    expect(nested.find((r) => r.title === "other")!.cls).not.toContain("nest-");
   });
 
   it("makes only a blocked FAMILY row focusable (keys 1–9) and swaps the parent's chip", () => {

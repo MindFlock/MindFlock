@@ -18,6 +18,7 @@ from backend.ticket_ingestion.config import (
     source_agent_now,
 )
 from backend.ticket_ingestion.models import Ticket
+from backend.ticket_ingestion.repo_routing import targets_of
 from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.state import (
     load_last_run_timestamp,
@@ -142,8 +143,14 @@ class BackfillScanner:
 
         # Multi-repo ingestion: this source's tickets provision into (and are
         # branch-checked against) its own repo when set, else the global default.
-        source_repo = self._source.repo_url or self.config.repo_url
-        existing = await _get_existing_branches(source_repo)
+        # A source spanning several repos: a ticket's branch may have been
+        # pushed to whichever of them it was routed to, so check them all.
+        source_repos = [t.url for t in targets_of(self._source)] or [
+            self.config.repo_url
+        ]
+        existing: set[str] = set()
+        for source_repo in source_repos:
+            existing |= await _get_existing_branches(source_repo)
         processed_ids = load_processed_story_ids(_STATE_DIR)
         # Also skip tickets already sitting in the queue (their pending marker
         # is written below) — the orchestrator re-enqueues those on startup.

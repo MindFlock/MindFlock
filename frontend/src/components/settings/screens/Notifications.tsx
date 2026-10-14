@@ -11,6 +11,7 @@ import { queryClient } from "../../../state/queries";
 import { useNotifyConfig, type NotifyRule } from "../../../state/runs";
 import { SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { AdvancedFold } from "../settingsMode";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
 
@@ -100,7 +101,7 @@ export function Notifications(_: ScreenProps) {
       <h3 className="set-section-title">What triggers a notification</h3>
       <p className="set-hint">
         Pick exactly which events notify you — turn off any you don't want. These switches
-        apply to both channels — the browser above and phone push below.
+        apply to every channel you turn on.
       </p>
       <div id="notif-rules-list">
         {rulesError ? (
@@ -115,7 +116,12 @@ export function Notifications(_: ScreenProps) {
           ))
         )}
       </div>
-      <Ntfy />
+      {/* Phone push is a second delivery channel, set up once by the few who
+          want it: folded, so the basic screen is the browser switch and the
+          rules. */}
+      <AdvancedFold id="notif-advanced">
+        <Ntfy />
+      </AdvancedFold>
     </>
   );
 }

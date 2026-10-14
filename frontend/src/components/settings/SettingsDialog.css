@@ -1,16 +1,26 @@
 /* Settings dialog (a modal like #recent-panel). The panel is a FIXED size —
    width and height don't change with the selected screen; each screen's content
    scrolls inside #settings-screens instead of resizing the dialog. (Capped to
-   the viewport so it still fits small windows.) */
+   the viewport so it still fits small windows.)
+
+   Spacing inside Settings runs on one scale — 4 / 8 / 12 / 16 / 24 / 32 — and
+   one rule: things that belong together sit close, things that are different
+   sit far apart. A field's label, control and hint are 6px apart; the next
+   field starts --set-rhythm (24px) below, so a hint can never read as the
+   label of the field under it. A section title leads its group by 16px and
+   gets 40px (16 + the rhythm) above it. */
 #settings-panel {
+  --set-rhythm: 24px;
+  --set-tight: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 22px;
-  width: 640px;
-  max-width: 92vw;
-  height: 82vh;
-  max-height: 720px;
+  padding: 24px;
+  width: 780px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  height: 84vh;
+  max-height: 760px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -39,8 +49,8 @@
 .onboarding-block {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-bottom: 16px;
+  gap: 16px;
+  padding-bottom: var(--set-rhythm, 24px);
   border-bottom: 1px solid var(--border);
 }
 
@@ -54,13 +64,13 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
 }
 
 .onboarding-action-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .onboarding-action .test-btn {
@@ -76,6 +86,29 @@
 .set-hint {
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Inside Settings a hint is read, not skimmed past: one size up, real line
+   height. :where() keeps the specificity of the bare class, so a component's
+   own hint size (.devices-readiness, …) still wins. */
+:where(#settings-panel) .set-hint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Labels a step heavier than their hints, so the eye finds the field names
+   when scanning a column of label / control / hint stacks. Also sizes labels
+   outside a .set-row (the ntfy field grid), which otherwise took the body's
+   16px. */
+:where(#settings-panel) .set-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Help paragraphs keep a readable measure on a wide dialog. */
+:where(#settings-panel) :is(p.set-hint, .set-block-hint, .notif-rule-desc) {
+  max-width: 72ch;
 }
 
 /* Standalone hint paragraphs (status lines, blurbs under a section title):
@@ -108,6 +141,12 @@ p.set-hint {
   /* No row-wide cursor: only the switch toggles now (the row is a <div>, not a
      <label>), so the whole row must not look clickable. The .ca-slider keeps
      its own pointer cursor. */
+}
+
+/* Text and switch: a clear gutter, so a long hint never runs up against the
+   toggle it describes. */
+#settings-panel .set-switch-row {
+  gap: 16px;
 }
 
 /* The row centers the label's line box on the switch, but the desktop app's
@@ -175,12 +214,13 @@ p.set-hint {
 /* Security → access-token reveal row */
 .token-reveal {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
 .token-reveal code {
-  flex: 1;
+  flex: 1 1 12em;
   min-width: 0;
   overflow-x: auto;
   white-space: nowrap;
@@ -200,10 +240,16 @@ p.set-hint {
   flex-direction: column;
 }
 
+#notif-rules-list > p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .notif-rule {
-  gap: 14px;
+  gap: 16px;
   align-items: center;
-  padding: 8px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--border);
   cursor: pointer;
 }
@@ -216,7 +262,7 @@ p.set-hint {
 .notif-rule-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -226,7 +272,7 @@ p.set-hint {
 
 .notif-rule-desc {
   white-space: normal;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
 .notif-rule .ca-switch {
@@ -241,10 +287,12 @@ p.set-hint {
    uppercase as a screen's section titles, so it reads as a label for what
    follows rather than as one more place to click. */
 .set-nav-group {
-  margin: 12px 0 2px;
+  /* More room above than below: the heading belongs to the items under it,
+     not to the group it follows. */
+  margin: 16px 0 4px;
   /* Left inset matches the items' text; none on the right, where the longest
-     heading ("Troubleshooting") would otherwise overrun the 132px column. */
-  padding: 0 0 0 10px;
+     heading ("Devices and people") would otherwise overrun the column. */
+  padding: 0 0 0 12px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -259,7 +307,7 @@ p.set-hint {
 /* Settings → Agent orchestration: the one-line intro under each heading, and
    the cap rows' "now N" / env-override line. */
 .orch-intro {
-  margin: -2px 0 10px;
+  margin: 0;
 }
 
 .orch-cap-row .orch-cap-env {

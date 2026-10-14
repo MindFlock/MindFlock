@@ -15,6 +15,7 @@ import { syncExtensions } from "./extensions/host";
 import { ExtensionDialog } from "./extensions/ExtensionDialog";
 import { TopBar } from "./components/TopBar";
 import { ConnBanner } from "./components/ConnBanner";
+import { MemoryNotice } from "./components/MemoryNotice";
 import { StateNotice } from "./components/StateNotice";
 import { VoiceInput } from "./components/VoiceInput";
 import { EventToasts } from "./components/EventToasts";
@@ -247,6 +248,7 @@ export default function App() {
   return (
     <>
       <ConnBanner />
+      <MemoryNotice />
       <StateNotice />
       <TopBar />
       <Sidebar

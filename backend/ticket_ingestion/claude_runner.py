@@ -369,6 +369,15 @@ class AgentCliRunner:
         lines.append("")
         lines.append(story.description)
         lines.append("")
+        if getattr(story, "route", None):
+            # A source spanning several repos routed this ticket: say where it
+            # went and why, and give the other repos it needs by absolute path.
+            from backend.ticket_ingestion.provisioner import _branch_name_for
+            from backend.ticket_ingestion.repo_routing import other_repos_section
+
+            section = other_repos_section(story, _branch_name_for(story))
+            if section:
+                lines.append(section)
         if story.acceptance_criteria:
             lines.append("## Acceptance Criteria")
             lines.append("")

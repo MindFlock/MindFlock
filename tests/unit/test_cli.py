@@ -1951,3 +1951,71 @@ class TestMcpCommand:
             "argv": ["--scope", "readonly", "--port", "9"],
             "prog": "mindflock mcp",
         }
+
+
+class TestTemplateCommands:
+    """`mindflock run TEMPLATE` (Run now from a shell) and `mindflock templates`."""
+
+    _TEMPLATES = {
+        "templates": [
+            {
+                "name": "Rivian update",
+                "repo_path": "/r",
+                "prompt": "p",
+                "autopilot": "pr",
+                "schedule": {"cron": "0 21 * * 1-5"},
+            },
+            {"name": "docs sweep", "repo_path": "/d", "prompt": "q"},
+        ],
+        "runs": {
+            "rivian update": {
+                "schedule_label": "Weekdays at 21:00",
+                "next_at": 1792000000,
+                "last_at": 1791900000,
+                "last_session": "rivian-update-oct13",
+            },
+            "docs sweep": {"last_error": "repo_path is not a folder"},
+        },
+        "runs_here": False,
+        "runs_on": "mac-mini",
+    }
+
+    @pytest.fixture()
+    def server(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(
+            client, "get", lambda base, path, timeout=None: self._TEMPLATES
+        )
+
+        def _post(base, path, payload=None, timeout=None):
+            calls.append(path)
+            if "nope" in path:
+                raise client.ApiError(404, "no template named nope")
+            return {"title": "rivian-update-oct14"}
+
+        monkeypatch.setattr(client, "post", _post)
+        return calls
+
+    def test_run_posts_the_run_route(self, server, capsys):
+        assert cli.main(["run", "Rivian update"]) == 0
+        assert server == ["/api/templates/Rivian%20update/run"]
+        assert (
+            "started rivian-update-oct14 from template Rivian update"
+            in capsys.readouterr().out
+        )
+
+    def test_run_unknown_template_is_one_line_error(self, server, capsys):
+        assert cli.main(["run", "nope"]) == 1
+        assert "no template named nope" in capsys.readouterr().err
+
+    def test_templates_lists_schedule_and_last_run(self, server, capsys):
+        assert cli.main(["templates"]) == 0
+        out = capsys.readouterr().out
+        assert "Weekdays at 21:00" in out and "rivian-update-oct13" in out
+        assert "failed: repo_path is not a folder" in out
+        assert "schedules fire on mac-mini" in out
+
+    def test_templates_json(self, server, capsys):
+        assert cli.main(["templates", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["runs_on"] == "mac-mini"

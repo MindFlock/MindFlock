@@ -152,35 +152,34 @@ class TestFirstRun:
         assert 'label: "Tour"' in palette
         assert "shortcuts-tour" in _read("components/palette/ShortcutsSheet.tsx")
 
-    def test_setup_folds_the_optional_account_tests(self):
+    def test_setup_has_no_account_test_forms(self):
         src = _read("components/setup/SetupChecklist.tsx")
-        fold = src[
-            src.index('className="setup-optional"') : src.index(
-                "</details>", src.index('className="setup-optional"')
-            )
-        ]
-        # GitHub is the Connect GitHub dialog (its own Test), not a fold test.
+        # GitHub is the Connect GitHub dialog (its own Test), not a fold test;
+        # a tracker's token goes in its Intake source, not a second form here.
         assert "setup-test-github" not in src
         assert "openConnectGitHub()" in src
-        assert "setup-test-shortcut" in fold
-        assert "setup-shortcut-token" in fold
-        assert "setup-test-agent" not in fold
+        assert "setup-test-shortcut" not in src
+        assert "setup-shortcut-token" not in src
         assert "Tokens live in" not in src
-        assert ".setup-optional" in _read("components/dialogs/SetupDialog.css")
 
-    def test_checklist_is_one_component_with_five_steps(self):
+    def test_checklist_is_one_component_in_three_groups(self):
         src = _read("components/setup/SetupChecklist.tsx")
-        for step in ("tools", "agent_login", "repo", "tracker", "phone"):
-            assert 'data-step="%s"' % step in src, step
+        for step in ("tools", "agent_login", "repo", "github", "tracker", "phone"):
+            assert 'step("%s")' % step in src, step
+        for group in ("start", "connect", "later"):
+            assert 'data-group="%s"' % group in src, group
+        # The phone is folded under "Optional, later", never a getting-started step.
+        later = src.index('className="setup-later"')
+        assert src.index('data-step="phone"') > later
         # Both surfaces render the same component.
         assert "<SetupChecklist />" in _read("components/grid/TerminalGrid.tsx")
         assert "<SetupChecklist />" in _read("components/dialogs/SetupDialog.tsx")
-        # Step 5 is always visible: Install Tailscale OR the QR, never hidden.
+        # The phone extra: Install Tailscale OR the QR.
         assert 'data-phone="install-tailscale"' in src and 'data-phone="qr"' in src
 
     def test_grid_card_says_get_set_up(self):
         src = _read("components/grid/TerminalGrid.tsx")
         assert "<h2>Get set up</h2>" in src
-        assert "Five steps" in src
+        assert "Three steps to your first agent" in src
         assert "⋯ menu" not in src
         assert "Click a session's row in the sidebar to show it." in src

@@ -130,6 +130,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "git_transport",
         "fasttrack_depth",
         "precommit_retry_hooks",
+        "fasttrack_failure_notes",
         "verify_repos",
         "verify_enabled",
         "verify_use_conversation",
@@ -193,6 +194,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "idle_after",
         "hints",
         "map_tour",
+        "settings_advanced",
     ),
     # The person all these devices share (docs/people.md). Its ``id`` is not
     # here: it is agreed, never last-edit-wins (see LOCAL and sync_once).
@@ -339,6 +341,7 @@ LABELS: Dict[str, str] = {
     "repository.git_transport": "Git transport (SSH/HTTPS)",
     "repository.fasttrack_depth": "Fast-track depth",
     "repository.precommit_retry_hooks": "Pre-commit retry hooks",
+    "repository.fasttrack_failure_notes": "Fast-track: tell the agent what failed",
     "repository.verify_repos": "Verify: repositories",
     "repository.verify_enabled": "Verify on/off",
     "repository.verify_use_conversation": "Verify: use the conversation",
@@ -396,6 +399,7 @@ LABELS: Dict[str, str] = {
     "prefs.idle_after": "Idle flock delay",
     "prefs.hints": "Hints",
     "prefs.map_tour": "Map tour seen",
+    "prefs.settings_advanced": "Advanced settings shown",
     "person.name": "Your name",
     "person.git_name": "Git author name",
     "person.git_email": "Git author email",

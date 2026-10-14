@@ -37,6 +37,7 @@ from backend.web.core import commit_message as _commit_message
 from backend.web.core import events as _events
 from backend.web.core import lanes as _lanes
 from backend.web.core import live_stage as _live_stage
+from backend.web.core import mailbox as _mailbox
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import team_runs as _team_runs
 from backend.web.core import worktree_setup as _wt_setup
@@ -472,8 +473,12 @@ async def _autopilot_step(title: str) -> None:
         await asyncio.to_thread(_autopilot_finish, title)
         return
     if action == "stop":
+        told = await asyncio.to_thread(_autopilot_tell_agent, title, wt, rec, detail)
         await asyncio.to_thread(
-            _autopilot_halt, title, detail.get("reason") or "stopped"
+            _autopilot_halt,
+            title,
+            detail.get("reason") or "stopped",
+            _TOLD_AGENT if told else "",
         )
         return
     if now - float(rec.get("acted_at") or 0.0) < _AUTOPILOT_ACTION_COOLDOWN:
@@ -553,9 +558,51 @@ def _autopilot_wait(title, rec, snap, detail, now) -> None:
         )
 
 
-def _autopilot_halt(title: str, reason: str) -> None:
-    _autopilot.halt(title, reason)
+def _autopilot_halt(title: str, reason: str, note: str = "") -> None:
+    _autopilot.halt(title, reason, note)
     _emit_autopilot(title)
+
+
+#: What the halted chip's tooltip adds once the agent has been sent its note.
+_TOLD_AGENT = "MindFlock told the agent what failed and asked it to fix it."
+
+
+def _autopilot_tell_agent(title: str, wt: str, rec: dict, detail: dict) -> bool:
+    """A run that stopped on something the AGENT can fix (``detail["fix"]``: a
+    failed pre-commit step or verification check, red CI, a conflicting PR)
+    leaves that agent a short note saying what failed and to fix it — or to
+    tell the user when it is a conflict that needs their call. Returns whether
+    a note was posted. Never raises.
+
+    The note rides the mailbox lane as a :data:`mailbox.NOTE_KIND`: typed once
+    the agent is settled idle, held while a person is typing in the pane, never
+    into a bare shell. Called just BEFORE the halt, which leaves the reason
+    exactly as it was (team runs parse it) and carries :data:`_TOLD_AGENT` as
+    its ``note`` when this returns True — one event, one toast. Off with
+    ``repository.fasttrack_failure_notes``. A team run's member is skipped —
+    its run already sends its own fix prompt."""
+    if not (detail or {}).get("fix"):
+        return False
+    try:
+        from backend.config import settings as _settings
+
+        if not _settings.load_settings().repository.fasttrack_failure_notes:
+            return False
+        if (rec or {}).get("source") == "run" or _run_member(title) is not None:
+            return False
+        cmd = ""
+        if detail.get("fix") == "check" and wt:
+            try:
+                cmd = _wt_setup.load_config(wt).check_command or ""
+            except Exception:  # noqa: BLE001 — the note just omits the command
+                cmd = ""
+        text = _autopilot.failure_note(detail, cmd)
+        if not text:
+            return False
+        _mailbox.post(title, text, kind=_mailbox.NOTE_KIND)
+        return True
+    except Exception:  # noqa: BLE001 — a note is never worth breaking a pass
+        return False
 
 
 def _autopilot_draft_for_approval(title: str, wt: str, rec: dict) -> None:
