@@ -48,6 +48,9 @@ import {
 } from "./kit";
 import {
   TEST_STATE_LABELS,
+  advancedFields,
+  advancedHasValues,
+  basicFields,
   clearSecretPatch,
   fieldErrorsFrom,
   hasSecret,
@@ -81,6 +84,7 @@ import { useMindflockStatus, useProviderEfforts } from "../../state/queries";
 import type { TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
+import { RepoListField } from "./RepoListField";
 import type {
   TicketClaimedBy,
   TicketingCatalogEntry,
@@ -701,6 +705,9 @@ interface AssignedTicket {
    * Stamped by the server (`TicketProvider.can_merge`) rather than decided from
    * the provider name here, so there is one answer rather than two. */
   merge_ready?: boolean;
+  /** On a source with several repos: which one(s) this ticket goes to and why
+   * (backend/ticket_ingestion/repo_routing.py::preview). */
+  route?: { repos: string[]; reason: string; method: string; summary: string };
 }
 
 /** "A", "A and B", "A, B and C", then "A, B and 4 more" — provider state names
@@ -1193,9 +1200,11 @@ function AssignedTicketRow({
       // Whose it is, but only when it isn't yours — on an assigned-to-me queue
       // every row would say your own name, which tells you nothing.
       meta={
-        t.mine === false
+        (t.mine === false
           ? ageText(t.created_at) + " · " + (t.assignee || "someone else")
-          : ageText(t.created_at)
+          : ageText(t.created_at)) +
+        // A source spanning several repos says where this one goes.
+        (t.route?.summary ? " · → " + t.route.summary : "")
       }
       hasSession={t.has_session}
       elsewhere={t.elsewhere?.label}
@@ -1365,7 +1374,6 @@ function TicketSourceCard({
   // looking for the picker in the first place.
   const summary =
     base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
-  const repoMissing = !(source.repo_url || "").trim();
   // A GitHub Issues source saved before the one GitHub credential path still
   // carries its own token (the server masks it as "•••set"): still read, as
   // the last fallback, this release only.
@@ -1393,6 +1401,45 @@ function TicketSourceCard({
       /* keep what the last Test listed */
     }
   };
+
+  // Open when something in the fold is set or refused; stays however the user
+  // left it otherwise — and a NEW refusal inside it opens it again.
+  const wantAdvanced = advancedHasValues(meta, source, errs);
+  const [advancedOpen, setAdvancedOpen] = useState(wantAdvanced);
+  useEffect(() => {
+    if (wantAdvanced) setAdvancedOpen(true);
+  }, [wantAdvanced]);
+
+  const renderField = (f: CatalogField) =>
+    f.type === "state" ? (
+      <StatePicker
+        key={f.key}
+        field={f}
+        source={source}
+        states={states}
+        loadStates={loadStates}
+        onChange={onChange}
+      />
+    ) : f.type === "state_one" ? (
+      <StartStatePicker
+        key={f.key}
+        field={f}
+        source={source}
+        states={states}
+        loadStates={loadStates}
+        onChange={onChange}
+      />
+    ) : f.type === "choice" ? (
+      <ChoicePicker key={f.key} field={f} source={source} onChange={onChange} error={errs[f.key]} />
+    ) : (
+      <CatalogInput
+        key={f.key}
+        field={f}
+        source={source}
+        error={errs[f.key]}
+        onChange={onChange}
+      />
+    );
 
   return (
     <SourceCard
@@ -1452,22 +1499,8 @@ function TicketSourceCard({
           have two of the same provider.
         </span>
       </label>
-      <label className="set-row">
-        <span className="set-label">Repo URL</span>
-        <input
-          type="text"
-          autoComplete="off"
-          required
-          data-tk-field="repo_url"
-          className={repoMissing ? "field-missing" : ""}
-          placeholder="git@github.com:org/repo.git"
-          defaultValue={source.repo_url || ""}
-          onBlur={(e) => {
-            if (e.target.value !== (source.repo_url || "")) onChange({ repo_url: e.target.value });
-          }}
-        />
-        <span className="set-hint">Required — tickets from this source clone into this repo.</span>
-      </label>
+      {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
+      <RepoListField source={source} onChange={onChange} />
       <label className="set-row">
         <span className="set-label">Agent CLI</span>
         <select
@@ -1491,104 +1524,89 @@ function TicketSourceCard({
           row is green, or leave it on the app default.
         </span>
       </label>
-      {/* THINKING EFFORT, directly under the CLI that will do the thinking —
-          the two are one decision. "Which CLI" and "how hard should it think"
-          are read together, and a rung means different things on different CLIs
-          (each spells it its own way and clamps its own ceiling), so the picker
-          has to sit where the CLI it is about to qualify is still on screen.
-          Per SOURCE because that is where the property lives: a queue of
-          one-line copy fixes and a queue of schema migrations deserve different
-          answers, and neither deserves to be set per ticket forever. */}
-      <label className="set-row">
-        <span className="set-label">Thinking effort</span>
-        <select
-          className="tk-effort"
-          data-tk-field="effort"
-          value={effortUsable ? source.effort || "" : ""}
-          disabled={!effortUsable}
-          title={effortTitle(effortProvider, effortCap)}
-          onChange={(e) => onChange({ effort: e.target.value })}
-        >
-          <option value="">
-            {effortUsable
-              ? "CLI default — however it thinks on its own"
-              : "No effort setting (" + (effortProvider || "this CLI") + ")"}
-          </option>
-          {effortUsable &&
-            EFFORTS.map((e) => (
-              // A rung above this CLI's ceiling still runs, clamped, and the top
-              // rung is named the way the CLI names it — so the pick says what it
-              // will actually do rather than what was asked for.
-              <option key={e} value={e}>
-                {effortOptionLabel(e, effortCap)}
+      <div className="tk-fields">{basicFields(meta).map(renderField)}</div>
+      {/* BASIC vs ADVANCED. Everything above is what a first setup needs to get
+          tickets flowing; the per-queue tuning and the catalog's `advanced`
+          extras (claim label, move on start…) fold away here. The fold opens
+          on its own when anything inside is already set or was refused by the
+          server, so a stored value or an error is never hidden. */}
+      <details
+        className="tk-advanced"
+        data-tk-advanced={source.id}
+        open={advancedOpen}
+        onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>Advanced options</summary>
+        <div className="tk-advanced-body">
+          {/* THINKING EFFORT, first thing in the fold. It qualifies the Agent CLI
+              picked above (a rung means different things on different CLIs —
+              each spells it its own way and clamps its own ceiling — so the
+              picker names THAT CLI's ceiling), but "CLI default" is right for a
+              first setup, so it waits here with the other per-queue tuning.
+              Per SOURCE because that is where the property lives: a queue of
+              one-line copy fixes and a queue of schema migrations deserve
+              different answers, and neither deserves to be set per ticket
+              forever. */}
+          <label className="set-row">
+            <span className="set-label">Thinking effort</span>
+            <select
+              className="tk-effort"
+              data-tk-field="effort"
+              value={effortUsable ? source.effort || "" : ""}
+              disabled={!effortUsable}
+              title={effortTitle(effortProvider, effortCap)}
+              onChange={(e) => onChange({ effort: e.target.value })}
+            >
+              <option value="">
+                {effortUsable
+                  ? "CLI default — however it thinks on its own"
+                  : "No effort setting (" + (effortProvider || "this CLI") + ")"}
               </option>
-            ))}
-        </select>
-        <span className="set-hint">
-          How hard the agent thinks about <em>every</em> ticket from this source —
-          both the ones the pipeline picks up on its own and the ones you start by
-          hand. The rungs are neutral: whichever CLI runs the ticket translates
-          them into its own spelling and never receives a rung it would reject, so
-          this is safe to set higher than the CLI above can go. An individual
-          ticket can still choose its own on its row.
-        </span>
-      </label>
-      <label className="set-row">
-        <span className="set-label">Fast-track tickets to</span>
-        <select
-          className="tk-depth"
-          data-tk-field="depth"
-          value={source.depth === "agent" ? "" : source.depth || ""}
-          onChange={(e) => onChange({ depth: e.target.value })}
-        >
-          {/* One ladder, the same words as every other Fast-track control.
-              A stored "agent" (stop once the agent stops) IS Off, so it reads
-              as Off rather than as a sixth rung. */}
-          <option value="">{LANE_LABEL.leave}</option>
-          {SOURCE_DEPTHS.map((d) => (
-            <option key={d} value={d}>
-              {LANE_LABEL[d]}
-            </option>
-          ))}
-        </select>
-        <span className="set-hint">
-          How far each ticket goes after its agent finishes. Merge is per-ticket only —
-          a source default runs with nobody watching.
-        </span>
-      </label>
-      <div className="tk-fields">
-        {(meta?.fields || []).map((f) =>
-          f.type === "state" ? (
-            <StatePicker
-              key={f.key}
-              field={f}
-              source={source}
-              states={states}
-              loadStates={loadStates}
-              onChange={onChange}
-            />
-          ) : f.type === "state_one" ? (
-            <StartStatePicker
-              key={f.key}
-              field={f}
-              source={source}
-              states={states}
-              loadStates={loadStates}
-              onChange={onChange}
-            />
-          ) : f.type === "choice" ? (
-            <ChoicePicker key={f.key} field={f} source={source} onChange={onChange} error={errs[f.key]} />
-          ) : (
-            <CatalogInput
-              key={f.key}
-              field={f}
-              source={source}
-              error={errs[f.key]}
-              onChange={onChange}
-            />
-          )
-        )}
-      </div>
+              {effortUsable &&
+                EFFORTS.map((e) => (
+                  // A rung above this CLI's ceiling still runs, clamped, and the top
+                  // rung is named the way the CLI names it — so the pick says what it
+                  // will actually do rather than what was asked for.
+                  <option key={e} value={e}>
+                    {effortOptionLabel(e, effortCap)}
+                  </option>
+                ))}
+            </select>
+            <span className="set-hint">
+              How hard the agent thinks about <em>every</em> ticket from this source —
+              both the ones the pipeline picks up on its own and the ones you start by
+              hand. The rungs are neutral: whichever CLI runs the ticket translates
+              them into its own spelling and never receives a rung it would reject, so
+              this is safe to set higher than the CLI above can go. An individual
+              ticket can still choose its own on its row.
+            </span>
+          </label>
+          <label className="set-row">
+            <span className="set-label">Fast-track tickets to</span>
+            <select
+              className="tk-depth"
+              data-tk-field="depth"
+              value={source.depth === "agent" ? "" : source.depth || ""}
+              onChange={(e) => onChange({ depth: e.target.value })}
+            >
+              {/* One ladder, the same words as every other Fast-track control.
+                  A stored "agent" (stop once the agent stops) IS Off, so it reads
+                  as Off rather than as a sixth rung. */}
+              <option value="">{LANE_LABEL.leave}</option>
+              {SOURCE_DEPTHS.map((d) => (
+                <option key={d} value={d}>
+                  {LANE_LABEL[d]}
+                </option>
+              ))}
+            </select>
+            <span className="set-hint">
+              How far each ticket goes after its agent finishes. Merge is per-ticket only —
+              a source default runs with nobody watching.
+            </span>
+          </label>
+          {advancedFields(meta).map(renderField)}
+        </div>
+      </details>
     </SourceCard>
   );
 }

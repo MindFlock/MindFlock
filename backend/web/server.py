@@ -86,6 +86,9 @@ modules under
     team_runs        team runs: the record store, goal parser, pure planner
     team_run_driver  team runs: the loop, reconcile, effects, run.* events,
                      the operations behind /api/runs*
+    template_schedule templates' Run now + schedules: due-time math, the
+                     per-device run record, the loop (started by the
+                     templates addon)
     test_plans_driver Verify: the push trigger, the due loop (liveness,
                      running plans, landings, orphan sweep), run-route helpers
     terminal         PTY/tmux attach plumbing shared by the websockets
@@ -2895,8 +2898,8 @@ def _doctor_payload_cached(refresh: bool = False) -> Optional[dict]:
 
 @app.get("/api/setup")
 def get_setup(refresh: bool = False) -> JSONResponse:
-    """The five-step first-run checklist and everything the UI draws it from:
-    ``{steps: [{id, title, required, done, at, skipped, status}], summary:
+    """The first-run checklist and everything the UI draws it from:
+    ``{steps: [{id, title, required, group, done, at, skipped, status}], summary:
     {done, total, required_done, complete, next}, doctor: {ok, checks,
     install} | null, tailscale: {status, detail, fix, docs} | null, logins:
     [{name, installed, logged_in, login_cmd, default}], default_provider,
@@ -2909,7 +2912,7 @@ def get_setup(refresh: bool = False) -> JSONResponse:
 
 @app.post("/api/setup/{step}/skip")
 async def post_setup_skip(step: str, request: Request) -> JSONResponse:
-    """Skip an OPTIONAL step (``tracker`` / ``phone``): ``{steps, summary}``
+    """Skip an OPTIONAL step (``github`` / ``tracker`` / ``phone``): ``{steps, summary}``
     after. 400 for a required or unknown step; owner only
     (``auth.may_configure``, 403)."""
     if not await _auth.may_configure(request.scope):

@@ -2,34 +2,43 @@
  * the empty grid's card, the Setup modal (opened from the "Setup 3/5" chip,
  * the sidebar's doctor chip, the palette, or `?setup=1`).
  *
- * Five steps, named and ordered by the server (`GET /api/setup`, built by
- * backend/web/core/setup_steps.py — the same list `mindflock init` prints):
+ * The steps, their names, order and groups are the server's (`GET /api/setup`,
+ * built by backend/web/core/setup_steps.py — the same list `mindflock init`
+ * prints). Three groups, so a new user sees the few things that matter first:
  *
- *   ① Engine and tools         the doctor list + "Install everything missing"
- *   ② Sign in to your agent    one sign-in button per INSTALLED agent CLI
- *   ③ Pick a repo              opens New session (with the folder browser)
- *   ④ Connect a tracker and GitHub   Settings → Connections · Skip
- *   ⑤ Your phone               Install Tailscale, or the QR · Skip
+ *   Get started            the three REQUIRED steps to a running agent
+ *     ① Install the tools        "Install …" + only what is missing
+ *     ② Sign in to your agent    one sign-in button per INSTALLED agent CLI
+ *     ③ Start your first agent   opens New session (with the folder browser)
+ *   Connect your work      optional, counted in the chip's N/5
+ *     ④ Connect GitHub           the Connect GitHub dialog · Skip
+ *     ⑤ Connect your tracker     Intake → Tickets (add a source) · Skip
+ *   Optional, later        folded; not counted, never "next"
+ *     Use it from your phone     Install Tailscale, or the QR
+ *
+ * One obvious next action: the server's `summary.next` step is highlighted and
+ * its button is the only accent-coloured one. A done step shrinks to its title.
  *
  * Nothing here marks a step done: the server does, from the thing itself (the
- * doctor run, the first session, the first ticket source, a QR fetch). The
- * only writes are the two Skips. The first-run report `mindflock serve`
- * printed at boot is shown at the bottom — the desktop app's server writes it
- * to a log nobody reads. */
+ * doctor run, the first session, a GitHub credential, the first ticket source,
+ * a QR fetch). The only writes are the Skips. The first-run report `mindflock
+ * serve` printed at boot is folded at the bottom — the desktop app's server
+ * writes it to a log nobody reads. */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { AgentSignIn, agentDisplayName } from "../dialogs/AgentSignIn";
+import { CONNECTIONS_CHANGED_EVENT } from "../settings/screens/Connections";
 import { DoctorList } from "./DoctorList";
-import { TestResult, idleTest, type TestState } from "./githubTest";
 import { openConnectGitHub } from "../../lib/githubConnect";
 import { refreshSetup, skipSetupStep, useSetup } from "./useSetup";
 import {
   STATUS_GLYPH,
   installedLogins,
   loginLine,
+  nextStepId,
   orderedSteps,
   stepNumber,
   tailscaleMissing,
@@ -37,27 +46,28 @@ import {
 import type { SetupStatus, SetupStep } from "../../api/types";
 import "./setup.css";
 
-/** What the dialog's head says: "3 of 5 done · next: Pick a repo". */
+/** The checklist's first line. Until the required steps are done it counts
+ * only those ("1 of 3 done · next: Sign in to your agent" — the card promises
+ * three steps); after, the chip's count ("3 of 5 done · next: Connect GitHub"). */
 export function progressLine(status: SetupStatus | null | undefined): string {
   if (!status) return "Checking…";
   const s = status.summary;
   const next = status.steps.find((x) => x.id === s.next);
   if (s.complete) return "All set";
-  return s.done + " of " + s.total + " done" + (next ? " · next: " + next.title : "");
+  const tail = next ? " · next: " + next.title : "";
+  if (!s.required_done) {
+    const req = status.steps.filter((x) => x.required);
+    return req.filter((x) => x.done).length + " of " + req.length + " done" + tail;
+  }
+  return s.done + " of " + s.total + " done" + tail;
 }
 
 function StepHead({ step }: { step: SetupStep }) {
-  const note =
-    step.status === "done"
-      ? "done"
-      : step.status === "skipped"
-        ? "skipped"
-        : step.required
-          ? ""
-          : "optional";
+  const note = step.status === "done" ? "done" : step.status === "skipped" ? "skipped" : "";
+  const num = stepNumber(step.id);
   return (
     <h3>
-      <span className="setup-num">{stepNumber(step.id)}</span> {step.title}
+      {num && <span className="setup-num">{num}</span>} {step.title}
       {note && (
         <span className={"setup-state st-" + step.status} data-step-status={step.status}>
           {STATUS_GLYPH[step.status] + " " + note}
@@ -96,12 +106,84 @@ function SkipRow({ step }: { step: SetupStep }) {
   );
 }
 
+/** One step: its head always; its body only while it is to do (a done step
+ * is one line; a skipped one keeps its "Show again"). `fold` is what a DONE
+ * step may still show, folded. */
+function Step({
+  step,
+  next,
+  children,
+  fold,
+}: {
+  step: SetupStep;
+  next: string;
+  children: ReactNode;
+  fold?: ReactNode;
+}) {
+  const isNext = step.id === next;
+  return (
+    <section
+      className={"setup-step st-" + step.status + (isNext ? " is-next" : "")}
+      data-step={step.id}
+      data-status={step.status}
+    >
+      <StepHead step={step} />
+      {step.status === "todo" && <div className="setup-step-body">{children}</div>}
+      {step.status === "skipped" && (
+        <div className="setup-actions">
+          <SkipRow step={step} />
+        </div>
+      )}
+      {step.status === "done" && fold}
+    </section>
+  );
+}
+
+/** A primary button: accent-coloured only on the step to do next, so there is
+ * one obvious thing to press. */
+function Action({
+  next,
+  className,
+  onClick,
+  children,
+  title,
+}: {
+  next: boolean;
+  className: string;
+  onClick(): void;
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={className + (next ? " setup-primary" : "")}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function SetupChecklist() {
   const { data: status, error } = useSetup();
   const [reprobeKey, setReprobeKey] = useState(0);
   const steps = orderedSteps(status);
   const by = new Map(steps.map((s) => [s.id, s]));
   const step = (id: string) => by.get(id) as SetupStep;
+  const next = nextStepId(status);
+
+  // Connecting GitHub (its own dialog) or signing an agent in announces
+  // itself; re-read the checklist so the step ticks without a reload.
+  useEffect(() => {
+    const on = () => void refreshSetup();
+    window.addEventListener(CONNECTIONS_CHANGED_EVENT, on);
+    return () => window.removeEventListener(CONNECTIONS_CHANGED_EVENT, on);
+  }, []);
 
   // Close the modal before jumping to another surface — the checklist itself
   // is the same component inside the modal and on the grid, and a dialog
@@ -109,7 +191,7 @@ export function SetupChecklist() {
   const closeSetup = () => {
     if (useUi.getState().openDialog === "setup") useUi.getState().closeDialog();
   };
-  const go = (name: "new-session" | "settings", target?: string) => {
+  const go = (name: "new-session" | "settings" | "intake", target?: string) => {
     closeSetup();
     useUi.getState().openDialogFor(name, target);
   };
@@ -117,9 +199,11 @@ export function SetupChecklist() {
   const tools = step("tools");
   const agent = step("agent_login");
   const repo = step("repo");
+  const github = step("github");
   const tracker = step("tracker");
   const phone = step("phone");
   const logins = installedLogins(status?.logins);
+  const startDone = [tools, agent, repo].every((s) => s.done);
 
   return (
     <div className="setup-checklist" data-setup-next={status?.summary.next || ""}>
@@ -129,20 +213,32 @@ export function SetupChecklist() {
         <p className="muted setup-progress">{progressLine(status)}</p>
       )}
 
-      {/* ① Engine and tools */}
-      <section className={"setup-step st-" + tools.status} data-step="tools" data-status={tools.status}>
-        <StepHead step={tools} />
-        <details className="setup-fold" open={!tools.done}>
-          <summary onClick={(e) => e.stopPropagation()}>
-            {tools.done ? "Everything required is installed — show the list" : "What this computer has"}
-          </summary>
+      <div className="setup-group" data-group="start">
+        <h4 className="setup-group-title">
+          Get started
+          {startDone && <span className="setup-group-note st-done"> ✓ done</span>}
+        </h4>
+
+        {/* ① Install the tools */}
+        <Step
+          step={tools}
+          next={next}
+          fold={
+            <details className="setup-fold" onClick={(e) => e.stopPropagation()}>
+              <summary>Show checks</summary>
+              <div className="setup-doctor">
+                <DoctorList essential reprobeKey={reprobeKey} onChange={() => void refreshSetup()} />
+              </div>
+            </details>
+          }
+        >
           <div className="setup-doctor">
-            <DoctorList reprobeKey={reprobeKey} onChange={() => void refreshSetup()} />
+            <DoctorList essential reprobeKey={reprobeKey} onChange={() => void refreshSetup()} />
           </div>
           <div className="setup-actions">
             <button
               type="button"
-              className="setup-recheck"
+              className="linklike setup-recheck"
               onClick={(e) => {
                 e.stopPropagation();
                 setReprobeKey((k) => k + 1);
@@ -151,144 +247,144 @@ export function SetupChecklist() {
               Re-check
             </button>
           </div>
-        </details>
-      </section>
+        </Step>
 
-      {/* ② Sign in to your agent */}
-      <section className={"setup-step st-" + agent.status} data-step="agent_login" data-status={agent.status}>
-        <StepHead step={agent} />
-        {!status ? (
-          <p className="muted setup-hint">Checking…</p>
-        ) : logins.length === 0 ? (
+        {/* ② Sign in to your agent */}
+        <Step step={agent} next={next}>
+          {!status ? (
+            <p className="muted setup-hint">Checking…</p>
+          ) : logins.length === 0 ? (
+            <p className="muted setup-hint">
+              Install the tools first — that installs {status.default_provider || "your agent"}.
+            </p>
+          ) : (
+            <ul className="setup-logins">
+              {logins.map((l) => {
+                const line = loginLine(l);
+                return (
+                  <li
+                    key={l.name}
+                    className={"setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown")}
+                    data-provider={l.name}
+                    data-logged-in={String(l.logged_in)}
+                  >
+                    <span className="setup-login-name">
+                      {agentDisplayName(l.name)}
+                      {l.default && <span className="muted"> (default)</span>}
+                    </span>
+                    <span className="setup-login-state">
+                      {(line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text}
+                    </span>
+                    {l.login_cmd && line.ok !== true && (
+                      <AgentSignIn provider={l.name} onDone={() => void refreshSetup(true)} />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <p className="muted setup-hint">
-            No agent CLI is installed yet — step ① installs {status.default_provider || "one"}.
+            Using an API key?{" "}
+            <button
+              type="button"
+              className="linklike setup-open-accounts"
+              onClick={(e) => {
+                e.stopPropagation();
+                go("settings", "accounts");
+              }}
+            >
+              Settings → Accounts
+            </button>
           </p>
-        ) : (
-          <ul className="setup-logins">
-            {logins.map((l) => {
-              const line = loginLine(l);
-              return (
-                <li
-                  key={l.name}
-                  className={"setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown")}
-                  data-provider={l.name}
-                  data-logged-in={String(l.logged_in)}
-                >
-                  <span className="setup-login-name">
-                    {agentDisplayName(l.name)}
-                    {l.default && <span className="muted"> (default)</span>}
-                  </span>
-                  <span className="setup-login-state">
-                    {(line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text}
-                  </span>
-                  {l.login_cmd && line.ok !== true && (
-                    <AgentSignIn provider={l.name} onDone={() => void refreshSetup(true)} />
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <p className="muted setup-hint">
-          API keys and extra accounts live in{" "}
+        </Step>
+
+        {/* ③ Start your first agent */}
+        <Step step={repo} next={next}>
+          <p className="muted setup-hint">Pick a repo folder and say what to do.</p>
+          <div className="setup-actions">
+            <Action next={repo.id === next} className="setup-new" onClick={() => go("new-session")}>
+              + New session
+            </Action>
+          </div>
+        </Step>
+      </div>
+
+      <div className="setup-group" data-group="connect">
+        <h4 className="setup-group-title">
+          Connect your work <span className="setup-group-note">optional</span>
+        </h4>
+
+        {/* ④ Connect GitHub */}
+        <Step step={github} next={next}>
+          <p className="muted setup-hint">Lets agents open and merge pull requests.</p>
+          <div className="setup-actions">
+            <Action
+              next={github.id === next}
+              className="setup-connect-github"
+              title={
+                "Sign in with GitHub, use gh, or paste a token. That token is the whole setup for " +
+                "opening and merging PRs — pushing is plain git push over your own remote."
+              }
+              onClick={() => openConnectGitHub()}
+            >
+              Connect GitHub
+            </Action>
+            <SkipRow step={github} />
+          </div>
+        </Step>
+
+        {/* ⑤ Connect your tracker */}
+        <Step step={tracker} next={next}>
+          <p className="muted setup-hint">
+            Turn tickets from Jira, Linear, Shortcut, Asana or GitHub Issues into sessions.
+          </p>
+          <div className="setup-actions">
+            <Action
+              next={tracker.id === next}
+              className="setup-open-intake"
+              onClick={() => go("intake", "tickets")}
+            >
+              Add a ticket source
+            </Action>
+            <SkipRow step={tracker} />
+          </div>
+        </Step>
+      </div>
+
+      {/* Optional, later — never part of getting started, so folded. */}
+      <details className="setup-later" data-group="later" onClick={(e) => e.stopPropagation()}>
+        <summary>Optional, later</summary>
+        <section className={"setup-step st-" + phone.status} data-step="phone" data-status={phone.status}>
+          <StepHead step={phone} />
+          <PhoneStep status={status} done={phone.done} />
+          <div className="setup-actions">
+            <button
+              type="button"
+              className="linklike setup-open-mobile"
+              onClick={(e) => {
+                e.stopPropagation();
+                go("settings", "mobile");
+              }}
+            >
+              Settings → Your phone
+            </button>
+          </div>
+        </section>
+        <p className="muted setup-hint setup-later-more">
+          Other computers, sharing with people, extensions and IDEs are all in{" "}
           <button
             type="button"
-            className="linklike setup-open-accounts"
+            className="linklike setup-open-settings"
             onClick={(e) => {
               e.stopPropagation();
-              go("settings", "accounts");
+              go("settings");
             }}
           >
-            Settings → Accounts
+            Settings
           </button>
           .
         </p>
-      </section>
-
-      {/* ③ Pick a repo */}
-      <section className={"setup-step st-" + repo.status} data-step="repo" data-status={repo.status}>
-        <StepHead step={repo} />
-        {repo.done ? (
-          <p className="muted setup-hint">Your first session was created. New (Ctrl+N) starts another.</p>
-        ) : (
-          <>
-            <p className="muted setup-hint">
-              A session is an isolated git worktree plus a terminal running your agent. Pick the
-              folder to work in — the folder browser is in the dialog — and say what to do.
-            </p>
-            <div className="setup-actions">
-              <button
-                type="button"
-                className="setup-new"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  go("new-session");
-                }}
-              >
-                + New session
-              </button>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ④ Connect a tracker and GitHub */}
-      <section className={"setup-step st-" + tracker.status} data-step="tracker" data-status={tracker.status}>
-        <StepHead step={tracker} />
-        <p className="muted setup-hint">
-          {tracker.done
-            ? "A tracker is connected — Intake turns its tickets into sessions."
-            : "Connect GitHub for PRs and issues; your tracker (Jira, Linear, Shortcut, Asana, GitHub Issues) is a ticket source in Settings → Connections. Done once the first ticket source is saved."}
-        </p>
-        <div className="setup-actions">
-          <button
-            type="button"
-            className="setup-open-connections"
-            onClick={(e) => {
-              e.stopPropagation();
-              go("settings", "connections");
-            }}
-          >
-            Open Settings → Connections
-          </button>
-          <button
-            type="button"
-            className="setup-connect-github"
-            title={
-              "Sign in with GitHub, use gh, or paste a token, then Test it against your first repository. " +
-              "That token is the whole setup for opening and merging PRs — the gh CLI is optional, and " +
-              "pushing is plain git push over your own remote."
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              openConnectGitHub();
-            }}
-          >
-            Connect GitHub
-          </button>
-          <SkipRow step={tracker} />
-        </div>
-        <ShortcutTest />
-      </section>
-
-      {/* ⑤ Your phone */}
-      <section className={"setup-step st-" + phone.status} data-step="phone" data-status={phone.status}>
-        <StepHead step={phone} />
-        <PhoneStep status={status} done={phone.done} />
-        <div className="setup-actions">
-          <button
-            type="button"
-            className="setup-open-mobile"
-            onClick={(e) => {
-              e.stopPropagation();
-              go("settings", "mobile");
-            }}
-          >
-            Settings → Your phone
-          </button>
-          <SkipRow step={phone} />
-        </div>
-      </section>
+      </details>
 
       {status?.report && (
         <details className="setup-report" onClick={(e) => e.stopPropagation()}>
@@ -300,9 +396,9 @@ export function SetupChecklist() {
   );
 }
 
-/** Step ⑤'s body: "Install Tailscale" with the doctor's hint when it is
- * missing, else a Show QR button (the fetch is deliberate — the server marks
- * the step done when the owner fetches the QR). */
+/** The phone extra's body: "Install Tailscale" with the doctor's hint when it
+ * is missing, else a Show QR button (the fetch is deliberate — the server
+ * marks the step done when the owner fetches the QR). */
 function PhoneStep({ status, done }: { status: SetupStatus | null | undefined; done: boolean }) {
   const [qr, setQr] = useState<{ svg?: string; urls?: Array<{ label?: string; url?: string }> } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -323,10 +419,7 @@ function PhoneStep({ status, done }: { status: SetupStatus | null | undefined; d
     const ts = status.tailscale!;
     return (
       <div className="setup-phone setup-phone-tailscale" data-phone="install-tailscale">
-        <p className="muted setup-hint">
-          Your phone reaches MindFlock over Tailscale, which isn't ready on this computer
-          {ts.detail ? " — " + ts.detail : ""}.
-        </p>
+        <p className="muted setup-hint">Your phone reaches MindFlock over Tailscale, which isn't on this computer yet.</p>
         {ts.fix && (
           <p className="setup-hint">
             Install Tailscale: <code>{ts.fix}</code>
@@ -367,77 +460,8 @@ function PhoneStep({ status, done }: { status: SetupStatus | null | undefined; d
         </div>
       )}
       {qr && !qr.svg && (
-        <p className="muted setup-hint">
-          No QR yet — turn on Make reachable in Settings → Your devices first.
-        </p>
+        <p className="muted setup-hint">No QR yet — turn on Make reachable in Settings → Your devices first.</p>
       )}
     </div>
-  );
-}
-
-/** Step ④'s fold: the Shortcut token test. Handy, never a step. GitHub's
- * test is the Connect GitHub dialog's own Test (the button above). */
-function ShortcutTest() {
-  const [sc, setSc] = useState<TestState>(idleTest);
-  const [scToken, setScToken] = useState("");
-
-  const testShortcut = useCallback(async () => {
-    setSc({ testing: true });
-    const tok = scToken.trim();
-    try {
-      const r = await api<Record<string, unknown>>("/api/settings/test/shortcut", {
-        json: { api_token: tok || "" },
-      });
-      if (r?.ok) {
-        setSc({
-          testing: false,
-          ok: true,
-          msg: "Shortcut OK — " + (r.name || r.mention_name || r.member_id),
-        });
-        toast("Shortcut token OK" + (r.name ? " — " + r.name : ""));
-        if (tok) {
-          // Persist through the normal settings path (never echoed back).
-          try {
-            await api("/api/settings", { json: { shortcut: { api_token: tok } } });
-          } catch {
-            /* the Settings screen remains the fallback */
-          }
-          setScToken("");
-        }
-        return;
-      }
-      setSc({ testing: false, ok: false, msg: String(r?.error || "test failed") });
-    } catch (e) {
-      setSc({ testing: false, ok: false, msg: (e as Error).message });
-    }
-  }, [scToken]);
-
-  return (
-    <details className="setup-optional" onClick={(e) => e.stopPropagation()}>
-      <summary>Optional: test a Shortcut token</summary>
-      <div className="setup-acct-row setup-shortcut-row">
-        <button
-          type="button"
-          className="setup-test-shortcut"
-          onClick={(e) => {
-            e.stopPropagation();
-            void testShortcut();
-          }}
-        >
-          Test Shortcut
-        </button>
-        <input
-          type="password"
-          className="setup-shortcut-token"
-          placeholder="Shortcut API token (optional)"
-          autoComplete="off"
-          title="Paste a Shortcut API token to test it — saved on success, never displayed. Leave empty to test the stored token."
-          value={scToken}
-          onChange={(e) => setScToken(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-        />
-        <TestResult state={sc} />
-      </div>
-    </details>
   );
 }

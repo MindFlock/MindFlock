@@ -888,7 +888,7 @@ class TestFirstRunPlan:
         out = capsys.readouterr().out
         assert "mindflock devices join DEVICE CODE" in out
         assert "Your setup, in order:" in out
-        # The five steps, by the names the web UI uses, in the shared order
+        # The steps, by the names the web UI uses, in the shared order
         # (backend.web.core.setup_steps is the one definition).
         from backend.web.core import setup_steps
 
@@ -911,9 +911,10 @@ class TestFirstRunPlan:
         setup_steps.skip("phone")
         assert init_wizard.run(assume_yes=True) == 0
         out = capsys.readouterr().out
-        assert "✓ 3. Pick a repo" in out
-        assert "– 5. Your phone" in out and "skipped" in out
-        assert "• 4. Connect a tracker and GitHub" in out
+        assert "✓ 3. Start your first agent" in out
+        assert "– 6. Use it from your phone" in out and "skipped" in out
+        assert "• 4. Connect GitHub" in out
+        assert "• 5. Connect your tracker" in out
 
     def test_joining_holds_the_agent_sign_in_back(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)

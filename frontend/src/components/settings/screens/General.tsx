@@ -16,6 +16,7 @@ import { toast } from "../../../lib/toast";
 import { useUi } from "../../../state/store";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { AdvancedFold } from "../settingsMode";
 
 export function General(_: ScreenProps) {
   return (
@@ -34,23 +35,26 @@ export function General(_: ScreenProps) {
           Runaway-agent insurance — emits session.budget_exceeded once per session.
         </span>
       </label>
-      <label
-        className="set-row"
-        title="Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown."
-      >
-        <span className="set-label">Plan window budget (≈USD per window, 0 = off)</span>
-        <SettingField group="general" field="window_budget_usd" type="number" placeholder="0" />
-        <span className="set-hint">
-          Subscription plans only — the '% left' estimate in the sidebar's Usage bar is
-          measured against this. Not billed dollars.
-        </span>
-      </label>
       <ResumeOnUsageResetRow />
       <ReviveOnStartRow />
-      <ScrollSpeedRow />
       <ReduceMotionRow />
       <TakeABreakRow />
       <IdleFlockRow />
+      {/* An estimate to calibrate and a wheel to fine-tune: folded. */}
+      <AdvancedFold id="general-advanced">
+        <label
+          className="set-row"
+          title="Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown."
+        >
+          <span className="set-label">Plan window budget (≈USD per window, 0 = off)</span>
+          <SettingField group="general" field="window_budget_usd" type="number" placeholder="0" />
+          <span className="set-hint">
+            Subscription plans only — the '% left' estimate in the sidebar's Usage bar is
+            measured against this. Not billed dollars.
+          </span>
+        </label>
+        <ScrollSpeedRow />
+      </AdvancedFold>
     </>
   );
 }

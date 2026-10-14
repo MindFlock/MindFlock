@@ -24,6 +24,7 @@ import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { runCommand } from "../../../extensions/host";
 import { AgentSignIn } from "../../dialogs/AgentSignIn";
+import { AdvancedFold, useAdvancedSettings } from "../settingsMode";
 import "./connections.css";
 
 /** Dispatch after anything that changes a connection (a sign-in, a saved
@@ -69,6 +70,15 @@ export const KIND_LABELS: Record<string, string> = {
   extension: "Extensions",
   system: "System",
 };
+
+/** The kinds a new user sets up: the agents, GitHub and the tracker. The
+ * rest (devices and people, orchestration, databases, phone push,
+ * extensions, system) sit in the screen's Advanced fold. */
+export const BASIC_KINDS: ReadonlySet<string> = new Set(["agent", "github", "tracker"]);
+
+export function isBasicKind(kind: string | undefined): boolean {
+  return BASIC_KINDS.has(kind || "other");
+}
 
 /** Rows grouped by kind, groups in first-seen order (the server's order). */
 export function groupRows(rows: ConnectionRow[]): Array<{ kind: string; label: string; rows: ConnectionRow[] }> {
@@ -301,13 +311,36 @@ export function Connections({ gotoScreen }: ScreenProps) {
 
   const deps: ActionDeps = { gotoScreen, openDialogFor, closeDialog };
   const groups = conns ? groupRows(conns) : [];
+  const basic = groups.filter((g) => isBasicKind(g.kind));
+  const more = groups.filter((g) => !isBasicKind(g.kind));
+  // The count covers what the screen shows unfolded: in basic mode that is
+  // the basic rows, so a device row nobody asked about never reads as
+  // "needs attention" up here.
+  const advanced = useAdvancedSettings();
+  const counted = conns ? (advanced ? conns : conns.filter((c) => isBasicKind(c.kind))) : null;
+  const renderGroup = (g: (typeof groups)[number]) => (
+    <section className="conn-group" key={g.kind} data-kind={g.kind}>
+      <h4 className="conn-group-title">{g.label}</h4>
+      {g.rows.map((c) => (
+        <ConnectionRowView
+          key={c.id || c.name}
+          c={c}
+          deps={deps}
+          result={results[c.id]}
+          testing={testing[c.id]}
+          onTest={() => void test(c)}
+          onChanged={() => void load(true)}
+        />
+      ))}
+    </section>
+  );
 
   return (
     <>
       <h3 className="set-section-title">
         Connections{" "}
         <span id="settings-connections-summary" className="muted">
-          {conns ? summaryLine(conns) : ""}
+          {counted ? summaryLine(counted) : ""}
         </span>
       </h3>
       <p className="set-hint">
@@ -319,22 +352,12 @@ export function Connections({ gotoScreen }: ScreenProps) {
         ) : conns === null ? (
           <p className="set-hint">Checking…</p>
         ) : (
-          groups.map((g) => (
-            <section className="conn-group" key={g.kind} data-kind={g.kind}>
-              <h4 className="conn-group-title">{g.label}</h4>
-              {g.rows.map((c) => (
-                <ConnectionRowView
-                  key={c.id || c.name}
-                  c={c}
-                  deps={deps}
-                  result={results[c.id]}
-                  testing={testing[c.id]}
-                  onTest={() => void test(c)}
-                  onChanged={() => void load(true)}
-                />
-              ))}
-            </section>
-          ))
+          <>
+            {basic.map(renderGroup)}
+            {more.length ? (
+              <AdvancedFold id="connections-advanced">{more.map(renderGroup)}</AdvancedFold>
+            ) : null}
+          </>
         )}
       </div>
     </>

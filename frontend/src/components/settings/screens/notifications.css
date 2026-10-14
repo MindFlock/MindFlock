@@ -5,10 +5,10 @@
    generate/test affordance sits with the field it acts on instead of below it. */
 .ntfy-field-row {
   display: grid;
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: 140px 1fr auto;
   align-items: center;
-  gap: 6px 12px;
-  margin: 8px 0;
+  gap: 6px 16px;
+  margin: 0;
 }
 
 .ntfy-field-row .set-label {
@@ -32,8 +32,8 @@
   border: 1px solid var(--gold);
   border-radius: 10px;
   background: var(--panel-2);
-  padding: 10px 14px;
-  margin: 10px 0;
+  padding: 12px 16px;
+  margin: 0;
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -42,9 +42,9 @@
 .ntfy-test-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin: 12px 0 4px;
+  margin: 0;
 }
 
 .ntfy-verdict-ok {
@@ -53,4 +53,18 @@
 
 .ntfy-verdict-bad {
   color: var(--red);
+}
+
+/* Phone width: the label goes above its field instead of eating a 140px
+   column, and a field with no trailing button takes the whole row. */
+@media (max-width: 600px) {
+  .ntfy-field-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ntfy-field-row .set-label,
+  .ntfy-field-row .set-hint,
+  .ntfy-field-row > input:not(:has(+ button)) {
+    grid-column: 1 / -1;
+  }
 }

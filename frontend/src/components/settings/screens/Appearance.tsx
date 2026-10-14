@@ -174,7 +174,7 @@ export function Appearance(_: ScreenProps) {
         sidebar and the window a hue each — Scarlet Macaw is a cobalt bar over an emerald
         sidebar over a scarlet window. Swallow, Raven and Heron are the quiet ones. Every set
         has its own light-mode palette, so the moon toggle in the top bar keeps working inside
-        all of them. Synced to all your devices.
+        all of them.
       </p>
       <div id="surface-swatches" className="accent-swatches">
         {SURFACES.map(surfaceSwatch)}

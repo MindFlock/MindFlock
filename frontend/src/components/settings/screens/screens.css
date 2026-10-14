@@ -2,7 +2,7 @@
    including its fixed size — lives in SettingsDialog.css. */
 #settings-body {
   display: flex;
-  gap: 16px;
+  gap: 24px;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -13,7 +13,9 @@
   flex-direction: column;
   gap: 2px;
   flex: none;
-  width: 132px;
+  /* Wide enough that "Agent orchestration" stays one line. */
+  width: 172px;
+  box-sizing: border-box;
   border-right: 1px solid var(--border);
   padding-right: 12px;
   /* Scroll the nav independently so the bottom items (System logs, Advanced)
@@ -28,8 +30,9 @@
   border: none;
   color: var(--muted);
   border-radius: 7px;
-  padding: 8px 10px;
+  padding: 7px 12px;
   font-size: 13px;
+  line-height: 1.35;
   font-family: inherit;
   cursor: pointer;
 }
@@ -45,17 +48,70 @@
   font-weight: 600;
 }
 
+/* A phone-width window: the 172px nav column would leave the fields a sliver,
+   so the nav becomes one scrolling row of tabs above the screen. Group
+   headings drop out (the row is read left to right, not scanned by group). */
+@media (max-width: 600px) {
+  #settings-panel {
+    padding: 16px;
+    height: 92vh;
+  }
+
+  #settings-body {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #settings-nav {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 8px;
+  }
+
+  .set-nav-item {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .set-nav-group {
+    display: none;
+  }
+
+  #settings-screens {
+    flex: 1;
+    min-height: 0;
+    padding-right: 4px;
+  }
+}
+
 #settings-screens {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  /* Room for the scrollbar beside the fields, and a little air under the
+     last one so the screen doesn't end flush against the panel edge. */
+  padding: 0 8px 16px 0;
 }
 
+/* The rhythm between fields: --set-rhythm (24px, SettingsDialog.css) — four
+   times the 6px inside a field, so each label / control / hint stack reads
+   as one unit. A section wrapper directly in the screen (Your devices' "You"
+   card) keeps the same rhythm inside it. */
 .set-screen {
   display: none;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--set-rhythm, 24px);
+}
+
+.set-screen > section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--set-rhythm, 24px);
+  min-width: 0;
 }
 
 .set-screen.active {
@@ -65,7 +121,7 @@
 .set-section {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--set-rhythm, 24px);
 }
 
 .set-section-title {
@@ -75,16 +131,50 @@
   letter-spacing: 0.06em;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
+  padding-bottom: 6px;
 }
 
 /* Consistent vertical rhythm: every screen leads flush with its title; later
-   section titles within a screen get breathing room to read as a new group. */
-.set-screen>.set-section-title {
+   section titles get 16px more than the rhythm above them (40px) so they read
+   as a new group, and pull the first field up to 16px below so the title
+   belongs to what it heads, not to what came before. */
+.set-screen>.set-section-title,
+.set-screen>section>.set-section-title,
+.set-section>.set-section-title {
   margin-top: 16px;
+  margin-bottom: -8px;
 }
 
-.set-screen>.set-section-title:first-child {
+/* A sub-heading inside a section ("Invite someone", "People you work
+   with"): text-coloured and a step up from a field label, 12px over what it
+   heads. */
+:where(#settings-panel) .set-subtitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.set-screen > .set-subtitle {
+  margin: 8px 0 -12px;
+}
+
+/* A switch row's description drawn as the NEXT sibling rather than inside the
+   row ("Scheduled refresh", "Ticket sessions in MindFlock"): it belongs to the
+   switch, so it sits at the in-field gap, not a whole rhythm away where it
+   would read as a separate item. */
+:is(.set-screen, .set-screen > section, .mobile-body) > .set-switch-row + .set-hint {
+  margin-top: calc(var(--set-tight, 6px) - var(--set-rhythm, 24px));
+}
+
+/* An empty launch-flag chip row still added its top margin under the field. */
+#settings-panel .flag-chips:empty {
+  display: none;
+}
+
+.set-screen>.set-section-title:first-child,
+.set-screen>section:first-child>.set-section-title:first-child,
+.set-section:first-child>.set-section-title:first-child {
   margin-top: 0;
 }
 
@@ -133,12 +223,41 @@
   border-color: var(--accent);
 }
 
+/* A text field in a Settings screen that no rule above dresses (the ntfy
+   field grid, People's invite and share boxes) got the browser's thin grey
+   box. Zero specificity: any component rule still wins. */
+:where(#settings-panel) :where(input:not([type]), input[type="text"], input[type="password"], input[type="url"], input[type="email"], input[type="search"], textarea) {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+:where(#settings-panel) :where(input:not([type]), input[type="text"], input[type="password"], input[type="url"], input[type="email"], input[type="search"], textarea):focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Fold headings ("Advanced") at label size, not the body's 16px. */
+:where(#settings-panel) details > summary {
+  font-size: 13px;
+}
+
 /* A short paragraph of guidance that sits above a block of fields. */
 .set-block-hint {
   font-size: 12px;
   color: var(--muted);
   margin: 4px 0 2px;
   line-height: 1.5;
+}
+
+/* In a Settings screen the flex gap is the spacing; the paragraph's own
+   margins would only make it uneven. */
+:where(#settings-panel) .set-block-hint {
+  margin: 0;
 }
 
 /* Advanced options fold (tuning fields hidden by default so "add a repo" is
@@ -525,15 +644,15 @@
 .prov-conn-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   margin-bottom: 14px;
 }
 
 .prov-conn {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px 11px;
+  gap: 8px;
+  padding: 12px 14px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -618,6 +737,7 @@
 
 .prov-conn-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -767,7 +887,7 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin: 4px 0 0;
+  margin: 0;
 }
 
 .upd-fold {
@@ -837,14 +957,14 @@
 .peer-actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 4px 0 12px;
+  gap: 16px;
+  margin: 0;
 }
 .peer-action {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -872,13 +992,13 @@
   align-self: flex-start;
 }
 .peer-needs {
-  margin: 0 0 12px;
+  margin: 0;
   padding: 8px 12px;
   border-left: 3px solid var(--warn, #d9a441);
 }
 .peer-link-card {
-  padding: 8px 12px;
-  margin: 0 0 8px;
+  padding: 12px 16px;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -948,10 +1068,10 @@
   font-size: 11px;
 }
 .peer-advanced {
-  margin-top: 16px;
+  margin-top: 0;
 }
 .peer-advanced > summary {
   cursor: pointer;
   color: var(--muted, inherit);
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }

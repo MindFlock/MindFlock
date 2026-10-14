@@ -14,7 +14,13 @@
  * an Advanced fold with the older routes; Your phone ("mobile") is the QR
  * and /m link; People ("peer") is peer links; Security keeps the access
  * token and the gate. Keys never changed — screenKeys.ts maps the new
- * names and the moved controls' names onto them. */
+ * names and the moved controls' names onto them.
+ *
+ * Basic vs advanced (settingsMode.tsx): the nav lists the six screens a new
+ * user needs — General, Connections, Notifications, Agent CLI, Workspace,
+ * Appearance — until "Show advanced settings" at its foot reveals the rest
+ * (a synced pref). Screens marked `advanced` below are the rest; a deep link
+ * to one still opens it, listed under an "Advanced" heading. */
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
@@ -22,6 +28,14 @@ import { Modal } from "../Modal";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { resolveScreenKey } from "./screenKeys";
+import {
+  AdvancedToggle,
+  navHeading,
+  navScreens,
+  readAdvancedMode,
+  SettingsModeCtx,
+  writeAdvancedMode,
+} from "./settingsMode";
 import { isDevShell } from "../../lib/shell";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
@@ -57,11 +71,16 @@ export interface ScreenProps {
  * the code they work on, this machine, and the troubleshooting tail. Purely a
  * heading — keys and labels are what deep links and the palette resolve, so
  * they never move with it. (Kept AFTER `label` so `{ key, label` stays one
- * contiguous phrase for whoever greps for a screen.) */
+ * contiguous phrase for whoever greps for a screen.)
+ *
+ * `advanced` hides the screen from the basic nav (settingsMode.tsx): the
+ * basic set is what "point MindFlock at my repo and tracker and run agents"
+ * needs, everything else waits behind "Show advanced settings". */
 interface ScreenDef {
   key: string;
   label: string;
   group?: string;
+  advanced?: boolean;
   el: (p: ScreenProps) => React.ReactNode;
 }
 
@@ -70,28 +89,28 @@ const SCREENS = [
   { key: "connections", label: "Connections", el: (p) => <Connections {...p} /> },
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
   { key: "coding", label: "Agent CLI", group: "Agents", el: (p) => <CodingCli {...p} /> },
-  { key: "providers", label: "Agent providers", group: "Agents", el: (p) => <Providers {...p} /> },
-  { key: "accounts", label: "Accounts", group: "Agents", el: (p) => <Accounts {...p} /> },
-  { key: "localmodel", label: "Local model", group: "Agents", el: (p) => <LocalModel {...p} /> },
-  { key: "orchestration", label: "Agent orchestration", group: "Agents", el: (p) => <AgentOrchestration {...p} /> },
+  { key: "providers", label: "Agent providers", group: "Agents", advanced: true, el: (p) => <Providers {...p} /> },
+  { key: "accounts", label: "Accounts", group: "Agents", advanced: true, el: (p) => <Accounts {...p} /> },
+  { key: "localmodel", label: "Local model", group: "Agents", advanced: true, el: (p) => <LocalModel {...p} /> },
+  { key: "orchestration", label: "Agent orchestration", group: "Agents", advanced: true, el: (p) => <AgentOrchestration {...p} /> },
   { key: "workspace", label: "Workspace", group: "Code", el: (p) => <Workspace {...p} /> },
-  { key: "ide", label: "IDE", group: "Code", el: (p) => <Ide {...p} /> },
-  { key: "security", label: "Security", group: "This device", el: (p) => <Security {...p} /> },
+  { key: "ide", label: "IDE", group: "Code", advanced: true, el: (p) => <Ide {...p} /> },
+  { key: "security", label: "Security", group: "This device", advanced: true, el: (p) => <Security {...p} /> },
   { key: "appearance", label: "Appearance", group: "This device", el: (p) => <Appearance {...p} /> },
   // Other machines and other people. Keys stay "devices" / "mobile" / "peer"
   // (old deep links, the palette, docs) — screenKeys.ts maps the new names.
-  { key: "devices", label: "Your devices", group: "Devices and people", el: (p) => <Devices {...p} /> },
-  { key: "mobile", label: "Your phone", group: "Devices and people", el: (p) => <Mobile {...p} /> },
-  { key: "peer", label: "People", group: "Devices and people", el: (p) => <PeerLinks {...p} /> },
+  { key: "devices", label: "Your devices", group: "Devices and people", advanced: true, el: (p) => <Devices {...p} /> },
+  { key: "mobile", label: "Your phone", group: "Devices and people", advanced: true, el: (p) => <Mobile {...p} /> },
+  { key: "peer", label: "People", group: "Devices and people", advanced: true, el: (p) => <PeerLinks {...p} /> },
   // Extensions are a thing you add, not a fault to chase: their own group.
-  { key: "extensions", label: "Extensions", group: "Extensions", el: (p) => <Extensions {...p} /> },
-  { key: "doctor", label: "Doctor", group: "Troubleshooting", el: (p) => <Doctor {...p} /> },
-  { key: "logs", label: "System logs", group: "Troubleshooting", el: (p) => <SystemLogs {...p} /> },
-  { key: "advanced", label: "Advanced", group: "Troubleshooting", el: (p) => <Advanced {...p} /> },
+  { key: "extensions", label: "Extensions", group: "Extensions", advanced: true, el: (p) => <Extensions {...p} /> },
+  { key: "doctor", label: "Doctor", group: "Troubleshooting", advanced: true, el: (p) => <Doctor {...p} /> },
+  { key: "logs", label: "System logs", group: "Troubleshooting", advanced: true, el: (p) => <SystemLogs {...p} /> },
+  { key: "advanced", label: "Advanced", group: "Troubleshooting", advanced: true, el: (p) => <Advanced {...p} /> },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.
-  { key: "traffic", label: "Site traffic", group: "Troubleshooting", el: (p) => <Traffic {...p} /> },
+  { key: "traffic", label: "Site traffic", group: "Troubleshooting", advanced: true, el: (p) => <Traffic {...p} /> },
 ] as const satisfies readonly ScreenDef[];
 
 /** A Settings screen key, derived from SCREENS: open one with
@@ -102,7 +121,6 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const open = useUi((s) => s.openDialog === "settings");
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
-  const [screen, setScreen] = useState("general");
   const model = useSettingsModel(open);
   const openDialogFor = useUi((s) => s.openDialogFor);
   // Site traffic is MindFlock's own maintainer dashboard — hidden from nav,
@@ -116,6 +134,14 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   // rendered a blank right-hand pane, since .set-screen.active would match no
   // section). Unknown keys still fall back to General.
   const keys = useMemo(() => screens.map((s) => s.key), [screens]);
+  // Seeded from the deep link too (not only the effect below), so the first
+  // paint is already the linked screen rather than a flash of General.
+  const [screen, setScreen] = useState(() => resolveScreenKey(target, keys) || "general");
+  const [advanced, setAdvanced] = useState(readAdvancedMode);
+  const changeMode = (on: boolean) => {
+    setAdvanced(on);
+    writeAdvancedMode(on);
+  };
   const gotoScreen = (name: string) => {
     const tab = LEGACY_SCREEN_TABS[name];
     if (tab) openDialogFor("intake", tab);
@@ -131,9 +157,14 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
       return;
     }
     setScreen(resolveScreenKey(target, keys) || "general");
+    // Re-read on every open: a sync may have brought another device's choice.
+    setAdvanced(readAdvancedMode());
   }, [open, target, openDialogFor, keys]);
 
   if (!open) return null;
+
+  const shown = navScreens(screens, advanced, screen);
+  const hiddenCount = screens.length - navScreens(screens, false, "").length;
 
   const props: ScreenProps = {
     active: true,
@@ -146,6 +177,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
 
   return (
     <SettingsCtx.Provider value={model}>
+      <SettingsModeCtx.Provider value={advanced}>
       <Modal id="settings-dialog" onClose={closeDialog}>
         <div id="settings-panel">
           <div className="ws-head">
@@ -155,26 +187,36 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
             </button>
           </div>
           <div id="settings-body">
-            <nav id="settings-nav" aria-label="Settings sections">
-              {screens.map((s, i) => (
-                <Fragment key={s.key}>
-                  {/* A heading before each group's first screen — text, not a
-                      control, so it takes no Tab stop and no click. */}
-                  {s.group && s.group !== screens[i - 1]?.group ? (
-                    <div className="set-nav-group" role="presentation">
-                      {s.group}
-                    </div>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={"set-nav-item" + (screen === s.key ? " active" : "")}
-                    data-screen={s.key}
-                    onClick={() => setScreen(s.key)}
-                  >
-                    {s.label}
-                  </button>
-                </Fragment>
-              ))}
+            <nav
+              id="settings-nav"
+              aria-label="Settings sections"
+              data-mode={advanced ? "advanced" : "basic"}
+            >
+              {shown.map((s, i) => {
+                // A heading before each group's first screen (advanced mode),
+                // or "Advanced" over a deep-linked advanced screen (basic) —
+                // text, not a control, so it takes no Tab stop and no click.
+                const heading = navHeading(shown, i, advanced);
+                return (
+                  <Fragment key={s.key}>
+                    {heading ? (
+                      <div className="set-nav-group" role="presentation">
+                        {heading}
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={"set-nav-item" + (screen === s.key ? " active" : "")}
+                      data-screen={s.key}
+                      data-advanced={s.advanced ? "" : undefined}
+                      onClick={() => setScreen(s.key)}
+                    >
+                      {s.label}
+                    </button>
+                  </Fragment>
+                );
+              })}
+              <AdvancedToggle advanced={advanced} hidden={hiddenCount} onChange={changeMode} />
             </nav>
             <div id="settings-screens">
               {screens.map((s) => (
@@ -191,6 +233,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
           </div>
         </div>
       </Modal>
+      </SettingsModeCtx.Provider>
     </SettingsCtx.Provider>
   );
 }

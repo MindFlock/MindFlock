@@ -9,14 +9,14 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .devices-list > li {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -70,7 +70,7 @@
 .devices-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -100,7 +100,7 @@
 }
 
 .devices-request {
-  padding: 10px 12px;
+  padding: 12px 16px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -111,7 +111,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 16px;
   border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--red) 8%, transparent);
@@ -136,9 +136,19 @@
 }
 
 .set-screen[data-screen="devices"] h4.set-subtitle {
-  margin: 4px 0 0;
-  font-size: 13px;
+  margin: 8px 0 -12px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text);
+}
+
+/* In the subhead row the row itself sits in the screen's flow. */
+.set-screen[data-screen="devices"] .devices-subhead h4.set-subtitle {
+  margin: 0;
+}
+
+.set-screen[data-screen="devices"] > .devices-subhead {
+  margin: 8px 0 -12px;
 }
 
 .devices-add {
@@ -153,7 +163,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2, transparent);
@@ -376,8 +386,8 @@
 .devices-this {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 4px 0 8px;
+  gap: 8px;
+  margin: 0;
 }
 
 .devices-this p {
@@ -433,7 +443,7 @@
 /* Advanced — other ways to trust a machine: a fold, each row leading with
    the one line that says when you would still use it. */
 .devices-advanced {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .devices-advanced > summary {

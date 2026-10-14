@@ -512,6 +512,38 @@ def remove_pending_story(state_dir: Path | str, story_id: int | str) -> None:
     _write_state(state_dir, data)
 
 
+#: How many routing decisions ``ticket_routes`` keeps (oldest dropped first).
+#: A decision only matters while its ticket is queued or being worked, so this
+#: is generous for any real queue and keeps state.json from growing forever.
+_MAX_TICKET_ROUTES = 500
+
+
+def load_ticket_routes(state_dir: Path | str) -> dict:
+    """``{ticket slug: decision}`` — the repo(s) each multi-repo ticket was
+    routed to and why (see :mod:`backend.ticket_ingestion.repo_routing`)."""
+    routes = _read_state(state_dir).get("ticket_routes")
+    if not isinstance(routes, dict):
+        return {}
+    return {str(k): v for k, v in routes.items() if isinstance(v, dict)}
+
+
+def record_ticket_route(state_dir: Path | str, slug: str, decision: dict) -> None:
+    """Upsert ``slug``'s routing decision (``{repos, reason, method, at}``)."""
+    data = _read_state(state_dir)
+    routes = data.get("ticket_routes")
+    if not isinstance(routes, dict):
+        routes = {}
+    routes.pop(str(slug), None)
+    routes[str(slug)] = dict(decision)
+    if len(routes) > _MAX_TICKET_ROUTES:
+        ordered = sorted(
+            routes.items(), key=lambda kv: str((kv[1] or {}).get("at") or "")
+        )
+        routes = dict(ordered[-_MAX_TICKET_ROUTES:])
+    data["ticket_routes"] = routes
+    _write_state(state_dir, data)
+
+
 def load_processed_prs(state_dir: Path | str) -> set[tuple[str, int]]:
     """Return the set of ``(repo, number)`` pairs already provisioned.
 

@@ -34,13 +34,20 @@ export interface SetupSummary {
 
 // --- First-run checklist (GET /api/setup; backend/web/core/setup_steps.py) ----
 
-export type SetupStepId = "tools" | "agent_login" | "repo" | "tracker" | "phone";
+export type SetupStepId = "tools" | "agent_login" | "repo" | "github" | "tracker" | "phone";
 
-/** One of the five steps, as stored (`general.setup`) and as drawn. */
+/** Which group a step is drawn in: `start` = Get started (the required
+ * three), `connect` = Connect your work (optional, counted), `later` =
+ * Optional, later (folded, not counted in the summary). */
+export type SetupGroup = "start" | "connect" | "later";
+
+/** One checklist step, as stored (`general.setup`) and as drawn. */
 export interface SetupStep {
   id: SetupStepId | string;
   title: string;
   required: boolean;
+  /** Absent from an older server: the client's STEP_GROUP fills it in. */
+  group?: SetupGroup | string;
   done: boolean;
   at: string | null;
   skipped: boolean;
@@ -1204,6 +1211,10 @@ export interface TicketingCatalogField {
   /** The shape the server checks a non-blank value against ("url", "email",
    * "key", "gid"); the message comes back per field on a 400. */
   validate?: string;
+  /** An optional extra a first setup never needs (claim label, move on
+   * start, …): the source form folds it under "Advanced options". Never set
+   * on a required field. */
+  advanced?: boolean;
 }
 
 /** One workflow state (or Asana section) a source's Test listed. */

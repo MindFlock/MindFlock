@@ -83,9 +83,9 @@ const SLIDES: Slide[] = [
     title: "You're all set",
     body: (
       <>
-        Watch for <b>💡 hints</b> around the app as you go — replay this tour or
-        turn hints off under <b>Settings → General</b>. <b>Settings → Doctor</b>{" "}
-        flags anything that still needs attention.
+        <b>Setup</b> connects GitHub and your tracker whenever you're ready. Watch
+        for <b>💡 hints</b> as you go — replay this tour or turn hints off under{" "}
+        <b>Settings → General</b>.
       </>
     ),
   },
@@ -210,16 +210,11 @@ export function WelcomeTour() {
           </button>
           {last ? (
             <div className="wt-nav-end">
-              {failing ? (
-                // Opens over the paused tour, like "Set up now".
-                <button type="button" className="wt-btn ghost" onClick={() => openDialogFor("setup")}>
-                  Open Setup
-                </button>
-              ) : (
-                <button type="button" className="wt-btn ghost" onClick={() => jumpTo("connections")}>
-                  Open Settings
-                </button>
-              )}
+              {/* The Setup checklist (Get started · Connect your work), over the
+                  paused tour like "Set up now" — not the whole of Settings. */}
+              <button type="button" className="wt-btn ghost" onClick={() => openDialogFor("setup")}>
+                Open Setup
+              </button>
               <button type="button" className="wt-btn primary" onClick={finishTour}>
                 Get started
               </button>

@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   TEST_FRESH_MS,
   TEST_STATE_LABELS,
+  advancedFields,
+  advancedHasValues,
+  basicFields,
   clearSecretPatch,
   fieldErrorsFrom,
   hasSecret,
@@ -20,6 +23,7 @@ import {
 } from "../components/intake/sourceForm";
 import type { TicketingCatalogEntry, TicketingSource } from "../api/types";
 import TICKETS_TAB from "../components/intake/TicketsTab.tsx?raw";
+import INTAKE_CSS from "../components/intake/IntakeDialog.css?raw";
 
 /** A Shortcut catalog entry as /api/settings/providers/ticketing serves it:
  * the token is typed and required, the member id is required but Test fills
@@ -285,5 +289,71 @@ describe("splitForSave (one half-filled new card never blocks the others)", () =
     expect(TICKETS_TAB).toMatch(/splitForSave\(list, catalog, storedIds\.current\)/);
     expect(TICKETS_TAB).toContain("putBody(send, opts.nulls)");
     expect(TICKETS_TAB).not.toContain("putBody(list");
+  });
+});
+
+describe("Basic vs Advanced (the source form's fold)", () => {
+  const jira: TicketingCatalogEntry = {
+    id: "jira",
+    label: "Jira",
+    fields: [
+      { key: "api_token", label: "API token", secret: true, required: true },
+      { key: "member_id", label: "Account ID", auto: true, advanced: true },
+      { key: "workflow_state", label: "Ingest statuses", type: "state" },
+      { key: "start_state", label: "Move to status on start", type: "state_one", advanced: true },
+      { key: "claim_label", label: "Claim label", advanced: true },
+    ],
+  };
+  const jsrc = (extra: Record<string, unknown> = {}): TicketingSource =>
+    ({ id: "jira", provider: "jira", ...extra }) as unknown as TicketingSource;
+
+  it("splits the catalog by its `advanced` flag, keeping catalog order", () => {
+    expect(basicFields(jira).map((f) => f.key)).toEqual(["api_token", "workflow_state"]);
+    expect(advancedFields(jira).map((f) => f.key)).toEqual(["member_id", "start_state", "claim_label"]);
+    expect(basicFields(null)).toEqual([]);
+    expect(advancedFields(undefined)).toEqual([]);
+  });
+
+  it("starts closed on a fresh source and on one Test filled in", () => {
+    expect(advancedHasValues(jira, jsrc())).toBe(false);
+    // member_id is advanced but Test writes it on every connect: not a choice.
+    expect(advancedHasValues(jira, jsrc({ member_id: "abc", api_token: "•••set" }))).toBe(false);
+    // A stored "agent" depth IS Off.
+    expect(advancedHasValues(jira, jsrc({ depth: "agent", effort: "" }))).toBe(false);
+  });
+
+  it("opens when anything inside already holds a value", () => {
+    expect(advancedHasValues(jira, jsrc({ claim_label: "erik" }))).toBe(true);
+    expect(advancedHasValues(jira, jsrc({ start_state: "3" }))).toBe(true);
+    expect(advancedHasValues(jira, jsrc({ effort: "high" }))).toBe(true);
+    expect(advancedHasValues(jira, jsrc({ depth: "pr" }))).toBe(true);
+  });
+
+  it("opens when the server refused a field inside it — an error is never hidden", () => {
+    expect(advancedHasValues(jira, jsrc(), { start_state: "bad" })).toBe(true);
+    expect(advancedHasValues(jira, jsrc(), { api_token: "Required" })).toBe(false);
+  });
+
+  it("renders basic fields up front and the rest in a details fold", () => {
+    expect(TICKETS_TAB).toContain("basicFields(meta).map(renderField)");
+    expect(TICKETS_TAB).toContain("advancedFields(meta).map(renderField)");
+    expect(TICKETS_TAB).toContain('<details\n        className="tk-advanced"');
+    expect(TICKETS_TAB).toContain("<summary>Advanced options</summary>");
+    expect(TICKETS_TAB).toContain("advancedHasValues(meta, source, errs)");
+    // The per-queue tuning lives in the fold, after its summary.
+    const fold = TICKETS_TAB.indexOf("<summary>Advanced options</summary>");
+    expect(TICKETS_TAB.indexOf('className="tk-effort"')).toBeGreaterThan(fold);
+    expect(TICKETS_TAB.indexOf('className="tk-depth"')).toBeGreaterThan(fold);
+    expect(TICKETS_TAB.indexOf('className="tk-agent"')).toBeLessThan(fold);
+  });
+
+  it("spaces fields apart and binds each hint to its own field", () => {
+    const css = INTAKE_CSS.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ");
+    // The catalog wrapper joins the body's column (it had no gap at all — the
+    // "Comment when moved" hint ran into "Claim label").
+    expect(css).toContain("#intake-panel .tk-source .tk-fields { display: contents; }");
+    expect(css).toMatch(/#intake-panel \.tk-source \.tk-body \{ gap: 18px;/);
+    expect(css).toContain("#intake-panel .tk-source .set-row { gap: 5px; }");
+    expect(css).toMatch(/#intake-panel \.tk-advanced-body \{[^}]*gap: 18px;/);
   });
 });

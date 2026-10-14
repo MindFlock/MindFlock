@@ -185,7 +185,9 @@ first and the jump rows last: **New session…**, then the dialog openers — Op
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
 have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
-**Templates…** (*manage saved New-session setups*), **Assistant agent file…**,
+**Templates…** (*manage saved New-session setups*), one **Run template:
+<name>** (*fresh session, prompt sent*) per template that has a folder,
+**Assistant agent file…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Tour** (*what MindFlock is, in five slides*), Toggle sidebar, Keyboard
 shortcuts — then the focused session's verbs (Commit / Push / **Open PR** /
@@ -1381,7 +1383,8 @@ notification fires either way.
 - **Browser / desktop** — the notify addon's `Notification` popup. Needs a tab
   open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
   tailnet URL and says so in the toggle's status line.
-- **Phone push (ntfy)** — optional, off until you turn it on. The *server*
+- **Phone push (ntfy)** — optional, off until you turn it on, in the
+  screen's **Advanced** fold. The *server*
   publishes to an [ntfy](https://ntfy.sh) topic your phone subscribes to, so an
   alert reaches you with MindFlock closed and no tab anywhere. Set a topic
   (**Generate** offers a random one), scan the QR into the ntfy app, and
@@ -1659,6 +1662,24 @@ already gone*). **+ New template** adds one. Templates live on the server
 that hold a prompt (see [Saved prompts](#saved-prompts)), so there is one
 list, not two. The old vanilla-JS templates modal is gone.
 
+**Run now and schedules.** Each card in the Templates dialog also has **Run
+now**: a fresh session from the template — its agent, folder and workspace —
+with its prompt already sent, titled after the template and the date
+(`rivian-update-oct13`) and focused as it starts (the dialog closes). The
+palette offers the same as **Run template: <name>** (*fresh session, prompt
+sent*), one row per template. A template with no folder (a saved prompt) can't
+start a session on its own: its Run now is disabled (*Pick a folder for this
+template first*) and the palette leaves it out. In the editor, **Run on a
+schedule** (*starts a fresh session with this prompt*) adds **Every day** /
+**Weekdays** **at** a local time; a scheduled template needs a folder and a
+prompt. The card then reads *Weekdays at 21:00 · next today 21:00 · last
+yesterday 21:00 → rivian-update-oct12* (or *starts on <device>* when another
+device in the group runs automation and fires schedules), and *Last run
+failed: …* when the create was refused. A schedule fires once per slot, starts
+counting from when it was saved, and after the server was down fires only the
+most recent missed slot — see [web-api.md](web-api.md) (Templates →
+Schedules).
+
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
 picks it. The parent is never in question, which matters: MindFlock has always
@@ -1932,38 +1953,54 @@ first load: the grid's first-run card *is* the welcome. UI store state
 `localStorage`) covers the hints; the checklist's state is the server's.
 
 - **Get set up** — with no sessions, and while a required step is still to
-  do, the grid shows a card headed *Get set up*, *Five steps — three to a
-  running agent, two you can skip.* It holds the setup checklist
+  do, the grid shows a card headed *Get set up*, *Three steps to your first
+  agent. The rest can wait.* It holds the setup checklist
   (`setup/SetupChecklist.tsx` — the same component the Setup modal renders).
-  The five steps, their names and their order come from the server
+  The steps, their names, order and groups come from the server
   (`GET /api/setup`, `backend/web/core/setup_steps.py` — the same list
-  `mindflock init` prints, in the same state):
-  ① **Engine and tools** (the doctor list with **Install …** and
-  **Re-check**, folded once everything required is there),
-  ② **Sign in to your agent** (one row per *installed* agent CLI, the
-  default first, each green once signed in or with a **Sign in to <agent>**
-  button; *Settings → Accounts* for API keys and extra accounts),
-  ③ **Pick a repo** (**+ New session**, whose dialog has the folder browser),
-  ④ **Connect a tracker and GitHub** (**Open Settings → Connections**,
-  **Connect GitHub** — the Connect GitHub dialog below — and, folded under
-  *Optional: test a Shortcut token*, the Shortcut token test) and
-  ⑤ **Your phone** (always shown: **Install Tailscale** with the doctor's
-  hint until Tailscale is there, then **Show QR**; **Settings → Your phone**).
-  The last two have a **Skip** (and **Show again**). Steps are marked by the
-  server from the thing itself, never by a button: ① and ② by every doctor
-  run (no required check failing; the default agent CLI installed and its
-  login found), ③ by the first session create, ④ by saving the first ticket
-  source, ⑤ by the owner fetching the QR or a phone loading `/m` from off
-  this machine. The only writes from the UI are `POST /api/setup/<step>/skip`
-  (and `/unskip`) for ④ and ⑤. A step once done stays done. The state is
-  `general.setup`; `general.onboarded` is derived from ③ (an older store is
-  migrated on load). The text a first `mindflock serve` prints at boot is
-  folded at the bottom as *What the server found at first start* — the
-  desktop app's server writes it to a log nobody reads.
+  `mindflock init` prints, in the same state), drawn as three groups so the
+  few things that matter come first:
+  - **Get started** (required): ① **Install the tools** (the
+    **Install …** button, then *only* what getting started is missing —
+    optional extras such as Tailscale, peer links, a local model or the gh CLI
+    never show here; every check is folded under *All checks (N)*, and
+    Settings → Doctor lists them all; **Re-check**), ② **Sign in to your
+    agent** (one row per *installed* agent CLI, the default first, each green
+    once signed in or with a **Sign in to <agent>** button; *Using an API
+    key? Settings → Accounts*), ③ **Start your first agent** (*Pick a repo
+    folder and say what to do.* **+ New session**, whose dialog has the
+    folder browser).
+  - **Connect your work** (optional): ④ **Connect GitHub** (the Connect
+    GitHub dialog below) and ⑤ **Connect your tracker** (**Add a ticket
+    source** opens Intake → Tickets). Each has a **Skip** (and **Show
+    again**).
+  - **Optional, later** — folded, unnumbered, not counted: **Use it from
+    your phone** (**Install Tailscale** with the doctor's hint until
+    Tailscale is there, then **Show QR**; **Settings → Your phone**), plus one
+    line pointing at Settings for other computers, people, extensions and IDEs.
+  One obvious next action: the server's `summary.next` step is outlined and
+  its button is the only accent-coloured one; a done step shrinks to its
+  title. The progress line counts the three required steps until they are
+  done (*1 of 3 done · next: Sign in to your agent*), then the chip's count.
+  Steps are marked by the server from the thing itself, never by a button:
+  ① and ② by every doctor run (nothing failing but optional extras; the
+  default agent CLI installed and its login found), ③ by the first session
+  create, ④ when a GitHub credential resolves (a Settings / env token, or a
+  signed-in gh), ⑤ by saving the first ticket source, the phone by the owner
+  fetching the QR or a phone loading `/m` from off this machine. Connecting
+  GitHub or signing an agent in re-reads the checklist at once. The only
+  writes from the UI are `POST /api/setup/<step>/skip` (and `/unskip`). A
+  step once done stays done. The state is `general.setup`;
+  `general.onboarded` is derived from ③ (an older store is migrated on load;
+  one that settled the old combined "Connect a tracker and GitHub" step reads
+  ④ as skipped). The text a first `mindflock serve` prints at boot is folded
+  at the bottom as *What the server found at first start* — the desktop
+  app's server writes it to a log nobody reads.
 - **Setup 3/5** — once the three required steps are done (or a session
   exists) the card gives way to a compact chip in the sidebar footer, beside
   the doctor's *setup issues* chip, reading **Setup** *done*/*5*, until every
-  step is done or skipped. The chip, the doctor chip's **open Setup**, the
+  step of the first two groups is done or skipped (the phone, under
+  *Optional, later*, never keeps it up). The chip, the doctor chip's **open Setup**, the
   palette's **Open Setup checklist** and the desktop app's `?setup=1` (its
   older spelling `?setup=install`; once, the parameter is stripped) open the
   **Setup** modal, which renders the same checklist. The modal never opens
@@ -1978,8 +2015,10 @@ first load: the grid's first-run card *is* the welcome. UI store state
   pane's next-step button, ⏩ Fast-track, and the bell for anything waiting
   on you), **Where work comes from** (Intake, Verify for checking what you
   shipped, and ⚙ Customize for more bars, like Prompts) and **You're all
-  set** (hints, Replay tour, Doctor) — or, while the doctor still reports a
-  required tool missing, **One thing left** with an **Open Setup** button.
+  set** (Setup for GitHub and your tracker, hints, Replay tour) — or, while
+  the doctor still reports a required tool missing, **One thing left**. Both
+  end on **Open Setup** (the checklist, not the whole of Settings) and
+  **Get started**.
   The fourth slide carries **Set up now →**, which opens **Intake** on its
   Tickets tab (`LEGACY_SCREEN_TABS` decides that from the slide's `screen`
   key). The tour pauses behind Settings, Intake or Setup rather than ending,
@@ -2255,9 +2294,13 @@ credential.
 - **Tickets** — the master **Automated ingestion** switch (the same
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's **Tickets** bar, so the two never disagree), one card per
-  connected source (provider, optional label, Repo URL, its own **Agent CLI**,
-  its **Thinking effort**, ingest-state picker, **Move to state on start**,
-  **Comment when moved**, credentials, **Test connection**, **Remove**), then
+  connected source — up front only what a first setup needs (provider, optional
+  label, Repo URL, its own **Agent CLI**, credentials, **Whose tickets**, the
+  ingest states/labels), then a collapsed **Advanced options** fold holding the
+  per-queue tuning (**Thinking effort**, **Fast-track tickets to**) and the
+  catalog's optional extras (**Move to state on start**, **Comment when moved**,
+  **Claim label**, the optional Test-filled account ids, Jira's **Project
+  key**), and the footer (**Test connection**, **Remove**) — then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -2270,8 +2313,8 @@ credential.
   too), its unset option names the app default rather than showing a blank, and
   the collapsed card always states which CLI the queue runs — the difference
   between a queue on a hosted CLI and one on a local model is worth seeing
-  without expanding. **Thinking effort** sits directly under it, because the two
-  are one decision: a rung means different things on different CLIs (each spells
+  without expanding. **Thinking effort** opens the Advanced fold, first thing
+  in it, because it qualifies that CLI: a rung means different things on different CLIs (each spells
   it its own way and clamps its own ceiling), so the picker names *that* CLI's
   ceiling and is disabled outright for a CLI with no effort control. It applies
   to every ticket from the queue — ingested automatically or started by hand —
@@ -2311,6 +2354,19 @@ credential.
   with **Start work**, then its own repository cards (`github.issue_repos`,
   independent of review's). The same **GitHub connection** row and **Connect
   GitHub** button (`#gh-issue-connect-btn`): one credential for both tabs.
+
+**Basic vs Advanced, and one rhythm.** Which provider fields are basic is the
+catalog's call, not the form's: a field marked `advanced` in
+`backend/ticket_ingestion/providers/__init__.py` (never a `required` one — a
+hidden field can't be filled) renders inside the card's **Advanced options**
+`<details>`, with the card's own effort and fast-track pickers. The fold starts
+closed on a fresh source and **opens on its own** when anything inside already
+holds a value someone chose, or when a save refused a field inside it
+(`advancedHasValues` in `intake/sourceForm.ts`; a Test-filled id doesn't count,
+or every connected card would open). Inside a card a field's own parts sit
+tight — label, control, hint 5px apart — and the next field starts 18px below,
+so a long hint can never read as the next field's; sections of the tab sit
+22px apart, a step bigger again. The work lists keep their own density.
 
 **A ticket source is connected only after a live test.** A source card's
 header carries a three-state pill — **Connected** (the last Test passed within
@@ -3121,7 +3177,31 @@ is running it**.
 ## Settings (⚙)
 
 **Set-and-forget configuration and diagnostics**, from the top bar's
-**Settings**. The left nav is grouped under non-clickable headings
+**Settings**.
+
+**Basic first, advanced on request.** Out of the box the nav lists only the
+six screens a new user needs to point MindFlock at a repo and a tracker and
+run agents — **General**, **Connections**, **Notifications**, **Agent CLI**,
+**Workspace** and **Appearance** — as one flat list with no headings. **Show
+advanced settings** at the foot of the nav (`#settings-advanced-toggle`, with
+"*N* more screens" under it) reveals every other screen; **Hide advanced
+settings** puts them away again. The choice is the synced pref
+`prefs.settings_advanced` (cached in localStorage `mf_settings_advanced`), so it
+follows the person to all their devices, like the theme. The controls on a
+basic screen that only some people need sit in a collapsed **Advanced** fold
+on that screen (open by default in advanced mode): General's plan window
+budget and terminal scroll speed, Notifications' phone push (ntfy), Agent
+CLI's keep-usage-windows-warm schedule, Workspace's live branch, fast-track
+depth and retryable pre-commit hooks, and Connections' rows other than agent
+CLIs, GitHub and ticket trackers (devices and people, orchestration,
+databases, phone push, extensions, system — the summary count above covers
+only the rows shown unfolded in basic mode). A deep link to an advanced screen
+— the palette, a Connections card, an in-screen link, `openSettings(...)`, a
+legacy key — still opens it in basic mode: the open screen is always in the
+nav, under an **Advanced** heading, and the saved mode does not change. The
+rules live in `components/settings/settingsMode.tsx`.
+
+In advanced mode the nav is grouped under non-clickable headings
 (`.set-nav-group`) so it scans: **General**, **Connections** and
 **Notifications** first, then **Agents** (Agent CLI, Agent providers, Accounts,
 Local model, Agent orchestration), **Code** (Workspace, IDE), **This device**
@@ -3154,6 +3234,14 @@ A few screens got quieter:
   auto-adopt on* / *off*.
 - **Notifications** holds the only desktop-notification on/off toggle; the
   bell no longer carries a copy.
+
+**Spacing.** Every screen runs on one rhythm (`--set-rhythm`, 24px, on
+`#settings-panel`): a field's label, control and hint sit 6px apart, the next
+field starts 24px below, so a hint always reads as part of the field above it.
+Section titles get 40px above and 16px below; cards and inline button rows
+use the same 4/8/12/16/24 scale. In a window narrower than 600px the nav
+becomes a scrolling row of tabs above the screen (group headings hidden) and
+the ntfy fields stack their labels above the inputs.
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
 - **Per-session budget (USD, 0 = off)** — cost guardrail: when a session's
@@ -3455,7 +3543,9 @@ A few screens got quieter:
   joins here; someone's `mfp1:`/`mfp2:` invite is joined as a peer link and
   People opens on it, with the safety number to compare. The
   palette's **Paste a code…** focuses it, and a code typed straight into the
-  palette is offered as "Join with code …" at the top.
+  palette is offered as "Join with code …" at the top (below the commands
+  instead when a command's own name contains what was typed — "run template"
+  also reads as a device name and a code).
 
   Under each of your devices, a read-only line says whether it is **ready to
   work** or what's missing there (*missing tmux · codex not signed in · can't
@@ -3682,6 +3772,9 @@ A few screens got quieter:
   devices). A template only ever *starts* a session — CLI, repo, workspace
   and an opening prompt; New's **Templates** strip lists them and its
   **Manage…** (or the palette's **Templates…**) opens the Templates dialog.
+  A template's **Run now** (its card, or the palette's **Run template: …**)
+  starts a fresh session from it with the prompt already sent, and an
+  optional schedule (every day / weekdays at a time) starts one on its own.
   Saved prompts are the templates that hold a prompt — one list. To paste text
   into a session that is already running, use the
   [Prompts bar](#saved-prompts).
