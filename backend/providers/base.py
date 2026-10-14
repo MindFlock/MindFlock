@@ -302,6 +302,13 @@ class BaseProvider:
         """
         return ()
 
+    def mcp_servers(self) -> list:
+        """This CLI's user-configured MCP servers, for Settings → Shared MCP
+        servers: ``[{name, transport, command, shareable, caution, reason}]``
+        (:func:`backend.providers.claude_mcp.list_servers`). Default: ``[]`` —
+        the CLI's servers cannot be shared through the bridge (yet)."""
+        return []
+
     # --- peer shared sessions (backend/peer) ------------------------------ #
     def sandbox_profile(self) -> Optional[SandboxProfile]:
         """How this CLI runs inside the peer sandbox, or ``None`` when it

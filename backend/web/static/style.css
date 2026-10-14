@@ -2785,6 +2785,18 @@ p.set-hint {
 .orch-cap-row .orch-cap-env {
   color: var(--warn, #d9a33b);
 }
+
+/* Shared MCP servers: the command basename beside the name, and the caution
+   line (a server that may not behave when shared). */
+.mcp-share-cmd {
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.mcp-share-caution {
+  color: var(--warn, #d9a33b);
+}
 }
 
 /* 040 */

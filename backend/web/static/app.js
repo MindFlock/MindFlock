@@ -74850,6 +74850,129 @@ function LocalModel(_) {
 	] });
 }
 //#endregion
+//#region src/components/settings/screens/SharedMcpServers.tsx
+function SharedMcpServers() {
+	const s = useSettings();
+	const [info, setInfo] = (0, import_react.useState)(null);
+	const [failed, setFailed] = (0, import_react.useState)(false);
+	const stored = s.get("general", "mcp_shared_servers");
+	const shared = Array.isArray(stored) ? stored : [];
+	const load = (0, import_react.useCallback)(() => {
+		api("/api/settings/mcp-shared").then((r) => {
+			setInfo(r || null);
+			setFailed(false);
+		}).catch(() => setFailed(true));
+	}, []);
+	(0, import_react.useEffect)(load, [load]);
+	const toggle = async (name, on) => {
+		const next = shared.filter((n) => n !== name);
+		if (on) next.push(name);
+		await s.saveField("general", "mcp_shared_servers", next);
+		toast(on ? `${name} shared — from each session's next launch` : `${name} back to one copy per window — from each session's next launch`);
+		load();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServersView, {
+		info,
+		failed,
+		shared,
+		onToggle: toggle
+	});
+}
+function SharedMcpServersView({ info, failed, shared, onToggle }) {
+	const upstream = (name) => info?.bridge?.upstreams?.find((u) => u.name === name);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Shared MCP servers"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Every agent window starts its own copy of each MCP server in your Claude config — often hundreds of MB per window. A server switched on here runs once on this machine and every session connects to that copy. Applies on each session's next launch; needs the MindFlock MCP switch above to be on."
+		}),
+		failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Couldn't read your MCP servers."
+		}),
+		!failed && info === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "Reading your MCP servers…"
+		}),
+		info && !info.available && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-hint mcp-share-unavailable",
+			children: "Off on this machine: the server was started with MINDFLOCK_MCP_SHARE=0 (or this OS has no bridge)."
+		}),
+		info && info.servers.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted mcp-share-empty",
+			children: "No MCP servers in your Claude config."
+		}),
+		info && info.servers.map((row) => {
+			const on = shared.includes(row.name);
+			const up = upstream(row.name);
+			const refused = Object.keys(up?.refused_requests || {});
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row set-switch-row mcp-share-row",
+				"data-mcp-server": row.name,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-label",
+						children: [
+							row.name,
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted mcp-share-cmd",
+								children: row.command
+							})
+						]
+					}), row.shareable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint notif-rule-desc",
+						children: [
+							row.caution ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "mcp-share-caution",
+								children: row.caution
+							}) : "One copy for every session instead of one per window.",
+							on && up?.running && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-live",
+								children: [
+									" ",
+									"Running once (pid ",
+									up.pid,
+									") for ",
+									up.sessions,
+									" session",
+									up.sessions === 1 ? "" : "s",
+									"."
+								]
+							}),
+							on && refused.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "mcp-share-caution",
+								children: [
+									" ",
+									"It asked the client for ",
+									refused.join(", "),
+									", which a shared copy can't answer — switch it off."
+								]
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						children: row.reason
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ca-switch",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						"aria-label": `Share ${row.name} across sessions`,
+						checked: on && row.shareable,
+						disabled: !row.shareable || !info.available,
+						onChange: (e) => onToggle(row.name, e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+				})]
+			}, row.name);
+		})
+	] });
+}
+//#endregion
 //#region src/components/settings/screens/AgentOrchestration.tsx
 function AgentOrchestration(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -74887,7 +75010,8 @@ function AgentOrchestration(_) {
 			field: "agent_max_spawn_depth",
 			label: "Nesting depth",
 			hint: "How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
-		})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServers, {})
 	] });
 }
 function CapRow({ cap, field, label, hint }) {

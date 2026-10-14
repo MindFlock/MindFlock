@@ -687,6 +687,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run files are written (mode 0600, removed on close): the credential file that lets API keys reach the CLI without passing through argv (see [accounts.md](accounts.md#where-the-credentials-go)), and Claude's MindFlock-MCP `--mcp-config` file `mcp-<tmux name>.json`. Also holds `slots/<pool>/`, the lock files of `mindflock slot` |
 | `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client and MindFlock MCP: where to find the running server (after `--host`/`--port` flags). Auto-attach sets both for each session's MCP |
 | `MINDFLOCK_AGENT_MCP` | unset | **Kill switch** for MindFlock-MCP auto-attach: `0`/`false`/`no`/`off` in the server's environment stops new launches from attaching it, and wins over `general.agent_mcp`. A truthy value does not force it on. See [mcp.md](mcp.md#turning-it-off-and-how-far-it-reaches) |
+| `MINDFLOCK_MCP_SHARE` | unset | **Kill switch** for shared MCP servers: `0`/`false`/`no`/`off` makes every launch keep its own copies, whatever `general.mcp_shared_servers` says. See [mcp.md](mcp.md#shared-mcp-servers-one-copy-per-machine) |
+| `MINDFLOCK_MCP_BRIDGE_DEBUG` | unset | `1` makes the shared-MCP bridge log every HTTP request (and each POST's methods) to `~/.mindflock/run/mcp-shared/logs/bridge.log`. Read when the bridge starts |
 | `MINDFLOCK_MCP_SCOPE` | `children` | The MindFlock MCP server's scope (`readonly`, `children` or `all`) when `--scope` isn't given. Auto-attach sets it from `general.agent_mcp_scope`. An unknown value runs `readonly` |
 | `MINDFLOCK_SESSION_TITLE` | — | Set by auto-attach in each session's MCP environment: the session the MCP acts as. Unset, the MCP falls back to the tmux pane's session, else it is an external client |
 | `MINDFLOCK_MCP_MANAGED` | — | Set to `1` by auto-attach. An MCP that MindFlock attached but that can't confirm its session then fails closed to `readonly` |
@@ -994,6 +996,17 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   pipeline's launches without a restart. Written through `POST /api/settings`
   (`{"general": {"agent_mcp": false}}`); `GET /api/config` reports the live
   state as `caps.agent_mcp`.
+- **Shared MCP servers** (`general.mcp_shared_servers`; Settings → Agent
+  orchestration → **Shared MCP servers**): names of your own user-scope
+  stdio MCP servers (from your Claude config) to run **once per machine** in
+  MindFlock's bridge instead of once per agent window. `[]` (the default)
+  shares nothing. Per device, never synced. `mindflock` is refused. Read
+  fresh at each launch, so a change applies on each session's next launch.
+  `MINDFLOCK_MCP_SHARE=0` in the server's environment turns it off. Needs the
+  Agent MCP attach on. `GET /api/settings/mcp-shared` lists the servers, what
+  is shared and the bridge's state. See
+  [mcp.md](mcp.md#shared-mcp-servers-one-copy-per-machine) for what is safe
+  to share.
 - **Spawn limits** (`general.agent_max_children`,
   `general.agent_max_spawned`, `general.agent_max_spawn_depth`; Settings →
   Agent orchestration → **Spawn limits**): live sub-sessions per

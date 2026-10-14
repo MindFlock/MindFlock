@@ -505,6 +505,17 @@ hand. See [mcp.md](mcp.md#how-it-gets-attached).
 Each launch site also records whether that launch carried the tokens
 (`mcp_attach.note_launch`), which is the session row's `mcp_attached`.
 
+**Shared MCP servers.** Claude's run file also carries the user's *shared*
+servers (`ClaudeProvider.shared_mcp_entries`, implemented in
+`providers/claude_mcp.py`). For each name in `general.mcp_shared_servers`,
+it adds an http entry pointing at the one-per-machine bridge, which replaces
+the user's same-named stdio entry for that launch. `BaseProvider.mcp_servers()`
+lists a CLI's user-configured servers for the Settings section. Its default
+is `[]`, meaning the CLI's servers can't be shared, and only Claude
+implements it. The CLI-neutral parts (the setting, the bridge's lifetime, the
+definitions it serves) live in `providers/mcp_share.py`. See
+[mcp.md](mcp.md#shared-mcp-servers-one-copy-per-machine).
+
 ### Peer shared sessions (`sandbox_profile`, `peer_mcp_args`)
 
 A CLI can run a peer shared session ([peer-link.md](peer-link.md)) when its
