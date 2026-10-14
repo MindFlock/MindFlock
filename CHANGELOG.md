@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cron sessions: templates run on any cron schedule.** Besides every day /
+  weekdays at a time, a template's schedule can be a cron expression
+  (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`), previewed in words with its next
+  runs as you type. Each fire starts a fresh session with the prompt sent; a
+  scheduled run is skipped while the previous one is still working or waiting
+  on you, so a slow job never stacks sessions. A template can also carry an
+  autopilot depth (commit, push or open a PR) that every run is armed with.
+  Cards show the last 20 runs; a scheduled run that can't start is a bell row
+  and a push. `mindflock run <template>` starts one from a shell and
+  `mindflock templates` lists them.
 - **Fast-track tells the agent what failed.** When a run stops on something
   the agent can fix (a pre-commit step or the verification check failed, CI
   went red, the PR conflicts with or is behind its base), the agent gets a

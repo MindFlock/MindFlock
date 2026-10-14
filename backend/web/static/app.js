@@ -30509,6 +30509,12 @@ function installKeymap(host) {
 }
 //#endregion
 //#region src/lib/templates.ts
+var AUTOPILOT_CHOICES = [
+	["", "Leave it for me"],
+	["commit", "Commit"],
+	["push", "Commit + push"],
+	["pr", "Open a PR"]
+];
 var TEMPLATES_CHANGED = "mf-presets-changed";
 var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
 var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
@@ -30586,9 +30592,17 @@ async function deleteTemplate(name) {
 function runProblem(t) {
 	return !(t.repo_path || "").trim() && !t.provisioned ? "Pick a folder for this template first" : "";
 }
+function hasSchedule(t) {
+	return !!(t.schedule && (t.schedule.at || t.schedule.cron));
+}
 function scheduleLabel(s) {
-	if (!s || !s.at) return "";
+	if (!s) return "";
+	if (s.cron) return "Cron " + s.cron;
+	if (!s.at) return "";
 	return (s.days === "weekdays" ? "Weekdays at " : "Every day at ") + s.at;
+}
+async function cronPreview(expr) {
+	return api("/api/templates/cron-preview?expr=" + encodeURIComponent(expr));
 }
 function whenLabel(epochSec, now = /* @__PURE__ */ new Date()) {
 	if (!epochSec) return "";
@@ -34383,6 +34397,16 @@ function notifFromEvent(env) {
 			text: "created",
 			cls: "n-info"
 		};
+		case "template.run_failed": return {
+			text: String(d.detail || "a scheduled run couldn't start — " + (d.error || "failed")),
+			cls: "n-warn",
+			template: true,
+			rule: "template_run_failed"
+		};
+		case "template.run_skipped": return {
+			text: String(d.detail || "skipped a scheduled run — " + (d.reason || "")),
+			cls: "n-muted"
+		};
 		case "session.create_failed": return {
 			text: "couldn't start — " + (d.error || "failed"),
 			cls: "n-warn"
@@ -34761,6 +34785,9 @@ function NotificationsBell() {
 						} else if (n.settings) {
 							setOpen(false);
 							openSettings(n.settings);
+						} else if (n.template && !n.session) {
+							setOpen(false);
+							useUi.getState().openDialogFor("templates");
 						} else if (n.run) {
 							setOpen(false);
 							showGroup(n.run);
@@ -34769,7 +34796,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "Collaborate" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Templates" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -62538,9 +62565,11 @@ function formFromTemplate(t) {
 		mode: t?.provisioned ? "provisioned" : t?.in_place ? "in_place" : "worktree",
 		workspace_strategy: t?.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: !!t?.init_repo,
-		scheduled: !!t?.schedule?.at,
+		scheduled: !!t && hasSchedule(t),
 		at: t?.schedule?.at || "21:00",
-		days: t?.schedule?.days === "weekdays" ? "weekdays" : "daily"
+		days: t?.schedule?.cron ? "cron" : t?.schedule?.days === "weekdays" ? "weekdays" : "daily",
+		cron: t?.schedule?.cron || "0 21 * * 1-5",
+		autopilot: t?.autopilot || ""
 	};
 }
 function templateBody(f) {
@@ -62548,8 +62577,11 @@ function templateBody(f) {
 	if (!name) return { error: "A template needs a name." };
 	if (name.length > 100) return { error: "Names are at most 100 characters." };
 	const at = f.at.trim();
+	const cron = f.cron.trim().replace(/\s+/g, " ");
 	if (f.scheduled) {
-		if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
+		if (f.days === "cron") {
+			if (!cron) return { error: "Type a cron expression, like 0 21 * * 1-5 (weekdays at 21:00)." };
+		} else if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) return { error: "Pick a time for the schedule, like 21:00." };
 		if (!f.repo_path.trim() && f.mode !== "provisioned") return { error: "A scheduled template needs a folder to start its session in." };
 		if (!f.prompt.trim()) return { error: "A scheduled template needs a prompt — it's what the session is told to do." };
 	}
@@ -62562,10 +62594,11 @@ function templateBody(f) {
 		in_place: f.mode === "in_place",
 		workspace_strategy: f.workspace_strategy === "clone" ? "clone" : "worktree",
 		init_repo: f.init_repo,
-		...f.scheduled ? { schedule: {
+		...f.scheduled ? { schedule: f.days === "cron" ? { cron } : {
 			at,
-			days: f.days
-		} } : {}
+			days: f.days === "weekdays" ? "weekdays" : "daily"
+		} } : {},
+		...f.autopilot ? { autopilot: f.autopilot } : {}
 	} };
 }
 function renameLeaves(oldName, newName) {
@@ -62573,23 +62606,42 @@ function renameLeaves(oldName, newName) {
 	const b = newName.trim().toLowerCase();
 	return a && a !== b ? oldName : null;
 }
+var AUTOPILOT_THEN = {
+	commit: "commit",
+	push: "commit + push",
+	pr: "open a PR"
+};
 function templateMeta(t) {
 	const bits = [];
 	if (t.program) bits.push(t.program);
 	if (t.repo_path) bits.push(t.repo_path);
 	bits.push(t.provisioned ? "provisioned" + (t.workspace_strategy === "clone" ? " (clone)" : "") : t.in_place ? "in this folder" : "new worktree");
 	if (t.init_repo) bits.push("git init");
+	if (t.autopilot) bits.push("then: " + AUTOPILOT_THEN[t.autopilot]);
 	return bits.join(" · ");
 }
 function runLine(t, info, status, now = /* @__PURE__ */ new Date()) {
 	const bits = [];
-	if (t.schedule?.at) {
-		bits.push(scheduleLabel(t.schedule));
+	if (hasSchedule(t)) {
+		bits.push(info.schedule_label || scheduleLabel(t.schedule));
 		if (!status.runs_here && status.runs_on) bits.push("starts on " + status.runs_on);
 		else if (info.next_at) bits.push("next " + whenLabel(info.next_at, now));
 	}
 	if (info.last_at) bits.push("last " + whenLabel(info.last_at, now) + (info.last_session ? " → " + info.last_session : ""));
 	return bits.join(" · ");
+}
+function historyLine(h, now = /* @__PURE__ */ new Date()) {
+	let line = [whenLabel(h.at, now), h.trigger === "schedule" ? "scheduled" : "by hand"].join(" · ");
+	if (h.skipped) line += " — skipped: " + h.skipped;
+	else if (h.error) line += " — failed: " + h.error;
+	else if (h.session) line += " → " + h.session + (h.autopilot ? " (autopilot: " + h.autopilot + ")" : "");
+	return line;
+}
+function cronPreviewLine(pv, now = /* @__PURE__ */ new Date()) {
+	if (!pv) return "";
+	if (!pv.ok) return pv.error || "Not a cron expression";
+	const next = (pv.next || []).map((t) => whenLabel(t, now)).join(", ");
+	return (pv.label || "") + (next ? " — next " + next : "");
 }
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
@@ -62701,55 +62753,101 @@ function TemplatesDialogView(p) {
 				className: "tpl-schedule",
 				role: "group",
 				"aria-label": "Schedule",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "check",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "checkbox",
-							id: "tpl-scheduled",
-							checked: form.scheduled,
-							onChange: (e) => p.onForm({ scheduled: e.target.checked })
-						}),
-						"Run on a schedule ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "muted",
-							children: "— starts a fresh session with this prompt"
-						})
-					]
-				}), form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "tpl-schedule-when",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-							id: "tpl-days",
-							"aria-label": "Which days",
-							value: form.days,
-							onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : "daily" }),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "daily",
-								children: "Every day"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "weekdays",
-								children: "Weekdays"
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "tpl-at",
-							type: "time",
-							"aria-label": "Time",
-							value: form.at,
-							onChange: (e) => p.onForm({ at: e.target.value })
-						}),
-						p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "muted",
-							children: [
-								"Starts on ",
-								p.runs.runs_on,
-								" — the device that runs automation."
-							]
-						})
-					]
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "tpl-scheduled",
+								checked: form.scheduled,
+								onChange: (e) => p.onForm({ scheduled: e.target.checked })
+							}),
+							"Run on a schedule ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: "— starts a fresh session with this prompt"
+							})
+						]
+					}),
+					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-schedule-when",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								id: "tpl-days",
+								"aria-label": "Which days",
+								value: form.days,
+								onChange: (e) => p.onForm({ days: e.target.value === "weekdays" ? "weekdays" : e.target.value === "cron" ? "cron" : "daily" }),
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "daily",
+										children: "Every day"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "weekdays",
+										children: "Weekdays"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "cron",
+										children: "Custom (cron)"
+									})
+								]
+							}),
+							form.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								id: "tpl-cron",
+								"aria-label": "Cron expression",
+								autoComplete: "off",
+								spellCheck: false,
+								value: form.cron,
+								onChange: (e) => p.onForm({ cron: e.target.value }),
+								placeholder: "*/30 * * * *"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "at" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								id: "tpl-at",
+								type: "time",
+								"aria-label": "Time",
+								value: form.at,
+								onChange: (e) => p.onForm({ at: e.target.value })
+							})] }),
+							p.runs && !p.runs.runs_here && p.runs.runs_on && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "muted",
+								children: [
+									"Starts on ",
+									p.runs.runs_on,
+									" — the device that runs automation."
+								]
+							})
+						]
+					}),
+					form.scheduled && form.days === "cron" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "tpl-cron-preview" + (p.cronPreview && !p.cronPreview.ok ? " error" : " muted"),
+						id: "tpl-cron-preview",
+						"aria-live": "polite",
+						children: cronPreviewLine(p.cronPreview) || "minute hour day-of-month month weekday — local time"
+					}),
+					form.scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "tpl-cron-preview muted",
+						children: "A scheduled run is skipped while the previous one is still working or waiting on you."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "tpl-autopilot",
+				children: [
+					"When a run's turn ends",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+						id: "tpl-autopilot",
+						value: form.autopilot,
+						onChange: (e) => p.onForm({ autopilot: e.target.value }),
+						children: AUTOPILOT_CHOICES.map(([v, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: v,
+							children: label
+						}, v || "leave"))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "— each Run now and scheduled run"
+					})
+				]
 			}),
 			ui.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error",
@@ -62802,7 +62900,9 @@ function TemplatesDialogView(p) {
 					children: [
 						"A template is a saved New-session setup — agent, folder, workspace and first prompt — and the list is the same on every device. The New dialog's Name → Enter reuses the one you last picked for that folder. A template that is only a prompt is also what the Prompts bar pastes.",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: " Run now" }),
-						" starts a fresh session from one, prompt already sent; give it a schedule and it starts itself every day or weekday at that time."
+						" starts a fresh session from one, prompt already sent (also",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: " mindflock run <name>" }),
+						"); give it a schedule — a daily time or any cron expression — and it starts itself, optionally carrying its work to a commit, a push or a PR."
 					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -62853,13 +62953,36 @@ function TemplatesDialogView(p) {
 											(() => {
 												const info = runs.runs[t.name.trim().toLowerCase()] || {};
 												const line = runLine(t, info, runs);
-												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "tpl-runs",
-													children: line
-												}), info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "tpl-run-error error",
-													children: ["Last run failed: ", info.last_error]
-												})] });
+												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+													line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "tpl-runs",
+														children: line
+													}),
+													info.last_error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "tpl-run-error error",
+														children: ["Last run failed: ", info.last_error]
+													}),
+													info.last_skip && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "tpl-run-skip muted",
+														children: [
+															"Skipped ",
+															whenLabel(info.last_skip_at),
+															": ",
+															info.last_skip
+														]
+													}),
+													info.history && info.history.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+														className: "tpl-history",
+														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: [
+															"Recent runs (",
+															info.history.length,
+															")"
+														] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: info.history.map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+															className: h.error ? "error" : h.skipped ? "muted" : "",
+															children: historyLine(h)
+														}, i)) })]
+													})
+												] });
 											})(),
 											t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 												className: "tpl-prompt",
@@ -62949,7 +63072,28 @@ function TemplatesDialog() {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [runs, setRuns] = (0, import_react.useState)(() => templateRunsNow());
 	const [running, setRunning] = (0, import_react.useState)("");
+	const [preview, setPreview] = (0, import_react.useState)(null);
 	const editingRef = (0, import_react.useRef)(null);
+	const wantsPreview = open && ui.editing !== null && form.scheduled && form.days === "cron";
+	const cronText = form.cron.trim();
+	(0, import_react.useEffect)(() => {
+		if (!wantsPreview || !cronText) {
+			setPreview(null);
+			return;
+		}
+		let live = true;
+		const timer = setTimeout(() => {
+			cronPreview(cronText).then((pv) => {
+				if (live) setPreview(pv);
+			}).catch(() => {
+				if (live) setPreview(null);
+			});
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+	}, [wantsPreview, cronText]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		dispatch({ t: "cancel" });
@@ -63041,6 +63185,7 @@ function TemplatesDialog() {
 		templates,
 		runs,
 		running,
+		cronPreview: preview,
 		onRun: (name) => void run(name),
 		ui,
 		form,

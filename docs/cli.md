@@ -417,6 +417,21 @@ By default it lists unread messages (`pending` and `held`). `--all` also
 lists messages already typed in or read. `--json` prints the raw response.
 Prefix matching works like `attach`.
 
+### `mindflock run TEMPLATE`
+
+Run now from a shell: `POST /api/templates/{name}/run` starts a fresh session
+from the template (any case), its prompt already sent and its autopilot depth
+armed, and prints the new session's title. Handy from the system's own cron,
+a CI job or a chat bot when a template's built-in schedule isn't the trigger
+you want. A template with no folder, or no such template, is a one-line error
+and exit 1.
+
+### `mindflock templates [--json]`
+
+The templates with their schedule in words, the next run, the autopilot depth
+and the last run (or why it failed / was skipped), plus which device fires
+schedules when it isn't this one. `--json` prints `GET /api/templates` as is.
+
 ### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`
 
 [Peer links](peer-link.md) over `/api/peer` (needs a running server; `invite`

@@ -38,6 +38,8 @@ modules under
                      radius, tool feed, declared plans, zone dry-run
     code_outline     Code Map outlines: symbol outlines, the file view, symbol
                      search
+    cronspec         5-field cron expressions for template schedules: parse,
+                     slots (DST-safe), describe
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
     events           the event bus behind /api/events

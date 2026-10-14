@@ -1703,14 +1703,26 @@ sent*), one row per template. A template with no folder (a saved prompt) can't
 start a session on its own: its Run now is disabled (*Pick a folder for this
 template first*) and the palette leaves it out. In the editor, **Run on a
 schedule** (*starts a fresh session with this prompt*) adds **Every day** /
-**Weekdays** **at** a local time; a scheduled template needs a folder and a
-prompt. The card then reads *Weekdays at 21:00 · next today 21:00 · last
-yesterday 21:00 → rivian-update-oct12* (or *starts on <device>* when another
-device in the group runs automation and fires schedules), and *Last run
-failed: …* when the create was refused. A schedule fires once per slot, starts
-counting from when it was saved, and after the server was down fires only the
-most recent missed slot — see [web-api.md](web-api.md) (Templates →
-Schedules).
+**Weekdays** **at** a local time, or **Custom (cron)**: a 5-field cron
+expression (`*/30 * * * *`, `0 21 * * 1-5`, `@weekly`) with the
+server's reading under it as you type (*Every 30 minutes — next today 10:30,
+today 11:00, today 11:30*, or why it can't be saved — nothing more often than
+every 15 minutes). A scheduled template needs a folder and a prompt. **When a
+run's turn ends** (*Leave it for me* / *Commit* / *Commit + push* / *Open a
+PR*) arms each Run now and scheduled run with that autopilot depth. The card
+then reads *Weekdays at 21:00 · next today 21:00 · last yesterday 21:00 →
+rivian-update-oct12* (or *starts on <device>* when another device in the group
+runs automation and fires schedules), *Last run failed: …* when the create was
+refused, *Skipped …: the previous run is still working* when a scheduled run
+didn't start because the last one hadn't finished (or is waiting on you), and
+a **Recent runs (n)** fold lists the last 20 starts, failures and skips. A
+scheduled run that fails or is skipped is also a bell row (a failure is a
+default-on push, *A scheduled template run can't start*). A schedule fires
+once per slot, starts counting from when it was saved, and after the server
+was down fires only the most recent missed slot — see
+[web-api.md](web-api.md) (Templates → Schedules). From a shell, `mindflock run
+<template>` is Run now and `mindflock templates` lists schedules and last
+runs.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
