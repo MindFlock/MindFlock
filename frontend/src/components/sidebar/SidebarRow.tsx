@@ -21,7 +21,8 @@ import { copyText } from "../../lib/clipboard";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
-import { deriveSessionState } from "../../lib/sessionState";
+import { agentMissing, agentMissingState, deriveSessionState } from "../../lib/sessionState";
+import { useSetup } from "../setup/useSetup";
 import { reviveSession } from "../../lib/revive";
 import { backgroundChip } from "../../lib/backgroundJobs";
 import { stopBackgroundJob } from "../../lib/stopBackgroundJob";
@@ -68,6 +69,7 @@ import {
   type SessionActionId,
 } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
+import { openChecklist } from "../../lib/checklistLink";
 
 /** The row menu's table-driven groups, in menu order. */
 const ROW_GIT: SessionActionId[] = ["commit", "push", "pr", "merge", "viewPr"];
@@ -123,6 +125,8 @@ const NO_KIDS: Instance[] = [];
 interface Props {
   inst: Instance;
   idx: number;
+  /** Draw the Alt+N number (off in the calm first hour — lib/calm.ts). */
+  numbered?: boolean;
   onScreen: boolean;
   dropCue: "above" | "below" | null;
   onDragState(title: string | null): void;
@@ -143,6 +147,7 @@ interface Props {
 export const SidebarRow = memo(function SidebarRow({
   inst,
   idx,
+  numbered = true,
   onScreen,
   dropCue,
   onDragState,
@@ -159,6 +164,9 @@ export const SidebarRow = memo(function SidebarRow({
   // click turns the item into a confirm strip, Delete on it does it. Closing
   // the menu disarms.
   const [deleteArmed, setDeleteArmed] = useState(false);
+  // The row's ✕ on a session with uncommitted changes asks first, on a strip
+  // under the row (never confirm(): the desktop app has none).
+  const [closeArmed, setCloseArmed] = useState(false);
   // The sessions holding this row's folder when a Delete 409ed ("Duplicate
   // session" runs in place). Drawn as a card under the row, outside the menu,
   // so it survives the menu closing; dismissed by its ✕ or by a later success.
@@ -192,9 +200,15 @@ export const SidebarRow = memo(function SidebarRow({
   const pending = !!inst.pending;
   const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
   const ideName = config?.ide_name || "Cursor";
+  // Files with uncommitted changes (what the ✕ asks about before it closes).
+  const uncommitted = Number(inst.diff_stat?.uncommitted?.files) || 0;
   // ONE session state for the row (lib/sessionState): the dot and the chip
   // below are painted from this same object, so they can never disagree.
-  const ss = deriveSessionState(inst);
+  // …unless its agent isn't installed here: then nothing about it is Idle or
+  // Offline — it never started, and Install is the one thing that helps.
+  const { data: setupStatus } = useSetup();
+  const noAgent = agentMissing(inst, setupStatus?.logins);
+  const ss = noAgent ? agentMissingState(noAgent) : deriveSessionState(inst);
   const me = useMe();
   // A one-for-all / split piece that MindFlock merged back into its lead's
   // branch: that is its stage now, whatever its own branch says ("committed").
@@ -206,7 +220,7 @@ export const SidebarRow = memo(function SidebarRow({
         : { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
       : chip0;
   const check = checkChip(inst);
-  const num = idx < 9 ? String(idx + 1) : "";
+  const num = numbered && idx < 9 ? String(idx + 1) : "";
   // Ticket/PR/issue sessions read as "(tix) add-dark-mode/sc-12345" instead of
   // the bare slug; a hand-made session's title is passed through unchanged.
   const label = sessionLabel(displayTitle(inst), inst.branch || "");
@@ -297,7 +311,12 @@ export const SidebarRow = memo(function SidebarRow({
   // 1–9 press them while the ROW has focus.
   const answering =
     (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
-  const subline = !editing && (ship || wline || roll || lline || lineage);
+  // What the session was asked to do, under its name — the first line of its
+  // newest prompt — when nothing more pressing (a ship line, a family line)
+  // has the slot. "untitled · Idle" said nothing about the work.
+  const task = String(inst.last_prompt || "").trim();
+  const taskLine = !noAgent && !ship && !lline && !wline && !lineage && !!task;
+  const subline = !editing && (ship || wline || roll || lline || lineage || taskLine || !!noAgent);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   useNow(wline?.state === "working" || ship?.state === "working" ? 30_000 : false);
@@ -598,6 +617,16 @@ export const SidebarRow = memo(function SidebarRow({
               {wline.text}
             </span>
           )}
+          {!editing && noAgent && (
+            <span className="lineage noagent-line" title={ss.hint}>
+              Failed: {noAgent} isn't installed
+            </span>
+          )}
+          {!editing && taskLine && (
+            <span className="lineage task-line" title={String(inst.last_prompt_full || task)}>
+              {task}
+            </span>
+          )}
           {!editing && !ship && !lline && !wline && lineage && (
             <span
               className={"lineage" + (lineage.spawned ? " spawned" : "")}
@@ -662,6 +691,21 @@ export const SidebarRow = memo(function SidebarRow({
           <span className={"stagechip " + pchip.cls} title={pchip.title}>
             {pchip.label}
           </span>
+        ) : noAgent ? (
+          // The agent never started: Install (the Setup checklist's step ①
+          // installs it), then the row's own Restart takes over.
+          <button
+            type="button"
+            className={"stagechip chip-restart chip-noagent " + chip.cls}
+            title={ss.hint}
+            aria-label={ss.label + " — install it"}
+            onClick={(e) => act(() => useUi.getState().openDialogFor("setup"), e)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <span className="chip-act" aria-hidden="true">
+              Install
+            </span>
+          </button>
         ) : ss.state === "offline" && ss.restartable && !paused ? (
           // Offline carries its remedy: Restart relaunches the agent (the same
           // lazy revive a terminal attach or a sent prompt does).
@@ -744,12 +788,21 @@ export const SidebarRow = memo(function SidebarRow({
         {!pending && (
           <button
             className={"kill" + (missing ? " cleanup" : "")}
+            aria-label={missing ? "Delete session" : "Close session"}
             title={
               missing
                 ? "Delete — its workspace is gone; this removes the session"
                 : "Close session — stops the agent and moves it to Recently closed (Ctrl+W / Del; reopen with Ctrl+Shift+T)"
             }
-            onClick={(e) => act(() => (missing ? cleanupMissing(title) : sessionAction("close").run(title)), e)}
+            onClick={(e) =>
+              act(() => {
+                if (missing) return cleanupMissing(title);
+                // Uncommitted work: say so before the agent stops.
+                if (uncommitted > 0 && !closeArmed) return setCloseArmed(true);
+                setCloseArmed(false);
+                sessionAction("close").run(title);
+              }, e)
+            }
           >
             {missing ? "Delete" : "✕"}
           </button>
@@ -759,6 +812,31 @@ export const SidebarRow = memo(function SidebarRow({
           stay inside, where the family connector is drawn through them. */}
       <div className="inst-tail">
         {(nested || nest.stem) && <NestLines nest={nest} part="tail" />}
+        {closeArmed && !missing && (
+          <div className="close-confirm" role="group" aria-label={`Close ${shown}?`}>
+            <span className="del-q">
+              Close session? Its {uncommitted} uncommitted change{uncommitted === 1 ? "" : "s"} stay in its
+              folder — reopen it from Recently closed.
+            </span>
+            <span className="del-acts">
+              <button
+                type="button"
+                className="danger"
+                onClick={(e) =>
+                  act(() => {
+                    setCloseArmed(false);
+                    sessionAction("close").run(title);
+                  }, e)
+                }
+              >
+                Close session
+              </button>
+              <button type="button" autoFocus onClick={(e) => act(() => setCloseArmed(false), e)}>
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
         {answering && (
           <AnswerStrip
             ref={strip}
@@ -811,6 +889,17 @@ export const SidebarRow = memo(function SidebarRow({
                     {ROW_GIT.map(rowItem)}
                     <div className="menu-sep" />
                   </>
+                )}
+                {/* Verify's checklist for this branch: what to check before
+                    (or after) it merges. Only a session with a branch has one. */}
+                {inst.branch && !peer && (
+                  <button
+                    data-row="checklist"
+                    title={"Verify's checklist for " + inst.branch + " — the steps to check before or after it merges"}
+                    onClick={(e) => act(() => openChecklist(inst.branch), e)}
+                  >
+                    Checklist…
+                  </button>
                 )}
                 {/* Hand-offs: Fast-track… (the ⏩ picker), Split into parallel
                     pieces…, Move out of a group, Message… — with a separator

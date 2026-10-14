@@ -1,7 +1,8 @@
 /** The welcome walkthrough — a short slideshow that says what MindFlock is and
  * where its few everyday surfaces live: New, the grid, the ship step and the
- * bell, Intake. Opens automatically on first run (see App) and is replayable
- * from Settings → General.
+ * bell, Intake. Opens by itself ONCE, on a first launch (`useFirstLaunchTour`
+ * below: the synced `welcome_tour` pref, never a per-browser flag), and is
+ * replayable from the palette, the ? sheet and Settings → General.
  *
  * It used to be twelve slides that walked every setup screen in turn, which put
  * a page of configuration between a new user and their first session. Setup now
@@ -11,6 +12,10 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
+import { useConfig, useInstances } from "../../state/queries";
+import { useSetup } from "../setup/useSetup";
+import { firstLaunchTour } from "../../lib/calm";
+import { firstPrefsPull } from "../../lib/prefsSync";
 import { Modal } from "../Modal";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
@@ -44,11 +49,10 @@ const SLIDES: Slide[] = [
     title: "Sessions & the grid",
     body: (
       <>
-        Press <b>New</b> (Ctrl+N) and say what to work on — tick <b>Auto-split</b> to
-        let its agent split a big task across sessions. Each session gets a pane in the grid and a row in the sidebar; drag
-        rows to reorder. <b>View</b> at the bottom of the sidebar picks how many
-        panes show at once. The <b>Assistant</b> bar is a personal helper with a
-        todo list.
+        Press <b>New</b> (Alt+N) and say what to work on. Each session gets a
+        pane in the grid and a row in the sidebar. More tools — the Assistant,
+        usage, how many panes show — appear once you have a few sessions;{" "}
+        <b>⚙ Customize</b> brings any of them in sooner.
       </>
     ),
   },
@@ -116,7 +120,36 @@ function Logo() {
   return <div className="wt-logo" role="img" aria-label="MindFlock" />;
 }
 
+/** Open the tour by itself once, on a first launch (lib/calm firstLaunchTour),
+ * after this page's first prefs pull — so "seen on another device" is known
+ * before anything opens — and remember it as seen the moment it opens. */
+function useFirstLaunchTour() {
+  const seen = useUi((s) => s.welcomeTourSeen);
+  const { data: instances } = useInstances();
+  const { data: status } = useSetup();
+  const { data: config } = useConfig();
+  const [pulled, setPulled] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void firstPrefsPull.then(() => live && setPulled(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const due =
+    pulled &&
+    !!instances &&
+    firstLaunchTour({ seen, sessions: instances.length, status, onboarded: config?.onboarded });
+  useEffect(() => {
+    if (!due) return;
+    const ui = useUi.getState();
+    ui.markWelcomeTourSeen();
+    if (!ui.tourOpen) useUi.setState({ tourOpen: true });
+  }, [due]);
+}
+
 export function WelcomeTour() {
+  useFirstLaunchTour();
   const open = useUi((s) => s.tourOpen);
   // While a setup dialog is open we PAUSE the tour: hide it but stay mounted so
   // the slide index survives. Closing that dialog brings the tour back where it

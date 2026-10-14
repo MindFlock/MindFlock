@@ -67,6 +67,7 @@ function applyLive(fields: Partial<Prefs>) {
     switch (f) {
       case "hidden_bars":
         st.hiddenBars = new Set(Array.isArray(v) ? (v as string[]) : defaultHiddenBars());
+        st.barsExplicit = Array.isArray(v);
         break;
       case "bar_order":
         st.barOrder = Array.isArray(v) ? v : [];
@@ -91,6 +92,9 @@ function applyLive(fields: Partial<Prefs>) {
         break;
       case "map_tour":
         st.mapTourSeen = v === true;
+        break;
+      case "welcome_tour":
+        st.welcomeTourSeen = v === true;
         break;
       case "keymap":
         reloadKeymap();
@@ -242,10 +246,19 @@ export function pullPrefs(): Promise<void> {
       }
     } finally {
       pulling = null;
+      settleFirstPull();
     }
   })();
   return pulling;
 }
+
+let settleFirstPull: () => void = () => {};
+/** Resolves once this page's first pull has finished (adopted or failed) —
+ * what a first-launch decision waits for, so a flag another device already
+ * set (the welcome tour seen) is in before anything opens over it. */
+export const firstPrefsPull: Promise<void> = new Promise<void>((r) => {
+  settleFirstPull = r;
+});
 
 let installed = false;
 

@@ -987,3 +987,72 @@
 .term-notice.gone {
   opacity: 0;
 }
+
+/* The header's ⋯ (PaneMoreMenu): the folded tabs and controls. Fixed, not
+   absolute — the header scrolls sideways and would clip it. */
+.pane-head .act.pane-more {
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.pane-head .act.pane-more.open {
+  border-color: var(--accent);
+}
+
+.pane-more-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.pane-more-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pane-more-menu button:hover,
+.pane-more-menu button:focus-visible {
+  background: var(--panel-2);
+}
+
+/* The session's agent isn't installed: one line over the terminal that says
+   what `claude: not found` means, and the way out. */
+.pane-noagent {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--tone-broken, var(--red));
+}
+
+.pane-noagent button {
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}

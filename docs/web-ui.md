@@ -108,14 +108,26 @@ the desktop-notification on/off toggle lives in Settings → Notifications.
 Disk management is not a screen of its own any more: it is the same page as
 [Recently closed](#recently-closed).
 
-A first run keeps the sidebar quiet: there is no welcome hint (the grid's
-**Get set up** checklist does that job, and the tour waits to be asked for),
-and the footer's doctor chip (*⚠ setup issues — open Setup*) stays down while
-that card is showing, because the card already lists the same checks. Once
-the card has gone, the footer carries the doctor chip and the **Setup 3/5**
-chip side by side until setup is finished (see
-[First-run onboarding](#first-run-onboarding)). One dismissible hint remains
-in the footer: *More sidebar bars — like Prompts — are under ⚙ Customize.*
+**The calm first hour** (`lib/calm.ts`). A newcomer — no session yet, or a
+first session under a week old, read from the server's setup record (the
+`repo` step's date), so every device agrees — with fewer than three sessions
+sees only what the first hour needs: the sessions, **+ New** and **Setup**.
+The usage strip, the **Assistant** bar and every extension's bar (Database,
+Usage optimizer…) join the *default* hidden set; the **View** presets, the
+filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
+Alt+N numbers wait too; and pane headers are calm (see
+[The pane header](#the-pane-header)). Three sessions, or a week, brings the
+full screen back by itself. A choice the person made always wins: bars set in
+Customize (here or synced from another device) are never touched, and a View
+preset other than Auto keeps the picker shown. While `/api/setup` is still
+loading nothing is hidden — a veteran's screen never flashes empty.
+
+The footer's doctor chip (*⚠ setup issues — open Setup*) stays down while the
+grid's **Get set up** card or the **Setup** chip is showing — they open the
+same checklist, which lists the issue. Setup has **one count** everywhere
+(`setupCount`): the chip, the card and the modal all say **Setup 1 of 3** for
+the three required steps, then **Setup 3 of 3 · 2 optional** while optional
+steps are left (see [First-run onboarding](#first-run-onboarding)).
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
 shared registry (`sidebar/barDefs.ts`: Usage, Tickets, Pull requests, Issues,
@@ -125,7 +137,7 @@ is reachable out of the box without being overwhelming; **Pull requests**,
 **Issues**, **Verify** and **Prompts** start hidden. **Customize** toggles each bar
 on/off, and bars drag-to-reorder by their ⠿ grip (the session list is a fixed
 anchor bars can sit above or below, but which never itself moves). Order and the
-hidden set persist per browser (`localStorage`). A bar added after you saved an
+hidden set are synced prefs (`hidden_bars`, `bar_order`). A bar added after you saved an
 order (Prompts — `LATE_BARS`) appears just above the session list rather than
 below it, and a hidden set saved before it existed leaves it visible.
 
@@ -201,6 +213,27 @@ commands. Type to filter (subsequence match), `↑`/`↓` to select, `Enter` to
 run, `Esc` to close. Both bindings work from anywhere, including while a
 terminal has keyboard focus — the same VSCode trade-off as its quick-open/palette
 keys.
+
+The palette opens on a **short menu**, not the whole index: New session, the
+sessions you last looked at, Intake, Verify, Setup, Settings, Tour, Keyboard
+shortcuts, and **All commands…** (`palette/paletteRank.ts`). Typing matches
+labels and a few plain synonyms (*help* finds the shortcuts and the tour,
+*install* finds Setup and the Doctor). An **outward verb** — Commit, Push,
+Open PR, Merge, Pause, Close, Delete — is never the `Enter` default: typing a
+session's name highlights **Focus: <name>**. **Join with code …** is offered
+only for a real code shape (a dashed `XXXX-XXXX` device code or an
+`mfp1:`/`mfp2:` invite) — an eight-letter word like *worktree* is not a code.
+
+**Shortcut sheet** (`?`, or **⌨ Shortcuts**) — in a browser tab, each row
+leads with the combo that works there (Alt+N before Ctrl+N, Delete before
+Ctrl+W), keys the browser keeps for itself (Ctrl+N/W/T, Ctrl+Tab, Ctrl+PgUp/Dn,
+Ctrl+1…9) are drawn faded, and rows with nothing usable in a tab sort last,
+tagged **desktop app**. In the desktop app nothing is marked.
+
+**Narrow window** (≤ 760 px) — the sidebar becomes an overlay that starts
+closed (the top bar's ▯ opens it; picking a session closes it), and **Auto**
+view shows one pane. Nothing is saved: widen the window and your own sidebar
+choice is back.
 
 **Grid** — terminal panes in a draggable grid (grip `⠿` to rearrange; layout is
 persisted). The view mode caps how many panes are visible; the most recently used
@@ -380,7 +413,23 @@ buttons did nothing there.
 Left to right: the ⠿ grip, the session's name, the tabs (**Agent**,
 **Terminal**, **Diff**, **Map**, **Queue**, and **Thread** once the session has
 workers or messages), the guided next-step button, ⏩
-[Fast-track](#fast-track-), the cost chip, **History** and **−**.
+[Fast-track](#fast-track-), the cost chip, **History**, **⋯** and **−**.
+
+- **Calm header.** In the [calm first hour](#layout), or when a pane is
+  narrower than 560 px, the header shows name · **Agent** / **Diff** ·
+  **Commit…**, and folds **Terminal**, **Map**, **Queue**, **Fast-track…**,
+  **Browse history** and the cost chip into **⋯** — the next-step button is
+  never the thing scrolled out of view. A tab you are on, a Queue with
+  something in it and a fast-track someone set stay in the row.
+- **⋯ → Checklist…** (any header, when the session has a branch) opens Verify
+  on that branch's checklist — also on the row's › menu.
+- **Commit…** says what it does on hover: *Commit this session's changes — you
+  check the message first. Next: Push, then Open PR.*
+- **An agent that isn't installed.** When the session's agent CLI is missing
+  on this computer (`/api/setup`'s `logins`), a line over the terminal says
+  so with **Install <agent>…** (the Setup checklist), and the rail row reads
+  *Failed: claude isn't installed* with an **Install** chip — never Idle or
+  Offline/Restart. Once it is installed, the row's usual Restart takes over.
 
 - **One name.** The pane is titled with exactly what its rail row shows — the
   rename if there is one, else the `(tix) feature/slug` label — and the same
@@ -480,7 +529,8 @@ leaves the ladder still asking for **Merge** until someone presses ↺.
 ## Session row actions (expand a sidebar row with ›)
 
 Copy path · **Commit…** · **Push** · **Open PR** · **Merge PR** ·
-**View PR ↗** · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
+**View PR ↗** · **Checklist…** (when the session has a branch: Verify on that
+branch's checklist, `openDialogFor("verify", branch)`) · **Fast-track…** (opens the pane's [⏩ picker](#fast-track-)) ·
 **Split into parallel pieces…** · **Move out of {team run}** for a team run member ·
 **Message…** · **Run checks now** · **Rename…** · **Duplicate session**
 (`Ctrl+K D`; a second in-place session on the same worktree) ·
@@ -503,7 +553,11 @@ older build (checkout removed) still resumes the old way.
 **One way to leave a session, in two strengths.** **Close** (the ✕ on the row,
 `Ctrl+W` / `Delete`, the palette's *Close session*) stops the agent and moves
 the session to Recently closed (its worktree is kept) — the item says so under
-the verb (*stops the agent and moves it to Recently closed*). **Delete…** removes the worktree and its branch; the
+the verb (*stops the agent and moves it to Recently closed*). The row's ✕ is
+labelled *Close session*, and on a session with uncommitted changes it asks
+first, on a strip under the row: *Close session? Its N uncommitted changes
+stay in its folder — reopen it from Recently closed.* **Close session** /
+**Cancel** (focus on Cancel). **Delete…** removes the worktree and its branch; the
 first click turns the item into an inline strip — *Removes the worktree and
 branch* with **Delete** and **Cancel** (focus lands on Cancel, so a second
 Enter never deletes). Both land in [Recently closed](#recently-closed); only a
@@ -1947,8 +2001,9 @@ a same-named different one is saved as *<name> (saved prompt)*.
 
 ## First-run onboarding
 
-One checklist, shown in one place at a time. Nothing opens by itself on a
-first load: the grid's first-run card *is* the welcome. UI store state
+One checklist, shown in one place at a time. On a genuinely first launch the
+welcome tour opens once over the grid's first-run card (below); nothing else
+opens by itself. UI store state
 (`state/store.ts`: `hintsEnabled`, `dismissedHints`, persisted in
 `localStorage`) covers the hints; the checklist's state is the server's.
 
@@ -1980,8 +2035,16 @@ first load: the grid's first-run card *is* the welcome. UI store state
     line pointing at Settings for other computers, people, extensions and IDEs.
   One obvious next action: the server's `summary.next` step is outlined and
   its button is the only accent-coloured one; a done step shrinks to its
-  title. The progress line counts the three required steps until they are
-  done (*1 of 3 done · next: Sign in to your agent*), then the chip's count.
+  title. The progress line uses the chip's one count (`setupCount`): the three
+  required steps (*1 of 3 done · next: Sign in to your agent*), then what
+  optional is left (*3 of 3 done · 2 optional left · next: Connect GitHub*).
+  **Install …** never leaves you watching a cursor: the window shows what it
+  installs and a running clock (from the run's own start, `started_at` on
+  `GET /api/doctor/install-state`), and after 90 s, or when the run fails,
+  shows the commands to run in your own terminal with **Copy** — the same
+  commands are always under *Or run it yourself* by the button. A run still
+  going after a reload (or in another tab) shows as *Installing… 1:23*
+  **Show** in the button's place.
   Steps are marked by the server from the thing itself, never by a button:
   ① and ② by every doctor run (nothing failing but optional extras; the
   default agent CLI installed and its login found), ③ by the first session
@@ -1996,22 +2059,23 @@ first load: the grid's first-run card *is* the welcome. UI store state
   ④ as skipped). The text a first `mindflock serve` prints at boot is folded
   at the bottom as *What the server found at first start* — the desktop
   app's server writes it to a log nobody reads.
-- **Setup 3/5** — once the three required steps are done (or a session
-  exists) the card gives way to a compact chip in the sidebar footer, beside
-  the doctor's *setup issues* chip, reading **Setup** *done*/*5*, until every
+- **Setup chip** — once the three required steps are done (or a session
+  exists) the card gives way to a compact chip in the sidebar footer reading
+  **Setup 1 of 3** (then **Setup 3 of 3 · 2 optional**), until every
   step of the first two groups is done or skipped (the phone, under
   *Optional, later*, never keeps it up). The chip, the doctor chip's **open Setup**, the
   palette's **Open Setup checklist** and the desktop app's `?setup=1` (its
   older spelling `?setup=install`; once, the parameter is stripped) open the
   **Setup** modal, which renders the same checklist. The modal never opens
   by itself — not on a failing doctor probe, not on a first load. The
-  doctor chip stays down while the grid card is showing, because the card
-  already lists the same checks.
+  doctor chip stays down while the grid card or this chip is showing,
+  because both open the checklist that already lists the same checks.
 - **Tour** (`onboarding/WelcomeTour.tsx`) — a five-slide tour: **Welcome to
   MindFlock** (agents side by side on this machine, no account and no cloud;
   each session is its own branch and folder), **Sessions & the grid** (New,
-  one task — Auto-split lets its agent split a big one; a pane and a row per
-  session; View picks how many panes show; the Assistant), **Shipping** (the
+  a pane and a row per session; more tools — the Assistant, usage, how many
+  panes show — appear once you have a few sessions, ⚙ Customize brings them
+  in sooner), **Shipping** (the
   pane's next-step button, ⏩ Fast-track, and the bell for anything waiting
   on you), **Where work comes from** (Intake, Verify for checking what you
   shipped, and ⚙ Customize for more bars, like Prompts) and **You're all
@@ -2022,9 +2086,13 @@ first load: the grid's first-run card *is* the welcome. UI store state
   The fourth slide carries **Set up now →**, which opens **Intake** on its
   Tickets tab (`LEGACY_SCREEN_TABS` decides that from the slide's `screen`
   key). The tour pauses behind Settings, Intake or Setup rather than ending,
-  so closing one lands you back on the same slide. It **never opens by
-  itself**: it is the palette's **Tour**, the **Tour** link on the **?**
-  shortcuts sheet, and **Replay tour** in Settings → General.
+  so closing one lands you back on the same slide. It **opens by itself
+  once**, on a first launch — no session ever started (the setup record's
+  `repo` step) and never seen on any of your devices (the synced
+  `prefs.welcome_tour`, marked the moment it opens; the page waits for its
+  first prefs pull before deciding). After that it is the palette's
+  **Tour**, the **Tour** link on the **?** shortcuts sheet, and **Replay
+  tour** in Settings → General.
 - **Connect GitHub** (`dialogs/ConnectGitHub.tsx`, `/api/github/*`) — one
   sign-in for opening PRs and pushing, stored as `github.token` (which
   settings sync shares with your other devices). It offers the best way this

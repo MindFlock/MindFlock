@@ -345,3 +345,53 @@
     padding: 18px 14px;
   }
 }
+
+/* Install: a run that is still going (after a reload), and the "run it
+   yourself" fallback — the commands in a copyable box. Shared by the install
+   window (dialogs/InstallTerminal.tsx) and every Install button. */
+.doctor-install .install-running {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.install-manual-fold {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.install-manual-fold > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.install-manual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.install-manual > span {
+  flex: 1 1 100%;
+}
+
+.install-manual .install-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 8em;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#install-dialog .install-manual {
+  padding: 0 14px;
+}

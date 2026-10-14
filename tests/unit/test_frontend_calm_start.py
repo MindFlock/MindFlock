@@ -143,7 +143,10 @@ class TestFirstRun:
         model = _read("components/setup/setupModel.ts")
         assert 'v !== "1" && v !== "install"' in model
 
-    def test_the_tour_no_longer_opens_itself(self):
+    def test_app_never_opens_the_tour(self):
+        """App never opens it; the one automatic opening is WelcomeTour's
+        first-launch hook on the synced `welcome_tour` pref (pinned in
+        onboarding.test.ts), never a per-browser flag."""
         app = _code(_read("App.tsx"))
         assert "tourDecision" not in app and "openTour" not in app
         store = _code(_read("state/store.ts"))

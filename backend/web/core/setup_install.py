@@ -85,10 +85,25 @@ def exit_code() -> Optional[int]:
         return None
 
 
+def started_at() -> Optional[float]:
+    """When the current (or last) run started — the script file is rewritten
+    by every run — as epoch seconds; ``None`` before any run."""
+    try:
+        return os.path.getmtime(_script_path())
+    except OSError:
+        return None
+
+
 def state() -> dict:
-    """``{"running": bool, "exit_code": int | None}`` for the UI to follow."""
+    """``{"running": bool, "exit_code": int | None, "started_at": float |
+    None}`` for the UI to follow. ``started_at`` lets a window opened (or a
+    page reloaded) mid-run show how long it has been going."""
     code = exit_code()
-    return {"running": _session_exists() and code is None, "exit_code": code}
+    return {
+        "running": _session_exists() and code is None,
+        "exit_code": code,
+        "started_at": started_at(),
+    }
 
 
 def _write_script(script: str) -> str:

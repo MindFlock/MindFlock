@@ -51,6 +51,11 @@ def fake(monkeypatch, tmp_path):
     return state
 
 
+def _rs(st):
+    """The run's state without ``started_at`` (a file mtime)."""
+    return {k: st[k] for k in ("running", "exit_code")}
+
+
 def test_starts_the_plan_script_and_records_its_exit(fake):
     session, err = setup_install.ensure_session()
     assert err is None and session == setup_install.SESSION
@@ -59,7 +64,7 @@ def test_starts_the_plan_script_and_records_its_exit(fake):
     (wrapped,) = fake["created"]
     assert "setup-install.sh" in wrapped
     assert "echo $? > " in wrapped and "setup-install.status" in wrapped
-    assert setup_install.state() == {"running": True, "exit_code": None}
+    assert _rs(setup_install.state()) == {"running": True, "exit_code": None}
 
 
 def test_nothing_to_install_is_an_error_not_an_empty_terminal(fake, monkeypatch):
@@ -95,6 +100,15 @@ def test_close_never_kills_an_install_halfway(fake):
     assert fake["session"] is False
 
 
+def test_state_says_when_the_run_started(fake):
+    """A window opened (or a page reloaded) mid-install shows how long it has
+    been going: ``started_at`` is the run's script file's mtime."""
+    assert setup_install.state()["started_at"] is None
+    setup_install.ensure_session()
+    st = setup_install.state()
+    assert isinstance(st["started_at"], float) and st["started_at"] > 0
+
+
 def test_the_script_is_private_to_the_user(fake):
     setup_install.ensure_session()
     mode = (fake["dir"] / "setup-install.sh").stat().st_mode & 0o777
@@ -107,14 +121,14 @@ def test_routes(fake):
     c = TestClient(
         server.app, client=("127.0.0.1", 50000), headers={"host": "127.0.0.1"}
     )
-    assert c.get("/api/doctor/install-state").json() == {
+    assert _rs(c.get("/api/doctor/install-state").json()) == {
         "running": False,
         "exit_code": None,
     }
     setup_install.ensure_session()
     assert c.post("/api/doctor/install-close").json() == {"closed": False}
     (fake["dir"] / "setup-install.status").write_text("0\n")
-    assert c.get("/api/doctor/install-state").json() == {
+    assert _rs(c.get("/api/doctor/install-state").json()) == {
         "running": False,
         "exit_code": 0,
     }
@@ -185,7 +199,7 @@ def test_without_tmux_the_script_runs_under_a_plain_pty(fake, monkeypatch):
         out = run.attach(lambda _d: None)
         assert b"install-uv" in out and b"you can close this window" in out
         # No interactive shell is left behind in a plain PTY.
-        assert setup_install.state() == {"running": False, "exit_code": 0}
+        assert _rs(setup_install.state()) == {"running": False, "exit_code": 0}
         assert setup_install.close() is True
         assert pty_run.get(session) is None
     finally:
@@ -206,7 +220,7 @@ def test_without_tmux_a_run_in_progress_is_reattached(fake, monkeypatch):
         first = pty_run.get(setup_install.SESSION)
         setup_install.ensure_session()
         assert pty_run.get(setup_install.SESSION) is first
-        assert setup_install.state() == {"running": True, "exit_code": None}
+        assert _rs(setup_install.state()) == {"running": True, "exit_code": None}
         # Closing the window mid-install never kills it.
         assert setup_install.close() is False and first.alive()
     finally:

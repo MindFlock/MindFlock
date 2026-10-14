@@ -41,6 +41,9 @@ import { WelcomeTour } from "./components/onboarding/WelcomeTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
 
+/** At or under this window width the main screen goes single-column. */
+const NARROW_PX = 760;
+
 export default function App() {
   const { data: config } = useConfig();
   const { data: instances } = useInstances();
@@ -96,6 +99,27 @@ export default function App() {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
     return () => clearTimeout(t);
   }, [ui.sidebarHidden]);
+
+  // A phone-narrow window: the sidebar becomes an overlay that starts closed
+  // (▯ in the top bar opens it), "Auto" view shows one pane, and picking a
+  // session closes the overlay again. Nothing here is saved — widen the
+  // window and the sidebar is wherever you left it.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: " + NARROW_PX + "px)");
+    const apply = () => {
+      useUi.getState().setNarrow(mq.matches);
+      document.body.classList.toggle("narrow", mq.matches);
+    };
+    apply();
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, []);
+  useEffect(() => {
+    const s = useUi.getState();
+    if (s.narrow && !s.sidebarHidden && ui.focused) s.toggleSidebar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ui.focused]);
 
   // Sidebar width (dragged from its right edge) drives the body grid column.
   // SidebarResizer writes the var directly while dragging; this is what makes

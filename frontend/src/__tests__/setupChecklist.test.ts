@@ -117,7 +117,7 @@ describe("SetupChecklist", () => {
     expect(html).toContain("Show again"); // the skipped step can come back
     expect(
       progressLine(status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true } }))
-    ).toBe("3 of 5 done · next: Connect GitHub");
+    ).toBe("3 of 3 done · 2 optional left · next: Connect GitHub");
     expect(
       progressLine(
         status({ tools: { done: true }, agent_login: { done: true }, repo: { done: true }, github: { done: true }, tracker: { skipped: true } })

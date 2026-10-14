@@ -69,9 +69,11 @@ function aggregate(instances: Instance[]): {
 }
 
 /** Collapsed pill text + tooltip (port of renderUsagePill's head/title logic).
- * Tracks the FOCUSED pane's provider, falling back to the default provider:
- *   plan, active window  ->  "Codex: 94% left · resets 3h 15m"
- *   plan, idle window    ->  "Claude: fresh window"
+ * Tracks the FOCUSED pane's provider, falling back to the default provider.
+ * Always names what it measures — a bare "Claude: fresh window" read like a
+ * button that opens a window:
+ *   plan, active window  ->  "Codex usage: 94% left · resets 3h 15m"
+ *   plan, idle window    ->  "Claude usage: none yet this window"
  *   metered              ->  "Aider ~$4.20"   (real marginal spend) */
 function pillText(
   usage: UsageWindows | null,
@@ -91,7 +93,7 @@ function pillText(
     target = provs.find((p) => p.name === usage.default) || null;
   }
   if (target) {
-    const tag = provs.length > 1 ? target.label + ": " : "";
+    const tag = target.label + " usage: ";
     if (target.mode === "windowed") {
       const w = target.window;
       if (w && w.end) {
@@ -111,7 +113,7 @@ function pillText(
           (focusedProv ? " (focused session)" : " (default)") +
           " — click for the breakdown";
       } else {
-        head = tag + "fresh window";
+        head = tag + "none yet this window";
         title =
           "No active " + target.label + " window — your next message starts one. Click for the breakdown";
       }

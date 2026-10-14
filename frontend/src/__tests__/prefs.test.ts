@@ -51,7 +51,7 @@ function memKV(init: Record<string, string> = {}): KV & { data: Record<string, s
 }
 
 describe("PREF_MAP", () => {
-  it("maps exactly the spec's thirteen keys, one field each", () => {
+  it("maps exactly the spec's fourteen keys, one field each", () => {
     expect(Object.fromEntries(PREF_MAP.map((p) => [p.ls, p.field]))).toEqual({
       mf_keymap: "keymap",
       "mindflock.prompt_presets": "prompt_presets",
@@ -68,6 +68,7 @@ describe("PREF_MAP", () => {
       mf_hints: "hints",
       mf_map_tour: "map_tour",
       mf_settings_advanced: "settings_advanced",
+      mf_welcome_tour: "welcome_tour",
     });
     // Every prefs field is mapped, and nothing else is.
     expect(PREF_MAP.map((p) => p.field).sort()).toEqual(Object.keys(PREF_DEFAULTS).sort());

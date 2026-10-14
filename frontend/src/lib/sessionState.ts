@@ -264,3 +264,45 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
 export function attentionReason(ss: SessionState): string {
   return ss.reason === "stuck" && ss.hint ? ss.hint : ss.label;
 }
+
+// --- An agent that can't launch -------------------------------------------
+
+/** What GET /api/setup says about each agent CLI (`logins`): enough to tell
+ * a session whose agent isn't on this machine. */
+export interface AgentInstallRow {
+  name: string;
+  installed: boolean;
+}
+
+/** The session's agent is not installed here: the CLI the session runs is
+ * one the server knows and reports missing, and nothing says the agent is
+ * running anyway. Its terminal printed `claude: not found` and exited — Idle
+ * then Offline/Restart was a lie about a session that can never start; this
+ * says so, and the row offers Install. Remote rows (another device's
+ * install) and custom providers the server doesn't list never match. `null`
+ * when the agent is there (or can't be told). */
+export function agentMissing(
+  inst: Partial<Instance>,
+  logins: AgentInstallRow[] | null | undefined,
+  activity: string = effectiveActivity(inst)
+): string | null {
+  if (!logins || !logins.length || inst.device || inst.pending) return null;
+  if (activity === "working" || activity === "clarify" || activity === "limit") return null;
+  const name = String(inst.provider || inst.program || "").trim();
+  if (!name) return null;
+  const row = logins.find((l) => l.name === name);
+  return row && row.installed === false ? name : null;
+}
+
+/** The state a session with a missing agent shows instead of Idle/Offline:
+ * "Failed: claude isn't installed", in the bell's broken tone. */
+export function agentMissingState(name: string): SessionState {
+  return {
+    state: "offline",
+    label: "Failed: " + name + " isn't installed",
+    tone: "broken",
+    inBell: true,
+    restartable: false,
+    hint: name + " isn't installed on this computer, so this session's agent couldn't start — install it, then Restart",
+  };
+}

@@ -10,7 +10,7 @@ import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { patchInstance, queryClient, refreshInstances } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { displayName, setSessionSelector, useUi, windowKey } from "../state/store";
+import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
@@ -58,7 +58,7 @@ export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
   ];
   const visible = computeVisibleSlots(instances(), windowKeys, {
     hidden: ui.hidden,
-    viewMode: ui.viewMode,
+    viewMode: effectiveViewMode(ui),
     mru: ui.mru,
     order: ui.order,
   });
