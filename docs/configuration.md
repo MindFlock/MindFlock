@@ -988,6 +988,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `GET /api/config` reports each one's effective value, default and source
   (`env` / `settings` / `default`) as `caps.orchestration`, and a refusal
   names the limit and where to raise it.
+- **Fast-track** (`repository.*`, synced; Settings → Workspace):
+  `fasttrack_depth` is the rung new batches start on (`commit` · `push` ·
+  `pr` · `merge` · `off`; blank = the built-in default).
+  `precommit_retry_hooks` is a comma-separated list of pre-commit hook **ids**
+  whose failure fast-track may retry, then skip with `SKIP=` (test and
+  secret-scanning hooks are always refused). `fasttrack_failure_notes`
+  (Advanced → **Tell the agent when fast-track stops**, default on) leaves
+  the agent a `[MindFlock note …]` saying what failed when a run stops on
+  something it can fix (see [web-ui.md](web-ui.md)). Only `false` is
+  written, and anything other than an explicit `false` reads as on.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

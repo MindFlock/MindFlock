@@ -24,7 +24,7 @@ const BELL = normCode("components/NotificationsBell.tsx");
 const MSGS = normCode("lib/agentMessages.ts");
 const ALL = allCode();
 
-describe("nesting is paint: rail order, numbering and drops are untouched", () => {
+describe("nesting is paint over one family-contiguous rail order", () => {
   it("computes nesting per rendered list and never reorders", () => {
     expect(has(normCode("components/sidebar/ordering.ts"), "export function railNesting(")).toBe(true);
     // Computed from the list being rendered, index-aligned with it; the row
@@ -53,6 +53,13 @@ describe("nesting is paint: rail order, numbering and drops are untouched", () =
     // The rail renders and drags off the placed order, not the raw saved one.
     expect(has(SIDEBAR, "orderedInstances(listed, order)")).toBe(true);
     expect(has(SIDEBAR, "saved: order,")).toBe(true);
+  });
+
+  it("keeps every family contiguous in the one rail order everything reads", () => {
+    // railKeys feeds the rendered rows, the published railOrder and the drop
+    // merge alike, so a worker is never drawn, numbered or dropped apart.
+    expect(has(SIDEBAR, "return keepFamiliesTogether(")).toBe(true);
+    expect(has(SIDEBAR, "live: railKeys,")).toBe(true);
   });
 
   it("indents the dot onwards, never the number, with a 1px accent connector", () => {

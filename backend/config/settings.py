@@ -628,6 +628,12 @@ class RepositorySettings:
     # index blocks a commit forever, while a test hook failing must always stop.
     # Test and secret-scanning hooks are refused at the consumer (NEVER_SKIP).
     precommit_retry_hooks: str = ""
+    # When fast-track stops on something the AGENT can fix — a pre-commit hook
+    # or the verification check failed, CI failed, the PR conflicts with its
+    # base — type a short note into that agent saying what failed and to fix
+    # it (or to tell the user when it is a conflict that needs their call).
+    # Defaults on, so only the OFF state is ever written.
+    fasttrack_failure_notes: bool = True
     #: The repos Verify tracks, as ``owner/name`` slugs — the same spelling
     #: :attr:`GithubSettings.repos` uses, because it is the same kind of thing: a
     #: GitHub repo somebody CONFIGURED by typing its name. MEMBERSHIP IS THE
@@ -756,6 +762,8 @@ class RepositorySettings:
             d["fasttrack_depth"] = self.fasttrack_depth
         if self.precommit_retry_hooks:
             d["precommit_retry_hooks"] = self.precommit_retry_hooks
+        if not self.fasttrack_failure_notes:
+            d["fasttrack_failure_notes"] = False
         # Same emit-on-deviation rule as `github.repos` / `github.repo_settings`,
         # whose shape these two copy: an empty list and an empty map are not
         # written at all, and the coercer below has already dropped every block
@@ -795,6 +803,7 @@ class RepositorySettings:
             git_transport=_git_transport(d.get("git_transport")),
             fasttrack_depth=str(d.get("fasttrack_depth", "") or ""),
             precommit_retry_hooks=str(d.get("precommit_retry_hooks", "") or ""),
+            fasttrack_failure_notes=d.get("fasttrack_failure_notes", True) is not False,
             verify_repos=_str_list(d.get("verify_repos")),
             verify_repo_settings=_verify_repo_settings(d.get("verify_repo_settings")),
             # Absent => on. Only an explicit `false` pauses it, so a settings

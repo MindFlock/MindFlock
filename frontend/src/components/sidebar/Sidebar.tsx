@@ -30,6 +30,7 @@ import {
   orderedInstances,
   orderedKeys,
   deviceLineage,
+  keepFamiliesTogether,
   placeNewRunMembers,
   placeNewWorkers,
   railNesting,
@@ -186,15 +187,16 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     [windows, ui.filter]
   );
   // The full rail in display order, UNFILTERED — what a drag reorders (the
-  // filter narrows what you see, never what a drop writes back).
-  const railKeys = useMemo(
-    () =>
-      orderedKeys(
-        [...allRows.map((i) => i.title), ...windows.map((w) => w.key)],
-        order
-      ),
-    [allRows, windows, order]
-  );
+  // filter narrows what you see, never what a drop writes back). A worker
+  // always rides directly under its parent's family, whatever the saved order
+  // says: a duplicate slotted under its source or a drag can never strand it.
+  const railKeys = useMemo(() => {
+    const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
+    return keepFamiliesTogether(
+      orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order),
+      (k) => parentOf.get(k)
+    );
+  }, [allRows, windows, order]);
   const onScreen = useMemo(
     () =>
       new Set(

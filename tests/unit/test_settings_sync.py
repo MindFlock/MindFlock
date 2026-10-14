@@ -568,6 +568,23 @@ def test_clearing_a_field_syncs_as_a_clear(devices, clock):
         assert devices.get("ui", "accent") == ""
 
 
+def test_a_default_on_switch_syncs_its_off_and_its_back_on(devices, clock):
+    """``repository.fasttrack_failure_notes`` is written only when False: the
+    absent key (on) here must not clobber the rig's explicit off, and turning
+    it back on (the key vanishes) must still reach the other device."""
+    devices.all_on()
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(repository={"fasttrack_failure_notes": False})
+    run(settings_sync.sync_once())
+    assert devices.get("repository", "fasttrack_failure_notes") is False
+    clock.tick()
+    store.update_settings(repository={"fasttrack_failure_notes": True})
+    devices.sync("rig")
+    with devices.on("rig"):
+        assert devices.get("repository", "fasttrack_failure_notes") is True
+
+
 def test_adopting_is_not_mistaken_for_a_local_edit(devices, clock):
     """After a pull, the next scan must not restamp the adopted value as this
     device's own (that would make every device 'win' in turn)."""

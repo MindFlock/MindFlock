@@ -449,6 +449,7 @@ from backend.web.core.autopilot_driver import (
     _autopilot_run_check,
     _autopilot_snapshot,
     _autopilot_step,
+    _autopilot_tell_agent,
     _autopilot_wait,
     _autopilot_written_message,
     _emit_autopilot,

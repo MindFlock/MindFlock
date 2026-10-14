@@ -25430,6 +25430,34 @@ function orderWithAfter(order, title, after) {
 	next.splice(at + 1, 0, title);
 	return next;
 }
+function keepFamiliesTogether(keys, parentOf) {
+	const present = new Set(keys);
+	const up = (k) => {
+		const p = parentOf(k) || "";
+		return p && p !== k && present.has(p) ? p : "";
+	};
+	const kids = /* @__PURE__ */ new Map();
+	const roots = [];
+	for (const k of keys) {
+		const p = up(k);
+		let q = p;
+		for (let hops = 0; q && q !== k && hops <= keys.length; hops++) q = up(q);
+		if (!p || q === k) roots.push(k);
+		else kids.set(p, [...kids.get(p) || [], k]);
+	}
+	if (!kids.size) return keys;
+	const out = [];
+	const done = /* @__PURE__ */ new Set();
+	const emit = (k) => {
+		if (done.has(k)) return;
+		done.add(k);
+		out.push(k);
+		for (const c of kids.get(k) || []) emit(c);
+	};
+	roots.forEach(emit);
+	for (const k of keys) emit(k);
+	return out.every((k, i) => k === keys[i]) ? keys : out;
+}
 var NEST_MAX = 3;
 function railNesting(rows) {
 	const out = rows.map(() => ({
@@ -28167,7 +28195,7 @@ function laneLabel(value) {
 }
 function autopilotChipTitle(run) {
 	const target = laneLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason");
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
 	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
 	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
 	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
@@ -35235,7 +35263,7 @@ function EventToasts() {
 					item: String(d.item || "")
 				}
 			}, { live: true });
-			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), { onClick: () => selectSession(env.session) });
+			if (String(env.new || "") === "halted") notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""), { onClick: () => selectSession(env.session) });
 		}));
 		unsubs.push(ev.subscribe("session.stage_changed", (env) => {
 			if (env.new) patchInstance(env.session, { stage: String(env.new) });
@@ -40337,7 +40365,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		ui.extPanes
 	]);
 	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
-	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), [
+	const railKeys = (0, import_react.useMemo)(() => {
+		const parentOf = new Map(allRows.map((i) => [i.title, i.parent || ""]));
+		return keepFamiliesTogether(orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), (k) => parentOf.get(k));
+	}, [
 		allRows,
 		windows,
 		order
@@ -74949,10 +74980,39 @@ function Workspace({ gotoScreen }) {
 							]
 						})
 					]
-				})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailureNotesRow, {})
 			]
 		})
 	] });
+}
+function FailureNotesRow() {
+	const s = useSettings();
+	const on = s.get("repository", "fasttrack_failure_notes") !== false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		id: "workspace-failure-notes",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Tell the agent when fast-track stops"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "When a pre-commit step or the verification check fails, CI goes red or the PR conflicts with its base, fast-track stops and leaves the agent a one-line note: what failed and to fix it — or, when it is a conflict with someone else's change, to stop and tell you. You still get the usual \"fast-track stopped\" notice."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
+					toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
 }
 //#endregion
 //#region src/components/settings/screens/Ide.tsx
