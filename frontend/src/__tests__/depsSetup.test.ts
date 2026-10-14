@@ -25,8 +25,8 @@ describe("signInTarget (Sign in to <agent>)", () => {
     expect(signInTarget(undefined)).toBeNull();
   });
 
-  it("labels the button with the agent's name", () => {
-    expect(agentDisplayName("claude")).toBe("Claude");
+  it("labels the button with the agent's product name", () => {
+    expect(agentDisplayName("claude")).toBe("Claude Code");
     expect(agentDisplayName("codex")).toBe("Codex");
   });
 });

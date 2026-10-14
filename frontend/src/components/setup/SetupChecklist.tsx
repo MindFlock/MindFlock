@@ -8,8 +8,10 @@
  *
  *   Get started            the three REQUIRED steps to a running agent
  *     ① Install the tools        "Install …" + only what is missing
- *     ② Sign in to your agent    one sign-in button per INSTALLED agent CLI
- *     ③ Start your first agent   opens New session (with the folder browser)
+ *     ② Sign in to your agent    the default agent's card (AgentCard — the same
+ *                                card Settings shows: Install → Sign in → Test)
+ *     ③ Start your first agent   opens New session; ticks only once an agent
+ *                                has actually started on its task
  *   Connect your work      optional, counted in the chip's N/5
  *     ④ Connect GitHub           the Connect GitHub dialog · Skip
  *     ⑤ Connect your tracker     Intake → Tickets (add a source) · Skip
@@ -29,15 +31,14 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
-import { AgentSignIn, agentDisplayName } from "../dialogs/AgentSignIn";
+import { agentName } from "../../lib/agentNames";
 import { CONNECTIONS_CHANGED_EVENT } from "../settings/screens/Connections";
+import { AgentCard } from "./AgentCard";
 import { DoctorList } from "./DoctorList";
 import { openConnectGitHub } from "../../lib/githubConnect";
 import { refreshSetup, skipSetupStep, useSetup } from "./useSetup";
 import {
   STATUS_GLYPH,
-  installedLogins,
-  loginLine,
   nextStepId,
   setupCount,
   orderedSteps,
@@ -201,7 +202,10 @@ export function SetupChecklist() {
   const github = step("github");
   const tracker = step("tracker");
   const phone = step("phone");
-  const logins = installedLogins(status?.logins);
+  const defaultAgent = status?.default_provider || "";
+  const defaultInstalled = !!(status?.logins || []).find((l) => l.name === defaultAgent && l.installed);
+  // The first session exists but its agent hasn't started on anything yet.
+  const repoStarted = !!(repo as SetupStep & { started?: boolean }).started;
   const startDone = [tools, agent, repo].every((s) => s.done);
 
   return (
@@ -252,35 +256,31 @@ export function SetupChecklist() {
         <Step step={agent} next={next}>
           {!status ? (
             <p className="muted setup-hint">Checking…</p>
-          ) : logins.length === 0 ? (
+          ) : !defaultInstalled ? (
             <p className="muted setup-hint">
-              Install the tools first — that installs {status.default_provider || "your agent"}.
+              Install the tools first — that installs {agentName(defaultAgent || "claude")}.
             </p>
           ) : (
-            <ul className="setup-logins">
-              {logins.map((l) => {
-                const line = loginLine(l);
-                return (
-                  <li
-                    key={l.name}
-                    className={"setup-login st-" + (line.ok === true ? "ok" : line.ok === false ? "todo" : "unknown")}
-                    data-provider={l.name}
-                    data-logged-in={String(l.logged_in)}
-                  >
-                    <span className="setup-login-name">
-                      {agentDisplayName(l.name)}
-                      {l.default && <span className="muted"> (default)</span>}
-                    </span>
-                    <span className="setup-login-state">
-                      {(line.ok === true ? "✓ " : line.ok === false ? "• " : "") + line.text}
-                    </span>
-                    {l.login_cmd && line.ok !== true && (
-                      <AgentSignIn provider={l.name} onDone={() => void refreshSetup(true)} />
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              <AgentCard
+                provider={defaultAgent}
+                gotoScreen={(n) => go("settings", n)}
+                onChanged={() => void refreshSetup(true)}
+              />
+              <p className="muted setup-hint setup-agent-change">
+                Using {agentName(defaultAgent)} ·{" "}
+                <button
+                  type="button"
+                  className="linklike setup-change-agent"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    go("settings", "coding");
+                  }}
+                >
+                  change
+                </button>
+              </p>
+            </>
           )}
           <p className="muted setup-hint">
             Using an API key?{" "}
@@ -299,7 +299,15 @@ export function SetupChecklist() {
 
         {/* ③ Start your first agent */}
         <Step step={repo} next={next}>
-          <p className="muted setup-hint">Pick a repo folder and say what to do.</p>
+          {repoStarted ? (
+            <p className="muted setup-hint setup-repo-started">
+              {agent.done
+                ? "Your first session is open. This ticks once its agent starts on your task."
+                : "Your first session is open, but its agent can't start until you sign in (②)."}
+            </p>
+          ) : (
+            <p className="muted setup-hint">Pick a repo folder and say what to do.</p>
+          )}
           <div className="setup-actions">
             <Action next={repo.id === next} className="setup-new" onClick={() => go("new-session")}>
               + New session

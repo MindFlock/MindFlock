@@ -45,6 +45,7 @@ function status(over: Record<string, Partial<SetupStatus["steps"][number]>> = {}
       at: null,
       skipped,
       status: done ? "done" : skipped ? "skipped" : "todo",
+      ...((o as { started?: boolean }).started ? { started: true } : {}),
     };
   });
   const counted = steps.filter((s) => s.group !== "later");
@@ -145,30 +146,40 @@ describe("SetupChecklist", () => {
     expect(repo).not.toContain("setup-step-body");
   });
 
-  it("step ② offers one sign-in per INSTALLED agent CLI and shows who is signed in", () => {
+  it("step ② is the default agent's card — the same one Settings shows — not a list of every CLI", () => {
     setupData.current = status(
       {},
       {
         logins: [
-          { name: "claude", installed: true, logged_in: true, login_cmd: "claude", default: true },
+          { name: "claude", installed: true, logged_in: false, login_cmd: "claude", default: true },
           { name: "codex", installed: true, logged_in: false, login_cmd: "codex login", default: false },
-          { name: "aider", installed: false, logged_in: null, login_cmd: "", default: false },
         ],
       }
     );
     const html = render();
-    expect(html).toContain('data-provider="claude"');
-    expect(html).toContain('data-provider="codex"');
-    expect(html).not.toContain('data-provider="aider"');
-    expect(html).toContain("✓ signed in");
-    // A signed-in CLI gets no button; the signed-out one gets its own.
-    expect((html.match(/Sign in to Codex/g) || []).length).toBe(1);
-    expect(html).not.toContain("Sign in to Claude");
+    // The card loads its row on mount (Checking… until then); no per-CLI list.
+    expect(html).toContain("agent-card-loading");
+    expect(html).not.toContain("setup-logins");
+    expect(html).not.toContain("Sign in to Codex");
+    expect(html).toContain("Using Claude Code");
+    expect(html).toContain("setup-change-agent");
   });
 
-  it("step ② says what to do when no agent CLI is installed yet", () => {
+  it("step ② says what to do when the default agent isn't installed yet", () => {
     setupData.current = status({}, { logins: [] });
+    expect(render()).toContain("Install the tools first — that installs Claude Code.");
+    setupData.current = status(
+      {},
+      { logins: [{ name: "claude", installed: false, logged_in: null, login_cmd: "", default: true }] }
+    );
     expect(render()).toContain("Install the tools first");
+  });
+
+  it("step ③ says when the session exists but its agent hasn't started yet", () => {
+    setupData.current = status({ repo: { started: true } as never });
+    expect(render()).toContain("start until you sign in (②)");
+    setupData.current = status({ agent_login: { done: true }, repo: { started: true } as never });
+    expect(render()).toContain("This ticks once its agent starts on your task.");
   });
 
   it("step ③ opens New session until the first session exists", () => {

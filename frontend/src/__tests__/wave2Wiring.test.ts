@@ -26,7 +26,9 @@ describe("wave-2 markup hooks", () => {
   });
 
   it("E3 — settings test buttons and the per-source ticketing list", () => {
-    expect(code("components/settings/screens/CodingCli.tsx")).toContain('"agent-test-btn"');
+    // Another agent is checked through its own agent card (Install → Sign in → Test).
+    expect(code("components/settings/screens/CodingCli.tsx")).toContain('"agent-test-provider"');
+    expect(code("components/settings/screens/CodingCli.tsx")).toContain("<AgentCard");
     const tickets = code("components/intake/TicketsTab.tsx");
     expect(tickets).toContain('"ticketing-sources"');
     expect(tickets).toContain('"ticketing-add"');

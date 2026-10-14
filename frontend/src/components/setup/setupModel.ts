@@ -14,7 +14,6 @@
 import type {
   DoctorCheckItem,
   SetupGroup,
-  SetupLogin,
   SetupStatus,
   SetupStep,
   SetupStepId,
@@ -167,20 +166,6 @@ export function isEssentialCheck(c: DoctorCheckItem): boolean {
   if (EXTRA_CHECKS.has(id)) return false;
   if (id.startsWith("agent-auth")) return false;
   return c.status === "fail" || c.status === "warn";
-}
-
-/** The agent CLIs step 2 offers a button for: the installed ones. The default
- * agent comes first; the rest keep the registry's order. */
-export function installedLogins(logins: SetupLogin[] | null | undefined): SetupLogin[] {
-  const rows = (logins || []).filter((l) => l.installed);
-  return rows.filter((l) => l.default).concat(rows.filter((l) => !l.default));
-}
-
-/** One agent's sign-in line: what the probe found. */
-export function loginLine(l: SetupLogin): { text: string; ok: boolean | null } {
-  if (l.logged_in === true) return { text: "signed in", ok: true };
-  if (l.logged_in === false) return { text: "not signed in yet", ok: false };
-  return { text: "sign-in can't be checked — fine if it works", ok: null };
 }
 
 /** Whether the phone extra should offer to install Tailscale rather than the QR: the

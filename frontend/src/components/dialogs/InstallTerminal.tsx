@@ -18,6 +18,7 @@ import { toast } from "../../lib/toast";
 import { copyText } from "../../lib/clipboard";
 import { useWsTerm } from "../../lib/wsTerm";
 import { Modal } from "../Modal";
+import { agentName } from "../../lib/agentNames";
 
 export type { InstallStep };
 
@@ -78,6 +79,15 @@ function ManualFallback({ cmds, lead }: { cmds: string; lead: string }) {
   );
 }
 
+/** What a finished install says once its window may already be gone (the
+ * Setup step it sat in ticks done and folds away): what landed, and the next
+ * step when an agent was part of it. */
+export function installedMessage(steps: InstallStep[]): string {
+  const agent = steps.find((s) => s.id === "agent-cli");
+  const m = agent ? /\(([^)]+)\)\s*$/.exec(agent.label) : null;
+  return m ? "✓ Installed — next: sign in to " + agentName(m[1]) : "✓ Everything is installed";
+}
+
 /** The summary line under the button: what one click installs. */
 export function installSummary(steps: InstallStep[]): string {
   return steps.map((s) => s.label.replace(/^system packages: /, "")).join(", ");
@@ -134,6 +144,7 @@ function InstallWindow({
   // The commands are captured once: a successful run empties `steps` (the
   // re-probe finds nothing missing), and a failed one must still show them.
   const [cmds] = useState(() => manualCommands(steps));
+  const [planned] = useState(() => steps || []);
   const doneRef = useRef(onDone);
   doneRef.current = onDone;
 
@@ -156,6 +167,7 @@ function InstallWindow({
         setExit(s.exit_code);
         if (!fired) {
           fired = true;
+          if (s.exit_code === 0) toast(installedMessage(planned));
           doneRef.current();
         }
       } catch {

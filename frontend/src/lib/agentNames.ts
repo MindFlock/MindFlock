@@ -5,8 +5,8 @@
  * person reads changes. A custom agent (a user TOML) has no product name and
  * reads as its own id, capitalised.
  *
- * Settings → Connections carries the same map (Connections.tsx AGENT_NAMES);
- * it should import this one. */
+ * The server's agent-card sentences use the same names
+ * (backend/web/addons/connections.py AGENT_NAMES). */
 export const AGENT_NAMES: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",

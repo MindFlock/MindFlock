@@ -30,6 +30,7 @@
 
 import type { Instance } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
+import { agentName } from "./agentNames";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -268,10 +269,13 @@ export function attentionReason(ss: SessionState): string {
 // --- An agent that can't launch -------------------------------------------
 
 /** What GET /api/setup says about each agent CLI (`logins`): enough to tell
- * a session whose agent isn't on this machine. */
+ * a session whose agent isn't on this machine, or isn't signed in. */
 export interface AgentInstallRow {
   name: string;
   installed: boolean;
+  /** true = a login was found, false = none where the CLI keeps it, null =
+   * can't tell (never read as signed out). */
+  logged_in?: boolean | null;
 }
 
 /** The session's agent is not installed here: the CLI the session runs is
@@ -305,4 +309,57 @@ export function agentMissingState(name: string): SessionState {
     restartable: false,
     hint: name + " isn't installed on this computer, so this session's agent couldn't start — install it, then Restart",
   };
+}
+
+/** Why a session's agent can't do its task: not installed here, or installed
+ * but not signed in. `exited` = its terminal is gone (the agent quit at
+ * launch), so the fix is sign in, then Restart. */
+export interface AgentBlock {
+  name: string;
+  why: "missing" | "signed_out";
+  exited: boolean;
+}
+
+/** `agentMissing`, plus the signed-out case: the CLI is installed, its login
+ * probe found nothing (`logged_in === false` — "can't tell" never counts), the
+ * session runs the ambient login (no account profile of its own), and the
+ * agent is not working. A first-run Claude Code then sits at its theme
+ * picker or login questions, which read as Idle or a Question — neither is
+ * true, and the session can never start on its task until it is signed in. */
+export function agentBlocked(
+  inst: Partial<Instance>,
+  logins: AgentInstallRow[] | null | undefined,
+  activity: string = effectiveActivity(inst)
+): AgentBlock | null {
+  const missing = agentMissing(inst, logins, activity);
+  if (missing) return { name: missing, why: "missing", exited: activity === "offline" };
+  if (!logins || !logins.length || inst.device || inst.pending) return null;
+  if (activity === "working" || activity === "limit") return null;
+  if (inst.profile_effective) return null;
+  const name = String(inst.provider || inst.program || "").trim();
+  if (!name) return null;
+  const row = logins.find((l) => l.name === name);
+  if (!row || !row.installed || row.logged_in !== false) return null;
+  return { name, why: "signed_out", exited: activity === "offline" };
+}
+
+/** The state a blocked session shows instead of Idle / Question / Offline. */
+export function agentBlockedState(b: AgentBlock): SessionState {
+  if (b.why === "missing") return agentMissingState(b.name);
+  const who = agentName(b.name);
+  return {
+    state: "needs_you",
+    label: "Not signed in",
+    tone: "attention",
+    inBell: true,
+    restartable: false,
+    hint: b.exited
+      ? who + " isn't signed in, so its agent stopped — sign in, then it restarts"
+      : who + " isn't signed in, so this session can't start on its task — finish signing in in its terminal",
+  };
+}
+
+/** The row's sub-line for a blocked session. */
+export function agentBlockedLine(b: AgentBlock): string {
+  return b.why === "missing" ? "Failed: " + b.name + " isn't installed" : "Not signed in";
 }

@@ -13,8 +13,6 @@ import {
   stepGroup,
   stepNumber,
   consumeSetupIntent,
-  installedLogins,
-  loginLine,
   orderedSteps,
   showSetupCard,
   showSetupChip,
@@ -161,18 +159,6 @@ describe("step helpers", () => {
       expect(isEssentialCheck({ id, status: "warn" })).toBe(false);
     // Sign-in is step ②'s, not a missing tool.
     expect(isEssentialCheck({ id: "agent-auth", status: "warn" })).toBe(false);
-  });
-
-  it("offers a sign-in button only for installed CLIs, default first", () => {
-    const rows = installedLogins([
-      { name: "codex", installed: true, logged_in: false, login_cmd: "codex login", default: false },
-      { name: "aider", installed: false, logged_in: null, login_cmd: "", default: false },
-      { name: "claude", installed: true, logged_in: true, login_cmd: "claude", default: true },
-    ]);
-    expect(rows.map((r) => r.name)).toEqual(["claude", "codex"]);
-    expect(loginLine(rows[0]).ok).toBe(true);
-    expect(loginLine(rows[1]).ok).toBe(false);
-    expect(loginLine({ ...rows[1], logged_in: null }).ok).toBeNull();
   });
 
   it("offers Install Tailscale only when the doctor says it is missing", () => {

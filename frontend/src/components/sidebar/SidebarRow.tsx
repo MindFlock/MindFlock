@@ -21,7 +21,8 @@ import { copyText } from "../../lib/clipboard";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
-import { agentMissing, agentMissingState, deriveSessionState } from "../../lib/sessionState";
+import { agentBlocked, agentBlockedLine, agentBlockedState, deriveSessionState } from "../../lib/sessionState";
+import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { reviveSession } from "../../lib/revive";
 import { backgroundChip } from "../../lib/backgroundJobs";
@@ -204,11 +205,12 @@ export const SidebarRow = memo(function SidebarRow({
   const uncommitted = Number(inst.diff_stat?.uncommitted?.files) || 0;
   // ONE session state for the row (lib/sessionState): the dot and the chip
   // below are painted from this same object, so they can never disagree.
-  // …unless its agent isn't installed here: then nothing about it is Idle or
-  // Offline — it never started, and Install is the one thing that helps.
+  // …unless its agent isn't installed here or isn't signed in: then nothing
+  // about it is Idle or Offline — it can't start, and Install / Sign in is
+  // the one thing that helps (components/setup/AgentBlocked).
   const { data: setupStatus } = useSetup();
-  const noAgent = agentMissing(inst, setupStatus?.logins);
-  const ss = noAgent ? agentMissingState(noAgent) : deriveSessionState(inst);
+  const noAgent = agentBlocked(inst, setupStatus?.logins);
+  const ss = noAgent ? agentBlockedState(noAgent) : deriveSessionState(inst);
   const me = useMe();
   // A one-for-all / split piece that MindFlock merged back into its lead's
   // branch: that is its stage now, whatever its own branch says ("committed").
@@ -619,7 +621,7 @@ export const SidebarRow = memo(function SidebarRow({
           )}
           {!editing && noAgent && (
             <span className="lineage noagent-line" title={ss.hint}>
-              Failed: {noAgent} isn't installed
+              {agentBlockedLine(noAgent)}
             </span>
           )}
           {!editing && taskLine && (
@@ -692,20 +694,7 @@ export const SidebarRow = memo(function SidebarRow({
             {pchip.label}
           </span>
         ) : noAgent ? (
-          // The agent never started: Install (the Setup checklist's step ①
-          // installs it), then the row's own Restart takes over.
-          <button
-            type="button"
-            className={"stagechip chip-restart chip-noagent " + chip.cls}
-            title={ss.hint}
-            aria-label={ss.label + " — install it"}
-            onClick={(e) => act(() => useUi.getState().openDialogFor("setup"), e)}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            <span className="chip-act" aria-hidden="true">
-              Install
-            </span>
-          </button>
+          <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
         ) : ss.state === "offline" && ss.restartable && !paused ? (
           // Offline carries its remedy: Restart relaunches the agent (the same
           // lazy revive a terminal attach or a sent prompt does).
