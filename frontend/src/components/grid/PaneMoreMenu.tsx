@@ -1,15 +1,21 @@
 /** The pane header's "⋯": the session's ONE menu (lib/sessionMenu — the
  * sidebar row's ⋯ draws the same model), grouped Work · Ship · Session ·
- * More · Close/Delete. What a calm header (the first hour, or a pane too
- * narrow for its row of controls) leaves out of the row — Terminal, Map, the
- * history view — is in its More fold; Queue prompt… and Fast-track… are in
- * it always.
+ * More · Close/Delete. Every header shows Terminal and Map, so those are the
+ * row menu's only; what a calm header (the first hour, or a pane too narrow
+ * for its row of controls) leaves out of the row — the history view — is in
+ * its More fold, beside Copy entire history; Queue prompt… and Fast-track…
+ * are in it always.
  *
  * Its own small popover rather than the shared OverflowMenu: the pane header
  * scrolls sideways (overflow-x: auto), which clips anything absolutely
- * positioned inside it, so this one is position: fixed against the button. */
+ * positioned inside it, so this one is position: fixed against the button —
+ * and portalled to <body>. Inside the pane, `container-type` (Pane.css) makes
+ * the pane the containing block and stacking context of a fixed child, so in
+ * a 2×2 the pane below painted over the menu's lower half and the pinned
+ * Task bar over its first item. */
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export function PaneMoreMenu({
   children,
@@ -75,17 +81,20 @@ export function PaneMoreMenu({
       >
         ⋯
       </button>
-      {open && pos && (
-        <div
-          ref={menu}
-          className="pane-more-menu"
-          role="menu"
-          style={{ top: pos.top, right: pos.right }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={menu}
+            className="pane-more-menu"
+            role="menu"
+            style={{ top: pos.top, right: pos.right }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {children(() => setOpen(false))}
+          </div>,
+          document.body
+        )}
     </>
   );
 }

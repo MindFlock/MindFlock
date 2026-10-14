@@ -303,15 +303,18 @@ describe("the row menu ends a session in exactly two ways", () => {
     expect(strip(menuSrc)).not.toMatch(/\bconfirm\(/);
   });
 
-  it("Pause and Close both stop the agent, and each says where the session goes", () => {
+  it("Pause (palette) and Close both stop the agent, and each says where the session goes", () => {
     expect(SESSION_ACTIONS.pause.note).toBe("stops the agent; keeps it in the sidebar to resume");
     expect(SESSION_ACTIONS.pause.note).not.toBe(SESSION_ACTIONS.close.note);
-    // The menu draws the note under the verb, as Close does.
-    const pause = model().groups.find((g) => g.id === "session")!.items.find((i) => i.key === "pause")!;
-    expect(pause.note).toBe(SESSION_ACTIONS.pause.note);
+    // The menus offer no Pause (the palette, the CLI and the API still do),
+    // only Resume — on a paused session, with its note under the verb.
+    const session = (o = {}) => model(o).groups.find((g) => g.id === "session")!.items.map((i) => i.key);
+    expect(session()).not.toContain("pause");
+    expect(session()).not.toContain("resume");
     const resume = model({ status: "paused" }).groups.find((g) => g.id === "session")!.items.find((i) => i.key === "resume")!;
     expect(resume.label).toBe("Resume session");
-    // Resume replaces Pause on a paused session; a shared folder can't pause.
+    expect(resume.note).toBe("starts the agent again in the same worktree");
+    // Pause and Resume never both apply; a shared folder can't pause.
     const at = (o: Partial<Instance>) =>
       actionCtx("s", { inst: { title: "s", ...o } as Instance, caps: { git: true, tailscale: true, ticketing: true } });
     expect(SESSION_ACTIONS.pause.enabled(at({ status: "ready" }))).toBe(true);

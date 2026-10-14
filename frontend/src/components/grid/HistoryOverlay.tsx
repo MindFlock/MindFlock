@@ -13,8 +13,8 @@
  * top edge of a live terminal (see attachDragHistoryGesture in
  * lib/terminals). Esc or the × closes it. Copy mirrors the terminals' house
  * rule: release the drag and the selection is already on the clipboard; the
- * bar's "Copy all" puts the whole history there (it used to be a second icon
- * in the pane header, beside the one that opens this view).
+ * bar's "Copy all" puts the whole history there — the same copy as the pane
+ * header's copy button (lib/paneHistory).
  *
  * Ctrl+F on a terminal opens it straight into find mode (and Ctrl+F inside it
  * focuses the find box): the search runs over the WHOLE history, not just
@@ -22,10 +22,9 @@
  * browser's find bar. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { apiText } from "../../api/client";
 import { copyText } from "../../lib/clipboard";
-import { agentCopyText } from "../../lib/agentCopy";
-import { peekTerm, type DragScreenCtx } from "../../lib/terminals";
+import { copyPaneHistory, fetchPaneHistory, historyForClipboard } from "../../lib/paneHistory";
+import { type DragScreenCtx } from "../../lib/terminals";
 import { FIND_MAX, findAll, pickStart, stepMatch } from "../../lib/textFind";
 import { toast } from "../../lib/toast";
 
@@ -275,10 +274,9 @@ function syncFindHighlights() {
 const histCache = new Map<string, string>();
 const HIST_CACHE_MAX = 8;
 
-/** A pane's full scrollback as plain text — the overlay's load and Copy all. */
-function fetchHistory(title: string, pane: "agent" | "shell"): Promise<string> {
-  return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
-}
+/** A pane's full scrollback as plain text — the overlay's load and Copy all
+ * (shared with the pane header's copy button: lib/paneHistory). */
+const fetchHistory = fetchPaneHistory;
 
 export function HistoryOverlay({
   title,
@@ -316,8 +314,7 @@ export function HistoryOverlay({
 }) {
   // The transcript keeps Claude Code's own layout (markers, gutter, its hard
   // wraps): an agent pane running it copies the text instead (agentCopy).
-  const forClipboard = (text: string) =>
-    pane === "agent" ? agentCopyText(text, title, peekTerm(title, "agent")?.term.cols || 80) : text;
+  const forClipboard = (text: string) => historyForClipboard(text, title, pane);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -693,23 +690,7 @@ export function HistoryOverlay({
   const pressAt = useRef<{ x: number; y: number; hadSelection: boolean } | null>(null);
   // The whole history to the clipboard: what is already loaded, or a fresh
   // fetch when nothing has arrived yet.
-  const copyAll = () => {
-    const got: Promise<string> =
-      text !== null
-        ? Promise.resolve(text)
-        : fetchHistory(title, pane);
-    got
-      .then((all) => {
-        if (!all.trim()) {
-          toast("No history to copy");
-          return;
-        }
-        copyText(forClipboard(all)).then((ok) =>
-          toast(ok ? `Copied full ${pane} history (${all.length} chars)` : "Copy failed")
-        );
-      })
-      .catch((err) => toast("History copy failed: " + (err as Error).message));
-  };
+  const copyAll = () => void copyPaneHistory(title, pane, text);
 
   const onRootMouseDown = (e: React.MouseEvent) => {
     // The header (find box, its buttons) is chrome, not page: a click there

@@ -1,8 +1,9 @@
 /** One session pane (port of app.js makePane, section 14): header with grip /
  * title / diff-stat context line / tabs / next-step / usage chip / state pill
- * / history + hide (−), the terminal hosts, Diff + Map + Queue tabs, and the
- * budget-lock overlay (Map is git-gated exactly like Diff). Copy-all lives in
- * the history view's bar, one click past the history button.
+ * / history + copy-whole-history + hide (−), the terminal hosts, Diff + Map +
+ * Queue tabs, and the budget-lock overlay (Map is git-gated exactly like
+ * Diff). Terminal and Map are in every header (narrow heads draw the tabs as
+ * icons); there is no Pause button — only ▶ Resume, on a paused session.
  * Terminals are adopted from lib/terminals' registry so they never remount
  * with the pane. */
 
@@ -25,6 +26,7 @@ import {
   type TermHandle,
 } from "../../lib/terminals";
 import { toast } from "../../lib/toast";
+import { copyPaneHistory } from "../../lib/paneHistory";
 import { dropSideFor, type DropSide } from "./layout";
 import type { DragCtx } from "./TerminalGrid";
 import { DiffTab } from "./DiffTab";
@@ -660,29 +662,39 @@ export function Pane({
   const quiet =
     !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 
-  // What the calm header folds under ⋯ (see PANE_NARROW_PX / useCalm). A tab
-  // you are ON stays in the row, and so does a Queue with something in it or
-  // a fast-track someone set: those are state, not options.
-  const showShellTab = !sharedFolder && (!compact || tab === "shell");
-  const showMapTab = caps.git && (!compact || tab === "map");
+  // Terminal and Map are in every header — calm or narrow alike (a narrow
+  // head draws its tabs as icons, Pane.css). Terminal is refused for a shared
+  // folder (its shell would run outside the sandbox); Map needs git.
+  // What the calm header still folds under ⋯ (see PANE_NARROW_PX / useCalm):
+  // Queue, ⏩ and the cost chip. A Queue with something in it, or the tab you
+  // are ON, stays in the row, and so does a fast-track someone set: those
+  // are state, not options.
+  const showShellTab = !sharedFolder;
+  const showMapTab = caps.git;
   const showQueueTab = !compact || tab === "queue" || pending > 0 || holding;
   const showFt = !!ft && (!compact || ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu);
   // The ⋯ menu: the session's one menu (lib/sessionMenu), less the tabs this
   // header already shows, plus the history view only a pane has.
   const menuCtx = actionCtx(title, { inst, caps });
   const visibleTabs = [showShellTab && "shell", showMapTab && "map"].filter(Boolean) as string[];
+  // The terminal whose history the copy button takes: the tab you are on, and
+  // only a terminal tab (Diff, Map, Queue and Thread have no scrollback).
+  const termTab: "agent" | "shell" | null = tab === "agent" || tab === "shell" ? tab : null;
+  const copyHistory = () => {
+    if (termTab) void copyPaneHistory(title, termTab);
+  };
   const menu = () =>
     sessionMenu(inst, menuCtx, {
       visibleTabs,
       onHistory: compact
         ? () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null })
         : undefined,
+      onCopyHistory: termTab ? copyHistory : undefined,
     });
-  // Pause / Resume in the header itself, next to −: how to stop an agent
-  // shouldn't be the last item of a long menu. Left out where it can't act
-  // (a shared folder can't pause; a row still being created).
-  const pauseId = sessionAction("resume").enabled(menuCtx) ? "resume" : "pause";
-  const canPause = sessionAction(pauseId).enabled(menuCtx);
+  // No Pause button: pausing lives in the palette, the CLI and the API. A
+  // session that IS paused (from there, or by an older build) shows ▶ Resume
+  // here, next to ⋯, so the way back is never a menu away.
+  const canResume = sessionAction("resume").enabled(menuCtx);
   // "Commit…" only once there is something to commit; until then the header
   // has no lead button (the agent's state chip says what it is doing).
   const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
@@ -713,19 +725,37 @@ export function Pane({
         )}
         {hasDiffStat && <CtxLine inst={inst} />}
         <div className="tabs">
-          <button data-tab="agent" className={tab === "agent" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("agent"); }}>
-            Agent
+          <button
+            data-tab="agent"
+            className={tab === "agent" ? "active" : ""}
+            title="Agent — the session's agent CLI"
+            onClick={(e) => { e.stopPropagation(); showTab("agent"); }}
+          >
+            <TabIcon name="agent" />
+            <span className="tab-label">Agent</span>
           </button>
           {/* The companion shell would run outside the sandbox: refused for
               a shared folder (peer_guard), so no tab. */}
           {showShellTab && (
-            <button data-tab="shell" className={tab === "shell" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("shell"); }}>
-              Terminal
+            <button
+              data-tab="shell"
+              className={tab === "shell" ? "active" : ""}
+              title="Terminal — a shell in this session's folder"
+              onClick={(e) => { e.stopPropagation(); showTab("shell"); }}
+            >
+              <TabIcon name="shell" />
+              <span className="tab-label">Terminal</span>
             </button>
           )}
           {caps.git && (
-            <button data-tab="diff" className={tab === "diff" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("diff"); }}>
-              Diff
+            <button
+              data-tab="diff"
+              className={tab === "diff" ? "active" : ""}
+              title="Diff — what this session changed"
+              onClick={(e) => { e.stopPropagation(); showTab("diff"); }}
+            >
+              <TabIcon name="diff" />
+              <span className="tab-label">Diff</span>
             </button>
           )}
           {showMapTab && (
@@ -735,7 +765,8 @@ export function Pane({
               title="Code map — the worktree as a tree: agents, zones, plan, blast radius"
               onClick={(e) => { e.stopPropagation(); showTab("map"); }}
             >
-              Map
+              <TabIcon name="map" />
+              <span className="tab-label">Map</span>
             </button>
           )}
           {showQueueTab && (
@@ -757,7 +788,8 @@ export function Pane({
             }
             onClick={(e) => { e.stopPropagation(); showTab("queue"); }}
           >
-            Queue
+            <TabIcon name="queue" />
+            <span className="tab-label">Queue</span>
             {(pending > 0 || holding) && (
               <span className="queue-tab-badge">
                 {holding ? "⏳" : pending > 99 ? "99+" : String(pending)}
@@ -776,7 +808,8 @@ export function Pane({
               }
               onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
             >
-              Thread
+              <TabIcon name="thread" />
+              <span className="tab-label">Thread</span>
               {badge.count > 0 && (
                 <span className={"queue-tab-badge thread-badge" + (badge.needs ? " needs" : "")}>
                   {badge.count > 99 ? "99+" : String(badge.count)}
@@ -900,27 +933,22 @@ export function Pane({
             / "Watching — take control", only once someone else is here. */}
         <DriveButton inst={inst} me={me} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
-        {/* Pinned right even when the header scrolls: history and hide stay
-            reachable without scrolling to the end of a long header. Copy-all
-            lives in the history view's bar. */}
+        {/* Pinned right even when the header scrolls: history, copy and hide
+            stay reachable without scrolling to the end of a long header. */}
         <div className="head-tail">
-        {canPause && (
+        {canResume && (
           <button
-            className={"act pane-pause" + (pauseId === "resume" ? " is-paused" : "")}
+            className="act pane-resume"
             type="button"
-            aria-label={pauseId === "resume" ? "Resume session" : "Pause session"}
-            title={
-              pauseId === "resume"
-                ? "Resume — starts the agent again in the same worktree"
-                : "Pause — stops the agent; the session stays in the sidebar to resume"
-            }
+            aria-label="Resume session"
+            title="Resume — starts the agent again in the same worktree"
             onClick={(e) => {
               e.stopPropagation();
-              sessionAction(pauseId).run(title);
+              sessionAction("resume").run(title);
             }}
           >
             {/* Glyph only where the header is short of room. */}
-            {pauseId === "resume" ? (paneNarrow ? "▶" : "▶ Resume") : paneNarrow ? "❚❚" : "❚❚ Pause"}
+            {paneNarrow ? "▶" : "▶ Resume"}
           </button>
         )}
         <PaneMoreMenu btnRef={ft && !showFt ? setFtEl : undefined}>
@@ -934,8 +962,9 @@ export function Pane({
         </PaneMoreMenu>
         {!compact && (
         <button
-          className="act copyhist"
+          className="act pane-hist"
           type="button"
+          aria-label="Browse the full history"
           title="Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)"
           onClick={(e) => {
             e.stopPropagation();
@@ -959,6 +988,39 @@ export function Pane({
           </svg>
         </button>
         )}
+        {/* The active terminal's whole history to the clipboard, one click.
+            Disabled, not hidden, on Diff / Map / Queue / Thread, so the tail
+            never shifts as you change tabs. */}
+        <button
+          className="act copy-history"
+          type="button"
+          disabled={!termTab}
+          aria-label="Copy this pane's whole history"
+          title={
+            termTab
+              ? `Copy this pane's whole history — the ${termTab === "shell" ? "Terminal" : "Agent"} tab's full scrollback`
+              : "Copy this pane's whole history — open the Agent or Terminal tab first"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            copyHistory();
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            <rect x="8" y="2" width="8" height="4" rx="1" />
+          </svg>
+        </button>
         <button
           className="act pane-close"
           type="button"
@@ -1106,6 +1168,74 @@ export function Pane({
         />
       )}
     </section>
+  );
+}
+
+/** A header tab's icon. Drawn only where the head is too narrow for the
+ * words (Pane.css's container query swaps them); the label stays in the
+ * button for screen readers and the title says what the tab is. */
+const TAB_ICONS: Record<Tab, React.ReactNode> = {
+  // A sparkle: the agent.
+  agent: <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />,
+  // >_ : a shell prompt.
+  shell: (
+    <>
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </>
+  ),
+  // ± : what changed.
+  diff: (
+    <>
+      <path d="M12 3v12" />
+      <path d="M6 9h12" />
+      <path d="M6 20h12" />
+    </>
+  ),
+  // A folded map.
+  map: (
+    <>
+      <polygon points="2 6 9 3 15 6 22 3 22 18 15 21 9 18 2 21" />
+      <line x1="9" y1="3" x2="9" y2="18" />
+      <line x1="15" y1="6" x2="15" y2="21" />
+    </>
+  ),
+  // A list: prompts waiting their turn.
+  queue: (
+    <>
+      <line x1="9" y1="6" x2="20" y2="6" />
+      <line x1="9" y1="12" x2="20" y2="12" />
+      <line x1="9" y1="18" x2="20" y2="18" />
+      <circle cx="4.5" cy="6" r="1" />
+      <circle cx="4.5" cy="12" r="1" />
+      <circle cx="4.5" cy="18" r="1" />
+    </>
+  ),
+  // Two speech bubbles: what passed between the workers.
+  thread: (
+    <>
+      <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" />
+      <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
+    </>
+  ),
+};
+
+function TabIcon({ name }: { name: Tab }) {
+  return (
+    <svg
+      className="tab-icon"
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {TAB_ICONS[name]}
+    </svg>
   );
 }
 

@@ -8322,6 +8322,35 @@ button.stagechip.bgchip.bg-stuck:hover {
   text-overflow: ellipsis;
 }
 
+/* A "(tix) " kind tag beside a middle-truncated name: one line. The name
+   (.mid-name) is a flex box, so beside an inline tag it dropped to a second
+   line and the head showed "(tix)" over a sliver of the name. */
+.pane-head .title:has(> .title-kind) {
+  display: flex;
+}
+
+.pane-head .title > .title-kind {
+  flex: none;
+  white-space: pre;
+}
+
+/* In a head squeezed below the name's whole tail (a 2×2 grid with a Queue
+   badge), the tail gives way too — with an ellipsis, after the head is down
+   to its 1ch — rather than being sliced mid-glyph by the title's clip. The
+   huge head weight makes that an order, not a share: at 1000:1 the tail
+   still took a sub-pixel of every squeeze, which was enough for its
+   ellipsis to eat the last digits of a name that fit. */
+.pane-head .title .mid-name .mid-head {
+  flex-shrink: 1000000;
+}
+
+.pane-head .title .mid-name .mid-tail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* How far the remote branch moved on past this session (row.behind). */
 .pane-head .pane-behind {
   flex: 0 0 auto;
@@ -8691,6 +8720,8 @@ button.stagechip.bgchip.bg-stuck:hover {
 }
 
 .pane-head .tabs button {
+  display: inline-flex;
+  align-items: center;
   background: none;
   border: none;
   color: var(--muted);
@@ -8698,6 +8729,14 @@ button.stagechip.bgchip.bg-stuck:hover {
   font-size: 11px;
   padding: 3px 9px;
   border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* Words by default; a head too narrow for them draws icons (the query below
+   the narrow-head rules). */
+.pane-head .tabs .tab-icon {
+  display: none;
+  flex: none;
 }
 
 .pane-head .tabs button:hover {
@@ -8995,19 +9034,29 @@ button.stagechip.bgchip.bg-stuck:hover {
   background: rgba(222, 97, 62, 0.12);
 }
 
-/* Icon-only history button: center the SVG, muted like the other glyphs. */
-.pane-head .act.copyhist {
+/* Icon-only history and copy-whole-history buttons: center the SVG, muted
+   like the other glyphs. Copy is disabled (not hidden) on a tab with no
+   terminal, so the tail never shifts as tabs change. */
+.pane-head .act.pane-hist,
+.pane-head .act.copy-history {
   display: inline-flex;
   align-items: center;
   padding: 4px 6px;
   color: var(--muted);
 }
 
-.pane-head .act.copyhist:hover {
+.pane-head .act.pane-hist:hover,
+.pane-head .act.copy-history:not(:disabled):hover {
   color: var(--text);
 }
 
-.pane-head .act.copyhist svg {
+.pane-head .act.copy-history:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pane-head .act.pane-hist svg,
+.pane-head .act.copy-history svg {
   display: block;
 }
 
@@ -9028,23 +9077,30 @@ button.stagechip.bgchip.bg-stuck:hover {
    1440×900 (heads near 570px) shows every control, and a 2×2 at 1100px
    (heads near 400px) still shows the title, the tabs and ⏩.
 
-   Below 640px what gives way first is what is least about THIS window: the
-   provider name and the context fill leave the cost chip (both are in its
-   breakdown, one click away), the diff-stat line goes (the rail row carries
-   it), and the tabs and gaps pack tighter so the title keeps some room. */
-@container (max-width: 640px) {
-  .pane-head {
-    gap: 5px;
-  }
-
-  .pane-head .ctxline {
-    display: none !important;
-  }
-
+   What gives way first is what is least about THIS window. Below 1000px
+   (two side by side on anything short of a very wide screen) the provider
+   name and the context fill leave the cost chip — at ~180px it was the
+   widest thing in the head, and both parts are in its breakdown, one click
+   away. Below 760px the tabs turn to icons (see that rule). Below 700px the
+   diff-stat line goes (the rail row carries it), and below 640px the tabs
+   and gaps pack tighter so the title keeps some room. */
+@container (max-width: 1000px) {
   .pane-head .tok .uh-prov,
   .pane-head .tok .uh-ctx,
   .pane-head .tok .caret {
     display: none;
+  }
+}
+
+@container (max-width: 700px) {
+  .pane-head .ctxline {
+    display: none !important;
+  }
+}
+
+@container (max-width: 640px) {
+  .pane-head {
+    gap: 5px;
   }
 
   .pane-head .tabs {
@@ -9077,6 +9133,13 @@ button.stagechip.bgchip.bg-stuck:hover {
 @container (max-width: 440px) {
   .pane-head .title .title-kind {
     display: none;
+  }
+
+  /* …and a name squeezed to its tail keeps just room for the "…" of its
+     head: at 1ch the stub drew a sliced letter ("r.ns/…"), at 0 a letter
+     with no ellipsis at all ("rns/…"). */
+  .pane-head .title .mid-name .mid-head {
+    min-width: 1em;
   }
 
   .pane-head .title-device {
@@ -9135,12 +9198,60 @@ button.stagechip.bgchip.bg-stuck:hover {
     padding-right: 6px;
   }
 
-  .pane-head .act.copyhist {
+  .pane-head .act.pane-hist,
+  .pane-head .act.copy-history {
     padding: 4px 3px;
   }
 
   .pane-head .act.pane-close {
     padding: 4px 4px;
+  }
+}
+
+/* Every header carries Agent · Terminal · Diff · Map (and Queue / Thread when
+   they show), calm or not. Spelled out they take ~180px, which a 2×2 grid's
+   heads (~375px at 1044px wide) can't spare beside the name, Commit… and the
+   tail. So below this width the tabs are icons, each with a title naming it;
+   the word stays in the button, visually hidden, for screen readers. The
+   active tab keeps its accent fill, so where you are still reads at a glance.
+   760px is measured: a full head (Commit…, ⏩, the trimmed cost chip,
+   history, copy, ⋯, −) with worded tabs leaves the name under ~120px below
+   it; with icons the name keeps ~160px at 650px (two side by side on a 1600
+   screen). */
+@container (max-width: 760px) {
+  .pane-head .tabs .tab-icon {
+    display: block;
+  }
+
+  .pane-head .tabs .tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .pane-head .tabs button {
+    position: relative;
+    padding: 4px 5px;
+  }
+
+  .pane-head .tabs .queue-tab-badge {
+    margin-left: 3px;
+  }
+}
+
+/* A 2×2 on a 1044px window (heads ~375px): with icon tabs, a Queue badge and
+   Commit… the name was a few pixels short of its tail ("ns/sc-17…"). The
+   icons and ⋯ give back their spare padding so the name keeps its digits. */
+@container (max-width: 440px) {
+  .pane-head .tabs button {
+    padding: 4px 3px;
+  }
+
+  .pane-head .head-tail .act.pane-more {
+    padding: 2px 5px;
   }
 }
 
@@ -9256,15 +9367,12 @@ button.stagechip.bgchip.bg-stuck:hover {
   line-height: 1;
 }
 
-/* Pause / Resume, in the header itself next to −. */
-.pane-head .act.pane-pause {
+/* ▶ Resume, only on a paused session (there is no Pause button). */
+.pane-head .act.pane-resume {
   padding: 2px 8px;
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
-}
-
-.pane-head .act.pane-pause.is-paused {
   color: var(--accent);
   border-color: var(--accent);
 }

@@ -10,8 +10,9 @@ Pins for mobile.js / mobile.html / mobile.css:
    not restated here, so a rename on the desktop fails this test until the
    phone follows.
 3. **Session actions hit the rail's routes**: Close → ``/close``, Delete →
-   ``/cleanup`` (its 409 "folder in use" said in the rail's sentence), Pause /
-   Resume → ``/pause`` / ``/resume``, Restart → ``/revive``, Recently closed →
+   ``/cleanup`` (its 409 "folder in use" said in the rail's sentence), Resume
+   (a paused session only — no Pause, as on the desktop's menus) →
+   ``/resume``, Restart → ``/revive``, Recently closed →
    ``GET /api/recently-closed`` + ``POST …/<id>/reopen``.
 4. **Labels**: Terminal (not Shell); the New sheet's buttons are the desktop
    New dialog's.
@@ -217,7 +218,9 @@ def test_actions_hit_the_rails_routes():
     js = _js()
     assert 'postFor(title, "close", {})' in js
     assert 'postFor(title, "cleanup", {})' in js
-    assert 'sessionCall(title, "pause",' in js
+    # No Pause on the phone either (owner: "drop the pause button entirely");
+    # the palette, the CLI and the API still pause.
+    assert 'sessionCall(title, "pause",' not in js
     assert 'sessionCall(title, "resume",' in js
     assert 'sessionCall(title, "revive",' in js
     call = js.split("  function sessionCall(")[1].split("\n  }\n")[0]
@@ -235,9 +238,8 @@ def test_action_words_are_the_rails():
     assert '"Closed — reopen from Recently closed"' in js
     assert '"Delete…"' in js
     assert '"Removes the worktree and branch"' in js
-    # Pause and Close both stop the agent; where the session goes is what
-    # each one says.
-    assert '"Pause", "stops the agent; keeps it in the list to resume"' in js
+    # No Pause row; Resume only on a paused session.
+    assert '"Pause", "stops the agent' not in js
     assert '"Resume session"' in js
     assert '"Restart"' in js
     # Restart is offered only where the rail offers it (offline, restartable).

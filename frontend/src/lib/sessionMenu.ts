@@ -7,16 +7,19 @@
  *   Work     Message…, Queue prompt…
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
  *            Merge PR, View PR, Fast-track…, Checklist…, Run checks now
- *   Session  Rename…, Pause / Resume
+ *   Session  Rename…, Resume (only on a paused session: there is no Pause
+ *            here — the palette, `mindflock pause` and the API still pause)
  *   More ▸   the rare ones, folded: Terminal, Code map, Thread, Browse
- *            history, Split into parallel pieces…, Duplicate, Open in the IDE,
+ *            history, Copy entire history (pane only), Split into parallel
+ *            pieces…, Duplicate, Open in the IDE,
  *            Open preview, Select, Hide window, Move out of a group, Re-run
  *            worktree setup, Copy folder path
  *   Danger   Close, Delete…
  *
  * A group with nothing in it is left out. A pane passes what its own header
- * already shows (a visible tab is not repeated) and the actions only a pane
- * can do (Browse history). */
+ * already shows (a visible tab is not repeated — every header shows Terminal
+ * and Map, so only the row's menu offers them) and the actions only a pane
+ * can do (Browse history, Copy entire history). */
 
 import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
@@ -29,7 +32,7 @@ import { fastTrackStep } from "./stage";
 import { isRemote } from "./playbooks";
 import { openChecklist } from "./checklistLink";
 import { openSettings } from "./openSettings";
-import { PEER_SANDBOX_HINT, PEER_SCREEN } from "./peer";
+import { PEER_SCREEN } from "./peer";
 import { copyText } from "./clipboard";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
@@ -73,6 +76,9 @@ export interface SessionMenuOpts {
   visibleTabs?: string[];
   /** Pane-only: open the history view. */
   onHistory?: () => void;
+  /** Pane-only: copy the active terminal tab's whole history (absent on a
+   * tab with no terminal). */
+  onCopyHistory?: () => void;
   /** Row-only: pick the row for the bulk bar. */
   onSelect?: () => void;
   picked?: boolean;
@@ -198,21 +204,10 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     },
   ]);
 
-  // Pause or Resume, whichever applies — Pause stays (greyed) on a shared
-  // folder, which can be resumed but not paused.
-  const pauseId: SessionActionId = sessionAction("resume").enabled(ctx) ? "resume" : "pause";
-  const pauseOff = !sessionAction(pauseId).enabled(ctx);
-  const session = keep([
-    fromTable("rename"),
-    !(pauseOff && !peer) && {
-      key: pauseId,
-      label: actionLabel(pauseId, ctx),
-      note: actionNote(pauseId, ctx),
-      disabled: pauseOff,
-      title: pauseOff && peer ? PEER_SANDBOX_HINT : undefined,
-      run: () => sessionAction(pauseId).run(title),
-    },
-  ]);
+  // No Pause here (the owner found the button pointless; the palette, the
+  // CLI and the API still pause). A session that IS paused — from those, or
+  // by an older build — must still come back from the menu: Resume.
+  const session = keep([fromTable("rename"), fromTable("resume", { note: actionNote("resume", ctx) })]);
 
   const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
   const group = remote ? null : detachableGroup(inst);
@@ -226,6 +221,12 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       label: "Browse history",
       title: "Scroll and select the full history like a page",
       run: opts.onHistory,
+    },
+    opts.onCopyHistory && {
+      key: "copy-history",
+      label: "Copy entire history",
+      title: "Copy the open terminal tab's whole history to the clipboard",
+      run: opts.onCopyHistory,
     },
     !remote &&
       !peer &&

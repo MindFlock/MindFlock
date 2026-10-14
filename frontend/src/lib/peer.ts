@@ -160,9 +160,6 @@ export function carrierText(carrier: string | undefined): string {
   return "";
 }
 
-/** The tooltip on every action a shared (sandboxed) session can't take. */
-export const PEER_SANDBOX_HINT = "Runs in a sandbox — use Bring work home in People";
-
 /** The settings screen key of "People" (kept as "peer" so old deep
  * links still route). */
 export const PEER_SCREEN = "peer" satisfies SettingsScreen;
