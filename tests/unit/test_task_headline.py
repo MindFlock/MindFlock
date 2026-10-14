@@ -439,3 +439,69 @@ def test_a_question_without_a_clean_subject_is_own_words():
     got = headline("is it going to take long?")
     assert got.confident is False
     assert got.text == "Is it going to take long"
+
+
+# --------------------------------------------------------------------------- #
+# Claude Code's context-compaction hand-off
+# --------------------------------------------------------------------------- #
+
+_COMPACT = (
+    "This session is being continued from a previous conversation that ran "
+    "out of context. The summary below covers the earlier portion of the "
+    "conversation.\n\nSummary:\n"
+)
+
+
+def test_compaction_reads_the_quoted_ask_and_is_not_meaningful():
+    text = _COMPACT + (
+        "## What the user asked (their exact words)\n"
+        '1. First message: "Look at session 3 titled build-bot. It says it '
+        'is working but it is stuck."\n'
+        "## Diagnosis\nThe agent was hung.\n"
+    )
+    h = headline(text)
+    assert h.text == "Review session 3 titled build-bot"
+    assert h.meaningful is False  # machine text: a remembered task still wins
+
+
+def test_compaction_prefers_the_latest_message():
+    text = _COMPACT + (
+        "## What the user asked for and why\n"
+        '- Earlier: "Add a cache to the parser please"\n'
+        '- Their latest message: "Rename the config loader module"\n'
+        "## State\nDone.\n"
+    )
+    assert headline(text).text == "Rename config loader module"
+
+
+def test_compaction_without_quotes_uses_the_section_sentence():
+    text = _COMPACT + (
+        "1. Primary Request and Intent:\n"
+        "   The user asked me to migrate the billing tables to the new schema. "
+        "Then verify the totals.\n"
+        "2. Key Technical Concepts:\n   - SQL\n"
+    )
+    assert headline(text).text == "Migrate billing tables to new schema"
+
+
+def test_compaction_never_headlines_its_own_boilerplate():
+    for text in (_COMPACT + "## Status\nAll done.\n", _COMPACT):
+        h = headline(text)
+        assert h.text == "Continue" and h.meaningful is False
+    # Never the old reading of the boilerplate sentence itself.
+    assert "summary" not in headline(_COMPACT + "nothing").text.lower()
+
+
+def test_a_heading_word_inside_prose_is_not_a_section():
+    text = _COMPACT + (
+        "The task came from the user, relayed through the parent.\n"
+        "## Status\nDone.\n"
+    )
+    assert headline(text).text == "Continue"
+
+
+def test_an_object_that_is_only_the_opening_verb_falls_back_to_own_words():
+    h = headline("Find out why and fix it.")
+    assert h.text == "Find out why and fix it" and h.confident is False
+    assert headline("find out why the build fails").text == "Investigate build fails"
+    assert headline("Fix the build").text == "Fix build"
