@@ -8213,6 +8213,61 @@ def test_a_checklist_for_a_branch_no_session_was_on(client, branch_repo):
     assert len(branch_repo.started) == 1
 
 
+def test_an_empty_checklist_starts_no_generation(client, branch_repo):
+    """``empty: true``: the checklist exists at once, stepless and marked
+    ``origin: "manual"`` (so Verify reads it as a person's to fill, not as one
+    that couldn't be written), and no model call is started."""
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate", "empty": True},
+    )
+    assert r.status_code == 201
+    assert r.json() == {
+        "ok": True,
+        "plan": "shop@feature/teammate",
+        "existing": False,
+        "empty": True,
+    }
+    assert branch_repo.started == []
+    plan = tp.get("shop@feature/teammate")
+    assert plan["origin"] == "manual" and plan["steps"] == []
+    assert plan["state"] == "generated" and plan["error"] == ""
+    # It is served that way, and a person's step makes it a working checklist.
+    listed = [
+        p
+        for p in client.get("/api/test-plans").json()["plans"]
+        if p["id"] == plan["id"]
+    ]
+    assert listed and listed[0]["origin"] == "manual"
+    filled = tp.add_step(plan["id"], "Open the page", "It loads")
+    assert filled["state"] == "generated" and len(filled["steps"]) == 1
+    # Asking again (empty or not) points at it and still starts nothing.
+    again = client.post(
+        "/api/test-plans/branch", json={"repo": "shop", "branch": "feature/teammate"}
+    )
+    assert again.status_code == 200 and again.json()["existing"] is True
+    assert branch_repo.started == []
+
+
+def test_only_a_literal_true_makes_it_empty(client, branch_repo):
+    r = client.post(
+        "/api/test-plans/branch",
+        json={"repo": branch_repo.root, "branch": "feature/teammate", "empty": "yes"},
+    )
+    assert r.status_code == 202
+    assert tp.get("shop@feature/teammate")["origin"] == ""
+    assert len(branch_repo.started) == 1
+
+
+def test_origin_survives_the_store_and_defaults_to_generated(store):
+    tp.ensure_plan_for("m-1", "feature/x", "abc", "/r", "main", manual=True)
+    assert tp.get("m-1")["origin"] == "manual"
+    tp.ensure_plan_for("g-1", "feature/y", "abd", "/r", "main")
+    assert tp.get("g-1")["origin"] == "" and tp.get("g-1")["state"] == "generating"
+    tp.upsert({**tp.get("m-1"), "origin": "bogus"})
+    assert tp.get("m-1")["origin"] == ""
+
+
 def test_a_branch_a_session_already_covers_names_that_checklist(client, branch_repo):
     tp.ensure_plan_for("sc-7", "feature/teammate", "abc", branch_repo.root, "main")
     r = client.post(

@@ -16,7 +16,7 @@
 import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
 import { useDoctor, useTestPlans } from "../state/queries";
-import { dueCount } from "./dialogs/verify";
+import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
@@ -58,6 +58,8 @@ export function TopBar() {
   // the thing you were not already looking at.
   const { data: testPlans } = useTestPlans();
   const due = dueCount(testPlans?.plans || []);
+  // Of those, the ones that FAILED: the badge turns red for them.
+  const failing = failingCount(testPlans?.plans || []);
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -198,7 +200,9 @@ export function TopBar() {
             id="verify-btn"
             className="tb-item"
             type="button"
-            title={"Verify — " + VERIFY_BLURB + keys("verify")}
+            title={
+              "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing)
+            }
             /* No aria-label, for the same reason as Intake above: the visible
                "Verify" IS the name, and a second wording would be the one a
                screen reader announced. */
@@ -209,7 +213,7 @@ export function TopBar() {
                 that becomes "3" a moment later reads as "nothing to do", which is
                 the one thing this badge must never say while it is still finding
                 out. */}
-            {due > 0 && <span className="tb-count">{due}</span>}
+            {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
           <button
             id="settings-btn"

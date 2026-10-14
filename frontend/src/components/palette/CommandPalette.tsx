@@ -145,6 +145,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({
       label: "Schedule a session…",
       hint: "daily or weekdays",
+      keywords: "recurring cron every day nightly weekly",
       run: () => ui.openDialogFor("templates", "schedule"),
     });
     // Run now: a fresh session from a template, its prompt already sent —

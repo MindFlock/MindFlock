@@ -205,7 +205,7 @@ def test_assistant_agent_file_has_one_name_and_two_doors():
     # One id per button: the head no longer reuses the bar's.
     assert 'id="assistant-agent-btn"' not in special
     dialog = _read("components/dialogs/AssistantAgentDialog.tsx")
-    assert "<h2>Assistant agent file</h2>" in dialog
+    assert "<h2>Assistant instructions</h2>" in dialog
     assert 'id="assistant-agent-text"' in dialog  # editable in place
     assert 'label: "Assistant instructions (agent file)…"' in _read(
         "components/palette/CommandPalette.tsx"

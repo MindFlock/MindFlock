@@ -101,7 +101,10 @@ def test_verify_always_shows_in_the_top_bar():
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
-    assert '{due > 0 && <span className="tb-count">{due}</span>}' in src
+    assert (
+        '{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}'
+        in src
+    )
     assert (
         src.index('id="intake-btn"')
         < src.index('id="verify-btn"')

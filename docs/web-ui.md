@@ -41,7 +41,9 @@ red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
 **Verify** is always on the bar. Its badge counts the checklists under **Needs
-you** and **Failed** (the dialog's first two groups) and says nothing at zero. Everywhere Verify is described in passing
+you** and **Failed** (the dialog's first two groups) and says nothing at zero;
+it turns **red** when any of them failed, and the tooltip's second line says
+what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
 (this tooltip, the palette, the tour, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
 
@@ -234,11 +236,11 @@ magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
-have to navigate), **Verify — check what was pushed**, **Customize…**, **Prompts…** (*manage saved prompts*),
+have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
 **Templates…** (*manage saved New-session setups*), **Schedule a session…**
 (opens Templates on a new template with **Run on a schedule** ticked), one **Run template:
 <name>** (*fresh session, prompt sent*) per template that has a folder,
-**Assistant agent file…**,
+**Assistant instructions (agent file)…**,
 **Recently closed…**, Open Settings / Doctor / **Open Setup checklist**,
 **Settings → …** rows for what you typed (`palette/settingsSearch.ts`: one
 entry per screen plus a few controls, matched on the words people use —
@@ -461,8 +463,10 @@ workers or messages), the guided next-step button, ⏩
 **▶ Resume**), **⋯** and **−**. Under the header, a one-line **Task:** bar
 names what the session was asked to do — its newest prompt from the agent's
 transcript, or, until there is one (or for an agent MindFlock can't read a
-transcript of), the task this browser started it with; the ❯ arrow drops the
-whole prompt over the terminal.
+transcript of), the task it was created with (`task` on `/api/instances`:
+`Instance.Task`, the create prompt, set once and persisted in `state.json`);
+the ❯ arrow drops the whole prompt over the terminal. The sidebar row's
+muted sub-line reads the same.
 
 - **⋯ is the session's one menu** — the same model as the sidebar row's ⋯
   (see [Session row actions](#session-row-actions-expand-a-sidebar-row-with-)),
@@ -1417,7 +1421,12 @@ the events bus, **including the backlog replayed on connect** so it answers
 "what happened while I was away." Events since you last opened it are marked
 unread (keyed on timestamp so it survives server restarts); while nothing
 needs attention, unread history shows as a small neutral dot on the bell, never
-a number. Clicking an entry focuses that session. A session that ended reads
+a number. Clicking an entry focuses that session. Verify adds three rows,
+named **Verify · <checklist>** and opening that checklist in Verify: *ready to
+check* (`session.test_plan_due`), *couldn't write the checklist*
+(`session.test_plan_failed`) and *checklist failed — N steps*
+(`session.test_plan_checked` with `new: "failed"`), each gated by its own rule
+(`verify_plan_due`, `verify_plan_failed`, `verify_run_failed`). A session that ended reads
 **closed** when it was closed (✕, `Ctrl+W`, the palette — the worktree kept)
 and **deleted** only when it was deleted (worktree and branch removed), never
 the other way round. The rows read as sentences: a stage change says
@@ -3344,7 +3353,12 @@ a branch no session has been on):
   a repo picker (every repo a checklist, an open session or a closed one has been
   in) and a branch box: for a teammate's branch, say. That checklist is keyed
   `<repo>@<branch>`, read from the repo's own checkout (fetching the branch from
-  origin when it isn't local), and written from the diff alone.
+  origin when it isn't local), and written from the diff alone. Sent with
+  `empty: true` (`POST /api/test-plans/branch`) the checklist is created
+  **empty** instead — no model call, `origin: "manual"`, 201 — and its row
+  reads **Empty — add a step** under **Needs you** with **Add a step** as its
+  button, never *Couldn't be written* (a rewrite asked of it that fails reads as
+  the failure again).
 - **Write steps yourself** — pick a checklist and **Add a step** opens it with its
   **Add a step** form open and the caret in it. Steps live on a checklist, so with
   none yet the row says to ask the agent for one first.
@@ -3377,7 +3391,8 @@ and **Verified**. The badge counts the first two, by construction. Merged-or-not
 is never a heading; it is on the row.
 
 **Every row says its verdict first** — a pill before the sentence: **Verified on
-branch**, **Verified live**, **Failed**, **Couldn't be written**, **Agent
+branch**, **Verified live**, **Failed**, **Couldn't be written**, **Empty — add a
+step** (made empty on purpose), **Agent
 checking**, **Being written**, **Waiting to ship** (merged, waiting out the
 deploy) or **n of m checked** (`planVerdict` in `verify.ts`). Then one
 plain-English sentence saying whose turn it is — a failure names its step:

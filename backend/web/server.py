@@ -1537,6 +1537,10 @@ def _session_snapshot(i, queues: dict) -> dict:
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
     d["last_prompt_full"] = _session_last_prompt_full_cached(i)
+    # What it was asked to do when it was created (Instance.Task) — the
+    # pane's "Task:" line until the transcript names a newer prompt, and the
+    # only one for an agent whose transcript MindFlock can't read.
+    d["task"] = getattr(i, "Task", "") or None
     # O2/O3/O4: worktree setup + verification-gate state and the port block.
     try:
         wt = i.GetWorktreePath()
@@ -1613,6 +1617,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["last_turn"] = None
     d["last_prompt"] = None
     d["last_prompt_full"] = None
+    d["task"] = getattr(i, "Task", "") or None
     d["setup"] = None
     d["check"] = None
     pb = _ports.get(i.Title)
@@ -9080,7 +9085,10 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
     so Verify's one button does not care which it asked. Written diff-only, from
     the repo's own checkout (there is no session, so no ticket text): the
     rewrite box is where to aim it. 400 a missing/unknown repo or a bad branch
-    name, 409 a branch the repo doesn't have or the branch it ships from."""
+    name, 409 a branch the repo doesn't have or the branch it ships from.
+
+    ``empty: true`` creates the checklist EMPTY instead (``origin: "manual"``,
+    201) and starts no generation: a person fills it with Add a step."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -9091,6 +9099,7 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
     if not isinstance(branch, str) or not branch.strip():
         return JSONResponse({"error": "type a branch name"}, status_code=400)
     repo, branch = repo.strip(), branch.strip()
+    empty = payload.get("empty") is True
 
     def _prepare():
         known = _known_repo_roots()
@@ -9142,7 +9151,9 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
                 ),
             )
         plan_id = _test_plans.branch_plan_id(root, branch)
-        plan = _test_plans.ensure_plan_for(plan_id, branch, sha, root, live, intent="")
+        plan = _test_plans.ensure_plan_for(
+            plan_id, branch, sha, root, live, intent="", manual=empty
+        )
         owner = (
             ""
             if plan is not None
@@ -9162,6 +9173,12 @@ async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
                 "existing": True,
                 "state": existing.get("state", ""),
             }
+        )
+    if empty:
+        # Empty by choice: nothing to write, so nothing is started.
+        return JSONResponse(
+            {"ok": True, "plan": plan_id, "existing": False, "empty": True},
+            status_code=201,
         )
     # No session: the repo's default CLI, reading the diff in its checkout.
     _start_test_plan_generation(plan_id, "", "")

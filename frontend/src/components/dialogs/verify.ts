@@ -394,7 +394,23 @@ export function isWaitingOnYou(plan: TestPlan): boolean {
   // under the reader's heading, and the row under it then said "Agent
   // checking", which is the contradiction the single axis exists to remove.
   if (plan.state === "running" || plan.state === "generating") return false;
+  // An empty checklist a person started is theirs to fill in.
+  if (isEmptyByChoice(plan)) return true;
   return plan.state === "due" || needsConfirmation(plan);
+}
+
+/** A checklist created empty on purpose (`origin: "manual"`) that has no
+ * steps yet: a person is writing them. Not a failure, and not "Couldn't be
+ * written" — nothing was asked of the model. */
+export function isEmptyByChoice(plan: TestPlan): boolean {
+  // A rewrite asked of it that is in flight or FAILED is the model's state
+  // again, and says so.
+  return (
+    plan.origin === "manual" &&
+    !(plan.steps || []).length &&
+    plan.state !== "generating" &&
+    plan.state !== "failed"
+  );
 }
 
 /** Whether this checklist has FAILED — a step that didn't do what was
@@ -408,7 +424,7 @@ export function isWaitingOnYou(plan: TestPlan): boolean {
 export function isFailing(plan: TestPlan): boolean {
   if (plan.state === "running") return false;
   if (plan.state === "generating") return isGenerationStalled(plan);
-  if (!(plan.steps || []).length) return true;
+  if (!(plan.steps || []).length) return !isEmptyByChoice(plan);
   return verdictOf(plan) === "fail";
 }
 
@@ -419,6 +435,13 @@ export function isFailing(plan: TestPlan): boolean {
  * two headings. */
 export function dueCount(plans: TestPlan[]): number {
   return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
+}
+
+/** The top bar's Verify tooltip, second line: what its count counts, now. */
+export function verifyCountLine(due: number, failing: number): string {
+  if (!due) return "Checklists that need you or failed: none right now";
+  const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
+  return failing ? what + " — " + failing + " failed" : what;
 }
 
 /** How many of those are failures — the VerifyBar's red pill. */
@@ -1079,6 +1102,10 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       "Try rewriting again",
     );
 
+  // Made empty on purpose ("Start an empty checklist"): nothing failed, a
+  // person is about to write the steps.
+  if (isEmptyByChoice(plan)) return at("you", "Empty — add the steps to check.", "answer", "Add a step");
+
   // A plan that came back empty looks identical to one still being written, so
   // it has to say which it is.
   if (!steps.length)
@@ -1352,6 +1379,8 @@ function clip(text: string, max: number): string {
  * heading above it cannot disagree:
  *
  * - **Being written** / **Agent checking** — an agent is at work;
+ * - **Empty — add a step** — made empty on purpose (`origin: "manual"`): no
+ *   steps yet because a person is writing them, not because writing failed;
  * - **Couldn't be written** — no steps (failed, empty, or stalled);
  * - **Failed** — a step didn't do what was expected;
  * - **Verified on branch** / **Verified live** — every step passed, before or
@@ -1362,6 +1391,7 @@ function clip(text: string, max: number): string {
  * `short` is the sidebar's version, where a row has room for two words. */
 export type VerdictKey =
   | "writing"
+  | "empty"
   | "checking"
   | "unwritten"
   | "failed"
@@ -1385,6 +1415,7 @@ export function planVerdict(plan: TestPlan): PlanVerdict {
   if (plan.state === "generating" && !isGenerationStalled(plan))
     return v("writing", "Being written", "busy", "\u2026", "Checklist…");
   if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
+  if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
   if (!steps.length || isGenerationStalled(plan))
     return v("unwritten", "Couldn't be written", "bad", "\u2717", "No checklist");
   const verdict = verdictOf(plan);

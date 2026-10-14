@@ -245,6 +245,11 @@ export interface Instance {
   /** The same prompt's whole body (capped ~4000 chars) — the pin's
    * hover/click expansion. */
   last_prompt_full?: string | null;
+  /** What the session was asked to do when it was created (the create
+   * prompt, trimmed; first line is what the UI shows) — the pane's "Task:"
+   * line until the transcript names a newer prompt. Null when it was started
+   * without one. Optional: an older server doesn't send it. */
+  task?: string | null;
   setup: SetupSummary | null;
   check: SetupSummary | null;
   ports: { base: number; count: number } | null;
@@ -1422,6 +1427,10 @@ export interface TestRun {
 export interface TestPlan {
   id: string;
   title: string;
+  /** "manual": created empty on purpose (`POST /api/test-plans/branch` with
+   * `empty: true`) — a person writes its steps, no model call was made. ""
+   * for a generated checklist. Optional: an older server doesn't send it. */
+  origin?: "" | "manual";
   /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
    * plan outlives the session that produced it. */
   repo_root: string;

@@ -593,6 +593,11 @@ def _blank(plan_id: str) -> dict:
         # How many times a later push has re-read this branch and rewritten the
         # checklist. Capped at :data:`MAX_REFRESHES`; see :func:`refresh_for_push`.
         "refreshes": 0,
+        # "manual": created EMPTY on purpose (``ensure_plan_for(manual=True)``,
+        # Verify's "Start an empty checklist") — no model call, the steps are a
+        # person's to write. "" for a generated checklist. It is what tells a
+        # stepless plan a person chose apart from one whose writing failed.
+        "origin": "",
         # When the work was first seen MERGED — distinct from ``live_at``, which
         # is when it became the reader's problem. Merged is a git fact and is
         # true the instant a PR lands; deployed is what a checklist actually
@@ -973,6 +978,7 @@ def _normalize(plan_id: str, entry) -> dict:
         plan["refreshes"] = max(0, int(entry.get("refreshes") or 0))
     except (TypeError, ValueError):
         plan["refreshes"] = 0
+    plan["origin"] = "manual" if entry.get("origin") == "manual" else ""
     plan["merged_at"] = _f(entry.get("merged_at"))
     plan["live_at"] = _f(entry.get("live_at"))
     plan["merged_into"] = str(entry.get("merged_into") or "")
@@ -1187,8 +1193,13 @@ def ensure_plan_for(
     repo_root: str,
     live_branch: str,
     intent: str = "",
+    manual: bool = False,
 ) -> Optional[dict]:
     """Create the ``generating`` plan for a session that just landed on origin.
+
+    ``manual=True`` creates it EMPTY instead: state ``generated`` with no
+    steps and ``origin: "manual"``, for a person to fill with Add a step —
+    the caller starts no generation. Same idempotence as below.
 
     **This is the idempotent entry point, and its idempotence is the single
     most important behaviour in the module.** It is called from the push
@@ -1243,6 +1254,17 @@ def ensure_plan_for(
         # for.
         plan["intent"] = _text(intent, TICKET_CTX_BUDGET)
         plan["state"] = "generating"
+        if manual:
+            # Empty by choice: nothing is being written, so no generation
+            # clock (a stamped ``generating`` plan would read as stalled).
+            plan["state"] = "generated"
+            plan["origin"] = "manual"
+            plan["generated_at"] = time.time()
+            plans.pop(plan_id, None)
+            plans[plan_id] = plan
+            _prune_plans(plans)
+            _save(_doc(plans))
+            return plan
         # Stamped HERE and not only in :func:`generate`, because the caller runs
         # the two in sequence on a thread that can die between them: a process
         # killed in that window would leave a ``generating`` plan whose clock had

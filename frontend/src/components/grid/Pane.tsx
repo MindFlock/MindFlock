@@ -11,7 +11,7 @@ import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { fmtUsd, displayBranch } from "../../lib/format";
+import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import { sessionLabel } from "../../lib/sessionLabel";
@@ -44,7 +44,6 @@ import { hasUncommitted, sessionMenu } from "../../lib/sessionMenu";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { folderInUseText } from "../../lib/sessionActions";
 import { errorPop } from "../../lib/errorPop";
-import { rememberedTask } from "../../lib/sessionTask";
 import { useCalm } from "../../lib/useCalm";
 import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
@@ -294,8 +293,9 @@ export function Pane({
   const fullNorm = (inst.last_prompt_full || "").replace(/\s+/g, " ");
   const ghostIsLatest = !ghost || (!!fullNorm && fullNorm.includes(ghostCore.slice(0, 80)));
   // Before the transcript names one (or for an agent without a transcript
-  // reader), the task this browser started it with (lib/sessionTask).
-  const task = inst.last_prompt || rememberedTask(title) || null;
+  // reader), the task it was created with (Instance.Task, first line).
+  const createTask = firstLine(inst.task);
+  const task = inst.last_prompt || createTask || null;
   const pinLine = ghost ?? task;
 
   // Expanding an OLDER prompt (the ghost isn't the latest) needs its full
@@ -317,7 +317,9 @@ export function Pane({
   }, [pinOpen, ghostIsLatest, ghostCore, title, lookup]);
 
   const pinBody = ghostIsLatest
-    ? inst.last_prompt_full || task
+    ? inst.last_prompt
+      ? inst.last_prompt_full || inst.last_prompt
+      : inst.task || task
     : lookup?.q === ghostCore
       ? lookup.text
       : ghost;

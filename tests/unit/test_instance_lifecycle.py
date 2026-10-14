@@ -1426,3 +1426,33 @@ def test_worktree_from_data_plain_worktree():
 
     assert isinstance(got, GitWorktree)
     assert got.GetRepoPath() == "/repo"
+
+
+def test_new_instance_keeps_the_create_prompt_as_its_task(monkeypatch):
+    """``Task`` is the create prompt, trimmed and capped; it survives the launch
+    clearing ``Prompt`` and the ToInstanceData / FromInstanceData round trip."""
+    monkeypatch.setattr(inst_mod, "_provider_default_launch_args", lambda program: ())
+    opts = InstanceOptions(
+        title="t", path="rel/path", program="claude", prompt="  add a README\nsection  "
+    )
+    inst = new_instance(opts)
+    assert inst.Task == "add a README\nsection"
+    inst.Prompt = ""  # what the launch path does once it is sent or queued
+    data = inst.ToInstanceData()
+    assert data.task == "add a README\nsection"
+    big = new_instance(
+        InstanceOptions(title="u", path="p", program="claude", prompt="x" * 5000)
+    )
+    assert len(big.Task) == inst_mod.TASK_MAX_CHARS
+    assert (
+        new_instance(InstanceOptions(title="v", path="p", program="claude")).Task == ""
+    )
+
+
+def test_from_instance_data_restores_the_task(monkeypatch):
+    monkeypatch.setattr(
+        inst_mod.tmux, "NewTmuxSession", lambda title, program: FakeTmux()
+    )
+    data = _instance_data(status=Status.Paused)
+    data.task = "fix the login flow"
+    assert from_instance_data(data).Task == "fix the login flow"

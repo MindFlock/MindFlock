@@ -287,3 +287,18 @@ def test_playbook_marshal_bytes():
         [InstanceData(title="o", spawned=True, playbook="split")]
     ).decode("utf-8")
     assert blob.endswith(',"spawned":true,"playbook":"split"}]')
+
+
+def test_task_key_absent_when_unset_and_emitted_last():
+    """``task`` (the create prompt — the UI's "Task:" line) is conditional like
+    the other extension keys: absent unset, last when set, and it round-trips."""
+    d = InstanceData(title="t", path="/x", program="claude").to_dict()
+    assert list(d.keys()) == _PLAIN_KEYS and "task" not in d
+    both = InstanceData(title="t", playbook="split", task="add a README").to_dict()
+    assert list(both)[-2:] == ["playbook", "task"] and both["task"] == "add a README"
+    back = InstanceData.from_dict(both)
+    assert back.task == "add a README" and back.to_dict() == both
+    assert InstanceData.from_dict({"title": "t"}).task == ""
+    assert InstanceData.from_dict({"title": "t", "task": None}).task == ""
+    blob = _marshal_instances([InstanceData(title="o", task="x")]).decode("utf-8")
+    assert blob.endswith(',"task":"x"}]')
