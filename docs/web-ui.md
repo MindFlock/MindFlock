@@ -3822,6 +3822,17 @@ is about to reset half-empty or unattended hours sat idle), and charts of
 window fill, uptime (working / idle / locked out) and attended vs.
 unattended time. See [extensions.md](extensions.md#worked-example-2-the-usage-optimizer).
 
+The **Workflow** bar (the built-in Workflow Optimizer extension, button
+**Bottlenecks**) breaks every ticket's time down from first work to the PR:
+the median (and active) time to PR and to merge, a stacked bar of where that
+time went — agent working, waiting on your answer, your turn, idle while you
+were away, setup, pre-commit hooks, recovering from failed hooks, committed
+not pushed, pushed no PR, PR open, usage limit — grouped by who held the
+work, the bottlenecks ranked with what to change, a per-phase table (median
+and p90 per item, until or after the PR), a weekly trend, and every work item
+with its own timeline. It records from the moment it is installed. See
+[extensions.md](extensions.md#worked-example-3-the-workflow-optimizer).
+
 ## Voice input
 
 The mic button (🎙, Chromium's `webkitSpeechRecognition`) dictates into the

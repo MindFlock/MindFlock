@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Workflow Optimizer: where each ticket's time goes, start to PR.** A new
+  built-in extension (sidebar bar **Workflow**, palette "Workflow:
+  Optimizer") records every session's phase — setup, agent working, waiting
+  on your answer, your turn, idle while you're away, pre-commit hooks,
+  recovering from failed hooks, committed-not-pushed, pushed-no-PR, PR open,
+  usage limit — and breaks each work item (one branch's trip to a merged PR)
+  down by them. It shows the median time to PR (and active time, without idle
+  hours), time to merge, which phase is the bottleneck with what to change
+  about it, a weekly trend, and every item's own timeline. Recording starts
+  when you install it; server downtime shows as untracked, never as work.
+
 ## [0.8.6] - 2026-10-13
 
 ### Added

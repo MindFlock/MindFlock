@@ -36,6 +36,7 @@ def test_manifest_lists_migrated_addons():
         "onboarding",
         "dbclient",
         "optimizer",
+        "workflow",
     ]
     # Each UI addon contributes a frontend descriptor with a known slot. The
     # "connections" addon is API-only (its list renders inline in the Settings →
