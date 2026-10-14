@@ -81,7 +81,9 @@ describe("writing it back", () => {
 describe("the field", () => {
   it("with one repo it is the Repo URL box it always was, plus + Add repo", () => {
     const html = render(src({ repo_url: BACK }));
-    expect(html).toContain(">Repo URL</span>");
+    expect(html).toContain(">Repo URL<");
+    // The same required marker the catalog fields wear.
+    expect(html).toContain(`data-marker="required"`);
     expect(html).toContain('data-tk-field="repo_url"');
     expect(html).toContain(`value="${BACK}"`);
     expect(html).toContain("+ Add repo");
@@ -99,7 +101,7 @@ describe("the field", () => {
     const html = render(
       src({ repo_url: BACK, repos: [{ url: BACK, hint: "api, django" }, { url: FRONT }] })
     );
-    expect(html).toContain(">Repos</span>");
+    expect(html).toContain(">Repos<");
     expect(html.match(/class="tk-repo-row"/g)?.length).toBe(2);
     expect(html.match(/class="tk-repo-hint"/g)?.length).toBe(2);
     expect(html.match(/aria-label="Remove repo \d"/g)?.length).toBe(2);

@@ -66,16 +66,17 @@ def test_the_rail_and_recently_closed_never_call_a_native_dialog():
 
 
 def test_switch_failures_are_titled_with_the_intake_switch_they_mirror():
-    assert 'errorPop("Automated ingestion failed", errMsg(err));' in _code(
+    # Named exactly as the Intake tabs name the switches (GLOSSARY: auto-start).
+    assert 'errorPop("Auto-start tickets failed", errMsg(err));' in _code(
         "components/sidebar/AutomationBar.tsx"
     )
     assert "errorPop(`${toggleLabel} failed`, errMsg(err));" in _code(
         "components/sidebar/useGithubToggleBar.ts"
     )
-    assert 'toggleLabel: "Automated review"' in _code(
+    assert 'toggleLabel: "Auto-address review comments"' in _code(
         "components/sidebar/PrReviewBar.tsx"
     )
-    assert 'toggleLabel: "Automated handling"' in _code(
+    assert 'toggleLabel: "Auto-start new issues"' in _code(
         "components/sidebar/GitIssueBar.tsx"
     )
 

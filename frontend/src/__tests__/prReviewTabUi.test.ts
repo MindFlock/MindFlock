@@ -52,10 +52,14 @@ describe("the Pull requests tab", () => {
     // The tab label in the Intake dialog's strip; the tab strip IS the heading,
     // so the switch label and its status line are what name the feature.
     expect(code(DIALOG_RAW)).toContain('label: "Pull requests"');
-    expect(PRS).toContain('label="Automated review"');
+    // Named for what it does: it addresses review comments on YOUR PRs; it
+    // never reviews anyone's (round-2: "Automated review" read as the opposite).
+    expect(PRS).toContain('label="Auto-address review comments"');
+    expect(PRS).not.toMatch(/Automated review|Begin review|auto review/);
     // Legacy id, kept on the work panel for addon CSS that targeted the screen.
     expect(code(DIALOG_RAW)).toContain('legacyId: "pr-review-block"');
-    expect(code(DIALOG_RAW)).toContain("id={t.legacyId}");
+    expect(code(DIALOG_RAW)).toContain("id={panelId(t)}");
+    expect(code(DIALOG_RAW)).toContain("t.legacyId || \"intake-tabpanel-\" + t.key");
     // Explicit on/off (pause without deleting repos) + a status line.
     expect(PRS).toContain('inputId="gh-pr-enabled"');
     expect(PRS).toContain('statusId="gh-pr-status"');
@@ -94,12 +98,17 @@ describe("the Pull requests tab", () => {
     expect(REPOS).toContain('toast(val + " is already in the list")');
     // POST { github: { repos: [...], repo_settings: {...} } } — the per-repo
     // override map is what makes a card's own agent / base branch mean anything.
-    expect(PRS).toContain("saveGithub({ repos: list, repo_settings: next }");
+    expect(PRS).toContain("repos: list,");
+    expect(PRS).toContain("repo_settings: next,");
+    // Off by default like Issues: a setup that never chose saves its first
+    // repository with an explicit off; saved settings keep their meaning.
+    expect(PRS).toContain("gh.enabled == null && !repos.length && list.length ? { enabled: false } : {}");
+    expect(PRS).toContain("const enabled = prsOn(gh);"),
     // No "● Active / ‖ Paused" status line under the switch any more; the
     // switch's only subtitle is the one state a switch can't show.
     expect(ALL).not.toContain("Paused —");
-    expect(PRS).toContain('"Automated review paused"');
-    expect(PRS).toContain('"Add a repository below and this starts reviewing your PRs on it"');
+    expect(PRS).toContain('"Auto-address review comments off"');
+    expect(PRS).toContain('"Add a repository below first"');
   });
 
   it("styles the feature and the repo cards", () => {
@@ -116,10 +125,10 @@ describe("the Pull requests tab", () => {
 });
 
 describe("the open-PR panel", () => {
-  it("ships its list, refresh and Begin review", () => {
+  it("ships its list, refresh and Start", () => {
     expect(PRS).toContain('refreshId="gh-prs-refresh"');
     expect(PRS).toContain('listId="gh-prs-list"');
-    expect(PRS).toContain('actionLabel="Begin review"');
+    expect(PRS).toContain('actionLabel="Start"');
     expect(rule(SCREENS_CSS_RAW, ".pr-open-item")).toContain("grid-template-columns");
   });
 });

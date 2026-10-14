@@ -44,12 +44,14 @@ describe("screens and panels declare what they need, and say how to get it", () 
     expect(attr(tagsWith(ws, "data-goto-screen", "doctor")[0], "onClick")).toContain('gotoScreen("doctor")');
   });
 
-  it("gates Intake's Pull requests and Issues tabs on git AND ticketing", () => {
+  it("gates Intake's Pull requests and Issues tabs on git (not on a tracker)", () => {
+    // They run on their own GitHub sign-in and switches — the pipeline boots
+    // for them with no ticket source — so only git can lock them.
     const intake = src("components/intake/IntakeDialog.tsx");
-    expect(intake.split('caps: "git ticketing",').length - 1).toBe(2);
+    expect(intake.split('caps: "git",').length - 1).toBe(2);
     for (const tab of ["components/intake/IssuesTab.tsx", "components/intake/PullRequestsTab.tsx"]) {
       expect(tagsWith(src(tab), "data-caps-gate", "git"), tab).toHaveLength(1);
-      expect(tagsWith(src(tab), "data-caps-gate", "ticketing"), tab).toHaveLength(1);
+      expect(tagsWith(src(tab), "data-caps-gate", "ticketing"), tab).toHaveLength(0);
     }
   });
 

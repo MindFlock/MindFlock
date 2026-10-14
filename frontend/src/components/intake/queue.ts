@@ -56,6 +56,9 @@ export interface QueuedItem {
   /** Identifies the item to its start endpoint, so a row here can be launched
    * by hand instead of waiting for the sweep. */
   target: QueueTarget;
+  /** Tickets on a several-repo source: where it starts and why (the row on
+   * the Tickets tab shows the same line). */
+  route?: { repos?: string[]; reason?: string; method?: string; summary?: string };
 }
 
 /** The narrow shape this module reads. The tabs keep their own fuller
@@ -75,6 +78,7 @@ export interface QueueTicket extends Annotated {
   bucket?: string;
   mine?: boolean;
   assignee?: string;
+  route?: QueuedItem["route"];
 }
 
 export interface QueuePr extends Annotated {
@@ -138,6 +142,7 @@ export function queuedOf(kind: QueueKind, payloads: QueuePayloads): QueuedItem[]
       created_at: t.created_at,
       state: t.bucket,
       assignee: t.mine === false ? t.assignee || "someone else" : undefined,
+      route: t.route,
       target: {
         kind: "tickets" as const,
         source: t.source || "",

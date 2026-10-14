@@ -236,16 +236,17 @@ export const TEST_STATE_LABELS: Record<SourceTestState, string> = {
 };
 
 /* --- Basic vs Advanced ------------------------------------------------------
- * A source card shows what a first setup needs (provider, repo, CLI, the
- * credential, whose tickets, which states) and folds the rest under
- * "Advanced options": the catalog fields marked `advanced` plus the card's own
- * per-queue tuning below. The fold opens on its own when anything in it is
+ * A source card shows what a first setup needs (provider, the credential,
+ * Test, whose tickets, which states, repo, agent) and folds the rest under
+ * "Advanced options": the source's name, the catalog fields marked `advanced`
+ * plus the card's own per-queue tuning below. The fold opens on its own when anything in it is
  * already set, or when the server objected to a field inside it — a value or an
  * error hidden behind a closed fold is a setting nobody can see. */
 
 /** The card's own (non-catalog) fields that live in the fold, each with the
  * stored values that mean "not set". `depth: "agent"` reads as Off. */
 export const CARD_ADVANCED_DEFAULTS: Record<string, readonly string[]> = {
+  label: [""],
   effort: [""],
   depth: ["", "agent"],
 };

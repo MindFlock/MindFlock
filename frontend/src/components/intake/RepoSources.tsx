@@ -598,7 +598,7 @@ export function RepoSourceList({
                 {surface !== "verify" && (
                   <>
                     <label className="set-row">
-                      <span className="set-label">Agent CLI</span>
+                      <span className="set-label">Agent</span>
                       <select
                         data-repo-field="agent"
                         value={agent}
@@ -615,9 +615,7 @@ export function RepoSourceList({
                         ))}
                       </select>
                       <span className="set-hint">
-                        Which coding CLI this repository's sessions run. Route one repo to a
-                        cloud CLI and another to a local model — pick a provider whose
-                        Connections row is green, or inherit the tab's default.
+                        Which agent works this repository's sessions.
                       </span>
                     </label>
                     <label className="set-row">
@@ -639,8 +637,8 @@ export function RepoSourceList({
                         ))}
                       </select>
                       <span className="set-hint">
-                        How far each item goes after its agent finishes. Merge is per-item
-                        only — a repo default runs with nobody watching.
+                        What happens after the agent finishes: commit, push, open a PR. Merge
+                        can only be picked per item, so nothing merges unattended.
                       </span>
                     </label>
                     {surface === "pr" && (
@@ -660,11 +658,8 @@ export function RepoSourceList({
                           }}
                         />
                         <span className="set-hint">
-                          Only PRs targeting this branch are auto-reviewed here. Blank inherits
-                          the tab default — which is <em>not</em> "every branch": it falls
-                          through to your repository's configured base branch. A PR into any
-                          other branch is still listed below, with a chip saying so, and{" "}
-                          <strong>Begin review</strong> works on it.
+                          Only PRs into this branch auto-start. Blank uses the tab default.
+                          <strong> Start</strong> still works on any PR.
                         </span>
                       </label>
                     )}
@@ -692,7 +687,9 @@ export function RepoSourceList({
                       </span>
                     </label>
                     <label className="set-row">
-                      <span className="set-label">Skip authors</span>
+                      <span className="set-label">
+                        {surface === "pr" ? "Ignore comments from" : "Ignore issues from"}
+                      </span>
                       <input
                         type="text"
                         autoComplete="off"
@@ -707,11 +704,9 @@ export function RepoSourceList({
                         }}
                       />
                       <span className="set-hint">
-                        Comma-separated GitHub logins.{" "}
-                        {surface === "pr"
-                          ? "Review only ever takes your own PRs, so this drops their review comments instead — the bots whose feedback you don't want acted on."
-                          : "Issues opened by these accounts are ignored."}{" "}
-                        Blank inherits the tab default.
+                        GitHub logins, comma-separated
+                        {surface === "pr" ? " — e.g. bots whose comments you don't want acted on" : ""}
+                        . Blank uses the tab default.
                       </span>
                     </label>
                   </>

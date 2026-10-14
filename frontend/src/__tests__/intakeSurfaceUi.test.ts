@@ -80,7 +80,14 @@ describe("the Intake dialog shell", () => {
     for (const label of ['label: "Tickets"', 'label: "Pull requests"', 'label: "Issues"', 'label: "Auto-start"'])
       expect(DIALOG, label).toContain(label);
     expect(DIALOG).toContain('{ key: "autostart", label: "Auto-start"');
-    expect(DIALOG).toContain('<span className="ik-tab-count">');
+    expect(DIALOG).toContain('className="ik-tab-count"');
+    // A real tablist: tabs say which is selected and which panel they drive,
+    // and arrow keys move along the strip.
+    expect(DIALOG).toContain('role="tablist"');
+    expect(DIALOG).toContain('role="tab"');
+    expect(DIALOG).toContain("aria-selected={tab === t.key}");
+    expect(DIALOG).toContain('role="tabpanel"');
+    expect(DIALOG).toContain('e.key === "ArrowRight"');
   });
 
   it("the legacy Settings screen keys still route", () => {
@@ -100,9 +107,13 @@ describe("the Intake dialog shell", () => {
       expect(ALL, gone).not.toContain(gone);
   });
 
-  it("the GitHub tabs keep their capability gate", () => {
-    // Same literal the Settings screens used, now on the work panels.
-    expect(DIALOG.split('caps: "git ticketing"').length - 1).toBe(2);
+  it("the GitHub tabs keep their git gate — and no longer need a tracker", () => {
+    // PR comments and issues run on their own switches and GitHub sign-in; the
+    // pipeline boots for them with no ticket source, so they are not locked
+    // behind "connect a ticketing tool" (round-2 judge: "why would PR handling
+    // need Shortcut?").
+    expect(DIALOG.split('caps: "git",').length - 1).toBe(2);
+    expect(DIALOG).not.toContain('caps: "git ticketing"');
     expect(DIALOG).toContain("data-caps-need={t.caps}");
     expect(css(CAPS_CSS_RAW)).toContain('body.no-ticketing .ik-panel[data-caps-need~="ticketing"]');
   });
@@ -143,7 +154,9 @@ describe("the work lists group by source", () => {
     expect(badge).toContain("countInBuckets(");
     expect(badge).toContain("visibleBuckets(");
     expect(badge).toContain("loadShownBuckets()");
-    expect(badge).toContain('<span className="ik-tab-count">');
+    expect(badge).toContain('className="ik-tab-count"');
+    // …and counts what needs you: rows ready to start, not every row listed.
+    expect(badge).toContain(".filter(isQueued)");
   });
 
   it("done buckets are what that filter excludes", () => {
@@ -163,8 +176,8 @@ describe("the work lists group by source", () => {
     // label, and the PR/issue tabs' conditional grouping.
     expect(ALL).not.toContain("ik-item-source");
     expect(ALL).not.toContain("groupOrder.length > 1");
-    // `sourceOrder.length > 1` survives only to pick the hint's wording.
-    expect(TICKETS).toContain("ingestStates[sourceOrder[0]]");
+    // `sourceOrder.length === 1` survives only to pick the hint's wording.
+    expect(TICKETS).toContain("filterOf(sourceOrder[0])");
   });
 
   it("the hint names this flock's own states", () => {
@@ -173,14 +186,17 @@ describe("the work lists group by source", () => {
     expect(TICKETS).toContain("parkedDone");
     expect(ALL).not.toContain("like Completed");
     // …and a plural/singular that matches however many there are.
-    expect(TICKETS).toContain('parkedDone.length === 1 ? "The done state " : "Done states "');
+    expect(TICKETS).toContain('parkedDone.length === 1 ? "is" : "are"');
   });
 
   it("ingest states are never merged across sources", () => {
     expect(ALL).not.toContain("Object.values(ingestStates).flat()");
-    expect(TICKETS).toContain("Each source heading says which states");
-    // The single-source case still names that source's own states.
-    expect(TICKETS).toContain("ingestStates[sourceOrder[0]]");
+    expect(TICKETS).toContain("Each source's heading says which tickets it auto-starts");
+    // The single-source case still names that source's own states — read from
+    // the SAVED filter, so an unreachable tracker can't make it "not set".
+    expect(TICKETS).toContain("filterOf(sourceOrder[0])");
+    expect(TICKETS).toContain("savedFilter(src)");
+    expect(ALL).not.toContain("No ingest-state filter is set");
   });
 
   it("group headings look like something you can press", () => {
@@ -233,6 +249,9 @@ describe("each row's per-launch overrides", () => {
     for (const [name, src] of Object.entries(TABS)) expect(code(src), name).toContain("effort ? { effort } : {}");
     // A CLI with no effort setting gets a disabled control that says so.
     expect(KIT).toContain('"No effort (" + (effortProvider || "this CLI") + ")"');
+    // Each picker carries its own small label.
+    for (const label of ["Agent", "Fast-track", "Effort"])
+      expect(KIT).toContain('<span className="ik-item-pick-label">' + label + "</span>");
     // Three pickers share the line, so it has to be allowed to fold…
     expect(rule(INTAKE_CSS_RAW, ".ik-item-start .ik-item-picks")).toContain("flex-wrap: wrap");
     expect(INTAKE_CSS).toContain(".ik-item-effort:disabled");
@@ -268,7 +287,7 @@ describe("failures", () => {
     // (a start that worked is still a toast).
     expect(KIT).toContain("errorPop(");
     expect(TICKETS).toContain("errorPop(");
-    expect(KIT).toContain('toast(created + " — provisioning, see the sidebar")');
+    expect(KIT).toContain('toast(msg + " — starting, see the sidebar")');
   });
 
   it("a long failure reason cannot widen the row", () => {
@@ -309,7 +328,7 @@ describe("every Intake work list ships its filter", () => {
 
 describe("Reopen window (intake reopen)", () => {
   it("the row ships the button, and the start demotes when a workspace exists", () => {
-    expect(KIT).toContain('"Reopen window"');
+    expect(KIT).toContain('"Reopen session"');
     // The start button demotes when a workspace exists, so the row has one
     // primary action rather than two competing ones.
     expect(KIT).toContain('canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn"');

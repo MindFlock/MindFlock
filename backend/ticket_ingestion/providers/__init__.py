@@ -125,11 +125,9 @@ def _start_comment_field(noun: str) -> dict:
             {"value": "on", "label": "On — “MindFlock (you) is taking this on.”"},
         ],
         "hint": (
-            f"Optional: when MindFlock moves the {noun} into the state above, "
-            "also post a comment on it saying MindFlock is taking it on, with "
-            "your first name from this connection. Only posted when the move "
-            f"actually changes the {noun}'s state, so relaunching one that is "
-            "already there doesn't comment twice."
+            f"Optional: when MindFlock moves the {noun} on start, also comment "
+            "that you're taking it on. Only when the move changes its state, so a relaunch "
+            "doesn't comment twice."
         ),
     }
 
@@ -137,22 +135,24 @@ def _start_comment_field(noun: str) -> dict:
 def _claim_label_field(noun: str) -> dict:
     """The claim label's stem, on every provider (all of them can label).
 
-    When a session starts on a {noun} MindFlock assigns it to you and labels
-    it ``<stem>:working`` so a teammate whose MindFlock is not paired with
-    yours sees it is taken (backend.ticket_ingestion.tracker_claims)."""
+    When a session starts on a {noun} MindFlock assigns it to you (never on an
+    Anyone's source) and labels it ``<stem>:working`` so a teammate whose
+    MindFlock is not paired with yours sees it is taken
+    (backend.ticket_ingestion.tracker_claims). The hint says both effects,
+    because "assigns it to you" is a change to the team's tracker that a
+    label-shaped field name doesn't announce."""
     return {
         "key": "claim_label",
-        "label": "Claim label",
+        "label": "Claim label (on start)",
         "secret": False,
         "required": False,
         "advanced": True,
         "placeholder": "mindflock",
         "hint": (
-            f"When a session starts on a {noun}, MindFlock assigns it to you "
-            f"and labels it <this>:working (mindflock:working when blank), so "
-            "teammates' MindFlock skips it — \u201c<you> is on this\u201d. The "
-            "label comes off when the session closes or ships; the assignment "
-            "stays."
+            f"Starting a {noun} assigns it to you and labels it <this>:working "
+            "(mindflock:working when blank), so teammates' MindFlock skips it. "
+            "On an Anyone's source it is only labelled, never reassigned. The "
+            "label comes off when the session ends; the assignment stays."
         ),
     }
 
@@ -163,8 +163,7 @@ PROVIDER_META: list[dict] = [
         "label": "GitHub Issues",
         "blurb": (
             "Zero config: uses your GitHub connection (Settings → Connections → "
-            "GitHub → Connect) and this repo. Auto-creates a session for each "
-            "issue assigned to you."
+            "GitHub) and this repo. Starts a session for each issue assigned to you."
         ),
         "fields": [
             {
@@ -185,9 +184,9 @@ PROVIDER_META: list[dict] = [
             # then ignored.
             _scope_field(
                 "Anyone's — every open issue",
-                "GitHub issues have no workflow states, so the repository above "
-                "is the only thing scoping this. Anyone's includes unassigned "
-                "issues.",
+                "Anyone's takes every open issue in the repository, assigned or "
+                "not. Starting one labels it mindflock:working; it isn't "
+                "reassigned to you.",
             ),
             _claim_label_field("issue"),
         ],
@@ -195,7 +194,7 @@ PROVIDER_META: list[dict] = [
     {
         "id": "shortcut",
         "label": "Shortcut",
-        "blurb": "Auto-create a session for each story assigned to you.",
+        "blurb": "Start a session for Shortcut stories assigned to you.",
         "fields": [
             {
                 "key": "api_token",
@@ -214,14 +213,14 @@ PROVIDER_META: list[dict] = [
             },
             _scope_field(
                 "Anyone's — by state or label",
-                "Anyone's picks up every story sitting in the ingest states "
-                "below (or carrying an ingest label), whoever owns it — the QA "
-                "queue. It needs at least one state or label; without one it "
-                "stays assigned-to-me.",
+                "Anyone's takes every story in the states (or with the labels) "
+                "below, whoever owns it — e.g. a team triage column. Pick at "
+                "least one. Starting one labels it mindflock:working; it isn't "
+                "reassigned to you.",
             ),
             {
                 "key": "workflow_state",
-                "label": "Ingest states",
+                "label": "Auto-start states",
                 "type": "state",
                 "secret": False,
                 "required": False,
@@ -229,22 +228,20 @@ PROVIDER_META: list[dict] = [
             },
             {
                 "key": "ingest_labels",
-                "label": "Ingest labels",
+                "label": "Auto-start labels",
                 "secret": False,
                 "required": False,
                 "placeholder": "any label — or e.g. mindflock, needs-agent",
                 "hint": (
-                    "Optional: only ingest stories carrying one of these labels "
-                    "(comma-separated, case-insensitive), on top of the states "
-                    "above. Use it when every ticket sits in the same state and "
-                    "adding the label is how you hand one to MindFlock."
+                    "Optional: only stories with one of these labels auto-start "
+                    "(comma-separated). Handy when adding a label is how you hand "
+                    "a story to MindFlock."
                 ),
             },
             _start_state_field(
                 "state",
-                "Optional: when a session starts for one of these stories — "
-                "whether the pipeline picked it up or you ran it by hand — move "
-                "the story here. Leave it unset and the story stays where it is.",
+                "Optional: when a session starts on a story (on its own or by "
+                "Start), move the story here.",
             ),
             _start_comment_field("story"),
             _claim_label_field("story"),
@@ -253,7 +250,7 @@ PROVIDER_META: list[dict] = [
     {
         "id": "jira",
         "label": "Jira",
-        "blurb": "Ingest Jira issues assigned to you (assignee = currentUser()).",
+        "blurb": "Start a session for Jira issues assigned to you.",
         "fields": [
             {
                 "key": "base_url",
@@ -297,19 +294,18 @@ PROVIDER_META: list[dict] = [
                 "placeholder": "e.g. ENG — optional",
                 "hint": (
                     "Optional: the project a ticket filed from New → Ticket goes "
-                    "into. Ingestion is by assignee or status across the whole "
-                    "site, so leave it blank unless you file tickets from here."
+                    "into. Leave it blank unless you file tickets from MindFlock."
                 ),
             },
             _scope_field(
                 "Anyone's — by status",
-                "Anyone's picks up every issue sitting in the ingest statuses "
-                "below, whoever it is assigned to. It needs at least one status "
-                "selected; without one it stays assigned-to-me.",
+                "Anyone's takes every issue in the statuses below, whoever it is "
+                "assigned to. Pick at least one. Starting one labels it "
+                "mindflock:working; it isn't reassigned to you.",
             ),
             {
                 "key": "workflow_state",
-                "label": "Ingest statuses",
+                "label": "Auto-start statuses",
                 "type": "state",
                 "secret": False,
                 "required": False,
@@ -317,12 +313,9 @@ PROVIDER_META: list[dict] = [
             },
             _start_state_field(
                 "status",
-                "Optional: when a session starts for one of these issues — "
-                "whether the pipeline picked it up or you ran it by hand — "
-                "transition the issue here. Jira only moves along transitions "
-                "its workflow offers from the issue's current status; when there "
-                "is none, the session still starts and the move is logged as a "
-                "warning.",
+                "Optional: when a session starts on an issue, move it here — if "
+                "its Jira workflow allows that move (otherwise it stays put and "
+                "the session still starts).",
             ),
             _start_comment_field("issue"),
             _claim_label_field("issue"),
@@ -331,7 +324,7 @@ PROVIDER_META: list[dict] = [
     {
         "id": "linear",
         "label": "Linear",
-        "blurb": "Ingest Linear issues assigned to you.",
+        "blurb": "Start a session for Linear issues assigned to you.",
         "fields": [
             {
                 "key": "api_token",
@@ -365,14 +358,14 @@ PROVIDER_META: list[dict] = [
             },
             _scope_field(
                 "Anyone's — by state",
-                "Anyone's picks up every issue sitting in the ingest states "
-                "below, whoever it is assigned to — scoped to the team in "
-                "Team key when one is set. It needs at least one state selected; "
-                "without one it stays assigned-to-me.",
+                "Anyone's takes every issue in the states below (in the Team key's "
+                "team, when set), whoever it is assigned to. Pick at least one. "
+                "Starting one labels it mindflock:working; it isn't reassigned "
+                "to you.",
             ),
             {
                 "key": "workflow_state",
-                "label": "Ingest states",
+                "label": "Auto-start states",
                 "type": "state",
                 "secret": False,
                 "required": False,
@@ -380,9 +373,8 @@ PROVIDER_META: list[dict] = [
             },
             _start_state_field(
                 "state",
-                "Optional: when a session starts for one of these issues — "
-                "whether the pipeline picked it up or you ran it by hand — move "
-                "the issue here. Leave it unset and the issue stays where it is.",
+                "Optional: when a session starts on an issue (on its own or by "
+                "Start), move the issue here.",
             ),
             _start_comment_field("issue"),
             _claim_label_field("issue"),
@@ -391,7 +383,7 @@ PROVIDER_META: list[dict] = [
     {
         "id": "asana",
         "label": "Asana",
-        "blurb": "Ingest Asana tasks assigned to you in a workspace.",
+        "blurb": "Start a session for Asana tasks assigned to you in a workspace.",
         "fields": [
             {
                 "key": "api_token",
@@ -424,13 +416,13 @@ PROVIDER_META: list[dict] = [
             },
             _scope_field(
                 "Anyone's — by section",
-                "Anyone's picks up every task sitting in the ingest sections "
-                "below, whoever it is assigned to. It needs at least one "
-                "section selected; without one it stays assigned-to-me.",
+                "Anyone's takes every task in the sections below, whoever it is "
+                "assigned to. Pick at least one. Starting one labels it "
+                "mindflock:working; it isn't reassigned to you.",
             ),
             {
                 "key": "workflow_state",
-                "label": "Ingest sections",
+                "label": "Auto-start sections",
                 "type": "state",
                 "secret": False,
                 "required": False,
@@ -438,10 +430,8 @@ PROVIDER_META: list[dict] = [
             },
             _start_state_field(
                 "section",
-                "Optional: when a session starts for one of these tasks — "
-                "whether the pipeline picked it up or you ran it by hand — move "
-                "the task into this section. Leave it unset and the task stays "
-                "where it is.",
+                "Optional: when a session starts on a task (on its own or by "
+                "Start), move the task into this section.",
             ),
             _start_comment_field("task"),
             _claim_label_field("task"),

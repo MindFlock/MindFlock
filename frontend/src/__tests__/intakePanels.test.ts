@@ -168,9 +168,10 @@ describe("the panel note", () => {
     expect(panelNote({ fetching: true, loaded: true, detail: "jira: 401" })).toBe("jira: 401");
     expect(panelNote({ fetching: true, loaded: true, error: "boom" })).toBe("");
     expect(panelNote({ fetching: true, loaded: true, error: "boom", detail: "jira: 401" })).toBe("jira: 401");
-    // …and the tickets panel is what passes the per-source errors in as detail.
-    expect(TICKETS).toContain('(sourceLabels[s] || s) + ": " + e');
-    expect(TICKETS).toContain('join(" · ")');
+    // The tickets panel no longer passes per-source errors in as detail: a
+    // source's failure is said ONCE, in its own group, in words, by name.
+    expect(TICKETS).not.toContain('(sourceLabels[s] || s) + ": " + e');
+    expect(TICKETS).toContain("friendlySourceError(label, srcError)");
   });
 
   it("a failed refetch is a banner, never an emptied panel", () => {

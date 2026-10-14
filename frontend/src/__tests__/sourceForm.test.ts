@@ -335,7 +335,18 @@ describe("Basic vs Advanced (the source form's fold)", () => {
   });
 
   it("renders basic fields up front and the rest in a details fold", () => {
-    expect(TICKETS_TAB).toContain("basicFields(meta).map(renderField)");
+    // Basic fields split around the Test: credentials, then Test, then the
+    // filters it unlocks (whose tickets, which states).
+    expect(TICKETS_TAB).toContain("const basics = basicFields(meta);");
+    expect(TICKETS_TAB).toContain("credFields.map(renderField)");
+    expect(TICKETS_TAB).toContain("filterFields.map(renderField)");
+    const order = ["credFields.map(renderField)", 'className="set-row tk-test-row"', "filterFields.map(renderField)", "<RepoListField", 'className="tk-agent"'];
+    for (let i = 1; i < order.length; i++)
+      expect(TICKETS_TAB.indexOf(order[i]), order[i]).toBeGreaterThan(TICKETS_TAB.indexOf(order[i - 1]));
+    // The source's name is an advanced extra now.
+    expect(TICKETS_TAB.indexOf('className="tk-label"')).toBeGreaterThan(
+      TICKETS_TAB.indexOf("<summary>Advanced options</summary>")
+    );
     expect(TICKETS_TAB).toContain("advancedFields(meta).map(renderField)");
     expect(TICKETS_TAB).toContain('<details\n        className="tk-advanced"');
     expect(TICKETS_TAB).toContain("<summary>Advanced options</summary>");

@@ -1,5 +1,5 @@
 /** The sidebar's Issues bar — Intake → Issues' door and quick switch: its label
- * opens that tab, its switch is the tab's "Automated handling" switch. Sits
+ * opens that tab, its switch is the tab's "Auto-start new issues" switch. Sits
  * under the Pull requests bar. The switch is the github.issues_enabled setting
  * — the settings addon emits addon.settings.github_toggled on a real change
  * and the ingestion addon reconciles the pipeline process (start / stop /
@@ -21,7 +21,7 @@ export function GitIssueBar() {
     reposKey: "issue_repos",
     defaultOn: false,
     activeFlag: "issues_active",
-    toggleLabel: "Automated handling",
+    toggleLabel: "Auto-start new issues",
   });
   if (!visible) return null;
 
@@ -29,9 +29,8 @@ export function GitIssueBar() {
     <div
       id="git-issue-bar"
       title={
-        `Issues — automated handling watches ${repos.length} ` +
-        `${repos.length === 1 ? "repository" : "repositories"} and starts work on ` +
-        "each newly opened issue on a fresh branch."
+        `Issues — starts a session for each new issue in ${repos.length} ` +
+        `${repos.length === 1 ? "repository" : "repositories"}.`
       }
     >
       <span
@@ -41,7 +40,7 @@ export function GitIssueBar() {
         className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
           active
-            ? "An issue is being brought in right now (automated or a forced start)"
+            ? "An issue is starting right now"
             : on
               ? starting
                 ? "Switched on — the pipeline is starting"
@@ -61,7 +60,7 @@ export function GitIssueBar() {
       <span className="dc-actions">
         <label
           className="dc-switch"
-          title="Automated handling — the same switch as Intake → Issues (your repositories are kept either way)"
+          title="Auto-start new issues — the same switch as Intake → Issues (your repositories are kept either way)"
         >
           <input
             type="checkbox"

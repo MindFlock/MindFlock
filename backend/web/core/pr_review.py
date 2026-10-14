@@ -91,23 +91,23 @@ def skip_reasons(
     """
     reasons: list[str] = []
     if (pr.repo, pr.number) in processed:
-        reasons.append("already reviewed (recorded in the processed ledger)")
+        reasons.append("already handled before")
     if login and pr.author != login:
-        reasons.append(f"authored by {pr.author}, not you ({login})")
+        reasons.append(f"opened by {pr.author}, not you ({login})")
     now = now or datetime.now(timezone.utc)
     age_min = (now - pr.created_at).total_seconds() / 60.0
     # This repo's own grace period, which its card may have overridden.
     min_age = gh.min_age_for(pr.repo)
     if age_min < min_age:
         left = max(1, round(min_age - age_min))
-        reasons.append(f"in the min-age grace period ({left} min left)")
+        reasons.append(f"too new — waits {left} more min")
     # The monitor asks GitHub only for PRs into this repo's base branch, so a PR
     # into another one is invisible to auto review. The panel lists every open
     # PR, which means it has to say so — otherwise a PR sitting there with no
     # chips reads as "queued" when the monitor will never see it.
     base = gh.base_branch_for(pr.repo)
     if base and pr.base_ref != base:
-        reasons.append(f"targets {pr.base_ref}, not the watched base ({base})")
+        reasons.append(f"into {pr.base_ref}, not {base}")
     return reasons
 
 
