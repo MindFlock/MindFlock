@@ -64,8 +64,12 @@ describe("a checklist row", () => {
 
 describe("the repository form", () => {
   it("warns before you add a repository when GitHub isn't connected", () => {
-    expect(has(SOURCES, "useGithubConnected(")).toBe(true);
-    expect(has(SOURCES, "Needs GitHub connected")).toBe(true);
+    // The add flow shows the GitHub line with its real state, up front…
+    expect(has(SOURCES, '<GithubStatusLine needFor="a repository can\'t be read without it" />')).toBe(true);
+    // …and Verify's watched repositories say so under their line.
+    const chrome = code("components/dialogs/VerifyChrome.tsx");
+    expect(has(chrome, "useGithubConnected(")).toBe(true);
+    expect(has(chrome, "These repositories need GitHub connected")).toBe(true);
   });
 
   it("speaks the glossary — no plan, no flock, no 'goes due'", () => {

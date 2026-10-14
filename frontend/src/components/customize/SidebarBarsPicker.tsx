@@ -26,11 +26,11 @@ const NOTES: Record<string, BarNote> = {
   },
   "pr-review": {
     text: "Appears once a repository is added",
-    link: { label: "Intake → Pull requests", dialog: "intake", target: "prs" },
+    link: { label: "Intake → GitHub PRs", dialog: "intake", target: "prs" },
   },
   "issue-handling": {
     text: "Appears once a repository is added",
-    link: { label: "Intake → Issues", dialog: "intake", target: "issues" },
+    link: { label: "Intake → GitHub issues", dialog: "intake", target: "issues" },
   },
   verify: {
     text: "Appears once Verify tracks a repository or has a checklist",

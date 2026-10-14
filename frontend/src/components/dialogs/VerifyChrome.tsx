@@ -6,16 +6,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TestPlan } from "../../api/types";
-import { copyText } from "../../lib/clipboard";
-import { toast } from "../../lib/toast";
 import {
   fetchVerifyRepos,
   type VerifyRepo,
   writePlanFor,
   writePlanForBranch,
 } from "../../lib/verifyActions";
-import { AutomationSwitch, WorkGroup, useToggleSet } from "../intake/kit";
-import { RepoSourceList, type RepoOverrides } from "../intake/RepoSources";
+import { AutomationSwitch, HeadAction, WorkGroup, useToggleSet } from "../intake/kit";
+import { RepoEditor, type RepoOverrides } from "../intake/RepoSources";
+import { useGithubConnected } from "../../state/queries";
+import { openConnectGitHub } from "../../lib/githubConnect";
 import { useSettings } from "../settings/useSettings";
 import type { RowSelection } from "./rowSelect";
 import {
@@ -403,50 +403,28 @@ export function VerifyNewChecklist({
 
 /** The repositories Verify tracks, and what each of them calls live.
  *
- * The other half of the bargain the bar above makes. Writing a plan costs a real
- * model call, so nothing happens in a repo nobody named; adding one here is how
- * you say this repo has earned it — and where you say what "live" even means for
- * it — without leaving the dialog and without learning a config file exists.
+ * Writing a plan costs a real model call, so nothing happens in a repo nobody
+ * named; adding one is how you say this repo has earned it. Membership IS the
+ * opt-in: there is no per-repo checkbox, a repo on the list gets a plan on every
+ * push of a session branch.
  *
- * Membership IS the opt-in. There is no "automatic" checkbox any more: a repo on
- * this list gets a plan on every push of a session branch, exactly as a repo in
- * `github.repos` is watched by virtue of being there. A checkbox next to a list
- * you had to add the repo to anyway was two decisions for one intent, and the
- * off state was indistinguishable from having removed it.
+ * ONE QUIET LINE. On the Intake tabs a watched repository is edited from its
+ * heading in the work list ("add once, edit where it shows"); Verify's
+ * checklists group by verdict, not by repository, so there is no repository
+ * heading to hang Edit on. The repositories get one line instead — "Watching
+ * acme/api ships main · acme/web ships staging" — and **Edit repositories**
+ * opens one heading per repository, each with the same editor Intake uses
+ * (intake/RepoSources.tsx `RepoEditor`, on the Verify use: the branch that
+ * ships, the wait after merge, where it runs, notes for the checklist writer,
+ * and "Use it for" ticks that put the same repository on Intake's lists).
+ * Adding is "+ Add repository" in the dialog head — the add flow, Verify
+ * pre-ticked. The live branch is per repo because "what counts as shipped" is
+ * a per-repo fact; a blank field inherits, and its placeholder says what.
  *
- * This is the SAME component the Intake tabs use (intake/RepoSources.tsx), on a
- * third `surface`, and that is the point. A repo is named the way GitHub names
- * it — you type `owner/name` — because that is how every other repo list in this
- * app is spelled, because it is stable across machines and clones, and because
- * the alternative this replaced (discovering local checkouts from whichever
- * sessions happened to be open) meant the list changed under you when you closed
- * a session, and keyed a machine-local absolute path that meant nothing to
- * anybody else in the flock.
- *
- * The live branch is per repo rather than one flock-wide setting because "what
- * counts as shipped" is a per-repo fact: `main` in one repo, `staging` in the
- * next, `release` in the third. One global answer was wrong the moment you
- * worked in two repos, and a plan measured against the wrong branch is worse
- * than no plan — it goes due when nothing shipped, or never goes due at all. A
- * blank field inherits, and its placeholder shows what it inherits, so "empty"
- * reads as "inherits staging" rather than as "nothing set".
- *
- * A checkout with no GitHub origin cannot be named here at all — there is no
- * slug to type. Its opt-in is the repo's own committed `.mindflock.toml`
- * (`[workspace] verify_on_push = true`), which is path-based, travels with the
- * code, and is OR'd with this list; neither can switch the other off. There is
- * no setting the dialog could write for it, so the fold under the list hands
- * over the snippet to commit — copyable, with one sentence saying what it does —
- * instead of a config key in the middle of a hint.
- */
-export function VerifySources({
-  liveBranch,
-  deployDelay,
-}: {
-  liveBranch: string;
-  /** The flock-wide deploy wait, in minutes — the cards' placeholder. */
-  deployDelay: string;
-}) {
+ * A checkout with no GitHub origin cannot be named here at all; its opt-in is
+ * its own committed `.mindflock.toml`, which the add flow hands over as a
+ * snippet. */
+export function VerifySources({ liveBranch }: { liveBranch: string }) {
   const s = useSettings();
   const repo = (s.settings.repository || {}) as {
     verify_repos?: string[];
@@ -454,75 +432,71 @@ export function VerifySources({
   };
   const repos = Array.isArray(repo.verify_repos) ? repo.verify_repos : [];
   const overrides = (repo.verify_repo_settings || {}) as RepoOverrides;
-
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const gh = useGithubConnected(repos.length > 0);
+  if (!repos.length) return null;
+  const liveOf = (r: string) => overrides[r]?.live_branch || liveBranch || "main";
   return (
-    <>
-    <RepoSourceList
-      surface="verify"
-      // "Sources", the word the two Intake tabs' equivalent block is called in
-      // the code and the word this list actually is: where checklists come
-      // from. It renders through `#verify-body > .set-row > .set-label`, which
-      // is a re-anchored copy of Intake's own rule, so the heading above these
-      // cards is the same uppercase rule as CHECKLISTS below them.
-      label="Sources"
-      repos={repos}
-      overrides={overrides}
-      // ONE save for both halves, as the Intake tabs do it: the list and the
-      // per-repo blocks are one edit as far as the user is concerned, and
-      // two POSTs would let a rename land without its settings — which is a
-      // repo that silently came back with its live branch reset.
-      onSave={(list, next, msg) =>
-        s.saveGroup("repository", { verify_repos: list, verify_repo_settings: next }, msg)
-      }
-      // Only `liveBranch` means anything on this surface; the rest are the
-      // Intake fields a verify card does not render (see `surface` there).
-      defaults={{
-        agent: "",
-        baseBranch: "",
-        minAge: "",
-        skipAuthors: "",
-        liveBranch,
-        deployDelay,
-      }}
-      listId="vf-repos-list"
-      addId="vf-repo-add-btn"
-      addLabel="+ Add repository"
-      emptyText="No repositories yet."
-      hint="Each new branch pushed in these GitHub repositories gets a checklist."
-    />
-    <NoRemoteOptIn />
-    </>
-  );
-}
-
-/** The opt-in for a repo with no GitHub remote: a file to commit. */
-const OPT_IN_SNIPPET = "[workspace]\nverify_on_push = true\n";
-
-function NoRemoteOptIn() {
-  return (
-    <details className="pr-advanced vf-optin">
-      <summary>Repository without a GitHub remote?</summary>
-      <div className="pr-advanced-body">
-        <p className="set-hint">
-          Commit this as <code>.mindflock.toml</code> at the repository's root — each new
-          branch pushed there then gets a checklist.
-        </p>
-        <div className="vf-snippet">
-          <pre>{OPT_IN_SNIPPET}</pre>
-          <button
-            type="button"
-            className="test-btn"
-            onClick={() =>
-              void copyText(OPT_IN_SNIPPET).then((ok) =>
-                toast(ok ? "Copied" : "Couldn't copy — select the text instead"),
-              )
-            }
-          >
-            Copy
-          </button>
-        </div>
+    <div className="vf-sources" id="vf-repos-list">
+      <div className="ik-watching">
+        <span className="ik-watching-label">Watching</span>
+        <span className="ik-watching-list" title={repos.map((r) => r + " ships " + liveOf(r)).join("\n")}>
+          {repos.map((r, i) => (
+            <span key={r} className="ik-watching-item">
+              {i ? <span className="ik-watching-sep"> · </span> : null}
+              <b>{r}</b> <span className="ik-watching-live">ships {liveOf(r)}</span>
+            </span>
+          ))}
+        </span>
+        <button
+          type="button"
+          id="vf-repos-edit"
+          className="ik-quiet-btn"
+          aria-expanded={open}
+          onClick={() => {
+            setOpen((v) => !v);
+            setEditing(null);
+          }}
+        >
+          {open ? "Done" : "Edit repositories"}
+        </button>
       </div>
-    </details>
+      {gh.data === false ? (
+        <p className="set-hint ik-gh-needed" role="note">
+          These repositories need GitHub connected —{" "}
+          <button type="button" className="linklike" onClick={() => openConnectGitHub()}>
+            Connect GitHub
+          </button>
+          .
+        </p>
+      ) : null}
+      {open ? (
+        <div className="ik-groups vf-repo-heads">
+          {repos.map((r) => (
+            <WorkGroup
+              key={r}
+              groupKey={r}
+              heading
+              name={r}
+              detail={"ships " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r]!.target : "")}
+              onDetail={() => setEditing(r)}
+              detailTitle={"Change how " + r + " is checked"}
+              open={editing === r}
+              onToggle={() => setEditing((cur) => (cur === r ? null : r))}
+              action={
+                <HeadAction
+                  editing={editing === r}
+                  name={r}
+                  onClick={() => setEditing((cur) => (cur === r ? null : r))}
+                />
+              }
+              editor={editing === r ? <RepoEditor use="verify" repo={r} liveBranch={liveBranch} /> : undefined}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -579,7 +553,7 @@ export function VerifyEmpty() {
         <strong>No checklists yet.</strong>
       </p>
       <p>
-        Add a repository under <strong>Sources</strong>, or ask for one under{" "}
+        Watch a repository with <strong>+ Add repository</strong> above, or ask for one under{" "}
         <strong>New checklist</strong> below.
       </p>
     </div>

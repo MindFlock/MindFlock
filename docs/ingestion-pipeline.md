@@ -233,7 +233,7 @@ change still launches on the CLI configured now.
 
 PR review and issue handling have no ticketing source of their own, so they
 resolve their own chain — `PipelineConfig.pr_agent(repo)` /
-`issue_agent(repo)`: that repo's own card → `[github].agent` /
+`issue_agent(repo)`: that repo's own setting (its editor in Intake) → `[github].agent` /
 `[github].issue_agent` → `[mindflock].agent` → `""`. Issue handling deliberately
 does **not** fall back to `[github].agent`: the two are separately configured
 features with separate repo lists and toggles, so inheriting the review CLI
@@ -243,7 +243,7 @@ A start clicked by hand in Intake outranks all of it for that one
 launch: every work row has an Agent CLI picker beside its Begin/Start button,
 and `POST /api/tickets/start`, `/api/github/prs/review` and
 `/api/github/issues/start` each take an optional `agent` that wins over the
-source's or repo card's own choice. It is validated against the **registered**
+source's or repository's own choice. It is validated against the **registered**
 providers (the same set `GET /api/providers` offers the picker, `generic`
 excluded) — an unrecognised name is a 400, never a quiet fall back to the
 default. Registered, not installed: a launch never gates on install state
@@ -278,7 +278,7 @@ per-field message — `validate: url | email | key | gid` checks a non-blank
 value's shape); `auto` marks a required field Test fills in rather than the
 user (Shortcut's `member_id`, Asana's workspace), which is required before the
 source counts as *connected* but not before it saves, since Test needs a saved
-source to record on. The card's required markers, inline errors and Clear
+source to record on. The editor's required markers, inline errors and Clear
 controls are rendered from these flags, never hard-coded per provider. Jira's
 `project` is its **project key** and Linear's its **team key** — the names the
 adapters' own error text uses, since `cfg.project` is what both read.
@@ -288,7 +288,7 @@ Shortcut, an ingest label), because `ingests_any_assignee` would otherwise
 quietly fall back to assigned-to-me. A source is **connected only after a live
 test**: the test route with `record: true` stamps `last_test` on the stored
 source, the PUT keeps that verdict only while the provider's catalog fields are
-unchanged, and both Connections and the Intake card read *connected* as "passed
+unchanged, and both Connections and the Intake editor read *connected* as "passed
 within the last 24 h, nothing left for Test to fill in" — see
 [web-api.md](web-api.md#config-providers-usage-settings).
 
@@ -553,7 +553,7 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
 
 A ticketing source can point at a SET of repos instead of one — a board whose
 tickets land in a backend, a frontend and a scanner. In Intake → Tickets the
-source card's **Repo URL** becomes a list with **+ Add repo**; each repo can
+source editor's **Repo URL** becomes a list with **+ Add repo**; each repo can
 carry an optional **hint** (comma-separated words like `frontend, ui`). Stored
 as `repos: [{url, hint?}]` with `repo_url` mirroring the first (see
 [configuration.md](configuration.md#a-source-spanning-several-repos)); one repo
@@ -645,10 +645,10 @@ Every `github.poll_interval_seconds`, the monitor lists open non-draft PRs into
 that repo's `base_branch` **authored by the authenticated GitHub user**, at
 least its `min_age_minutes` old, and not yet in `state.json`'s `processed_prs`.
 
-**Every one of those filters is resolved per repo.** Each watched repository is
-its own card in Intake → Pull requests, with its own base branch, min age, skip
-authors and agent CLI stored under `github.repo_settings["owner/name"]`; a card
-field left blank inherits the tab-wide value (the flat `[github]` keys, which
+**Every one of those filters is resolved per repo.** Each watched repository has
+its own settings — **Edit** on its heading in Intake → GitHub PRs — with its own
+base branch, min age, skip authors and agent CLI stored under
+`github.repo_settings["owner/name"]`; a field left blank inherits the tab-wide value (the flat `[github]` keys, which
 the tab keeps under *Advanced options*). Nothing reads a flat field directly —
 the monitor, the comment fetch and the web panel all go through
 `GithubConfig.min_age_for(repo)` / `base_branch_for(repo)` /
@@ -694,7 +694,7 @@ memo instead of caching for the life of the process — a token pasted into
 Connect GitHub reaches the loops within a minute, restart or not. The token
 has one home, **Settings → Connections → GitHub → Connect** (the Intake tabs
 only offer the button that opens it); its **Test** does a real `GET /user`
-plus one repo check, and a repo card's **Test access** checks that the
+plus one repo check, and a repository's **Test access** checks that the
 resolved credential reaches that particular repo
 (`POST /api/settings/test/github-repo`). The GitHub Issues source resolves
 through the same chain; a per-source `api_token` an older release stored is
@@ -720,11 +720,11 @@ comments) and run through the same engine launch path as a story, on a fresh
 branch (`gh-<n>`). Its `(repo, number)` is then recorded so it isn't
 re-ingested.
 
-The **Intake → Issues** tab surfaces this live (`/api/github/issues`), and
+The **Intake → GitHub issues** tab surfaces this live (`/api/github/issues`), and
 **Start work** (`/api/github/issues/start`) force-starts one issue against
 the running server's engine — bypassing the age / already-handled filters — so
 the session shows up in the grid without a reload. That start takes the row's
-own Agent CLI picker if one was used, then the repo card's, then
+own Agent CLI picker if one was used, then the repository's own, then
 `issue_agent`'s chain above.
 
 ## What the sweeps will pick up next

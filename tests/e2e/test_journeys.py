@@ -256,3 +256,71 @@ def test_shortcuts_guard(mf_server, page, open_app):
 
     expect(row).to_be_visible()
     assert title in _titles(mf_server), "Ctrl+W closed the session behind the palette"
+
+
+# --------------------------------------------------------------------------- #
+# intake: add a repository once, edit it where it shows
+# --------------------------------------------------------------------------- #
+def _wait_settings(srv, pred, timeout: float = 10.0):
+    """The settings file once ``pred`` holds (a save is one round trip)."""
+    deadline = time.time() + timeout
+    st = srv.settings()
+    while not pred(st) and time.time() < deadline:
+        time.sleep(0.2)
+        st = srv.settings()
+    return st
+
+
+def test_intake_add_a_repository_once_and_edit_it_where_it_shows(
+    mf_server, page, open_app
+):
+    """Intake → GitHub PRs with nothing watched: the add flow leads. One slug,
+    two uses ticked, "Finish with defaults" → ONE save puts it on the PR list
+    (switched OFF — a never-chosen setup) and Verify's list; its heading shows
+    even though GitHub can't be listed here, and its Edit → Remove (arm, then
+    confirm) takes it off the PR list only."""
+    repo = "acme/widgets"
+    open_app(mf_server)
+
+    page.locator("#intake-btn").click()
+    panel = page.locator("#intake-panel")
+    expect(panel).to_be_visible(timeout=10_000)
+    page.locator("#intake-tab-prs").click()
+
+    flow = panel.locator("#ik-add-flow")
+    expect(flow).to_be_visible(timeout=10_000)
+    expect(flow.locator(".ik-kind[data-kind='repo']")).to_have_attribute(
+        "aria-checked", "true"
+    )
+    flow.locator("#ik-add-repo").fill(repo)
+    pr_tick = flow.locator(".ik-use[data-use='pr'] input")
+    expect(pr_tick).to_be_checked()
+    flow.locator(".ik-use[data-use='verify'] input").check()
+    flow.get_by_role("button", name="Finish with defaults").click()
+    expect(flow).to_have_count(0, timeout=10_000)
+
+    st = _wait_settings(
+        mf_server,
+        lambda s: s.get("repository", {}).get("verify_repos") == [repo],
+    )
+    assert st.get("github", {}).get("repos") == [repo], st.get("github")
+    assert st.get("github", {}).get("enabled") is False, st.get("github")
+    assert st.get("repository", {}).get("verify_repos") == [repo], st.get("repository")
+
+    head = panel.locator(".ik-source-group[data-group-key='%s']" % repo)
+    expect(head).to_be_visible(timeout=10_000)
+    head.locator(".ik-head-action").click()
+    editor = head.locator(".ik-editor")
+    expect(editor).to_be_visible(timeout=5_000)
+    expect(editor.locator(".ik-use[data-use='verify'] input")).to_be_checked()
+    remove = editor.locator("button.ik-arm")
+    remove.click()
+    expect(remove).to_contain_text("Confirm")
+    remove.click()
+    expect(head).to_have_count(0, timeout=10_000)
+
+    # An empty list is the default, so the store may omit the key entirely.
+    st = _wait_settings(mf_server, lambda s: not s.get("github", {}).get("repos"))
+    assert not st.get("github", {}).get("repos"), st.get("github")
+    # Verify keeps watching it: Remove took it off THIS list only.
+    assert st.get("repository", {}).get("verify_repos") == [repo], st.get("repository")

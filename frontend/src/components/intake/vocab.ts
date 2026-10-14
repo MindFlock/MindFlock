@@ -21,20 +21,21 @@ import type { TicketingSource, TicketingWorkflowState } from "../../api/types";
  * name — never the provider's raw JSON body. `name` is what the user knows the
  * source as ("Shortcut", "Jira — payments"). */
 export function friendlySourceError(name: string, raw: string, onCard = false): string {
-  // On the card itself, "open its card below" points at where you already are.
-  if (onCard) return friendlySourceError(name, raw).replace(/ — (open its card below to fix it|check its (permissions on the )?card below|finish its card below)/, "");
+  // In the source's own editor, "press Fix on its heading" points at where you
+  // already are.
+  if (onCard) return friendlySourceError(name, raw).replace(/ — (press Fix on its heading|check its permissions with Fix on its heading|check it with Fix on its heading|finish it with Fix on its heading)/, "");
   const text = String(raw || "").trim();
   const status = text.match(/\b(?:HTTP\s*)?(401|403|404|429|5\d\d)\b/i)?.[1] || "";
   if (status === "401" || /unauthori[sz]ed|invalid token|bad credentials/i.test(text))
-    return name + " rejected the token — open its card below to fix it.";
+    return name + " rejected the token — press Fix on its heading.";
   if (status === "403" || /forbidden/i.test(text))
-    return name + " refused access with this token — check its permissions on the card below.";
-  if (status === "404") return name + " couldn't find what this source points at — check its card below.";
+    return name + " refused access with this token — check its permissions with Fix on its heading.";
+  if (status === "404") return name + " couldn't find what this source points at — check it with Fix on its heading.";
   if (status === "429") return name + " is rate-limiting requests — try Refresh in a minute.";
   if (status.startsWith("5")) return name + " is having trouble (server error) — try Refresh later.";
   if (/timed? ?out|timeout|connection|resolve|network|unreachable|ssl/i.test(text))
     return name + " can't be reached — check your network, then Refresh.";
-  if (/missing|required/i.test(text)) return name + " isn't set up yet — finish its card below.";
+  if (/missing|required/i.test(text)) return name + " isn't set up yet — finish it with Fix on its heading.";
   // Unknown: keep the words, drop any JSON tail.
   const clean = text.replace(/[:\s]*[{[].*$/s, "").trim();
   return name + " can't be listed" + (clean ? " — " + clean : "") + ".";
@@ -47,7 +48,7 @@ export function friendlyStartError(name: string, raw: string): string {
   const text = String(raw || "").trim();
   const status = text.match(/\bAPI returned (\d{3})\b/i)?.[1] || "";
   if (status === "401" || (!!status && /unauthori[sz]ed|bad credentials/i.test(text)))
-    return name + " rejected the API token. Fix it in Intake → Tickets, on the source's card.";
+    return name + " rejected the API token. Fix it in Intake → Tickets — press Fix on the source's heading.";
   if (status === "403") return name + " refused access with this token. Check its permissions in Intake → Tickets.";
   if (status === "404") return name + " couldn't find this ticket — it may have been deleted or moved.";
   if (status === "429") return name + " is rate-limiting requests — try again in a minute.";

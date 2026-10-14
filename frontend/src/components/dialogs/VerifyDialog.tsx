@@ -38,9 +38,11 @@
  * — lives in a ⋯ menu.
  *
  * THE ANATOMY IS INTAKE'S, in Intake's order: an intro sentence, the master
- * switch, the work the sources produced, the SOURCES it watches (these two
- * swap while nothing is configured yet, so + Add leads), and a
- * `<details>` at the bottom for what you touch once. PullRequestsTab and
+ * switch, the repositories it watches as ONE line ("Watching acme/api ships
+ * main · …", edited from their own headings under "Edit repositories"), the
+ * work, and a `<details>` at the bottom for what you touch once. "+ Add
+ * repository" in the head opens the add flow, which leads on its own while
+ * nothing is configured yet. PullRequestsTab and
  * IssuesTab are laid out exactly this way, down to `.set-block-hint` and
  * `.pr-advanced`, and Verify is the fourth surface of the same kind — it should
  * not have to be learned separately. The switch is `repository.verify_enabled`;
@@ -95,6 +97,7 @@ import { previewList } from "../../lib/rowSelection";
 import { DialogFilter } from "./DialogFilter";
 import { BulkRowBar, SelectAllCheck, useRowSelection } from "./rowSelect";
 import { WorkListPanel, panelNote } from "../intake/kit";
+import { AddRepoFlow } from "../intake/RepoSources";
 import { SettingsCtx, useSettingsModel } from "../settings/useSettings";
 import { InlineConfirm } from "../InlineConfirm";
 import { InfoTip } from "../InfoTip";
@@ -158,7 +161,7 @@ export function VerifyDialog() {
   // same settings model the Intake tabs get from IntakeDialog — loaded on open,
   // provided below, and read by `VerifySwitch` / `VerifySources` through
   // `useSettings()`. Nothing Verify-specific: `repository.verify_repos` saves
-  // through the one POST /api/settings every other card list already uses.
+  // through the one POST /api/settings every other repository list already uses.
   const model = useSettingsModel(open);
 
   /** The Ctrl+F filter, and the checkbox selection it drives.
@@ -187,6 +190,8 @@ export function VerifyDialog() {
   const [newOpen, setNewOpen] = useState(false);
   const [preselect, setPreselect] = useState("");
   const [asking, setAsking] = useState(false);
+  const [addingRepo, setAddingRepo] = useState(false);
+  const [addDismissed, setAddDismissed] = useState(false);
   const linked = useRef("");
 
   // Half-typed step notes belong to the visit, not to the app: drop them when
@@ -203,6 +208,8 @@ export function VerifyDialog() {
     setMissingBranch("");
     setNewOpen(false);
     setPreselect("");
+    setAddingRepo(false);
+    setAddDismissed(false);
     linked.current = "";
   }, [open, sel]);
 
@@ -261,7 +268,7 @@ export function VerifyDialog() {
   // Does anything on this surface actually wait on a different branch? "What
   // counts as shipped" is per repo, so the one branch in the header is a
   // DEFAULT, not a fact about every plan — and a header that states it as a
-  // fact contradicts the repo card in Sources, and the drift line on the rows.
+  // fact contradicts the repository's own editor, and the drift line on the rows.
   // Asked of the PLANS and of the CONFIGURED REPOS both: a plan outlives its
   // repo's place on the list, and a repo configured a minute ago has no plans
   // at all (they cost a model call and are written on push), so either source
@@ -270,14 +277,7 @@ export function VerifyDialog() {
   const repoCfg = (model.settings.repository || {}) as {
     verify_repos?: string[];
     verify_repo_settings?: Record<string, { live_branch?: string }>;
-    deploy_delay_minutes?: number;
   };
-  // The flock-wide wait, shown as each card's placeholder so an empty field
-  // reads as "inherits 5" rather than as "nothing set". Absent => the backend
-  // default, which is 5.
-  const deployDelay = String(
-    repoCfg.deploy_delay_minutes == null ? 5 : repoCfg.deploy_delay_minutes
-  );
   const overridden = liveBranchOverridden(
     liveBranch,
     plans,
@@ -343,13 +343,30 @@ export function VerifyDialog() {
     loaded: !!plansQ.data,
   });
 
-  // Work first once there is any: a tracked repo or a checklist. Before that,
-  // Sources (and its + Add) is the only thing there is to do.
-  const workFirst = (repoCfg.verify_repos || []).length > 0 || plans.length > 0;
-
+  // "+ Add repository" (the dialog head) opens the add flow, Verify ticked;
+  // with nothing tracked and no checklist yet it leads on its own, until
+  // cancelled.
+  const showAdd = addingRepo || ((repoCfg.verify_repos || []).length === 0 && !plans.length && !addDismissed);
   const sources = (
-    <VerifySources key="sources" liveBranch={liveBranch} deployDelay={deployDelay} />
+    <VerifySources key="sources" liveBranch={liveBranch} />
   );
+  const addFlow = showAdd ? (
+    <AddRepoFlow
+      key="add"
+      title="Add a repository"
+      uses={["verify"]}
+      only="verify"
+      liveBranch={liveBranch}
+      onCancel={() => {
+        setAddingRepo(false);
+        setAddDismissed(true);
+      }}
+      onDone={() => {
+        setAddingRepo(false);
+        setAddDismissed(true);
+      }}
+    />
+  ) : null;
   const checklists = (
     <WorkListPanel
       key="work"
@@ -544,6 +561,16 @@ export function VerifyDialog() {
                 </InfoTip>
               )}
             </span>
+            <button
+              type="button"
+              id="vf-repo-add-btn"
+              className="btn-primary"
+              disabled={showAdd}
+              title="Watch a GitHub repository: each new branch pushed there gets a checklist"
+              onClick={() => setAddingRepo(true)}
+            >
+              + Add repository
+            </button>
             <button type="button" id="verify-close" onClick={closeDialog}>
               Close
             </button>
@@ -567,10 +594,12 @@ export function VerifyDialog() {
                 <VerifyMoments liveBranch={liveBranch} overridden={overridden} />
               </div>
             )}
+            {addFlow}
             <VerifySwitch hasPlans={plans.length > 0} />
-            {/* Keyed, so the swap MOVES the two instead of remounting them
-                (adding the first repo flips it mid-edit; see PullRequestsTab). */}
-            {workFirst ? [checklists, sources] : [sources, checklists]}
+            {/* The repositories, as one quiet line above the work — edited from
+                their own headings under "Edit repositories". */}
+            {sources}
+            {checklists}
             <VerifyNewChecklist
               targets={targets}
               reason={noTargetsReason(instancesQ.data || [], plans, closed)}

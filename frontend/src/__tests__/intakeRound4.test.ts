@@ -78,10 +78,13 @@ describe("save as you type (M1: never 'Saved ✓' over unsent text)", () => {
 });
 
 describe("the safe default (M2): a new source starts nothing until a state is picked", () => {
-  it("a new card preselects no tracker and carries needs_filter", () => {
-    expect(TICKETS).toContain('const fresh = { id, provider: "", needs_filter: "on" } as Source;');
+  it("a new source preselects no tracker and carries needs_filter", () => {
+    // "+ Add source" opens on the tiles with none picked (step 1); the draft a
+    // tile creates is the safe default — nothing auto-starts until a state.
+    expect(TICKETS).toContain('const fresh = { id, provider, needs_filter: "on" } as Source;');
     expect(TICKETS).not.toContain("const provider = catalog[0]?.id");
-    expect(TICKETS).toContain("Choose a tracker…");
+    expect(TICKETS).toContain('picked={draftSource?.provider || ""}');
+    expect(TICKETS).toContain("step={draft ? draft.step : 1}");
   });
 
   it("says so on the card, and offers 'Any state' only as an explicit choice", () => {
@@ -126,7 +129,8 @@ describe("one truth for auto-start (M4, M5)", () => {
 
   it("no 'bucket' in what the ticket list says", () => {
     expect(TICKETS).not.toMatch(/Add bucket|All buckets|bucket everywhere|buckets you're showing/);
-    expect(TICKETS).toContain('"+ Show state…" : "All states shown"');
+    // Which states the panel shows is a View choice now, beside "whose".
+    expect(TICKETS).toContain('<span className="ik-view-h">States shown</span>');
   });
 });
 
@@ -163,7 +167,7 @@ describe("a failed Start is one sentence (m6)", () => {
   it("a rejected token names where to fix it, without JSON", () => {
     const raw = 'Shortcut API returned 401 for story 4101: {"message":"Unauthorized","tag":"unauthorized"}';
     const out = friendlyStartError("Shortcut", raw);
-    expect(out).toBe("Shortcut rejected the API token. Fix it in Intake → Tickets, on the source's card.");
+    expect(out).toBe("Shortcut rejected the API token. Fix it in Intake → Tickets — press Fix on the source's heading.");
     expect(out).not.toContain("{");
   });
 

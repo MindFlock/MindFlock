@@ -1,9 +1,12 @@
 /** Intake → Tickets: connect a tracker, and the tickets in the states you pick
  * start as sessions — on their own while auto-start is on, or by hand.
  *
- * The tab the other two were modelled on (see ./kit.tsx): master switch, one
- * collapsible card per connected source, then the assigned tickets those
- * sources yielded.
+ * The tab the other two were modelled on (see ./kit.tsx): master switch, then
+ * the tickets the connected sources yielded — each source's heading being where
+ * that source is edited (Edit / Fix opens `TicketSourceEditor` under it) — and
+ * "+ Add source" (the dialog head) opening the tracker add flow at the top.
+ * (Internally a source being edited is still called a "card" in places: the
+ * save bookkeeping below predates the move and is unchanged.)
  *
  * Those tickets are grouped **by source, then by workflow state**. Two levels
  * because the state names are the provider's, not ours: a Jira site and a
@@ -21,6 +24,7 @@ import {
   putTicketingSources,
   refreshConfig,
   refreshInstances,
+  refreshPanel,
   useAgentChoices,
   usePanelQuery,
   useTicketingCatalog,
@@ -32,10 +36,14 @@ import { useUi } from "../../state/store";
 import { InlineConfirm } from "../InlineConfirm";
 import { startTogetherText } from "../../lib/runStart";
 import {
+  AddFlowShell,
+  ArmButton,
   AutomationSwitch,
-  SourceCard,
+  HeadAction,
   SourcePill,
   TestButton,
+  ViewMenu,
+  useEditing,
   useListFilter,
   WorkGroup,
   WorkItemRow,
@@ -70,6 +78,7 @@ import {
   fieldErrorsFrom,
   hasSecret,
   lastTestOf,
+  missingAutoFields,
   putBody,
   requiredMarker,
   savedStates,
@@ -100,6 +109,7 @@ import type { IntakeTabKey, TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
 import { MergeButton, MergeDrawer } from "./MergeTicket";
 import { RepoListField } from "./RepoListField";
+import { AddRepoFlow } from "./RepoSources";
 import { sourceRepos } from "./repoList";
 import type {
   TicketClaimedBy,
@@ -197,7 +207,7 @@ function IngestionToggle({
         }}
         note={
           !sourceCount
-            ? "Add a ticket source below first"
+            ? "Add a ticket source first — + Add source"
             : paused
               ? "Intake is paused — Resume intake at the top turns it back on"
             : desired && broken.length
@@ -257,7 +267,7 @@ export function sourceDisplayName(source: Source, catalog: CatalogEntry[]): stri
  * pause, blur or Enter) — the card says "Saving…" then, never "Saved ✓". */
 type SaveState = { state: "pending" | "saving" | "saved" | "failed"; at: number };
 
-export function TicketsTab({ gotoTab }: TabProps) {
+export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps) {
   // Catalog, saved sources and agent names all come from the shared query cache
   // (see state/queries), warmed at app startup. They used to be three requests
   // fired in series from this component's mount, behind a full-tab "Loading…" —
@@ -273,10 +283,6 @@ export function TicketsTab({ gotoTab }: TabProps) {
   // (the normal case) that is the difference between the cards being there on
   // the first frame and a "Loading…" flash on every reopen.
   const [sources, setSources] = useState<Source[] | null>(savedSources.data ?? null);
-  // Already-saved sources start collapsed (a summary chip).
-  const [collapsed, setCollapsed] = useState<Set<string>>(
-    () => new Set((savedSources.data || []).map((s) => s.id))
-  );
   const seeded = useRef(savedSources.data !== undefined);
   // The ids the server has stored, as of the last load or save: a card outside
   // it that is still missing a typed required field is not sent (splitForSave).
@@ -325,6 +331,29 @@ export function TicketsTab({ gotoTab }: TabProps) {
     "tickets"
   );
 
+  // Which source's editor is open under its heading (one at a time), seeded
+  // from a deep link (Settings → Connections → "Open in Intake").
+  const edit = useEditing(focus);
+  // The tracker draft "+ Add source" is building, and which step it is on.
+  const [draft, setDraft] = useState<{ id: string; step: 2 | 3 } | null>(null);
+  const [flowError, setFlowError] = useState("");
+  const [busy, setBusy] = useState(false);
+  // With no source yet the add flow leads — until you cancel it.
+  const [dismissed, setDismissed] = useState(false);
+  // A tracker tile pressed on another tab hands its provider over once.
+  const handedOver = useRef("");
+  const beginDraftRef = useRef<((provider: string) => void) | null>(null);
+  const wanted = adding?.kind === "tracker" ? adding.provider || "" : "";
+  useEffect(() => {
+    if (!wanted || handedOver.current === wanted) return;
+    if (!beginDraftRef.current) return;
+    handedOver.current = wanted;
+    beginDraftRef.current(wanted);
+  });
+  useEffect(() => {
+    if (!adding) handedOver.current = "";
+  }, [adding]);
+
   useEffect(() => {
     if (seeded.current) return;
     if (savedSources.data === undefined) {
@@ -340,7 +369,6 @@ export function TicketsTab({ gotoTab }: TabProps) {
     seeded.current = true;
     storedIds.current = new Set(savedSources.data.map((s) => s.id));
     setSources(savedSources.data);
-    setCollapsed(new Set(savedSources.data.map((s) => s.id)));
   }, [savedSources.data, savedSources.isError]);
 
   /** Run Test on a SAVED source and record the verdict on it (the server
@@ -560,36 +588,143 @@ export function TicketsTab({ gotoTab }: TabProps) {
     }
   };
 
-  const remove = (id: string) => {
+  const remove = (id: string, quiet = false) => {
     const list = latest.current || [];
     const gone = list.find((s) => s.id === id);
     const next = list.filter((s) => s.id !== id);
     latest.current = next;
     setSources(next);
-    persist(next);
-    if (gone && storedIds.current.has(id)) toast("Removed " + sourceDisplayName(gone, catalog));
+    if (storedIds.current.has(id)) persist(next);
+    if (gone && storedIds.current.has(id) && !quiet) toast("Removed " + sourceDisplayName(gone, catalog));
+    if (edit.editing === id) edit.close();
   };
 
-  const add = () => {
-    // No tracker preselected: the user picks theirs (a preselected GitHub
-    // Issues read as "the place for issues", beside the GitHub issues tab).
-    // `needs_filter`: this source auto-starts nothing until a state or label
-    // is picked — the safe default (sources saved before it keep theirs).
-    const id = uniqueId("new");
-    const fresh = { id, provider: "", needs_filter: "on" } as Source;
-    latest.current = [...(latest.current || []), fresh];
+  // ---- + Add source: the tracker half -----------------------------------
+  // A draft is a real entry in the list (it saves as its fields fill, like any
+  // card did, so Test has a SAVED source to record its verdict on) that is not
+  // yet a heading: only stored sources are listed below.
+
+  /** Start a draft for `provider`. Its id is the provider's slug prefix, so
+   * nothing re-seeds it later. `needs_filter: "on"`: it auto-starts NOTHING
+   * until a state (or label) is picked — the safe default. */
+  const beginDraft = (provider: string) => {
+    let list = latest.current || [];
+    // Picking another tracker over a draft that was never saved replaces it;
+    // one that was saved is removed (it is still mid-add, nobody chose it).
+    if (draft) {
+      if (storedIds.current.has(draft.id)) remove(draft.id, true);
+      list = (latest.current || []).filter((x) => x.id !== draft.id);
+    }
+    const id = uniqueId(prefixFor(provider), list);
+    const fresh = { id, provider, needs_filter: "on" } as Source;
+    latest.current = [...list, fresh];
     setSources(latest.current);
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+    setDraft({ id, step: 2 });
+    setFlowError("");
+  };
+  const dropDraft = () => {
+    if (draft) {
+      if (storedIds.current.has(draft.id)) remove(draft.id, true);
+      else {
+        latest.current = (latest.current || []).filter((x) => x.id !== draft.id);
+        setSources(latest.current);
+      }
+    }
+    setDraft(null);
+    setFlowError("");
+  };
+  const closeAdd = () => {
+    dropDraft();
+    endAdd();
+    setDismissed(true);
+  };
+  beginDraftRef.current = beginDraft;
+
+  const draftSource = draft ? sources.find((x) => x.id === draft.id) || null : null;
+  const draftMeta = draftSource ? catalog.find((p) => p.id === draftSource.provider) || null : null;
+
+  /** Let a field's blur-save land, then save the draft and report whether the
+   * server holds it. */
+  const saveDraft = async (): Promise<Source | null> => {
+    await new Promise((r) => setTimeout(r, 0));
+    if (!draft) return null;
+    await persist(latest.current || [], { changed: draft.id });
+    const src = (latest.current || []).find((x) => x.id === draft.id) || null;
+    if (!src || !storedIds.current.has(draft.id)) {
+      setFlowError("Fill in the marked fields first.");
+      return null;
+    }
+    return src;
+  };
+  const testAndContinue = async (skip = false) => {
+    if (!draft || busy) return;
+    setBusy(true);
+    try {
+      const src = await saveDraft();
+      if (!src) return;
+      if (!skip) {
+        try {
+          // Saved first, so the verdict is RECORDED on the source (last_test),
+          // and the states it lists fill the next step's pickers.
+          await runTest(src, draftMeta);
+        } catch (err) {
+          setFlowError(
+            "Test failed — " + ((err as Error).message || "no answer") + ". Fix it, or continue anyway."
+          );
+          return;
+        }
+      }
+      setFlowError("");
+      setDraft({ id: draft.id, step: 3 });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const finish = async () => {
+    if (!draft || busy) return;
+    setBusy(true);
+    try {
+      const src = await saveDraft();
+      if (!src) return;
+      const anyone = src.assignee_scope === "anyone";
+      const hasFilter = savedFilter(src).length > 0 || savedLabels(src).length > 0;
+      if (anyone && !hasFilter) {
+        // The server refuses this save too (Anyone's without a state would
+        // quietly fall back to assigned-to-me); said here, where the fix is.
+        setFlowError(
+          "Anyone's needs at least one state to take tickets from — pick one, or set Whose tickets back to Assigned to me."
+        );
+        return;
+      }
+      if (Object.keys(errors[draft.id] || {}).length) {
+        setFlowError("Fix the marked fields first.");
+        return;
+      }
+      if (!sourceRepos(src).length) {
+        // The pipeline skips a source with nowhere to start its tickets.
+        setFlowError("Add the repository its tickets are worked on (Repo URL).");
+        return;
+      }
+      const name = sourceDisplayName(src, catalog);
+      setDraft(null);
+      setFlowError("");
+      endAdd();
+      setDismissed(true);
+      void refreshPanel("tickets");
+      // Never switches Auto-start tickets on: adding a source is not consent
+      // to start sessions from it.
+      toast(
+        "Added " + name + (hasFilter ? "" : " — nothing auto-starts until you pick a state")
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
-  // Only SAVED sources have tickets to list or a switch to gate: a card still
-  // being filled in (the first "+ Add source") must not conjure a work list —
-  // that is how a half-typed card once sat under someone else's error.
-  const stored = sources.filter((s) => storedIds.current.has(s.id));
+  // Only SAVED sources have tickets to list or a switch to gate: a draft still
+  // being filled in must not conjure a work list — that is how a half-typed
+  // card once sat under someone else's error.
+  const stored = sources.filter((s) => storedIds.current.has(s.id) && s.id !== draft?.id);
   const panelErrors = new Map(
     (ticketsPanel.data?.errors || []).map((e) => [e.source, e.error])
   );
@@ -600,17 +735,181 @@ export function TicketsTab({ gotoTab }: TabProps) {
     return raw ? [{ name, why: friendlySourceError(name, raw) }] : [];
   });
 
+  /** A source heading's state: whether it needs fixing, and the sentence. */
+  const headOf = (id: string, listError?: string): { broken: boolean; message: string } => {
+    const src = sources.find((x) => x.id === id);
+    if (!src) return { broken: false, message: "" };
+    const meta = catalog.find((p) => p.id === src.provider) || null;
+    const name = sourceDisplayName(src, catalog);
+    if (Object.keys(errors[id] || {}).length) return { broken: true, message: "not saved — fix the marked fields" };
+    const t = tests[id];
+    if (t && !t.testing && t.msg && !t.ok) return { broken: true, message: "can't connect — " + t.msg };
+    if (listError)
+      return {
+        broken: true,
+        message: "can't connect — " + friendlySourceError(name, listError, true).replace(name + " ", "").replace(/\.$/, ""),
+      };
+    const verdict = sourceTestState(src, meta);
+    const last = lastTestOf(src);
+    // A stale-but-passing test is not broken (the listing just worked); a
+    // failed one, no credentials, or a Test-filled field still empty is.
+    if (verdict.state === "off") return { broken: true, message: "no credentials yet" };
+    if (last && !last.ok) return { broken: true, message: "can't connect — " + (last.message || "the last test failed") };
+    if (last && missingAutoFields(meta, src).length) return { broken: true, message: verdict.message };
+    return { broken: false, message: "" };
+  };
+
+  const editorFor = (id: string) => {
+    const src = sources.find((x) => x.id === id);
+    if (!src) return null;
+    return (
+      <TicketSourceEditor
+        section="edit"
+        source={src}
+        catalog={catalog}
+        agents={agents}
+        fieldErrors={errors[src.id]}
+        save={saves[src.id]}
+        dirty={(dirty[src.id] || []).length > 0}
+        onDirty={(key, on) => markDirty(src.id, key, on)}
+        gotoTab={gotoTab}
+        saved={storedIds.current.has(src.id)}
+        listError={panelErrors.get(src.id)}
+        test={tests[src.id]}
+        onTest={() => runTest(src, catalog.find((p) => p.id === src.provider) || null)}
+        onChange={(patch) => update(src.id, patch)}
+        onRemove={() => remove(src.id)}
+      />
+    );
+  };
+
+  const showAdd = !!adding || !!draft || (!stored.length && !dismissed);
+  const trackerKinds = catalog.map((p) => ({
+    key: p.id,
+    label: p.label,
+    sub: p.id === "github_issues" ? "assigned to me" : undefined,
+  }));
+  const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? (
+    <AddRepoFlow
+      key="add-repo"
+      uses={adding.uses?.length ? adding.uses : ["pr"]}
+      trackers={trackerKinds}
+      onPickTracker={(provider) => {
+        endAdd();
+        beginDraft(provider);
+      }}
+      onCancel={closeAdd}
+      onDone={() => closeAdd()}
+    />
+  ) : (
+    <AddFlowShell
+      key="add-tracker"
+      step={draft ? draft.step : 1}
+      kinds={[...trackerKinds, { key: "repo", label: "Repository", sub: "PRs · issues · Verify" }]}
+      picked={draftSource?.provider || ""}
+      onPick={(key) => {
+        if (key === "repo") {
+          dropDraft();
+          startAdd({ kind: "repo", uses: ["pr"] });
+        } else if (key !== draftSource?.provider) beginDraft(key);
+      }}
+      onCancel={closeAdd}
+      footer={
+        !draft ? (
+          <span className="ik-add-hint">
+            Pick the tracker your tickets live in — or <strong>Repository</strong> to watch a
+            GitHub repository's PRs, issues or what ships.
+          </span>
+        ) : draft.step === 2 ? (
+          <>
+            <span className="ik-add-error" role="alert">
+              {flowError}
+              {flowError.startsWith("Test failed") ? (
+                <>
+                  {" "}
+                  <button type="button" className="linklike" onClick={() => void testAndContinue(true)}>
+                    Continue anyway
+                  </button>
+                </>
+              ) : null}
+            </span>
+            <button type="button" className="ik-quiet-btn" onClick={dropDraft}>
+              ‹ Back
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              id="ik-add-next"
+              disabled={busy}
+              onClick={() => void testAndContinue()}
+            >
+              {busy ? "Testing…" : "Test & continue ›"}
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="ik-add-error" role="alert">
+              {flowError}
+            </span>
+            <button
+              type="button"
+              className="ik-quiet-btn"
+              onClick={() => setDraft({ id: draft.id, step: 2 })}
+            >
+              ‹ Back
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              id="ik-add-finish"
+              disabled={busy}
+              onClick={() => void finish()}
+            >
+              Finish
+            </button>
+          </>
+        )
+      }
+    >
+      {draftSource ? (
+        <div className="ik-add-body">
+          <TicketSourceEditor
+            section={draft!.step === 2 ? "connect" : "setup"}
+            source={draftSource}
+            catalog={catalog}
+            agents={agents}
+            fieldErrors={errors[draftSource.id]}
+            save={saves[draftSource.id]}
+            dirty={(dirty[draftSource.id] || []).length > 0}
+            onDirty={(key, on) => markDirty(draftSource.id, key, on)}
+            gotoTab={gotoTab}
+            onAddRepo={() => {
+              dropDraft();
+              startAdd({ kind: "repo", uses: ["issue"] });
+            }}
+            saved={storedIds.current.has(draftSource.id)}
+            test={tests[draftSource.id]}
+            onTest={() => runTest(draftSource, draftMeta)}
+            onChange={(patch) => update(draftSource.id, patch)}
+            onRemove={dropDraft}
+          />
+        </div>
+      ) : null}
+    </AddFlowShell>
+  );
+
   return (
     <>
+      {addFlow}
       <p className="set-hint set-block-hint">
         Connect a tracker. Tickets in the states you pick start as sessions — on their own
         while auto-start is on, or when you press <strong>Start</strong>.
       </p>
       <IngestionToggle sourceCount={stored.length} broken={broken} />
-      {/* WORK FIRST. Once a source exists the tab opens on what it yielded —
-          the tickets are the reason you came, the source cards are setup you
-          revisit. With none yet, the card to add one is all there is. */}
-      {stored.length > 0 && (
+      {/* WORK, with each source's heading as its handle: Edit (or Fix) opens
+          the source's settings under its heading. There is no card list
+          below any more — "+ Add source" in the dialog head adds one. */}
+      {stored.length > 0 ? (
         <AssignedTickets
           sources={stored}
           catalog={catalog}
@@ -627,52 +926,31 @@ export function TicketsTab({ gotoTab }: TabProps) {
             sources.map((s) => [s.id, s.depth || ""])
           )}
           // ...and for the effort picker, so a row's empty choice names the
-          // queue's own rung instead of the CLI's default. Before the source had
-          // an effort there was nothing to name, which is why that picker's blank
-          // option used to read "Default effort" unconditionally.
+          // queue's own rung instead of the CLI's default.
           sourceEfforts={Object.fromEntries(
             sources.map((s) => [s.id, s.effort || ""])
           )}
+          editing={edit.editing}
+          onEdit={edit.toggle}
+          onOpenEditor={edit.open}
+          headOf={headOf}
+          editorFor={editorFor}
         />
-      )}
-      <div className="set-row">
-        <span className="set-label">Ticket sources</span>
-        <div id="ticketing-sources" className="ik-cards">
-          {sources.map((src) => (
-            <TicketSourceCard
-              key={src.id}
-              source={src}
-              catalog={catalog}
-              agents={agents}
-              collapsed={collapsed.has(src.id)}
-              onToggle={() =>
-                setCollapsed((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(src.id)) next.delete(src.id);
-                  else next.add(src.id);
-                  return next;
-                })
-              }
-              fieldErrors={errors[src.id]}
-              save={saves[src.id]}
-              dirty={(dirty[src.id] || []).length > 0}
-              onDirty={(key, on) => markDirty(src.id, key, on)}
-              gotoTab={gotoTab}
-              saved={storedIds.current.has(src.id)}
-              listError={panelErrors.get(src.id)}
-              test={tests[src.id]}
-              onTest={() => runTest(src, catalog.find((p) => p.id === src.provider) || null)}
-              onChange={(patch) => update(src.id, patch)}
-              onRemove={() => remove(src.id)}
-            />
-          ))}
+      ) : !showAdd ? (
+        <div className="set-row" id="ticketing-sources">
+          <div className="repo-empty ik-empty-add">
+            <span>No ticket source yet — connect Shortcut, Jira, Linear, Asana or GitHub Issues.</span>
+            <button
+              type="button"
+              id="ticketing-add"
+              className="test-btn"
+              onClick={() => startAdd({ kind: null })}
+            >
+              + Add a ticket source
+            </button>
+          </div>
         </div>
-        <div className="set-row">
-          <button type="button" id="ticketing-add" className="btn-primary" onClick={add}>
-            + Add ticket source
-          </button>
-        </div>
-      </div>
+      ) : null}
     </>
   );
 }
@@ -1012,11 +1290,27 @@ function AssignedTickets({
   defaultAgent,
   sourceDepths,
   sourceEfforts,
+  editing,
+  onEdit,
+  onOpenEditor,
+  headOf,
+  editorFor,
 }: {
   /** The SAVED sources, in their configured order: the panel groups only
    * these, names them as the user knows them, and reads each one's saved
-   * auto-start filter from here rather than from the tracker. */
+   * auto-start filter from here rather than from the tracker. Every one of
+   * them gets a heading — always, even empty, unreachable or filtered to
+   * nothing — because the heading is where the source is edited. */
   sources: Source[];
+  /** The source whose editor is open under its heading. */
+  editing: string | null;
+  /** Edit / Fix / Done on a heading. */
+  onEdit(id: string): void;
+  /** The heading's "auto-starts …" note: opens (never closes) the editor. */
+  onOpenEditor(id: string): void;
+  /** Whether the source needs fixing, and the sentence that says why. */
+  headOf(id: string, listError?: string): { broken: boolean; message: string };
+  editorFor(id: string): React.ReactNode;
   catalog: CatalogEntry[];
   agents: string[];
   sourceAgents: Record<string, string>;
@@ -1158,15 +1452,12 @@ function AssignedTickets({
     if (!inner.has(b)) inner.set(b, []);
     inner.get(b)!.push(t);
   }
-  const sourceOrder = filter.active
-    ? [...bySource.keys()]
-    : [
-        ...listedSources,
-        ...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
-        ...[...bySource.keys()].filter(
-          (s) => !listedSources.includes(s) && !sourceErrors.has(s)
-        ),
-      ];
+  // EVERY configured source, in configured order — filtered or not, listed or
+  // not, reachable or not: its heading is its Edit. A source a stale listing
+  // still names but that is no longer configured has no group.
+  const sourceOrder = sources.map((s) => s.id);
+  void listedSources;
+  const matched = filter.active ? [...bySource.values()].reduce((n, m) => n + [...m.values()].flat().length, 0) : -1;
 
   const hideBucket = (b: string) => {
     // First customization starts from what's on screen (the default view),
@@ -1220,16 +1511,19 @@ function AssignedTickets({
    * instead of inventing a union. */
   const only = sourceOrder.length === 1 ? filterOf(sourceOrder[0]) : null;
   const ingestSummary = !only ? (
-    <>Each source's heading says which tickets it auto-starts; <strong>Start</strong> starts any ticket now.</>
+    <>
+      Each source's heading says which tickets it auto-starts — press it to change them;{" "}
+      <strong>Start</strong> starts any ticket now.
+    </>
   ) : only.kind === "waiting" ? (
     <>
-      This source auto-starts <strong>nothing</strong> until you pick a state on its card.{" "}
-      <strong>Start</strong> starts any ticket now.
+      This source auto-starts <strong>nothing</strong> until you pick a state — press{" "}
+      <strong>Edit</strong> on its heading. <strong>Start</strong> starts any ticket now.
     </>
   ) : only.kind === "none" ? (
     <>
-      Auto-start takes tickets in <strong>every state</strong> — pick states on the source card
-      to narrow it. <strong>Start</strong> starts any ticket now.
+      Auto-start takes tickets in <strong>every state</strong> — press <strong>Edit</strong> on
+      its heading to narrow it. <strong>Start</strong> starts any ticket now.
     </>
   ) : (
     <>
@@ -1239,6 +1533,12 @@ function AssignedTickets({
       <strong>Start</strong> starts any other ticket now.
     </>
   );
+
+  const hiddenCount = hidden.length;
+  const viewLabel =
+    "View: " +
+    (hasOthers ? (mineOnly ? "only mine" : "everyone's") + " · " : "") +
+    (hiddenCount ? hiddenCount + (hiddenCount === 1 ? " state hidden" : " states hidden") : "all states");
 
   return (
     <WorkListPanel
@@ -1254,37 +1554,58 @@ function AssignedTickets({
       toolbarExtra={
         <>
           {tickets && tickets.length ? filter.control : null}
-          {hasOthers ? (
-            <select
-              id="tk-mine-filter"
-              className="tk-mine-filter"
-              value={mineOnly ? "mine" : "all"}
-              title="Whose tickets this panel lists"
-              onChange={(e) => {
-                const next = e.target.value === "mine";
-                setMineOnly(next);
-                saveMineOnly(next);
-              }}
+          {/* VIEW, kept apart from the sources' settings: whose tickets and
+              which workflow states this panel shows (per browser). It used to
+              be two selects — "Everyone's tickets" and "+ Show state…" — plus
+              a ✕ on each state, and they read as the source's "Whose tickets"
+              and "Auto-start states", which they are not. */}
+          {buckets.length || hasOthers ? (
+            <ViewMenu
+              id="tk-view"
+              label={viewLabel}
+              title="Which tickets this panel shows — on this browser only; what auto-starts is on each source's heading"
             >
-              <option value="all">Everyone's tickets</option>
-              <option value="mine">Only mine</option>
-            </select>
+              {hasOthers ? (
+                <div className="ik-view-sec" role="radiogroup" aria-label="Whose tickets this panel lists">
+                  <span className="ik-view-h">Whose tickets</span>
+                  {(["all", "mine"] as const).map((v) => (
+                    <label key={v} className="ik-view-opt">
+                      <input
+                        type="radio"
+                        name="tk-mine-filter"
+                        id={v === "mine" ? "tk-mine-filter" : undefined}
+                        checked={(v === "mine") === mineOnly}
+                        onChange={() => {
+                          setMineOnly(v === "mine");
+                          saveMineOnly(v === "mine");
+                        }}
+                      />
+                      {v === "mine" ? "Only mine" : "Everyone's"}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              {buckets.length ? (
+                <div className="ik-view-sec" aria-label="Workflow states this panel shows">
+                  <span className="ik-view-h">States shown</span>
+                  {buckets.map((b) => {
+                    const on = visible.includes(b);
+                    return (
+                      <label key={b} className="ik-view-opt" data-bucket={b}>
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => (on ? hideBucket(b) : addBucket(b))}
+                        />
+                        <span className="ik-view-name">{b}</span>
+                        <span className="ik-view-n">{countAll.get(b) || 0}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </ViewMenu>
           ) : null}
-          <select
-            id="tk-bucket-add"
-            className="tk-bucket-add"
-            value=""
-            disabled={!hidden.length}
-            title="Show another workflow state in this panel"
-            onChange={(e) => addBucket(e.target.value)}
-          >
-            <option value="">{hidden.length ? "+ Show state…" : "All states shown"}</option>
-            {hidden.map((b) => (
-              <option key={b} value={b}>
-                {b} ({countAll.get(b) || 0})
-              </option>
-            ))}
-          </select>
         </>
       }
       hint={
@@ -1293,35 +1614,27 @@ function AssignedTickets({
           {parkedDone.length ? (
             <>
               <strong>{listNames(parkedDone)}</strong> {parkedDone.length === 1 ? "is" : "are"}{" "}
-              hidden — add {parkedDone.length === 1 ? "it" : "them"} back with{" "}
-              <strong>+ Show state…</strong>.
+              hidden — show {parkedDone.length === 1 ? "it" : "them"} from <strong>View</strong>.
             </>
           ) : null}
         </>
       }
     >
-      {error ? (
-        <div className="repo-empty">{error}</div>
-      ) : tickets === null ? null : !visible.length && buckets.length ? (
-        <div className="repo-empty">
-          All states are hidden — pick one from the “+ Show state…” menu above.
-        </div>
-      ) : !sourceOrder.length ? (
-        <div className="repo-empty">
-          {filter.active
-            ? "No ticket matches “" + filter.query + "”."
-            : mineOnly && hasOthers
-              ? "None of the tickets here are yours — switch to Everyone's tickets to see them."
-              : "No tickets are assigned to you on the connected sources."}
-        </div>
-      ) : (
-        sourceOrder.map((src) => {
+      {error ? <div className="repo-empty">{error}</div> : null}
+      {tickets !== null && !visible.length && buckets.length ? (
+        <p className="ik-nomatch">All states are hidden — pick some under View.</p>
+      ) : null}
+      {matched === 0 ? <p className="ik-nomatch">No ticket matches “{filter.query}”.</p> : null}
+      {sourceOrder.map((src) => {
           const inner = bySource.get(src) || new Map<string, AssignedTicket[]>();
           const shownBuckets = visible.filter((b) => (inner.get(b) || []).length);
           const total = shownBuckets.reduce((n, b) => n + (inner.get(b) || []).length, 0);
           const srcError = sourceErrors.get(src);
           const label = nameOf(src);
           const filt = filterOf(src);
+          const head = headOf(src, srcError);
+          const isEditing = editing === src;
+          const scope = configured.get(src)?.assignee_scope === "anyone" ? "anyone's · " : "";
           // The workflows this source's shown buckets span, in the provider's
           // own order. More than one and they become a level of their own, so
           // "Product Development" is written once instead of onto each of its
@@ -1350,10 +1663,6 @@ function AssignedTickets({
                     count={rows.length}
                     open={openBuckets.isOpen(key)}
                     onToggle={() => openBuckets.toggle(key)}
-                    onHide={() => hideBucket(b)}
-                    hideTitle={
-                      "Hide " + b + " in this list (show it again from “+ Show state…”)"
-                    }
                   >
                     {rows.map((t) => (
                       <AssignedTicketRow
@@ -1385,61 +1694,84 @@ function AssignedTickets({
                 );
               });
 
-          const buckets = srcError ? (
-            <div className="repo-empty ik-source-error">{friendlySourceError(label, srcError)}</div>
-          ) : !inner.size ? (
-            // Nothing at all, vs. nothing in the buckets you chose to show —
-            // two different situations, and only one of them is your filter.
-            <div className="repo-empty">No tickets are assigned to you on this source.</div>
-          ) : !shownBuckets.length ? (
-            <div className="repo-empty">
-              No tickets from this source in the states you're showing.
-            </div>
-          ) : !nestWorkflows ? (
-            bucketsOf(null)
-          ) : (
-            workflows.map((wf) => {
-              const rows = shownBuckets.filter((b) => groupOf(b) === wf);
-              const n = rows.reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
-              const key = src + "::wf::" + wf;
-              return (
-                <WorkGroup
-                  key={key}
-                  indent
-                  middle
-                  name={wf || "Other states"}
-                  count={n}
-                  open={openWorkflows.isOpen(key)}
-                  onToggle={() => openWorkflows.toggle(key)}
-                >
-                  {bucketsOf(wf)}
-                </WorkGroup>
-              );
-            })
-          );
+          const buckets =
+            tickets === null || (filter.active && !total) ? null : srcError ? (
+              <div className="repo-empty ik-source-error">{friendlySourceError(label, srcError)}</div>
+            ) : !inner.size ? (
+              // Nothing at all, vs. nothing in the buckets you chose to show —
+              // two different situations, and only one of them is your filter.
+              <div className="repo-empty">
+                {configured.get(src)?.assignee_scope === "anyone"
+                  ? "No tickets in this source's states right now."
+                  : "No tickets are assigned to you on this source."}
+              </div>
+            ) : !shownBuckets.length ? (
+              <div className="repo-empty">
+                No tickets from this source in the states you're showing.
+              </div>
+            ) : !nestWorkflows ? (
+              bucketsOf(null)
+            ) : (
+              workflows.map((wf) => {
+                const rows = shownBuckets.filter((b) => groupOf(b) === wf);
+                const n = rows.reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
+                const key = src + "::wf::" + wf;
+                return (
+                  <WorkGroup
+                    key={key}
+                    indent
+                    middle
+                    name={wf || "Other states"}
+                    count={n}
+                    open={openWorkflows.isOpen(key)}
+                    onToggle={() => openWorkflows.toggle(key)}
+                  >
+                    {bucketsOf(wf)}
+                  </WorkGroup>
+                );
+              })
+            );
+          // The heading's note: the problem when there is one (red, with Fix),
+          // else what the source auto-starts — which IS the setting, so
+          // pressing it opens the editor at the state picker.
+          const detail = filter.active && !total && !head.broken
+            ? "no match"
+            : head.broken
+              ? head.message
+              : filt.kind === "labels"
+                ? scope + "auto-starts tickets with " + filt.text
+                : filt.kind === "waiting"
+                  ? scope + "auto-starts nothing yet — pick a state"
+                  : scope + "auto-starts " + filt.text;
           return (
             <WorkGroup
               key={src}
+              groupKey={src}
               heading
               name={label}
-              count={total}
-              detail={
-                srcError
-                  ? "can't connect"
-                  : filt.kind === "labels"
-                    ? "auto-starts tickets with " + filt.text
-                    : filt.kind === "waiting"
-                      ? "auto-starts nothing yet — pick a state on its card"
-                      : "auto-starts " + filt.text
+              count={tickets === null ? undefined : total}
+              detail={detail}
+              detailTone={head.broken ? "bad" : filt.kind === "waiting" ? "warn" : undefined}
+              onDetail={() => onOpenEditor(src)}
+              detailTitle={
+                head.broken ? "Fix " + label : "Change which tickets " + label + " auto-starts"
               }
               open={openSources.isOpen(src)}
               onToggle={() => openSources.toggle(src)}
+              action={
+                <HeadAction
+                  editing={isEditing}
+                  broken={head.broken}
+                  name={label}
+                  onClick={() => onEdit(src)}
+                />
+              }
+              editor={isEditing ? editorFor(src) : undefined}
             >
               {buckets}
             </WorkGroup>
           );
-        })
-      )}
+        })}
       {picked.size > 0 && (
         // Sticky to the bottom of the dialog's scroll, so it stays in reach
         // while more rows are ticked further down. Opens New in list mode with
@@ -1637,28 +1969,37 @@ function AssignedTicketRow({
   );
 }
 
-function TicketSourceCard({
+/** One ticket source's settings, in the order a first-timer fills them:
+ * **Connection** (the credentials and the Test that proves them — it also
+ * loads the workflow states the next fields pick from), **What it takes**
+ * (whose tickets, which states/labels), **Where it goes, and who works it**
+ * (repo(s), agent, fast-track), then **Advanced options**.
+ *
+ * Three ways in, one component: `edit` is the editor attached under a source's
+ * heading (all sections, its save line and Remove); `connect` and `setup` are
+ * steps 2 and 3 of "+ Add source", which owns its own footer. */
+function TicketSourceEditor({
+  section,
   source,
   catalog,
   agents,
-  collapsed,
   fieldErrors,
   save,
   dirty,
   onDirty,
   gotoTab,
+  onAddRepo,
   saved,
   listError,
   test,
   onTest,
-  onToggle,
   onChange,
   onRemove,
 }: {
+  section: "edit" | "connect" | "setup";
   source: Source;
   catalog: CatalogEntry[];
   agents: AgentChoices;
-  collapsed: boolean;
   /** What the server refused on the last save, per field — the card is unsaved. */
   fieldErrors?: FieldErrors;
   /** What this card's last edit did ("Saving…" / "Saved ✓" / "Not saved"). */
@@ -1668,6 +2009,9 @@ function TicketSourceCard({
   /** A field started (`on`) or stopped holding unsent text. */
   onDirty(key: string, on: boolean): void;
   gotoTab(key: IntakeTabKey): void;
+  /** In the add flow: switch to adding a Repository (GitHub Issues' "every new
+   * issue in a repo" lives there, not on a tracker). */
+  onAddRepo?: () => void;
   /** Whether the server holds this card at all (a new card may not, yet). */
   saved: boolean;
   /** The ticket listing's error for this source, when it couldn't be listed. */
@@ -1676,7 +2020,6 @@ function TicketSourceCard({
   test?: TestResult;
   /** Test the SAVED source and record the verdict on it. */
   onTest(): Promise<string>;
-  onToggle(): void;
   /** A null value clears the field (secrets); strings set it. */
   onChange(patch: Record<string, string | null>): void;
   onRemove(): void;
@@ -1727,26 +2070,6 @@ function TicketSourceCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedStateKey]);
 
-  // The source's name (label, else provider), then — when it has no label of
-  // its own — the repo it feeds, which is what tells two of one tracker apart.
-  // Never the member id: that is an opaque tracker id nobody recognises.
-  // Named after the tracker; the repo count follows as a plain fact. "Shortcut
-  // — payments-api +1" read as a routing decision (every ticket going to
-  // payments-api), which it never was.
-  const repoNames = sourceRepos(source).map((r) => repoNameOf(r.url));
-  const feeds =
-    repoNames.length > 1 ? repoNames.length + " repos" : repoNames[0] || "";
-  const base = !source.provider
-    ? "New ticket source"
-    : sourceDisplayName(source, catalog) + (feeds && !(source.label || "").trim() ? " · " + feeds : "");
-  // Always show which CLI this queue runs, not just when it is overridden.
-  // Saved sources render collapsed, so an agent shown only when explicitly set
-  // made the common case — "it's on the app default" — indistinguishable from
-  // "this source has no agent setting at all", which is what sent people
-  // looking for the picker in the first place.
-  const summary = !source.provider
-    ? base
-    : base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
   // A GitHub Issues source saved before the one GitHub credential path still
   // carries its own token (the server masks it as "•••set"): still read, as
   // the last fallback, this release only.
@@ -1832,17 +2155,19 @@ function TicketSourceCard({
       />
     );
 
-  // The form in the order a first-timer fills it: what tracker, the key that
-  // unlocks it, a Test that proves it (and loads the workflow states the next
+  // The form in the order a first-timer fills it: the key that unlocks the
+  // tracker, a Test that proves it (and loads the workflow states the next
   // fields pick from), then whose tickets and which, then where they go and
   // who works them. Everything a first setup can leave alone is folded.
   const basics = basicFields(meta);
   const cut = basics.findIndex((f) => f.key === "assignee_scope" || f.type === "state");
   const credFields = cut < 0 ? basics : basics.slice(0, cut);
   const filterFields = cut < 0 ? [] : basics.slice(cut);
-  const saveLine = !source.provider
-    ? "Pick a tracker to start"
-    : !saved
+  // Whose tickets and the states it takes sit side by side: the rule that ties
+  // them ("Anyone's needs a state") is then checked on one line.
+  const paired =
+    filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
+  const saveLine = !saved
     ? unsaved
       ? "Not saved — fill in the marked fields"
       : dirty
@@ -1855,16 +2180,194 @@ function TicketSourceCard({
         : save?.state === "saved"
           ? "Saved ✓"
           : "";
+  const name = sourceDisplayName(source, catalog);
+  const showConnect = section !== "setup";
+  const showSetup = section !== "connect";
+  const heads = section === "edit";
 
   return (
-    <SourceCard
-      sourceId={source.id}
-      summary={summary}
-      badge={<SourcePill state={pillState} label={pillLabel} message={pillMessage} />}
-      collapsed={collapsed}
-      onToggle={onToggle}
-      footer={
+    <div className="ik-editor-body tk-source-editor" data-source-id={source.id} data-section={section}>
+      {showConnect ? (
         <>
+          {heads ? (
+            <div className="ik-editor-hrow">
+              <h4 className="ik-editor-h">Connection</h4>
+              <SourcePill state={pillState} label={pillLabel} message={pillMessage} />
+            </div>
+          ) : meta?.blurb ? (
+            <p className="set-hint tk-blurb">{meta.blurb}</p>
+          ) : null}
+          {source.provider === "github_issues" && section === "connect" ? (
+            // The two GitHub-issue homes, told apart: this one is "issues
+            // assigned to me, as tickets"; a watched Repository is "every NEW
+            // issue in a repo".
+            <p className="set-hint tk-gh-issues-note" role="note">
+              Want every new issue in a repo to start on its own?{" "}
+              <button
+                type="button"
+                className="linklike"
+                onClick={() => (onAddRepo ? onAddRepo() : gotoTab("issues"))}
+              >
+                Add it as a Repository instead
+              </button>
+              .
+            </p>
+          ) : null}
+          {ownGithubToken && (
+            <p className="set-hint tk-own-token" role="note" data-tk-notice="own-token">
+              This source still has its own token — move it to Settings → Connections → GitHub →
+              Connect (read as a fallback this release, ignored from the next)
+            </p>
+          )}
+          <div className="tk-fields">{credFields.map(renderField)}</div>
+          {/* Test sits right under the credentials it checks — it is also what
+              loads the workflow states the fields below pick from. */}
+          <div className="set-row tk-test-row">
+            <span className="test-row">
+              <TestButton label={stored ? "Test again" : "Test"} onTest={onTest} result={test} />
+              {!test?.msg && !test?.testing ? (
+                <span className="ik-source-message" title={pillMessage}>
+                  {pillMessage}
+                </span>
+              ) : null}
+            </span>
+          </div>
+        </>
+      ) : null}
+      {showSetup ? (
+        <>
+          {heads || section === "setup" ? <h4 className="ik-editor-h">What it takes</h4> : null}
+          {paired ? (
+            <div className="ik-grid ik-grid-2">
+              {renderField(filterFields[0])}
+              {renderField(filterFields[1])}
+            </div>
+          ) : null}
+          <div className="tk-fields">{(paired ? filterFields.slice(2) : filterFields).map(renderField)}</div>
+          <h4 className="ik-editor-h">Where it goes, and who works it</h4>
+          {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
+          <RepoListField
+            source={source}
+            onChange={(patch) => {
+              onDirty("repos", false);
+              onChange(patch);
+            }}
+            onPending={() => onDirty("repos", true)}
+            onSettled={() => onDirty("repos", false)}
+          />
+          <div className="ik-grid ik-grid-2">
+            <label className="set-row">
+              <span className="set-label">Agent</span>
+              <select
+                className="tk-agent"
+                data-tk-field="agent"
+                value={source.agent || ""}
+                onChange={(e) => onChange({ agent: e.target.value })}
+              >
+                <option value="">
+                  {agents.fallback ? `App default (${agents.fallback})` : "App default"}
+                </option>
+                {agents.names.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span className="set-hint">Works the tickets from this source.</span>
+            </label>
+            <label className="set-row">
+              <span className="set-label">Fast-track to</span>
+              <select
+                className="tk-depth"
+                data-tk-field="depth"
+                value={source.depth === "agent" ? "" : source.depth || ""}
+                onChange={(e) => onChange({ depth: e.target.value })}
+              >
+                {/* One ladder, the same words as every other Fast-track control.
+                    A stored "agent" (stop once the agent stops) IS Off, so it
+                    reads as Off rather than as a sixth rung. */}
+                <option value="">{LANE_LABEL.leave}</option>
+                {SOURCE_DEPTHS.map((d) => (
+                  <option key={d} value={d}>
+                    {LANE_LABEL[d]}
+                  </option>
+                ))}
+              </select>
+              <span className="set-hint">After the agent finishes. Merge is per ticket only.</span>
+            </label>
+          </div>
+          {/* BASIC vs ADVANCED. Everything above is what a first setup needs to
+              get tickets flowing; the per-queue tuning and the catalog's
+              `advanced` extras (claim label, move on start…) fold away here.
+              The fold opens on its own when anything inside is already set or
+              was refused by the server, so a stored value or an error is never
+              hidden. */}
+          <details
+            className="tk-advanced"
+            data-tk-advanced={source.id}
+            open={advancedOpen}
+            onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary>Advanced options</summary>
+            <div className="tk-advanced-body">
+              <label className="set-row">
+                <span className="set-label">Name</span>
+                <input
+                  type="text"
+                  className="tk-label"
+                  placeholder="e.g. Jira – EU"
+                  defaultValue={source.label || ""}
+                  onChange={(e) => labelSave.schedule(e.target.value)}
+                  onBlur={labelSave.flush}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      labelSave.flush();
+                    }
+                  }}
+                />
+                <span className="set-hint">
+                  What this source is called in the ticket list — handy with two of one tracker.
+                </span>
+              </label>
+              <label className="set-row">
+                <span className="set-label">Thinking effort</span>
+                <select
+                  className="tk-effort"
+                  data-tk-field="effort"
+                  value={effortUsable ? source.effort || "" : ""}
+                  disabled={!effortUsable}
+                  title={effortTitle(effortProvider, effortCap)}
+                  onChange={(e) => onChange({ effort: e.target.value })}
+                >
+                  <option value="">
+                    {effortUsable
+                      ? "Agent's default"
+                      : "No effort setting (" + (effortProvider || "this agent") + ")"}
+                  </option>
+                  {effortUsable &&
+                    EFFORTS.map((e) => (
+                      // A rung above this CLI's ceiling still runs, clamped, and the top
+                      // rung is named the way the CLI names it — so the pick says what it
+                      // will actually do rather than what was asked for.
+                      <option key={e} value={e}>
+                        {effortOptionLabel(e, effortCap)}
+                      </option>
+                    ))}
+                </select>
+                <span className="set-hint">
+                  How hard the agent thinks about every ticket from this source. Safe to set
+                  higher than the agent supports — it uses its own top level. A row's Options
+                  can pick another for one ticket.
+                </span>
+              </label>
+              {advancedFields(meta).map(renderField)}
+            </div>
+          </details>
+        </>
+      ) : null}
+      {section === "edit" ? (
+        <div className="ik-editor-foot">
           <span
             className={"ik-save-line" + (save?.state === "saved" && saved && !dirty ? " ok" : "")}
             data-save={!saved ? "unsaved" : dirty ? "pending" : save?.state || ""}
@@ -1873,188 +2376,16 @@ function TicketSourceCard({
           >
             {saveLine}
           </span>
-          <button type="button" className="test-btn tk-remove" onClick={onRemove}>
-            Remove
-          </button>
-        </>
-      }
-    >
-      <label className="set-row">
-        <span className="set-label">Provider</span>
-        <select
-          className="tk-provider"
-          value={source.provider}
-          onChange={(e) => {
-            if (e.target.value) onChange({ provider: e.target.value });
-          }}
-        >
-          {!source.provider ? <option value="">Choose a tracker…</option> : null}
-          {catalog.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <span className="set-hint tk-blurb">
-          {meta?.blurb || (source.provider ? "" : "Shortcut, Jira, Linear, Asana or GitHub Issues.")}
-        </span>
-      </label>
-      {source.provider === "github_issues" ? (
-        // The two GitHub-issue homes, told apart: this one is "issues assigned
-        // to me, as tickets"; the GitHub issues tab is "every NEW issue in a repo".
-        <p className="set-hint tk-gh-issues-note" role="note">
-          Want every new issue in a repo to start on its own?{" "}
-          <button type="button" className="linklike" onClick={() => gotoTab("issues")}>
-            Use the GitHub issues tab
-          </button>
-          .
-        </p>
-      ) : null}
-      {ownGithubToken && (
-        <p className="set-hint tk-own-token" role="note" data-tk-notice="own-token">
-          This source still has its own token — move it to Settings → Connections → GitHub →
-          Connect (read as a fallback this release, ignored from the next)
-        </p>
-      )}
-      {/* Nothing below means anything until the tracker is picked. */}
-      {source.provider ? (
-        <>
-      <div className="tk-fields">{credFields.map(renderField)}</div>
-      {/* Test sits right under the credentials it checks — it is also what
-          loads the workflow states the fields below pick from. */}
-      <div className="set-row tk-test-row">
-        <span className="test-row">
-          <TestButton label={stored ? "Test again" : "Test"} onTest={onTest} result={test} />
-          {!test?.msg && !test?.testing ? (
-            <span className="ik-source-message" title={pillMessage}>
-              {pillMessage}
-            </span>
-          ) : null}
-        </span>
-      </div>
-      <div className="tk-fields">{filterFields.map(renderField)}</div>
-      {/* One repo, or a set of them with per-repo hints (repoList.ts). */}
-      <RepoListField
-        source={source}
-        onChange={(patch) => {
-          onDirty("repos", false);
-          onChange(patch);
-        }}
-        onPending={() => onDirty("repos", true)}
-        onSettled={() => onDirty("repos", false)}
-      />
-      <label className="set-row">
-        <span className="set-label">Agent</span>
-        <select
-          className="tk-agent"
-          data-tk-field="agent"
-          value={source.agent || ""}
-          onChange={(e) => onChange({ agent: e.target.value })}
-        >
-          <option value="">
-            {agents.fallback ? `App default (${agents.fallback})` : "App default"}
-          </option>
-          {agents.names.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-        <span className="set-hint">Which agent works the tickets from this source.</span>
-      </label>
-      {/* BASIC vs ADVANCED. Everything above is what a first setup needs to get
-          tickets flowing; the per-queue tuning and the catalog's `advanced`
-          extras (claim label, move on start…) fold away here. The fold opens
-          on its own when anything inside is already set or was refused by the
-          server, so a stored value or an error is never hidden. */}
-      <details
-        className="tk-advanced"
-        data-tk-advanced={source.id}
-        open={advancedOpen}
-        onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary>Advanced options</summary>
-        <div className="tk-advanced-body">
-          <label className="set-row">
-            <span className="set-label">Name</span>
-            <input
-              type="text"
-              className="tk-label"
-              placeholder="e.g. Jira – EU"
-              defaultValue={source.label || ""}
-              onChange={(e) => labelSave.schedule(e.target.value)}
-              onBlur={labelSave.flush}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  labelSave.flush();
-                }
-              }}
-            />
-            <span className="set-hint">
-              What this source is called in the ticket list — handy with two of one tracker.
-            </span>
-          </label>
-          <label className="set-row">
-            <span className="set-label">Thinking effort</span>
-            <select
-              className="tk-effort"
-              data-tk-field="effort"
-              value={effortUsable ? source.effort || "" : ""}
-              disabled={!effortUsable}
-              title={effortTitle(effortProvider, effortCap)}
-              onChange={(e) => onChange({ effort: e.target.value })}
-            >
-              <option value="">
-                {effortUsable
-                  ? "Agent's default"
-                  : "No effort setting (" + (effortProvider || "this agent") + ")"}
-              </option>
-              {effortUsable &&
-                EFFORTS.map((e) => (
-                  // A rung above this CLI's ceiling still runs, clamped, and the top
-                  // rung is named the way the CLI names it — so the pick says what it
-                  // will actually do rather than what was asked for.
-                  <option key={e} value={e}>
-                    {effortOptionLabel(e, effortCap)}
-                  </option>
-                ))}
-            </select>
-            <span className="set-hint">
-              How hard the agent thinks about every ticket from this source. Safe to set
-              higher than the agent supports — it uses its own top level. A row's Options
-              can pick another for one ticket.
-            </span>
-          </label>
-          <label className="set-row">
-            <span className="set-label">Fast-track tickets to</span>
-            <select
-              className="tk-depth"
-              data-tk-field="depth"
-              value={source.depth === "agent" ? "" : source.depth || ""}
-              onChange={(e) => onChange({ depth: e.target.value })}
-            >
-              {/* One ladder, the same words as every other Fast-track control.
-                  A stored "agent" (stop once the agent stops) IS Off, so it reads
-                  as Off rather than as a sixth rung. */}
-              <option value="">{LANE_LABEL.leave}</option>
-              {SOURCE_DEPTHS.map((d) => (
-                <option key={d} value={d}>
-                  {LANE_LABEL[d]}
-                </option>
-              ))}
-            </select>
-            <span className="set-hint">
-              What happens after the agent finishes: commit, push, open a PR. Merge can only
-              be picked per ticket, so nothing merges unattended.
-            </span>
-          </label>
-          {advancedFields(meta).map(renderField)}
+          <ArmButton
+            className="tk-remove"
+            label="Remove"
+            armedLabel={"Confirm — remove " + name}
+            title={"Stop taking tickets from " + name + " — its sessions are kept"}
+            onConfirm={onRemove}
+          />
         </div>
-      </details>
-        </>
       ) : null}
-    </SourceCard>
+    </div>
   );
 }
 

@@ -24552,6 +24552,14 @@ function usePanelQuery(key) {
 		refresh
 	};
 }
+function refreshPanel(key) {
+	return queryClient.fetchQuery({
+		queryKey: [key],
+		queryFn: () => api(PANELS[key] + "?fresh=1"),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+}
 function prefetchIntakePanels() {
 	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
 		queryKey: [key],
@@ -24679,14 +24687,24 @@ function checkedToastText(d) {
 }
 function useGithubConnected(enabled = true) {
 	return useQuery({
+		...githubStatusQuery(enabled),
+		select: (r) => !!r.connected
+	});
+}
+function githubStatusQuery(enabled) {
+	return {
 		queryKey: ["github-status"],
-		queryFn: async () => {
-			return !!(await api("/api/github/status"))?.connected;
-		},
+		queryFn: async () => await api("/api/github/status") || {},
 		enabled,
 		staleTime: 6e4,
 		retry: false
-	});
+	};
+}
+function useGithubStatus(enabled = true) {
+	return useQuery(githubStatusQuery(enabled));
+}
+function refreshGithubStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["github-status"] });
 }
 function useTestPlans(enabled = true) {
 	(0, import_react.useEffect)(bridgeTestPlanEvents, []);
@@ -24698,6 +24716,13 @@ function useTestPlans(enabled = true) {
 		placeholderData: (prev) => prev,
 		retry: false
 	});
+}
+function useCachedLiveBranch() {
+	return useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled: false
+	}).data?.live_branch || "";
 }
 function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
@@ -37909,7 +37934,7 @@ function actionHandler(a, deps) {
 		case "route": return () => window.open(a.target, "_blank", "noopener");
 		case "dialog":
 			if (a.target === "connect-github") return openConnectGitHub;
-			if (a.target === "intake") return () => deps.openDialogFor("intake", a.tab || "tickets");
+			if (a.target === "intake") return () => deps.openDialogFor("intake", (a.tab || "tickets") + (a.source_id ? ":" + a.source_id : ""));
 			if (a.target === "db-explorer") return () => {
 				deps.closeDialog();
 				runCommand("dbclient", "dbclient.explorer");
@@ -65068,11 +65093,11 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("intake", "tickets")
 		});
 		acts.push({
-			label: "Intake: Pull requests",
+			label: "Intake: GitHub PRs",
 			run: () => ui.openDialogFor("intake", "prs")
 		});
 		acts.push({
-			label: "Intake: Issues",
+			label: "Intake: GitHub issues",
 			run: () => ui.openDialogFor("intake", "issues")
 		});
 		acts.push({
@@ -71129,29 +71154,34 @@ function useSettingsModel(open) {
 			await fetchSettingsDoc();
 		} catch {}
 	}, []);
+	const saveField = (0, import_react.useCallback)(async (group, field, value) => {
+		try {
+			putSettingsDoc((await api("/api/settings", { json: { [group]: { [field]: value } } }))?.settings || {});
+			refreshConfig();
+			if (!flashSaved()) toast("Saved");
+		} catch (err) {
+			toast("Save failed: " + (err.message || field));
+			reload();
+		}
+	}, [reload]);
+	const saveGroups = (0, import_react.useCallback)(async (patches, okMsg) => {
+		const groups = Object.keys(patches);
+		if (!groups.length) return;
+		try {
+			putSettingsDoc((await api("/api/settings", { json: patches }))?.settings || {});
+			refreshConfig();
+			if (okMsg) toast(okMsg);
+		} catch (err) {
+			toast("Save failed: " + (err.message || groups.join(", ")));
+			reload();
+		}
+	}, [reload]);
 	return {
 		settings,
 		reload,
-		saveField: (0, import_react.useCallback)(async (group, field, value) => {
-			try {
-				putSettingsDoc((await api("/api/settings", { json: { [group]: { [field]: value } } }))?.settings || {});
-				refreshConfig();
-				if (!flashSaved()) toast("Saved");
-			} catch (err) {
-				toast("Save failed: " + (err.message || field));
-				reload();
-			}
-		}, [reload]),
-		saveGroup: (0, import_react.useCallback)(async (group, patch, okMsg) => {
-			try {
-				putSettingsDoc((await api("/api/settings", { json: { [group]: patch } }))?.settings || {});
-				refreshConfig();
-				if (okMsg) toast(okMsg);
-			} catch (err) {
-				toast("Save failed: " + (err.message || group));
-				reload();
-			}
-		}, [reload]),
+		saveField,
+		saveGroup: (0, import_react.useCallback)((group, patch, okMsg) => saveGroups({ [group]: patch }, okMsg), [saveGroups]),
+		saveGroups,
 		get: (0, import_react.useCallback)((group, field) => {
 			const g = settings[group];
 			return g && typeof g === "object" ? g[field] : void 0;
@@ -71445,38 +71475,6 @@ function AutomationSwitch({ label, title, rowId, inputId, statusId, checked, onC
 		})]
 	});
 }
-function SourceCard({ sourceId, summary, badge, collapsed, onToggle, children, footer }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "tk-source" + (collapsed ? " tk-collapsed" : ""),
-		"data-source-id": sourceId,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			type: "button",
-			className: "tk-head",
-			"aria-expanded": !collapsed,
-			onClick: onToggle,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "tk-caret",
-					children: collapsed ? "▸" : "▾"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "tk-summary",
-					children: summary
-				}),
-				badge
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "tk-body",
-			children: [children, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "set-row",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "test-row",
-					children: footer
-				})
-			})]
-		})]
-	});
-}
 function TestButton({ label = "Test connection", onTest, result }) {
 	const [own, setOwn] = (0, import_react.useState)({ testing: false });
 	const state = result || own;
@@ -71515,45 +71513,278 @@ function SourcePill({ state, label, message }) {
 		children: label
 	});
 }
-function WorkGroup({ name, count, detail, open, onToggle, onHide, hideTitle, indent, heading, middle, children }) {
+function WorkGroup({ name, count, detail, detailTone, onDetail, detailTitle, open, onToggle, onHide, hideTitle, indent, heading, middle, action, editor, groupKey, children }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "tk-bucket" + (indent ? " ik-nested" : "") + (heading ? " ik-source-group" : "") + (middle ? " ik-workflow-group" : ""),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "tk-bucket-head",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "tk-bucket-toggle",
-				"aria-expanded": open,
-				title: (open ? "Collapse" : "Expand") + " " + name,
-				onClick: onToggle,
+		className: "tk-bucket" + (indent ? " ik-nested" : "") + (heading ? " ik-source-group" : "") + (middle ? " ik-workflow-group" : "") + (editor ? " ik-editing" : ""),
+		"data-group-key": groupKey,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tk-bucket-head",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "tk-caret",
-						children: "▸"
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "tk-bucket-toggle" + (onDetail ? " ik-toggle-tight" : ""),
+						"aria-expanded": open,
+						title: (open ? "Collapse" : "Expand") + " " + name,
+						onClick: onToggle,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tk-caret",
+								children: "▸"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tk-bucket-name",
+								children: name
+							}),
+							count !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tk-bucket-count",
+								children: count
+							}) : null,
+							detail && !onDetail ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ik-group-detail" + (detailTone ? " " + detailTone : ""),
+								children: detail
+							}) : null
+						]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "tk-bucket-name",
-						children: name
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "tk-bucket-count",
-						children: count
-					}),
-					detail ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ik-group-detail",
+					detail && onDetail ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ik-group-detail ik-detail-btn" + (detailTone ? " " + detailTone : ""),
+						title: detailTitle || "Change this",
+						onClick: onDetail,
 						children: detail
-					}) : null
+					}) : null,
+					onDetail ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-head-fill",
+						"aria-hidden": "true",
+						onClick: onToggle
+					}) : null,
+					onHide && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tk-bucket-x",
+						title: hideTitle || "Hide " + name,
+						"aria-label": "Hide " + name,
+						onClick: onHide,
+						children: "✕"
+					}),
+					action
 				]
-			}), onHide && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			}),
+			editor ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-editor",
+				children: editor
+			}) : null,
+			open && children ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-group-body",
+				children
+			}) : null
+		]
+	});
+}
+function useEditing(focus) {
+	const [editing, setEditing] = (0, import_react.useState)(focus || null);
+	(0, import_react.useEffect)(() => {
+		if (!focus) return;
+		setEditing(focus);
+		const t = window.setTimeout(() => scrollToGroup(focus), 60);
+		return () => window.clearTimeout(t);
+	}, [focus]);
+	return {
+		editing,
+		isEditing: (key) => editing === key,
+		toggle: (key) => setEditing((cur) => cur === key ? null : key),
+		open: (key) => {
+			setEditing(key);
+			window.setTimeout(() => scrollToGroup(key), 60);
+		},
+		close: () => setEditing(null)
+	};
+}
+function scrollToGroup(key) {
+	const sel = "[data-group-key=\"" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(key) : key) + "\"]";
+	const el = document.querySelector(sel);
+	if (el && "scrollIntoView" in el) el.scrollIntoView({
+		block: "start",
+		behavior: "smooth"
+	});
+}
+function repoGroupOrder(repos, byRepo) {
+	const watched = new Set(repos.map((r) => r.toLowerCase()));
+	return [...repos, ...[...byRepo.keys()].filter((r) => !watched.has(r.toLowerCase()))];
+}
+function HeadAction({ editing, broken, name, onClick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "ik-head-action" + (editing ? " done" : broken ? " fix" : ""),
+		"aria-expanded": editing,
+		title: editing ? "Close " + name + "'s settings" : (broken ? "Fix " : "Edit ") + name,
+		onClick,
+		children: editing ? "Done" : broken ? "Fix" : "Edit"
+	});
+}
+function ArmButton({ label, armedLabel, onConfirm, title, className, id }) {
+	const [armed, setArmed] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!armed) return;
+		const t = window.setTimeout(() => setArmed(false), 5e3);
+		return () => window.clearTimeout(t);
+	}, [armed]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		id,
+		className: "ik-arm" + (armed ? " armed" : "") + (className ? " " + className : ""),
+		title: armed ? "Press again to confirm" : title,
+		"data-armed": armed || void 0,
+		onBlur: () => setArmed(false),
+		onClick: () => {
+			if (!armed) return setArmed(true);
+			setArmed(false);
+			onConfirm();
+		},
+		children: armed ? armedLabel : label
+	});
+}
+function GithubStatusLine({ buttonId, needFor }) {
+	const st = useGithubStatus(true).data;
+	if (!st) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-ghline",
+		"data-gh": "loading",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ik-dot off" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "GitHub" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-ghline-text",
+				children: "checking…"
+			})
+		]
+	});
+	const on = !!st.connected;
+	const who = st.login ? "connected as @" + st.login : st.user_error ? "connected — " + st.user_error : "connected";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-ghline" + (on ? "" : " off"),
+		"data-gh": on ? "connected" : "off",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ik-dot" + (on ? "" : " warn") }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "GitHub" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-ghline-text",
+				children: on ? who + " — one sign-in for PRs, issues, Verify and Open PR" : "not connected — " + needFor
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
-				className: "tk-bucket-x",
-				title: hideTitle || "Hide " + name,
-				"aria-label": "Hide " + name,
-				onClick: onHide,
-				children: "✕"
-			})]
-		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "ik-group-body",
+				id: buttonId,
+				className: on ? "ik-quiet-btn" : "test-btn",
+				onClick: () => openConnectGitHub(),
+				children: on ? "Manage…" : "Connect GitHub"
+			})
+		]
+	});
+}
+function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onCancel, cancelLabel = "Cancel", children, footer }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ik-add",
+		id: "ik-add-flow",
+		"aria-label": title,
+		"data-step": step,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-add-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+						className: "ik-add-title",
+						children: title
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+						className: "ik-steps",
+						"aria-label": "Steps",
+						children: [
+							"What",
+							"Connect",
+							"What it does"
+						].map((label, i) => {
+							const n = i + 1;
+							const state = n < step ? "done" : n === step ? "cur" : "todo";
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+								className: "ik-step " + state,
+								"aria-current": state === "cur" ? "step" : void 0,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ik-step-num",
+									children: state === "done" ? "✓" : n
+								}), label]
+							}, label);
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ik-quiet-btn",
+						id: "ik-add-cancel",
+						onClick: onCancel,
+						children: cancelLabel
+					})
+				]
+			}),
+			kinds.length > 1 && step < 3 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-kinds",
+				role: "radiogroup",
+				"aria-label": "What to add",
+				children: kinds.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					role: "radio",
+					"aria-checked": picked === k.key,
+					className: "ik-kind" + (picked === k.key ? " picked" : ""),
+					"data-kind": k.key,
+					onClick: () => onPick(k.key),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-kind-label",
+						children: k.label
+					}), k.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-kind-sub",
+						children: k.sub
+					}) : null]
+				}, k.key))
+			}) : null,
+			children,
+			footer ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-add-foot",
+				children: footer
+			}) : null
+		]
+	});
+}
+function ViewMenu({ id, label, title, children }) {
+	const ref = (0, import_react.useRef)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onDown = (e) => {
+			if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			setOpen(false);
+			e.stopPropagation();
+			e.preventDefault();
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [open]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "ik-view",
+		id,
+		open,
+		ref,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+			title,
+			onClick: (e) => {
+				e.preventDefault();
+				setOpen((v) => !v);
+			},
+			children: label
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ik-view-pop",
 			children
 		})]
 	});
@@ -71731,7 +71962,7 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, elsewhe
 					where ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ik-item-route",
 						"data-route": route?.method || "",
-						title: route?.method === ONLY_REPO ? "The repo this starts in — this source's only repo. Add more on its card." : (route?.method === "pending" || !(route?.repos || []).length ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts." : "The repo this starts in, and why.") + (canPickRepo ? " To start it in another repo, pick one under Options." : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card)."),
+						title: route?.method === ONLY_REPO ? "The repo this starts in — this source's only repo. Add more with Edit on its heading." : (route?.method === "pending" || !(route?.repos || []).length ? "Nothing on the ticket names one of this source's repos, so the agent reads the ticket and picks when it starts." : "The repo this starts in, and why.") + (canPickRepo ? " To start it in another repo, pick one under Options." : " To send it elsewhere, give the ticket a label that matches another repo's name or hint (on the source card)."),
 						children: where
 					}) : null,
 					hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -72009,23 +72240,23 @@ function useToggleSet(key, invert = false, keep) {
 //#endregion
 //#region src/components/intake/vocab.ts
 function friendlySourceError(name, raw, onCard = false) {
-	if (onCard) return friendlySourceError(name, raw).replace(/ — (open its card below to fix it|check its (permissions on the )?card below|finish its card below)/, "");
+	if (onCard) return friendlySourceError(name, raw).replace(/ — (press Fix on its heading|check its permissions with Fix on its heading|check it with Fix on its heading|finish it with Fix on its heading)/, "");
 	const text = String(raw || "").trim();
 	const status = text.match(/\b(?:HTTP\s*)?(401|403|404|429|5\d\d)\b/i)?.[1] || "";
-	if (status === "401" || /unauthori[sz]ed|invalid token|bad credentials/i.test(text)) return name + " rejected the token — open its card below to fix it.";
-	if (status === "403" || /forbidden/i.test(text)) return name + " refused access with this token — check its permissions on the card below.";
-	if (status === "404") return name + " couldn't find what this source points at — check its card below.";
+	if (status === "401" || /unauthori[sz]ed|invalid token|bad credentials/i.test(text)) return name + " rejected the token — press Fix on its heading.";
+	if (status === "403" || /forbidden/i.test(text)) return name + " refused access with this token — check its permissions with Fix on its heading.";
+	if (status === "404") return name + " couldn't find what this source points at — check it with Fix on its heading.";
 	if (status === "429") return name + " is rate-limiting requests — try Refresh in a minute.";
 	if (status.startsWith("5")) return name + " is having trouble (server error) — try Refresh later.";
 	if (/timed? ?out|timeout|connection|resolve|network|unreachable|ssl/i.test(text)) return name + " can't be reached — check your network, then Refresh.";
-	if (/missing|required/i.test(text)) return name + " isn't set up yet — finish its card below.";
+	if (/missing|required/i.test(text)) return name + " isn't set up yet — finish it with Fix on its heading.";
 	const clean = text.replace(/[:\s]*[{[].*$/s, "").trim();
 	return name + " can't be listed" + (clean ? " — " + clean : "") + ".";
 }
 function friendlyStartError(name, raw) {
 	const text = String(raw || "").trim();
 	const status = text.match(/\bAPI returned (\d{3})\b/i)?.[1] || "";
-	if (status === "401" || !!status && /unauthori[sz]ed|bad credentials/i.test(text)) return name + " rejected the API token. Fix it in Intake → Tickets, on the source's card.";
+	if (status === "401" || !!status && /unauthori[sz]ed|bad credentials/i.test(text)) return name + " rejected the API token. Fix it in Intake → Tickets — press Fix on the source's heading.";
 	if (status === "403") return name + " refused access with this token. Check its permissions in Intake → Tickets.";
 	if (status === "404") return name + " couldn't find this ticket — it may have been deleted or moved.";
 	if (status === "429") return name + " is rate-limiting requests — try again in a minute.";
@@ -72237,8 +72468,7 @@ var TEST_STATE_LABELS = {
 };
 var CARD_ADVANCED_DEFAULTS = {
 	label: [""],
-	effort: [""],
-	depth: ["", "agent"]
+	effort: [""]
 };
 function basicFields(meta) {
 	return (meta?.fields || []).filter((f) => !f.advanced);
@@ -72640,6 +72870,681 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 	});
 }
 //#endregion
+//#region src/components/intake/repoUses.ts
+var REPO_USES = [
+	"pr",
+	"issue",
+	"verify"
+];
+var USE_STORE = {
+	pr: {
+		group: "github",
+		list: "repos",
+		map: "repo_settings"
+	},
+	issue: {
+		group: "github",
+		list: "issue_repos",
+		map: "issue_repo_settings"
+	},
+	verify: {
+		group: "repository",
+		list: "verify_repos",
+		map: "verify_repo_settings"
+	}
+};
+var USE_LABEL = {
+	pr: "PR comments",
+	issue: "New issues",
+	verify: "Verify"
+};
+var USE_SENTENCE = {
+	pr: "Address review comments on my PRs",
+	issue: "Start on new issues",
+	verify: "Verify what ships"
+};
+var keepsRemovedBlocks = (use) => use === "verify";
+var lower = (s) => s.trim().toLowerCase();
+function groupOf(settings, group) {
+	const g = settings[group];
+	return g && typeof g === "object" && !Array.isArray(g) ? g : {};
+}
+function reposFor(settings, use) {
+	const { group, list } = USE_STORE[use];
+	const v = groupOf(settings, group)[list];
+	return Array.isArray(v) ? v.map(String) : [];
+}
+function blocksFor(settings, use) {
+	const { group, map } = USE_STORE[use];
+	const v = groupOf(settings, group)[map];
+	return v && typeof v === "object" && !Array.isArray(v) ? { ...v } : {};
+}
+function usesOf(settings, repo) {
+	const r = lower(repo);
+	return REPO_USES.filter((u) => reposFor(settings, u).some((x) => lower(x) === r));
+}
+function knownRepos(settings, extra = []) {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const r of [...REPO_USES.flatMap((u) => reposFor(settings, u)), ...extra]) {
+		const k = lower(r);
+		if (!k || seen.has(k)) continue;
+		seen.add(k);
+		out.push(r.trim());
+	}
+	return out;
+}
+function githubSlugOf(url) {
+	const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec((url || "").trim());
+	return m ? m[1] + "/" + m[2] : "";
+}
+function usesPatch(settings, repo, next) {
+	const slug = repo.trim();
+	const want = new Set(next);
+	const have = new Set(usesOf(settings, slug));
+	const patch = {};
+	const put = (group, field, value) => {
+		patch[group] = {
+			...patch[group] || {},
+			[field]: value
+		};
+	};
+	for (const use of REPO_USES) {
+		const on = want.has(use);
+		if (on === have.has(use)) continue;
+		const { group, list, map } = USE_STORE[use];
+		const repos = reposFor(settings, use);
+		if (on) {
+			put(group, list, [...repos, slug]);
+			if (use === "pr") {
+				if (groupOf(settings, "github").enabled == null && !repos.length) put(group, "enabled", false);
+			}
+		} else {
+			put(group, list, repos.filter((r) => lower(r) !== lower(slug)));
+			if (!keepsRemovedBlocks(use)) {
+				const blocks = blocksFor(settings, use);
+				const key = Object.keys(blocks).find((k) => lower(k) === lower(slug));
+				if (key) {
+					delete blocks[key];
+					put(group, map, blocks);
+				}
+			}
+		}
+	}
+	return patch;
+}
+function fieldPatch(blocks, use, repo, field, value) {
+	const { group, map } = USE_STORE[use];
+	const next = { ...blocks };
+	const block = { ...next[repo] || {} };
+	const v = value.trim();
+	if (!v) delete block[field];
+	else if (field === "skip_authors") block[field] = v.split(",").map((x) => x.trim()).filter(Boolean);
+	else block[field] = v;
+	if (Object.keys(block).length) next[repo] = block;
+	else delete next[repo];
+	return {
+		patch: { [group]: { [map]: next } },
+		blocks: next
+	};
+}
+//#endregion
+//#region src/components/intake/RepoSources.tsx
+var REPO_RE = /^[^\s/]+\/[^\s/]+$/;
+var VERIFY_PROMPT_MAX = 2e3;
+var VERIFY_TARGET_MAX = 500;
+var listText = (v) => Array.isArray(v) ? v.join(", ") : v == null ? "" : String(v);
+function repoDefaults(settings, use, agentFallback, liveBranch) {
+	const gh = settings.github || {};
+	const rp = settings.repository || {};
+	const blank = {
+		agent: "",
+		baseBranch: "",
+		minAge: "",
+		skipAuthors: "",
+		liveBranch: "",
+		deployDelay: ""
+	};
+	if (use === "pr") return {
+		...blank,
+		agent: String(gh.agent || agentFallback || ""),
+		baseBranch: String(gh.base_branch || ""),
+		minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
+		skipAuthors: listText(gh.skip_authors)
+	};
+	if (use === "issue") return {
+		...blank,
+		agent: String(gh.issue_agent || agentFallback || ""),
+		minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
+		skipAuthors: listText(gh.issue_skip_authors)
+	};
+	return {
+		...blank,
+		liveBranch: liveBranch || String(rp.live_branch || ""),
+		deployDelay: String(rp.deploy_delay_minutes == null ? 5 : rp.deploy_delay_minutes)
+	};
+}
+function useDefaults(use, liveBranch) {
+	const s = useSettings();
+	const agents = useAgentChoices$1().data;
+	const cached = useCachedLiveBranch();
+	return repoDefaults(s.settings, use, agents?.fallback || "", liveBranch ?? cached);
+}
+function BlockInput({ label, field, value, placeholder, hint, type = "text", maxLength, narrow, onSave }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: label
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type,
+				className: narrow ? "num-sm" : void 0,
+				min: type === "number" ? 0 : void 0,
+				step: type === "number" ? 1 : void 0,
+				autoComplete: "off",
+				spellCheck: false,
+				maxLength,
+				"data-repo-field": field,
+				placeholder,
+				defaultValue: value,
+				onBlur: (e) => {
+					if (e.target.value.trim() !== value) onSave(field, e.target.value);
+				},
+				onKeyDown: (e) => {
+					if (e.key === "Enter") e.target.blur();
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: hint
+			})
+		]
+	});
+}
+function RepoFields({ use, repo, liveBranch }) {
+	const s = useSettings();
+	const agents = useAgentChoices$1().data || {
+		names: [],
+		fallback: ""
+	};
+	const defaults = useDefaults(use, liveBranch);
+	const saved = blocksFor(s.settings, use);
+	const savedKey = JSON.stringify(saved);
+	const [blocks, setBlocks] = (0, import_react.useState)(saved);
+	(0, import_react.useEffect)(() => {
+		setBlocks((prev) => JSON.stringify(prev) === savedKey ? prev : saved);
+	}, [savedKey]);
+	const o = blocks[repo] || {};
+	const save = (field, value) => {
+		const { patch, blocks: next } = fieldPatch(blocks, use, repo, field, value);
+		setBlocks(next);
+		s.saveGroups(patch, "Saved " + repo);
+	};
+	const text = (field) => listText(o[field]);
+	if (use === "verify") {
+		const live = o.live_branch || defaults.liveBranch;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-fields",
+			"data-use": "verify",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-grid ik-grid-2",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+						label: "Branch that ships",
+						field: "live_branch",
+						value: text("live_branch"),
+						placeholder: live || "main",
+						hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							"Blank uses ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.liveBranch || "main" }),
+							"."
+						] }),
+						onSave: save
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+						label: "Wait after merge (minutes)",
+						field: "deploy_delay_minutes",
+						type: "number",
+						value: text("deploy_delay_minutes"),
+						placeholder: defaults.deployDelay || "5",
+						hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							"Time to deploy; 0 = no deploy. Blank uses ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.deployDelay || "5" }),
+							"."
+						] }),
+						onSave: save
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+					label: "Where it runs (optional)",
+					field: "target",
+					value: text("target"),
+					maxLength: VERIFY_TARGET_MAX,
+					placeholder: "e.g. https://app.example.com — log in as qa@example.com",
+					hint: "URL and test login the checks use. Blank checks a fresh checkout.",
+					onSave: save
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Notes for the checklist writer (optional)"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+							className: "vf-repo-prompt",
+							rows: 3,
+							spellCheck: false,
+							"data-repo-field": "prompt",
+							maxLength: VERIFY_PROMPT_MAX,
+							placeholder: "e.g. The UI runs on :3000 — check there, not :8080.\nAlways confirm the migration ran.\nIgnore anything under vendor/.",
+							defaultValue: o.prompt || "",
+							onBlur: (e) => {
+								if (e.target.value.trim() !== (o.prompt || "")) save("prompt", e.target.value);
+							}
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Added to every checklist for this repo."
+						})
+					]
+				})
+			]
+		}, repo);
+	}
+	const agent = o.agent || "";
+	const depth = o.depth === "agent" ? "" : o.depth || "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-fields",
+		"data-use": use,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-grid ik-grid-3",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Agent"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							"data-repo-field": "agent",
+							value: agent,
+							onChange: (e) => save("agent", e.target.value),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "",
+								children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
+							}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: n,
+								children: n
+							}, n))]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Works this repository's sessions."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Fast-track to"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							"data-repo-field": "depth",
+							value: depth,
+							onChange: (e) => save("depth", e.target.value),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "",
+								children: LANE_LABEL.leave
+							}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: d,
+								children: LANE_LABEL[d]
+							}, d))]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "After the agent finishes."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+					label: use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)",
+					field: "min_age_minutes",
+					type: "number",
+					value: text("min_age_minutes"),
+					placeholder: defaults.minAge || "15",
+					hint: "Blank uses " + (defaults.minAge || "15") + ".",
+					onSave: save
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1"),
+			children: [use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+				label: "Base branch",
+				field: "base_branch",
+				value: text("base_branch"),
+				placeholder: defaults.baseBranch || "the repo's default branch",
+				hint: "Only PRs into this branch auto-start.",
+				onSave: save
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+				label: use === "pr" ? "Ignore comments from" : "Ignore issues from",
+				field: "skip_authors",
+				value: text("skip_authors"),
+				placeholder: defaults.skipAuthors || "e.g. dependabot, renovate",
+				hint: "GitHub logins, comma-separated.",
+				onSave: save
+			})]
+		})]
+	}, repo);
+}
+function UseTicks({ repo, fixed, value, onChange, disabledUses = [] }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row ik-uses",
+		role: "group",
+		"aria-label": "Use " + (repo || "this repository") + " for",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-label",
+			children: "Use it for"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ik-uses-row",
+			children: REPO_USES.map((u) => {
+				const locked = u === fixed || disabledUses.includes(u);
+				const on = value.includes(u);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ik-use" + (locked ? " locked" : ""),
+					"data-use": u,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: on,
+							disabled: locked,
+							onChange: (e) => onChange(e.target.checked ? [...value, u] : value.filter((x) => x !== u))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: fixed ? USE_LABEL[u] : USE_SENTENCE[u] }),
+						disabledUses.includes(u) && u !== fixed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-use-note",
+							children: "already"
+						}) : null
+					]
+				}, u);
+			})
+		})]
+	});
+}
+var PANEL_OF = {
+	pr: "github-prs",
+	issue: "github-issues"
+};
+function resweep(uses) {
+	for (const u of uses) {
+		const key = PANEL_OF[u];
+		if (key) refreshPanel(key);
+	}
+}
+function usesText(uses) {
+	const names = REPO_USES.filter((u) => uses.includes(u)).map((u) => USE_LABEL[u]);
+	return names.length <= 1 ? names.join("") : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+}
+function TestAccess({ repo, use }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestButton, {
+		label: "Test access",
+		onTest: async () => {
+			if (!REPO_RE.test(repo.trim())) throw new Error("type owner/name first");
+			const r = await api("/api/settings/test/github-repo", { json: { repo: repo.trim() } });
+			if (!r?.ok) throw new Error(r?.error || "test failed");
+			return (r.name || repo) + (r.private ? " (private)" : "") + (r.default_branch ? " · default " + r.default_branch : "") + (r.can_push ? " · can push" : "") + (use === "issue" && !r.can_push ? " · read-only token — issue work can't push a branch" : "");
+		}
+	});
+}
+function RepoEditor({ use, repo, liveBranch }) {
+	const s = useSettings();
+	const uses = usesOf(s.settings, repo);
+	const setUses = (next) => {
+		const patch = usesPatch(s.settings, repo, next);
+		const added = next.filter((u) => !uses.includes(u));
+		const dropped = uses.filter((u) => !next.includes(u));
+		s.saveGroups(patch, added.length ? repo + " — now also " + usesText(added) : repo + " — no longer " + usesText(dropped)).then(() => resweep([...added, ...dropped]));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-editor-body",
+		"data-repo": repo,
+		"data-use": use,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UseTicks, {
+				repo,
+				fixed: use,
+				value: uses,
+				onChange: setUses
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoFields, {
+				use,
+				repo,
+				liveBranch
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-editor-foot",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "test-row",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestAccess, {
+						repo,
+						use
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArmButton, {
+					className: "tk-remove",
+					label: "Remove",
+					armedLabel: "Confirm — stop watching " + repo + (use === "verify" ? "" : " for " + USE_LABEL[use]),
+					title: "Take " + repo + " off this list — its other uses stay",
+					onConfirm: () => {
+						s.saveGroups(usesPatch(s.settings, repo, uses.filter((u) => u !== use)), "Removed " + repo).then(() => resweep([use]));
+					}
+				})]
+			})
+		]
+	});
+}
+var OPT_IN_SNIPPET = "[workspace]\nverify_on_push = true\n";
+function NoRemoteOptIn() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "pr-advanced vf-optin",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Repository without a GitHub remote?" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pr-advanced-body",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				children: [
+					"Commit this as ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ".mindflock.toml" }),
+					" at the repository's root — each new branch pushed there then gets a checklist."
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-snippet",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: OPT_IN_SNIPPET }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => void copyText(OPT_IN_SNIPPET).then((ok) => toast(ok ? "Copied" : "Couldn't copy — select the text instead")),
+					children: "Copy"
+				})]
+			})]
+		})]
+	});
+}
+function AddRepoFlow({ uses: initialUses, trackers = [], onPickTracker, onDone, onCancel, title, liveBranch, only }) {
+	const s = useSettings();
+	const ticketSources = useTicketingSources(true).data || [];
+	const [step, setStep] = (0, import_react.useState)(2);
+	const [slug, setSlug] = (0, import_react.useState)("");
+	const [ticks, setTicks] = (0, import_react.useState)(only ? [only] : initialUses);
+	const [error, setError] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [added, setAdded] = (0, import_react.useState)(null);
+	const repo = slug.trim();
+	const already = REPO_RE.test(repo) ? usesOf(s.settings, repo) : [];
+	const ticketRepos = ticketSources.flatMap((src) => sourceRepos(src).map((r) => githubSlugOf(r.url)));
+	const suggestions = knownRepos(s.settings, ticketRepos).filter((r) => r.toLowerCase() !== repo.toLowerCase());
+	const kinds = trackers.length ? [...trackers, {
+		key: "repo",
+		label: "Repository",
+		sub: "PRs · issues · Verify"
+	}] : [];
+	const commit = async (andContinue) => {
+		if (!REPO_RE.test(repo)) {
+			setError("Type the repository as owner/name — e.g. mindflockai/MindFlock.");
+			return;
+		}
+		const want = [.../* @__PURE__ */ new Set([...already, ...ticks])];
+		if (!ticks.length && !already.length) {
+			setError("Tick at least one use.");
+			return;
+		}
+		setError("");
+		setBusy(true);
+		try {
+			const fresh = ticks.filter((u) => !already.includes(u));
+			const patch = usesPatch(s.settings, repo, want);
+			if (Object.keys(patch).length) {
+				await s.saveGroups(patch, "Added " + repo + (fresh.length ? " — " + usesText(fresh) : ""));
+				resweep(fresh);
+			}
+			const shown = ticks.length ? ticks : already;
+			setAdded({
+				repo,
+				uses: shown
+			});
+			if (andContinue) setStep(3);
+			else onDone(repo, shown);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddFlowShell, {
+		title,
+		step,
+		kinds,
+		picked: "repo",
+		onPick: (k) => {
+			if (k !== "repo") onPickTracker?.(k);
+		},
+		onCancel,
+		cancelLabel: step === 3 ? "Close" : "Cancel",
+		footer: step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-add-error",
+				role: "alert",
+				children: error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ik-quiet-btn",
+				disabled: busy,
+				onClick: () => void commit(false),
+				children: "Finish with defaults"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary",
+				id: "ik-add-next",
+				disabled: busy || !repo,
+				onClick: () => void commit(true),
+				children: busy ? "Adding…" : "Add & continue ›"
+			})
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ik-add-error" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "btn-primary",
+			id: "ik-add-finish",
+			onClick: () => added && onDone(added.repo, added.uses),
+			children: "Finish"
+		})] }),
+		children: step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-add-body",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "set-label",
+							htmlFor: "ik-add-repo",
+							children: "Repository"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "ik-repo-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "ik-add-repo",
+								autoFocus: true,
+								autoComplete: "off",
+								spellCheck: false,
+								list: "ik-add-repo-known",
+								placeholder: "owner/name — e.g. mindflockai/MindFlock",
+								value: slug,
+								className: error && !REPO_RE.test(repo) ? "field-missing" : "",
+								onChange: (e) => {
+									setSlug(e.target.value);
+									setError("");
+								},
+								onKeyDown: (e) => {
+									if (e.key === "Enter") {
+										e.preventDefault();
+										commit(true);
+									}
+								}
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestAccess, {
+								repo,
+								use: ticks.includes("issue") ? "issue" : void 0
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", {
+							id: "ik-add-repo-known",
+							children: suggestions.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: r }, r))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [only === "verify" ? "Each new branch pushed in it gets a checklist. " : "", suggestions.length ? "Any clone counts. Known: " + suggestions.slice(0, 3).join(", ") + (suggestions.length > 3 ? "…" : "") : "Any clone of it counts — it is matched by its GitHub remote, not its path."]
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, { needFor: "a repository can't be read without it" }),
+				!only && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UseTicks, {
+					repo,
+					value: [.../* @__PURE__ */ new Set([...ticks, ...already])],
+					disabledUses: already,
+					onChange: (next) => setTicks(next.filter((u) => !already.includes(u)))
+				}),
+				!only ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint ik-uses-hint",
+					children: "Each tick adds it to that list. Nothing auto-starts until that tab's switch is on."
+				}) : null,
+				(only === "verify" || ticks.includes("verify")) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NoRemoteOptIn, {})
+			]
+		}) : added ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-add-body",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint ik-add-done",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: added.repo }),
+					" is on the list for ",
+					usesText(added.uses),
+					". Blank fields inherit the defaults — change any now, or later with ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+					" on its heading."
+				]
+			}), REPO_USES.filter((u) => added.uses.includes(u)).map((u) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-add-use",
+				children: [added.uses.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "ik-editor-h",
+					children: USE_LABEL[u]
+				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoFields, {
+					use: u,
+					repo: added.repo,
+					liveBranch
+				})]
+			}, u))]
+		}) : null
+	});
+}
+//#endregion
 //#region src/components/intake/TicketsTab.tsx
 function IngestionToggle({ sourceCount, broken }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -72681,7 +73586,7 @@ function IngestionToggle({ sourceCount, broken }) {
 			if (next && broken.length) setAsking(true);
 			else toggle(next);
 		},
-		note: !sourceCount ? "Add a ticket source below first" : paused ? "Intake is paused — Resume intake at the top turns it back on" : desired && broken.length ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed" : void 0
+		note: !sourceCount ? "Add a ticket source first — + Add source" : paused ? "Intake is paused — Resume intake at the top turns it back on" : desired && broken.length ? names + " can't connect — nothing starts from " + (one ? "it" : "them") + " until fixed" : void 0
 	}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		id: "tk-ingestion-confirm",
 		title: names + " can't connect.",
@@ -72712,12 +73617,11 @@ function sourceDisplayName(source, catalog) {
 	const namesProvider = [provName, source.provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length)));
 	return !detail ? provName : namesProvider ? detail : provName + " — " + detail;
 }
-function TicketsTab({ gotoTab }) {
+function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 	const catalog = useTicketingCatalog(true).data || EMPTY_CATALOG;
 	const savedSources = useTicketingSources(true);
 	const agents = useAgentChoices$1().data || EMPTY_AGENTS;
 	const [sources, setSources] = (0, import_react.useState)(savedSources.data ?? null);
-	const [collapsed, setCollapsed] = (0, import_react.useState)(() => new Set((savedSources.data || []).map((s) => s.id)));
 	const seeded = (0, import_react.useRef)(savedSources.data !== void 0);
 	const storedIds = (0, import_react.useRef)(new Set((savedSources.data || []).map((s) => s.id)));
 	const seq = (0, import_react.useRef)(0);
@@ -72746,6 +73650,23 @@ function TicketsTab({ gotoTab }) {
 		return next;
 	});
 	const ticketsPanel = usePanelQuery("tickets");
+	const edit = useEditing(focus);
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [flowError, setFlowError] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [dismissed, setDismissed] = (0, import_react.useState)(false);
+	const handedOver = (0, import_react.useRef)("");
+	const beginDraftRef = (0, import_react.useRef)(null);
+	const wanted = adding?.kind === "tracker" ? adding.provider || "" : "";
+	(0, import_react.useEffect)(() => {
+		if (!wanted || handedOver.current === wanted) return;
+		if (!beginDraftRef.current) return;
+		handedOver.current = wanted;
+		beginDraftRef.current(wanted);
+	});
+	(0, import_react.useEffect)(() => {
+		if (!adding) handedOver.current = "";
+	}, [adding]);
 	(0, import_react.useEffect)(() => {
 		if (seeded.current) return;
 		if (savedSources.data === void 0) {
@@ -72758,7 +73679,6 @@ function TicketsTab({ gotoTab }) {
 		seeded.current = true;
 		storedIds.current = new Set(savedSources.data.map((s) => s.id));
 		setSources(savedSources.data);
-		setCollapsed(new Set(savedSources.data.map((s) => s.id)));
 	}, [savedSources.data, savedSources.isError]);
 	const runTest = (0, import_react.useCallback)(async (src, meta) => {
 		const payload = {
@@ -72923,31 +73843,119 @@ function TicketsTab({ gotoTab }) {
 			});
 		}
 	};
-	const remove = (id) => {
+	const remove = (id, quiet = false) => {
 		const list = latest.current || [];
 		const gone = list.find((s) => s.id === id);
 		const next = list.filter((s) => s.id !== id);
 		latest.current = next;
 		setSources(next);
-		persist(next);
-		if (gone && storedIds.current.has(id)) toast("Removed " + sourceDisplayName(gone, catalog));
+		if (storedIds.current.has(id)) persist(next);
+		if (gone && storedIds.current.has(id) && !quiet) toast("Removed " + sourceDisplayName(gone, catalog));
+		if (edit.editing === id) edit.close();
 	};
-	const add = () => {
-		const id = uniqueId("new");
+	const beginDraft = (provider) => {
+		let list = latest.current || [];
+		if (draft) {
+			if (storedIds.current.has(draft.id)) remove(draft.id, true);
+			list = (latest.current || []).filter((x) => x.id !== draft.id);
+		}
+		const id = uniqueId(prefixFor(provider), list);
 		const fresh = {
 			id,
-			provider: "",
+			provider,
 			needs_filter: "on"
 		};
-		latest.current = [...latest.current || [], fresh];
+		latest.current = [...list, fresh];
 		setSources(latest.current);
-		setCollapsed((prev) => {
-			const next = new Set(prev);
-			next.delete(id);
-			return next;
+		setDraft({
+			id,
+			step: 2
 		});
+		setFlowError("");
 	};
-	const stored = sources.filter((s) => storedIds.current.has(s.id));
+	const dropDraft = () => {
+		if (draft) {
+			if (storedIds.current.has(draft.id)) remove(draft.id, true);
+			else {
+				latest.current = (latest.current || []).filter((x) => x.id !== draft.id);
+				setSources(latest.current);
+			}
+		}
+		setDraft(null);
+		setFlowError("");
+	};
+	const closeAdd = () => {
+		dropDraft();
+		endAdd();
+		setDismissed(true);
+	};
+	beginDraftRef.current = beginDraft;
+	const draftSource = draft ? sources.find((x) => x.id === draft.id) || null : null;
+	const draftMeta = draftSource ? catalog.find((p) => p.id === draftSource.provider) || null : null;
+	const saveDraft = async () => {
+		await new Promise((r) => setTimeout(r, 0));
+		if (!draft) return null;
+		await persist(latest.current || [], { changed: draft.id });
+		const src = (latest.current || []).find((x) => x.id === draft.id) || null;
+		if (!src || !storedIds.current.has(draft.id)) {
+			setFlowError("Fill in the marked fields first.");
+			return null;
+		}
+		return src;
+	};
+	const testAndContinue = async (skip = false) => {
+		if (!draft || busy) return;
+		setBusy(true);
+		try {
+			const src = await saveDraft();
+			if (!src) return;
+			if (!skip) try {
+				await runTest(src, draftMeta);
+			} catch (err) {
+				setFlowError("Test failed — " + (err.message || "no answer") + ". Fix it, or continue anyway.");
+				return;
+			}
+			setFlowError("");
+			setDraft({
+				id: draft.id,
+				step: 3
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	const finish = async () => {
+		if (!draft || busy) return;
+		setBusy(true);
+		try {
+			const src = await saveDraft();
+			if (!src) return;
+			const anyone = src.assignee_scope === "anyone";
+			const hasFilter = savedFilter(src).length > 0 || savedLabels(src).length > 0;
+			if (anyone && !hasFilter) {
+				setFlowError("Anyone's needs at least one state to take tickets from — pick one, or set Whose tickets back to Assigned to me.");
+				return;
+			}
+			if (Object.keys(errors[draft.id] || {}).length) {
+				setFlowError("Fix the marked fields first.");
+				return;
+			}
+			if (!sourceRepos(src).length) {
+				setFlowError("Add the repository its tickets are worked on (Repo URL).");
+				return;
+			}
+			const name = sourceDisplayName(src, catalog);
+			setDraft(null);
+			setFlowError("");
+			endAdd();
+			setDismissed(true);
+			refreshPanel("tickets");
+			toast("Added " + name + (hasFilter ? "" : " — nothing auto-starts until you pick a state"));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const stored = sources.filter((s) => storedIds.current.has(s.id) && s.id !== draft?.id);
 	const panelErrors = new Map((ticketsPanel.data?.errors || []).map((e) => [e.source, e.error]));
 	const broken = stored.flatMap((s) => {
 		const name = sourceDisplayName(s, catalog);
@@ -72958,7 +73966,185 @@ function TicketsTab({ gotoTab }) {
 			why: friendlySourceError(name, raw)
 		}] : [];
 	});
+	const headOf = (id, listError) => {
+		const src = sources.find((x) => x.id === id);
+		if (!src) return {
+			broken: false,
+			message: ""
+		};
+		const meta = catalog.find((p) => p.id === src.provider) || null;
+		const name = sourceDisplayName(src, catalog);
+		if (Object.keys(errors[id] || {}).length) return {
+			broken: true,
+			message: "not saved — fix the marked fields"
+		};
+		const t = tests[id];
+		if (t && !t.testing && t.msg && !t.ok) return {
+			broken: true,
+			message: "can't connect — " + t.msg
+		};
+		if (listError) return {
+			broken: true,
+			message: "can't connect — " + friendlySourceError(name, listError, true).replace(name + " ", "").replace(/\.$/, "")
+		};
+		const verdict = sourceTestState(src, meta);
+		const last = lastTestOf(src);
+		if (verdict.state === "off") return {
+			broken: true,
+			message: "no credentials yet"
+		};
+		if (last && !last.ok) return {
+			broken: true,
+			message: "can't connect — " + (last.message || "the last test failed")
+		};
+		if (last && missingAutoFields(meta, src).length) return {
+			broken: true,
+			message: verdict.message
+		};
+		return {
+			broken: false,
+			message: ""
+		};
+	};
+	const editorFor = (id) => {
+		const src = sources.find((x) => x.id === id);
+		if (!src) return null;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketSourceEditor, {
+			section: "edit",
+			source: src,
+			catalog,
+			agents,
+			fieldErrors: errors[src.id],
+			save: saves[src.id],
+			dirty: (dirty[src.id] || []).length > 0,
+			onDirty: (key, on) => markDirty(src.id, key, on),
+			gotoTab,
+			saved: storedIds.current.has(src.id),
+			listError: panelErrors.get(src.id),
+			test: tests[src.id],
+			onTest: () => runTest(src, catalog.find((p) => p.id === src.provider) || null),
+			onChange: (patch) => update(src.id, patch),
+			onRemove: () => remove(src.id)
+		});
+	};
+	const showAdd = !!adding || !!draft || !stored.length && !dismissed;
+	const trackerKinds = catalog.map((p) => ({
+		key: p.id,
+		label: p.label,
+		sub: p.id === "github_issues" ? "assigned to me" : void 0
+	}));
+	const addFlow = !showAdd ? null : adding?.kind === "repo" && !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
+		uses: adding.uses?.length ? adding.uses : ["pr"],
+		trackers: trackerKinds,
+		onPickTracker: (provider) => {
+			endAdd();
+			beginDraft(provider);
+		},
+		onCancel: closeAdd,
+		onDone: () => closeAdd()
+	}, "add-repo") : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddFlowShell, {
+		step: draft ? draft.step : 1,
+		kinds: [...trackerKinds, {
+			key: "repo",
+			label: "Repository",
+			sub: "PRs · issues · Verify"
+		}],
+		picked: draftSource?.provider || "",
+		onPick: (key) => {
+			if (key === "repo") {
+				dropDraft();
+				startAdd({
+					kind: "repo",
+					uses: ["pr"]
+				});
+			} else if (key !== draftSource?.provider) beginDraft(key);
+		},
+		onCancel: closeAdd,
+		footer: !draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "ik-add-hint",
+			children: [
+				"Pick the tracker your tickets live in — or ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Repository" }),
+				" to watch a GitHub repository's PRs, issues or what ships."
+			]
+		}) : draft.step === 2 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ik-add-error",
+				role: "alert",
+				children: [flowError, flowError.startsWith("Test failed") ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => void testAndContinue(true),
+					children: "Continue anyway"
+				})] }) : null]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ik-quiet-btn",
+				onClick: dropDraft,
+				children: "‹ Back"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary",
+				id: "ik-add-next",
+				disabled: busy,
+				onClick: () => void testAndContinue(),
+				children: busy ? "Testing…" : "Test & continue ›"
+			})
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-add-error",
+				role: "alert",
+				children: flowError
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ik-quiet-btn",
+				onClick: () => setDraft({
+					id: draft.id,
+					step: 2
+				}),
+				children: "‹ Back"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary",
+				id: "ik-add-finish",
+				disabled: busy,
+				onClick: () => void finish(),
+				children: "Finish"
+			})
+		] }),
+		children: draftSource ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ik-add-body",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketSourceEditor, {
+				section: draft.step === 2 ? "connect" : "setup",
+				source: draftSource,
+				catalog,
+				agents,
+				fieldErrors: errors[draftSource.id],
+				save: saves[draftSource.id],
+				dirty: (dirty[draftSource.id] || []).length > 0,
+				onDirty: (key, on) => markDirty(draftSource.id, key, on),
+				gotoTab,
+				onAddRepo: () => {
+					dropDraft();
+					startAdd({
+						kind: "repo",
+						uses: ["issue"]
+					});
+				},
+				saved: storedIds.current.has(draftSource.id),
+				test: tests[draftSource.id],
+				onTest: () => runTest(draftSource, draftMeta),
+				onChange: (patch) => update(draftSource.id, patch),
+				onRemove: dropDraft
+			})
+		}) : null
+	}, "add-tracker");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
@@ -72971,61 +74157,33 @@ function TicketsTab({ gotoTab }) {
 			sourceCount: stored.length,
 			broken
 		}),
-		stored.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
+		stored.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
 			sources: stored,
 			catalog,
 			agents: agents.names,
 			sourceAgents: Object.fromEntries(sources.map((s) => [s.id, s.agent || agents.fallback || ""])),
 			defaultAgent: agents.fallback,
 			sourceDepths: Object.fromEntries(sources.map((s) => [s.id, s.depth || ""])),
-			sourceEfforts: Object.fromEntries(sources.map((s) => [s.id, s.effort || ""]))
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			sourceEfforts: Object.fromEntries(sources.map((s) => [s.id, s.effort || ""])),
+			editing: edit.editing,
+			onEdit: edit.toggle,
+			onOpenEditor: edit.open,
+			headOf,
+			editorFor
+		}) : !showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Ticket sources"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "ticketing-sources",
-					className: "ik-cards",
-					children: sources.map((src) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketSourceCard, {
-						source: src,
-						catalog,
-						agents,
-						collapsed: collapsed.has(src.id),
-						onToggle: () => setCollapsed((prev) => {
-							const next = new Set(prev);
-							if (next.has(src.id)) next.delete(src.id);
-							else next.add(src.id);
-							return next;
-						}),
-						fieldErrors: errors[src.id],
-						save: saves[src.id],
-						dirty: (dirty[src.id] || []).length > 0,
-						onDirty: (key, on) => markDirty(src.id, key, on),
-						gotoTab,
-						saved: storedIds.current.has(src.id),
-						listError: panelErrors.get(src.id),
-						test: tests[src.id],
-						onTest: () => runTest(src, catalog.find((p) => p.id === src.provider) || null),
-						onChange: (patch) => update(src.id, patch),
-						onRemove: () => remove(src.id)
-					}, src.id))
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "set-row",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "ticketing-add",
-						className: "btn-primary",
-						onClick: add,
-						children: "+ Add ticket source"
-					})
-				})
-			]
-		})
+			id: "ticketing-sources",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "repo-empty ik-empty-add",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "No ticket source yet — connect Shortcut, Jira, Linear, Asana or GitHub Issues." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "ticketing-add",
+					className: "test-btn",
+					onClick: () => startAdd({ kind: null }),
+					children: "+ Add a ticket source"
+				})]
+			})
+		}) : null
 	] });
 }
 function StatePicker({ field, source, states, loadStates, onChange }) {
@@ -73224,7 +74382,7 @@ function claimedBy(err) {
 var BUCKETS_OPEN_LS_KEY = "mf_ticket_buckets_open";
 var SOURCES_CLOSED_LS_KEY = "mf_intake_ticket_sources";
 var WORKFLOWS_CLOSED_LS_KEY = "mf_intake_ticket_workflows";
-function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent, sourceDepths, sourceEfforts }) {
+function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent, sourceDepths, sourceEfforts, editing, onEdit, onOpenEditor, headOf, editorFor }) {
 	const ticketsQuery = usePanelQuery("tickets");
 	const load = ticketsQuery.refresh;
 	const relistTickets = ticketsQuery.refetch;
@@ -73247,7 +74405,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	const bucketMeta = ticketsQuery.data?.bucket_meta || {};
 	const groupOf = (b) => bucketMeta[b]?.group || "";
 	const labelOf = (b) => bucketMeta[b]?.label || b;
-	const listedSources = (ticketsQuery.data?.sources || []).filter((s) => configured.has(s));
+	(ticketsQuery.data?.sources || []).filter((s) => configured.has(s));
 	const sourceErrors = new Map((ticketsQuery.data?.errors || []).filter((e) => configured.has(e.source)).map((e) => [e.source, e.error]));
 	const error = ticketsQuery.error ? "Could not list tickets: " + (ticketsQuery.error.message || "error") : "";
 	const note = panelNote({
@@ -73287,11 +74445,8 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		if (!inner.has(b)) inner.set(b, []);
 		inner.get(b).push(t);
 	}
-	const sourceOrder = filter.active ? [...bySource.keys()] : [
-		...listedSources,
-		...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
-		...[...bySource.keys()].filter((s) => !listedSources.includes(s) && !sourceErrors.has(s))
-	];
+	const sourceOrder = sources.map((s) => s.id);
+	const matched = filter.active ? [...bySource.values()].reduce((n, m) => n + [...m.values()].flat().length, 0) : -1;
 	const hideBucket = (b) => {
 		const next = (shown ?? visible).filter((x) => x !== b);
 		setShown(next);
@@ -73318,20 +74473,25 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	};
 	const only = sourceOrder.length === 1 ? filterOf(sourceOrder[0]) : null;
 	const ingestSummary = !only ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		"Each source's heading says which tickets it auto-starts; ",
+		"Each source's heading says which tickets it auto-starts — press it to change them;",
+		" ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any ticket now."
 	] }) : only.kind === "waiting" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		"This source auto-starts ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "nothing" }),
-		" until you pick a state on its card.",
+		" until you pick a state — press",
 		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+		" on its heading. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any ticket now."
 	] }) : only.kind === "none" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		"Auto-start takes tickets in ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "every state" }),
-		" — pick states on the source card to narrow it. ",
+		" — press ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+		" on its heading to narrow it. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any ticket now."
 	] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -73344,6 +74504,8 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 		" starts any other ticket now."
 	] });
+	const hiddenCount = hidden.length;
+	const viewLabel = "View: " + (hasOthers ? (mineOnly ? "only mine" : "everyone's") + " · " : "") + (hiddenCount ? hiddenCount + (hiddenCount === 1 ? " state hidden" : " states hidden") : "all states");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: hasOthers ? "Ticket queue" : "Assigned tickets",
 		onRefresh: load,
@@ -73352,47 +74514,60 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 		refreshId: "tk-tickets-refresh",
 		noteId: "tk-tickets-note",
 		listId: "tk-tickets-list",
-		toolbarExtra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			tickets && tickets.length ? filter.control : null,
-			hasOthers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				id: "tk-mine-filter",
-				className: "tk-mine-filter",
-				value: mineOnly ? "mine" : "all",
-				title: "Whose tickets this panel lists",
-				onChange: (e) => {
-					const next = e.target.value === "mine";
-					setMineOnly(next);
-					saveMineOnly(next);
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "all",
-					children: "Everyone's tickets"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "mine",
-					children: "Only mine"
+		toolbarExtra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [tickets && tickets.length ? filter.control : null, buckets.length || hasOthers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ViewMenu, {
+			id: "tk-view",
+			label: viewLabel,
+			title: "Which tickets this panel shows — on this browser only; what auto-starts is on each source's heading",
+			children: [hasOthers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-view-sec",
+				role: "radiogroup",
+				"aria-label": "Whose tickets this panel lists",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ik-view-h",
+					children: "Whose tickets"
+				}), ["all", "mine"].map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "ik-view-opt",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "tk-mine-filter",
+						id: v === "mine" ? "tk-mine-filter" : void 0,
+						checked: v === "mine" === mineOnly,
+						onChange: () => {
+							setMineOnly(v === "mine");
+							saveMineOnly(v === "mine");
+						}
+					}), v === "mine" ? "Only mine" : "Everyone's"]
+				}, v))]
+			}) : null, buckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-view-sec",
+				"aria-label": "Workflow states this panel shows",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ik-view-h",
+					children: "States shown"
+				}), buckets.map((b) => {
+					const on = visible.includes(b);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ik-view-opt",
+						"data-bucket": b,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: on,
+								onChange: () => on ? hideBucket(b) : addBucket(b)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ik-view-name",
+								children: b
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ik-view-n",
+								children: countAll.get(b) || 0
+							})
+						]
+					}, b);
 				})]
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				id: "tk-bucket-add",
-				className: "tk-bucket-add",
-				value: "",
-				disabled: !hidden.length,
-				title: "Show another workflow state in this panel",
-				onChange: (e) => addBucket(e.target.value),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "",
-					children: hidden.length ? "+ Show state…" : "All states shown"
-				}), hidden.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-					value: b,
-					children: [
-						b,
-						" (",
-						countAll.get(b) || 0,
-						")"
-					]
-				}, b))]
-			})
-		] }),
+			}) : null]
+		}) : null] }),
 		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			ingestSummary,
 			" ",
@@ -73401,126 +74576,148 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 				" ",
 				parkedDone.length === 1 ? "is" : "are",
 				" ",
-				"hidden — add ",
+				"hidden — show ",
 				parkedDone.length === 1 ? "it" : "them",
-				" back with",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "+ Show state…" }),
+				" from ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "View" }),
 				"."
 			] }) : null
 		] }),
-		children: [error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: error
-		}) : tickets === null ? null : !visible.length && buckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: "All states are hidden — pick one from the “+ Show state…” menu above."
-		}) : !sourceOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: filter.active ? "No ticket matches “" + filter.query + "”." : mineOnly && hasOthers ? "None of the tickets here are yours — switch to Everyone's tickets to see them." : "No tickets are assigned to you on the connected sources."
-		}) : sourceOrder.map((src) => {
-			const inner = bySource.get(src) || /* @__PURE__ */ new Map();
-			const shownBuckets = visible.filter((b) => (inner.get(b) || []).length);
-			const total = shownBuckets.reduce((n, b) => n + (inner.get(b) || []).length, 0);
-			const srcError = sourceErrors.get(src);
-			const label = nameOf(src);
-			const filt = filterOf(src);
-			const workflows = [];
-			for (const b of shownBuckets) {
-				const g = groupOf(b);
-				if (!workflows.includes(g)) workflows.push(g);
-			}
-			const nestWorkflows = workflows.filter(Boolean).length > 1;
-			const bucketsOf = (wf) => shownBuckets.filter((b) => wf === null || groupOf(b) === wf).map((b) => {
-				const rows = inner.get(b) || [];
-				const key = src + "::" + b;
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-					indent: true,
-					name: wf === null ? b : labelOf(b),
-					count: rows.length,
-					open: openBuckets.isOpen(key),
-					onToggle: () => openBuckets.toggle(key),
-					onHide: () => hideBucket(b),
-					hideTitle: "Hide " + b + " in this list (show it again from “+ Show state…”)",
-					children: rows.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTicketRow, {
-						t,
-						all: tickets || [],
-						agents,
-						configuredAgent: sourceAgents[t.source] || defaultAgent,
-						configuredDepth: sourceDepths[t.source] || "",
-						configuredEffort: sourceEfforts[t.source] || "",
-						onStarted: relistTickets,
-						eligibleLabel,
-						autoOn,
-						pick: {
-							checked: picked.has(pickKey(t)),
-							onChange: (on) => setPick(t, on)
-						}
-					}, t.source + ":" + t.id))
-				}, key);
-			});
-			const buckets = srcError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty ik-source-error",
-				children: friendlySourceError(label, srcError)
-			}) : !inner.size ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: [
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "repo-empty",
-				children: "No tickets are assigned to you on this source."
-			}) : !shownBuckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "repo-empty",
-				children: "No tickets from this source in the states you're showing."
-			}) : !nestWorkflows ? bucketsOf(null) : workflows.map((wf) => {
-				const n = shownBuckets.filter((b) => groupOf(b) === wf).reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
-				const key = src + "::wf::" + wf;
+				children: error
+			}) : null,
+			tickets !== null && !visible.length && buckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ik-nomatch",
+				children: "All states are hidden — pick some under View."
+			}) : null,
+			matched === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ik-nomatch",
+				children: [
+					"No ticket matches “",
+					filter.query,
+					"”."
+				]
+			}) : null,
+			sourceOrder.map((src) => {
+				const inner = bySource.get(src) || /* @__PURE__ */ new Map();
+				const shownBuckets = visible.filter((b) => (inner.get(b) || []).length);
+				const total = shownBuckets.reduce((n, b) => n + (inner.get(b) || []).length, 0);
+				const srcError = sourceErrors.get(src);
+				const label = nameOf(src);
+				const filt = filterOf(src);
+				const head = headOf(src, srcError);
+				const isEditing = editing === src;
+				const scope = configured.get(src)?.assignee_scope === "anyone" ? "anyone's · " : "";
+				const workflows = [];
+				for (const b of shownBuckets) {
+					const g = groupOf(b);
+					if (!workflows.includes(g)) workflows.push(g);
+				}
+				const nestWorkflows = workflows.filter(Boolean).length > 1;
+				const bucketsOf = (wf) => shownBuckets.filter((b) => wf === null || groupOf(b) === wf).map((b) => {
+					const rows = inner.get(b) || [];
+					const key = src + "::" + b;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+						indent: true,
+						name: wf === null ? b : labelOf(b),
+						count: rows.length,
+						open: openBuckets.isOpen(key),
+						onToggle: () => openBuckets.toggle(key),
+						children: rows.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTicketRow, {
+							t,
+							all: tickets || [],
+							agents,
+							configuredAgent: sourceAgents[t.source] || defaultAgent,
+							configuredDepth: sourceDepths[t.source] || "",
+							configuredEffort: sourceEfforts[t.source] || "",
+							onStarted: relistTickets,
+							eligibleLabel,
+							autoOn,
+							pick: {
+								checked: picked.has(pickKey(t)),
+								onChange: (on) => setPick(t, on)
+							}
+						}, t.source + ":" + t.id))
+					}, key);
+				});
+				const buckets = tickets === null || filter.active && !total ? null : srcError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty ik-source-error",
+					children: friendlySourceError(label, srcError)
+				}) : !inner.size ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty",
+					children: configured.get(src)?.assignee_scope === "anyone" ? "No tickets in this source's states right now." : "No tickets are assigned to you on this source."
+				}) : !shownBuckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty",
+					children: "No tickets from this source in the states you're showing."
+				}) : !nestWorkflows ? bucketsOf(null) : workflows.map((wf) => {
+					const n = shownBuckets.filter((b) => groupOf(b) === wf).reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
+					const key = src + "::wf::" + wf;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+						indent: true,
+						middle: true,
+						name: wf || "Other states",
+						count: n,
+						open: openWorkflows.isOpen(key),
+						onToggle: () => openWorkflows.toggle(key),
+						children: bucketsOf(wf)
+					}, key);
+				});
+				const detail = filter.active && !total && !head.broken ? "no match" : head.broken ? head.message : filt.kind === "labels" ? scope + "auto-starts tickets with " + filt.text : filt.kind === "waiting" ? scope + "auto-starts nothing yet — pick a state" : scope + "auto-starts " + filt.text;
 				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-					indent: true,
-					middle: true,
-					name: wf || "Other states",
-					count: n,
-					open: openWorkflows.isOpen(key),
-					onToggle: () => openWorkflows.toggle(key),
-					children: bucketsOf(wf)
-				}, key);
-			});
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-				heading: true,
-				name: label,
-				count: total,
-				detail: srcError ? "can't connect" : filt.kind === "labels" ? "auto-starts tickets with " + filt.text : filt.kind === "waiting" ? "auto-starts nothing yet — pick a state on its card" : "auto-starts " + filt.text,
-				open: openSources.isOpen(src),
-				onToggle: () => openSources.toggle(src),
-				children: buckets
-			}, src);
-		}), picked.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ik-pickbar",
-			role: "region",
-			"aria-label": "Picked tickets",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-					picked.size,
-					" ticket",
-					picked.size === 1 ? "" : "s",
-					" ·",
-					" "
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: "tk-start-together",
-					className: "ik-pick-go",
-					onClick: () => {
-						const text = startTogetherText([...picked.values()]);
-						setPicked(/* @__PURE__ */ new Map());
-						useUi.getState().openNewWith(text);
-					},
-					children: "Start together…"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					onClick: () => setPicked(/* @__PURE__ */ new Map()),
-					children: "Clear"
-				})
-			]
-		})]
+					groupKey: src,
+					heading: true,
+					name: label,
+					count: tickets === null ? void 0 : total,
+					detail,
+					detailTone: head.broken ? "bad" : filt.kind === "waiting" ? "warn" : void 0,
+					onDetail: () => onOpenEditor(src),
+					detailTitle: head.broken ? "Fix " + label : "Change which tickets " + label + " auto-starts",
+					open: openSources.isOpen(src),
+					onToggle: () => openSources.toggle(src),
+					action: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadAction, {
+						editing: isEditing,
+						broken: head.broken,
+						name: label,
+						onClick: () => onEdit(src)
+					}),
+					editor: isEditing ? editorFor(src) : void 0,
+					children: buckets
+				}, src);
+			}),
+			picked.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-pickbar",
+				role: "region",
+				"aria-label": "Picked tickets",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						picked.size,
+						" ticket",
+						picked.size === 1 ? "" : "s",
+						" ·",
+						" "
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "tk-start-together",
+						className: "ik-pick-go",
+						onClick: () => {
+							const text = startTogetherText([...picked.values()]);
+							setPicked(/* @__PURE__ */ new Map());
+							useUi.getState().openNewWith(text);
+						},
+						children: "Start together…"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => setPicked(/* @__PURE__ */ new Map()),
+						children: "Clear"
+					})
+				]
+			})
+		]
 	});
 }
 function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, configuredEffort, onStarted, eligibleLabel, autoOn, pick }) {
@@ -73610,7 +74807,7 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		}
 	});
 }
-function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, save, dirty, onDirty, gotoTab, saved, listError, test, onTest, onToggle, onChange, onRemove }) {
+function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, save, dirty, onDirty, gotoTab, onAddRepo, saved, listError, test, onTest, onChange, onRemove }) {
 	const meta = catalog.find((p) => p.id === source.provider) || null;
 	const errs = fieldErrors || {};
 	const unsaved = Object.keys(errs).length > 0;
@@ -73631,10 +74828,6 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, sav
 		const fresh = savedStates(source);
 		if (fresh.length) setStates(fresh);
 	}, [savedStateKey]);
-	const repoNames = sourceRepos(source).map((r) => repoNameOf(r.url));
-	const feeds = repoNames.length > 1 ? repoNames.length + " repos" : repoNames[0] || "";
-	const base = !source.provider ? "New ticket source" : sourceDisplayName(source, catalog) + (feeds && !(source.label || "").trim() ? " · " + feeds : "");
-	const summary = !source.provider ? base : base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
 	const ownGithubToken = source.provider === "github_issues" && source.api_token === "•••set";
 	const testPayload = () => {
 		const payload = {
@@ -73695,79 +74888,53 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, sav
 	const cut = basics.findIndex((f) => f.key === "assignee_scope" || f.type === "state");
 	const credFields = cut < 0 ? basics : basics.slice(0, cut);
 	const filterFields = cut < 0 ? [] : basics.slice(cut);
-	const saveLine = !source.provider ? "Pick a tracker to start" : !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SourceCard, {
-		sourceId: source.id,
-		summary,
-		badge: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
-			state: pillState,
-			label: pillLabel,
-			message: pillMessage
-		}),
-		collapsed,
-		onToggle,
-		footer: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "ik-save-line" + (save?.state === "saved" && saved && !dirty ? " ok" : ""),
-			"data-save": !saved ? "unsaved" : dirty ? "pending" : save?.state || "",
-			role: "status",
-			"aria-live": "polite",
-			children: saveLine
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "test-btn tk-remove",
-			onClick: onRemove,
-			children: "Remove"
-		})] }),
+	const paired = filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
+	const saveLine = !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
+	const name = sourceDisplayName(source, catalog);
+	const showConnect = section !== "setup";
+	const showSetup = section !== "connect";
+	const heads = section === "edit";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-editor-body tk-source-editor",
+		"data-source-id": source.id,
+		"data-section": section,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "Provider"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						className: "tk-provider",
-						value: source.provider,
-						onChange: (e) => {
-							if (e.target.value) onChange({ provider: e.target.value });
-						},
-						children: [!source.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "Choose a tracker…"
-						}) : null, catalog.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: p.id,
-							children: p.label
-						}, p.id))]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint tk-blurb",
-						children: meta?.blurb || (source.provider ? "" : "Shortcut, Jira, Linear, Asana or GitHub Issues.")
-					})
-				]
-			}),
-			source.provider === "github_issues" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint tk-gh-issues-note",
-				role: "note",
-				children: [
-					"Want every new issue in a repo to start on its own?",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike",
-						onClick: () => gotoTab("issues"),
-						children: "Use the GitHub issues tab"
-					}),
-					"."
-				]
-			}) : null,
-			ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint tk-own-token",
-				role: "note",
-				"data-tk-notice": "own-token",
-				children: "This source still has its own token — move it to Settings → Connections → GitHub → Connect (read as a fallback this release, ignored from the next)"
-			}),
-			source.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			showConnect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				heads ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-editor-hrow",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+						className: "ik-editor-h",
+						children: "Connection"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+						state: pillState,
+						label: pillLabel,
+						message: pillMessage
+					})]
+				}) : meta?.blurb ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint tk-blurb",
+					children: meta.blurb
+				}) : null,
+				source.provider === "github_issues" && section === "connect" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint tk-gh-issues-note",
+					role: "note",
+					children: [
+						"Want every new issue in a repo to start on its own?",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => onAddRepo ? onAddRepo() : gotoTab("issues"),
+							children: "Add it as a Repository instead"
+						}),
+						"."
+					]
+				}) : null,
+				ownGithubToken && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint tk-own-token",
+					role: "note",
+					"data-tk-notice": "own-token",
+					children: "This source still has its own token — move it to Settings → Connections → GitHub → Connect (read as a fallback this release, ignored from the next)"
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tk-fields",
 					children: credFields.map(renderField)
@@ -73786,10 +74953,24 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, sav
 							children: pillMessage
 						}) : null]
 					})
-				}),
+				})
+			] }) : null,
+			showSetup ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				heads || section === "setup" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "ik-editor-h",
+					children: "What it takes"
+				}) : null,
+				paired ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-grid ik-grid-2",
+					children: [renderField(filterFields[0]), renderField(filterFields[1])]
+				}) : null,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tk-fields",
-					children: filterFields.map(renderField)
+					children: (paired ? filterFields.slice(2) : filterFields).map(renderField)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "ik-editor-h",
+					children: "Where it goes, and who works it"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoListField, {
 					source,
@@ -73800,31 +74981,59 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, sav
 					onPending: () => onDirty("repos", true),
 					onSettled: () => onDirty("repos", false)
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Agent"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-							className: "tk-agent",
-							"data-tk-field": "agent",
-							value: source.agent || "",
-							onChange: (e) => onChange({ agent: e.target.value }),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "",
-								children: agents.fallback ? `App default (${agents.fallback})` : "App default"
-							}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: n,
-								children: n
-							}, n))]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Which agent works the tickets from this source."
-						})
-					]
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ik-grid ik-grid-2",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Agent"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								className: "tk-agent",
+								"data-tk-field": "agent",
+								value: source.agent || "",
+								onChange: (e) => onChange({ agent: e.target.value }),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: agents.fallback ? `App default (${agents.fallback})` : "App default"
+								}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: n,
+									children: n
+								}, n))]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Works the tickets from this source."
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Fast-track to"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								className: "tk-depth",
+								"data-tk-field": "depth",
+								value: source.depth === "agent" ? "" : source.depth || "",
+								onChange: (e) => onChange({ depth: e.target.value }),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: LANE_LABEL.leave
+								}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: d,
+									children: LANE_LABEL[d]
+								}, d))]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "After the agent finishes. Merge is per ticket only."
+							})
+						]
+					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "tk-advanced",
@@ -73889,37 +75098,27 @@ function TicketSourceCard({ source, catalog, agents, collapsed, fieldErrors, sav
 									})
 								]
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "set-row",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "set-label",
-										children: "Fast-track tickets to"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-										className: "tk-depth",
-										"data-tk-field": "depth",
-										value: source.depth === "agent" ? "" : source.depth || "",
-										onChange: (e) => onChange({ depth: e.target.value }),
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: "",
-											children: LANE_LABEL.leave
-										}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-											value: d,
-											children: LANE_LABEL[d]
-										}, d))]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "set-hint",
-										children: "What happens after the agent finishes: commit, push, open a PR. Merge can only be picked per ticket, so nothing merges unattended."
-									})
-								]
-							}),
 							advancedFields(meta).map(renderField)
 						]
 					})]
 				})
-			] }) : null
+			] }) : null,
+			section === "edit" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-editor-foot",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ik-save-line" + (save?.state === "saved" && saved && !dirty ? " ok" : ""),
+					"data-save": !saved ? "unsaved" : dirty ? "pending" : save?.state || "",
+					role: "status",
+					"aria-live": "polite",
+					children: saveLine
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArmButton, {
+					className: "tk-remove",
+					label: "Remove",
+					armedLabel: "Confirm — remove " + name,
+					title: "Stop taking tickets from " + name + " — its sessions are kept",
+					onConfirm: onRemove
+				})]
+			}) : null
 		]
 	});
 }
@@ -74074,504 +75273,12 @@ function AgentPicker({ label, hint, value, choices, fallbackLabel, onChange }) {
 	});
 }
 //#endregion
-//#region src/components/intake/RepoSources.tsx
-var REPO_RE = /^[^\s/]+\/[^\s/]+$/;
-var VERIFY_PROMPT_MAX = 2e3;
-var VERIFY_TARGET_MAX = 500;
-var nextKey = 1;
-var named = (list) => list.map((c) => c.repo.trim()).filter(Boolean);
-var cardKey = (c) => c.repo || "new-" + c.key;
-function overrideText(o, field) {
-	if (!o) return "";
-	const v = o[field];
-	if (Array.isArray(v)) return v.join(", ");
-	return v == null ? "" : String(v);
-}
-function RepoSourceList({ repos, overrides, onSave, surface, defaults, label, listId, addId, addLabel, emptyText, hint }) {
-	const agents = useAgentChoices();
-	const gh = useGithubConnected(surface === "verify");
-	const [cards, setCards] = (0, import_react.useState)(() => repos.map((r) => ({
-		key: nextKey++,
-		repo: r
-	})));
-	const [expanded, setExpanded] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
-	const [leftEmpty, setLeftEmpty] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
-	const [ov, setOv] = (0, import_react.useState)(() => overrides);
-	const saved = repos.join("\n");
-	const savedOv = JSON.stringify(overrides);
-	(0, import_react.useEffect)(() => {
-		setCards((prev) => {
-			if (named(prev).join("\n") === saved) return prev;
-			const drafts = prev.filter((c) => !c.repo.trim());
-			return [...repos.map((r) => ({
-				key: nextKey++,
-				repo: r
-			})), ...drafts];
-		});
-	}, [saved]);
-	(0, import_react.useEffect)(() => {
-		setOv((prev) => JSON.stringify(prev) === savedOv ? prev : overrides);
-	}, [savedOv]);
-	const keepsRemovedBlocks = surface === "verify";
-	const persist = (list, nextOverrides, msg) => {
-		const slugs = named(list);
-		let kept;
-		if (keepsRemovedBlocks) kept = { ...nextOverrides };
-		else {
-			kept = {};
-			for (const slug of slugs) if (nextOverrides[slug]) kept[slug] = nextOverrides[slug];
-		}
-		setOv(kept);
-		onSave(slugs, kept, msg);
-	};
-	const rename = (key, raw) => {
-		const val = raw.trim();
-		const card = cards.find((c) => c.key === key);
-		if (!card) return raw;
-		if (val === card.repo) return val;
-		if (val && !REPO_RE.test(val)) {
-			toast("Use owner/name, e.g. MindFlock/MindFlock");
-			return card.repo;
-		}
-		if (val && cards.some((c) => c.key !== key && c.repo.toLowerCase() === val.toLowerCase())) {
-			toast(val + " is already in the list");
-			return card.repo;
-		}
-		if (!val && card.repo) {
-			toast("Repository can't be blank — use Remove to stop watching " + card.repo);
-			return card.repo;
-		}
-		const next = cards.map((c) => c.key === key ? {
-			...c,
-			repo: val
-		} : c);
-		setCards(next);
-		const moved = { ...ov };
-		if (card.repo && moved[card.repo]) {
-			moved[val] = moved[card.repo];
-			delete moved[card.repo];
-		}
-		setExpanded((prev) => {
-			const was = cardKey(card);
-			if (!prev.has(was)) return prev;
-			const nextSet = new Set(prev);
-			nextSet.delete(was);
-			nextSet.add(val);
-			return nextSet;
-		});
-		persist(next, moved, card.repo ? "Renamed to " + val : "Added " + val);
-		return val;
-	};
-	const patch = (repo, field, value) => {
-		const next = { ...ov };
-		const block = { ...next[repo] || {} };
-		const v = value.trim();
-		if (!v) delete block[field];
-		else if (field === "skip_authors") block.skip_authors = v.split(",").map((x) => x.trim()).filter(Boolean);
-		else if (field === "min_age_minutes") block.min_age_minutes = v;
-		else block[field] = v;
-		if (Object.keys(block).length) next[repo] = block;
-		else delete next[repo];
-		persist(cards, next, "Saved " + repo);
-	};
-	const remove = (key) => {
-		const card = cards.find((c) => c.key === key);
-		const next = cards.filter((c) => c.key !== key);
-		setCards(next);
-		const moved = { ...ov };
-		if (card?.repo && !keepsRemovedBlocks) delete moved[card.repo];
-		persist(next, moved, card?.repo ? "Removed " + card.repo : "Removed the empty card");
-	};
-	const add = () => {
-		const key = nextKey++;
-		setCards((prev) => [...prev, {
-			key,
-			repo: ""
-		}]);
-		setExpanded((prev) => new Set(prev).add("new-" + key));
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: label
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				id: listId,
-				className: "ik-cards",
-				children: !cards.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "repo-empty",
-					children: emptyText
-				}) : cards.map((card) => {
-					const o = ov[card.repo];
-					const agent = o?.agent || "";
-					const depth = o?.depth === "agent" ? "" : o?.depth || "";
-					const live = o?.live_branch || defaults.liveBranch;
-					const summary = surface === "verify" ? (card.repo || "New repository") + (live ? " · live: " + live : "") : (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(SourceCard, {
-						sourceId: card.repo || "new-" + card.key,
-						summary,
-						collapsed: !expanded.has(cardKey(card)),
-						onToggle: () => setExpanded((prev) => {
-							const next = new Set(prev);
-							const k = cardKey(card);
-							if (next.has(k)) next.delete(k);
-							else next.add(k);
-							return next;
-						}),
-						footer: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TestButton, {
-							label: "Test access",
-							onTest: async () => {
-								const r = await api("/api/settings/test/github-repo", { json: { repo: card.repo } });
-								if (!r?.ok) throw new Error(r?.error || "test failed");
-								return (r.name || card.repo) + (r.private ? " (private)" : "") + (r.default_branch ? " · default " + r.default_branch : "") + (surface === "issue" && !r.can_push ? " · read-only token — issue work can't push a branch" : "");
-							}
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn tk-remove",
-							onClick: () => remove(card.key),
-							children: "Remove"
-						})] }),
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-								className: "set-row",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "set-label",
-										children: "Repository"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-										type: "text",
-										autoComplete: "off",
-										spellCheck: false,
-										required: true,
-										"data-repo-field": "repo",
-										className: !card.repo && leftEmpty.has(card.key) ? "field-missing" : "",
-										placeholder: "owner/name — e.g. mindflockai/MindFlock",
-										defaultValue: card.repo,
-										onBlur: (e) => {
-											e.target.value = rename(card.key, e.target.value);
-											const empty = !e.target.value.trim();
-											setLeftEmpty((prev) => {
-												if (prev.has(card.key) === empty) return prev;
-												const next = new Set(prev);
-												if (empty) next.add(card.key);
-												else next.delete(card.key);
-												return next;
-											});
-										},
-										onKeyDown: (e) => {
-											if (e.key === "Enter") e.target.blur();
-										}
-									}),
-									!card.repo && leftEmpty.has(card.key) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "set-hint ik-field-error",
-										role: "alert",
-										children: "Required — type owner/name, then press Enter."
-									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "set-hint",
-										children: surface === "verify" ? "Any clone of it counts." : "Press Enter to save. Separate from the other GitHub tab's list."
-									})
-								]
-							}),
-							surface === "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Branch that ships"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "text",
-											autoComplete: "off",
-											spellCheck: false,
-											"data-repo-field": "live_branch",
-											disabled: !card.repo,
-											placeholder: live || "main",
-											defaultValue: o?.live_branch || "",
-											onBlur: (e) => {
-												if (e.target.value.trim() !== (o?.live_branch || "")) patch(card.repo, "live_branch", e.target.value);
-											},
-											onKeyDown: (e) => {
-												if (e.key === "Enter") e.target.blur();
-											}
-										}, "lb-" + card.repo),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "set-hint",
-											children: [
-												"Blank uses ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.liveBranch || "main" }),
-												"."
-											]
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Wait after merge (minutes)"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "number",
-											min: 0,
-											step: 1,
-											autoComplete: "off",
-											"data-repo-field": "deploy_delay_minutes",
-											disabled: !card.repo,
-											placeholder: defaults.deployDelay || "5",
-											defaultValue: o?.deploy_delay_minutes || "",
-											onBlur: (e) => {
-												if (e.target.value.trim() !== (o?.deploy_delay_minutes || "")) patch(card.repo, "deploy_delay_minutes", e.target.value);
-											},
-											onKeyDown: (e) => {
-												if (e.key === "Enter") e.target.blur();
-											}
-										}, "dd-" + card.repo),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "set-hint",
-											children: [
-												"Time to deploy before checking; 0 = no deploy. Blank uses",
-												" ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.deployDelay || "5" }),
-												"."
-											]
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Where it runs (optional)"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "text",
-											autoComplete: "off",
-											spellCheck: false,
-											"data-repo-field": "target",
-											maxLength: VERIFY_TARGET_MAX,
-											disabled: !card.repo,
-											placeholder: "e.g. https://app.example.com — log in as qa@example.com",
-											defaultValue: o?.target || "",
-											onBlur: (e) => {
-												if (e.target.value.trim() !== (o?.target || "")) patch(card.repo, "target", e.target.value);
-											},
-											onKeyDown: (e) => {
-												if (e.key === "Enter") e.target.blur();
-											}
-										}, "tg-" + card.repo),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "URL and test login the checks use. Blank checks a fresh checkout."
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Notes for the checklist writer (optional)"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-											className: "vf-repo-prompt",
-											rows: 3,
-											spellCheck: false,
-											"data-repo-field": "prompt",
-											maxLength: VERIFY_PROMPT_MAX,
-											disabled: !card.repo,
-											placeholder: "e.g. The UI runs on :3000 — check there, not :8080.\nAlways confirm the migration ran.\nIgnore anything under vendor/.",
-											defaultValue: o?.prompt || "",
-											onBlur: (e) => {
-												if (e.target.value.trim() !== (o?.prompt || "")) patch(card.repo, "prompt", e.target.value);
-											}
-										}, "pr-" + card.repo),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "Added to every checklist for this repo."
-										})
-									]
-								})
-							] }),
-							surface !== "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Agent"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-											"data-repo-field": "agent",
-											value: agent,
-											disabled: !card.repo,
-											onChange: (e) => patch(card.repo, "agent", e.target.value),
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "",
-												children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
-											}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: n,
-												children: n
-											}, n))]
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "Which agent works this repository's sessions."
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Fast-track them to"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-											"data-repo-field": "depth",
-											value: depth,
-											disabled: !card.repo,
-											onChange: (e) => patch(card.repo, "depth", e.target.value),
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: "",
-												children: LANE_LABEL.leave
-											}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-												value: d,
-												children: LANE_LABEL[d]
-											}, d))]
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "What happens when the agent finishes. Merge is picked per item only."
-										})
-									]
-								}),
-								surface === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: "Base branch"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "text",
-											autoComplete: "off",
-											spellCheck: false,
-											"data-repo-field": "base_branch",
-											disabled: !card.repo,
-											placeholder: defaults.baseBranch || "inherit the tab default",
-											defaultValue: overrideText(o, "base_branch"),
-											onBlur: (e) => {
-												if (e.target.value.trim() !== overrideText(o, "base_branch")) patch(card.repo, "base_branch", e.target.value);
-											}
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "Only PRs into this branch auto-start. Blank uses the tab default."
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: surface === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "number",
-											className: "num-sm",
-											autoComplete: "off",
-											"data-repo-field": "min_age_minutes",
-											disabled: !card.repo,
-											placeholder: defaults.minAge || "15",
-											defaultValue: o?.min_age_minutes == null ? "" : String(o.min_age_minutes),
-											onBlur: (e) => {
-												const cur = o?.min_age_minutes == null ? "" : String(o.min_age_minutes);
-												if (e.target.value.trim() !== cur) patch(card.repo, "min_age_minutes", e.target.value);
-											}
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-hint",
-											children: "Wait this long after it opens before starting. Blank uses the tab default."
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "set-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "set-label",
-											children: surface === "pr" ? "Ignore comments from" : "Ignore issues from"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "text",
-											autoComplete: "off",
-											spellCheck: false,
-											"data-repo-field": "skip_authors",
-											disabled: !card.repo,
-											placeholder: defaults.skipAuthors || "inherit — none",
-											defaultValue: overrideText(o, "skip_authors"),
-											onBlur: (e) => {
-												if (e.target.value.trim() !== overrideText(o, "skip_authors")) patch(card.repo, "skip_authors", e.target.value);
-											}
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "set-hint",
-											children: [
-												"GitHub logins, comma-separated",
-												surface === "pr" ? " — e.g. bots whose comments you don't want acted on" : "",
-												". Blank uses the tab default."
-											]
-										})
-									]
-								})
-							] })
-						]
-					}, card.key);
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "set-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: addId,
-					className: "btn-primary",
-					onClick: add,
-					children: addLabel
-				}), surface === "verify" && gh.data === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint ik-gh-needed",
-					role: "note",
-					children: [
-						"Needs GitHub connected —",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => openConnectGitHub(),
-							children: "Connect GitHub"
-						})
-					]
-				}) : null]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: hint
-			})
-		]
-	});
-}
-//#endregion
 //#region src/components/intake/PullRequestsTab.tsx
 var PR_GROUPS_KEY = "mf_intake_pr_groups";
-function PullRequestsTab({ gotoTab }) {
+function PullRequestsTab({ focus, adding, startAdd, endAdd }) {
 	const s = useSettings();
 	const agentChoices = useAgentChoices();
+	const catalog = useTicketingCatalog(true).data || [];
 	const groups = useToggleSet(PR_GROUPS_KEY, true);
 	const filter = useListFilter("gh-prs-filter", "Filter by repo, number, title, author, branch, or why…  ( Ctrl+F )");
 	const gh = s.settings.github || {};
@@ -74581,57 +75288,55 @@ function PullRequestsTab({ gotoTab }) {
 	const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("prs");
 	const overrides = gh.repo_settings || {};
 	const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
+	const edit = useEditing(focus);
+	const [dismissed, setDismissed] = (0, import_react.useState)(false);
 	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
 	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const prsQuery = usePanelQuery("github-prs");
 	const loadOpenPrs = prsQuery.refresh;
 	const relistPrs = prsQuery.refetch;
 	const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
-	const prsRepos = prsQuery.data?.repos || [];
 	const prsError = prsQuery.error ? "Could not list PRs: " + (prsQuery.error.message || "error") : "";
 	const prsNote = panelNote({
 		error: prsError,
 		fetching: prsQuery.isFetching,
 		loaded: !!prs
-	}) || (prsQuery.data?.login ? "GitHub: " + prsQuery.data.login : prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
+	}) || (prsQuery.data?.login_error ? "GitHub login unknown — force review may still work" : "");
 	const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
 	const n = repos.length;
 	const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
 	for (const p of shownPrs) {
-		const key = p.repo || "unknown";
+		const key = (p.repo || "unknown").toLowerCase();
 		if (!byRepo.has(key)) byRepo.set(key, []);
 		byRepo.get(key).push(p);
 	}
-	const groupOrder = filter.active ? [...byRepo.keys()] : [...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)), ...[...byRepo.keys()].filter((r) => !repos.includes(r))];
-	const sourceList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
-		surface: "pr",
-		label: "Repositories",
-		repos,
-		overrides,
-		onSave: (list, next, msg) => saveGithub({
-			repos: list,
-			repo_settings: next,
-			...gh.enabled == null && !repos.length && list.length ? { enabled: false } : {}
-		}, msg),
-		defaults: {
-			agent: String(gh.agent || agentChoices.fallback || ""),
-			baseBranch: String(gh.base_branch || ""),
-			minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
-			skipAuthors: String(skipAuthors),
-			liveBranch: ""
-		},
-		listId: "gh-repos-list",
-		addId: "gh-repo-add-btn",
-		addLabel: "+ Add repository",
-		emptyText: "No repositories yet — add one you open PRs on.",
-		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Each card is one repository, with its own agent and filters. Blank fields use the defaults under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
-			"."
-		] })
-	}, "sources");
-	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+	const extraNames = new Map(shownPrs.map((p) => [(p.repo || "unknown").toLowerCase(), p.repo || "unknown"]));
+	const groupOrder = repoGroupOrder(repos.map((r) => r.toLowerCase()), byRepo).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
+	const watched = new Set(repos.map((r) => r.toLowerCase()));
+	const anyMatch = shownPrs.length > 0;
+	const showAdd = !!adding || !n && !dismissed;
+	const closeAdd = () => {
+		endAdd();
+		setDismissed(true);
+	};
+	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
+		uses: adding?.uses?.length ? adding.uses : ["pr"],
+		trackers: catalog.map((p) => ({
+			key: p.id,
+			label: p.label
+		})),
+		onPickTracker: (provider) => startAdd({
+			kind: "tracker",
+			provider
+		}, "tickets"),
+		onCancel: closeAdd,
+		onDone: (repo) => {
+			closeAdd();
+			if (!groups.isOpen(repo)) groups.toggle(repo);
+		}
+	}, "add") : null;
+	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Your open pull requests",
 		onRefresh: loadOpenPrs,
 		note: prsNote,
@@ -74643,82 +75348,112 @@ function PullRequestsTab({ gotoTab }) {
 		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			"Each row says whether auto-start will take it. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
-			" addresses a PR's comments now, whatever the filters say."
+			" addresses a PR's comments now, whatever the filters say. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+			" on a repository changes how it is watched."
 		] }),
-		children: prsError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: prsError
-		}) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: "Add a repository to see its open PRs."
-		}) : !prs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: "No open pull requests on the watched repositories."
-		}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "repo-empty",
-			children: [
-				"No open pull request matches “",
-				filter.query,
-				"”."
-			]
-		}) : groupOrder.map((repo) => {
-			const rows = byRepo.get(repo) || [];
-			const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: [
+			prsError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "repo-empty",
-				children: "No open pull requests in this repository."
-			}) : rows.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
-				reference: "#" + p.number,
-				url: p.url,
-				title: p.title,
-				tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
-				meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
-				hasSession: p.has_session,
-				eligible: p.eligible,
-				eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
-				eligibleOn: enabled,
-				reasons: p.reasons,
-				actionLabel: "Start",
-				failPrefix: "Start failed",
-				workspace: p.workspace,
-				onReopen: async () => {
-					const title = await reopenIntakeItem({
-						kind: "prs",
-						repo: p.repo,
-						number: p.number
-					});
-					setTimeout(relistPrs, 5e3);
-					return title;
-				},
-				agents: agentChoices.names,
-				configuredAgent: overrides[repo]?.agent || String(gh.agent || agentChoices.fallback || ""),
-				configuredDepth: overrides[repo]?.depth || "",
-				onStart: async ({ agent, depth, effort }) => {
-					const r = await api("/api/github/prs/review", { json: {
-						repo: p.repo,
-						number: p.number,
-						...agent ? { agent } : {},
-						...depth ? { depth } : {},
-						...effort ? { effort } : {}
-					} });
-					refreshInstances();
-					setTimeout(relistPrs, 5e3);
-					return {
-						message: "Session " + (r?.title || ""),
-						title: r?.title
-					};
-				}
-			}, (p.repo || "") + p.number));
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-				heading: true,
-				name: repo,
-				count: rows.length,
-				open: groups.isOpen(repo),
-				onToggle: () => groups.toggle(repo),
-				children: body
-			}, repo);
-		})
+				children: prsError
+			}) : null,
+			!n && !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "repo-empty ik-empty-add",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "No repositories yet — add one you open PRs on." }), !showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => startAdd({
+						kind: "repo",
+						uses: ["pr"]
+					}),
+					children: "+ Add a repository"
+				}) : null]
+			}) : null,
+			filter.active && !anyMatch && groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ik-nomatch",
+				children: [
+					"No open pull request matches “",
+					filter.query,
+					"”."
+				]
+			}) : null,
+			groupOrder.map((repo) => {
+				const key = repo.toLowerCase();
+				const rows = byRepo.get(key) || [];
+				const isWatched = watched.has(key);
+				const editing = isWatched && edit.isEditing(repo);
+				const loading = prs === null;
+				const body = loading || filter.active && !rows.length ? null : !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty",
+					children: "No open pull requests in this repository."
+				}) : rows.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+					reference: "#" + p.number,
+					url: p.url,
+					title: p.title,
+					tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
+					meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
+					hasSession: p.has_session,
+					eligible: p.eligible,
+					eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
+					eligibleOn: enabled,
+					reasons: p.reasons,
+					actionLabel: "Start",
+					failPrefix: "Start failed",
+					workspace: p.workspace,
+					onReopen: async () => {
+						const title = await reopenIntakeItem({
+							kind: "prs",
+							repo: p.repo,
+							number: p.number
+						});
+						setTimeout(relistPrs, 5e3);
+						return title;
+					},
+					agents: agentChoices.names,
+					configuredAgent: overrides[repo]?.agent || String(gh.agent || agentChoices.fallback || ""),
+					configuredDepth: overrides[repo]?.depth || "",
+					onStart: async ({ agent, depth, effort }) => {
+						const r = await api("/api/github/prs/review", { json: {
+							repo: p.repo,
+							number: p.number,
+							...agent ? { agent } : {},
+							...depth ? { depth } : {},
+							...effort ? { effort } : {}
+						} });
+						refreshInstances();
+						setTimeout(relistPrs, 5e3);
+						return {
+							message: "Session " + (r?.title || ""),
+							title: r?.title
+						};
+					}
+				}, (p.repo || "") + p.number));
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+					groupKey: repo,
+					heading: true,
+					name: repo,
+					count: loading ? void 0 : rows.length,
+					detail: filter.active && !rows.length ? "no match" : isWatched ? overrides[repo]?.agent || (gh.agent || agentChoices.fallback ? (gh.agent || agentChoices.fallback) + " (default)" : "app default") : "no longer watched",
+					onDetail: isWatched ? () => edit.open(repo) : void 0,
+					detailTitle: "Change how " + repo + " is watched",
+					open: groups.isOpen(repo),
+					onToggle: () => groups.toggle(repo),
+					action: isWatched ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadAction, {
+						editing,
+						name: repo,
+						onClick: () => edit.toggle(repo)
+					}) : void 0,
+					editor: editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoEditor, {
+						use: "pr",
+						repo
+					}) : void 0,
+					children: body
+				}, key);
+			})
+		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -74750,17 +75485,25 @@ function PullRequestsTab({ gotoTab }) {
 			paused: pausedOff,
 			disabled: !n,
 			onChange: (next) => saveGithub({ enabled: next }, next ? "Auto-address review comments on" : "Auto-address review comments off"),
-			note: !n ? "Add a repository below first" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
+			note: !n ? "Add a repository first — + Add source" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
 		}),
-		n ? [workList, sourceList] : [sourceList, workList],
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
+			buttonId: "gh-connect-btn",
+			needFor: "your PRs can't be listed or started"
+		}),
+		workList,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-advanced-body",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "set-hint set-block-hint",
-						children: "Defaults for every repository card. A card can override each one."
+						children: [
+							"Defaults for every repository. A repository's own ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+							" can override each one."
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentPicker, {
 						label: "Agent",
@@ -74849,29 +75592,6 @@ function PullRequestsTab({ gotoTab }) {
 								children: "GitHub logins, comma-separated — e.g. bots whose comments you don't want acted on."
 							})
 						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-label",
-								children: "GitHub connection"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "test-row",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "gh-connect-btn",
-									className: "test-btn",
-									onClick: () => openConnectGitHub(),
-									children: "Connect GitHub"
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-hint",
-								children: "One GitHub sign-in for PRs, issues and Open PR, shared with your devices."
-							})
-						]
 					})
 				]
 			})]
@@ -74881,9 +75601,10 @@ function PullRequestsTab({ gotoTab }) {
 //#endregion
 //#region src/components/intake/IssuesTab.tsx
 var ISSUE_GROUPS_KEY = "mf_intake_issue_groups";
-function IssuesTab({ gotoTab }) {
+function IssuesTab({ focus, adding, startAdd, endAdd }) {
 	const s = useSettings();
 	const agentChoices = useAgentChoices();
+	const catalog = useTicketingCatalog(true).data || [];
 	const groups = useToggleSet(ISSUE_GROUPS_KEY, true);
 	const filter = useListFilter("gh-issues-filter", "Filter by repo, number, title, author, or why…  ( Ctrl+F )");
 	const gh = s.settings.github || {};
@@ -74893,13 +75614,14 @@ function IssuesTab({ gotoTab }) {
 	const pausedOff = !enabled && repos.length > 0 && pause.pausedKind("issues");
 	const overrides = gh.issue_repo_settings || {};
 	const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
+	const edit = useEditing(focus);
+	const [dismissed, setDismissed] = (0, import_react.useState)(false);
 	const [skipDraft, setSkipDraft] = (0, import_react.useState)(String(skipAuthors));
 	(0, import_react.useEffect)(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 	const issuesQuery = usePanelQuery("github-issues");
 	const loadOpenIssues = issuesQuery.refresh;
 	const relistIssues = issuesQuery.refetch;
 	const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
-	const issuesRepos = issuesQuery.data?.repos || [];
 	const issuesError = issuesQuery.error ? "Could not list issues: " + (issuesQuery.error.message || "error") : "";
 	const issuesNote = panelNote({
 		error: issuesError,
@@ -74911,38 +75633,35 @@ function IssuesTab({ gotoTab }) {
 	const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
 	const byRepo = /* @__PURE__ */ new Map();
 	for (const i of shown) {
-		const key = i.repo || "unknown";
+		const key = (i.repo || "unknown").toLowerCase();
 		if (!byRepo.has(key)) byRepo.set(key, []);
 		byRepo.get(key).push(i);
 	}
-	const groupOrder = filter.active ? [...byRepo.keys()] : [...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)), ...[...byRepo.keys()].filter((r) => !repos.includes(r))];
-	const sourceList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
-		surface: "issue",
-		label: "Repositories",
-		repos,
-		overrides,
-		onSave: (list, next, msg) => saveGithub({
-			issue_repos: list,
-			issue_repo_settings: next
-		}, msg),
-		defaults: {
-			agent: String(gh.issue_agent || agentChoices.fallback || ""),
-			baseBranch: "",
-			minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
-			skipAuthors: String(skipAuthors),
-			liveBranch: ""
-		},
-		listId: "gh-issue-repos-list",
-		addId: "gh-issue-repo-add-btn",
-		addLabel: "+ Add repository",
-		emptyText: "No repositories yet — add one whose new issues you want worked on.",
-		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			"Each card is one repository, with its own agent and filters. Blank fields use the defaults under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Advanced options" }),
-			". Separate from the GitHub PRs tab's list."
-		] })
-	}, "sources");
-	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+	const extraNames = new Map(shown.map((i) => [(i.repo || "unknown").toLowerCase(), i.repo || "unknown"]));
+	const groupOrder = repoGroupOrder(repos.map((r) => r.toLowerCase()), byRepo).map((k) => repos.find((r) => r.toLowerCase() === k) || extraNames.get(k) || k);
+	const watched = new Set(repos.map((r) => r.toLowerCase()));
+	const showAdd = !!adding || !n && !dismissed;
+	const closeAdd = () => {
+		endAdd();
+		setDismissed(true);
+	};
+	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
+		uses: adding?.uses?.length ? adding.uses : ["issue"],
+		trackers: catalog.map((p) => ({
+			key: p.id,
+			label: p.label
+		})),
+		onPickTracker: (provider) => startAdd({
+			kind: "tracker",
+			provider
+		}, "tickets"),
+		onCancel: closeAdd,
+		onDone: (repo) => {
+			closeAdd();
+			if (!groups.isOpen(repo)) groups.toggle(repo);
+		}
+	}, "add") : null;
+	const workList = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: "Open issues",
 		onRefresh: loadOpenIssues,
 		note: issuesNote,
@@ -74954,82 +75673,112 @@ function IssuesTab({ gotoTab }) {
 		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			"Each row says whether auto-start will take it. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
-			" starts a session for an issue now, whatever the filters say."
+			" starts a session for an issue now, whatever the filters say. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+			" on a repository changes how it is watched."
 		] }),
-		children: issuesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: issuesError
-		}) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: "Add a repository to see its open issues."
-		}) : !issues.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "repo-empty",
-			children: "No open issues on the watched repositories."
-		}) : !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "repo-empty",
-			children: [
-				"No open issue matches “",
-				filter.query,
-				"”."
-			]
-		}) : groupOrder.map((repo) => {
-			const rows = byRepo.get(repo) || [];
-			const body = !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: [
+			issuesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "repo-empty",
-				children: "No open issues in this repository."
-			}) : rows.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
-				reference: "#" + i.number,
-				url: i.url,
-				title: i.title,
-				tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
-				meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
-				hasSession: i.has_session,
-				eligible: i.eligible,
-				eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
-				eligibleOn: enabled,
-				reasons: i.reasons,
-				actionLabel: "Start",
-				failPrefix: "Start failed",
-				workspace: i.workspace,
-				onReopen: async () => {
-					const title = await reopenIntakeItem({
-						kind: "issues",
-						repo: i.repo,
-						number: i.number
-					});
-					setTimeout(relistIssues, 5e3);
-					return title;
-				},
-				agents: agentChoices.names,
-				configuredAgent: overrides[repo]?.agent || String(gh.issue_agent || agentChoices.fallback || ""),
-				configuredDepth: overrides[repo]?.depth || "",
-				onStart: async ({ agent, depth, effort }) => {
-					const r = await api("/api/github/issues/start", { json: {
-						repo: i.repo,
-						number: i.number,
-						...agent ? { agent } : {},
-						...depth ? { depth } : {},
-						...effort ? { effort } : {}
-					} });
-					refreshInstances();
-					setTimeout(relistIssues, 5e3);
-					return {
-						message: "Session " + (r?.title || ""),
-						title: r?.title
-					};
-				}
-			}, (i.repo || "") + i.number));
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
-				heading: true,
-				name: repo,
-				count: rows.length,
-				open: groups.isOpen(repo),
-				onToggle: () => groups.toggle(repo),
-				children: body
-			}, repo);
-		})
+				children: issuesError
+			}) : null,
+			!n && !groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "repo-empty ik-empty-add",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "No repositories yet — add one whose new issues you want worked on." }), !showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => startAdd({
+						kind: "repo",
+						uses: ["issue"]
+					}),
+					children: "+ Add a repository"
+				}) : null]
+			}) : null,
+			filter.active && !shown.length && groupOrder.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ik-nomatch",
+				children: [
+					"No open issue matches “",
+					filter.query,
+					"”."
+				]
+			}) : null,
+			groupOrder.map((repo) => {
+				const key = repo.toLowerCase();
+				const rows = byRepo.get(key) || [];
+				const isWatched = watched.has(key);
+				const editing = isWatched && edit.isEditing(repo);
+				const loading = issues === null;
+				const body = loading || filter.active && !rows.length ? null : !rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "repo-empty",
+					children: "No open issues in this repository."
+				}) : rows.map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+					reference: "#" + i.number,
+					url: i.url,
+					title: i.title,
+					tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
+					meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
+					hasSession: i.has_session,
+					eligible: i.eligible,
+					eligibleLabel: enabled ? "will auto-start" : pausedOff ? "auto-start paused" : "auto-start off",
+					eligibleOn: enabled,
+					reasons: i.reasons,
+					actionLabel: "Start",
+					failPrefix: "Start failed",
+					workspace: i.workspace,
+					onReopen: async () => {
+						const title = await reopenIntakeItem({
+							kind: "issues",
+							repo: i.repo,
+							number: i.number
+						});
+						setTimeout(relistIssues, 5e3);
+						return title;
+					},
+					agents: agentChoices.names,
+					configuredAgent: overrides[repo]?.agent || String(gh.issue_agent || agentChoices.fallback || ""),
+					configuredDepth: overrides[repo]?.depth || "",
+					onStart: async ({ agent, depth, effort }) => {
+						const r = await api("/api/github/issues/start", { json: {
+							repo: i.repo,
+							number: i.number,
+							...agent ? { agent } : {},
+							...depth ? { depth } : {},
+							...effort ? { effort } : {}
+						} });
+						refreshInstances();
+						setTimeout(relistIssues, 5e3);
+						return {
+							message: "Session " + (r?.title || ""),
+							title: r?.title
+						};
+					}
+				}, (i.repo || "") + i.number));
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+					groupKey: repo,
+					heading: true,
+					name: repo,
+					count: loading ? void 0 : rows.length,
+					detail: filter.active && !rows.length ? "no match" : isWatched ? overrides[repo]?.agent || (gh.issue_agent || agentChoices.fallback ? (gh.issue_agent || agentChoices.fallback) + " (default)" : "app default") : "no longer watched",
+					onDetail: isWatched ? () => edit.open(repo) : void 0,
+					detailTitle: "Change how " + repo + " is watched",
+					open: groups.isOpen(repo),
+					onToggle: () => groups.toggle(repo),
+					action: isWatched ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadAction, {
+						editing,
+						name: repo,
+						onClick: () => edit.toggle(repo)
+					}) : void 0,
+					editor: editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoEditor, {
+						use: "issue",
+						repo
+					}) : void 0,
+					children: body
+				}, key);
+			})
+		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -75058,17 +75807,25 @@ function IssuesTab({ gotoTab }) {
 			paused: pausedOff,
 			disabled: !n,
 			onChange: (next) => saveGithub({ issues_enabled: next }, next ? "Auto-start new issues on" : "Auto-start new issues off"),
-			note: !n ? "Add a repository below first" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
+			note: !n ? "Add a repository first — + Add source" : pausedOff ? "Intake is paused — Resume intake at the top turns it back on" : void 0
 		}),
-		n ? [workList, sourceList] : [sourceList, workList],
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GithubStatusLine, {
+			buttonId: "gh-issue-connect-btn",
+			needFor: "issues can't be listed or started"
+		}),
+		workList,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 			className: "pr-advanced",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Advanced options" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-advanced-body",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "set-hint set-block-hint",
-						children: "Defaults for every repository card. A card can override each one."
+						children: [
+							"Defaults for every repository. A repository's own ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Edit" }),
+							" can override each one."
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentPicker, {
 						label: "Agent",
@@ -75137,29 +75894,6 @@ function IssuesTab({ gotoTab }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
 								children: "GitHub logins, comma-separated."
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-label",
-								children: "GitHub connection"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "test-row",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "gh-issue-connect-btn",
-									className: "test-btn",
-									onClick: () => openConnectGitHub(),
-									children: "Connect GitHub"
-								})
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-hint",
-								children: "The same GitHub sign-in the GitHub PRs tab uses."
 							})
 						]
 					})
@@ -75587,7 +76321,7 @@ function QueueTab({ gotoTab }) {
 		const src = (ticketSources || []).find((x) => x.id === id);
 		return src ? sourceDisplayName(src, catalog) : id;
 	};
-	const ticketsBroken = configuredTickets && ticketErrors.length && !listedTickets ? ticketErrors.map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — open its card below to fix it\.$/, ".")).join(" ") + " Fix it on the Tickets tab." : "";
+	const ticketsBroken = configuredTickets && ticketErrors.length && !listedTickets ? ticketErrors.map((e) => friendlySourceError(nameOfSource(e.source), e.error).replace(/ — press Fix on its heading\.$/, ".")).join(" ") + " Fix it on the Tickets tab." : "";
 	const paused = pause.paused;
 	const sections = [
 		{
@@ -75739,6 +76473,23 @@ function QueueTab({ gotoTab }) {
 }
 //#endregion
 //#region src/components/intake/IntakeDialog.tsx
+function parseIntakeTarget(target) {
+	const raw = (target || "").trim();
+	const cut = raw.indexOf(":");
+	const head = cut < 0 ? raw : raw.slice(0, cut);
+	const focus = cut < 0 ? "" : raw.slice(cut + 1).trim();
+	const wanted = LEGACY_SCREEN_TABS[head] || head;
+	return {
+		tab: TAB_KEYS.includes(wanted) ? wanted : "tickets",
+		focus
+	};
+}
+var TAB_KEYS = [
+	"tickets",
+	"prs",
+	"issues",
+	"autostart"
+];
 var LEGACY_SCREEN_TABS = {
 	ticketing: "tickets",
 	repo: "prs",
@@ -75842,13 +76593,20 @@ function IntakeDialog() {
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [tab, setTab] = (0, import_react.useState)("tickets");
+	const [focus, setFocus] = (0, import_react.useState)("");
+	const [adding, setAdding] = (0, import_react.useState)(null);
 	const model = useSettingsModel(open);
 	const savedSources = useTicketingSources(open).data || [];
 	const tabRefs = (0, import_react.useRef)({});
 	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const wanted = target && (LEGACY_SCREEN_TABS[target] || target);
-		setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
+		if (!open) {
+			setAdding(null);
+			setFocus("");
+			return;
+		}
+		const t = parseIntakeTarget(target);
+		setTab(t.tab);
+		setFocus(t.focus);
 	}, [open, target]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -75856,13 +76614,37 @@ function IntakeDialog() {
 		prefetchIntakeMeta();
 	}, [open]);
 	if (!open) return null;
-	const props = { gotoTab: setTab };
+	const switchTab = (key, nextFocus = "") => {
+		setTab(key);
+		setFocus(nextFocus);
+		setAdding(null);
+	};
+	const startAdd = (intent, on) => {
+		if (on) setTab(on);
+		setFocus("");
+		setAdding(intent);
+		document.getElementById("intake-body")?.scrollTo({ top: 0 });
+	};
+	const props = {
+		gotoTab: switchTab,
+		focus,
+		adding,
+		startAdd,
+		endAdd: () => setAdding(null)
+	};
+	const addFrom = () => tab === "prs" ? [{
+		kind: "repo",
+		uses: ["pr"]
+	}, "prs"] : tab === "issues" ? [{
+		kind: "repo",
+		uses: ["issue"]
+	}, "issues"] : [{ kind: null }, "tickets"];
 	const onTabKey = (e, i) => {
 		const n = TABS.length;
 		const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
 		if (to < 0) return;
 		e.preventDefault();
-		setTab(TABS[to].key);
+		switchTab(TABS[to].key);
 		tabRefs.current[TABS[to].key]?.focus();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
@@ -75883,6 +76665,18 @@ function IntakeDialog() {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
+								id: "intake-add-source",
+								className: "btn-primary",
+								disabled: !!adding,
+								title: "Connect a tracker, or watch a GitHub repository",
+								onClick: () => {
+									const [intent, on] = addFrom();
+									startAdd(intent, on);
+								},
+								children: "+ Add source"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
 								id: "intake-close",
 								onClick: closeDialog,
 								children: "Close"
@@ -75892,7 +76686,7 @@ function IntakeDialog() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PauseBar, {
 						ticketSources: savedSources.length,
 						onDone: () => void model.reload(),
-						gotoTab: setTab
+						gotoTab: switchTab
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						id: "intake-tabs",
@@ -75910,7 +76704,7 @@ function IntakeDialog() {
 							tabIndex: tab === t.key ? 0 : -1,
 							className: "ik-tab" + (tab === t.key ? " active" : ""),
 							"data-intake-tab": t.key,
-							onClick: () => setTab(t.key),
+							onClick: () => switchTab(t.key),
 							onKeyDown: (e) => onTabKey(e, i),
 							children: [t.label, t.key === "autostart" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartOn, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabCount, { tab: t.key })]
 						}, t.key))
@@ -85238,7 +86032,7 @@ var NOTES = {
 	"pr-review": {
 		text: "Appears once a repository is added",
 		link: {
-			label: "Intake → Pull requests",
+			label: "Intake → GitHub PRs",
 			dialog: "intake",
 			target: "prs"
 		}
@@ -85246,7 +86040,7 @@ var NOTES = {
 	"issue-handling": {
 		text: "Appears once a repository is added",
 		link: {
-			label: "Intake → Issues",
+			label: "Intake → GitHub issues",
 			dialog: "intake",
 			target: "issues"
 		}
@@ -87339,58 +88133,97 @@ function VerifyNewChecklist({ targets, reason, plans, preselect, open, onToggle,
 		})]
 	});
 }
-function VerifySources({ liveBranch, deployDelay }) {
-	const s = useSettings();
-	const repo = s.settings.repository || {};
+function VerifySources({ liveBranch }) {
+	const repo = useSettings().settings.repository || {};
 	const repos = Array.isArray(repo.verify_repos) ? repo.verify_repos : [];
 	const overrides = repo.verify_repo_settings || {};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoSourceList, {
-		surface: "verify",
-		label: "Sources",
-		repos,
-		overrides,
-		onSave: (list, next, msg) => s.saveGroup("repository", {
-			verify_repos: list,
-			verify_repo_settings: next
-		}, msg),
-		defaults: {
-			agent: "",
-			baseBranch: "",
-			minAge: "",
-			skipAuthors: "",
-			liveBranch,
-			deployDelay
-		},
-		listId: "vf-repos-list",
-		addId: "vf-repo-add-btn",
-		addLabel: "+ Add repository",
-		emptyText: "No repositories yet.",
-		hint: "Each new branch pushed in these GitHub repositories gets a checklist."
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NoRemoteOptIn, {})] });
-}
-var OPT_IN_SNIPPET = "[workspace]\nverify_on_push = true\n";
-function NoRemoteOptIn() {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "pr-advanced vf-optin",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Repository without a GitHub remote?" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "pr-advanced-body",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "set-hint",
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [editing, setEditing] = (0, import_react.useState)(null);
+	const gh = useGithubConnected(repos.length > 0);
+	if (!repos.length) return null;
+	const liveOf = (r) => overrides[r]?.live_branch || liveBranch || "main";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vf-sources",
+		id: "vf-repos-list",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-watching",
 				children: [
-					"Commit this as ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ".mindflock.toml" }),
-					" at the repository's root — each new branch pushed there then gets a checklist."
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-watching-label",
+						children: "Watching"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-watching-list",
+						title: repos.map((r) => r + " ships " + liveOf(r)).join("\n"),
+						children: repos.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ik-watching-item",
+							children: [
+								i ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ik-watching-sep",
+									children: " · "
+								}) : null,
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: r }),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "ik-watching-live",
+									children: ["ships ", liveOf(r)]
+								})
+							]
+						}, r))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "vf-repos-edit",
+						className: "ik-quiet-btn",
+						"aria-expanded": open,
+						onClick: () => {
+							setOpen((v) => !v);
+							setEditing(null);
+						},
+						children: open ? "Done" : "Edit repositories"
+					})
 				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "vf-snippet",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", { children: OPT_IN_SNIPPET }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					onClick: () => void copyText(OPT_IN_SNIPPET).then((ok) => toast(ok ? "Copied" : "Couldn't copy — select the text instead")),
-					children: "Copy"
-				})]
-			})]
-		})]
+			}),
+			gh.data === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint ik-gh-needed",
+				role: "note",
+				children: [
+					"These repositories need GitHub connected —",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => openConnectGitHub(),
+						children: "Connect GitHub"
+					}),
+					"."
+				]
+			}) : null,
+			open ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-groups vf-repo-heads",
+				children: repos.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+					groupKey: r,
+					heading: true,
+					name: r,
+					detail: "ships " + liveOf(r) + (overrides[r]?.target ? " · " + overrides[r].target : ""),
+					onDetail: () => setEditing(r),
+					detailTitle: "Change how " + r + " is checked",
+					open: editing === r,
+					onToggle: () => setEditing((cur) => cur === r ? null : r),
+					action: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeadAction, {
+						editing: editing === r,
+						name: r,
+						onClick: () => setEditing((cur) => cur === r ? null : r)
+					}),
+					editor: editing === r ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoEditor, {
+						use: "verify",
+						repo: r,
+						liveBranch
+					}) : void 0
+				}, r))
+			}) : null
+		]
 	});
 }
 function VerifySwitch({ hasPlans }) {
@@ -87413,9 +88246,9 @@ function VerifyEmpty() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "repo-empty vf-empty",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No checklists yet." }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Add a repository under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Sources" }),
-			", or ask for one under",
+			"Watch a repository with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "+ Add repository" }),
+			" above, or ask for one under",
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New checklist" }),
 			" below."
@@ -87472,6 +88305,8 @@ function VerifyDialog() {
 	const [newOpen, setNewOpen] = (0, import_react.useState)(false);
 	const [preselect, setPreselect] = (0, import_react.useState)("");
 	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [addingRepo, setAddingRepo] = (0, import_react.useState)(false);
+	const [addDismissed, setAddDismissed] = (0, import_react.useState)(false);
 	const linked = (0, import_react.useRef)("");
 	(0, import_react.useEffect)(() => {
 		if (open) return;
@@ -87483,6 +88318,8 @@ function VerifyDialog() {
 		setMissingBranch("");
 		setNewOpen(false);
 		setPreselect("");
+		setAddingRepo(false);
+		setAddDismissed(false);
 		linked.current = "";
 	}, [open, sel]);
 	const plansLoaded = !!plansQ.data;
@@ -87535,7 +88372,6 @@ function VerifyDialog() {
 	const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
 	const liveBranch = plansQ.data?.live_branch || "";
 	const repoCfg = model.settings.repository || {};
-	const deployDelay = String(repoCfg.deploy_delay_minutes == null ? 5 : repoCfg.deploy_delay_minutes);
 	const overridden = liveBranchOverridden(liveBranch, plans, repoCfg.verify_repos, repoCfg.verify_repo_settings);
 	const closed = closedQ.data || [];
 	const targets = checklistTargets(instancesQ.data || [], plans, closed, liveBranch);
@@ -87565,11 +88401,22 @@ function VerifyDialog() {
 		fetching: plansQ.isFetching,
 		loaded: !!plansQ.data
 	});
-	const workFirst = (repoCfg.verify_repos || []).length > 0 || plans.length > 0;
-	const sources = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, {
+	const showAdd = addingRepo || (repoCfg.verify_repos || []).length === 0 && !plans.length && !addDismissed;
+	const sources = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, { liveBranch }, "sources");
+	const addFlow = showAdd ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
+		title: "Add a repository",
+		uses: ["verify"],
+		only: "verify",
 		liveBranch,
-		deployDelay
-	}, "sources");
+		onCancel: () => {
+			setAddingRepo(false);
+			setAddDismissed(true);
+		},
+		onDone: () => {
+			setAddingRepo(false);
+			setAddDismissed(true);
+		}
+	}, "add") : null;
 	const checklists = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
 		label: "Checklists",
 		onRefresh: () => void plansQ.refetch(),
@@ -87726,6 +88573,15 @@ function VerifyDialog() {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							id: "vf-repo-add-btn",
+							className: "btn-primary",
+							disabled: showAdd,
+							title: "Watch a GitHub repository: each new branch pushed there gets a checklist",
+							onClick: () => setAddingRepo(true),
+							children: "+ Add repository"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
 							id: "verify-close",
 							onClick: closeDialog,
 							children: "Close"
@@ -87744,8 +88600,10 @@ function VerifyDialog() {
 								overridden
 							})]
 						}),
+						addFlow,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, { hasPlans: plans.length > 0 }),
-						workFirst ? [checklists, sources] : [sources, checklists],
+						sources,
+						checklists,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyNewChecklist, {
 							targets,
 							reason: noTargetsReason(instancesQ.data || [], plans, closed),
@@ -89850,9 +90708,13 @@ function ConnectGitHub({ onChange }) {
 	});
 }
 function ConnectGitHubDialog() {
-	const [open, setOpen] = (0, import_react.useState)(false);
+	const [open, setOpenRaw] = (0, import_react.useState)(false);
+	const setOpen = (next) => {
+		setOpenRaw(next);
+		if (!next) refreshGithubStatus();
+	};
 	(0, import_react.useEffect)(() => {
-		const on = () => setOpen(true);
+		const on = () => setOpenRaw(true);
 		window.addEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 		return () => window.removeEventListener(OPEN_CONNECT_GITHUB_EVENT, on);
 	}, []);

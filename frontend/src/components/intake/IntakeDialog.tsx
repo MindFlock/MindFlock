@@ -11,7 +11,8 @@
  * counts, because "how much is waiting" is the question the surface exists to
  * answer and you should not have to open a tab to find out.
  *
- * Each tab has the same anatomy — switch, source cards, grouped work list —
+ * Each tab has the same anatomy — switch, grouped work list whose source
+ * headings are where each source is edited, "+ Add source" in the head —
  * built from ./kit.tsx. The three legacy Settings screen keys still route here
  * (see SettingsDialog), so every old deep link lands on the right tab.
  */
@@ -33,12 +34,48 @@ import { IssuesTab } from "./IssuesTab";
 import { QueueTab } from "./QueueTab";
 import { collectQueued, isQueued } from "./queue";
 import { kindsText, useIntakePause } from "./pause";
+import type { RepoUse } from "./repoUses";
 
 export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
 
-export interface TabProps {
-  gotoTab(key: IntakeTabKey): void;
+/** What "+ Add source" was asked to add: a tracker (optionally a provider
+ * already picked — a tracker tile pressed on another tab hands over here), a
+ * repository with its uses pre-ticked, or nothing yet (the tiles decide). */
+export interface AddIntent {
+  kind: "tracker" | "repo" | null;
+  provider?: string;
+  uses?: RepoUse[];
 }
+
+export interface TabProps {
+  /** Switch tab; `focus` names a source (id) or repository (owner/name) whose
+   * heading to bring into view with its editor open. */
+  gotoTab(key: IntakeTabKey, focus?: string): void;
+  /** The source or repository a deep link asked for ("" = none). */
+  focus?: string;
+  /** The add flow, when one is open on this tab. */
+  adding: AddIntent | null;
+  startAdd(intent: AddIntent, tab?: IntakeTabKey): void;
+  endAdd(): void;
+}
+
+/** A dialog target: a tab key, a legacy Settings screen key, or either with a
+ * source after a colon — `tickets:jira` from Settings → Connections' "Open in
+ * Intake", `prs:acme/api`. Unknown tabs fall back to Tickets. */
+export function parseIntakeTarget(target: string | null | undefined): {
+  tab: IntakeTabKey;
+  focus: string;
+} {
+  const raw = (target || "").trim();
+  const cut = raw.indexOf(":");
+  const head = cut < 0 ? raw : raw.slice(0, cut);
+  const focus = cut < 0 ? "" : raw.slice(cut + 1).trim();
+  const wanted = (LEGACY_SCREEN_TABS[head] || head) as IntakeTabKey;
+  const tab = TAB_KEYS.includes(wanted) ? wanted : "tickets";
+  return { tab, focus };
+}
+
+const TAB_KEYS: IntakeTabKey[] = ["tickets", "prs", "issues", "autostart"];
 
 /** Legacy Settings screen keys → the tab that took over from them. Kept so a
  * deep link recorded anywhere (a palette entry, a sidebar button, the welcome
@@ -239,15 +276,23 @@ export function IntakeDialog() {
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
   const [tab, setTab] = useState<IntakeTabKey>("tickets");
+  const [focus, setFocus] = useState("");
+  const [adding, setAdding] = useState<AddIntent | null>(null);
   const model = useSettingsModel(open);
   const savedSources = useTicketingSources(open).data || [];
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  // The target may be a tab key or one of the legacy Settings screen keys.
+  // The target may be a tab key, one of the legacy Settings screen keys, or
+  // either with a source after a colon (see parseIntakeTarget).
   useEffect(() => {
-    if (!open) return;
-    const wanted = (target && (LEGACY_SCREEN_TABS[target] || target)) as IntakeTabKey | undefined;
-    setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
+    if (!open) {
+      setAdding(null);
+      setFocus("");
+      return;
+    }
+    const t = parseIntakeTarget(target);
+    setTab(t.tab);
+    setFocus(t.focus);
   }, [open, target]);
 
   // The panels are normally already warm before this dialog exists (App's
@@ -263,7 +308,33 @@ export function IntakeDialog() {
 
   if (!open) return null;
 
-  const props: TabProps = { gotoTab: setTab };
+  const switchTab = (key: IntakeTabKey, nextFocus = "") => {
+    setTab(key);
+    setFocus(nextFocus);
+    setAdding(null);
+  };
+  /** "+ Add source": the flow opens at the top of the tab that owns the kind,
+   * scrolled into view. */
+  const startAdd = (intent: AddIntent, on?: IntakeTabKey) => {
+    if (on) setTab(on);
+    setFocus("");
+    setAdding(intent);
+    document.getElementById("intake-body")?.scrollTo({ top: 0 });
+  };
+  const props: TabProps = {
+    gotoTab: switchTab,
+    focus,
+    adding,
+    startAdd,
+    endAdd: () => setAdding(null),
+  };
+  // What the head button adds from each tab: the kind that tab shows.
+  const addFrom = (): [AddIntent, IntakeTabKey] =>
+    tab === "prs"
+      ? [{ kind: "repo", uses: ["pr"] }, "prs"]
+      : tab === "issues"
+        ? [{ kind: "repo", uses: ["issue"] }, "issues"]
+        : [{ kind: null }, "tickets"];
   // Arrow keys move along the tab strip (the WAI tablist pattern), so the
   // strip is one Tab stop rather than four.
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
@@ -276,7 +347,7 @@ export function IntakeDialog() {
       : -1;
     if (to < 0) return;
     e.preventDefault();
-    setTab(TABS[to].key);
+    switchTab(TABS[to].key);
     tabRefs.current[TABS[to].key]?.focus();
   };
 
@@ -287,6 +358,22 @@ export function IntakeDialog() {
           <div className="ws-head">
             <h2>Intake</h2>
             <span className="ik-subtitle">Where your sessions come from</span>
+            {/* ONE door for every kind of source — a tracker, or a repository
+                with its uses as ticks. It replaced four "+ Add" buttons at the
+                bottom of four card lists in two dialogs. */}
+            <button
+              type="button"
+              id="intake-add-source"
+              className="btn-primary"
+              disabled={!!adding}
+              title="Connect a tracker, or watch a GitHub repository"
+              onClick={() => {
+                const [intent, on] = addFrom();
+                startAdd(intent, on);
+              }}
+            >
+              + Add source
+            </button>
             <button type="button" id="intake-close" onClick={closeDialog}>
               Close
             </button>
@@ -294,7 +381,7 @@ export function IntakeDialog() {
           <PauseBar
             ticketSources={savedSources.length}
             onDone={() => void model.reload()}
-            gotoTab={setTab}
+            gotoTab={switchTab}
           />
           <div id="intake-tabs" role="tablist" aria-label="Intake">
             {TABS.map((t, i) => (
@@ -311,7 +398,7 @@ export function IntakeDialog() {
                 tabIndex={tab === t.key ? 0 : -1}
                 className={"ik-tab" + (tab === t.key ? " active" : "")}
                 data-intake-tab={t.key}
-                onClick={() => setTab(t.key)}
+                onClick={() => switchTab(t.key)}
                 onKeyDown={(e) => onTabKey(e, i)}
               >
                 {t.label}

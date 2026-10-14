@@ -229,6 +229,36 @@ def test_a_local_github_token_save_restarts_the_pipeline_once(
     assert pipeline_events[0]["data"] == {"changed": ["github"]}
 
 
+def test_one_post_spanning_github_and_repository_writes_both_restarts_once(
+    client, pipeline_events, fake_timers
+):
+    """Intake's "Use it for" ticks put one repository on the PR list, the
+    issue list and Verify's list in ONE ``POST /api/settings`` (the frontend's
+    ``saveGroups``): both groups land, and the pipeline restarts once."""
+    r = client.post(
+        "/api/settings",
+        json={
+            "github": {
+                "repos": ["acme/web"],
+                "enabled": False,
+                "issue_repos": ["acme/web"],
+            },
+            "repository": {"verify_repos": ["acme/web"]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    st = S.load_settings()
+    assert st.github.repos == ["acme/web"]
+    assert st.github.issue_repos == ["acme/web"]
+    assert st.github.enabled is False
+    assert st.repository.verify_repos == ["acme/web"]
+    armed = _armed(fake_timers)
+    assert len(armed) == 1
+    armed[0].fn()
+    assert len(pipeline_events) == 1
+    assert pipeline_events[0]["data"] == {"changed": ["github"]}
+
+
 def test_a_local_ticket_source_save_restarts_the_pipeline_once(
     client, pipeline_events, fake_timers
 ):

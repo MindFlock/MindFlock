@@ -526,6 +526,20 @@ export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
   return { ...q, refresh };
 }
 
+/** Re-sweep one panel now (`?fresh=1`), outside the component that shows it —
+ * the add flow uses it after a repository joins a list, so the tab's new
+ * heading fills with that repository's rows instead of waiting out the cache. */
+export function refreshPanel(key: PanelKey) {
+  return queryClient
+    .fetchQuery({
+      queryKey: [key],
+      queryFn: () => api(PANELS[key] + "?fresh=1"),
+      staleTime: 0,
+      retry: false,
+    })
+    .catch(() => undefined);
+}
+
 /** Warm all three panels, so opening Intake — or switching to a tab inside it —
  * finds the list already there, and so the tab strip's counts are filled in
  * before you get there, which is the point of putting them on the strip. A
@@ -854,15 +868,42 @@ export function checkedToastText(d: Record<string, unknown>): string {
  * in, and the Connect dialog refreshes it then. */
 export function useGithubConnected(enabled = true) {
   return useQuery({
+    ...githubStatusQuery(enabled),
+    select: (r: GithubStatusLite) => !!r.connected,
+  });
+}
+
+/** The part of `GET /api/github/status` a status line needs: whether a token
+ * resolves, and whose it is (`login`; "" when GitHub couldn't be asked —
+ * `user_error` then says why). Never the token. */
+export interface GithubStatusLite {
+  connected?: boolean;
+  login?: string;
+  source?: string;
+  user_error?: string;
+}
+
+function githubStatusQuery(enabled: boolean) {
+  return {
     queryKey: ["github-status"],
-    queryFn: async () => {
-      const r = await api<{ connected?: boolean }>("/api/github/status");
-      return !!r?.connected;
-    },
+    queryFn: async () => (await api<GithubStatusLite>("/api/github/status")) || {},
     enabled,
     staleTime: 60_000,
     retry: false,
-  });
+  };
+}
+
+/** Whether GitHub is connected AND as whom — the "GitHub: connected as @you"
+ * line Intake's GitHub tabs and the add flow show. Shares `useGithubConnected`'s
+ * cache entry, so the two can never disagree. */
+export function useGithubStatus(enabled = true) {
+  return useQuery(githubStatusQuery(enabled));
+}
+
+/** Re-ask after the Connect GitHub dialog closes: a sign-in there is the one
+ * thing that changes the answer. */
+export function refreshGithubStatus() {
+  return queryClient.invalidateQueries({ queryKey: ["github-status"] });
 }
 
 /** The Verify dialog's list, and the top bar's due count.
@@ -885,6 +926,18 @@ export function useTestPlans(enabled = true) {
     placeholderData: (prev) => prev,
     retry: false,
   });
+}
+
+/** The flock-wide "branch that ships" as the server last resolved it (the
+ * Verify list's `live_branch`), read from the cache the top bar keeps warm —
+ * never a request of its own. "" before anything has loaded. */
+export function useCachedLiveBranch(): string {
+  const q = useQuery({
+    queryKey: ["test-plans"],
+    queryFn: () => api<TestPlansResponse>("/api/test-plans"),
+    enabled: false,
+  });
+  return q.data?.live_branch || "";
 }
 
 /** Imperative refresh after anything that changes a plan (start a run, record a

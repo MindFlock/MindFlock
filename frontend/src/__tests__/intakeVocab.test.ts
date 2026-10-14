@@ -26,7 +26,7 @@ describe("a source that can't be listed is one sentence, by name, without JSON",
   it("a rejected token", () => {
     const raw = 'Shortcut API returned 401: {"message":"Unauthorized","tag":"unauthorized"}';
     const out = friendlySourceError("Shortcut", raw);
-    expect(out).toBe("Shortcut rejected the token — open its card below to fix it.");
+    expect(out).toBe("Shortcut rejected the token — press Fix on its heading.");
     expect(out).not.toContain("{");
   });
 

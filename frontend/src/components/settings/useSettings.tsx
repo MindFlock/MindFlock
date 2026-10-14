@@ -24,6 +24,11 @@ export interface SettingsModel {
   saveField(group: string, field: string, value: unknown): Promise<void>;
   /** Persist a whole group patch (e.g. the PR-review repos array). */
   saveGroup(group: string, patch: Json, okMsg?: string): Promise<void>;
+  /** Persist several groups in ONE `POST /api/settings` — one echo, one
+   * settings-hook pass, so a change that spans `github` and `repository` (a
+   * repository's "Use it for" ticks) restarts the pipeline once, and can't
+   * land half-applied. */
+  saveGroups(patches: Record<string, Json>, okMsg?: string): Promise<void>;
   get(group: string, field: string): unknown;
 }
 
@@ -73,19 +78,26 @@ export function useSettingsModel(open: boolean): SettingsModel {
     [reload]
   );
 
-  const saveGroup = useCallback(
-    async (group: string, patch: Json, okMsg?: string) => {
+  const saveGroups = useCallback(
+    async (patches: Record<string, Json>, okMsg?: string) => {
+      const groups = Object.keys(patches);
+      if (!groups.length) return;
       try {
-        const r = await api<{ settings?: Json }>("/api/settings", { json: { [group]: patch } });
+        const r = await api<{ settings?: Json }>("/api/settings", { json: patches });
         putSettingsDoc(r?.settings || {});
         void refreshConfig();
         if (okMsg) toast(okMsg);
       } catch (err) {
-        toast("Save failed: " + ((err as Error).message || group));
+        toast("Save failed: " + ((err as Error).message || groups.join(", ")));
         reload();
       }
     },
     [reload]
+  );
+
+  const saveGroup = useCallback(
+    (group: string, patch: Json, okMsg?: string) => saveGroups({ [group]: patch }, okMsg),
+    [saveGroups]
   );
 
   const get = useCallback(
@@ -96,7 +108,7 @@ export function useSettingsModel(open: boolean): SettingsModel {
     [settings]
   );
 
-  return { settings, reload, saveField, saveGroup, get };
+  return { settings, reload, saveField, saveGroup, saveGroups, get };
 }
 
 export const SettingsCtx = createContext<SettingsModel | null>(null);

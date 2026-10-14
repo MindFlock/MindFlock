@@ -16,6 +16,7 @@ import { SRC, dropComments, norm } from "./sourceText";
 import DIALOG_RAW from "../components/intake/IntakeDialog.tsx?raw";
 import PRS_RAW from "../components/intake/PullRequestsTab.tsx?raw";
 import REPO_SOURCES_RAW from "../components/intake/RepoSources.tsx?raw";
+import REPO_USES_RAW from "../components/intake/repoUses.ts?raw";
 import KIT_RAW from "../components/intake/kit.tsx?raw";
 import TICKETS_RAW from "../components/intake/TicketsTab.tsx?raw";
 import REPO_FIELD_RAW from "../components/intake/RepoListField.tsx?raw";
@@ -31,10 +32,10 @@ const code = (raw: string) => norm(dropComments(raw));
 
 /** Every app module (tests excluded), comments stripped. */
 const ALL = Object.values(SRC).map(code).join("\n");
-const count = (hay: string, needle: string) => hay.split(needle).length - 1;
 
 const PRS = code(PRS_RAW);
 const REPOS = code(REPO_SOURCES_RAW);
+const USES = code(REPO_USES_RAW);
 const TICKETS = code(TICKETS_RAW);
 const css = (raw: string) => raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ");
 
@@ -75,40 +76,39 @@ describe("the Pull requests tab", () => {
     expect(ALL).not.toContain('data-field="url"');
   });
 
-  it("has multi-repo add/remove controls — a watched repo is a CARD", () => {
-    expect(PRS).toContain('listId="gh-repos-list"'); // where the repo cards render
-    expect(PRS).toContain('addId="gh-repo-add-btn"');
-    // The slug is a field inside the card, so there is no separate "add a
-    // repo" text input any more; `+ Add repository` appends an empty card.
+  it("a watched repo is edited from its HEADING, and added once", () => {
+    // No card list under the work: every watched repository has a heading in
+    // the list (even filtered to nothing), whose Edit opens its editor.
+    expect(PRS).not.toContain("RepoSourceList");
+    expect(PRS).toContain("repoGroupOrder(");
+    expect(PRS).toContain('editor={editing ? <RepoEditor use="pr" repo={repo} /> : undefined}');
+    expect(PRS).toContain("<HeadAction editing={editing}");
+    // "+ Add source" in the dialog head — the repository flow, PR ticked.
+    expect(PRS).toContain("<AddRepoFlow");
+    expect(PRS).toContain('uses={adding?.uses?.length ? adding.uses : ["pr"]}');
     expect(ALL).not.toContain("gh-repo-new");
-    expect(PRS).toContain('addLabel="+ Add repository"');
-    for (const field of ["repo", "agent", "base_branch", "min_age_minutes", "skip_authors"])
-      expect(REPOS, field).toContain(`data-repo-field="${field}"`);
+    for (const field of ["agent", "depth", "base_branch", "min_age_minutes", "skip_authors"])
+      expect(REPOS, field).toContain(field);
+    expect(REPOS).toContain("data-repo-field={field}");
+    expect(REPOS).toContain('data-repo-field="agent"');
   });
 
   it("wires the watched repos and the toggle", () => {
     expect(PRS).toContain("gh-pr-enabled");
     expect(PRS).toContain("gh-skip-authors");
     expect(PRS).toContain("skip_authors");
-    // Multi-repo add/remove lives in the shared RepoSourceList, which PR review
-    // and Git issues both drive. Exactly one copy of each guard IS the point.
-    expect(count(ALL, "Use owner/name")).toBe(1); // owner/name format guard
-    expect(count(ALL, "is already in the list")).toBe(1); // duplicate guard
-    expect(REPOS).toContain('toast("Use owner/name');
-    expect(REPOS).toContain('toast(val + " is already in the list")');
-    // POST { github: { repos: [...], repo_settings: {...} } } — the per-repo
-    // override map is what makes a card's own agent / base branch mean anything.
-    expect(PRS).toContain("repos: list,");
-    expect(PRS).toContain("repo_settings: next,");
-    // Off by default like Issues: a setup that never chose saves its first
-    // repository with an explicit off; saved settings keep their meaning.
-    expect(PRS).toContain("gh.enabled == null && !repos.length && list.length ? { enabled: false } : {}");
+    // The owner/name guard lives once, in the add flow.
+    expect(REPOS).toContain("Type the repository as owner/name");
+    // The lists are written by repoUses.ts — one patch for every tick, and
+    // the first PR repository of a setup that never chose is saved OFF.
+    expect(REPOS).toContain("usesPatch(s.settings, repo, want)");
+    expect(USES).toContain('if (gh.enabled == null && !repos.length) put(group, "enabled", false);');
     expect(PRS).toContain("const enabled = prsOn(gh);"),
     // No "● Active / ‖ Paused" status line under the switch any more; the
     // switch's only subtitle is the one state a switch can't show.
     expect(ALL).not.toContain("Paused —");
     expect(PRS).toContain('"Auto-address review comments off"');
-    expect(PRS).toContain('"Add a repository below first"');
+    expect(PRS).toContain('"Add a repository first — + Add source"');
   });
 
   it("styles the feature and the repo cards", () => {
@@ -144,11 +144,12 @@ describe("ticketing source cards", () => {
     expect(field).toContain('{many ? "Repos" : "Repo URL"}');
   });
 
-  it("each card is collapsible, and saved sources fold by default", () => {
-    expect(TICKETS).toContain("setCollapsed(new Set(savedSources.data.map((s) => s.id)))");
+  it("a source is edited from its heading — one editor open at a time", () => {
+    expect(TICKETS).toContain("editor={isEditing ? editorFor(src) : undefined}");
+    expect(TICKETS).toContain("const edit = useEditing(focus);");
     const kit = code(KIT_RAW);
-    expect(kit).toContain('className="tk-head"');
-    expect(kit).toContain('className="tk-body"');
-    expect(rule(TICKETING_CSS_RAW, ".tk-source.tk-collapsed .tk-body")).toContain("display: none");
+    expect(kit).toContain('className="ik-editor"');
+    expect(kit).toContain("setEditing((cur) => (cur === key ? null : key))");
+    expect(kit).not.toContain('className="tk-head"');
   });
 });
