@@ -96,6 +96,91 @@
   text-align: right;
 }
 
+/* "Include my time": a switch, always present in both states (so flipping it
+ * never moves the toolbar), and a one-line hint on its own row under the top
+ * bar, clipped rather than wrapped (so the header keeps its height; the
+ * switch's tooltip carries the whole sentence). */
+.mfx-workflow .wf-head {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.mfx-workflow .wf-me-hint {
+  flex: 1 0 100%;
+  margin-top: -8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mfx-workflow .wf-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.mfx-workflow .wf-switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+
+.mfx-workflow .wf-switch-track {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.mfx-workflow .wf-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.mfx-workflow .wf-switch-input:checked + .wf-switch-track {
+  background: color-mix(in srgb, var(--gold) 35%, var(--panel-2));
+  border-color: var(--gold);
+}
+
+.mfx-workflow .wf-switch-input:checked + .wf-switch-track::after {
+  transform: translateX(12px);
+  background: var(--gold);
+}
+
+.mfx-workflow .wf-switch-input:focus-visible + .wf-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mfx-workflow .wf-switch-input:disabled + .wf-switch-track {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mfx-workflow .wf-switch-track,
+  .mfx-workflow .wf-switch-track::after {
+    transition: none;
+  }
+}
+
 /* --- cards + KPIs ------------------------------------------------------- */
 .mfx-workflow .wf-card {
   background: var(--panel-2);

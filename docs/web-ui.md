@@ -4500,7 +4500,12 @@ were away, setup, pre-commit hooks, recovering from failed hooks, committed
 not pushed, pushed no PR, PR open, usage limit — grouped by who held the
 work, the bottlenecks ranked with what to change, a per-phase table (median
 and p90 per item, until or after the PR), a weekly trend, and every work item
-with its own timeline. It records from the moment it is installed. See
+with its own timeline. It records from the moment it is installed. Your own
+time (waiting on your answer, your turn, idle while you were away) is left
+out by default — every number is computed as if you answered instantly, so
+the ranking is about the agent, tooling, handoffs, limits and review (PR
+open, waiting on reviewers, still counts); the **Include my time** switch in
+its toolbar counts it again. See
 [extensions.md](extensions.md#worked-example-3-the-workflow-optimizer).
 
 ## Voice input

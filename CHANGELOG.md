@@ -66,6 +66,10 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   hours), time to merge, which phase is the bottleneck with what to change
   about it, a weekly trend, and every item's own timeline. Recording starts
   when you install it; server downtime shows as untracked, never as work.
+  Your own time — answering the agent, your turns, idle while you're away —
+  is left out by default, as if you answered instantly, so the bottlenecks
+  are the agent, tooling, handoffs, limits and review; the **Include my
+  time** switch in the dashboard counts it again.
 
 ### Changed
 

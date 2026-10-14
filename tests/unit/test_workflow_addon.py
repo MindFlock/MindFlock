@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -247,8 +248,70 @@ def scenario():
     return rows
 
 
+def person_scenario():
+    """Four branches where the person's own time (questions, your turn, idle
+    while away) is a big part of the clock — now is ``T + 9000``.
+
+    * ``feature/a`` (sc-1): setup 60, agent 540, a question 300, agent 600,
+      your turn 600, away 1900, agent 600, hooks 60, to_push 60, to_pr 120,
+      PR at +4840, merged at +8000.
+    * ``feature/b``: agent 600, your turn 3400, PR at +5000 (open).
+    * ``feature/c``: ONLY the person before its PR — a question 600, your
+      turn 400, PR at +3000.
+    * ``feature/d`` (in progress): agent 500, then away to now.
+
+    The server is down 5880→6600 (720 s untracked in every item)."""
+    rows = []
+
+    def meta(s, branch, **kw):
+        rows.append(
+            {"t": T, "k": "meta", "s": s, "repo": "app", "branch": branch, **kw}
+        )
+
+    def ph(dt, s, p, a=False):
+        rows.append({"t": T + dt, "k": "ph", "s": s, "ph": p, "a": a})
+
+    meta("a", "feature/a", ticket="sc-1", name="Fix a")
+    meta("b", "feature/b")
+    meta("c", "feature/c")
+    meta("d", "feature/d")
+    for dt, p, a in [
+        (0, "setup", False),
+        (60, "agent", False),
+        (600, "question", True),
+        (900, "agent", False),
+        (1500, "your_turn", True),
+        (2100, "your_turn", False),
+        (4000, "agent", False),
+        (4600, "precommit", False),
+        (4660, "to_push", False),
+        (4720, "to_pr", False),
+        (4840, "review", False),
+    ]:
+        ph(dt, "a", p, a)
+    rows.append({"t": T + 8000, "k": "merge", "s": "a", "pr": "https://x/pull/7"})
+    for dt, p, a in [
+        (1000, "agent", False),
+        (1600, "your_turn", True),
+        (5000, "review", False),
+    ]:
+        ph(dt, "b", p, a)
+    for dt, p, a in [
+        (2000, "question", True),
+        (2600, "your_turn", True),
+        (3000, "review", False),
+    ]:
+        ph(dt, "c", p, a)
+    for dt, p, a in [(3000, "agent", False), (3500, "your_turn", False)]:
+        ph(dt, "d", p, a)
+    rows += [{"t": T + x, "k": "hb"} for x in range(0, 5401, 300)]
+    rows += [{"t": T + x, "k": "hb"} for x in range(6600, 9001, 300)]
+    rows.sort(key=lambda r: r["t"])
+    return rows
+
+
 def test_work_items_split_at_the_merge_and_add_up():
-    items = A.build_items(scenario(), T + 26000, ["s1", "s1-copy"])
+    items = A.build_items(scenario(), T + 26000, ["s1", "s1-copy"], include_me=True)
     assert [it["id"] for it in items] == [
         "app@feature/sc-12/x#1",
         "app@feature/sc-12/x#0",
@@ -288,7 +351,7 @@ def test_downtime_is_untracked_and_away_is_split_from_your_turn():
         {"t": T + 5000, "k": "hb"},
         {"t": T + 5100, "k": "ph", "s": "s", "ph": "agent", "a": False},
     ]
-    it = A.build_items(rows, T + 5200, ["s"])[0]
+    it = A.build_items(rows, T + 5200, ["s"], include_me=True)[0]
     # alive until +100+ALIVE_S, dark until the +5000 heartbeat, then idle
     # again for the 100 s before the agent restarts
     assert it["to_pr"]["away"] == A.ALIVE_S + 100
@@ -320,7 +383,7 @@ def test_combine_scales_to_a_long_lived_session():
             }
         )
     t0 = _time.monotonic()
-    it = A.build_items(rows, T + 20000 * 300, ["s"])[0]
+    it = A.build_items(rows, T + 20000 * 300, ["s"], include_me=True)[0]
     assert _time.monotonic() - t0 < 5
     assert it["to_pr"]["agent"] == it["to_pr"]["your_turn"] == 10000 * 300
 
@@ -335,7 +398,7 @@ def test_abandoned_and_closed_items():
 
 
 def test_report_kpis_stats_and_advice():
-    rep = A.report(scenario(), T + 26000, 7 * 86400, ["s1", "s1-copy"])
+    rep = A.report(scenario(), T + 26000, 7 * 86400, ["s1", "s1-copy"], include_me=True)
     k = rep["kpi"]
     assert (k["items"], k["prs_opened"], k["merged"], k["in_progress"]) == (2, 1, 1, 1)
     assert k["median_to_pr"] == 3000 and k["median_to_merge"] == 9000
@@ -362,6 +425,185 @@ def test_empty_report():
     rep = A.report([], T, 7 * 86400, [])
     assert rep["kpi"]["items"] == 0 and rep["kpi"]["median_to_pr"] is None
     assert rep["advice"] == [] and rep["items"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Your own time: left out by default, counted on request
+# --------------------------------------------------------------------------- #
+GOLDEN = os.path.join(
+    os.path.dirname(__file__), "data", "workflow_report_include_me.golden.json"
+)
+PERSON_LIVE = ["a", "b", "c", "d"]
+
+
+def test_include_me_is_the_full_clock_byte_for_byte():
+    """The golden file was written by the analysis as it was before the
+    person's time could be left out: counting it must change nothing."""
+    got = {
+        "report": {
+            "scenario": A.report(
+                scenario(), T + 26000, 7 * 86400, ["s1", "s1-copy"], include_me=True
+            ),
+            "person_scenario": A.report(
+                person_scenario(), T + 9000, 7 * 86400, PERSON_LIVE, include_me=True
+            ),
+        },
+        "items": {
+            "scenario": A.build_items(
+                scenario(), T + 26000, ["s1", "s1-copy"], include_me=True
+            ),
+            "person_scenario": A.build_items(
+                person_scenario(), T + 9000, PERSON_LIVE, include_me=True
+            ),
+        },
+    }
+    with open(GOLDEN, encoding="utf-8") as f:
+        assert json.dumps(got, indent=1) + "\n" == f.read()
+
+
+def test_person_phases_are_the_you_and_idle_groups():
+    assert A.PERSON_PHASES == {"question", "your_turn", "away"}
+    assert {A.GROUP_OF[p] for p in A.PERSON_PHASES} == {"you", "idle"}
+    assert "review" not in A.PERSON_PHASES and "untracked" not in A.PERSON_PHASES
+
+
+def test_leaving_me_out_compresses_each_items_clock():
+    mine = {
+        it["id"]: it
+        for it in A.build_items(
+            person_scenario(), T + 9000, PERSON_LIVE, include_me=True
+        )
+    }
+    items = {
+        it["id"]: it for it in A.build_items(person_scenario(), T + 9000, PERSON_LIVE)
+    }
+    # Same items either way: ids, status and the real epochs don't move.
+    assert set(items) == set(mine)
+    for k, it in items.items():
+        for f in (
+            "status",
+            "start",
+            "pr_at",
+            "merged_at",
+            "end",
+            "commits",
+            "sessions",
+        ):
+            assert it[f] == mine[k][f], (k, f)
+        assert not set(it["to_pr"]) & A.PERSON_PHASES
+        assert not set(it["after_pr"]) & A.PERSON_PHASES
+        assert not {sg["ph"] for sg in it["timeline"]} & A.PERSON_PHASES
+    a = items["app@feature/a#0"]
+    # 4840 s wall to the PR, 300 + 600 + 1900 of it waiting on the person.
+    assert a["your_time_s"] == 2800
+    assert a["lead_to_pr"] == 4840 - 2800 == sum(a["to_pr"].values())
+    assert a["to_pr"] == {
+        "setup": 60.0,
+        "agent": 1740.0,
+        "precommit": 60.0,
+        "to_push": 60.0,
+        "to_pr": 120.0,
+    }
+    assert a["active_to_pr"] == 2040
+    assert a["lead_to_merge"] == a["elapsed"] == 8000 - 2800
+    assert (
+        a["after_pr"]
+        == mine["app@feature/a#0"]["after_pr"]
+        == {"review": 2440.0, "untracked": 720.0}
+    )
+    # The strip closes the holes: the two agent stints around the question
+    # and the turn the person sat on are one stretch, the PR opens at +2040.
+    tl = a["timeline"]
+    assert [sg["ph"] for sg in tl] == [
+        "setup",
+        "agent",
+        "precommit",
+        "to_push",
+        "to_pr",
+        "review",
+        "untracked",
+        "review",
+    ]
+    assert all(x["end"] == y["start"] for x, y in zip(tl, tl[1:]))
+    assert tl[1] == {"ph": "agent", "start": T + 60, "end": T + 1800, "at": T + 60}
+    assert (
+        tl[5]["start"] - tl[0]["start"] == a["lead_to_pr"] and tl[5]["at"] == T + 4840
+    )
+    assert tl[-1]["end"] - tl[0]["start"] == a["lead_to_merge"]
+    assert items["app@feature/b#0"]["lead_to_pr"] == 600
+    # Nothing but the person before its PR: zero to PR, not a crash.
+    c = items["app@feature/c#0"]
+    assert (c["lead_to_pr"], c["active_to_pr"], c["to_pr"], c["your_time_s"]) == (
+        0.0,
+        0,
+        {},
+        1000,
+    )
+    d = items["app@feature/d#0"]
+    assert d["elapsed"] == 6000 - 4780 and d["to_pr"] == {
+        "agent": 500.0,
+        "untracked": 720.0,
+    }
+
+
+def test_leaving_me_out_ranks_only_the_process():
+    full = A.report(
+        person_scenario(), T + 9000, 7 * 86400, PERSON_LIVE, include_me=True
+    )
+    rep = A.report(person_scenario(), T + 9000, 7 * 86400, PERSON_LIVE)
+    assert {a["phase"] for a in full["advice"]} >= {"your_turn", "question", "away"}
+    k = rep["kpi"]
+    assert (k["items"], k["prs_opened"], k["merged"], k["in_progress"]) == (4, 3, 1, 1)
+    # leads 2040 / 600 / 0 (was 4840 / 4000 / 1000)
+    assert (k["median_to_pr"], k["p90_to_pr"]) == (600, 2040)
+    assert k["median_active_to_pr"] == 600 and k["median_to_merge"] == 5200
+    stats = {r["phase"]: r for r in rep["to_pr"]}
+    assert set(stats) == {"agent", "setup", "precommit", "to_push", "to_pr"}
+    assert round(sum(r["share"] for r in rep["to_pr"]), 3) == 1.0
+    assert stats["agent"]["total_s"] == 2340 and stats["agent"]["share"] == round(
+        2340 / 2640, 4
+    )
+    assert (
+        stats["agent"]["median_s"],
+        stats["agent"]["p90_s"],
+        stats["agent"]["items"],
+    ) == (1170, 1740, 2)
+    assert {g["group"] for g in rep["to_pr_groups"]} == {"agent", "tooling", "handoff"}
+    assert round(sum(g["share"] for g in rep["to_pr_groups"]), 3) == 1.0
+    assert not {r["phase"] for r in rep["after_pr"]} & A.PERSON_PHASES
+    assert not {a["phase"] for a in rep["advice"]} & A.PERSON_PHASES
+    assert not {p["id"] for p in rep["phases"]} & A.PERSON_PHASES
+    assert {g["id"] for g in rep["groups"]} == {g for g, _ in A.GROUPS} - {
+        "you",
+        "idle",
+    }
+    assert rep["excluded"] == {
+        "phases": ["question", "your_turn", "away"],
+        "total_s": 2800 + 3400 + 1000,
+    }
+    assert rep["trend"][-1]["items"] == 3 and rep["trend"][-1]["median_to_pr"] == 600
+    assert "excluded" not in full
+
+
+def test_an_item_that_was_all_me():
+    rows = [
+        {"t": T, "k": "meta", "s": "s", "repo": "r", "branch": "b"},
+        {"t": T, "k": "ph", "s": "s", "ph": "your_turn", "a": True},
+        {"t": T + 300, "k": "ph", "s": "s", "ph": "question", "a": True},
+        {"t": T + 400, "k": "ph", "s": "s", "ph": "review", "a": False},
+    ] + [{"t": T + x, "k": "hb"} for x in range(0, 1001, 300)]
+    rep = A.report(rows, T + 1000, 7 * 86400, ["s"])
+    assert rep["kpi"]["median_to_pr"] == 0 and rep["kpi"]["p90_to_pr"] == 0
+    assert rep["to_pr"] == [] and rep["to_pr_groups"] == [] and rep["advice"] == []
+    assert rep["excluded"]["total_s"] == 400
+    it = rep["items"][0]
+    assert it["lead_to_pr"] == 0 and it["elapsed"] == 600
+    assert [sg["ph"] for sg in it["timeline"]] == ["review"]
+    # still waiting on you, no PR: nothing counted yet, and no division by zero
+    rows = rows[:2] + rows[4:]
+    rep = A.report(rows, T + 1000, 7 * 86400, ["s"])
+    assert rep["basis"] == "all" and rep["items"][0]["elapsed"] == 0
+    assert rep["items"][0]["timeline"] == [] and rep["to_pr"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -418,3 +660,80 @@ def test_recording_is_off_under_pytest():
 
     asyncio.run(workflow.WorkflowAddon().on_startup(Ctx()))
     assert started == [] and subs == []
+
+
+def _store_person_scenario(tmp_path, monkeypatch):
+    p = tmp_path / "wf.jsonl"
+    monkeypatch.setenv("MINDFLOCK_WORKFLOW_FILE", str(p))
+    monkeypatch.setattr(workflow, "_live_titles", lambda: PERSON_LIVE)
+    import time as _time
+
+    shift = _time.time() - (T + 9000)
+    p.write_text(
+        "".join(
+            json.dumps({**r, "t": r["t"] + shift}) + "\n" for r in person_scenario()
+        )
+    )
+    return p
+
+
+def test_include_me_setting_defaults_off_and_persists(tmp_path, monkeypatch):
+    p = _store_person_scenario(tmp_path, monkeypatch)
+    sp = tmp_path / "workflow_optimizer.settings.json"
+    assert store.settings_path() == str(sp)
+    assert store.load_settings() == {"include_me": False} and not sp.exists()
+    assert client.get("/api/workflow/settings").json() == {"include_me": False}
+    assert client.post("/api/workflow/settings", json={"include_me": True}).json() == {
+        "include_me": True
+    }
+    assert json.loads(sp.read_text()) == {"include_me": True}
+    assert oct(sp.stat().st_mode & 0o777) == "0o600"
+    # wrong types and unknown keys change nothing
+    body = client.post(
+        "/api/workflow/settings", json={"include_me": "no", "x": 1}
+    ).json()
+    assert body == {"include_me": True} and store.load_settings() == {
+        "include_me": True
+    }
+    sp.write_text("{torn")
+    assert store.load_settings() == {"include_me": False}
+    assert p.exists()
+
+
+def test_summary_and_item_follow_the_setting_and_the_override(tmp_path, monkeypatch):
+    _store_person_scenario(tmp_path, monkeypatch)
+
+    def phases(body):
+        return {r["phase"] for r in body["to_pr"]} | {
+            r["phase"] for r in body["after_pr"]
+        }
+
+    body = client.get("/api/workflow/summary?range=7d").json()
+    assert body["include_me"] is False and not phases(body) & A.PERSON_PHASES
+    assert body["excluded"]["total_s"] == 7200 and body["kpi"]["median_to_pr"] == 600
+    a = next(it for it in body["items"] if it["branch"] == "feature/a")
+    tl = client.get("/api/workflow/item", params={"id": a["id"]}).json()["timeline"]
+    assert not {sg["ph"] for sg in tl} & A.PERSON_PHASES and "at" in tl[0]
+
+    store.save_settings({"include_me": True})
+    body = client.get("/api/workflow/summary?range=7d").json()
+    assert (
+        body["include_me"] is True
+        and "your_turn" in phases(body)
+        and "excluded" not in body
+    )
+    tl = client.get("/api/workflow/item", params={"id": a["id"]}).json()["timeline"]
+    assert "question" in {sg["ph"] for sg in tl}
+    # an explicit override wins over the setting, both ways
+    body = client.get("/api/workflow/summary?range=7d&include_me=0").json()
+    assert body["include_me"] is False and not phases(body) & A.PERSON_PHASES
+    tl = client.get(
+        "/api/workflow/item", params={"id": a["id"], "include_me": "0"}
+    ).json()["timeline"]
+    assert not {sg["ph"] for sg in tl} & A.PERSON_PHASES
+    store.save_settings({"include_me": False})
+    assert client.get("/api/workflow/summary?include_me=1").json()["include_me"] is True
+    assert (
+        client.get("/api/workflow/summary?include_me=bogus").json()["include_me"]
+        is False
+    )

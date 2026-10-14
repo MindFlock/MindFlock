@@ -81,6 +81,7 @@ def _resolvers():
         "activity markers": activity_markers.marker_dir,
         "thread markers": thread_markers.marker_dir,
         "workflow optimizer": workflow_store.path,
+        "workflow optimizer settings": workflow_store.settings_path,
     }
 
 

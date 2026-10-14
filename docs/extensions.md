@@ -1138,6 +1138,33 @@ MindFlock in the last 10 minutes) and the analysis splits it into
 `your_turn` (you were there: a review/steer bottleneck) and `away` (idle
 capacity).
 
+**Your own time is left out by default.** `analysis.PERSON_PHASES` —
+`question`, `your_turn`, `away` — is the person's time, and unless the
+**Include my time** switch is on the analysis assumes the person moves at
+max speed: that time is cut out of the clock, not just hidden. Each item's
+time to PR, time to merge and elapsed time are the wall span less the person
+phases inside it; its `to_pr` / `after_pr` drop them; its timeline is
+compressed (later pieces move earlier by the cut, each keeping its real
+start as `at`) and it carries `your_time_s`. So every median, p90, share
+(they sum to 100 % of the counted time), group, advice item and the weekly
+trend ranks only agent, tooling, handoff, limit and review time; the report
+leaves the person phases and the You / Idle groups out of `phases` and
+`groups` and adds `excluded: {phases, total_s}`. An item that was nothing
+but the person before its PR reads 0 s to PR. Item ids, boundaries, status
+and epochs are the same either way. `review` (PR open, nothing working)
+keeps counting — it waits on reviewers and CI, not on your turn in the
+terminal — and so does `untracked`. With the switch on, the report is the
+full wall clock, byte-for-byte what it was before the switch existed
+(pinned by a golden file).
+
+The switch is the extension's one setting, `include_me` (default `false`),
+in its own file beside the timeline,
+`~/.mindflock/workflow_optimizer.settings.json` (mode 0600, written
+atomically; it follows `$MINDFLOCK_WORKFLOW_FILE`'s directory) — never in
+settings.json, so it is per device, like the timeline it reads. Flipping it
+saves the setting and reloads with an explicit `include_me=` override, so
+the numbers change at once without a blank flash.
+
 **Work items** (`analysis.build_items`). One item is one branch's trip to a
 merged PR: everything recorded for the same `repo@branch` — two windows on
 one branch are one item, and at each moment the busiest window speaks for it
@@ -1159,15 +1186,17 @@ away; agent-dominated → split tickets).
 (store: `~/.mindflock/workflow_optimizer.jsonl`, mode 0600, append-only,
 100-day compaction, `$MINDFLOCK_WORKFLOW_FILE` redirects it and
 `tests/conftest.py` does so for every test; pinned by
-`tests/unit/test_workflow_addon.py`) and
+`tests/unit/test_workflow_addon.py`, the full-clock golden in
+`tests/unit/data/workflow_report_include_me.golden.json`) and
 `backend/web/static/extensions/workflow/{index,view}.js` + `style.css`.
 
 **Routes** (`APIRouter(prefix="/api/workflow")`):
 
 | Route | Purpose |
 |---|---|
-| `GET /summary?range=7d\|30d\|90d` | `{now, range, period_s, tracking_since, phases, groups, kpi: {items, prs_opened, merged, median_to_pr, p90_to_pr, median_active_to_pr, median_to_merge, in_progress}, basis, to_pr: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_pr_groups, after_pr, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_pr}], items}` — items without their timelines. `basis` is `"shipped"` (the PRs opened in the range) or `"all"` when none was. Never 500s. |
-| `GET /item?id=<repo@branch#n>` | One work item with its `timeline: [{ph, start, end}]` (404 when unknown). |
+| `GET /summary?range=7d\|30d\|90d[&include_me=0\|1]` | `{now, range, include_me, period_s, tracking_since, phases, groups, kpi: {items, prs_opened, merged, median_to_pr, p90_to_pr, median_active_to_pr, median_to_merge, in_progress}, basis, to_pr: [{phase, label, group, total_s, share, median_s, p90_s, items}], to_pr_groups, after_pr, advice: [{phase, level, title, detail, at_stake_s, share}], trend: [{start, end, items, median_to_pr}], items, excluded?: {phases, total_s}}` — items without their timelines. `basis` is `"shipped"` (the PRs opened in the range) or `"all"` when none was. `include_me` is the saved setting unless the query overrides it; `excluded` is there only when your time is left out. Never 500s. |
+| `GET /item?id=<repo@branch#n>[&include_me=0\|1]` | One work item with its `timeline: [{ph, start, end}]` (`at` too when compressed; 404 when unknown). |
+| `GET /settings` · `POST /settings {include_me}` | The extension's setting (`{include_me: false}` by default); a POST merges the known keys of the right type and returns the result. |
 
 ### A minimal third-party extension
 
