@@ -433,6 +433,11 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         "provisioned": getattr(inst, "Provisioned", False),
         "workspace_strategy": getattr(inst, "WorkspaceStrategy", "worktree"),
         "in_place": getattr(inst, "InPlace", False),
+        # Whether the session's folder is in a git repository: a worktree or
+        # provisioned session always is; an in-place one is when its folder
+        # (or a parent) holds a .git. A filesystem look, never a git call —
+        # what lets the UI grey out Branch for a plain folder up front.
+        "git_repo": _in_git_repo(inst, folder),
         # Lineage: the live session that spawned/adopted this one ("" for a
         # root, or when the stored parent is gone), and whether an agent
         # created it.
@@ -516,6 +521,23 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # null when it was never ordered or fenced (core.worker_order).
         "order": _row_order(inst.Title, getattr(inst, "Parent", "") or ""),
     }
+
+
+def _in_git_repo(inst, folder: str) -> bool:
+    """The row's ``git_repo``: True for a worktree/provisioned session, else
+    whether ``folder`` or one of its parents has a ``.git`` (dir or file)."""
+    if not getattr(inst, "InPlace", False):
+        return True
+    if not folder:
+        return False
+    cur = os.path.abspath(folder)
+    while True:
+        if os.path.exists(os.path.join(cur, ".git")):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
 
 
 def _mcp_attached(title: str):

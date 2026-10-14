@@ -75,6 +75,9 @@ modules under
     outbox           what is waiting on you / shipping / shipped / queued
                      (GET /api/outbox)
     session_create   the create route's body (POST /api/instances)
+    session_branch   Branch session (POST /api/instances/{title}/branch): a new
+                     worktree on a new branch from a session's HEAD, carrying
+                     its uncommitted changes
     session_end      ending a session: DELETE / /close / /cleanup / the
                      workspace delete share one path (folder-in-use 409,
                      Recently closed, children re-parented)
@@ -213,6 +216,7 @@ from backend.web.core import find_query as _find_query
 from backend.web.core import pane_find as _pane_find
 from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import session_plan as _session_plan
+from backend.web.core import session_branch as _session_branch
 from backend.web.core import session_create as _session_create
 from backend.web.core import ship_status as _ship_status
 from backend.web.core import agent_io as _agent_io
@@ -6712,6 +6716,33 @@ async def copy_instance(title: str) -> JSONResponse:
         data={"program": program, "copied_from": title},
     )
     return JSONResponse(_instance_json(inst), status_code=202)
+
+
+@app.post("/api/instances/{title}/branch")
+async def branch_instance(title: str, request: Request) -> JSONResponse:
+    """Branch a session: a NEW session in its own worktree, on a new branch
+    (``<branch_prefix><title>-branch``, numbered ``-branch-2``… past taken
+    names or branches) cut from the source's current HEAD, with a copy of the
+    source's uncommitted changes (tracked edits, deletions and untracked,
+    non-ignored files — left uncommitted, nothing staged) laid over it before
+    its agent starts. The source is untouched. Same agent CLI, launch flags,
+    auth profile and model as the source; no parent; a fresh conversation (as
+    Duplicate). The recorded base is the source's branch.
+
+    → **202** the new row plus ``branched_from``, ``base_branch`` and
+    ``carried`` (whether there were uncommitted changes to copy); the worktree
+    is built in the background like any create. **409** with ``{"error"}``:
+    a remote ``device::title`` row or a relayed request, a shared-folder
+    session, one still starting, a folder that isn't a git repo ("Branch needs
+    a git repository — <folder> isn't one") or has no commit, a clone-strategy
+    workspace, or changes git can't snapshot. **404** unknown session. See
+    :mod:`core.session_branch`.
+    """
+    return await _session_branch.branch(
+        title,
+        person=_auth.request_person(request),
+        relayed=bool(request.headers.get(_remote.REMOTE_HEADER)),
+    )
 
 
 @app.post("/api/instances/{title}/parent")

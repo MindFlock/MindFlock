@@ -182,6 +182,11 @@ export interface Instance {
   provisioned: boolean;
   workspace_strategy: string;
   in_place: boolean;
+  /** Whether the session's folder is in a git repository (a worktree session
+   * always is; an in-place one when its folder or a parent has a .git) — what
+   * greys out Branch for a plain folder. Optional: older servers don't send
+   * it, and absent reads as "yes" (the server still refuses). */
+  git_repo?: boolean;
   diff_stat: DiffStat | null;
   workspace_missing: boolean;
   /** Asleep (backend core/sleep.py): the agent was stopped on purpose, idle,

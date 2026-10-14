@@ -36,6 +36,11 @@ strategies:
 - `base_branch`, given with `base_ref`, is recorded as `BaseBranch` instead
   of the inferred one. Without it, `BaseBranch` is `base_ref` when that is a
   local branch, else the repo's current branch.
+- `carry_ref`, given with `base_ref`, is a snapshot commit of another
+  worktree's uncommitted changes (`git.snapshot_changes`, below). The first
+  `Start` lays it over the new worktree right after creating it and before
+  the agent launches (`git.apply_snapshot`); a failure fails the start, which
+  removes the worktree. Not persisted. Branch session passes it.
 - Both refs are read only by the first `Start` and are not persisted. With
   `base_ref`, a branch that already exists is refused rather than reused: the
   start fails, and the branch is marked pre-existing first, so the failed
@@ -161,6 +166,17 @@ every stored tmux session as a side effect of changing one field.
   `pr_list_url` build the browser fallbacks the PR flow uses when there is no
   `gh` and no token. Parsing is read-only: nothing here writes a remote back.
 - Existing branches (`isExistingBranch`) are never deleted on cleanup.
+- **Carrying uncommitted changes** (`session/git/carry.py`, no Go original).
+  `snapshot_changes(worktree)` records the working tree — tracked edits,
+  deletions and untracked files `.gitignore` doesn't exclude — as one dangling
+  commit on top of `HEAD` ("" when nothing differs). It stages into a *copy*
+  of the index (`GIT_INDEX_FILE` in a temp dir, seeded from the real index so
+  only changed files are re-hashed), so the source's index, files and branch
+  are never written; the commit uses a fixed MindFlock identity and
+  `--no-gpg-sign` (nobody pushes it; gc drops it). `apply_snapshot(worktree,
+  sha)` runs `git restore --source=<sha> --worktree -- :/`: files match the
+  snapshot, the index stays at `HEAD`, so everything arrives unstaged (a file
+  staged in the source is an untracked file here).
 
 ## tmux + PTY (`session/tmux/`)
 

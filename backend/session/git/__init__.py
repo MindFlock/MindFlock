@@ -16,6 +16,7 @@ per-file mixins; free functions live in the module that mirrors their Go file.
 
 from __future__ import annotations
 
+from backend.session.git.carry import apply_snapshot, snapshot_changes
 from backend.session.git.diff import (
     DiffStats,
     GitWorktreeDiffMixin,
@@ -70,6 +71,9 @@ from backend.session.git.worktree_ops import (
 )
 
 __all__ = [
+    # carry.py (no Go original: Branch session's uncommitted-change carry)
+    "snapshot_changes",
+    "apply_snapshot",
     # util.go
     "sanitize_branch_name",
     "sanitizeBranchName",

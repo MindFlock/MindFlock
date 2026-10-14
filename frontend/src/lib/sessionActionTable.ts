@@ -14,6 +14,10 @@
  *   enabled  whether the action applies to this session right now. The palette
  *            and the row menu leave out an action that doesn't (the row keeps
  *            Pause, greyed, on a shared folder); a chord refuses with a toast.
+ *   why      for a disabled action whose reason is worth SAYING rather than
+ *            hiding the entry (Branch on a folder outside git): the row menu
+ *            draws it greyed with this as its note, the palette lists it with
+ *            this as its hint, and the chord raises it as an error card.
  *
  * Every rule reads the same context (`actionCtx`): the session row, the
  * server caps, whether it is a shared (peer, sandboxed) folder — where the
@@ -23,6 +27,7 @@ import type { Caps, Config, Instance } from "../api/types";
 import { queryClient } from "../state/queries";
 import { displayName, useUi } from "../state/store";
 import {
+  branchSession,
   closeSession,
   commitSession,
   copySession,
@@ -40,9 +45,10 @@ import {
 } from "./sessionActions";
 import { LANE_LABEL, laneChoice, openFastTrackMenu, splitBlockReason, splitSession } from "./laneActions";
 import { fastTrackStep } from "./stage";
-import { focusQueueInput } from "./playbooks";
+import { focusQueueInput, isRemote } from "./playbooks";
 import { errMsg } from "./format";
 import { toast } from "./toast";
+import { errorPop } from "./errorPop";
 
 export interface ActionCtx {
   title: string;
@@ -88,6 +94,10 @@ export interface SessionAction {
   /** Ends in the browser (no gh/token): the row marks it ↗. */
   external?(c: ActionCtx): boolean;
   enabled(c: ActionCtx): boolean;
+  /** Why a disabled action doesn't apply, when that is worth saying ("" =
+   * nothing to say — the entry is simply left out). Only asked of an action
+   * whose `enabled` is false. */
+  why?(c: ActionCtx): string;
   run(title: string): void;
 }
 
@@ -97,6 +107,16 @@ const settled = (c: ActionCtx) => !!c.inst && !c.inst.pending;
 // PR entries are never withheld: without gh/a token they still work, they
 // just end in the browser — the note says so instead of the label.
 const prNote = (c: ActionCtx) => (c.prSupport ? "" : "opens GitHub");
+// Branch's say-why cases: the session is otherwise branchable, but its folder
+// can't be. (A shared folder, another device's row or a session still starting
+// just leaves the entry out.)
+const branchWhy = (c: ActionCtx): string => {
+  if (!c.inst || c.shared || isRemote(c.inst)) return "";
+  if (c.caps.git === false) return "git is not installed — install git to branch sessions";
+  if (c.inst.git_repo === false)
+    return `Branch needs a git repository — ${c.inst.folder || c.inst.path || "this folder"} isn’t one`;
+  return "";
+};
 
 export const SESSION_ACTIONS = {
   commit: { label: "Commit…", keys: "Ctrl+K C", chord: "c", enabled: gitHere, run: (t) => commitSession(t) },
@@ -197,6 +217,19 @@ export const SESSION_ACTIONS = {
     enabled: (c) => !c.shared,
     run: (t) => void copySession(t),
   },
+  // Duplicate's sibling for work that must not collide: its OWN worktree, on a
+  // new branch cut from this one's HEAD, with a copy of its uncommitted
+  // changes. Git only — the server refuses anything else, and so does `why`.
+  branch: {
+    label: "Branch session",
+    keys: "Ctrl+K B",
+    chord: "b",
+    note: (c) => branchWhy(c) || "new worktree on a new branch from this one",
+    enabled: (c) =>
+      settled(c) && c.inst!.status !== "loading" && !c.shared && !isRemote(c.inst!) && !branchWhy(c),
+    why: branchWhy,
+    run: (t) => void branchSession(t),
+  },
   hide: {
     label: (c) => (c.hidden ? "Show window" : "Hide window"),
     keys: "Ctrl+K H",
@@ -278,6 +311,7 @@ export const CHORD_ACTIONS: SessionActionId[] = [
   "pr",
   "ide",
   "duplicate",
+  "branch",
   "hide",
   "map",
   "message",
@@ -301,7 +335,9 @@ export function chordDesc(id: SessionActionId): string {
 export function runChordAction(id: SessionActionId, title: string) {
   const c = actionCtx(title);
   if (c.inst && !sessionAction(id).enabled(c)) {
-    toast(chordDesc(id) + " isn’t available for " + displayName(title));
+    const why = sessionAction(id).why?.(c);
+    if (why) errorPop(chordDesc(id) + " isn’t available for " + displayName(title), why);
+    else toast(chordDesc(id) + " isn’t available for " + displayName(title));
     return;
   }
   sessionAction(id).run(title);
