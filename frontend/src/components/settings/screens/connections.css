@@ -98,3 +98,16 @@
     justify-content: flex-start;
   }
 }
+
+/* Not your concern (an agent you never set up, a sign-in nobody can check
+   from here): quiet grey, never the warning gold. */
+.conn-pill.conn-neutral {
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+#connections-other-agents > .set-adv-fold-body,
+#connections-advanced > .set-adv-fold-body {
+  gap: 12px;
+}

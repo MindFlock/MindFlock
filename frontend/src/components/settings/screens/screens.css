@@ -62,11 +62,19 @@
     gap: 16px;
   }
 
+  /* Narrow: the items WRAP into a few short rows instead of one strip that
+     scrolled sideways with no cue (screens 5–19 were simply invisible), and
+     no row stretches to the height of the mode switch. Advanced mode's long
+     list scrolls inside a capped height. */
   #settings-nav {
     flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
     width: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
+    max-height: 132px;
+    overflow-x: hidden;
+    overflow-y: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 0 0 8px;
@@ -75,6 +83,19 @@
   .set-nav-item {
     flex: none;
     white-space: nowrap;
+  }
+
+  #settings-nav .set-mode-foot {
+    margin-top: 0;
+    padding-top: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #settings-nav .set-mode-toggle {
+    border-top: none;
+    padding: 6px 10px;
   }
 
   .set-nav-group {

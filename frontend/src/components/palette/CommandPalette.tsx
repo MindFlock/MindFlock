@@ -25,6 +25,7 @@ export { fuzzyScore };
 import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
+import { settingsActions } from "./settingsSearch";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -248,6 +249,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => setShowAll(true),
       }),
     });
+    // Settings rows ("Settings → GitHub") go right after the commands whose
+    // own names contain what was typed, before looser matches.
+    if (query.trim()) {
+      const direct = out.filter((a) => {
+        const s = fuzzyScore(query, a.label);
+        return s >= 0 && s < 1000;
+      }).length;
+      out.splice(direct, 0, ...settingsActions(query));
+    }
     // The query IS a code (pasted straight into the palette): joining with
     // it is the first thing offered, routed by its format.
     // Second, not first, when a command's own name contains the query: "run

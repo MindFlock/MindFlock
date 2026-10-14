@@ -377,7 +377,7 @@ export function Accounts(_: ScreenProps) {
             />
           </label>
           <label className="set-row">
-            <span className="set-label">Agent CLI</span>
+            <span className="set-label">Agent</span>
             <select
               value={draft.provider || ""}
               onChange={(e) => setDraft((d) => ({ ...d, provider: e.target.value }))}

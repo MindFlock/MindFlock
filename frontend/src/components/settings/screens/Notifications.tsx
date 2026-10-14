@@ -3,7 +3,7 @@
  * optional ntfy phone-push channel (/api/notify/ntfy), and the per-rule on/off
  * list (POST /api/notify/rules/<id>) that governs BOTH channels. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { relTime } from "../../../lib/format";
@@ -12,6 +12,7 @@ import { useNotifyConfig, type NotifyRule } from "../../../state/runs";
 import { SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
+import { groupRules, ONLY_BELL_HINT, ruleCopy } from "./notifyCopy";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
 
@@ -40,13 +41,25 @@ function notifState(): string {
   }
 }
 
-export function Notifications(_: ScreenProps) {
+export function Notifications({ gotoScreen }: ScreenProps) {
   const [state, setState] = useState(notifState());
   // The rule switches come from the shared notify-config query (state/runs.ts)
   // the bell and the toasts already read.
   const config = useNotifyConfig();
   const rules = config.data ? config.data.rules || [] : null;
   const rulesError = config.isError && !config.data;
+  // Phone push on/off for the "Where alerts go" block; the Ntfy form below
+  // reports every save it makes, so the two never disagree.
+  const [phoneOn, setPhoneOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<NtfyView>("/api/notify/ntfy")
+      .then((v) => live && setPhoneOn(!!v.enabled))
+      .catch(() => live && setPhoneOn(false));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     const paint = () => setState(notifState());
@@ -59,68 +72,128 @@ export function Notifications(_: ScreenProps) {
     state === "unsupported"
       ? notifApi()?.unavailableReason ||
         (window.isSecureContext
-          ? "This browser has no notification support."
-          : "Browser notifications need a secure origin (HTTPS or localhost).")
+          ? "This browser can't show notifications."
+          : "Desktop alerts need a secure address (HTTPS or localhost).")
       : state === "blocked"
-        ? "Blocked for this site — allow notifications in your browser's site settings, then toggle again."
+        ? "Blocked for this site. Allow notifications in your browser's site settings, then try again."
         : state === "on"
-          ? "On — you'll get a desktop alert when an agent needs you, a PR merges, or a budget is exceeded."
-          : "Off — enable to get desktop alerts even when this tab is in the background.";
+          ? "On. Alerts pop up on this computer, even when MindFlock is in the background."
+          : "Off. Turn on to get pop-up alerts on this computer.";
+  const grouped = rules ? groupRules(rules) : null;
+  const moreOn = grouped ? grouped.more.filter((r) => r.enabled !== false).length : 0;
+
+  /** Open the phone fold and bring it into view. */
+  const showPhone = () => {
+    const fold = document.getElementById("notif-advanced") as HTMLDetailsElement | null;
+    if (!fold) return;
+    fold.open = true;
+    fold.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  };
 
   return (
     <>
-      <h3 className="set-section-title">Browser notifications</h3>
-      <div
-        className="set-row set-switch-row"
-        id="notif-browser-row"
-        title="Show a desktop/Chrome notification when an agent needs you, a PR merges, or a budget is exceeded"
-      >
-        <span className="set-label" id="notif-browser-label">Desktop / Chrome notifications</span>
-        {/* label wraps only the switch, so clicking the row text no longer flips it */}
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id="notif-browser-toggle"
-            checked={state === "on"}
-            disabled={!usable}
-            onChange={async (e) => {
-              const a = notifApi();
-              if (!a || typeof a.enable !== "function") {
+      <h3 className="set-section-title">Where alerts go</h3>
+      <div className="notif-channels" id="notif-channels">
+        <div className="notif-channel" data-channel="bell">
+          <span className="notif-rule-text">
+            <span className="set-label">In MindFlock</span>
+            <span className="set-hint notif-rule-desc">Always on: the bell in the top bar lists them.</span>
+          </span>
+          <span className="notif-channel-state on">On</span>
+        </div>
+        <div
+          className="notif-channel set-switch-row"
+          id="notif-browser-row"
+          data-channel="desktop"
+          title="Pop-up alerts on this computer when an agent needs you, a pull request changes, or a budget is exceeded"
+        >
+          <span className="notif-rule-text">
+            <span className="set-label" id="notif-browser-label">Desktop notifications</span>
+            <span className="set-hint notif-rule-desc" id="notif-browser-status">{status}</span>
+          </span>
+          {/* label wraps only the switch, so clicking the row text no longer flips it */}
+          <label className="ca-switch">
+            <input
+              type="checkbox"
+              id="notif-browser-toggle"
+              aria-labelledby="notif-browser-label"
+              checked={state === "on"}
+              disabled={!usable}
+              onChange={async (e) => {
+                const a = notifApi();
+                if (!a || typeof a.enable !== "function") {
+                  setState(notifState());
+                  return;
+                }
+                if (e.target.checked) await a.enable();
+                else a.disable?.();
                 setState(notifState());
-                return;
-              }
-              if (e.target.checked) await a.enable();
-              else a.disable?.();
-              setState(notifState());
-            }}
-          />
-          <span className="ca-slider" />
-        </label>
+              }}
+            />
+            <span className="ca-slider" />
+          </label>
+        </div>
+        <div className="notif-channel" data-channel="phone" id="notif-phone-row">
+          <span className="notif-rule-text">
+            <span className="set-label">Phone alerts</span>
+            <span className="set-hint notif-rule-desc">
+              {phoneOn
+                ? "On, through the free ntfy app. Works even with MindFlock closed."
+                : "Only if you want to be pinged away from your desk. Uses the free ntfy app."}
+            </span>
+          </span>
+          <button type="button" className="test-btn" id="notif-phone-setup" onClick={showPhone}>
+            {phoneOn ? "Change" : "Set up"}
+          </button>
+        </div>
       </div>
-      <p className="set-hint" id="notif-browser-status">{status}</p>
-      <h3 className="set-section-title">What triggers a notification</h3>
+      {state !== "on" && phoneOn === false && (
+        <p className="set-hint notif-only-bell" id="notif-only-bell">
+          {ONLY_BELL_HINT}
+        </p>
+      )}
       <p className="set-hint">
-        Pick exactly which events notify you — turn off any you don't want. These switches
-        apply to every channel you turn on.
+        Want to use MindFlock itself from your phone? That's{" "}
+        <button type="button" className="linklike" data-goto-screen="mobile" onClick={() => gotoScreen("mobile")}>
+          Your phone
+        </button>{" "}
+        (needs Tailscale).
       </p>
+      <h3 className="set-section-title">What you're alerted about</h3>
       <div id="notif-rules-list">
         {rulesError ? (
-          <p className="muted">Couldn't load notification rules.</p>
-        ) : rules === null ? (
+          <p className="muted">Couldn't load the alert list.</p>
+        ) : grouped === null ? (
           <p className="muted">Loading…</p>
-        ) : !rules.length ? (
-          <p className="muted">No notification rules configured.</p>
+        ) : !rules!.length ? (
+          <p className="muted">No alerts to choose from.</p>
         ) : (
-          rules.map((rule) => (
-            <RuleRow key={rule.id} rule={rule} />
-          ))
+          <>
+            {grouped.groups.map((g) => (
+              <section className="notif-group" key={g.key} data-group={g.key}>
+                <h4 className="notif-group-title">{g.title}</h4>
+                {g.rules.map((rule) => (
+                  <RuleRow key={rule.id} rule={rule} />
+                ))}
+              </section>
+            ))}
+            {grouped.more.length ? (
+              <AdvancedFold
+                id="notif-more-events"
+                summary={`More alerts: team runs, hooks, Verify, zones (${moreOn} of ${grouped.more.length} on)`}
+              >
+                {grouped.more.map((rule) => (
+                  <RuleRow key={rule.id} rule={rule} />
+                ))}
+              </AdvancedFold>
+            ) : null}
+          </>
         )}
       </div>
-      {/* Phone push is a second delivery channel, set up once by the few who
-          want it: folded, so the basic screen is the browser switch and the
-          rules. */}
-      <AdvancedFold id="notif-advanced">
-        <Ntfy />
+      {/* Phone push is a delivery channel, set up once by the few who want it:
+          folded, opened from "Phone alerts → Set up" above. */}
+      <AdvancedFold id="notif-advanced" summary="Phone alerts (ntfy)">
+        <Ntfy onChange={(v) => setPhoneOn(!!v.enabled)} />
       </AdvancedFold>
     </>
   );
@@ -152,7 +225,7 @@ interface NtfyView {
   note?: string;
 }
 
-function Ntfy() {
+function Ntfy({ onChange }: { onChange?(v: NtfyView): void } = {}) {
   const [view, setView] = useState<NtfyView | null>(null);
   const [failed, setFailed] = useState(false);
   // Text fields are uncontrolled between saves (same flow as SettingField):
@@ -164,8 +237,11 @@ function Ntfy() {
   const [testing, setTesting] = useState(false);
   const [verdict, setVerdict] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
   const apply = useCallback((v: NtfyView) => {
     setView(v);
+    changeRef.current?.(v);
     setServer(v.server || "");
     setTopic(v.topic || "");
     setClick(v.click_url || "");
@@ -202,32 +278,31 @@ function Ntfy() {
   if (failed)
     return (
       <>
-        <h3 className="set-section-title">Phone push (ntfy)</h3>
-        <p className="muted">Couldn't load the ntfy settings.</p>
+        <p className="muted">Couldn't load the phone alert settings.</p>
       </>
     );
-  if (!view) return <h3 className="set-section-title">Phone push (ntfy)</h3>;
+  if (!view) return <p className="muted">Loading…</p>;
 
   const on = !!view.enabled;
   const last = view.last || {};
 
+  // No heading of its own: the fold's summary ("Phone alerts (ntfy)") is it.
   return (
     <>
-      <h3 className="set-section-title">Phone push (ntfy)</h3>
       <p className="set-hint">
-        Get these alerts on your phone — even with MindFlock closed, because the server
-        sends them, not the browser. Install the free{" "}
+        Install the free{" "}
         <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">
           ntfy
         </a>{" "}
-        app, subscribe to the topic below, and check in on the flock from anywhere.
+        app, subscribe to the topic below (or scan the code), then turn this on. Works even
+        with MindFlock closed.
       </p>
       <div
         className="set-row set-switch-row"
         id="ntfy-row"
         title="Push notifications to an ntfy topic your phone subscribes to"
       >
-        <span className="set-label">Push to ntfy</span>
+        <span className="set-label">Send alerts to my phone</span>
         <label className="ca-switch">
           <input
             type="checkbox"
@@ -325,8 +400,7 @@ function Ntfy() {
           <span />
         )}
         <span className="set-hint">
-          Needed only if your topic is access-protected (self-hosted, or a reserved ntfy.sh
-          topic). Blank keeps the saved one — use <strong>Clear</strong> to remove it.
+          Only for a protected topic. Leave blank to keep the saved one.
         </span>
       </div>
       <div className="ntfy-field-row">
@@ -336,7 +410,7 @@ function Ntfy() {
           value={click}
           autoComplete="off"
           spellCheck={false}
-          placeholder="optional — e.g. your phone URL from Settings → Your phone"
+          placeholder="optional link"
           onChange={(e) => setClick(e.target.value)}
           onBlur={() =>
             click.trim() !== (view.click_url || "") && save({ click_url: click.trim() })
@@ -345,8 +419,7 @@ function Ntfy() {
         />
         <span />
         <span className="set-hint">
-          Opened when you tap the notification. Don't paste an access token into it — it
-          would be stored on the ntfy server (MindFlock strips one if you do).
+          Opened when you tap an alert. Don't put an access token in it.
         </span>
       </div>
       <div className="ntfy-test-row">
@@ -421,17 +494,21 @@ function Ntfy() {
 
 function RuleRow({ rule }: { rule: NotifyRule }) {
   const [on, setOn] = useState(rule.enabled !== false);
-  const label = rule.label || rule.title || rule.event || "event";
+  // Never the server's body: that is the notification's own template text
+  // ("{detail}"), not a description (notifyCopy.ts).
+  const { label, desc } = ruleCopy(rule);
+  const labelId = "notif-rule-" + rule.id;
   return (
-    <div className="set-row set-switch-row notif-rule">
+    <div className="set-row set-switch-row notif-rule" data-rule={rule.id}>
       <span className="notif-rule-text">
-        <span className="set-label">{label}</span>
-        {rule.body && <span className="set-hint notif-rule-desc">{rule.body}</span>}
+        <span className="set-label" id={labelId}>{label}</span>
+        {desc && <span className="set-hint notif-rule-desc">{desc}</span>}
       </span>
       {/* label wraps only the switch, so clicking the row text no longer flips it */}
       <label className="ca-switch">
         <input
           type="checkbox"
+          aria-labelledby={labelId}
           checked={on}
           onChange={async (e) => {
             const want = e.target.checked;

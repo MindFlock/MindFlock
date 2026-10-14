@@ -2,7 +2,7 @@
 
 import { SettingField } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
-import { AdvancedFold } from "../settingsMode";
+import { AdvancedFold, LearnMore } from "../settingsMode";
 
 export function Workspace({ gotoScreen }: ScreenProps) {
   return (
@@ -23,29 +23,26 @@ export function Workspace({ gotoScreen }: ScreenProps) {
         </p>
       </div>
       <p className="set-hint set-block-hint">
-        Where MindFlock puts the working checkouts your <em>coding sessions</em> run in. Which
-        repo a session clones comes from its <strong>ticket source (Intake → Tickets)</strong>,
-        which names its own repo, or the repo you pick when starting a manual session — so
-        there's nothing to set here per repo.
+        Where sessions keep their copy of your repo, and which branches they start from.
       </p>
       <label className="set-row">
-        <span className="set-label">Workspace dir</span>
+        <span className="set-label">Workspace folder</span>
         <SettingField group="repository" field="workspace_dir" placeholder="./workspaces" />
-        <span className="set-hint">Folder on disk where session checkouts live.</span>
+        <span className="set-hint">
+          Where ticket sessions get their separate worktree. A full path (like
+          ~/mindflock/workspaces) is clearest.
+        </span>
       </label>
       <label className="set-row">
         <span className="set-label">Default base branch</span>
         <SettingField group="repository" field="base_branch" placeholder="main" />
-        <span className="set-hint">
-          Branch new session branches are cut from when the source doesn't specify one.
-        </span>
+        <span className="set-hint">New session branches start from this, unless told otherwise.</span>
       </label>
       <label className="set-row">
         <span className="set-label">Default PR base branch</span>
         <SettingField group="repository" field="pr_base_branch" placeholder="use the session's own base" />
         <span className="set-hint">
-          Branch the <strong>Open PR</strong> button targets. Set it to e.g. <code>staging</code>{" "}
-          to always PR there. Blank = PR into whatever branch the session was created from.
+          Where <strong>Open PR</strong> points. Blank = the branch the session started from.
         </span>
       </label>
       {/* What "shipped" means, fast-track's default reach and its hook
@@ -55,10 +52,8 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           <span className="set-label">Live branch</span>
           <SettingField group="repository" field="live_branch" placeholder="main" />
           <span className="set-hint">
-            The branch that means <em>shipped</em>. <strong>Verify</strong> waits until a
-            session's commit is an ancestor of it, then asks you to test the change for real.
-            Blank = fall back to the PR base branch, then the default base branch, then{" "}
-            <code>main</code>.
+            The branch that means <em>shipped</em>. Verify asks you to check a change once it
+            lands here. Blank = the PR base branch, then the default base branch.
           </span>
         </label>
         <label className="set-row">
@@ -76,11 +71,14 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           />
           <span className="set-hint">
             <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
-            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
-            waits for the agent to finish, then commits, pushes and carries on to this rung. Change
-            one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
-            keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.
+            Change one session any time with its <strong>⏩</strong> button.
           </span>
+          <LearnMore>
+            A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+            waits for the agent to finish, then commits, pushes and carries on to this step. A
+            ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
+            merges.
+          </LearnMore>
         </label>
         <label className="set-row">
           <span className="set-label">Retryable pre-commit hooks</span>
@@ -90,13 +88,14 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             placeholder="gitnexus-index"
           />
           <span className="set-hint">
-            Comma-separated pre-commit hook <strong>IDs</strong> (not display names — pre-commit's{" "}
-            <code>name:</code> is free text, so <code>Black format</code> is the hook{" "}
-            <code>black</code>). When one of these fails <em>without changing any files</em>,
-            fast-track retries the commit once and then re-runs it with{" "}
-            <code>SKIP=&lt;id&gt;</code> so the commit can land, and says which hook it skipped.
-            Test and secret-scanning hooks are refused here — a failing test always stops the run.
+            Hooks fast-track may skip when they fail without changing any files.
           </span>
+          <LearnMore>
+            Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
+            <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
+            commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
+            skipped. Test and secret-scanning hooks are refused here.
+          </LearnMore>
         </label>
       </AdvancedFold>
     </>

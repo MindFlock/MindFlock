@@ -42,7 +42,7 @@ describe("grouping", () => {
       row({ id: "phone", kind: "devices" }),
     ]);
     expect(groups.map((g) => g.kind)).toEqual(["agent", "github", "devices"]);
-    expect(groups.map((g) => g.label)).toEqual(["Agent CLIs", "GitHub", "Devices and people"]);
+    expect(groups.map((g) => g.label)).toEqual(["Agents", "GitHub", "Devices and people"]);
     expect(groups[2].rows.map((r) => r.id)).toEqual(["devices", "phone"]);
   });
 
@@ -66,7 +66,8 @@ describe("pill + summary", () => {
   it("renders the pill with the conn-<status> class and the name", () => {
     const html = render(row({ name: "Coding agent · Claude", status: "needs_attention" }));
     expect(html).toContain('class="conn-row"');
-    expect(html).toContain('<span class="conn-name">Coding agent · Claude</span>');
+    // GLOSSARY: "Agent · …", never "Coding agent · …".
+    expect(html).toContain('<span class="conn-name">Agent · Claude</span>');
     expect(html).toContain('class="conn-pill conn-needs_attention">Needs attention<');
   });
 
